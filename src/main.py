@@ -756,21 +756,23 @@ async def get_history():
 
 @app.post("/chat/message", response_class=HTMLResponse)
 async def post_message(message: str = Form(...), provider: str = Form("default")):
+    import time
     # Store user message
     memory.store_convo("default", "user", message)
     escaped = safe(message)
     provider_param = safe(provider)
+    
+    session_id = f"chat-{int(time.time()*1000)}"
 
     # Return user bubble + SSE stream container
     return f'''<div class="msg-row user">
         <div class="msg-bubble user">{escaped}</div>
     </div>
     <div class="msg-row assistant"
+         id="{session_id}"
          hx-ext="sse"
-         sse-connect="/chat/stream?message={escaped}&provider={provider_param}"
-         sse-swap="message"
-         sse-close="done"
-         hx-swap="innerHTML">
+         sse-connect="/chat/stream?message={escaped}&provider={provider_param}&session={session_id}"
+         sse-swap="message">
         <div class="msg-bubble assistant">
             <div class="thinking">
                 <div class="thinking-dot"></div>
@@ -781,7 +783,7 @@ async def post_message(message: str = Form(...), provider: str = Form("default")
 
 
 @app.get("/chat/stream")
-async def stream_chat(message: str, provider: str = "default"):
+async def stream_chat(message: str, provider: str = "default", session: str = ""):
     async def event_generator():
         try:
             prov = None if provider == "default" else provider
@@ -791,41 +793,29 @@ async def stream_chat(message: str, provider: str = "default"):
             memory.store_convo("default", "assistant", response_text)
 
             # Format response (basic markdown-like rendering)
-            # 1. Escape for security
             escaped_text = safe(response_text)
             
-            # 2. Simple Markdown replacements
-            # Handle bold (simple regex-like approach)
             import re
             formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escaped_text)
-            # Handle inline code
             formatted = re.sub(r'`(.*?)`', r'<code>\1</code>', formatted)
-            # Handle code blocks
             formatted = re.sub(r'```(.*?)\n(.*?)\n?```', r'<pre><code>\2</code></pre>', formatted, flags=re.DOTALL)
-            
-            # 3. Paragraphs and breaks
             formatted = formatted.replace("\n\n", "</p><p>")
             formatted = formatted.replace("\n", "<br>")
             formatted = f"<p>{formatted}</p>"
 
             # Stream word-by-word for UX
-            # Note: We still send the full accumulated text as it grows
             words = response_text.split(" ")
             accumulated = ""
             for i, word in enumerate(words):
                 accumulated += word + (" " if i < len(words) - 1 else "")
                 
-                # Re-run formatting for the accumulated buffer
                 current_safe = safe(accumulated)
                 current_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', current_safe)
                 current_formatted = re.sub(r'`(.*?)`', r'<code>\1</code>', current_formatted)
                 
-                # Special handling for open code blocks in partial streams
                 if "```" in current_formatted:
-                    # Very primitive attempt to close open blocks for the UI
                     if current_formatted.count("```") % 2 != 0:
                         current_formatted += "\n... (coding) ..."
-                    
                     current_formatted = re.sub(
                         r'```(.*?)\n(.*?)(?:```|$)', 
                         r'<pre><code>\2</code></pre>', 
@@ -835,15 +825,22 @@ async def stream_chat(message: str, provider: str = "default"):
                 
                 current_formatted = current_formatted.replace("\n\n", "</p><p>").replace("\n", "<br>")
                 display = f"<p>{current_formatted}</p>"
-                yield f'data: <div class="msg-bubble assistant">{display}</div>\n\n'
+                
+                # If this is the final final word, swap out the entire container to kill SSE!
+                if i == len(words) - 1 and session:
+                    yield f'event: message\ndata: <div hx-swap-oob="outerHTML:#{session}" class="msg-row assistant"><div class="msg-bubble assistant">{display}</div></div>\n\n'
+                else:
+                    yield f'event: message\ndata: <div class="msg-bubble assistant">{display}</div>\n\n'
+                    
                 await asyncio.sleep(0.01)
-
-            yield "event: done\ndata: done\n\n"
 
         except Exception as e:
             logger.error(f"Stream error: {e}")
-            yield f'data: <div class="msg-bubble assistant"><span class="error-msg">Error: {safe(str(e))}</span></div>\n\n'
-            yield "event: done\ndata: done\n\n"
+            display = f'<span class="error-msg">Error: {safe(str(e))}</span>'
+            if session:
+                yield f'event: message\ndata: <div hx-swap-oob="outerHTML:#{session}" class="msg-row assistant"><div class="msg-bubble assistant">{display}</div></div>\n\n'
+            else:
+                yield f'event: message\ndata: <div class="msg-bubble assistant">{display}</div>\n\n'
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
