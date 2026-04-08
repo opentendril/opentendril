@@ -843,6 +843,7 @@ async def stream_chat(message: str, provider: str = "default"):
         except Exception as e:
             logger.error(f"Stream error: {e}")
             yield f'data: <div class="msg-bubble assistant"><span class="error-msg">Error: {safe(str(e))}</span></div>\n\n'
+            yield "event: done\ndata: done\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

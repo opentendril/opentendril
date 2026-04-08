@@ -30,9 +30,9 @@ PROVIDER_CONFIG = {
         "base_url": "https://api.x.ai/v1",
         "api_key": GROK_API_KEY,
         "models": {
-            "fast": "grok-2-mini",
-            "standard": "grok-2",
-            "power": "grok-2",
+            "fast": "grok-beta",
+            "standard": "grok-beta",
+            "power": "grok-beta",
         },
     },
     "anthropic": {
