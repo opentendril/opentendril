@@ -542,6 +542,13 @@ CHAT_HTML = """<!DOCTYPE html>
             font-family: var(--font-sans);
             outline: none;
             transition: border-color 0.2s, box-shadow 0.2s;
+            min-height: 50px;
+            max-height: 200px;
+            resize: vertical;
+            white-space: pre-wrap;
+            overflow-wrap: break-word;
+            overflow-y: auto;
+            line-height: 1.5;
         }
 
         .chat-input::placeholder { color: var(--text-muted); }
@@ -561,6 +568,7 @@ CHAT_HTML = """<!DOCTYPE html>
             font-family: var(--font-sans);
             cursor: pointer;
             transition: all 0.15s;
+            flex-shrink: 0;
         }
 
         .btn-send:hover { filter: brightness(1.1); }
@@ -695,10 +703,10 @@ CHAT_HTML = """<!DOCTYPE html>
                       hx-post="/chat/message"
                       hx-target="#chat-messages"
                       hx-swap="beforeend"
-                      hx-on::after-request="this.reset(); document.getElementById('chat-messages').scrollTo({top: document.getElementById('chat-messages').scrollHeight, behavior: 'smooth'});">
+                      hx-on::after-request="this.reset(); document.getElementById('chat-input').style.height='50px'; document.getElementById('chat-messages').scrollTo({top: document.getElementById('chat-messages').scrollHeight, behavior: 'smooth'});">
                     <input type="hidden" id="provider-hidden" name="provider" value="default">
-                    <input name="message" type="text" placeholder="Describe what you want to build..."
-                           required autocomplete="off" class="chat-input" id="chat-input">
+                    <textarea name="message" placeholder="Describe what you want to build..."
+                           required class="chat-input" id="chat-input" rows="1"></textarea>
                     <button type="submit" class="btn-send">Send</button>
                 </form>
                 <p class="powered-by">Tendril v0.1 — The agent that builds agents.</p>
@@ -718,6 +726,23 @@ CHAT_HTML = """<!DOCTYPE html>
             container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
         });
         observer.observe(document.getElementById('chat-messages'), { childList: true, subtree: true });
+
+        // Enhanced input handling: Auto-resize, Enter for new line, Ctrl+Enter to send
+        const input = document.getElementById('chat-input');
+        const form = input.closest('form');
+        
+        input.addEventListener('input', function() {
+            this.style.height = '50px';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                // Submit form on Ctrl+Enter
+                e.preventDefault();
+                htmx.trigger(form, 'submit');
+            }
+        });
     </script>
 </body>
 </html>"""
