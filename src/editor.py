@@ -28,6 +28,32 @@ BLOCKED_PATTERNS = {
     "venv", ".venv", "secrets",
 }
 
+# Protected files: the LLM CANNOT write to these during chat sessions.
+# These are critical kernel files that have been destroyed by LLM write_file
+# calls multiple times (2026-04-09 incidents: main.py, patcher.py, styles.css).
+# Modifications to these files require the /edit endpoint with SDLC gates,
+# or direct human editing.
+PROTECTED_FILES = {
+    "src/main.py",
+    "src/tendril.py",
+    "src/config.py",
+    "src/editor.py",
+    "src/patcher.py",
+    "src/llmrouter.py",
+    "src/failover.py",
+    "src/eventbus.py",
+    "src/memory.py",
+    "static/styles.css",
+    "static/index.html",
+    "static/app.js",
+    "GUARDRAILS.md",
+    "DECISIONS.md",
+    "ARCHITECTURE.md",
+    "docker-compose.yml",
+    "Dockerfile",
+    "requirements.txt",
+}
+
 
 class FileEditor:
     """
@@ -37,8 +63,9 @@ class FileEditor:
     to prevent directory traversal attacks.
     """
 
-    def __init__(self, sandbox_root: str = SANDBOX_ROOT):
+    def __init__(self, sandbox_root: str = SANDBOX_ROOT, enforce_protection: bool = True):
         self.sandbox_root = os.path.realpath(sandbox_root)
+        self.enforce_protection = enforce_protection
         self._edit_history: list[dict] = []
 
     def _resolve_path(self, filepath: str) -> str:
@@ -139,6 +166,21 @@ class FileEditor:
 
         return diff_text
 
+    def _check_protected(self, filepath: str):
+        """Block writes to protected kernel files during chat sessions."""
+        if not self.enforce_protection:
+            return
+        # Normalize to relative path for comparison
+        rel = filepath.lstrip("/").lstrip("./")
+        if self.sandbox_root and filepath.startswith(self.sandbox_root):
+            rel = os.path.relpath(filepath, self.sandbox_root)
+        if rel in PROTECTED_FILES:
+            raise PermissionError(
+                f"🛡️ PROTECTED FILE: '{rel}' cannot be modified during a chat session. "
+                f"Use the /edit endpoint with SDLC gates, or ask the human developer "
+                f"to make this change directly. See GUARDRAILS.md §7 for details."
+            )
+
     def write(self, filepath: str, content: str, create_parents: bool = True) -> dict:
         """
         Write content to a file within the sandbox.
@@ -147,6 +189,7 @@ class FileEditor:
         """
         resolved = self._resolve_path(filepath)
         self._validate_extension(filepath)
+        self._check_protected(filepath)
 
         # Generate diff before writing
         diff = self.generate_diff(filepath, content)
@@ -191,6 +234,7 @@ class FileEditor:
         Apply a targeted search-and-replace patch to a file.
         More surgical than full file writes.
         """
+        self._check_protected(filepath)
         content = self.read(filepath)
 
         if search not in content:
