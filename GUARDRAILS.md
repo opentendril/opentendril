@@ -50,5 +50,33 @@ This document defines the "Laws of the Kernel." All contributors (human and AI) 
 
 ---
 
+## 🔀 Source Control (SDLC Discipline)
+
+### 6. Commit Cadence
+- **Atomic commits** after each logical unit of work. Never batch more than one phase or feature into a single commit.
+- **Commit BEFORE testing.** If a live test corrupts files (as happened 2026-04-09 when an LLM `write_file` destroyed `main.py`), the last commit is the recovery point.
+- Commit message format: `type(scope): description` using [Conventional Commits](https://www.conventionalcommits.org/).
+  - ✅ `feat(failover): add exponential backoff with cost-aware routing`
+  - ✅ `fix(llmrouter): correct Claude model names (dots → hyphens)`
+  - ❌ `update stuff`
+- **Push after every commit session.** Local-only commits are not backups.
+
+### 7. Protected Files
+The following files must **never** be modified by the orchestrator's `write_file` tool during a chat session:
+- `src/main.py` — Core application server
+- `src/tendril.py` — Orchestrator (self-modification = corruption risk)
+- `src/config.py` — Configuration
+- `.env` — Secrets
+- `GUARDRAILS.md`, `DECISIONS.md` — Governance documents
+
+These files should only be modified via the `/edit` endpoint (which has SDLC gates) or by human developers.
+
+### 8. Branch Strategy (Future)
+- `main` — Stable, deployable at all times
+- `feat/*` — Feature branches for multi-session work
+- PRs required for any changes that modify more than 5 files
+
+---
+
 > [!IMPORTANT]
 > Failure to follow these guardrails leads to technical debt and brand dilution. If an AI agent (including the Root Agent) detects a violation, it is authorized to pause and request a refactor.
