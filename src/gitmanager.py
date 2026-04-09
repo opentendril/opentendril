@@ -69,8 +69,24 @@ class GitManager:
         self._run_git("checkout", "-b", branch_name)
         return f"Checked out new branch: {branch_name}"
 
+    def _is_signing_configured(self) -> bool:
+        """Check if GPG commit signing is configured for this repository."""
+        try:
+            result = subprocess.run(
+                ["git", "config", "commit.gpgsign"],
+                cwd=self.repo_path,
+                capture_output=True, text=True
+            )
+            return result.stdout.strip().lower() == "true"
+        except Exception:
+            return False
+
     def commit_changes(self, message: str) -> str:
-        """Add all tracked/untracked changes in safe areas and commit them."""
+        """Add all tracked/untracked changes in safe areas and commit them.
+        
+        Commits are cryptographically signed (-S) when a GPG key is configured.
+        This ensures every autonomous commit is verifiable on GitHub.
+        """
         # Only stage files in safe directories to avoid committing secrets accidentally
         # Assuming .gitignore handles the heavy lifting, we'll just add everything
         self._run_git("add", "-A")
@@ -79,9 +95,20 @@ class GitManager:
         status = self.status()
         if not status:
             return "No changes to commit."
-            
-        self._run_git("commit", "-m", message, "-m", "Co-authored-by: Tendril <tendril@jurnx.com>")
-        return f"Committed changes with message: '{message}'"
+
+        # Build commit command with optional signing
+        commit_args = ["commit"]
+        if self._is_signing_configured():
+            commit_args.append("-S")
+            logger.info("🔏 Signing commit with GPG key")
+        else:
+            logger.warning("⚠️  GPG signing not configured. Run scripts/generate-node-identity.sh to enable verified commits.")
+
+        commit_args.extend(["-m", message, "-m", "Co-authored-by: Tendril <tendril@jurnx.com>"])
+        self._run_git(*commit_args)
+        
+        signed = " (signed)" if self._is_signing_configured() else " (unsigned)"
+        return f"Committed changes with message: '{message}'{signed}"
 
     def push_branch(self, branch_name: Optional[str] = None) -> str:
         """Push the given (or current) branch to origin."""

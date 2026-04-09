@@ -34,3 +34,4 @@ skills/dynamic-skills/
 # Models cache
 models/
 .cache/
+tendril-node-*.pub
