@@ -1,8 +1,9 @@
 # Build stage
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
-COPY go.mod go.sum ./
+COPY go.mod ./
 RUN go mod download
+RUN go mod tidy
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o gateway ./cmd/gateway
 
