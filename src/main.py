@@ -176,33 +176,50 @@ async def get_status():
 @app.get("/dreamer/status")
 async def get_dreamer_status():
     """Current state of the background Dreamer loop (JSON API)."""
+    state = dreamer_state
     return {
-        "status": dreamer_state.status,
-        "last_run": dreamer_state.last_run,
-        "run_count": dreamer_state.run_count,
-        "insight_count": dreamer_state.insight_count,
-        "last_error": dreamer_state.last_error,
+        "status": getattr(state, 'last_status', 'idle'),
+        "last_run": state.last_run.isoformat() if state.last_run else None,
+        "run_count": getattr(state, 'total_runs', 0),
+        "insight_count": getattr(state, 'total_insights', 0),
+        "last_error": getattr(state, 'last_error', None),
     }
 
 
 @app.get("/dreamer/widget", response_class=HTMLResponse)
 async def get_dreamer_widget():
     """HTML fragment for the sidebar dreamer status widget (polled by HTMX)."""
-    state = dreamer_state
-    if state.status == "idle" and state.run_count == 0:
-        status_text = "Waiting for first cycle..."
-        dot_color = "var(--text-muted)"
-    elif state.status == "running":
-        status_text = "Dreaming..."
-        dot_color = "#8b5cf6"
-    elif state.last_error:
-        status_text = f"Error: {state.last_error[:30]}"
-        dot_color = "var(--danger)"
-    else:
-        status_text = f"{state.insight_count} insights · {state.run_count} runs"
-        dot_color = "var(--accent)"
+    try:
+        state = dreamer_state
+        last_status = getattr(state, 'last_status', 'idle')
+        total_runs = getattr(state, 'total_runs', 0)
+        total_insights = getattr(state, 'total_insights', 0)
+        last_run = getattr(state, 'last_run', None)
+        last_error = getattr(state, 'last_error', None)
 
-    last_run_display = state.last_run[:16] if state.last_run else "Never"
+        if last_status == "idle" and total_runs == 0:
+            status_text = "Waiting for first cycle..."
+            dot_color = "var(--text-muted)"
+        elif last_status == "running":
+            status_text = "Dreaming..."
+            dot_color = "#8b5cf6"
+        elif last_error:
+            status_text = f"Error: {str(last_error)[:30]}"
+            dot_color = "var(--danger)"
+        else:
+            status_text = f"{total_insights} insights · {total_runs} runs"
+            dot_color = "var(--accent)"
+
+        if last_run and hasattr(last_run, 'strftime'):
+            last_run_display = last_run.strftime("%Y-%m-%d %H:%M")
+        else:
+            last_run_display = "Never"
+
+    except Exception as e:
+        logger.warning(f"Dreamer widget error (non-fatal): {e}")
+        status_text = "Initializing..."
+        dot_color = "var(--text-muted)"
+        last_run_display = "Never"
 
     return f'''
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
