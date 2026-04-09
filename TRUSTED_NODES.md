@@ -25,7 +25,7 @@ It is the human-readable counterpart to GitHub's GPG key verification. When a ne
 
 | Node Name | Operator | GPG Key ID | Hostname | Registered |
 |-----------|----------|------------|----------|------------|
-| OpenTendril Agent | dr3w | `EB231EA00EDE602C` | phn16s | 2026-04-09 |
+| OpenTendril Agent | dr3w | `C0AA41FA9B3B4DBD` | phn16s | 2026-04-09 |
 
 ### Deployed Agents (PR-Only Access)
 
