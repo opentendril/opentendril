@@ -5,12 +5,15 @@ Routes requests to the best model for the task:
   - grok:      xAI Grok models (fast + reasoning)
   - anthropic: Claude models (best for code editing)
   - openai:    GPT models (general purpose)
+  - google:    Gemini models (via OpenAI-compatible endpoint)
   - local:     vLLM on local GPU (free, private)
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from .config import (
     GROK_API_KEY,
@@ -24,11 +27,13 @@ from .config import (
 
 logger = logging.getLogger(__name__)
 
-# Provider configurations: (base_url, default_model, fast_model)
+# Provider configurations
+# Updated: April 2026 — current model landscape
 PROVIDER_CONFIG = {
     "grok": {
         "base_url": "https://api.x.ai/v1",
         "api_key": GROK_API_KEY,
+        "type": "openai",
         "models": {
             "fast": "grok-3-mini",
             "standard": "grok-4-fast-non-reasoning",
@@ -36,35 +41,39 @@ PROVIDER_CONFIG = {
         },
     },
     "anthropic": {
-        "base_url": "https://api.anthropic.com/v1",
+        "base_url": None,  # ChatAnthropic handles this internally
         "api_key": ANTHROPIC_API_KEY,
+        "type": "anthropic",
         "models": {
-            "fast": "claude-3-5-haiku-latest",
-            "standard": "claude-3-5-sonnet-latest",
-            "power": "claude-3-5-sonnet-latest",
+            "fast": "claude-haiku-4-5",
+            "standard": "claude-sonnet-4-6",
+            "power": "claude-opus-4-6",
         },
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "api_key": OPENAI_API_KEY,
+        "type": "openai",
         "models": {
-            "fast": "gpt-4o-mini",
-            "standard": "gpt-4o",
-            "power": "gpt-4o",
+            "fast": "gpt-5.4-nano",
+            "standard": "gpt-5.4-mini",
+            "power": "gpt-5.4",
         },
     },
     "google": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key": GOOGLE_API_KEY,
+        "type": "openai",
         "models": {
-            "fast": "gemini-2.0-flash",
-            "standard": "gemini-2.5-pro-preview-03-25",
-            "power": "gemini-2.5-pro-preview-03-25",
+            "fast": "gemini-2.5-flash",
+            "standard": "gemini-3-flash",
+            "power": "gemini-3.1-pro-preview",
         },
     },
     "local": {
         "base_url": LOCAL_INFERENCE_URL,
         "api_key": "not-needed",
+        "type": "openai",
         "models": {
             "fast": LOCAL_MODEL_NAME,
             "standard": LOCAL_MODEL_NAME,
@@ -87,7 +96,7 @@ class LLMRouter:
 
     def __init__(self, default_provider: Optional[str] = None):
         self.default_provider = default_provider or DEFAULT_LLM_PROVIDER
-        self._cache: dict[str, ChatOpenAI] = {}
+        self._cache: dict[str, BaseChatModel] = {}
         self._available_providers = self._detect_providers()
 
         if not self._available_providers:
@@ -108,22 +117,27 @@ class LLMRouter:
                 available.append(name)
         return available
 
+    @property
+    def available_providers(self) -> list[str]:
+        """Return list of providers with valid API keys."""
+        return list(self._available_providers)
+
     def get(
         self,
         provider: Optional[str] = None,
         tier: str = "standard",
         temperature: float = 0.2,
-    ) -> ChatOpenAI:
+    ) -> BaseChatModel:
         """
-        Get a ChatOpenAI instance for the given provider and tier.
+        Get a chat model instance for the given provider and tier.
 
         Args:
-            provider: "grok", "anthropic", "openai", "local" (None = default)
+            provider: "grok", "anthropic", "openai", "google", "local" (None = default)
             tier: "fast", "standard", "power"
             temperature: Model temperature (0.0 - 1.0)
 
         Returns:
-            ChatOpenAI instance ready for .invoke() or .stream()
+            BaseChatModel instance ready for .invoke() or .stream()
         """
         provider = provider or self.default_provider
 
@@ -141,12 +155,20 @@ class LLMRouter:
         cache_key = f"{provider}:{model_name}:{temperature}"
 
         if cache_key not in self._cache:
-            self._cache[cache_key] = ChatOpenAI(
-                model=model_name,
-                api_key=config["api_key"],
-                base_url=config["base_url"],
-                temperature=temperature,
-            )
+            if config["type"] == "anthropic":
+                self._cache[cache_key] = ChatAnthropic(
+                    model=model_name,
+                    api_key=config["api_key"],
+                    temperature=temperature,
+                    max_tokens=4096,
+                )
+            else:
+                self._cache[cache_key] = ChatOpenAI(
+                    model=model_name,
+                    api_key=config["api_key"],
+                    base_url=config["base_url"],
+                    temperature=temperature,
+                )
             logger.info(f"🧠 Created LLM instance: {provider}/{model_name} (tier={tier}, temp={temperature})")
 
         return self._cache[cache_key]

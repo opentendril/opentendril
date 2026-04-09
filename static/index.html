@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tendril | The Root Agent</title>
+    <meta name="description" content="Tendril — The Root Agent. OpenClaw's successor that fixes itself while it works.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
+    <link rel="icon" type="image/png" href="/static/tendril-logo.png">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>History</h2>
+            <button class="btn-text"
+                    hx-post="/chat/clear"
+                    hx-target="#chat-history"
+                    hx-swap="innerHTML">Clear</button>
+        </div>
+        <div id="chat-history" class="sidebar-content"
+             hx-get="/chat/history" hx-trigger="load">
+        </div>
+        <div class="sidebar-footer">
+            <div class="dreamer-widget"
+                 hx-get="/dreamer/widget" hx-trigger="load, every 60s" hx-swap="innerHTML">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                    <span style="font-size:14px;">💭</span>
+                    <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">Dreamer</span>
+                    <span id="dreamer-dot" style="width:6px;height:6px;border-radius:50%;background:var(--text-muted);margin-left:auto;"></span>
+                </div>
+                <div style="font-size:10px;color:var(--text-muted);">Loading...</div>
+            </div>
+            <button class="btn-secondary" style="margin-bottom:8px;display:block;width:100%;text-align:center;font-size:11px;padding:6px;"
+                    hx-post="/dreamer/trigger" hx-swap="none"
+                    hx-on::after-request="this.textContent='✅ Triggered'; setTimeout(() => this.textContent='⚡ Trigger Dream', 2000)">
+                ⚡ Trigger Dream
+            </button>
+            <a href="#" class="btn-secondary" style="margin-bottom: 8px; display: block; text-align: center;" 
+               hx-get="/settings" hx-target="#chat-messages" hx-swap="innerHTML">⚙️ Configuration</a>
+            <a href="/health" class="btn-secondary" target="_blank">System Status</a>
+            <div class="credits-widget local" hx-get="/v1/credits" hx-trigger="load">
+                <div>
+                    <div class="credits-val">∞</div>
+                    <div class="credits-label">Local Credits</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <main class="main">
+        <header class="topbar">
+            <div class="topbar-left">
+                <div class="status-dot"></div>
+                <img src="/static/tendril-logo.png" alt="Tendril Logo" style="height: 24px; width: 24px;">
+                <h1>Tendril</h1>
+            </div>
+            <select id="provider-select" class="provider-select">
+                <option value="default">Auto (Default)</option>
+                <!-- Provider options loaded dynamically by app.js -->
+            </select>
+        </header>
+
+        <div id="chat-messages" class="messages">
+            <div class="welcome">
+                <img src="/static/tendril-logo.png" alt="Tendril Logo" style="height: 80px; width: 80px; margin-bottom: 24px; opacity: 1;">
+                <h3>I am the Root Agent.</h3>
+                <p>Turn your frustrations into skills via <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">/edit</code>.</p>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-wrapper">
+                <form class="input-form"
+                      hx-post="/chat/message"
+                      hx-target="#chat-messages"
+                      hx-swap="beforeend"
+                      hx-on::after-request="this.reset(); document.getElementById('chat-input').style.height='50px'; document.getElementById('chat-messages').scrollTo({top: document.getElementById('chat-messages').scrollHeight, behavior: 'smooth'});">
+                    <input type="hidden" id="provider-hidden" name="provider" value="default">
+                    <textarea name="message" placeholder="Describe what you want to build..."
+                           required class="chat-input" id="chat-input" rows="1"></textarea>
+                    <button type="submit" class="btn-send">Send</button>
+                </form>
+                <p class="powered-by">Tendril v0.1 — The agent that builds agents.</p>
+            </div>
+        </div>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

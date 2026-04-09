@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+
+# Tendril Sandbox — Isolated code execution environment.
+# No API keys. No database. No internet. Just a Python runtime
+# with linting and testing tools, accepting commands via HTTP relay.
+
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /sandbox
+
+# Install only the execution/testing dependencies (no LLM, no DB drivers)
+RUN pip install --no-cache-dir \
+    fastapi==0.115.2 \
+    uvicorn[standard]==0.32.0 \
+    pydantic==2.9.2 \
+    ruff==0.3.5 \
+    pytest==8.1.1 \
+    pytest-asyncio==0.23.6 \
+    httpx==0.27.0
+
+# Copy only the sandbox server
+COPY src/sandboxserver.py ./sandboxserver.py
+
+# Create non-root user
+RUN adduser --disabled-password --gecos '' sandbox \
+    && mkdir -p /workspace \
+    && chown -R sandbox:sandbox /sandbox /workspace
+
+USER sandbox
+WORKDIR /workspace
+
+EXPOSE 9999
+
+CMD ["python", "-m", "uvicorn", "sandboxserver:app", "--host", "0.0.0.0", "--port", "9999", "--app-dir", "/sandbox"]

@@ -5,8 +5,8 @@ Self-building AI orchestrator with multi-LLM routing,
 file editing, and enterprise-ready security.
 
 Endpoints:
-  GET  /           → Redirect to /chat
-  GET  /chat       → Chat UI (SSE streaming, history, LLM selector)
+  GET  /             → Redirect to /chat
+  GET  /chat         → Chat UI (served from static/index.html)
   POST /chat/message → Send a message (returns HTML fragments via HTMX)
   GET  /chat/stream  → SSE stream for response tokens
   GET  /chat/history → Chat history sidebar
@@ -14,6 +14,9 @@ Endpoints:
   POST /edit         → Self-building: edit project files via LLM
   GET  /health       → Health check
   POST /v1/chat      → JSON API for programmatic access
+  GET  /api/providers → Available LLM providers (JSON)
+  GET  /events       → Recent system events
+  GET  /health/providers → Provider health status
 """
 
 import html
@@ -21,11 +24,12 @@ import logging
 import os
 import asyncio
 import json
+import uuid
 import dotenv
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi import FastAPI, Request, Form, HTTPException, Cookie, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,9 +48,10 @@ from .skillsmanager import SkillsManager
 from .tendril import Orchestrator
 from .editor import FileEditor
 from .approval import ApprovalGate
-from .dreamer import dream
+from .dreamer import dream, dreamer_state
 from .credits import credit_manager
 from .waitlist import router as waitlist_router
+from .eventbus import event_bus
 
 # --- Setup ---
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -72,6 +77,10 @@ editor = FileEditor()
 approval = ApprovalGate(auto_approve=True)
 orchestrator = Orchestrator(memory, skills_manager, llm_router, editor, approval)
 
+# Wire event bus to Redis (shares connection with Memory)
+if memory.redis:
+    event_bus.set_redis(memory.redis)
+
 # Async scheduler for dreaming
 scheduler = AsyncIOScheduler()
 scheduler.add_job(dream, "interval", hours=1, args=[memory, llm_router])
@@ -83,7 +92,6 @@ app = FastAPI(title="Tendril", version="0.1.0", description="Self-building AI or
 app.state.limiter = limiter
 
 # Mount static assets
-import os
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -96,8 +104,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
-
-app.state.limiter = limiter
 
 # Include routers
 app.include_router(waitlist_router)
@@ -148,7 +154,6 @@ async def get_status():
             "name": "Tendril",
             "version": "0.1.0",
             "identity": "The Root Agent",
-            "uptime": "Calculating...", # Placeholder for future uptime logic
         },
         "inventory": {
             "skills": skills_manager.skills,
@@ -167,604 +172,122 @@ async def get_status():
     }
 
 
+# --- Dreamer Endpoints ---
+@app.get("/dreamer/status")
+async def get_dreamer_status():
+    """Current state of the background Dreamer loop (JSON API)."""
+    return {
+        "status": dreamer_state.status,
+        "last_run": dreamer_state.last_run,
+        "run_count": dreamer_state.run_count,
+        "insight_count": dreamer_state.insight_count,
+        "last_error": dreamer_state.last_error,
+    }
+
+
+@app.get("/dreamer/widget", response_class=HTMLResponse)
+async def get_dreamer_widget():
+    """HTML fragment for the sidebar dreamer status widget (polled by HTMX)."""
+    state = dreamer_state
+    if state.status == "idle" and state.run_count == 0:
+        status_text = "Waiting for first cycle..."
+        dot_color = "var(--text-muted)"
+    elif state.status == "running":
+        status_text = "Dreaming..."
+        dot_color = "#8b5cf6"
+    elif state.last_error:
+        status_text = f"Error: {state.last_error[:30]}"
+        dot_color = "var(--danger)"
+    else:
+        status_text = f"{state.insight_count} insights · {state.run_count} runs"
+        dot_color = "var(--accent)"
+
+    last_run_display = state.last_run[:16] if state.last_run else "Never"
+
+    return f'''
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+        <span style="font-size:14px;">💭</span>
+        <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">Dreamer</span>
+        <span style="width:6px;height:6px;border-radius:50%;background:{dot_color};margin-left:auto;"></span>
+    </div>
+    <div style="font-size:10px;color:var(--text-muted);">{safe(status_text)}</div>
+    <div style="font-size:9px;color:var(--text-muted);margin-top:2px;">Last: {safe(last_run_display)}</div>
+    '''
+
+
+@app.post("/dreamer/trigger")
+async def trigger_dream():
+    """Manually trigger a dream cycle (for testing or on-demand synthesis)."""
+    try:
+        await asyncio.to_thread(dream, memory, llm_router)
+        return {"status": "completed", "insight_count": dreamer_state.insight_count}
+    except Exception as e:
+        logger.error(f"Manual dream trigger failed: {e}")
+        return {"status": "error", "error": str(e)}
+
+
+# --- API Endpoints ---
+@app.get("/api/providers")
+async def get_providers():
+    """Return available LLM providers for the UI selector."""
+    info = llm_router.get_provider_info()
+    return [
+        {"value": name, "label": f"{name.capitalize()} ({info[name]['models']['standard']})"}
+        for name in sorted(info.keys())
+        if info[name]["has_key"] or name == "local"
+    ]
+
+
+@app.get("/events/{session_id}")
+async def get_session_events(session_id: str, limit: int = 50):
+    """Get recent events for a session (for debugging and observability)."""
+    return event_bus.get_session_events(session_id, limit=min(limit, 200))
+
+
+@app.get("/events")
+async def get_recent_events(limit: int = 20):
+    """Get most recent events across all sessions."""
+    return event_bus.get_recent(limit=min(limit, 100))
+
+
+@app.get("/health/providers")
+async def get_provider_health():
+    """Get health status of all LLM providers (cooldowns, error rates)."""
+    return orchestrator.failover.get_provider_health()
+
+
 # --- Chat UI ---
-CHAT_HTML = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tendril | The Root Agent</title>
-    <meta name="description" content="Tendril — The Root Agent. OpenClaw's successor that fixes itself while it works.">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://unpkg.com/htmx.org/dist/ext/sse.js"></script>
-    <link rel="icon" type="image/png" href="/static/tendril-logo.png">
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        :root {
-            --bg-primary: #09090b;
-            --bg-secondary: #18181b;
-            --bg-tertiary: #27272a;
-            --border: #3f3f46;
-            --border-hover: #52525b;
-            --text-primary: #fafafa;
-            --text-secondary: #a1a1aa;
-            --text-muted: #71717a;
-            --accent: #10b981;
-            --accent-dim: rgba(16, 185, 129, 0.15);
-            --accent-glow: rgba(16, 185, 129, 0.3);
-            --danger: #ef4444; /* Lobster red */
-            --accent-secondary: #ef4444; /* OpenClaw legacy */
-            --radius: 16px;
-            --radius-sm: 10px;
-            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
-        }
-
-        body {
-            font-family: var(--font-sans);
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            height: 100vh;
-            display: flex;
-            overflow: hidden;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        /* Sidebar */
-        .sidebar {
-            width: 300px;
-            background: var(--bg-secondary);
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-        }
-
-        .sidebar-header {
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .sidebar-header h2 {
-            font-size: 15px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-
-        .btn-text {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            cursor: pointer;
-            transition: color 0.2s;
-            font-family: var(--font-sans);
-        }
-
-        .btn-text:hover { color: var(--text-primary); }
-
-        .sidebar-content {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px;
-            scrollbar-width: none;
-        }
-
-        .sidebar-content::-webkit-scrollbar { display: none; }
-
-        .history-item {
-            padding: 10px 14px;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            transition: all 0.15s;
-            border: 1px solid transparent;
-            margin-bottom: 4px;
-        }
-
-        .history-item:hover {
-            background: var(--bg-tertiary);
-            border-color: var(--border);
-        }
-
-        .history-item p { font-size: 13px; color: var(--text-secondary); }
-        .history-item .meta { font-size: 10px; color: var(--text-muted); margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
-
-        .sidebar-footer {
-            padding: 16px;
-            border-top: 1px solid var(--border);
-        }
-
-        .btn-secondary {
-            display: block;
-            width: 100%;
-            padding: 10px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            color: var(--text-secondary);
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            text-align: center;
-            text-decoration: none;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-family: var(--font-sans);
-        }
-
-        .btn-secondary:hover {
-            background: var(--border);
-            color: var(--text-primary);
-        }
-
-        .credits-widget {
-            margin-top: 12px;
-            padding: 12px;
-            background: linear-gradient(135deg, rgba(234, 179, 8, 0.1), rgba(234, 179, 8, 0.02));
-            border: 1px solid rgba(234, 179, 8, 0.2);
-            border-radius: var(--radius-sm);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .credits-widget.local {
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(16, 185, 129, 0.02));
-            border-color: rgba(16, 185, 129, 0.2);
-        }
-
-        .credits-val {
-            font-family: var(--font-mono);
-            font-weight: 700;
-            font-size: 13px;
-        }
-
-        .credits-widget.local .credits-val { color: var(--accent); }
-        .credits-widget:not(.local) .credits-val { color: #eab308; } /* Gold color for hosted */
-
-        .credits-label {
-            font-size: 10px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-        }
-
-        /* Main Chat */
-        .main {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .topbar {
-            height: 56px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            background: rgba(9, 9, 11, 0.8);
-            backdrop-filter: blur(12px);
-            z-index: 10;
-        }
-
-        .topbar-left {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            background: var(--accent);
-            border-radius: 50%;
-            box-shadow: 0 0 8px var(--accent-glow);
-            animation: pulse 2s ease-in-out infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--accent-glow); }
-            50% { opacity: 0.6; box-shadow: 0 0 16px var(--accent-glow); }
-        }
-
-        .topbar h1 {
-            font-size: 15px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-        }
-
-        .provider-select {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-secondary);
-            font-size: 12px;
-            font-family: var(--font-mono);
-            padding: 6px 12px;
-            cursor: pointer;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-
-        .provider-select:hover,
-        .provider-select:focus {
-            border-color: var(--accent);
-        }
-
-        /* Messages */
-        .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 32px 24px;
-            scrollbar-width: none;
-        }
-
-        .messages::-webkit-scrollbar { display: none; }
-
-        .welcome {
-            text-align: center;
-            padding: 80px 20px;
-            opacity: 0.25;
-        }
-
-        .welcome h3 {
-            font-size: 32px;
-            font-weight: 800;
-            letter-spacing: -0.04em;
-            margin-bottom: 12px;
-        }
-
-        .welcome p {
-            font-family: var(--font-mono);
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-
-        .msg-row {
-            max-width: 720px;
-            margin: 0 auto 16px;
-            display: flex;
-            animation: fadeIn 0.3s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .msg-row.user { justify-content: flex-end; }
-        .msg-row.assistant { justify-content: flex-start; }
-
-        .msg-bubble {
-            padding: 12px 18px;
-            border-radius: var(--radius);
-            font-size: 14px;
-            line-height: 1.6;
-            max-width: 85%;
-            word-wrap: break-word;
-        }
-
-        .msg-bubble.user {
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-bottom-right-radius: 4px;
-        }
-
-        .msg-bubble.assistant {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-bottom-left-radius: 4px;
-            color: var(--text-secondary);
-        }
-
-        .msg-bubble pre {
-            background: var(--bg-primary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px 16px;
-            margin: 8px 0;
-            overflow-x: auto;
-            font-family: var(--font-mono);
-            font-size: 13px;
-        }
-
-        .msg-bubble code {
-            font-family: var(--font-mono);
-            font-size: 13px;
-            background: var(--bg-primary);
-            padding: 2px 6px;
-            border-radius: 4px;
-        }
-
-        .thinking {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: var(--accent);
-            font-family: var(--font-mono);
-            font-size: 12px;
-        }
-
-        .thinking-dot {
-            width: 6px;
-            height: 6px;
-            background: var(--accent);
-            border-radius: 50%;
-            animation: blink 1s ease-in-out infinite;
-        }
-
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.2; }
-        }
-
-        .error-msg {
-            color: var(--danger);
-            font-size: 13px;
-            font-family: var(--font-mono);
-        }
-
-        /* Input Area */
-        .input-area {
-            padding: 20px 24px 24px;
-            background: linear-gradient(to top, var(--bg-primary) 60%, transparent);
-        }
-
-        .input-wrapper {
-            max-width: 720px;
-            margin: 0 auto;
-            position: relative;
-        }
-
-        .input-form {
-            display: flex;
-            gap: 8px;
-        }
-
-        .chat-input {
-            flex: 1;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 14px 20px;
-            color: var(--text-primary);
-            font-size: 14px;
-            font-family: var(--font-sans);
-            outline: none;
-            transition: border-color 0.2s, box-shadow 0.2s;
-            min-height: 50px;
-            max-height: 200px;
-            resize: vertical;
-            white-space: pre-wrap;
-            overflow-wrap: break-word;
-            overflow-y: auto;
-            line-height: 1.5;
-        }
-
-        .chat-input::placeholder { color: var(--text-muted); }
-        .chat-input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-dim);
-        }
-
-        .btn-send {
-            background: var(--accent-secondary);
-            border: none;
-            border-radius: 12px;
-            padding: 14px 24px;
-            color: #fff;
-            font-size: 13px;
-            font-weight: 700;
-            font-family: var(--font-sans);
-            cursor: pointer;
-            transition: all 0.15s;
-            flex-shrink: 0;
-        }
-
-        .btn-send:hover { filter: brightness(1.1); }
-        .btn-send:active { transform: scale(0.97); }
-
-        .powered-by {
-            text-align: center;
-            margin-top: 12px;
-            font-size: 10px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.15em;
-        }
-
-        /* Settings Panel */
-        .settings-panel {
-            background: rgba(24, 24, 27, 0.8);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 32px;
-            max-width: 500px;
-            margin: 40px auto;
-            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-            animation: fadeIn 0.3s ease;
-        }
-        .settings-panel h2 {
-            margin-bottom: 24px;
-            font-size: 18px;
-            font-weight: 700;
-        }
-        .form-group { margin-bottom: 16px; text-align: left; }
-        .form-group label {
-            display: block;
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-muted);
-            margin-bottom: 8px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-family: var(--font-mono);
-        }
-        .form-input {
-            width: 100%;
-            padding: 12px 14px;
-            background: var(--bg-tertiary);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text-primary);
-            outline: none;
-            font-family: var(--font-mono);
-            font-size: 13px;
-            transition: border-color 0.2s;
-        }
-        .form-input:focus { border-color: var(--accent); }
-        .settings-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 32px;
-        }
-        .btn-primary {
-            background: var(--accent);
-            color: #fff;
-            padding: 10px 20px;
-            border-radius: 8px;
-            border: none;
-            font-size: 13px;
-            font-weight: 600;
-            font-family: var(--font-sans);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-        .btn-primary:hover { filter: brightness(1.1); }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .sidebar { display: none; }
-            .messages { padding: 16px; }
-        }
-    </style>
-</head>
-<body>
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <h2>History</h2>
-            <button class="btn-text"
-                    hx-post="/chat/clear"
-                    hx-target="#chat-history"
-                    hx-swap="innerHTML">Clear</button>
-        </div>
-        <div id="chat-history" class="sidebar-content"
-             hx-get="/chat/history" hx-trigger="load">
-        </div>
-        <div class="sidebar-footer">
-            <a href="#" class="btn-secondary" style="margin-bottom: 8px; display: block; text-align: center;" 
-               hx-get="/settings" hx-target="#chat-messages" hx-swap="innerHTML">⚙️ Configuration</a>
-            <a href="/health" class="btn-secondary" target="_blank">System Status</a>
-            <div class="credits-widget local" hx-get="/v1/credits" hx-trigger="load">
-                <div>
-                    <div class="credits-val">∞</div>
-                    <div class="credits-label">Local Credits</div>
-                </div>
-            </div>
-        </div>
-    </aside>
-
-    <main class="main">
-        <header class="topbar">
-            <div class="topbar-left">
-                <div class="status-dot"></div>
-                <img src="/static/tendril-logo.png" alt="Tendril Logo" style="height: 24px; width: 24px;">
-                <h1>Tendril</h1>
-            </div>
-            <select id="provider-select" class="provider-select">
-                <option value="default">Auto (Default)</option>
-                PROVIDER_OPTIONS_PLACEHOLDER
-            </select>
-        </header>
-
-        <div id="chat-messages" class="messages">
-            <div class="welcome">
-                <img src="/static/tendril-logo.png" alt="Tendril Logo" style="height: 80px; width: 80px; margin-bottom: 24px; opacity: 1;">
-                <h3>I am the Root Agent.</h3>
-                <p>Turn your frustrations into skills via <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">/edit</code>.</p>
-            </div>
-        </div>
-
-        <div class="input-area">
-            <div class="input-wrapper">
-                <form class="input-form"
-                      hx-post="/chat/message"
-                      hx-target="#chat-messages"
-                      hx-swap="beforeend"
-                      hx-on::after-request="this.reset(); document.getElementById('chat-input').style.height='50px'; document.getElementById('chat-messages').scrollTo({top: document.getElementById('chat-messages').scrollHeight, behavior: 'smooth'});">
-                    <input type="hidden" id="provider-hidden" name="provider" value="default">
-                    <textarea name="message" placeholder="Describe what you want to build..."
-                           required class="chat-input" id="chat-input" rows="1"></textarea>
-                    <button type="submit" class="btn-send">Send</button>
-                </form>
-                <p class="powered-by">Tendril v0.1 — The agent that builds agents.</p>
-            </div>
-        </div>
-    </main>
-
-    <script>
-        // Sync provider selector with hidden form field
-        const sel = document.getElementById('provider-select');
-        const hidden = document.getElementById('provider-hidden');
-        sel.addEventListener('change', () => { hidden.value = sel.value; });
-
-        // Auto-scroll on new messages
-        const observer = new MutationObserver(() => {
-            const container = document.getElementById('chat-messages');
-            container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-        });
-        observer.observe(document.getElementById('chat-messages'), { childList: true, subtree: true });
-
-        // Enhanced input handling: Auto-resize, Enter for new line, Ctrl+Enter to send
-        const input = document.getElementById('chat-input');
-        const form = input.closest('form');
-        
-        input.addEventListener('input', function() {
-            this.style.height = '50px';
-            this.style.height = (this.scrollHeight) + 'px';
-        });
-
-        input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                // Submit form on Ctrl+Enter
-                e.preventDefault();
-                htmx.trigger(form, 'submit');
-            }
-        });
-    </script>
-</body>
-</html>"""
-
+# Frontend served from static/index.html, static/styles.css, static/app.js
+# Provider options loaded dynamically via GET /api/providers
 
 @app.get("/chat", response_class=HTMLResponse)
-async def get_chat_ui():
-    # Build provider options dynamically
-    provider_info = llm_router.get_provider_info()
-    options = ""
-    for name in sorted(provider_info.keys()):
-        if provider_info[name]["has_key"] or name == "local":
-            label = name.capitalize()
-            model = provider_info[name]["models"]["standard"]
-            options += f'<option value="{safe(name)}">{safe(label)} ({safe(model)})</option>\n'
+async def get_chat_ui(request: Request, response: Response):
+    # Ensure a persistent session cookie exists
+    session_id = request.cookies.get("tendril_session")
+    if not session_id:
+        session_id = f"sess-{uuid.uuid4().hex[:12]}"
+        response.set_cookie(
+            key="tendril_session",
+            value=session_id,
+            max_age=60 * 60 * 24 * 30,  # 30 days
+            httponly=True,
+            samesite="lax",
+        )
+    logger.info(f"Chat UI session: {session_id}")
 
-    return CHAT_HTML.replace("PROVIDER_OPTIONS_PLACEHOLDER", options)
+    # Serve static frontend
+    html_path = os.path.join(os.path.dirname(__file__), "..", "static", "index.html")
+    with open(html_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    response.body = html_content.encode()
+    response.status_code = 200
+    response.media_type = "text/html"
+    return response
 
 
 @app.get("/chat/history", response_class=HTMLResponse)
-async def get_history():
-    history = memory.get_convo("default")
+async def get_history(tendril_session: str = Cookie(default="default")):
+    history = memory.get_convo(tendril_session)
     if not history:
         return '<p style="color: var(--text-muted); text-align: center; font-size: 12px; font-style: italic; margin-top: 40px;">No conversations yet</p>'
 
@@ -780,23 +303,24 @@ async def get_history():
 
 
 @app.post("/chat/message", response_class=HTMLResponse)
-async def post_message(message: str = Form(...), provider: str = Form("default")):
+async def post_message(message: str = Form(...), provider: str = Form("default"), tendril_session: str = Cookie(default="default")):
     import time
-    # Store user message
-    memory.store_convo("default", "user", message)
+    # Store user message with actual session
+    memory.store_convo(tendril_session, "user", message)
     escaped = safe(message)
     provider_param = safe(provider)
     
-    session_id = f"chat-{int(time.time()*1000)}"
+    # Unique ID for this specific SSE stream connection (not the user session)
+    stream_id = f"chat-{int(time.time()*1000)}"
 
     # Return user bubble + SSE stream container
     return f'''<div class="msg-row user">
         <div class="msg-bubble user">{escaped}</div>
     </div>
     <div class="msg-row assistant"
-         id="{session_id}"
+         id="{stream_id}"
          hx-ext="sse"
-         sse-connect="/chat/stream?message={escaped}&provider={provider_param}&session={session_id}"
+         sse-connect="/chat/stream?message={escaped}&provider={provider_param}&session={stream_id}&sid={safe(tendril_session)}"
          sse-swap="message">
         <div class="msg-bubble assistant">
             <div class="thinking">
@@ -808,14 +332,14 @@ async def post_message(message: str = Form(...), provider: str = Form("default")
 
 
 @app.get("/chat/stream")
-async def stream_chat(message: str, provider: str = "default", session: str = ""):
+async def stream_chat(message: str, provider: str = "default", session: str = "", sid: str = "default"):
     async def event_generator():
         try:
             prov = None if provider == "default" else provider
             response_text = await asyncio.to_thread(
-                orchestrator.process, "default", message, provider=prov
+                orchestrator.process, sid, message, provider=prov
             )
-            memory.store_convo("default", "assistant", response_text)
+            memory.store_convo(sid, "assistant", response_text)
 
             # Format response (basic markdown-like rendering)
             escaped_text = safe(response_text)
@@ -851,7 +375,7 @@ async def stream_chat(message: str, provider: str = "default", session: str = ""
                 current_formatted = current_formatted.replace("\n\n", "</p><p>").replace("\n", "<br>")
                 display = f"<p>{current_formatted}</p>"
                 
-                # If this is the final final word, swap out the entire container to kill SSE!
+                # If this is the final word, swap out the entire container to kill SSE!
                 if i == len(words) - 1 and session:
                     yield f'event: message\ndata: <div hx-swap-oob="outerHTML:#{session}" class="msg-row assistant"><div class="msg-bubble assistant">{display}</div></div>\n\n'
                 else:
@@ -871,9 +395,9 @@ async def stream_chat(message: str, provider: str = "default", session: str = ""
 
 
 @app.post("/chat/clear", response_class=HTMLResponse)
-async def clear_chat():
+async def clear_chat(tendril_session: str = Cookie(default="default")):
     try:
-        memory.redis.delete("convo:default")
+        memory.redis.delete(f"convo:{tendril_session}")
     except Exception:
         pass
     return '<p style="color: var(--text-muted); text-align: center; font-size: 12px; font-style: italic; margin-top: 40px;">Conversation cleared</p>'
@@ -981,7 +505,6 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
 
         if approval_req.status.value in ("approved", "auto_approved"):
             # 5. Document & Commit
-            # Pass the full context for the Chronicler's automated documentation
             commit_msg = f"tendril(/edit): Updated {req.file} - {req.instruction[:120]}"
             git_result = orchestrator.git.commit_changes(commit_msg)
 
@@ -1090,7 +613,6 @@ async def get_credits_ui():
     balance = credit_manager.get_balance()
     is_local = credit_manager.mode.value == "local"
     
-    widget_class = "credits-widget local" if is_local else "credits-widget"
     label = "Local Compute" if is_local else "Cloud Credits"
     
     return f'''<div>

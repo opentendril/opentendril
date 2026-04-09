@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import json
 from redis import Redis
 from sqlalchemy import create_engine
@@ -37,5 +37,7 @@ class Memory:
             metadata = {}
         self.vectorstore.add_texts([content], metadatas=[metadata])
 
-    def retrieve_relevant(self, query: str, k: int = 5) -> List[Document]:
-        return self.vectorstore.similarity_search(query, k=k)
+    def retrieve_relevant(self, query: str, session_id: Optional[str] = None, k: int = 5) -> List[Document]:
+        """Retrieve relevant documents, optionally filtered by session for tenant isolation."""
+        filter_dict = {"session_id": session_id} if session_id else None
+        return self.vectorstore.similarity_search(query, k=k, filter=filter_dict)

@@ -2,7 +2,7 @@
 Tendril Orchestrator — The brain that ties everything together.
 
 Uses LLM Router for multi-model dispatch, File Editor for self-building,
-and Approval Gate for safe operations.
+Model Failover for resilient invocation, and Approval Gate for safe operations.
 """
 
 import json
@@ -24,6 +24,9 @@ from .gitmanager import GitManager
 from .testrunner import TestRunner
 from .credits import credit_manager
 from .chronicler import chronicler
+from .failover import ModelFailover, AllProvidersFailed
+from .eventbus import event_bus, TendrilEvent, generate_run_id
+from .patcher import parse_patch, validate_patch, apply_patch, format_patch_for_prompt, PatchParseError
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,7 @@ class Orchestrator:
         self.approval = approval or ApprovalGate(auto_approve=True)
         self.git = GitManager()
         self.tester = TestRunner(self.approval)
+        self.failover = ModelFailover(self.router)
         self.tools = self._create_tools()
 
     def _create_tools(self) -> list:
@@ -131,6 +135,21 @@ class Orchestrator:
                 return f"✅ {result['action'].title()} {filepath}\n\nDiff:\n{diff}"
             except Exception as e:
                 return f"❌ Cannot write {filepath}: {str(e)}"
+
+        @tool
+        def apply_code_patch(patch_text: str) -> str:
+            """Apply a structured multi-file patch. Use the *** Begin Patch / *** End Patch format for surgical edits."""
+            try:
+                operations = parse_patch(patch_text)
+                errors = validate_patch(operations, editor)
+                if errors:
+                    return f"❌ Patch validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+                result = apply_patch(operations, editor)
+                return f"✅ Patch applied: {result.file_count} file(s)\n{result.summary}"
+            except PatchParseError as e:
+                return f"❌ Patch parse error: {str(e)}"
+            except Exception as e:
+                return f"❌ Patch failed: {str(e)}"
 
         @tool
         def list_project_files(directory: str = "") -> str:
@@ -262,11 +281,19 @@ class Orchestrator:
         if not credit_manager.validate_request(session_id):
             return "❌ Access Denied: Insufficient credits. Please upgrade at cloud.opentendril.com"
 
-        llm = self.router.get(provider=provider, tier=tier)
+        run_id = generate_run_id()
+        event_bus.emit(TendrilEvent(
+            run_id=run_id,
+            event_type="request.start",
+            session_id=session_id,
+            data={"message_preview": message[:100], "provider": provider or "default", "tier": tier},
+        ))
+
         history = self.memory.get_convo(session_id)
-        relevant_docs = self.memory.retrieve_relevant(message)
+        relevant_docs = self.memory.retrieve_relevant(message, session_id=session_id)
         rag_context = "\n".join(doc.page_content for doc in relevant_docs) if relevant_docs else "None"
         skills_context = self.skills_manager.get_context() or "No skills loaded."
+        patch_format = format_patch_for_prompt()
 
         # Build tool descriptions for the system prompt
         tool_descriptions = "\n".join(
@@ -286,8 +313,11 @@ Loaded skills:
 Relevant memories:
 {rag_context}
 
+{patch_format}
+
 Guidelines:
 - Use tools via function calls when helpful
+- For multi-file or surgical edits, prefer apply_code_patch over write_file
 - When editing files, always show the diff
 - Self-Diagnosis: Use `read_logs` and `search_project` proactively if a user reports a bug, you encounter an error, or if asked to check system health.
 - If asked to build or modify code, use the read_file and write_file tools
@@ -300,6 +330,31 @@ Guidelines:
             {"role": "user", "content": message},
         ]
 
+        # Select provider using failover chain (skip providers in cooldown)
+        selected_provider = provider
+        for candidate in self.failover._build_candidate_chain(provider, tier):
+            state = self.failover._get_state(candidate)
+            if not state.is_in_cooldown:
+                selected_provider = candidate
+                break
+        else:
+            event_bus.emit(TendrilEvent(
+                run_id=run_id, event_type="request.error",
+                session_id=session_id, data={"error": "All providers in cooldown"},
+            ))
+            return "⚠️ All LLM providers are currently in cooldown. Please try again in a few seconds."
+
+        try:
+            llm = self.router.get(provider=selected_provider, tier=tier)
+        except Exception as e:
+            return f"⚠️ Failed to initialize LLM provider: {str(e)}"
+
+        event_bus.emit(TendrilEvent(
+            run_id=run_id, event_type="failover.selected",
+            session_id=session_id,
+            data={"provider": selected_provider, "tier": tier, "was_fallback": selected_provider != provider},
+        ))
+
         # Bind tools to the LLM for function calling
         try:
             llm_with_tools = llm.bind_tools(self.tools)
@@ -311,14 +366,29 @@ Guidelines:
         max_iterations = 5
         for i in range(max_iterations):
             try:
+                import time as _time
+                _start = _time.time()
                 resp = llm_with_tools.invoke(messages)
+                _latency = (_time.time() - _start) * 1000
+                self.failover._get_state(selected_provider).record_success(_latency)
             except Exception as e:
+                from .failover import classify_error
+                reason = classify_error(e)
+                self.failover._get_state(selected_provider).record_failure(reason)
                 logger.error(f"LLM invocation error: {e}")
+                event_bus.emit(TendrilEvent(
+                    run_id=run_id, event_type="request.error",
+                    session_id=session_id, data={"error": str(e)[:200], "iteration": i, "reason": reason},
+                ))
                 return f"Sorry, I encountered an error communicating with the LLM: {str(e)}"
 
             # If no tool calls, return the text response
             if not resp.tool_calls:
                 credit_manager.consume_request(session_id)
+                event_bus.emit(TendrilEvent(
+                    run_id=run_id, event_type="request.end",
+                    session_id=session_id, data={"iterations": i + 1},
+                ))
                 return resp.content or "I processed your request but have no text response."
 
             # Execute tool calls

@@ -43,11 +43,18 @@ services:
       LOCAL_INFERENCE_URL: ${LOCAL_INFERENCE_URL:-http://inference:8000/v1}
       LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-Qwen/Qwen3-8B-AWQ}
       TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN}
+      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      sandbox:
+        condition: service_started
+    networks:
+      - default
+      - sandbox_net
     volumes:
       # Default: Mount internal source code for the "Root Agent" Moat loop
       - ./src:/app/src
@@ -55,10 +62,36 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./static:/app/static
+      - ./tests:/app/tests
       # --- Day 1 External Codebase Mount Example ---
       # To edit an external repo, set TENDRIL_WORKSPACE_ROOT=/workspace in .env
       # and uncomment the volume mount below pointing to your target repo:
       # - /path/to/external/repo:/workspace
+    restart: unless-stopped
+
+  # Secure sandbox for code execution (no secrets, no DB, no internet)
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    environment:
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN}
+    volumes:
+      - ./src:/workspace/src:ro
+      - ./tests:/workspace/tests:ro
+      - ./data:/workspace/data
+    networks:
+      - sandbox_net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9999/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
   # GPU Inference (optional — uncomment when NVIDIA GPU is available)
@@ -92,3 +125,7 @@ services:
 volumes:
   postgres_data:
   redis_data:
+
+networks:
+  sandbox_net:
+    internal: true   # No outbound internet access

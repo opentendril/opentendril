@@ -49,6 +49,11 @@ LOG_DIR = os.path.join(PROJECT_ROOT, "logs")
 # SDLC Pipeline Configuration
 STRICT_LINTING: bool = os.getenv("STRICT_LINTING", "false").lower() == "true"
 
+# Sandbox Configuration (secure code execution)
+SANDBOX_ENABLED: bool = os.getenv("SANDBOX_ENABLED", "true").lower() == "true"
+SANDBOX_URL: str = os.getenv("SANDBOX_URL", "http://sandbox:9999")
+SANDBOX_TOKEN: str = os.getenv("SANDBOX_TOKEN", "")
+
 # --- Validation ---
 def validate_config():
     """Check that at least one LLM provider is configured."""
