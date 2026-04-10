@@ -28,13 +28,31 @@ As the core stabilized, we looked at the competition (OpenClaw). While OpenClaw 
 
 ---
 
+---
+
+### Day 3: The Honest Assessment & v0.1.0 (2026-04-10)
+
+As the kernel hit the 72-hour mark, we took a brutal look at the state of the system. We had built significant infrastructure for "Evolution 2" (multi-agent orchestration, credit systems, marketing bots), but we hadn't proven the core: **Can Tendril reliably edit code on someone else's project?**
+
+**The Tactical Pivot:** We hit the brakes on all secondary features. We stripped away the complexity and focused on one thing: **The Stable Kernel.**
+
+**Milestones of the v0.1.0 Sprint:**
+- **External Project Mode:** We verified that Tendril can be pointed at complex, 1000+ file repos (like Jurnx) and successfully understand/edit them.
+- **The Go-First Pipeline:** We solidified the Go CLI and Gateway as the primary interaction layer, providing a low-latency, "pro-tool" feel.
+- **Proof of Life:** On Day 1 of the sprint, Tendril successfully diagnosed and committed a change to an external Go/React codebase.
+
+**The State of the Union:**
+Tendril v0.1.0 is not a finished product; it is a **working engine.** It proves that a self-hosted agent can be trusted to operate on a project with its own rules, its own tech stack, and its own LLM keys.
+
+---
+
 ### The Vision: The Agent that Builds Agents
 
-Tendril is being built in public. Every major strategic decision—from the choice of PostgreSQL for vector memory to the use of HTMX for a lightweight, premium UI—is documented.
+Tendril is being built in public. Every major strategic decision—from the choice of PostgreSQL for vector memory to the shift back to the Stable Kernel—is documented here.
 
-We are currently in the **"Growing Core"** phase. We aren't just building a product; we are building the Root Agent that will eventually build the next 100 products.
+We are currently in the **"Stable Core"** phase. We aren't just building a product; we are building the Root Agent that will eventually build the next 100 products.
 
 **Join the journey.**
-- [Join the Cloud Beta Waitlist](https://cloud.opentendril.com)
-- [View the Strategic Roadmap](ROADMAP.md)
-- [Check the Live Pulse](PROGRESS.md)
+- [View the v0.1.0 Release](https://github.com/opentendril/core/releases)
+- [Watch the Progress](PROGRESS.md)
+- [Check the Genesis](HISTORY.md)

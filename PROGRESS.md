@@ -1,53 +1,49 @@
 # Tendril — Project Progress & State
 
-This file is the "Source of Truth" for all AI agents working on Tendril. **Update this file after every major milestone or configuration change.**
+This file is the "Source of Truth" for the Tendril development sprint. **Stable v0.1.0 landed on 2026-04-10.**
 
 ---
 
-## 🚀 Current Milestone: Phase 3 — Enterprise Memory & Testing
-**Goal:** Enhance the Dreamer loop, persist RAG memory securely for multi-tenant scalability, and integrate the TestRunner for automated CI-level feedback during self-edits.
+## 🚀 Current Milestone: Phase 1 — Stable Kernel (v0.1.0) 🟢 COMPLETE
+**Goal:** Enable a robust "External Project Mode" where Tendril can be pointed at any codebase to read, understand, edit, and commit changes with high reliability.
 
-| Workstream | Lead Agent | Status | Notes |
-|---|---|---|---|
-| **Kernel Core** | Antigravity | 🟢 Active | Phase 1 & 2 complete. Starting Phase 3 (Memory / Testing). |
-| **Branding** | Antigravity | 🟢 Complete | Name/Logo/Colors locked in. UI updated. |
-| **Marketing** | Antigravity | 🟡 Waitlist | Waitlist API live. Awaiting external landing page design. |
-
----
-
-## 🛠️ Active Tasks
-
-- [x] **Phase 1 & 2:** Chronicler, `/status`, Unified Credits architecture, and Waitlist API.
-- [x] **Feature:** Secure TestRunner Integration (Automated quality gates for `/edit`).
-- [x] **Feature:** Sandbox Isolation via HTTP Relay (inspired by OpenClaw, improved security).
-- [x] **Feature:** Multi-tenant RAG (Session-isolated vector search + cookie-based sessions).
-- [x] **Feature:** The "Dreamer" Loop — state tracking, UI widget, manual trigger, API visibility.
+| Workstream | Status | Notes |
+|---|---|---|
+| **External Project Mode** | 🟢 Complete | Verified on `jurnx` (1,300+ files). Read/Write/Commit works. |
+| **Go CLI v0.1.0** | 🟢 Complete | Cross-compiled binaries (linux/darwin) available in release. |
+| **Go Gateway** | 🟢 Complete | WebSocket transport for low-latency agent interaction. |
+| **Developer Experience** | 🟢 Complete | One-command setup (`docker compose up`) + README guide. |
 
 ---
 
-## 📈 Recent Pulse (Changelog)
+## 🛠️ Sprint Deliverables (Day 1-2)
 
-- **2026-04-09:** 🚀 **MILESTONE:** Consolidated 48 hours of strategic development from multiple threads into a new public HISTORY.md manifesto.
-- **2026-04-09:** Go Chat Gateway microservice (539 lines) + tendril-cli (170 lines). WebSocket replaces SSE. Unified Message Object protocol for 20+ channel support.
-- **2026-04-09:** Three core improvements: Event Bus (structured observability w/ Redis), Model Failover (exponential backoff across 4 providers), Surgical Patcher (multi-file patches w/ validation).
-- **2026-04-09:** Frontend extracted from main.py into static files (index.html, styles.css, app.js). main.py reduced from 1237 to 644 lines.
-- **2026-04-09:** Fixed Claude integration: LLM Router now uses `ChatAnthropic` for Claude (was silently broken using `ChatOpenAI`). Added `langchain-anthropic` dependency.
-- **2026-04-09:** Dreamer Loop visibility: DreamerState tracker, sidebar widget with HTMX polling, /dreamer/status API, manual trigger button.
-- **2026-04-09:** Multi-tenant memory isolation: cookie-based sessions, filtered RAG retrieval, per-user conversation history.
-- **2026-04-09:** Implemented Sandbox Isolation: `Dockerfile.sandbox`, `sandboxserver.py` HTTP relay, internal-only Docker network. TestRunner now routes through isolated container.
-- **2026-04-09:** Implemented SDLC Pipeline: Ruff linting + py_compile + pytest with auto-rollback on failure.
-- **2026-04-09:** Code review of OpenClaw architecture. Documented learnings in `DECISIONS.md` (Decision #10).
-- **2026-04-08:** Refactored project to "No Underscore" naming convention and merged Python modules.
-- **2026-04-08:** Integrated "Direction B" logo and "Root Agent" brand with Lobster Red accents.
-- **2026-04-08:** Secured `opentendril` namespace on PyPI and NPM.
-- **2026-04-08:** Implemented Unified Credit System and Chronicler Service
-- **2026-04-08:** Documented future scalability paths and meta-awareness files in `ARCHITECTURE.md`.
-- **2026-04-08:** Completed Phase 0: Security fixes, XSS hardening, and async scheduler.
-- **2026-04-08:** Initial Master Roadmap established in Conversation `ab7ff...`
-- **2026-04-08:** Created `PROGRESS.md` for cross-conversation coordination.
+- [x] **Dynamic System Prompt**: Tendril now surveys external workspaces instead of assuming it's editing itself.
+- [x] **Zero-Restriction Mode**: `PROTECTED_FILES` and `SDLC` gates are context-aware (disabled for external projects).
+- [x] **Universal File Support**: Expanded editor to support `.go`, `.rs`, `.java`, `.rb`, `.c`, etc.
+- [x] **Git safe.directory**: Fixed volume mount ownership issues in Docker.
+- [x] **Sandbox Volume Fix**: Resolved OCI runtime mount errors for read-only workspaces.
+- [x] **Automated Releases**: GitHub Actions workflow for cross-platform CLI binaries.
+
+---
+
+## 📈 Pulse (Latest Logs)
+
+- **2026-04-11 (Day 2.5):** 🚢 **SHIP-IT:** Tagged `v0.1.0`. README rewritten as a minimal setup guide. Makefile added for CLI builds.
+- **2026-04-10 (Day 1):** 🧪 **PROOF OF LIFE:** Successfully pointed Tendril at `jurnx-med-dev`. Tendril listed 1,354 files, identified the tech stack (Go/React/Firestore), and committed a verified change to `README.md`.
+- **2026-04-09:** 🎯 **STRATEGIC PIVOT:** Paused Evolution 2 (Multi-agent/Credits/Marketplace) to focus on Evolution 1 (The Stable Kernel). Hardened the `/edit` loop and extracted transport to Go.
 
 ---
 
 ## 🛑 Blockers & Open Questions
 
-1. **Claude Key:** Confirmed provided.
+1. **User Feedback:** Awaiting first external developer reports on the v0.1.0 CLI.
+2. **Demo Content:** Need to capture high-quality terminal recording for the public launch.
+
+---
+
+## 🔮 Next: Phase 2 — UX & Refinement
+- [ ] `tendril init` wizard for interactive configuration.
+- [ ] Replan/Retry loop for failed tool calls.
+- [ ] Improved context window management for large codebases.
+- [ ] Human-in-the-loop diff review via CLI.

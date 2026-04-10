@@ -12,10 +12,12 @@ Tendril points its sandbox at its own source code (`opentendril/core`).
 - ✅ **The `/edit` Endpoint Loop:** The core moat. Generate → Syntax Check → Auto-Commit → Chronicle.
 - 🟡 **The Chronicler:** Marketing-focused logs of what Tendril is building (In Progress).
 
-## Evolution 2: Deployed Agents (The Jurnx Build)
+## Evolution 2: Deployed Agents (Stable v0.1.0) 🟢
 **Focus:** Pointing Tendril at external codebases.
-Tendril instances run as sidecars in external projects (e.g., `jurnx/med-dev`).
-- [ ] **Dynamic Sandbox:** Ability to point `SRC_DIR` and `TestRunner` at external repos safely.
+Tendril instances run as sidecars or tools on any codebase (e.g., `jurnx/med-api`).
+- ✅ **External Project Mode:** Native mounting of any repo via `TENDRIL_PROJECT_PATH`.
+- ✅ **Dynamic Workspace Awareness:** LLM surveys and understands project context on the fly.
+- ✅ **Tool Adaptability:** File operations and Git committed directly to the external workspace.
 - [ ] **Enterprise Pipelines:** Native "Design → Plan → Pull Request" workflows distinct from the root `/edit` loop.
 - [ ] **Monetization & Credits:** The `credit_manager` enforcing limits on cloud-hosted usage, allowing unlimited local compute.
 
