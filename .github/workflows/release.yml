@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build CLI binaries
+        run: |
+          mkdir -p cli/dist
+          cd cli
+          GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-linux-arm64 .
+          GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-darwin-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-darwin-arm64 .
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            cli/dist/tendril-linux-amd64
+            cli/dist/tendril-linux-arm64
+            cli/dist/tendril-darwin-amd64
+            cli/dist/tendril-darwin-arm64
+          body: |
+            ## Tendril v${{ github.ref_name }}
+
+            Self-hosted AI coding assistant. Point it at any project. Talk to it. It reads, edits, and commits.
+
+            ### Quick Start
+            ```bash
+            git clone https://github.com/opentendril/core.git && cd core
+            cp .env.example .env  # Add your LLM API key
+            # Set TENDRIL_PROJECT_PATH in .env to your project
+            docker compose up --build
+            # Download the CLI binary for your platform below
+            ./tendril-linux-amd64  # or tendril-darwin-arm64
+            ```
+
+            ### CLI Binaries
+            | Platform | Binary |
+            |----------|--------|
+            | Linux x86_64 | `tendril-linux-amd64` |
+            | Linux ARM64 | `tendril-linux-arm64` |
+            | macOS Intel | `tendril-darwin-amd64` |
+            | macOS Apple Silicon | `tendril-darwin-arm64` |

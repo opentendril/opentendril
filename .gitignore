@@ -35,3 +35,7 @@ skills/dynamic-skills/
 models/
 .cache/
 tendril-node-*.pub
+
+# CLI build artifacts
+cli/dist/
+cli/tendril-cli

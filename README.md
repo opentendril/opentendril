@@ -1,107 +1,142 @@
-# <img src="static/tendril-logo.png" width="40" height="40" align="center"> Tendril 🌱
+# 🌱 Tendril
 
-**The agent that builds agents.**
+**Self-hosted AI coding assistant. Point it at any project. Talk to it. It reads, edits, and commits.**
 
-Tendril is the **Root Agent**—the self-building orchestration layer that turns your frustrations into new skills. It is not another chatbot. it is an agentic kernel that fixes its own source code while it works.
-
----
-
-### 🚀 Public Reveal: The 7-Day Sprint
-We are currently in the middle of a high-velocity launch. Tendril was born to prove that an agent can be its own developer.
-- **Join the Cloud Beta:** [cloud.opentendril.com](https://cloud.opentendril.com)
-- **Watch the Progress:** [PROGRESS.md](PROGRESS.md)
-- **Read the Genesis:** [HISTORY.md](HISTORY.md)
+Your LLM keys. Your codebase. Your machine.
 
 ---
 
-## 💡 The Philosophy
-Current AI orchestrators (OpenClaw, AutoGPT) are **Tools**. You use them to perform a task. If they break, you fix them.
+## Quick Start (5 minutes)
 
-Tendril is a **Kernel**. It is designed to be the "Root Agent" that builds and manages your other agents. If Tendril encounters an error, it uses its `/edit` endpoint to rewrite its own source code, runs a validation suite in a sandbox, and submits a Pull Request for your approval.
-
-*OpenClaw gave you claws. Tendril grows them.*
-
----
-
-## ⚡ Quick Start (Local Development)
+### 1. Clone and configure
 
 ```bash
-# 1. Configure
+git clone https://github.com/opentendril/core.git
+cd core
 cp .env.example .env
-# Edit .env with your API keys (BYO keys or use our hosted credits at cloud.opentendril.com)
-# At minimum: GROK_API_KEY and POSTGRES_PASSWORD
+```
 
-# 2. Create directories
-mkdir -p data logs skills
+Edit `.env` — add at least one LLM API key:
+```bash
+# Pick your provider (anthropic recommended for code editing)
+ANTHROPIC_API_KEY=sk-ant-...
+# or
+GROK_API_KEY=xai-...
+# or
+OPENAI_API_KEY=sk-...
 
-# 3. Launch
+# Required infrastructure passwords
+POSTGRES_PASSWORD=pick-something-secure
+REDIS_PASSWORD=pick-something-secure
+SECRET_KEY=generate-with-openssl-rand-hex-32
+SANDBOX_TOKEN=generate-with-openssl-rand-hex-16
+```
+
+### 2. Mount your project
+
+In `.env`, point Tendril at your codebase:
+```bash
+TENDRIL_WORKSPACE_ROOT=/workspace
+TENDRIL_PROJECT_PATH=/absolute/path/to/your/project
+DEFAULT_LLM_PROVIDER=anthropic
+```
+
+### 3. Launch
+
+```bash
 docker compose up --build
 ```
-Open **http://localhost:8080** → Chat UI with LLM provider selector.
 
-## Production / VPS Deployment
-
-If you want to host Tendril yourself on a cheap VPS (e.g. DigitalOcean, Hetzner):
-
+Wait for health checks to pass. Verify:
 ```bash
-# 1. Clone the repository
-git clone https://github.com/dr3w/opentendril.git
-cd opentendril
-
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your keys and set TENDRIL_MODE=saas if monetizing
-
-# 3. Launch in detached mode
-docker compose up -d --build
+curl http://localhost:8080/health
+# → {"status":"healthy","version":"0.1.0",...}
 ```
 
+### 4. Talk to it
 
-## Features
+**Option A — CLI (recommended)**
+```bash
+cd cli/
+go build -o tendril-cli .
+./tendril-cli
+```
 
-- **Multi-LLM Routing** — Grok, Claude, OpenAI, or local models via vLLM. Pick the right model for each task.
-- **Self-Building** — `/edit` endpoint lets Tendril modify its own source code through volume-mounted files.
-- **Approval Gate** — Human-in-the-loop confirmation for destructive operations. Auto-approve in dev, require approval in production.
-- **Signed Skills** — HMAC-SHA256 verified skill plugins. Tendril can build and sign new skills at runtime.
-- **RAG Memory** — PGVector + HuggingFace embeddings for long-term memory and conversation recall.
-- **Live Reload** — Edit `src/` files and changes apply instantly (no rebuild needed).
-- **Enterprise Ready** — Rate limiting, non-root container, structured logging, secret management.
+**Option B — Direct API**
+```bash
+curl -X POST http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "my-session", "message": "list all files in the project"}'
+```
 
-## API
+**Option C — Web UI**
+
+Open http://localhost:8080 in your browser.
+
+### 5. Make your first edit
+
+```
+you › add error handling to the main entry point
+you › read src/auth.py and add input validation
+you › what does this project do? summarize the architecture
+you › commit all changes with message "feat: add error handling"
+```
+
+Tendril reads your code, generates edits, shows diffs, and commits to git.
+
+---
+
+## How It Works
+
+```
+┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  CLI (Go)    │────►│  Gateway (Go)    │────►│  Brain (Python)  │
+│  WebSocket   │ ws  │  :9090/ws        │ HTTP│  :8080/v1/chat   │
+└──────────────┘     └──────────────────┘     └──────┬───────────┘
+                                                     │ LangChain Tools:
+                                                     ├─ read_file
+                                                     ├─ write_file
+                                                     ├─ apply_code_patch
+                                                     ├─ search_project
+                                                     ├─ list_project_files
+                                                     ├─ run_bash_command
+                                                     ├─ git_commit
+                                                     └─ git_status
+```
+
+- **Your project** is mounted read-write at `/workspace` inside the container
+- **The LLM** (Claude, Grok, GPT-4, or local via vLLM) processes your request
+- **Tools** execute against your mounted codebase — file reads, writes, git operations
+- **Everything stays local** — no code leaves your machine except to the LLM API
+
+## Supported LLM Providers
+
+| Provider | Env Var | Best For |
+|----------|---------|----------|
+| **Anthropic** (Claude) | `ANTHROPIC_API_KEY` | Code editing, tool use — recommended |
+| **xAI** (Grok) | `GROK_API_KEY` | Fast, good value |
+| **OpenAI** (GPT-4) | `OPENAI_API_KEY` | General purpose |
+| **Google** (Gemini) | `GOOGLE_API_KEY` | Multimodal |
+| **Local** (vLLM) | Uncomment in `docker-compose.yml` | Air-gapped, GPU required |
+
+## API Reference
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/` | Redirect to chat UI |
-| GET | `/chat` | Chat interface |
-| GET | `/health` | System health + loaded providers |
-| POST | `/v1/chat` | JSON API for programmatic access |
-| POST | `/edit` | Self-building: edit files via LLM |
-| GET | `/approvals/pending` | View pending approval requests |
-| POST | `/approvals/{id}/approve` | Approve a pending change |
-
-## Architecture
-
-```
-┌────────────────────────────────────────┐
-│              Chat UI / API              │
-├────────────────────────────────────────┤
-│            Orchestrator                 │
-│  ┌─────────┐ ┌────────┐ ┌───────────┐ │
-│  │   LLM   │ │  File  │ │ Approval  │ │
-│  │  Router  │ │ Editor │ │   Gate    │ │
-│  └─────────┘ └────────┘ └───────────┘ │
-│  ┌─────────┐ ┌────────┐ ┌───────────┐ │
-│  │ Memory  │ │ Skills │ │  Dreamer  │ │
-│  │  (RAG)  │ │Manager │ │           │ │
-│  └─────────┘ └────────┘ └───────────┘ │
-├────────────────────────────────────────┤
-│  Postgres (pgvector) │ Redis │ vLLM   │
-└────────────────────────────────────────┘
-```
+| `GET`  | `/health` | System health + loaded providers |
+| `POST` | `/v1/chat` | Send a message (JSON API) |
+| `POST` | `/edit` | Self-building: edit files via LLM |
+| `GET`  | `/chat` | Web chat UI |
+| `GET`  | `/api/providers` | List available LLM providers |
+| `GET`  | `/health/providers` | Provider health + cooldown status |
 
 ## GPU Inference (Optional)
 
-If you have an NVIDIA GPU, uncomment the `inference` service in `docker-compose.yml` to run local models via vLLM.
+If you have an NVIDIA GPU, uncomment the `inference` service in `docker-compose.yml` to run models locally via vLLM. No API keys needed.
+
+## Self-Building Mode
+
+When `TENDRIL_PROJECT_PATH` is not set, Tendril operates on its own source code — the "Root Agent" mode. It can modify itself through a staged edit pipeline with syntax validation, branch-per-change, and PR creation.
 
 ## License
 
