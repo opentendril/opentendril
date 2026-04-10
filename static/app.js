@@ -58,8 +58,14 @@ function initInputHandlers() {
 
     // Auto-resize textarea
     input.addEventListener('input', function () {
-        this.style.height = 'auto';
-        this.style.height = Math.min(this.scrollHeight, 200) + 'px';
+        this.style.height = '50px'; // reset to min-height instead of auto to avoid layout jumps
+        var newHeight = Math.min(this.scrollHeight, 200);
+        this.style.height = newHeight + 'px';
+        if (this.scrollHeight >= 200) {
+            this.style.overflowY = 'auto';
+        } else {
+            this.style.overflowY = 'hidden';
+        }
     });
 
     // Ctrl+Enter to send via WebSocket (preferred) or HTMX fallback

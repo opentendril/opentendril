@@ -358,6 +358,7 @@ body {
 .input-form {
     display: flex;
     gap: 8px;
+    align-items: flex-end;
 }
 
 .chat-input {
@@ -373,10 +374,10 @@ body {
     transition: border-color 0.2s, box-shadow 0.2s;
     min-height: 50px;
     max-height: 200px;
-    resize: vertical;
+    resize: none;
     white-space: pre-wrap;
     overflow-wrap: break-word;
-    overflow-y: auto;
+    overflow-y: hidden;
     line-height: 1.5;
 }
 
