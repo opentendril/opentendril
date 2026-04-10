@@ -63,10 +63,10 @@ services:
       - ./logs:/app/logs
       - ./static:/app/static
       - ./tests:/app/tests
-      # --- Day 1 External Codebase Mount Example ---
-      # To edit an external repo, set TENDRIL_WORKSPACE_ROOT=/workspace in .env
-      # and uncomment the volume mount below pointing to your target repo:
-      # - /path/to/external/repo:/workspace
+      # External project mode: set TENDRIL_PROJECT_PATH in .env
+      # When set, mounts the external repo at /workspace and Tendril edits that.
+      # When unset, defaults to '.' (opentendril itself, self-building mode).
+      - ${TENDRIL_PROJECT_PATH:-.}:/workspace
     restart: unless-stopped
 
   # Go Chat Gateway — WebSocket entry point for all channels
@@ -89,9 +89,8 @@ services:
     environment:
       SANDBOX_TOKEN: ${SANDBOX_TOKEN}
     volumes:
-      - ./src:/workspace/src:ro
-      - ./tests:/workspace/tests:ro
-      - ./data:/workspace/data
+      - ${TENDRIL_PROJECT_PATH:-.}:/workspace:ro
+      - ./data:/sandbox-data
     networks:
       - sandbox_net
     deploy:

@@ -16,7 +16,7 @@ from typing import Optional
 import httpx
 
 from .approval import ApprovalGate
-from .config import PROJECT_ROOT, SANDBOX_ENABLED, SANDBOX_URL, SANDBOX_TOKEN
+from .config import WORKSPACE_ROOT, SANDBOX_ENABLED, SANDBOX_URL, SANDBOX_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class TestRunner:
     """Manages secure execution of tests and bash commands."""
 
-    def __init__(self, approval_gate: ApprovalGate, cwd: str = PROJECT_ROOT):
+    def __init__(self, approval_gate: ApprovalGate, cwd: str = WORKSPACE_ROOT):
         self.approval = approval_gate
         self.cwd = cwd
         self.sandbox_enabled = SANDBOX_ENABLED

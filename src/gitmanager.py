@@ -9,7 +9,7 @@ import subprocess
 import logging
 from typing import Optional
 
-from .config import PROJECT_ROOT
+from .config import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class GitManager:
     """Manages Git operations and GitHub API interactions."""
 
-    def __init__(self, repo_path: str = PROJECT_ROOT):
+    def __init__(self, repo_path: str = WORKSPACE_ROOT):
         self.repo_path = repo_path
         self.github_token = os.getenv("GITHUB_TOKEN")
         self._github_client = None

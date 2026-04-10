@@ -14,7 +14,7 @@ from typing import Optional
 
 from langchain_core.tools import tool
 
-from .config import SECRET_KEY, WORKSPACE_ROOT
+from .config import SECRET_KEY, WORKSPACE_ROOT, PROJECT_ROOT
 from .llmrouter import LLMRouter
 from .memory import Memory
 from .skillsmanager import SkillsManager
@@ -407,7 +407,51 @@ class Orchestrator:
             f"  - {t.name}: {t.description}" for t in self.tools
         )
 
-        system_prompt = f"""You are Tendril — The Root Agent. You are an AI software development orchestrator that helps users build, debug, and modify software.
+        # Detect external project mode
+        is_external = WORKSPACE_ROOT != PROJECT_ROOT
+
+        if is_external:
+            # Survey the external project files for context
+            try:
+                project_files = self.editor.list_files()
+                file_listing = "\n".join(
+                    f"  {f['path']} ({f['size']} bytes)" for f in project_files[:80]
+                )
+                if len(project_files) > 80:
+                    file_listing += f"\n  ... and {len(project_files) - 80} more files"
+            except Exception:
+                file_listing = "  (could not scan project files)"
+
+            system_prompt = f"""You are Tendril — an AI coding assistant. You help developers read, understand, edit, and improve their code.
+
+## Your Workspace
+You are working on an EXTERNAL PROJECT mounted at {WORKSPACE_ROOT}.
+This is NOT Tendril's own source code. You are a coding assistant for this project.
+
+Project files:
+{file_listing}
+
+There are NO protected files. You can read and write any file in the workspace.
+
+## Available Tools
+{tool_descriptions}
+
+## Relevant Memories
+{rag_context}
+
+{patch_format}
+
+## Behavioral Guidelines
+- Use tools via function calls when helpful
+- For multi-file or surgical edits, prefer apply_code_patch over write_file
+- When editing files, always show the diff
+- Use list_project_files and read_file to understand the project before making changes
+- Use search_project to find where things are defined or used
+- Use git_commit to save your changes with descriptive commit messages
+- Be concise unless the user asks for detail
+- If you're not sure about the project structure, explore it first with list_project_files and read_file"""
+        else:
+            system_prompt = f"""You are Tendril — The Root Agent. You are an AI software development orchestrator that helps users build, debug, and modify software.
 
 ## What You Are
 You are running inside the Tendril kernel, a self-building AI agent system. You ARE the orchestrator — the brain that processes user requests using tools, memory, and LLM reasoning.
@@ -517,7 +561,8 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
             llm_with_tools = llm
 
         # Agentic loop: call LLM, execute tools, repeat
-        max_iterations = 5
+        # Increased to 20 to allow for complex multi-file read/write self-edits
+        max_iterations = 20
         for i in range(max_iterations):
             try:
                 import time as _time

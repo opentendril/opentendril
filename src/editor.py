@@ -14,14 +14,20 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-from .config import WORKSPACE_ROOT
+from .config import WORKSPACE_ROOT, PROJECT_ROOT
 
 # Sandboxed root — the editor cannot escape this directory
 SANDBOX_ROOT = WORKSPACE_ROOT
+
+# Detect external project mode: when WORKSPACE_ROOT differs from PROJECT_ROOT (/app),
+# we're editing someone else's code, not Tendril's kernel.
+_IS_EXTERNAL = WORKSPACE_ROOT != PROJECT_ROOT
+
 ALLOWED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css",
     ".json", ".yml", ".yaml", ".toml", ".md", ".txt",
     ".sql", ".sh", ".cfg", ".ini", ".dockerfile",
+    ".go", ".rs", ".java", ".rb", ".php", ".c", ".cpp", ".h",
 }
 BLOCKED_PATTERNS = {
     "__pycache__", ".git", "node_modules", ".env",
@@ -33,7 +39,9 @@ BLOCKED_PATTERNS = {
 # calls multiple times (2026-04-09 incidents: main.py, patcher.py, styles.css).
 # Modifications to these files require the /edit endpoint with SDLC gates,
 # or direct human editing.
-PROTECTED_FILES = {
+# NOTE: Protection is DISABLED in external project mode — external code has no
+# protected files (the user controls what's editable via their .gitignore).
+PROTECTED_FILES = set() if _IS_EXTERNAL else {
     "src/main.py",
     "src/tendril.py",
     "src/config.py",
@@ -65,7 +73,7 @@ class FileEditor:
 
     def __init__(self, sandbox_root: str = SANDBOX_ROOT, enforce_protection: bool = True):
         self.sandbox_root = os.path.realpath(sandbox_root)
-        self.enforce_protection = enforce_protection
+        self.enforce_protection = enforce_protection and not _IS_EXTERNAL
         self._edit_history: list[dict] = []
 
     def _resolve_path(self, filepath: str) -> str:
