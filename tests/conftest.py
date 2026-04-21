@@ -125,7 +125,12 @@ def git_pipeline(tmp_git_repo, monkeypatch):
     # ------------------------------------------------------------------
     # staged_edit
     # ------------------------------------------------------------------
-    def staged_edit(filepath: str, patch_text: str, description: str) -> str:
+    def staged_edit(
+        filepath: str,
+        patch_text: str,
+        description: str,
+        skip_canary: bool = True,  # default True in tests — no Docker in CI
+    ) -> str:
         staging_editor = FileEditor(
             sandbox_root=str(tmp_git_repo), enforce_protection=False
         )
@@ -188,8 +193,11 @@ def git_pipeline(tmp_git_repo, monkeypatch):
                 "-m", "Co-authored-by: Tendril <tendril@jurnx.com>",
             )
 
-            # Skip canary boot (no Docker in unit test environment)
-            canary_result = "⚠️ Canary boot skipped (test environment)."
+            # Canary boot
+            if skip_canary:
+                canary_result = "⚠️ Canary boot skipped (skip_canary=True)."
+            else:
+                canary_result = "⚠️ Canary boot skipped (Docker not available in this environment)."
 
             git.checkout("main")
 

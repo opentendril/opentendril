@@ -156,7 +156,12 @@ class Orchestrator:
                 return f"❌ Patch failed: {str(e)}"
 
         @tool
-        def staged_edit(filepath: str, patch_text: str, description: str) -> str:
+        def staged_edit(
+            filepath: str,
+            patch_text: str,
+            description: str,
+            skip_canary: bool = False,
+        ) -> str:
             """Safely modify a PROTECTED file through the staging pipeline.
 
             This is the ONLY way to modify kernel files (main.py, tendril.py, etc).
@@ -164,9 +169,11 @@ class Orchestrator:
             and switches back to the default branch for human review.
 
             Args:
-                filepath: The file to modify (can be a protected file)
-                patch_text: A patch in *** Begin Patch / *** End Patch format describing the surgical change
-                description: Brief description of the change (used as commit message)
+                filepath:     The file to modify (can be a protected file)
+                patch_text:   A patch in *** Begin Patch / *** End Patch format
+                description:  Brief description of the change (used as commit message)
+                skip_canary:  If True, skip the Docker canary-build check.
+                              Set this when Docker is not available (CI, local dev, tests).
             """
             import subprocess
             import re
@@ -182,7 +189,6 @@ class Orchestrator:
             # Detect the repo's default branch (main, master, or whatever it's called)
             def _default_branch() -> str:
                 try:
-                    # Prefer the remote HEAD ref if origin is configured
                     ref = git._run_git(
                         "symbolic-ref", "refs/remotes/origin/HEAD"
                     ).strip().replace("refs/remotes/origin/", "")
@@ -191,15 +197,11 @@ class Orchestrator:
                 except Exception:
                     pass
                 try:
-                    # Fall back to local HEAD branch name
                     return git._run_git("rev-parse", "--abbrev-ref", "HEAD").strip()
                 except Exception:
-                    return "main"  # last resort
+                    return "main"
 
             default_branch = _default_branch()
-
-            if not git_available:
-                return "❌ staged_edit requires a git repository. No .git directory found."
 
             # Stash any unrelated dirty files so they don't block the single-file commit
             stash_ref = None
@@ -261,27 +263,29 @@ class Orchestrator:
                              "-m", "Co-authored-by: Tendril <tendril@jurnx.com>")
 
                 # 6. Canary Boot — spin up a test container and health-check the change
-                canary_result = "⚠️ Canary boot skipped (Docker not available in this environment)."
-                try:
-                    canary = subprocess.run(
-                        ["docker", "compose", "build", "tendril"],
-                        capture_output=True, text=True, timeout=120,
-                        cwd=str(editor.sandbox_root)
-                    )
-                    if canary.returncode != 0:
-                        # Build failed — revert and abort
-                        git.checkout(default_branch)
-                        git._run_git("branch", "-D", branch_name)
-                        return (
-                            f"❌ Canary build FAILED — change reverted.\n"
-                            f"Build error:\n{canary.stderr[-1000:]}"
+                if skip_canary:
+                    canary_result = "⚠️ Canary boot skipped (skip_canary=True)."
+                else:
+                    canary_result = "⚠️ Canary boot skipped (Docker not available in this environment)."
+                    try:
+                        canary = subprocess.run(
+                            ["docker", "compose", "build", "tendril"],
+                            capture_output=True, text=True, timeout=120,
+                            cwd=str(editor.sandbox_root)
                         )
-                    canary_result = "✅ Canary build passed."
-                except FileNotFoundError:
-                    canary_result = "⚠️ Docker not found — canary boot skipped."
-                except subprocess.TimeoutExpired:
-                    canary_result = "⚠️ Canary build timed out — branch left for manual review."
-
+                        if canary.returncode != 0:
+                            # Build failed — revert and abort
+                            git.checkout(default_branch)
+                            git._run_git("branch", "-D", branch_name)
+                            return (
+                                f"❌ Canary build FAILED — change reverted.\n"
+                                f"Build error:\n{canary.stderr[-1000:]}"
+                            )
+                        canary_result = "✅ Canary build passed."
+                    except FileNotFoundError:
+                        canary_result = "⚠️ Docker not found — canary boot skipped."
+                    except subprocess.TimeoutExpired:
+                        canary_result = "⚠️ Canary build timed out — branch left for manual review."
                 # 7. Switch back to default branch (leave staging branch for review/merge)
                 git.checkout(default_branch)
 
