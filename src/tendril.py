@@ -402,7 +402,113 @@ class Orchestrator:
                 except Exception as e:
                     return f"❌ PR creation failed: {str(e)}"
 
-            tools += [git_commit, git_create_branch, git_status, create_pull_request, staged_edit]
+            @tool
+            def merge_staging_branch(branch_name: str, delete_after_merge: bool = True) -> str:
+                """Merge a verified staging branch into main and optionally delete it.
+
+                Use this ONLY after a staged_edit has been reviewed and is ready to ship.
+                This is the final step of the self-build lifecycle.
+
+                Args:
+                    branch_name: The staging branch to merge (e.g. 'staging/my-change-123456')
+                    delete_after_merge: If True (default), delete the branch after successful merge
+                """
+                try:
+                    # Ensure we're on main first
+                    git.checkout("main")
+                    current = git._run_git("rev-parse", "--abbrev-ref", "HEAD").strip()
+                    if current != "main":
+                        return f"❌ Could not switch to main (currently on '{current}')"
+
+                    # Verify the branch exists
+                    branches = git._run_git("branch", "--list", branch_name).strip()
+                    if not branches:
+                        return f"❌ Branch '{branch_name}' not found. Run git_status to list branches."
+
+                    # Merge with no-ff so there's always a merge commit for visibility
+                    merge_out = git._run_git(
+                        "merge", "--no-ff", "--no-gpg-sign", branch_name,
+                        "-m", f"merge: {branch_name} into main\n\nCo-authored-by: Tendril <tendril@jurnx.com>"
+                    )
+
+                    result = f"✅ Merged '{branch_name}' into main.\n{merge_out}"
+
+                    if delete_after_merge:
+                        try:
+                            git._run_git("branch", "-d", branch_name)
+                            result += f"\n🗑️  Branch '{branch_name}' deleted."
+                        except Exception as e:
+                            result += f"\n⚠️  Could not delete branch: {e}"
+
+                    return result
+                except Exception as e:
+                    return f"❌ Merge failed: {str(e)}"
+
+            @tool
+            def cleanup_staging_branches(older_than_days: int = 7) -> str:
+                """Delete stale staging/* branches that are older than N days (default: 7).
+
+                Safe to call periodically to prevent branch accumulation from self-build operations.
+                Only deletes branches prefixed with 'staging/' — never touches main or feature branches.
+
+                Args:
+                    older_than_days: Remove staging branches created more than this many days ago
+                """
+                import time as _time
+                try:
+                    # List all local staging branches with their last commit dates
+                    raw = git._run_git(
+                        "for-each-ref", "--format=%(refname:short) %(committerdate:unix)",
+                        "refs/heads/staging/"
+                    ).strip()
+
+                    if not raw:
+                        return "✅ No staging branches found — nothing to clean up."
+
+                    now = _time.time()
+                    cutoff = now - (older_than_days * 86400)
+                    deleted = []
+                    skipped = []
+
+                    for line in raw.splitlines():
+                        parts = line.strip().split()
+                        if len(parts) < 2:
+                            continue
+                        branch, ts_str = parts[0], parts[1]
+                        try:
+                            ts = float(ts_str)
+                        except ValueError:
+                            skipped.append(f"{branch} (bad timestamp)")
+                            continue
+
+                        if ts < cutoff:
+                            try:
+                                # -D force-delete (branch may not be fully merged)
+                                git._run_git("branch", "-D", branch)
+                                deleted.append(branch)
+                            except Exception as e:
+                                skipped.append(f"{branch} ({e})")
+                        else:
+                            skipped.append(f"{branch} (recent, kept)")
+
+                    lines = [f"🧹 Staging branch cleanup ({older_than_days}d threshold):"]
+                    if deleted:
+                        lines.append(f"\nDeleted ({len(deleted)}):")
+                        lines += [f"  ✅ {b}" for b in deleted]
+                    if skipped:
+                        lines.append(f"\nSkipped ({len(skipped)}):")
+                        lines += [f"  ⏭️  {b}" for b in skipped]
+                    if not deleted and not skipped:
+                        lines.append("  Nothing to do.")
+
+                    return "\n".join(lines)
+                except Exception as e:
+                    return f"❌ Cleanup failed: {str(e)}"
+
+            tools += [
+                git_commit, git_create_branch, git_status, create_pull_request,
+                staged_edit, merge_staging_branch, cleanup_staging_branches,
+            ]
             logger.info("🔀 Git tools registered (repo detected).")
         else:
             logger.info("⚠️  No .git directory found — git tools and staged_edit disabled.")
@@ -466,7 +572,7 @@ class Orchestrator:
             except Exception:
                 file_listing = "  (could not scan project files)"
 
-            system_prompt = f"""You are Tendril — an AI coding assistant. You help developers read, understand, edit, and improve their code.
+            system_prompt = f\"\"\"You are Tendril — an AI coding assistant. You help developers read, understand, edit, and improve their code.
 
 ## Your Workspace
 You are working on an EXTERNAL PROJECT mounted at {WORKSPACE_ROOT}.
@@ -493,9 +599,9 @@ There are NO protected files. You can read and write any file in the workspace.
 - Use search_project to find where things are defined or used
 - Use git_commit to save your changes with descriptive commit messages
 - Be concise unless the user asks for detail
-- If you're not sure about the project structure, explore it first with list_project_files and read_file"""
+- If you're not sure about the project structure, explore it first with list_project_files and read_file\"\"\"
         else:
-            system_prompt = f"""You are Tendril — The Root Agent. You are an AI software development orchestrator that helps users build, debug, and modify software.
+            system_prompt = f\"\"\"You are Tendril — The Root Agent. You are an AI software development orchestrator that helps users build, debug, and modify software.
 
 ## What You Are
 You are running inside the Tendril kernel, a self-building AI agent system. You ARE the orchestrator — the brain that processes user requests using tools, memory, and LLM reasoning.
@@ -564,7 +670,7 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
 - Be concise unless the user asks for detail
 - For PROTECTED files: use `staged_edit` (creates branch, validates, commits for review)
 - For UNPROTECTED files: use `write_file` or `apply_code_patch` as normal
-- When using staged_edit, tell the user: the change is on a branch, here's how to test and merge it"""
+- When using staged_edit, tell the user: the change is on a branch, here's how to test and merge it\"\"\"
 
         messages = [
             {"role": "system", "content": system_prompt},
