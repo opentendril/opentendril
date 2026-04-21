@@ -26,6 +26,8 @@ import asyncio
 import json
 import uuid
 import dotenv
+import time
+from typing import List, Optional
 from datetime import datetime
 from contextlib import asynccontextmanager
 
@@ -552,6 +554,167 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
 
 
 # --- JSON API (Programmatic Access) ---
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatCompletionRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    stream: Optional[bool] = False
+    temperature: Optional[float] = None
+
+@app.post("/v1/chat/completions")
+async def openai_chat_completions(req: ChatCompletionRequest):
+    """
+    OpenAI-compatible chat completions endpoint.
+    Allows 3rd party TUIs (Aider, Crush, OpenCode) to connect seamlessly.
+    """
+    logger.info(f"OpenAI API chat: model={req.model} stream={req.stream}")
+    try:
+        # 1. Map requested model to our internal providers
+        provider = "default"
+        model_name = req.model.lower()
+        if "gpt" in model_name or "o1" in model_name:
+            provider = "openai"
+        elif "claude" in model_name:
+            provider = "anthropic"
+        elif "grok" in model_name or "xai" in model_name:
+            provider = "grok"
+
+        # 2. Extract user message
+        user_msg = ""
+        for msg in reversed(req.messages):
+            if msg.role == "user":
+                user_msg = msg.content
+                break
+                
+        if not user_msg:
+            raise HTTPException(status_code=400, detail="No user message found")
+            
+        session_id = f"ext-{uuid.uuid4().hex[:8]}"
+
+        if req.stream:
+            async def event_generator():
+                queue = asyncio.Queue()
+                loop = asyncio.get_running_loop()
+                
+                def subscriber(event):
+                    if event.session_id == session_id:
+                        try:
+                            loop.call_soon_threadsafe(queue.put_nowait, event)
+                        except Exception:
+                            pass
+                            
+                event_bus.subscribe(subscriber)
+                
+                try:
+                    # Start orchestrator in background
+                    task = asyncio.create_task(
+                        asyncio.to_thread(orchestrator.process, session_id, user_msg, provider=provider)
+                    )
+
+                    while True:
+                        get_task = asyncio.create_task(queue.get())
+                        done, pending = await asyncio.wait(
+                            [get_task, task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+                        
+                        if get_task in done:
+                            event = get_task.result()
+                            chunk_content = ""
+                            
+                            if event.event_type == "tool.start":
+                                name = event.data.get('name', '')
+                                args_str = json.dumps(event.data.get('args', {}))
+                                chunk_content = f"\n\n🛠️ **Running Tool**: `{name}` with args: `{args_str}`...\n"
+                            elif event.event_type == "tool.end":
+                                name = event.data.get('name', '')
+                                chunk_content = f"✅ **Tool `{name}` completed.**\n\n"
+                            elif event.event_type == "request.end":
+                                content = event.data.get('content', '')
+                                chunk_content = f"\n{content}"
+                            elif event.event_type == "request.error":
+                                chunk_content = f"\n\n❌ **Error**: {event.data.get('error', '')}\n"
+                                
+                            if chunk_content:
+                                chunk = {
+                                    "id": f"chatcmpl-{session_id}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": req.model,
+                                    "choices": [{"index": 0, "delta": {"content": chunk_content}, "finish_reason": None}]
+                                }
+                                yield f"data: {json.dumps(chunk)}\n\n"
+                                
+                            if event.event_type in ["request.end", "request.error"]:
+                                break
+                                
+                        if task in done and queue.empty():
+                            if task.exception():
+                                logger.error(f"OpenAI stream task error: {task.exception()}")
+                                error_chunk = {
+                                    "id": f"chatcmpl-{session_id}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": req.model,
+                                    "choices": [{"index": 0, "delta": {"content": f"\n\n**Error:** {str(task.exception())}"}, "finish_reason": "stop"}]
+                                }
+                                yield f"data: {json.dumps(error_chunk)}\n\n"
+                            break
+                            
+                    # Final chunk
+                    final_chunk = {
+                        "id": f"chatcmpl-{session_id}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": req.model,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+                    }
+                    yield f"data: {json.dumps(final_chunk)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    
+                finally:
+                    event_bus.unsubscribe(subscriber)
+                    memory.store_convo(session_id, "user", user_msg)
+                    # Note: We rely on orchestrator to store assistant convo
+
+            return StreamingResponse(event_generator(), media_type="text/event-stream")
+            
+        else:
+            # Non-streaming response
+            response_text = await asyncio.to_thread(
+                orchestrator.process, session_id, user_msg, provider=provider
+            )
+            memory.store_convo(session_id, "user", user_msg)
+            memory.store_convo(session_id, "assistant", response_text)
+            
+            return {
+                "id": f"chatcmpl-{session_id}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": req.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": response_text
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(default="default", max_length=64)
     message: str = Field(..., max_length=4000)

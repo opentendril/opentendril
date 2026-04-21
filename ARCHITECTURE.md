@@ -23,9 +23,10 @@ Python will likely remain the orchestrator to leverage AI libraries, but high-th
 - **I/O Bottlenecks:** Memory retrieval (RAG), vector searches, or high-volume logging can be spun out into microservices written in **Go** or **Rust**.
 - **Code Execution:** Untrusted code built by Tendril should eventually run in segregated Rust-based WebAssembly (Wasm) or Firecracker microVM sandboxes rather than direct subprocesses.
 
-### C. Frontend / Client Separation
-As the Chat UI becomes a richer dashboard (reporting, memory management, skill graph visualization):
-- **Web App:** Extract the UI from FastAPI logic into a dedicated **TypeScript + React / Next.js** application.
+### C. Headless Kernel & Ecosystem Integrations
+As the core orchestrator becomes increasingly robust, Tendril should embrace a "Headless Kernel" pattern:
+- **Ecosystem Integration:** Expose an OpenAI-compatible SSE streaming API (`/v1/chat/completions`) that enables external tools like Aider, OpenCode, and Crush to connect directly to Tendril.
+- **Web App:** Extract the UI from FastAPI logic into a dedicated **TypeScript + React / Next.js** dashboard for observability and agent configuration rather than purely chat.
 - **Local Native:** For local users who want a "1-click" experience outside of Docker, the Python backend and web frontend can be bundled into a desktop application via **Tauri (Rust)** or **Electron**.
 
 ## 3. Documentation Governance

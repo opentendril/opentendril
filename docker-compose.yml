@@ -58,6 +58,7 @@ services:
     volumes:
       # Default: Mount internal source code for the "Root Agent" Moat loop
       - ./src:/app/src
+      - ./.git:/app/.git
       - ./skills:/app/skills
       - ./data:/app/data
       - ./logs:/app/logs

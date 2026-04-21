@@ -152,16 +152,16 @@ class Orchestrator:
                 return f"❌ Patch failed: {str(e)}"
 
         @tool
-        def staged_edit(filepath: str, content: str, description: str) -> str:
+        def staged_edit(filepath: str, patch_text: str, description: str) -> str:
             """Safely modify a PROTECTED file through the staging pipeline.
 
-            This is the ONLY way to modify kernel files (main.py, styles.css, etc).
-            It creates a git branch, applies the change, runs validation, commits,
-            and creates a PR for human review.
+            This is the ONLY way to modify kernel files (main.py, tendril.py, etc).
+            It creates a git branch, applies a surgical patch, runs validation, commits,
+            and switches back to main for human review.
 
             Args:
                 filepath: The file to modify (can be a protected file)
-                content: The new file content
+                patch_text: A patch in *** Begin Patch / *** End Patch format describing the surgical change
                 description: Brief description of the change (used as commit message)
             """
             import subprocess
@@ -183,13 +183,21 @@ class Orchestrator:
                 except Exception as e:
                     return f"❌ Cannot create branch '{branch_name}': {str(e)}"
 
-                # 3. Generate diff BEFORE writing
-                diff = staging_editor.generate_diff(filepath, content)
+                # 3. Apply the patch (surgical edit, not full rewrite)
+                try:
+                    operations = parse_patch(patch_text)
+                    errors = validate_patch(operations, staging_editor)
+                    if errors:
+                        git.checkout("main")
+                        git._run_git("branch", "-D", branch_name)
+                        return f"❌ Patch validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+                    result = apply_patch(operations, staging_editor)
+                except PatchParseError as e:
+                    git.checkout("main")
+                    git._run_git("branch", "-D", branch_name)
+                    return f"❌ Patch parse error: {str(e)}"
 
-                # 4. Write the file (protection bypassed)
-                result = staging_editor.write(filepath, content)
-
-                # 5. Syntax validation for Python files
+                # 4. Syntax validation for Python files
                 if filepath.endswith('.py'):
                     try:
                         resolved = staging_editor._resolve_path(filepath)
@@ -208,37 +216,18 @@ class Orchestrator:
                             f"Error: {e.stderr}"
                         )
 
-                # 6. Commit on the staging branch
+                # 5. Commit on the staging branch (never GPG sign in container)
                 git._run_git("add", filepath)
-                git._run_git("commit", "-m", f"staging: {description}",
+                git._run_git("commit", "--no-gpg-sign", "-m", f"staging: {description}",
                              "-m", "Co-authored-by: Tendril <tendril@jurnx.com>")
 
-                # 7. Try to push and create PR
-                pr_url = ""
-                try:
-                    git.push_branch(branch_name)
-                    pr_result = git.create_pull_request(
-                        repo_name="opentendril/core",
-                        title=f"staging: {description}",
-                        body=f"**Automated staging edit by Tendril**\n\n"
-                             f"File: `{filepath}`\n\n"
-                             f"```diff\n{diff[:3000]}\n```\n\n"
-                             f"This change was validated:\n"
-                             f"- ✅ Sandbox check passed\n"
-                             f"- ✅ Syntax check passed\n"
-                             f"- ⏳ Awaiting human review",
-                        head_branch=branch_name,
-                    )
-                    pr_url = f"\n{pr_result}"
-                except Exception as e:
-                    pr_url = f"\n⚠️ Could not push/create PR: {str(e)}"
-
-                # 8. Switch back to main (leave branch for testing)
+                # 6. Switch back to main (leave branch for testing/merging)
                 git.checkout("main")
 
                 return (
                     f"✅ Staged edit committed on branch '{branch_name}'\n"
-                    f"File: {filepath} ({result['size']} bytes)\n\n"
+                    f"Patch applied: {result.file_count} file(s)\n"
+                    f"{result.summary}\n\n"
                     f"To test this change:\n"
                     f"  git checkout {branch_name}\n"
                     f"  docker compose up --build\n\n"
@@ -246,8 +235,6 @@ class Orchestrator:
                     f"  git checkout main\n"
                     f"  git merge {branch_name}\n"
                     f"  git push origin main\n"
-                    f"{pr_url}\n\n"
-                    f"Diff:\n{diff}"
                 )
 
             except Exception as e:
@@ -359,7 +346,8 @@ class Orchestrator:
                 return f"❌ Command execution failed: {str(e)}"
 
         return [
-            calculator, search_memory, build_skill, read_file, write_file, 
+            calculator, search_memory, build_skill, read_file, write_file,
+            apply_code_patch, staged_edit,
             list_project_files, search_project, read_logs,
             git_commit, git_create_branch, git_status, create_pull_request,
             run_bash_command
@@ -563,6 +551,7 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
         # Agentic loop: call LLM, execute tools, repeat
         # Increased to 20 to allow for complex multi-file read/write self-edits
         max_iterations = 20
+        last_response_content = None
         for i in range(max_iterations):
             try:
                 import time as _time
@@ -570,6 +559,7 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
                 resp = llm_with_tools.invoke(messages)
                 _latency = (_time.time() - _start) * 1000
                 self.failover._get_state(selected_provider).record_success(_latency)
+                last_response_content = resp.content
             except Exception as e:
                 from .failover import classify_error
                 reason = classify_error(e)
@@ -586,8 +576,14 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
                 credit_manager.consume_request(session_id)
                 event_bus.emit(TendrilEvent(
                     run_id=run_id, event_type="request.end",
-                    session_id=session_id, data={"iterations": i + 1},
+                    session_id=session_id, data={"iterations": i + 1, "content": str(resp.content)},
                 ))
+                # Drift detection check
+                if last_response_content:
+                    import difflib
+                    similarity = difflib.SequenceMatcher(None, message, last_response_content).ratio()
+                    if similarity < 0.15:
+                        logger.warning(f"Drift detected in session {session_id}: similarity {similarity:.2f} between user message and last response")
                 return resp.content or "I processed your request but have no text response."
 
             # Execute tool calls
@@ -595,6 +591,12 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
             for tool_call in resp.tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
+
+                event_bus.emit(TendrilEvent(
+                    run_id=run_id, event_type="tool.start",
+                    session_id=session_id, data={"name": tool_name, "args": tool_args}
+                ))
+
                 tool_func = next((t for t in self.tools if t.name == tool_name), None)
 
                 if tool_func:
@@ -605,11 +607,23 @@ When the user refers to "the chat", "the UI", "the text box", "the screen" — t
                 else:
                     tool_result = f"Unknown tool: {tool_name}"
 
+                event_bus.emit(TendrilEvent(
+                    run_id=run_id, event_type="tool.end",
+                    session_id=session_id, data={"name": tool_name, "result_preview": str(tool_result)[:200]}
+                ))
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
                     "name": tool_name,
                     "content": str(tool_result),
                 })
+
+        # Drift detection check after loop
+        if last_response_content:
+            import difflib
+            similarity = difflib.SequenceMatcher(None, message, last_response_content).ratio()
+            if similarity < 0.15:
+                logger.warning(f"Drift detected in session {session_id}: similarity {similarity:.2f} between user message and last response")
 
         return "⚠️ Reached maximum tool iterations. The task may be too complex — try breaking it into smaller steps."

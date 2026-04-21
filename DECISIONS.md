@@ -18,6 +18,11 @@ This document records the "Why" behind the Tendril Kernel's evolution. It is a p
 - **Decision:** Replaced `SRC_DIR` with `WORKSPACE_ROOT` as the primary editor boundary.
 - **Rationale:** Allows Tendril to modify its own configuration, Docker files, and root-level documentation, not just code inside `src/`. Essential for a true "Root Agent."
 
+### 4. The Headless Kernel Ecosystem (2026-04-20)
+- **Decision:** Shifted focus from building a custom CLI/Gateway to a "Headless Kernel" model accessible via a live-streaming, OpenAI-compatible REST API.
+- **Rationale:** Instead of competing with robust TUI tools like Aider or OpenCode, Tendril exposes its orchestration loop and agentic capabilities via a standard `/v1/chat/completions` endpoint. This allows Tendril to serve as the autonomous backend "brain" for existing developer ecosystems, preserving its sandboxed testing and execution features while leveraging existing frontends.
+- **Impact:** Custom Go CLI/Gateway layers are deprecated in favor of external integration. The API now streams live tool execution events natively to clients.
+
 ---
 
 ## 🎨 Branding & Identity

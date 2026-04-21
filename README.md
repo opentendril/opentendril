@@ -86,6 +86,35 @@ Tendril reads your code, generates edits, shows diffs, and commits to git.
 
 ---
 
+## Ecosystem Integrations (The Headless Kernel)
+
+Tendril is designed as an **Intelligent Backend Protocol** (a Headless Kernel) that seamlessly powers the best Terminal UIs and agents in the open-source ecosystem. 
+
+Because Tendril exposes a native **OpenAI-Compatible API Endpoint** (`/v1/chat/completions`), you can point your favorite third-party tool at your local Tendril Brain. Tendril will execute the edits autonomously in its sandbox, while streaming a continuous live narrative of its thoughts and actions back to your TUI of choice!
+
+### Supported Frontends
+
+#### 1. Aider
+The gold standard for Git-native code editing.
+```bash
+export OPENAI_API_BASE="http://localhost:8080/v1"
+export OPENAI_API_KEY="tendril"
+aider --model openai/tendril
+```
+
+#### 2. Crush
+For a glamorous, blazing fast Terminal UI experience.
+```bash
+export OPENAI_API_BASE="http://localhost:8080/v1"
+export OPENAI_API_KEY="tendril"
+crush --model openai/tendril
+```
+
+#### 3. OpenCode
+For Neovim-centric, highly customizable agenting. Point OpenCode's custom provider configuration to `http://localhost:8080/v1`.
+
+---
+
 ## How It Works
 
 ```
