@@ -6,83 +6,31 @@ Your LLM keys. Your codebase. Your machine.
 
 ---
 
-## Quick Start (5 minutes)
+## Quick Start
 
-### 1. Clone and configure
+> **[→ Full setup guide with Hello World verification: QUICKSTART.md](./QUICKSTART.md)**
 
 ```bash
 git clone https://github.com/opentendril/core.git
-cd core
-cp .env.example .env
-```
-
-Edit `.env` — add at least one LLM API key:
-```bash
-# Pick your provider (anthropic recommended for code editing)
-ANTHROPIC_API_KEY=sk-ant-...
-# or
-GROK_API_KEY=xai-...
-# or
-OPENAI_API_KEY=sk-...
-
-# Required infrastructure passwords
-POSTGRES_PASSWORD=pick-something-secure
-REDIS_PASSWORD=pick-something-secure
-SECRET_KEY=generate-with-openssl-rand-hex-32
-SANDBOX_TOKEN=generate-with-openssl-rand-hex-16
-```
-
-### 2. Mount your project
-
-In `.env`, point Tendril at your codebase:
-```bash
-TENDRIL_WORKSPACE_ROOT=/workspace
-TENDRIL_PROJECT_PATH=/absolute/path/to/your/project
-DEFAULT_LLM_PROVIDER=anthropic
-```
-
-### 3. Launch
-
-```bash
+cd core && cp .env.example .env   # Add your LLM API key
 docker compose up --build
 ```
 
-Wait for health checks to pass. Verify:
+Verify it's live:
 ```bash
-curl http://localhost:8080/health
-# → {"status":"healthy","version":"0.1.0",...}
+curl -s http://localhost:8080/health | python3 -m json.tool
+# → {"status": "healthy", ...}
 ```
 
-### 4. Talk to it
+Then connect — pick your preferred interface:
 
-**Option A — CLI (recommended)**
-```bash
-cd cli/
-go build -o tendril-cli .
-./tendril-cli
-```
+| Interface | Command |
+|---|---|
+| **curl** | `curl -X POST http://localhost:8080/v1/chat -H 'Content-Type: application/json' -d '{"session_id":"test","message":"What files are in this project?"}'` |
+| **CLI** | `cd cli && go build -o tendril-cli . && ./tendril-cli` |
+| **Web UI** | Open `http://localhost:8080/chat` |
 
-**Option B — Direct API**
-```bash
-curl -X POST http://localhost:8080/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "my-session", "message": "list all files in the project"}'
-```
-
-**Option C — Web UI**
-
-Open http://localhost:8080 in your browser.
-
-### 5. Make your first edit
-
-```
-you › add error handling to the main entry point
-you › read src/auth.py and add input validation
-you › what does this project do? summarize the architecture
-you › commit all changes with message "feat: add error handling"
-```
-
-Tendril reads your code, generates edits, shows diffs, and commits to git.
+See [QUICKSTART.md](./QUICKSTART.md) for full setup, troubleshooting, and first-edit walkthrough.
 
 ---
 
