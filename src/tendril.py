@@ -63,7 +63,10 @@ class Orchestrator:
         self.router = llm_router or LLMRouter()
         self.editor = editor or FileEditor(WORKSPACE_ROOT)
         self.approval = approval or ApprovalGate(auto_approve=True)
-        self.git = GitManager()
+        # Git is optional — gracefully skip if no .git repo is present
+        import os as _os
+        git_root = _os.path.join(WORKSPACE_ROOT, ".git")
+        self.git = GitManager() if _os.path.isdir(git_root) else None
         self.tester = TestRunner(self.approval)
         self.failover = ModelFailover(self.router)
         self.tools = self._create_tools()
@@ -73,8 +76,9 @@ class Orchestrator:
         memory = self.memory
         skills_manager = self.skills_manager
         editor = self.editor
-        git = self.git
+        git = self.git  # May be None if no .git repo
         tester = self.tester
+        git_available = git is not None
 
         @tool
         def search_memory(query: str) -> str:
@@ -172,6 +176,9 @@ class Orchestrator:
             # Create a staging editor with protection DISABLED
             staging_editor = FileEditor(sandbox_root=editor.sandbox_root, enforce_protection=False)
 
+            if not git_available:
+                return "❌ staged_edit requires a git repository. No .git directory found."
+
             try:
                 # 1. Generate branch name from description
                 slug = re.sub(r'[^a-z0-9]+', '-', description.lower().strip())[:40].strip('-')
@@ -221,20 +228,38 @@ class Orchestrator:
                 git._run_git("commit", "--no-gpg-sign", "-m", f"staging: {description}",
                              "-m", "Co-authored-by: Tendril <tendril@jurnx.com>")
 
-                # 6. Switch back to main (leave branch for testing/merging)
+                # 6. Canary Boot — spin up a test container and health-check the change
+                canary_result = "⚠️ Canary boot skipped (Docker not available in this environment)."
+                try:
+                    canary = subprocess.run(
+                        ["docker", "compose", "build", "tendril"],
+                        capture_output=True, text=True, timeout=120,
+                        cwd=str(editor.sandbox_root)
+                    )
+                    if canary.returncode != 0:
+                        # Build failed — revert and abort
+                        git.checkout("main")
+                        git._run_git("branch", "-D", branch_name)
+                        return (
+                            f"❌ Canary build FAILED — change reverted.\n"
+                            f"Build error:\n{canary.stderr[-1000:]}"
+                        )
+                    canary_result = "✅ Canary build passed."
+                except FileNotFoundError:
+                    canary_result = "⚠️ Docker not found — canary boot skipped."
+                except subprocess.TimeoutExpired:
+                    canary_result = "⚠️ Canary build timed out — branch left for manual review."
+
+                # 7. Switch back to main (leave branch for testing/merging)
                 git.checkout("main")
 
                 return (
                     f"✅ Staged edit committed on branch '{branch_name}'\n"
                     f"Patch applied: {result.file_count} file(s)\n"
-                    f"{result.summary}\n\n"
-                    f"To test this change:\n"
-                    f"  git checkout {branch_name}\n"
-                    f"  docker compose up --build\n\n"
-                    f"To merge after testing:\n"
-                    f"  git checkout main\n"
-                    f"  git merge {branch_name}\n"
-                    f"  git push origin main\n"
+                    f"{result.summary}\n"
+                    f"{canary_result}\n\n"
+                    f"To merge after review:\n"
+                    f"  git checkout main && git merge {branch_name} && git push origin main\n"
                 )
 
             except Exception as e:
@@ -303,41 +328,6 @@ class Orchestrator:
                 return f"❌ Cannot read logs: {str(e)}"
                 
         @tool
-        def git_commit(message: str) -> str:
-            """Commit all changes in the project with the given message."""
-            try:
-                result = git.commit_changes(message)
-                if "✅" in result:
-                    chronicler.log_commit(message)
-                return result
-            except Exception as e:
-                return f"❌ Git commit failed: {str(e)}"
-                
-        @tool
-        def git_create_branch(branch_name: str) -> str:
-            """Create and checkout a new git branch."""
-            try:
-                return git.create_branch(branch_name)
-            except Exception as e:
-                return f"❌ Git branch failed: {str(e)}"
-                
-        @tool
-        def git_status() -> str:
-            """Get the current git status."""
-            try:
-                return git.status()
-            except Exception as e:
-                return f"❌ Git status failed: {str(e)}"
-                
-        @tool
-        def create_pull_request(title: str, body: str, head_branch: str) -> str:
-            """Create a pull request on GitHub to opentendril/core."""
-            try:
-                return git.create_pull_request("opentendril/core", title, body, head_branch)
-            except Exception as e:
-                return f"❌ PR creation failed: {str(e)}"
-                
-        @tool
         async def run_bash_command(command: str) -> str:
             """Run a bash command or test suite (e.g. 'pytest', 'npm test'). Will ask for approval."""
             try:
@@ -345,13 +335,57 @@ class Orchestrator:
             except Exception as e:
                 return f"❌ Command execution failed: {str(e)}"
 
-        return [
+        # Base tools always available
+        tools = [
             calculator, search_memory, build_skill, read_file, write_file,
-            apply_code_patch, staged_edit,
+            apply_code_patch,
             list_project_files, search_project, read_logs,
-            git_commit, git_create_branch, git_status, create_pull_request,
-            run_bash_command
+            run_bash_command,
         ]
+
+        # Git tools only registered when a .git repo is present
+        if git_available:
+            @tool
+            def git_commit(message: str) -> str:
+                """Commit all changes in the project with the given message."""
+                try:
+                    result = git.commit_changes(message)
+                    if "✅" in result:
+                        chronicler.log_commit(message)
+                    return result
+                except Exception as e:
+                    return f"❌ Git commit failed: {str(e)}"
+
+            @tool
+            def git_create_branch(branch_name: str) -> str:
+                """Create and checkout a new git branch."""
+                try:
+                    return git.create_branch(branch_name)
+                except Exception as e:
+                    return f"❌ Git branch failed: {str(e)}"
+
+            @tool
+            def git_status() -> str:
+                """Get the current git status of the project."""
+                try:
+                    return git.status()
+                except Exception as e:
+                    return f"❌ Git status failed: {str(e)}"
+
+            @tool
+            def create_pull_request(title: str, body: str, head_branch: str) -> str:
+                """Create a pull request on GitHub to opentendril/core."""
+                try:
+                    return git.create_pull_request("opentendril/core", title, body, head_branch)
+                except Exception as e:
+                    return f"❌ PR creation failed: {str(e)}"
+
+            tools += [git_commit, git_create_branch, git_status, create_pull_request, staged_edit]
+            logger.info("🔀 Git tools registered (repo detected).")
+        else:
+            logger.info("⚠️  No .git directory found — git tools and staged_edit disabled.")
+
+        return tools
 
     def process(
         self,
