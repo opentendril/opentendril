@@ -558,9 +558,13 @@ async def edit_endpoint(req: EditRequest):
         if not credit_manager.validate_request():
             raise HTTPException(status_code=402, detail="Insufficient credits.")
             
+        # The /edit endpoint operates with SDLC gates (lint, test, human approval).
+        # It is explicitly allowed to modify protected files.
+        unprotected_editor = FileEditor(enforce_protection=False)
+            
         # Read current file
         try:
-            current_content = editor.read(req.file)
+            current_content = unprotected_editor.read(req.file)
         except FileNotFoundError:
             current_content = ""
 
@@ -589,10 +593,10 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
             new_content = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
 
         # Generate diff
-        diff = editor.generate_diff(req.file, new_content)
+        diff = unprotected_editor.generate_diff(req.file, new_content)
 
         # 1. Apply Change Temporarily for SDLC Testing
-        result = editor.write(req.file, new_content)
+        result = unprotected_editor.write(req.file, new_content)
         
         # 2. CI / Automated Tests (The SDLC Loop)
         check_msg = "Skipped syntax & CI checks (not a .py file)"
@@ -620,7 +624,7 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
 
         # 3. Auto-Revert on Failure
         if not test_passed:
-            editor.write(req.file, current_content)  # Rollback instantly
+            unprotected_editor.write(req.file, current_content)  # Rollback instantly
             return {
                 "status": "rejected",
                 "file": req.file,
@@ -652,7 +656,7 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
             }
         else:
             # Human rejected: Rollback
-            editor.write(req.file, current_content)
+            unprotected_editor.write(req.file, current_content)
             return {
                 "status": "rejected",
                 "file": req.file,
