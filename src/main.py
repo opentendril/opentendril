@@ -43,7 +43,7 @@ from slowapi.errors import RateLimitExceeded
 from pydantic import BaseModel, Field
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .config import validate_config, LOG_DIR
+from .config import validate_config, LOG_DIR, has_active_llm_provider, DATA_ENV_PATH
 from .llmrouter import LLMRouter
 from .memory import Memory
 from .skillsmanager import SkillsManager
@@ -129,6 +129,108 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 def safe(text: str) -> str:
     """Escape text for safe HTML rendering."""
     return html.escape(str(text))
+
+
+# --- Helper: Slash Command Engine ---
+def append_to_env(key: str, val: str):
+    import os
+    os.makedirs(os.path.dirname(DATA_ENV_PATH), exist_ok=True)
+    with open(DATA_ENV_PATH, "a") as f:
+        f.write(f"\n{key}={val}\n")
+
+def intercept_slash_commands(message: str) -> Optional[str]:
+    """
+    Intercepts and handles CLI slash commands (/help, /repo, etc.)
+    Returns a response string if intercepted, or None to proceed to the LLM.
+    """
+    msg_strip = message.strip()
+    
+    if not msg_strip.startswith("/"):
+        if not has_active_llm_provider():
+            return (
+                "🌱 **Welcome to Tendril!** The system is live, but no LLM API keys are configured.\n\n"
+                "To start chatting, please provide an API key using the `/keys` command:\n"
+                "`/keys ANTHROPIC_API_KEY sk-ant-...`\n\n"
+                "Type `/help` to see all available commands."
+            )
+        return None
+
+    # Parse command and args
+    parts = msg_strip.split(maxsplit=1)
+    cmd = parts[0].lower()
+    args = parts[1] if len(parts) > 1 else ""
+
+    if cmd == "/help":
+        return """## Tendril Command Center
+
+**Configuration**
+- `/keys <PROVIDER> <KEY>` : Set an API key (e.g., `/keys OPENAI_API_KEY sk-...`)
+- `/model <PROVIDER>` : Switch default LLM provider (e.g., `/model grok`)
+- `/repo <PATH>` : Switch the active codebase (e.g., `/repo /tmp/app`)
+- `/local` : Enable the local GPU-accelerated Qwen-3 model
+
+**System**
+- `/status` : View current system configuration
+- `/test` : Run system health checks
+- `/restart` : Restart the Tendril container
+"""
+
+    elif cmd == "/status":
+        from .config import DEFAULT_LLM_PROVIDER, WORKSPACE_ROOT
+        active = ", ".join(llm_router.available_providers) if llm_router.available_providers else "None"
+        return f"""### System Status
+- **Workspace:** `{WORKSPACE_ROOT}`
+- **Active Keys:** {active}
+- **Default Model:** `{DEFAULT_LLM_PROVIDER}`
+"""
+
+    elif cmd == "/keys":
+        key_parts = args.split(maxsplit=1)
+        if len(key_parts) != 2:
+            return "❌ Invalid format. Use: `/keys OPENAI_API_KEY sk-...`"
+            
+        key, val = key_parts[0].strip(), key_parts[1].strip()
+        success = llm_router.reconfigure_provider(key, val)
+        if not success:
+            return "❌ Failed to configure. Ensure the key matches a supported provider (OPENAI_API_KEY, ANTHROPIC_API_KEY, GROK_API_KEY)."
+            
+        try:
+            append_to_env(key, val)
+        except Exception as e:
+            return f"⚠️ Applied dynamically but failed to save to disk: {e}"
+        return f"✅ **Key saved!** Tendril is operational."
+
+    elif cmd == "/model":
+        if not args:
+            return "❌ Missing provider. Use: `/model anthropic`"
+        try:
+            append_to_env("DEFAULT_LLM_PROVIDER", args.strip().lower())
+            return f"✅ Default model set to `{args}`. The CLI will restart the server to apply this change."
+        except Exception as e:
+            return f"❌ Failed to save to disk: {e}"
+
+    elif cmd == "/repo":
+        if not args:
+            return "❌ Missing path. Use: `/repo /absolute/path`"
+        try:
+            append_to_env("TENDRIL_PROJECT_PATH", args.strip())
+            return f"✅ Workspace updated to `{args}`. The CLI will now restart the server to mount the new folder."
+        except Exception as e:
+            return f"❌ Failed to save to disk: {e}"
+
+    elif cmd == "/local":
+        try:
+            append_to_env("DEFAULT_LLM_PROVIDER", "local")
+            append_to_env("LOCAL_MODEL_NAME", "Qwen/Qwen3-8B-AWQ")
+            return "✅ Local model configured (`Qwen/Qwen3-8B-AWQ`). The CLI will now restart the server using the GPU profile."
+        except Exception as e:
+            return f"❌ Failed to save to disk: {e}"
+            
+    # Legacy /config handler
+    elif cmd == "/config":
+        return "⚠️ The `/config` command has been replaced. Please use `/help` to see the new command menu."
+
+    return "❌ Unknown command. Type `/help` for a list of commands."
 
 
 # --- Root ---
@@ -324,8 +426,8 @@ async def get_history(tendril_session: str = Cookie(default="default")):
 @app.post("/chat/message", response_class=HTMLResponse)
 async def post_message(message: str = Form(...), provider: str = Form("default"), tendril_session: str = Cookie(default="default")):
     import time
-    # Store user message with actual session
-    memory.store_convo(tendril_session, "user", message)
+    # NOTE: Do NOT store user message here — the stream endpoint handles memory storage
+    # to avoid duplicates in the conversation history.
     escaped = safe(message)
     provider_param = safe(provider)
     
@@ -354,22 +456,49 @@ async def post_message(message: str = Form(...), provider: str = Form("default")
 async def stream_chat(message: str, provider: str = "default", session: str = "", sid: str = "default"):
     async def event_generator():
         try:
-            prov = None if provider == "default" else provider
-            response_text = await asyncio.to_thread(
-                orchestrator.process, sid, message, provider=prov
-            )
+            # Check Slash Command interception
+            intercepted = intercept_slash_commands(message)
+            if intercepted:
+                response_text = intercepted
+            else:
+                prov = None if provider == "default" else provider
+                response_text = await asyncio.to_thread(
+                    orchestrator.process, sid, message, provider=prov
+                )
+            
+            # Store both user message and assistant response here (single source of truth)
+            memory.store_convo(sid, "user", message)
             memory.store_convo(sid, "assistant", response_text)
 
-            # Format response (basic markdown-like rendering)
+            # Format response with full Markdown rendering
             escaped_text = safe(response_text)
             
             import re
-            formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', escaped_text)
-            formatted = re.sub(r'`(.*?)`', r'<code>\1</code>', formatted)
-            formatted = re.sub(r'```(.*?)\n(.*?)\n?```', r'<pre><code>\2</code></pre>', formatted, flags=re.DOTALL)
-            formatted = formatted.replace("\n\n", "</p><p>")
-            formatted = formatted.replace("\n", "<br>")
-            formatted = f"<p>{formatted}</p>"
+            def apply_markdown(text: str) -> str:
+                """Convert Markdown to safe HTML."""
+                # Code blocks first (before other substitutions)
+                text = re.sub(r'```(?:\w+)?\n(.*?)\n?```', r'<pre><code>\1</code></pre>', text, flags=re.DOTALL)
+                # Inline code
+                text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+                # Bold
+                text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+                # Italic
+                text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
+                # ATX headings (## Heading)
+                text = re.sub(r'^### (.+)$', r'<h3>\1</h3>', text, flags=re.MULTILINE)
+                text = re.sub(r'^## (.+)$', r'<h2>\1</h2>', text, flags=re.MULTILINE)
+                text = re.sub(r'^# (.+)$', r'<h1>\1</h1>', text, flags=re.MULTILINE)
+                # Unordered lists (- item or * item)
+                text = re.sub(r'^[-*] (.+)$', r'<li>\1</li>', text, flags=re.MULTILINE)
+                text = re.sub(r'(<li>.*?</li>\n?)+', r'<ul>\g<0></ul>', text, flags=re.DOTALL)
+                # Horizontal rules
+                text = re.sub(r'^---+$', r'<hr>', text, flags=re.MULTILINE)
+                # Paragraphs
+                text = text.replace("\n\n", "</p><p>")
+                text = text.replace("\n", "<br>")
+                return f"<p>{text}</p>"
+            
+            formatted = apply_markdown(escaped_text)
 
             # Stream word-by-word for UX
             words = response_text.split(" ")
@@ -377,28 +506,13 @@ async def stream_chat(message: str, provider: str = "default", session: str = ""
             for i, word in enumerate(words):
                 accumulated += word + (" " if i < len(words) - 1 else "")
                 
-                current_safe = safe(accumulated)
-                current_formatted = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', current_safe)
-                current_formatted = re.sub(r'`(.*?)`', r'<code>\1</code>', current_formatted)
+                current_formatted = apply_markdown(safe(accumulated))
                 
-                if "```" in current_formatted:
-                    if current_formatted.count("```") % 2 != 0:
-                        current_formatted += "\n... (coding) ..."
-                    current_formatted = re.sub(
-                        r'```(.*?)\n(.*?)(?:```|$)', 
-                        r'<pre><code>\2</code></pre>', 
-                        current_formatted, 
-                        flags=re.DOTALL
-                    )
-                
-                current_formatted = current_formatted.replace("\n\n", "</p><p>").replace("\n", "<br>")
-                display = f"<p>{current_formatted}</p>"
-                
-                # If this is the final word, swap out the entire container to kill SSE!
+                # If this is the final word, use the fully-rendered final version
                 if i == len(words) - 1 and session:
-                    yield f'event: message\ndata: <div hx-swap-oob="outerHTML:#{session}" class="msg-row assistant"><div class="msg-bubble assistant">{display}</div></div>\n\n'
+                    yield f'event: message\ndata: <div hx-swap-oob="outerHTML:#{session}" class="msg-row assistant"><div class="msg-bubble assistant">{formatted}</div></div>\n\n'
                 else:
-                    yield f'event: message\ndata: <div class="msg-bubble assistant">{display}</div>\n\n'
+                    yield f'event: message\ndata: <div class="msg-bubble assistant">{current_formatted}</div>\n\n'
                     
                 await asyncio.sleep(0.01)
 
@@ -725,10 +839,14 @@ class ChatRequest(BaseModel):
 async def chat_api(req: ChatRequest):
     logger.info(f"API chat: session={req.session_id} msg='{req.message[:100]}'")
     try:
-        prov = None if req.provider == "default" else req.provider
-        response = await asyncio.to_thread(
-            orchestrator.process, req.session_id, req.message, provider=prov
-        )
+        intercepted = intercept_slash_commands(req.message)
+        if intercepted:
+            response = intercepted
+        else:
+            prov = None if req.provider == "default" else req.provider
+            response = await asyncio.to_thread(
+                orchestrator.process, req.session_id, req.message, provider=prov
+            )
         memory.store_convo(req.session_id, "user", req.message)
         memory.store_convo(req.session_id, "assistant", response)
         return {"response": response, "provider": req.provider}
@@ -754,6 +872,14 @@ async def get_settings():
             <div class="form-group">
                 <label>GROK_API_KEY</label>
                 <input type="password" name="grok_key" class="form-input" value="{safe(os.getenv('GROK_API_KEY', ''))}" placeholder="xai-...">
+            </div>
+            <div id="chat-messages" class="messages">
+            <div class="welcome">
+                <img src="/static/favicon.png" alt="Tendril Logo" style="height: 80px; width: 80px; margin-bottom: 24px; opacity: 1;">
+                <h3>I am the Root Agent.</h3>
+                <p>Turn your frustrations into skills via <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px;border:1px solid var(--border)">/edit</code>.</p>
+                <p style="margin-top:16px;font-size:13px;color:var(--text-muted);">Type <code style="background:var(--bg-tertiary);padding:2px 5px;border-radius:4px;">/help</code> to see all available commands, or just say hello.</p>
+            </div>
             </div>
             <div class="settings-actions">
                 <button type="button" class="btn-secondary" style="width: auto;" onclick="window.location.reload()">Cancel</button>

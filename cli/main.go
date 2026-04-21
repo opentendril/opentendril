@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -180,7 +181,7 @@ func main() {
 	log.Println("Tip: Use --http to force HTTP mode.")
 
 	scanner := bufio.NewScanner(os.Stdin)
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -192,9 +193,33 @@ func main() {
 
 	for scanner.Scan() {
 		msg := strings.TrimSpace(scanner.Text())
-		if msg == "" || msg == "exit" {
+		if msg == "" || msg == "exit" || msg == "/exit" {
 			break
 		}
+
+		// --- Host-side Command Interception ---
+		if msg == "/restart" {
+			log.Println("🔄 Restarting Tendril containers...")
+			cmd := exec.Command("docker", "compose", "restart")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			_ = cmd.Run()
+			continue
+		}
+
+		if msg == "/test" {
+			log.Println("🧪 Running health checks...")
+			cmd := exec.Command("docker", "compose", "ps")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			_ = cmd.Run()
+			log.Println("✅ Config OK.")
+			continue
+		}
+
+		// Let the backend process these first to save to .env, then intercept to restart Docker
+		isRepoCmd := strings.HasPrefix(msg, "/repo ")
+		isLocalCmd := msg == "/local"
 
 		response, err := sendFunc(msg)
 		if err != nil {
@@ -202,6 +227,23 @@ func main() {
 			continue
 		}
 		fmt.Println(response)
+
+		// After backend responds successfully, trigger the host-side Docker restart
+		if isRepoCmd && !strings.Contains(response, "❌") {
+			log.Println("🔄 Remounting volumes (this may take a few seconds)...")
+			cmd := exec.Command("docker", "compose", "up", "-d")
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			_ = cmd.Run()
+		} else if isLocalCmd && !strings.Contains(response, "❌") {
+			log.Println("🔄 Restarting with GPU Profile enabled...")
+			cmd1 := exec.Command("docker", "compose", "down")
+			_ = cmd1.Run()
+			cmd2 := exec.Command("docker", "compose", "--profile", "gpu", "up", "-d")
+			cmd2.Stdout = os.Stdout
+			cmd2.Stderr = os.Stderr
+			_ = cmd2.Run()
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
