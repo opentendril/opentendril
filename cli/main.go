@@ -1,188 +1,210 @@
-// tendril-cli — Interactive terminal client for the Tendril AI orchestrator.
-//
-// Connects via WebSocket to the Tendril Chat Gateway.
-// Streams responses word-by-word like Codex CLI / Gemini CLI.
-//
-// Usage:
-//
-//	tendril-cli                          # Connect to localhost:9090
-//	tendril-cli --url ws://host:9090/ws  # Connect to remote gateway
-//	tendril-cli --provider anthropic     # Force a specific LLM provider
-//	tendril-cli --session my-project     # Persistent named session
+// Package main implements the Tendril CLI client.
+// Supports WebSocket (primary) and HTTP fallback to the Brain's OpenAI-compatible endpoint.
+
 package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// Message types (matching gateway protocol)
-type IncomingMessage struct {
-	Type      string `json:"type"`
-	Content   string `json:"content,omitempty"`
-	Provider  string `json:"provider,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-}
-
-type OutgoingMessage struct {
-	Type    string `json:"type"`
-	Content string `json:"content,omitempty"`
-	RunID   string `json:"run_id,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
-// ANSI colors
-const (
-	colorReset  = "\033[0m"
-	colorGreen  = "\033[32m"
-	colorCyan   = "\033[36m"
-	colorYellow = "\033[33m"
-	colorRed    = "\033[31m"
-	colorDim    = "\033[2m"
-	colorBold   = "\033[1m"
+var (
+	wsFlag  = flag.Bool("ws", true, "Use WebSocket connection (default)")
+	httpFlag = flag.Bool("http", false, "Force HTTP connection (OpenAI-compatible)")
+	baseURL  = flag.String("url", "localhost:8080", "Base URL for the Tendril server")
+	helpFlag = flag.Bool("h", false, "Show help")
 )
 
-func main() {
-	url := flag.String("url", "ws://localhost:9090/ws", "Gateway WebSocket URL")
-	provider := flag.String("provider", "default", "LLM provider (grok, anthropic, openai)")
-	session := flag.String("session", "cli-default", "Session ID for conversation persistence")
-	flag.Parse()
+type Message struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
 
-	fmt.Printf("%s%s🌱 Tendril CLI v0.1.0%s\n", colorBold, colorGreen, colorReset)
-	fmt.Printf("%sConnecting to %s...%s\n", colorDim, *url, colorReset)
+type ChatRequest struct {
+	Model    string    `json:"model"`
+	Messages []Message `json:"messages"`
+	Stream   bool      `json:"stream"`
+}
 
-	conn, _, err := websocket.DefaultDialer.Dial(*url, nil)
+type ChatResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Choices []struct {
+		Message Message `json:"message"`
+	} `json:"choices"`
+}
+
+type WSMessage struct {
+	Type string      `json:"type"`
+	Data interface{} `json:"data"`
+}
+
+// connectWS establishes a WebSocket connection to the gateway.
+func connectWS(base *url.URL) (*websocket.Conn, error) {
+	u := url.URL{Scheme: "ws", Host: base.Host, Path: "/ws"}
+	log.Printf("Connecting to WS: %s", u.String())
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s❌ Connection failed: %v%s\n", colorRed, err, colorReset)
-		fmt.Fprintf(os.Stderr, "\nMake sure the gateway is running:\n")
-		fmt.Fprintf(os.Stderr, "  docker compose up gateway\n")
-		os.Exit(1)
+		log.Printf("WS connect failed: %v", err)
+		return nil, err
 	}
-	defer conn.Close()
+	return conn, nil
+}
 
-	// Wait for connected message
-	_, msg, err := conn.ReadMessage()
+// sendWS sends a message over WebSocket and reads the response.
+func sendWS(conn *websocket.Conn, msg string) (string, error) {
+	err := conn.WriteJSON(WSMessage{Type: "user_message", Data: msg})
 	if err != nil {
-		log.Fatalf("Failed to read connection confirmation: %v", err)
-	}
-	var connectMsg OutgoingMessage
-	json.Unmarshal(msg, &connectMsg)
-	if connectMsg.Type == "connected" {
-		fmt.Printf("%s✅ Connected (session: %s, provider: %s)%s\n",
-			colorGreen, *session, *provider, colorReset)
+		return "", err
 	}
 
-	fmt.Printf("%sType your message and press Enter. Ctrl+C to exit.%s\n\n", colorDim, colorReset)
+	var response WSMessage
+	err = conn.ReadJSON(&response)
+	if err != nil {
+		return "", err
+	}
 
-	// Handle Ctrl+C gracefully
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Printf("\n%s👋 Goodbye!%s\n", colorCyan, colorReset)
-		conn.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		os.Exit(0)
-	}()
+	if respData, ok := response.Data.(string); ok {
+		return respData, nil
+	}
+	return "", fmt.Errorf("invalid WS response")
+}
 
-	// Response reader goroutine
-	responseCh := make(chan OutgoingMessage, 100)
-	go func() {
-		for {
-			_, raw, err := conn.ReadMessage()
-			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
-					return
-				}
-				fmt.Fprintf(os.Stderr, "\n%s⚠️  Connection lost: %v%s\n", colorYellow, err, colorReset)
-				os.Exit(1)
-			}
-			var msg OutgoingMessage
-			if err := json.Unmarshal(raw, &msg); err != nil {
-				continue
-			}
-			responseCh <- msg
+// sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.
+func sendHTTP(base *url.URL, msg string) (string, error) {
+	u := *base
+	u.Path = "/v1/chat/completions"
+	reqBody := ChatRequest{
+		Model: "gpt-4", // Default model; can be configured later
+		Messages: []Message{
+			{Role: "user", Content: msg},
+		},
+		Stream: false,
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", u.String(), strings.NewReader(string(jsonData)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-123") // Dummy key; configure via env or flag
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var chatResp ChatResponse
+	err = json.NewDecoder(resp.Body).Decode(&chatResp)
+	if err != nil {
+		return "", err
+	}
+
+	if len(chatResp.Choices) > 0 {
+		return chatResp.Choices[0].Message.Content, nil
+	}
+	return "", fmt.Errorf("no content in response")
+}
+
+// connect attempts WS first, falls back to HTTP after retries.
+func connect(base *url.URL, useWS bool) (func(string) (string, error), error) {
+	if !useWS {
+		log.Println("Using HTTP mode")
+		return func(msg string) (string, error) { return sendHTTP(base, msg) }, nil
+	}
+
+	// Try WS with retries
+	for i := 0; i < 3; i++ {
+		conn, err := connectWS(base)
+		if err == nil {
+			log.Println("Connected via WebSocket")
+			return func(msg string) (string, error) { return sendWS(conn, msg) }, nil
 		}
-	}()
+		log.Printf("WS retry %d/3 failed: %v. Waiting 2s...", i+1, err)
+		time.Sleep(2 * time.Second)
+	}
+
+	log.Println("WS failed; falling back to HTTP")
+	return func(msg string) (string, error) { return sendHTTP(base, msg) }, nil
+}
+
+func main() {
+	flag.Parse()
+	if *helpFlag {
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+
+	if *wsFlag && *httpFlag {
+		log.Fatal("Cannot use both --ws and --http")
+	}
+	useWS := *wsFlag
+
+	base, err := url.Parse(fmt.Sprintf("http://%s", *baseURL))
+	if err != nil {
+		log.Fatal("Invalid URL:", err)
+	}
+
+	sendFunc, err := connect(base, useWS)
+	if err != nil {
+		log.Fatal("Failed to connect:", err)
+	}
+
+	log.Println("Tendril CLI connected! Type 'exit' or Ctrl+C to quit.")
+	log.Println("Tip: Use --http to force HTTP mode.")
 
 	scanner := bufio.NewScanner(os.Stdin)
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
-	for {
-		// Prompt
-		fmt.Printf("%s%syou › %s", colorBold, colorCyan, colorReset)
+	go func() {
+		<-c
+		log.Println("\nExiting...")
+		cancel()
+	}()
 
-		if !scanner.Scan() {
-			break
-		}
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
-			continue
-		}
-
-		// Handle special commands
-		if input == "/quit" || input == "/exit" {
-			fmt.Printf("%s👋 Goodbye!%s\n", colorCyan, colorReset)
-			break
-		}
-		if input == "/clear" {
-			fmt.Print("\033[H\033[2J") // Clear screen
-			continue
-		}
-		if strings.HasPrefix(input, "/provider ") {
-			*provider = strings.TrimPrefix(input, "/provider ")
-			fmt.Printf("%sSwitched to provider: %s%s\n", colorDim, *provider, colorReset)
-			continue
-		}
-		if input == "/help" {
-			fmt.Printf("%sCommands:%s\n", colorDim, colorReset)
-			fmt.Printf("  /provider <name>  Switch LLM provider\n")
-			fmt.Printf("  /clear            Clear screen\n")
-			fmt.Printf("  /quit             Exit\n\n")
-			continue
-		}
-
-		// Send message
-		outMsg := IncomingMessage{
-			Type:      "message",
-			Content:   input,
-			Provider:  *provider,
-			SessionID: *session,
-		}
-		data, _ := json.Marshal(outMsg)
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			fmt.Fprintf(os.Stderr, "%s❌ Send failed: %v%s\n", colorRed, err, colorReset)
+	for scanner.Scan() {
+		msg := strings.TrimSpace(scanner.Text())
+		if msg == "" || msg == "exit" {
 			break
 		}
 
-		// Read streaming response
-		fmt.Printf("%s%stendril › %s", colorBold, colorGreen, colorReset)
-		streaming := true
-		for streaming {
-			select {
-			case msg := <-responseCh:
-				switch msg.Type {
-				case "stream.start":
-					// Response is starting
-				case "stream.token":
-					fmt.Print(msg.Content)
-				case "stream.end":
-					fmt.Println() // Newline after response
-					fmt.Println()
-					streaming = false
-				case "error":
-					fmt.Printf("\n%s❌ %s%s\n\n", colorRed, msg.Error, colorReset)
-					streaming = false
-				}
-			}
+		response, err := sendFunc(msg)
+		if err != nil {
+			log.Printf("Error: %v", err)
+			continue
 		}
+		fmt.Println(response)
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("Scanner error: %v", err)
 	}
 }
