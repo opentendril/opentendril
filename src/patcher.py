@@ -449,7 +449,7 @@ def format_patch_for_prompt() -> str:
 @@ context_hint (e.g. function name)
 - old line to remove
 + new line to add
-  unchanged context line
+  unchanged context line (space prefix = kept as-is)
 *** Add File: path/to/newfile.py
 +first line of new file
 +second line of new file
@@ -457,8 +457,22 @@ def format_patch_for_prompt() -> str:
 *** End Patch
 
 Rules:
-- Lines starting with '-' are removed, '+' are added, ' ' (space) are context
+- Lines starting with '-' are removed, '+' are added, ' ' (space prefix) are context kept unchanged
 - Use @@ followed by a function/class name to help locate the change
 - Multiple files can be changed in one patch
 - For new files, every line starts with '+'
-- The patch will be validated and tested automatically before committing"""
+- The patch will be validated and tested automatically before committing
+
+IMPORTANT — inserting new lines inside a function (correct example):
+
+*** Begin Patch
+*** Update File: hello.py
+@@ greet
+- def greet(name):
++ def greet(name):
++     '''Greet a person by name.'''
+  print("Hello " + name)
+*** End Patch
+
+Always use '-' to remove any line that needs replacing or that immediately precedes an insertion.
+Never use only '+' lines above a space-context line — that leaves the original intact and duplicates it."""
