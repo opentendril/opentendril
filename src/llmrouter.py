@@ -115,6 +115,10 @@ class LLMRouter:
             api_key = config["api_key"]
             if api_key and len(api_key) > 5:
                 available.append(name)
+        # Nano is always available last (CPU fallback, no key needed)
+        from .config import NANO_MODEL_ENABLED
+        if NANO_MODEL_ENABLED and "nano" not in available:
+            available.append("nano")
         return available
 
     @property
@@ -176,6 +180,11 @@ class LLMRouter:
             else:
                 raise RuntimeError(f"No LLM providers available. Cannot route to '{provider}'.")
 
+        # Nano provider — CPU-only, no PROVIDER_CONFIG entry needed
+        if provider == "nano":
+            from .providers.nano import NanoProvider
+            return NanoProvider()
+
         config = PROVIDER_CONFIG[provider]
         model_name = config["models"].get(tier, config["models"]["standard"])
         cache_key = f"{provider}:{model_name}:{temperature}"
@@ -200,9 +209,9 @@ class LLMRouter:
         return self._cache[cache_key]
 
     def _get_fallback(self, failed_provider: str) -> Optional[str]:
-        """Find a fallback provider when the requested one isn't available."""
-        # Prefer cloud providers over local for fallback
-        preference = ["grok", "anthropic", "openai", "google", "local"]
+        """Find a fallback provider when the requested one isn't available.
+        Nano is always last resort — cloud first, then local, then nano."""
+        preference = ["grok", "anthropic", "openai", "google", "local", "nano"]
         for p in preference:
             if p != failed_provider and p in self._available_providers:
                 return p

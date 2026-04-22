@@ -166,6 +166,55 @@ async def get_credits_ui():
               </div>'''
 
 
+@router.get("/nano/status")
+async def get_nano_status():
+    """Return current nano model download/load state."""
+    from ..providers.nano import nano_state, is_nano_available
+    return {
+        "available": is_nano_available(),
+        "status": nano_state.status,
+        "progress_pct": nano_state.progress_pct,
+        "progress_msg": nano_state.progress_msg,
+        "model_name": nano_state.model_name,
+        "error": nano_state.error,
+    }
+
+
+@router.post("/nano/download")
+async def trigger_nano_download(model_choice: int = 1):
+    """
+    Trigger nano model download in background.
+    model_choice: 1 = Qwen2.5-0.5B (default), 2 = TinyLlama-1.1B
+    """
+    import threading
+    from ..providers.nano import download_model, load_model, nano_state
+    from ..config import NANO_MODEL_ENABLED
+
+    if not NANO_MODEL_ENABLED:
+        return {"status": "disabled", "message": "Set NANO_MODEL_ENABLED=true to enable nano model."}
+
+    if nano_state.status in ("downloading", "loading", "ready"):
+        return {"status": nano_state.status, "message": nano_state.progress_msg}
+
+    NANO_MODELS = {
+        1: ("Qwen/Qwen2.5-0.5B-Instruct-GGUF", "qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+        2: ("TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"),
+    }
+    model_name, model_file = NANO_MODELS.get(model_choice, NANO_MODELS[1])
+
+    def _download():
+        import os
+        try:
+            path = download_model(model_name, model_file, hf_token=os.getenv("HF_TOKEN"))
+            load_model(path)
+        except Exception as e:
+            nano_state.status = "error"
+            nano_state.error = str(e)
+
+    threading.Thread(target=_download, daemon=True).start()
+    return {"status": "started", "model": model_name, "message": f"Downloading {model_name}..."}
+
+
 @router.get("/approvals/pending")
 async def get_pending_approvals():
     from ..dependencies import approval

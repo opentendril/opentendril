@@ -18,9 +18,14 @@ GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 # Default provider for the LLM Router
 DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "grok")
 
-# Local inference (optional)
+# Local inference (optional — GPU via vllm)
 LOCAL_MODEL_NAME: str = os.getenv("LOCAL_MODEL_NAME", "Qwen/Qwen3-8B-AWQ")
 LOCAL_INFERENCE_URL: str = os.getenv("LOCAL_INFERENCE_URL", "http://inference:8000/v1")
+
+# Nano model — CPU-only zero-config fallback (always bundled, no API key required)
+NANO_MODEL_ENABLED: bool = os.getenv("NANO_MODEL_ENABLED", "true").lower() == "true"
+NANO_MODEL_NAME: str = os.getenv("NANO_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct-GGUF")
+NANO_MODEL_FILE: str = os.getenv("NANO_MODEL_FILE", "qwen2.5-0.5b-instruct-q4_k_m.gguf")
 
 # --- Infrastructure ---
 POSTGRES_USER: str = os.getenv("POSTGRES_USER", "postgres")
@@ -58,7 +63,9 @@ SANDBOX_TOKEN: str = os.getenv("SANDBOX_TOKEN", "")
 
 # --- Validation ---
 def has_active_llm_provider() -> bool:
-    """Check if any LLM API key is currently configured in the environment."""
+    """Check if any LLM API key is configured, or nano model is enabled (always available)."""
+    if NANO_MODEL_ENABLED:
+        return True
     providers = {
         "grok": os.getenv("GROK_API_KEY", ""),
         "anthropic": os.getenv("ANTHROPIC_API_KEY", ""),
