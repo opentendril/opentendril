@@ -47,3 +47,24 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 - [ ] Replan/Retry loop for failed tool calls.
 - [ ] Improved context window management for large codebases.
 - [ ] Human-in-the-loop diff review via CLI.
+
+## 2026-04-22 — Patcher Bug Hunt & External Project Validation
+
+### What happened
+End-to-end tested external project mode (`TENDRIL_PROJECT_PATH` + `TENDRIL_WORKSPACE_ROOT=/workspace`).
+- ✅ `list_project_files`, `read_file`, `write_file` all work on mounted external directories
+- ✅ File writes persist to host filesystem via Docker volume mount
+- ✅ `write_file` was confirmed as the correct primary edit mechanism
+
+### Bug found & fixed: `parse_patch` infinite loop
+`apply_code_patch` appeared to "hang" when the LLM (Grok) included bare trailing context lines in its patch output — the standard docstring-insertion format. Root cause was an infinite loop in `parse_patch()`'s UPDATE_FILE_MARKER while block: when `i` was never advanced past unrecognised trailing lines.
+
+**Fix**: `i_before_hunk` guard — if the inner hunk parser consumes nothing, skip the unrecognised line with `i += 1`.
+
+### Tests
+- 29/29 patcher tests pass (0.05s)
+- 3 regression tests added to `TestRegressionPatterns` pinning the exact Grok patch format
+
+### Commits
+- `87915b9` — fix(core): apply_code_patch 30s timeout + PROTECTED_FILES + system prompt
+- `8c8d851` — fix(patcher): eliminate infinite loop on trailing non-prefixed lines
