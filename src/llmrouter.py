@@ -100,7 +100,7 @@ class LLMRouter:
         self._available_providers = self._detect_providers()
 
         if not self._available_providers:
-            logger.error("❌ No LLM providers available! Configure at least one API key.")
+            logger.warning("⚠️ No LLM providers available! Interactive setup mode engaged.")
         else:
             logger.info(f"🔌 LLM Router initialized. Available: {', '.join(self._available_providers)}")
 
@@ -121,6 +121,32 @@ class LLMRouter:
     def available_providers(self) -> list[str]:
         """Return list of providers with valid API keys."""
         return list(self._available_providers)
+
+    def reconfigure_provider(self, provider_key: str, new_api_key: str) -> bool:
+        """Dynamically inject an API key and reload the provider cache."""
+        # Find the matching provider prefix (e.g. OPENAI_API_KEY -> openai)
+        provider_name = provider_key.lower().replace("_api_key", "")
+        
+        if provider_name not in PROVIDER_CONFIG:
+            logger.error(f"❌ Unknown provider for config key '{provider_key}'")
+            return False
+            
+        import os
+        # Update the environment so other parts of the app can see it
+        os.environ[provider_key.upper()] = new_api_key
+        
+        # Update the internal config
+        PROVIDER_CONFIG[provider_name]["api_key"] = new_api_key
+        
+        # Clear cache for this provider to force recreation
+        keys_to_delete = [k for k in self._cache.keys() if k.startswith(f"{provider_name}:")]
+        for k in keys_to_delete:
+            del self._cache[k]
+            
+        # Re-run detection
+        self._available_providers = self._detect_providers()
+        logger.info(f"🔄 Dynamically reconfigured provider '{provider_name}'. Available: {', '.join(self._available_providers)}")
+        return True
 
     def get(
         self,
