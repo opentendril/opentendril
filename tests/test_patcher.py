@@ -381,3 +381,94 @@ class TestApplyPatch:
             result = apply_patch(ops, tmp_sandbox)
         assert "x.py" not in result.modified
         assert any("not found" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — real LLM output patterns
+# ---------------------------------------------------------------------------
+
+class TestRegressionPatterns:
+    """Pin exact patch formats the LLM produces in production to catch silent regressions.
+
+    These tests mock event_bus.emit to avoid the live container logging/Redis path
+    that can block when pytest runs inside Docker alongside the running FastAPI app.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _silence_event_bus(self, monkeypatch):
+        """Replace event_bus.emit with a no-op for all regression tests."""
+        import src.patcher as patcher_mod
+        monkeypatch.setattr(patcher_mod.event_bus, "emit", lambda *a, **kw: None)
+
+    def test_docstring_insertion_llm_format(self, tmp_sandbox, tmp_path):
+        """Regression: LLM-generated docstring-insertion patch (Grok format).
+
+        The LLM produces context lines (space-prefix) to anchor the hunk.
+        New lines (+ prefix) insert above the context line. The patcher must
+        produce a file where the function body has the docstring on line 2.
+        """
+        (tmp_path / "hello.py").write_text(
+            'def greet(name):\n'
+            '    print("Hello " + name)\n'
+            '\n'
+            'greet("world")\n'
+        )
+        patch = (
+            '*** Begin Patch\n'
+            '*** Update File: hello.py\n'
+            '@@ greet\n'
+            '+def greet(name):\n'
+            '+    """Greet a person by name."""\n'
+            '     print("Hello " + name)\n'
+            '\n'
+            'greet("world")\n'
+            '*** End Patch'
+        )
+        ops = parse_patch(patch)
+        result = apply_patch(ops, tmp_sandbox)
+        content = (tmp_path / "hello.py").read_text()
+        assert 'hello.py' in result.modified, f"File not in modified: {result.modified}"
+        assert '"""Greet a person by name."""' in content, f"Docstring missing:\n{content}"
+        assert 'print("Hello " + name)' in content
+
+    def test_context_line_with_only_additions(self, tmp_sandbox, tmp_path):
+        """A hunk with + lines above a context anchor should prepend without removing."""
+        (tmp_path / "app.py").write_text(
+            "import os\n"
+            "\n"
+            "def main():\n"
+            "    pass\n"
+        )
+        patch = """\
+*** Begin Patch
+*** Update File: app.py
+@@ import
++import sys
+ import os
+*** End Patch"""
+        ops = parse_patch(patch)
+        result = apply_patch(ops, tmp_sandbox)
+        content = (tmp_path / "app.py").read_text()
+        assert "import sys" in content
+        assert "import os" in content
+
+    def test_multi_file_patch_all_files_applied(self, tmp_sandbox, tmp_path):
+        """All files in a multi-file patch must be applied, not just the first."""
+        (tmp_path / "a.py").write_text("x = 1\n")
+        (tmp_path / "b.py").write_text("y = 2\n")
+        patch = """\
+*** Begin Patch
+*** Update File: a.py
+@@ x
+- x = 1
++ x = 10
+*** Update File: b.py
+@@ y
+- y = 2
++ y = 20
+*** End Patch"""
+        ops = parse_patch(patch)
+        result = apply_patch(ops, tmp_sandbox)
+        assert (tmp_path / "a.py").read_text() == "x = 10\n"
+        assert (tmp_path / "b.py").read_text() == "y = 20\n"
+        assert result.file_count == 2

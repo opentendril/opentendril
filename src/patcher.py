@@ -191,6 +191,7 @@ def parse_patch(text: str) -> list[PatchOperation]:
                     i += 1
 
                 hunk = PatchHunk(context=context)
+                i_before_hunk = i
                 while i < len(body):
                     hline = body[i]
                     if hline.startswith("***") or (hline.startswith(CONTEXT_MARKER) and hunk.old_lines):
@@ -212,6 +213,10 @@ def parse_patch(text: str) -> list[PatchOperation]:
 
                 if hunk.old_lines or hunk.new_lines:
                     hunks.append(hunk)
+                elif i == i_before_hunk:
+                    # Nothing consumed and i unchanged — unrecognised trailing line.
+                    # Advance to prevent infinite loop (e.g. bare context like 'greet("world")').
+                    i += 1
 
             operations.append(PatchOperation(
                 action=PatchAction.UPDATE,
