@@ -2,7 +2,8 @@
 Tendril Event Bus — Centralized observability and structured event system.
 
 Emits, stores, and streams structured events across all Tendril subsystems.
-Events are persisted in Redis (24h TTL) and queryable by run_id or session_id.
+Events are persisted in the configured KV store (Redis, Upstash, or InMemory)
+with a 24h TTL, and are queryable by run_id or session_id.
 
 Usage:
     from .eventbus import event_bus, TendrilEvent
@@ -71,16 +72,16 @@ class EventBus:
       - Queryable by run_id and session_id
     """
 
-    def __init__(self, redis_client=None):
-        self._redis = redis_client
+    def __init__(self, kv_store=None):
+        self._kv = kv_store
         self._subscribers: list[Callable[[TendrilEvent], None]] = []
-        self._recent: list[dict] = []  # In-memory fallback when Redis unavailable
+        self._recent: list[dict] = []  # In-memory buffer (always active)
         self._max_recent = 200
         logger.info("📡 Event Bus initialized.")
 
-    def set_redis(self, redis_client):
-        """Set Redis client (called after startup when Redis is available)."""
-        self._redis = redis_client
+    def set_redis(self, kv_store):
+        """Set the KV store backend (called at app startup). Accepts any KVStore."""
+        self._kv = kv_store
 
     def emit(self, event: TendrilEvent):
         """
@@ -95,15 +96,15 @@ class EventBus:
         # 1. Structured log
         logger.info(f"[EVENT] {event.event_type} | run={event.run_id} | {json.dumps(event.data)}")
 
-        # 2. Redis persistence
-        if self._redis:
+        # 2. KV store persistence
+        if self._kv:
             try:
                 key = f"events:{event.session_id}"
-                self._redis.lpush(key, json.dumps(event_dict))
-                self._redis.ltrim(key, 0, MAX_EVENTS_PER_SESSION - 1)
-                self._redis.expire(key, EVENT_TTL_SECONDS)
+                self._kv.lpush(key, json.dumps(event_dict))
+                self._kv.ltrim(key, 0, MAX_EVENTS_PER_SESSION - 1)
+                self._kv.expire(key, EVENT_TTL_SECONDS)
             except Exception as e:
-                logger.warning(f"Event Redis write failed: {e}")
+                logger.warning(f"Event KV write failed: {e}")
 
         # 3. Notify subscribers
         for sub in self._subscribers:
@@ -126,14 +127,14 @@ class EventBus:
         self._subscribers = [s for s in self._subscribers if s is not callback]
 
     def get_session_events(self, session_id: str, limit: int = 50) -> list[dict]:
-        """Get recent events for a session from Redis (or in-memory fallback)."""
-        if self._redis:
+        """Get recent events for a session from the KV store (or in-memory fallback)."""
+        if self._kv:
             try:
                 key = f"events:{session_id}"
-                raw = self._redis.lrange(key, 0, limit - 1)
+                raw = self._kv.lrange(key, 0, limit - 1)
                 return [json.loads(r) for r in raw]
             except Exception as e:
-                logger.warning(f"Event Redis read failed: {e}")
+                logger.warning(f"Event KV read failed: {e}")
 
         # Fallback: filter in-memory
         return [
