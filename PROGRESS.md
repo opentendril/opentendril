@@ -29,6 +29,12 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 
 ## 📈 Pulse (Latest Logs)
 
+- **2026-04-27:** 🧠 **COGNITIVE UPGRADES:** Shipped three architectural features in one session:
+  - `src/modeldiscovery.py` — Live model catalogue fetch from OpenRouter API with 24h cache. Auto-selects fast/standard/power tiers by pricing metadata.
+  - `src/promptcache.py` — Anthropic-native `cache_control` blocks split static system prompt (persona, guardrails, tools) from dynamic context (RAG, skills). 50-90% token cost reduction on cached turns.
+  - `src/llmrouter.py` — OpenRouter added as provider #5. Per-provider `.env` model overrides (`ANTHROPIC_POWER_MODEL`, etc.) take precedence over auto-discovery and hardcoded defaults. No code change needed to upgrade model versions.
+  - **12 strategic GitHub issues** created (#7–#18) mapping the full architecture roadmap.
+
 - **2026-04-11 (Day 2.5):** 🚢 **SHIP-IT:** Tagged `v0.1.0`. README rewritten as a minimal setup guide. Makefile added for CLI builds.
 - **2026-04-10 (Day 1):** 🧪 **PROOF OF LIFE:** Successfully pointed Tendril at `jurnx-med-dev`. Tendril listed 1,354 files, identified the tech stack (Go/React/Firestore), and committed a verified change to `README.md`.
 - **2026-04-09:** 🎯 **STRATEGIC PIVOT:** Paused Evolution 2 (Multi-agent/Credits/Marketplace) to focus on Evolution 1 (The Stable Kernel). Hardened the `/edit` loop and extracted transport to Go.
