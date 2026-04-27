@@ -90,6 +90,13 @@ async def start_scheduler():
     scheduler.start()
     logger.info("⏰ Background dreamer scheduler started.")
 
+    # Phase 2: Live model discovery — populate tier cache from provider APIs
+    from .modeldiscovery import discover_all
+    from .llmrouter import PROVIDER_CONFIG
+    await discover_all(PROVIDER_CONFIG)
+    logger.info("🔍 Model discovery complete.")
+
+
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):

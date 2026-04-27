@@ -35,6 +35,6 @@ To maintain meta-awareness of its own development, Tendril relies on a suite of 
 - **`ARCHITECTURE.md`:** (This file) Long-term structural design and scaling pathways.
 - **`DECISIONS.md`:** (Strategic Memory) Records the "Why" behind major architectural and brand shifts.
 - **`GUARDRAILS.md`:** (Project Constitution) Codifies mandatory naming conventions, brand constraints, and security standards.
-- **`FEATURE_REQUESTS.md`:** (Planned) A structured backlog for community or internal requests.
+- **`FEATURE_REQUESTS.md`**: A structured backlog for community or internal requests, including the "Options for Everything" modularity roadmap.
 
 *Note to AI agents modifying this repository: Before decoupling components or shifting infrastructure, refer to this document. Ensure that all major changes are validated via `test_runner.py` before finalizing.*

@@ -30,7 +30,8 @@ from ..failover import ModelFailover, classify_error
 from ..eventbus import event_bus, TendrilEvent, generate_run_id
 from ..patcher import format_patch_for_prompt
 from .tools import ToolFactory
-from .system_prompt import build_system_prompt
+from .system_prompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
+from ..promptcache import build_cached_messages
 
 logger = logging.getLogger(__name__)
 
@@ -122,18 +123,14 @@ class Orchestrator:
             except Exception:
                 file_listing = "  (could not scan project files)"
 
-        system_prompt = build_system_prompt(
-            tool_descriptions=tool_descriptions,
+        static_prompt = build_static_prompt(tool_descriptions)
+        dynamic_prompt = build_dynamic_prompt(
             skills_context=skills_context,
             rag_context=rag_context,
             file_listing=file_listing,
         )
 
-        messages = [{"role": "system", "content": system_prompt}] + history[-8:] + [
-            {"role": "user", "content": message}
-        ]
-
-        # --- Provider selection via failover chain ---
+        # Resolve the active provider & model name for cache annotation
         selected_provider = provider
         for candidate in self.failover._build_candidate_chain(provider, tier):
             if not self.failover._get_state(candidate).is_in_cooldown:
@@ -145,6 +142,20 @@ class Orchestrator:
                 session_id=session_id, data={"error": "All providers in cooldown"},
             ))
             return "⚠️ All LLM providers are currently in cooldown. Please try again in a few seconds."
+
+        from ..llmrouter import PROVIDER_CONFIG, _resolve_model
+        _provider_cfg = PROVIDER_CONFIG.get(selected_provider, {})
+        _default_model = _provider_cfg.get("models", {}).get(tier, "")
+        resolved_model = _resolve_model(selected_provider, tier, _default_model)
+
+        messages = build_cached_messages(
+            provider=selected_provider,
+            model_name=resolved_model,
+            static_system=static_prompt,
+            dynamic_system=dynamic_prompt,
+            history=history,
+            user_message=message,
+        )
 
         try:
             llm = self.router.get(provider=selected_provider, tier=tier)

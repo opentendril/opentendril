@@ -3,6 +3,11 @@ src/agent/system_prompt.py — System prompt builder for the Root Agent.
 
 Isolated here so the LLM can modify the agent's persona and instructions
 without touching orchestration logic.
+
+Prompt cache architecture:
+  build_static_prompt()  → cached at the provider level (~1hr TTL)
+  build_dynamic_prompt() → fresh per request (RAG context, skills, file listing)
+  build_system_prompt()  → convenience wrapper combining both (for non-caching paths)
 """
 
 import os
@@ -10,17 +15,10 @@ from ..config import WORKSPACE_ROOT, PROJECT_ROOT
 from ..patcher import format_patch_for_prompt
 
 
-def build_system_prompt(
-    tool_descriptions: str,
-    skills_context: str,
-    rag_context: str,
-    file_listing: str = "",
-) -> str:
+def build_static_prompt(tool_descriptions: str) -> str:
     """
-    Build the system prompt for the current execution context.
-
-    Automatically switches between 'external project' and 'self-building'
-    modes depending on whether WORKSPACE_ROOT differs from PROJECT_ROOT.
+    The static portion of the system prompt — persona, guardrails, tool list.
+    This only changes when the codebase changes, making it ideal for caching.
     """
     patch_format = format_patch_for_prompt()
     is_external = WORKSPACE_ROOT != PROJECT_ROOT
@@ -31,17 +29,10 @@ def build_system_prompt(
 ## Your Workspace
 You are working on an EXTERNAL PROJECT mounted at {WORKSPACE_ROOT}.
 This is NOT Tendril's own source code. You are a coding assistant for this project.
-
-Project files:
-{file_listing or "  (could not scan project files)"}
-
 There are NO protected files. You can read and write any file in the workspace.
 
 ## Available Tools
 {tool_descriptions}
-
-## Relevant Memories
-{rag_context}
 
 {patch_format}
 
@@ -103,12 +94,6 @@ To modify protected files, use the `staged_edit` tool. It safely:
 ## Available Tools
 {tool_descriptions}
 
-## Loaded Skills
-{skills_context}
-
-## Relevant Memories
-{rag_context}
-
 {patch_format}
 
 ## Behavioral Guidelines
@@ -120,3 +105,43 @@ To modify protected files, use the `staged_edit` tool. It safely:
 - For PROTECTED files: use `staged_edit` (creates branch, validates, commits for review)
 - For UNPROTECTED files: use `write_file` or `apply_code_patch` as normal
 - When using staged_edit, tell the user: the change is on a branch, here's how to test and merge it"""
+
+
+def build_dynamic_prompt(
+    skills_context: str,
+    rag_context: str,
+    file_listing: str = "",
+) -> str:
+    """
+    The dynamic portion of the system prompt — changes every request.
+    Contains RAG context, skills, and (in external mode) the file listing.
+    Never cached; always sent fresh to the provider.
+    """
+    is_external = WORKSPACE_ROOT != PROJECT_ROOT
+    parts = []
+
+    if is_external and file_listing:
+        parts.append(f"## Project Files\n{file_listing}")
+
+    if skills_context and skills_context != "No skills loaded.":
+        parts.append(f"## Loaded Skills\n{skills_context}")
+
+    if rag_context and rag_context != "None":
+        parts.append(f"## Relevant Memories\n{rag_context}")
+
+    return "\n\n".join(parts)
+
+
+def build_system_prompt(
+    tool_descriptions: str,
+    skills_context: str,
+    rag_context: str,
+    file_listing: str = "",
+) -> str:
+    """
+    Build the full combined system prompt.
+    Convenience wrapper used by non-caching code paths.
+    """
+    static = build_static_prompt(tool_descriptions)
+    dynamic = build_dynamic_prompt(skills_context, rag_context, file_listing)
+    return "\n\n".join(filter(None, [static, dynamic]))

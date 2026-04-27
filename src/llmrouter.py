@@ -1,12 +1,18 @@
 """
 Tendril LLM Router — Multi-provider model dispatch.
 
-Routes requests to the best model for the task:
-  - grok:      xAI Grok models (fast + reasoning)
-  - anthropic: Claude models (best for code editing)
-  - openai:    GPT models (general purpose)
-  - google:    Gemini models (via OpenAI-compatible endpoint)
-  - local:     vLLM on local GPU (free, private)
+Model selection priority (per provider):
+  1. .env override  e.g. OPENROUTER_POWER_MODEL=anthropic/claude-opus-4.7
+  2. Live discovery cache (populated at startup via src/modeldiscovery.py)
+  3. Hardcoded default in PROVIDER_CONFIG
+
+Providers:
+  - grok:       xAI Grok models (fast + reasoning)
+  - anthropic:  Claude models (best for code editing)
+  - openai:     GPT models (general purpose)
+  - google:     Gemini models (via OpenAI-compatible endpoint)
+  - openrouter: Universal gateway (access to 200+ models)
+  - local:      vLLM on local GPU (free, private)
 """
 
 import logging
@@ -16,14 +22,46 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from .config import (
-    GROK_API_KEY,
-    ANTHROPIC_API_KEY,
-    OPENAI_API_KEY,
-    GOOGLE_API_KEY,
+    GROK_API_KEY, GROK_FAST_MODEL, GROK_STANDARD_MODEL, GROK_POWER_MODEL,
+    ANTHROPIC_API_KEY, ANTHROPIC_FAST_MODEL, ANTHROPIC_STANDARD_MODEL, ANTHROPIC_POWER_MODEL,
+    OPENAI_API_KEY, OPENAI_FAST_MODEL, OPENAI_STANDARD_MODEL, OPENAI_POWER_MODEL,
+    GOOGLE_API_KEY, GOOGLE_FAST_MODEL, GOOGLE_STANDARD_MODEL, GOOGLE_POWER_MODEL,
+    OPENROUTER_API_KEY, OPENROUTER_FAST_MODEL, OPENROUTER_STANDARD_MODEL, OPENROUTER_POWER_MODEL,
     DEFAULT_LLM_PROVIDER,
     LOCAL_INFERENCE_URL,
     LOCAL_MODEL_NAME,
 )
+from .modeldiscovery import get_cached_tiers
+
+# .env override map — populated once at import time
+_ENV_OVERRIDES: dict[str, dict[str, str]] = {
+    "grok":       {"fast": GROK_FAST_MODEL,        "standard": GROK_STANDARD_MODEL,        "power": GROK_POWER_MODEL},
+    "anthropic":  {"fast": ANTHROPIC_FAST_MODEL,   "standard": ANTHROPIC_STANDARD_MODEL,   "power": ANTHROPIC_POWER_MODEL},
+    "openai":     {"fast": OPENAI_FAST_MODEL,       "standard": OPENAI_STANDARD_MODEL,      "power": OPENAI_POWER_MODEL},
+    "google":     {"fast": GOOGLE_FAST_MODEL,       "standard": GOOGLE_STANDARD_MODEL,      "power": GOOGLE_POWER_MODEL},
+    "openrouter": {"fast": OPENROUTER_FAST_MODEL,   "standard": OPENROUTER_STANDARD_MODEL,  "power": OPENROUTER_POWER_MODEL},
+}
+
+
+def _resolve_model(provider: str, tier: str, default: str) -> str:
+    """
+    Resolve the model name for a given provider and tier using the priority chain:
+      1. .env override  (e.g. OPENROUTER_POWER_MODEL)
+      2. Live discovery cache (populated async at startup)
+      3. Hardcoded default
+    """
+    # 1. .env override
+    override = _ENV_OVERRIDES.get(provider, {}).get(tier, "")
+    if override:
+        return override
+
+    # 2. Live discovery
+    discovered = get_cached_tiers(provider)
+    if discovered and tier in discovered:
+        return discovered[tier]
+
+    # 3. Hardcoded default
+    return default
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +106,16 @@ PROVIDER_CONFIG = {
             "fast": "gemini-2.5-flash",
             "standard": "gemini-3-flash",
             "power": "gemini-3.1-pro-preview",
+        },
+    },
+    "openrouter": {
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key": OPENROUTER_API_KEY,
+        "type": "openai",
+        "models": {
+            "fast": "google/gemini-2.0-flash-001",
+            "standard": "anthropic/claude-3.5-sonnet",
+            "power": "openai/gpt-4o",
         },
     },
     "local": {
@@ -186,7 +234,8 @@ class LLMRouter:
             return NanoProvider()
 
         config = PROVIDER_CONFIG[provider]
-        model_name = config["models"].get(tier, config["models"]["standard"])
+        default_model = config["models"].get(tier, config["models"]["standard"])
+        model_name = _resolve_model(provider, tier, default_model)
         cache_key = f"{provider}:{model_name}:{temperature}"
 
         if cache_key not in self._cache:
@@ -211,7 +260,7 @@ class LLMRouter:
     def _get_fallback(self, failed_provider: str) -> Optional[str]:
         """Find a fallback provider when the requested one isn't available.
         Nano is always last resort — cloud first, then local, then nano."""
-        preference = ["grok", "anthropic", "openai", "google", "local", "nano"]
+        preference = ["grok", "anthropic", "openai", "google", "openrouter", "local", "nano"]
         for p in preference:
             if p != failed_provider and p in self._available_providers:
                 return p
@@ -223,12 +272,19 @@ class LLMRouter:
         return self._available_providers.copy()
 
     def get_provider_info(self) -> dict:
-        """Return info about available providers and their models for the UI."""
+        """Return info about available providers and their models for the UI.
+        Shows resolved model names (env override > discovered > default)."""
         info = {}
         for provider in self._available_providers:
-            config = PROVIDER_CONFIG[provider]
+            config = PROVIDER_CONFIG.get(provider, {})
+            raw_models = config.get("models", {})
+            resolved = {
+                tier: _resolve_model(provider, tier, name)
+                for tier, name in raw_models.items()
+            }
             info[provider] = {
-                "models": config["models"],
-                "has_key": bool(config["api_key"] and len(config["api_key"]) > 5),
+                "models": resolved,
+                "has_key": bool(config.get("api_key") and len(config["api_key"]) > 5),
+
             }
         return info

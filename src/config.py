@@ -14,9 +14,34 @@ GROK_API_KEY: str = os.getenv("GROK_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
 # Default provider for the LLM Router
 DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "grok")
+
+# --- Per-Provider Model Tier Overrides ---
+# Set these in .env to pin specific model versions without changing code.
+# If unset, LLMRouter uses its hardcoded defaults (or auto-discovers via API).
+# Format: <PROVIDER>_<TIER>_MODEL=<model-name>
+GROK_FAST_MODEL: str = os.getenv("GROK_FAST_MODEL", "")
+GROK_STANDARD_MODEL: str = os.getenv("GROK_STANDARD_MODEL", "")
+GROK_POWER_MODEL: str = os.getenv("GROK_POWER_MODEL", "")
+
+ANTHROPIC_FAST_MODEL: str = os.getenv("ANTHROPIC_FAST_MODEL", "")
+ANTHROPIC_STANDARD_MODEL: str = os.getenv("ANTHROPIC_STANDARD_MODEL", "")
+ANTHROPIC_POWER_MODEL: str = os.getenv("ANTHROPIC_POWER_MODEL", "")
+
+OPENAI_FAST_MODEL: str = os.getenv("OPENAI_FAST_MODEL", "")
+OPENAI_STANDARD_MODEL: str = os.getenv("OPENAI_STANDARD_MODEL", "")
+OPENAI_POWER_MODEL: str = os.getenv("OPENAI_POWER_MODEL", "")
+
+GOOGLE_FAST_MODEL: str = os.getenv("GOOGLE_FAST_MODEL", "")
+GOOGLE_STANDARD_MODEL: str = os.getenv("GOOGLE_STANDARD_MODEL", "")
+GOOGLE_POWER_MODEL: str = os.getenv("GOOGLE_POWER_MODEL", "")
+
+OPENROUTER_FAST_MODEL: str = os.getenv("OPENROUTER_FAST_MODEL", "")
+OPENROUTER_STANDARD_MODEL: str = os.getenv("OPENROUTER_STANDARD_MODEL", "")
+OPENROUTER_POWER_MODEL: str = os.getenv("OPENROUTER_POWER_MODEL", "")
 
 # Local inference (optional — GPU via vllm)
 LOCAL_MODEL_NAME: str = os.getenv("LOCAL_MODEL_NAME", "Qwen/Qwen3-8B-AWQ")
@@ -72,6 +97,7 @@ def has_active_llm_provider() -> bool:
         "anthropic": os.getenv("ANTHROPIC_API_KEY", ""),
         "openai": os.getenv("OPENAI_API_KEY", ""),
         "google": os.getenv("GOOGLE_API_KEY", ""),
+        "openrouter": os.getenv("OPENROUTER_API_KEY", ""),
     }
     return any(v and len(v) > 5 for v in providers.values())
 
@@ -82,6 +108,7 @@ def validate_config():
         "anthropic": ANTHROPIC_API_KEY,
         "openai": OPENAI_API_KEY,
         "google": GOOGLE_API_KEY,
+        "openrouter": OPENROUTER_API_KEY,
     }
     active = {k: v for k, v in providers.items() if v}
 
