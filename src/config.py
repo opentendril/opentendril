@@ -63,6 +63,11 @@ POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "")
 REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "")
 
+# KV Store provider — redis | upstash | memory
+KV_STORE_PROVIDER: str = os.getenv("KV_STORE_PROVIDER", "redis")
+UPSTASH_REDIS_REST_URL: str = os.getenv("UPSTASH_REDIS_REST_URL", "")
+UPSTASH_REDIS_REST_TOKEN: str = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+
 # Postgres connection — user is configurable for production
 POSTGRES_URL = f"postgresql+psycopg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@postgres:5432/postgres"
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@redis:6379/0" if REDIS_PASSWORD else "redis://redis:6379/0"

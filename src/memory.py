@@ -1,16 +1,27 @@
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 import json
-from redis import Redis
 from sqlalchemy import create_engine
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_postgres.vectorstores import PGVector
 from langchain_core.documents import Document
-from .config import POSTGRES_URL, REDIS_URL, DB_CONNECTION
+from .config import (
+    POSTGRES_URL, DB_CONNECTION,
+    REDIS_URL, KV_STORE_PROVIDER,
+    UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN,
+)
+from .kvstore import create_kv_store
+
 
 class Memory:
     def __init__(self):
-        self.redis = Redis.from_url(REDIS_URL)
+        kv_kwargs: dict = {"url": REDIS_URL}
+        if KV_STORE_PROVIDER == "upstash":
+            kv_kwargs = {"url": UPSTASH_REDIS_REST_URL, "token": UPSTASH_REDIS_REST_TOKEN}
+        self.kv = create_kv_store(provider=KV_STORE_PROVIDER, **kv_kwargs)
+        # Expose .redis for backward-compatible EventBus wiring in main.py
+        self.redis = self.kv
+
         self.engine = create_engine(POSTGRES_URL)
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.vectorstore = PGVector(
@@ -21,15 +32,16 @@ class Memory:
 
     def store_convo(self, session_id: str, role: str, content: str):
         key = f"convo:{session_id}"
-        history = json.loads(self.redis.get(key) or "[]")
+        raw = self.kv.get(key)
+        history = json.loads(raw or "[]")
         history.append({"role": role, "content": content})
-        self.redis.set(key, json.dumps(history[-10:]))
+        self.kv.set(key, json.dumps(history[-10:]))
         timestamp = datetime.now().isoformat()
         self.store_longterm(f"{role}: {content}", {"session_id": session_id, "timestamp": timestamp})
 
     def get_convo(self, session_id: str) -> List[Dict[str, str]]:
         key = f"convo:{session_id}"
-        data = self.redis.get(key)
+        data = self.kv.get(key)
         return json.loads(data or "[]")
 
     def store_longterm(self, content: str, metadata: Dict[str, Any] = None):
