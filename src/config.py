@@ -53,6 +53,10 @@ NANO_MODEL_ENABLED: bool = os.getenv("NANO_MODEL_ENABLED", "false").lower() == "
 NANO_MODEL_NAME: str = os.getenv("NANO_MODEL_NAME", "Qwen/Qwen2.5-0.5B-Instruct-GGUF")
 NANO_MODEL_FILE: str = os.getenv("NANO_MODEL_FILE", "qwen2.5-0.5b-instruct-q4_k_m.gguf")
 
+# Complexity Assessor — auto-routes requests to fast/standard/power tier
+# Set to false to always use the default tier (avoids extra fast-model call)
+ASSESSOR_ENABLED: bool = os.getenv("ASSESSOR_ENABLED", "true").lower() == "true"
+
 # --- Infrastructure ---
 POSTGRES_USER: str = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "")

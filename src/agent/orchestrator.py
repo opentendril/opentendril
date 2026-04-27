@@ -32,6 +32,7 @@ from ..patcher import format_patch_for_prompt
 from .tools import ToolFactory
 from .system_prompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
 from ..promptcache import build_cached_messages
+from ..assessor import assess_and_route
 
 logger = logging.getLogger(__name__)
 
@@ -78,26 +79,40 @@ class Orchestrator:
         session_id: str,
         message: str,
         provider: Optional[str] = None,
-        tier: str = "standard",
+        tier: str = "auto",
     ) -> str:
         """
         Process a user message through the agentic loop.
 
         1. Credit check
-        2. Build context (history, RAG, skills)
-        3. Select LLM provider via failover chain
-        4. Agentic loop: LLM → tool calls → LLM (max 20 iterations)
-        5. Emit structured events throughout
+        2. Complexity assessment (auto-selects tier unless explicitly set)
+        3. Build context (history, RAG, skills)
+        4. Select LLM provider via failover chain
+        5. Agentic loop: LLM → tool calls → LLM (max 20 iterations)
+        6. Emit structured events throughout
         """
         if not credit_manager.validate_request(session_id):
             return "❌ Access Denied: Insufficient credits. Please upgrade at cloud.opentendril.com"
+
+        # --- Complexity assessment (auto-tier routing) ---
+        from ..config import ASSESSOR_ENABLED
+        _active_provider = provider or self.router.default_provider
+        if ASSESSOR_ENABLED:
+            _active_provider, tier = assess_and_route(
+                message=message,
+                router=self.router,
+                provider=_active_provider,
+                requested_tier=tier,
+            )
+        elif tier == "auto":
+            tier = "standard"  # Safe fallback when assessor is disabled
 
         run_id = generate_run_id()
         event_bus.emit(TendrilEvent(
             run_id=run_id,
             event_type="request.start",
             session_id=session_id,
-            data={"message_preview": message[:100], "provider": provider or "default", "tier": tier},
+            data={"message_preview": message[:100], "provider": _active_provider, "tier": tier},
         ))
 
         # --- Build context ---
