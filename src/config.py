@@ -68,6 +68,15 @@ KV_STORE_PROVIDER: str = os.getenv("KV_STORE_PROVIDER", "redis")
 UPSTASH_REDIS_REST_URL: str = os.getenv("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_REDIS_REST_TOKEN: str = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
 
+# Vector Store provider — pgvector | pinecone | weaviate
+VECTOR_STORE_PROVIDER: str = os.getenv("VECTOR_STORE_PROVIDER", "pgvector")
+PINECONE_API_KEY: str = os.getenv("PINECONE_API_KEY", "")
+PINECONE_INDEX_NAME: str = os.getenv("PINECONE_INDEX_NAME", "tendril")
+PINECONE_NAMESPACE: str = os.getenv("PINECONE_NAMESPACE", "")
+WEAVIATE_URL: str = os.getenv("WEAVIATE_URL", "http://weaviate:8080")
+WEAVIATE_API_KEY: str = os.getenv("WEAVIATE_API_KEY", "")
+WEAVIATE_INDEX_NAME: str = os.getenv("WEAVIATE_INDEX_NAME", "Tendril")
+
 # Postgres connection — user is configurable for production
 POSTGRES_URL = f"postgresql+psycopg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@postgres:5432/postgres"
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@redis:6379/0" if REDIS_PASSWORD else "redis://redis:6379/0"
