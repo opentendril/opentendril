@@ -6,7 +6,8 @@ without touching orchestration logic. Max file size target: 300 lines.
 
 Tools registered:
   Core:    search_memory, build_skill, read_file, write_file, apply_code_patch,
-           list_project_files, search_project, read_logs, run_bash_command, calculator
+           list_project_files, search_project, read_logs, run_bash_command, calculator,
+           spawn_sub_agent
   Git:     git_commit, git_create_branch, git_status, create_pull_request,
            staged_edit, merge_staging_branch, cleanup_staging_branches
 """
@@ -218,11 +219,40 @@ class ToolFactory:
             except Exception as e:
                 return f"❌ Command execution failed: {str(e)}"
 
-        return [
+        @tool
+        def spawn_sub_agent(profile: str, task: str) -> str:
+            """Delegate a specialised task to an expert Worker Agent.
+
+            The Worker Agent runs an isolated agentic loop with a restricted
+            tool set and tailored persona, then returns its findings.
+
+            Available profiles:
+              security_auditor  — Read-only code security analysis
+              code_reviewer     — Read-only style, logic, and best-practice review
+              test_writer       — Reads source and writes pytest unit tests
+              documenter        — Reads source and writes docstrings/markdown
+              linter            — Runs linting tools and reports issues
+
+            Args:
+              profile: Name of the expert profile to instantiate
+              task:    Precise description of what the Worker should do
+            """
+            from ..subagent import spawn, list_profiles
+            all_tools = core_tools  # Captured from outer scope below
+            result = spawn(
+                profile_name=profile,
+                task=task,
+                parent_tools=all_tools,
+                router=router,
+            )
+            return f"[{profile.upper()} REPORT]\n{result}"
+
+        core_tools = [
             calculator, search_memory, build_skill, read_file, write_file,
             apply_code_patch, list_project_files, search_project,
-            read_logs, run_bash_command,
+            read_logs, run_bash_command, spawn_sub_agent,
         ]
+        return core_tools
 
     # -------------------------------------------------------------------------
     # Git Tools (only when .git directory exists)
