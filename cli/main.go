@@ -26,7 +26,7 @@ import (
 var (
 	wsFlag  = flag.Bool("ws", true, "Use WebSocket connection (default)")
 	httpFlag = flag.Bool("http", false, "Force HTTP connection (OpenAI-compatible)")
-	baseURL  = flag.String("url", "localhost:8080", "Base URL for the Tendril server")
+	baseURL  = flag.String("url", "localhost:9090", "Base URL for the Tendril server")
 	helpFlag = flag.Bool("h", false, "Show help")
 )
 
