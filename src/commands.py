@@ -118,6 +118,9 @@ def intercept_slash_commands(message: str) -> Optional[str]:
         except Exception as e:
             return f"❌ Failed to save to disk: {e}"
 
+    elif cmd == "/init":
+        return "✅ **Initialization Wizard Triggered.** Preparing environment for setup sequence..."
+
     elif cmd == "/local":
         try:
             append_to_env("DEFAULT_LLM_PROVIDER", "local")
