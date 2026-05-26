@@ -98,7 +98,20 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
             append_to_env(key, val)
         except Exception as e:
             return f"⚠️ Applied dynamically but failed to save to disk: {e}"
-        return f"✅ **Key saved!** Tendril is operational."
+            
+        from .eventbus import event_bus, TendrilEvent, generate_run_id
+        event_bus.emit(TendrilEvent(
+            run_id=generate_run_id(),
+            event_type="onboarding.complete",
+            session_id=session_id,
+            data={"configured_key": key}
+        ))
+
+        return (
+            f"✅ **Key saved!**\n\n"
+            f"🚀 **Onboarding Complete!** Tendril is fully initialized, telemetry has been logged, and I am actively watching your workspace.\n\n"
+            f"You are now ready to type your first development prompt!"
+        )
 
     elif cmd == "/model":
         if not args:
