@@ -73,16 +73,36 @@ func sendWS(conn *websocket.Conn, msg string) (string, error) {
 		return "", err
 	}
 
-	var response WSMessage
-	err = conn.ReadJSON(&response)
-	if err != nil {
-		return "", err
-	}
+	for {
+		_, rawMsg, err := conn.ReadMessage()
+		if err != nil {
+			return "", err
+		}
 
-	if respData, ok := response.Data.(string); ok {
-		return respData, nil
+		// Try to parse as WSMessage
+		var response WSMessage
+		if err := json.Unmarshal(rawMsg, &response); err == nil && response.Type != "" {
+			if response.Type == "event" || response.Type == "telemetry" {
+				// Ignore background events, keep waiting for the real response
+				continue
+			}
+			if respData, ok := response.Data.(string); ok {
+				return respData, nil
+			}
+			// If it's a JSON object, format it as string
+			bytes, _ := json.MarshalIndent(response.Data, "", "  ")
+			return string(bytes), nil
+		}
+
+		// Try to parse as OpenAI-compatible ChatResponse
+		var chatResp ChatResponse
+		if err := json.Unmarshal(rawMsg, &chatResp); err == nil && len(chatResp.Choices) > 0 {
+			return chatResp.Choices[0].Message.Content, nil
+		}
+
+		// Fallback: treat the raw payload as standard text/markdown stream
+		return string(rawMsg), nil
 	}
-	return "", fmt.Errorf("invalid WS response")
 }
 
 // sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.
