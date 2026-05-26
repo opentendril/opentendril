@@ -220,6 +220,7 @@ func main() {
 		// Let the backend process these first to save to .env, then intercept to restart Docker
 		isRepoCmd := strings.HasPrefix(msg, "/repo ")
 		isLocalCmd := msg == "/local"
+		isInitCmd := msg == "/init"
 
 		response, err := sendFunc(msg)
 		if err != nil {
@@ -229,8 +230,8 @@ func main() {
 		fmt.Println(response)
 
 		// After backend responds successfully, trigger the host-side Docker restart
-		if isRepoCmd && !strings.Contains(response, "❌") {
-			log.Println("🔄 Remounting volumes (this may take a few seconds)...")
+		if (isRepoCmd || isInitCmd) && !strings.Contains(response, "❌") {
+			log.Println("🔄 Remounting volumes and applying configuration...")
 			cmd := exec.Command("docker", "compose", "up", "-d")
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
