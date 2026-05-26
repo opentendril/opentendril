@@ -22,6 +22,8 @@ Usage (via Root Agent's spawn_sub_agent tool):
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
+from langchain_core.messages import AIMessage
+from .eventbus import event_bus, TendrilEvent
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +212,34 @@ class SubAgentRunner:
                         result = tool_fn.invoke(tc["args"])
                     except Exception as e:
                         result = f"Tool error: {e}"
+
+                is_failure = isinstance(result, str) and (
+                    result.startswith("❌") or 
+                    "Tool error:" in result or 
+                    "AssertionError" in result or
+                    "error" in result.lower()
+                )
+
+                if is_failure:
+                    event_bus.emit(TendrilEvent(
+                        run_id="subagent", event_type="orchestrator.pruned", 
+                        session_id="system", data={"tool": tc["name"]}
+                    ))
+                    if hasattr(resp, "tool_calls"):
+                        pruned_calls = []
+                        for tc_old in resp.tool_calls:
+                            if tc_old["id"] == tc["id"]:
+                                safe_args = {k: "[PRUNED DUE TO VALIDATION FAILURE]" if isinstance(v, str) and len(v) > 200 else v for k, v in tc_old.get("args", {}).items()}
+                                pruned_calls.append({"name": tc_old["name"], "args": safe_args, "id": tc_old["id"]})
+                            else:
+                                pruned_calls.append(tc_old)
+                        cloned_resp = AIMessage(
+                            content=resp.content,
+                            tool_calls=pruned_calls,
+                            id=resp.id if getattr(resp, "id", None) and isinstance(resp.id, str) else None
+                        )
+                        messages[-1] = cloned_resp
+                        resp = cloned_resp
 
                 messages.append({
                     "role": "tool",

@@ -21,6 +21,8 @@ from typing import Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from .eventbus import event_bus, TendrilEvent
+
 logger = logging.getLogger(__name__)
 
 Tier = Literal["fast", "standard", "power"]
@@ -103,3 +105,49 @@ def assess_and_route(
         tier = "standard"
 
     return provider, tier
+
+
+_REPLAN_PROMPT = """\
+You are the Strategic Architect for an AI coding assistant.
+The agent previously attempted to solve the following task but encountered severe validation failures.
+
+Original Task:
+{task}
+
+Failure Trace:
+{error_trace}
+
+Your objective is to revise the execution plan to circumvent these errors.
+Output a strict JSON array of objects representing the revised plan steps.
+Example:
+[
+  { "step": 1, "action": "spawn_sub_agent", "profile": "security_auditor", "instruction": "Audit the file before modifications." },
+  { "step": 2, "action": "direct_modification", "instruction": "Apply minimal fix to X without touching Y." }
+]
+Output ONLY valid JSON.\
+"""
+
+def revise_execution_plan(task: str, error_trace: str, llm: BaseChatModel, session_id: str = "system") -> str:
+    """
+    Generate a revised execution plan based on previous failures.
+    """
+    event_bus.emit(TendrilEvent(
+        run_id="replan",
+        event_type="assessor.replan_start",
+        session_id=session_id,
+        data={"task_preview": task[:100], "error_preview": error_trace[:100]}
+    ))
+    
+    try:
+        prompt = _REPLAN_PROMPT.format(task=task, error_trace=error_trace)
+        response = llm.invoke([{"role": "user", "content": prompt}])
+        plan = str(response.content).strip()
+        # strip markdown block if present
+        if plan.startswith("```json"):
+            plan = plan[7:]
+        if plan.endswith("```"):
+            plan = plan[:-3]
+        return plan.strip()
+    except Exception as exc:
+        logger.warning(f"⚠️  Assessor replan failed ({exc})")
+        return '[\n  { "step": 1, "action": "fallback", "instruction": "Retry cautiously with a smaller scope." }\n]'

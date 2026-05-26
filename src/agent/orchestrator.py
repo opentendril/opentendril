@@ -32,7 +32,8 @@ from ..patcher import format_patch_for_prompt
 from .tools import ToolFactory
 from .system_prompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
 from ..promptcache import build_cached_messages
-from ..assessor import assess_and_route
+from ..assessor import assess_and_route, revise_execution_plan
+from langchain_core.messages import AIMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,7 @@ class Orchestrator:
         # --- Agentic loop ---
         max_iterations = 20
         last_response_content = None
+        consecutive_failures = 0
 
         for i in range(max_iterations):
             try:
@@ -222,6 +224,8 @@ class Orchestrator:
 
             # Execute tool calls
             messages.append(resp)
+            circuit_broken = False
+            
             for tool_call in resp.tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
@@ -238,6 +242,41 @@ class Orchestrator:
                 except Exception as e:
                     tool_result = f"Tool error: {str(e)}"
 
+                is_failure = isinstance(tool_result, str) and (
+                    tool_result.startswith("❌") or 
+                    "Tool error:" in tool_result or 
+                    "AssertionError" in tool_result or
+                    "error" in tool_result.lower()
+                )
+
+                if is_failure:
+                    consecutive_failures += 1
+                    event_bus.emit(TendrilEvent(
+                        run_id=run_id, event_type="orchestrator.pruned", 
+                        session_id=session_id, data={"tool": tool_name}
+                    ))
+                    
+                    # 1. IMMUTABILITY GUARD: Clone the message to prune massive arguments safely
+                    if hasattr(resp, "tool_calls"):
+                        pruned_calls = []
+                        for tc_old in resp.tool_calls:
+                            if tc_old["id"] == tool_call["id"]:
+                                safe_args = {k: "[PRUNED DUE TO VALIDATION FAILURE]" if isinstance(v, str) and len(v) > 200 else v for k, v in tc_old.get("args", {}).items()}
+                                pruned_calls.append({"name": tc_old["name"], "args": safe_args, "id": tc_old["id"]})
+                            else:
+                                pruned_calls.append(tc_old)
+                        
+                        # Replace resp in messages with cloned AIMessage
+                        cloned_resp = AIMessage(
+                            content=resp.content,
+                            tool_calls=pruned_calls,
+                            id=resp.id if getattr(resp, "id", None) and isinstance(resp.id, str) else None
+                        )
+                        messages[-1] = cloned_resp
+                        resp = cloned_resp # keep local ref updated
+                else:
+                    consecutive_failures = 0
+
                 event_bus.emit(TendrilEvent(
                     run_id=run_id, event_type="tool.end",
                     session_id=session_id,
@@ -250,6 +289,35 @@ class Orchestrator:
                     "name": tool_name,
                     "content": str(tool_result),
                 })
+                
+                # 2. CIRCUIT BREAKER
+                if consecutive_failures >= 3:
+                    event_bus.emit(TendrilEvent(
+                        run_id=run_id, event_type="orchestrator.circuit_breaker", 
+                        session_id=session_id, data={"failures": consecutive_failures}
+                    ))
+                    logger.warning(f"Circuit breaker triggered in session {session_id} after {consecutive_failures} failures.")
+                    
+                    plan_json = revise_execution_plan(message, str(tool_result), llm, session_id)
+                    
+                    # Reset context completely
+                    messages = build_cached_messages(
+                        provider=selected_provider,
+                        model_name=resolved_model,
+                        static_system=static_prompt,
+                        dynamic_system=dynamic_prompt,
+                        history=history,
+                        user_message=message,
+                    )
+                    messages.append(SystemMessage(content=f"CIRCUIT BREAKER TRIGGERED. Previous attempts failed severely. Execute this revised JSON master plan natively:\n{plan_json}"))
+                    
+                    consecutive_failures = 0
+                    circuit_broken = True
+                    break
+
+            if circuit_broken:
+                continue
+
 
         self._check_drift(session_id, message, last_response_content)
         return "⚠️ Reached maximum tool iterations. The task may be too complex — try breaking it into smaller steps."
