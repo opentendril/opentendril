@@ -9,7 +9,7 @@ def append_to_env(key: str, val: str):
     with open(DATA_ENV_PATH, "a") as f:
         f.write(f"\\n{key}={val}\\n")
 
-def intercept_slash_commands(message: str) -> Optional[str]:
+def intercept_slash_commands(message: str, session_id: str = "system") -> Optional[str]:
     """
     Intercepts and handles CLI slash commands (/help, /repo, etc.)
     Returns a response string if intercepted, or None to proceed to the LLM.
@@ -98,7 +98,20 @@ def intercept_slash_commands(message: str) -> Optional[str]:
             append_to_env(key, val)
         except Exception as e:
             return f"⚠️ Applied dynamically but failed to save to disk: {e}"
-        return f"✅ **Key saved!** Tendril is operational."
+            
+        from .eventbus import event_bus, TendrilEvent, generate_run_id
+        event_bus.emit(TendrilEvent(
+            run_id=generate_run_id(),
+            event_type="onboarding.complete",
+            session_id=session_id,
+            data={"configured_key": key}
+        ))
+
+        return (
+            f"✅ **Key saved!**\n\n"
+            f"🚀 **Onboarding Complete!** Tendril is fully initialized, telemetry has been logged, and I am actively watching your workspace.\n\n"
+            f"You are now ready to type your first development prompt!"
+        )
 
     elif cmd == "/model":
         if not args:
@@ -117,6 +130,42 @@ def intercept_slash_commands(message: str) -> Optional[str]:
             return f"✅ Workspace updated to `{args}`. The CLI will now restart the server to mount the new folder."
         except Exception as e:
             return f"❌ Failed to save to disk: {e}"
+
+    elif cmd == "/init":
+        from .config import WORKSPACE_ROOT
+        from .eventbus import event_bus, TendrilEvent, generate_run_id
+        from collections import Counter
+
+        ignores = {".git", "venv", "__pycache__", "node_modules"}
+        ext_counter = Counter()
+
+        for root, dirs, files in os.walk(WORKSPACE_ROOT):
+            dirs[:] = [d for d in dirs if d not in ignores and not d.startswith(".")]
+            for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext:
+                    ext_counter[ext] += 1
+
+        top_exts = ext_counter.most_common(3)
+        detected_languages = {ext: count for ext, count in ext_counter.items()}
+        
+        dominant_text = ""
+        if top_exts:
+            top_ext_names = [f"{ext} ({count})" for ext, count in top_exts]
+            dominant_text = f" Detected dominant extensions: {', '.join(top_ext_names)}."
+            
+        event_bus.emit(TendrilEvent(
+            run_id=generate_run_id(),
+            event_type="onboarding.survey_complete",
+            session_id=session_id,
+            data={"detected_languages": detected_languages}
+        ))
+
+        return (
+            f"✅ **Initialization Wizard Triggered.**\n\n"
+            f"🌱 Workspace Survey Complete:{dominant_text}\n\n"
+            f"Please set your default LLM provider to continue (e.g., `/model anthropic`)."
+        )
 
     elif cmd == "/local":
         try:
