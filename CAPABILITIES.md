@@ -4,6 +4,19 @@ OpenTendril is designed to be fully extensible. Developers and AI agents can ext
 
 ---
 
+## 💡 Plain-English Analogy (For Beginners)
+
+If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plugins" can sound confusing. Here is a simple analogy comparing OpenTendril to a human developer working at a desk:
+
+* **The Agent (The Programmer):** The AI brain itself (the LLM). It doesn't have a body; it can only think, plan, and draft text based on instructions.
+* **The Desk (The Context Window):** What the programmer can see at any given moment. To work on your codebase, the programmer needs you to place relevant source files on their desk.
+* **The Tools (The Keyboard & Terminal):** The programmer cannot directly modify your host system. Instead, we give them a keyboard with a few specific buttons: `read_file`, `write_file`, and `run_command`. Every action they take must use one of these tools.
+* **The Skills (The Reference Manuals):** Prompts or markdown files (like `SKILL.md`) that teach the programmer how to work with a specific framework or tool (e.g., "How to write Firestore database rules"). When you ask the agent to work on a specialized task, the system automatically pulls the matching "Reference Manual" and puts it on their desk.
+* **The Plugins (The Toolboxes):** A pre-packaged kit containing both reference manuals (Skills) and specialized tools (like a browser inspector or database connector) that you can hand to the programmer to expand their capabilities.
+* **The SDLC Process (The Manager's Sign-off):** The governance rules (defined in `AGENTS.md`) that prevent the programmer from pushing code directly to production. They must write a design draft (Design RFC), get your signature (Gate A), show you exactly what lines of code they will modify (Implementation Plan), get your signature (Gate B), and then open a draft pull request for you to merge (Gate C).
+
+---
+
 ## 1. Taxonomy of Capability Extension
 
 ```
