@@ -3,6 +3,12 @@ name: Docker Build & Publish
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'src/**'
+      - 'Dockerfile*'
+      - 'requirements.txt'
+      - 'setup.py'
+      - '.github/workflows/docker-publish.yml'
   release:
     types: [published]
 
