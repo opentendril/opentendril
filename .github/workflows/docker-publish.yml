@@ -1,16 +1,10 @@
 name: Docker Build & Publish
 
 on:
-  push:
-    branches: [ "main" ]
-    paths:
-      - 'src/**'
-      - 'Dockerfile*'
-      - 'requirements.txt'
-      - 'setup.py'
-      - '.github/workflows/docker-publish.yml'
+  workflow_dispatch:
   release:
     types: [published]
+
 
 env:
   REGISTRY: ghcr.io
