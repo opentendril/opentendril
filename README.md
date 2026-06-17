@@ -1,119 +1,86 @@
 # 🌱 Tendril
 
-**Self-hosted AI coding assistant. Point it at any project. Talk to it. It reads, edits, and commits.**
+**Headless AI coding assistant kernel. Point it at any project. Talk to it from any CLI or web app. It reads, edits, and commits safely inside a secure sandbox.**
 
 Your LLM keys. Your codebase. Your machine.
 
 ---
 
-## Quick Start
+## The Vision: A Zero-Friction, Headless Kernel
 
-> **[→ Full setup guide with Hello World verification: QUICKSTART.md](./QUICKSTART.md)**
-
-```bash
-git clone https://github.com/opentendril/core.git
-cd core && cp .env.example .env   # Add your LLM API key
-docker compose up --build
-```
-
-Verify it's live:
-```bash
-curl -s http://localhost:8080/health | python3 -m json.tool
-# → {"status": "healthy", ...}
-```
-
-Then connect — pick your preferred interface:
-
-| Interface | Command |
-|---|---|
-| **curl** | `curl -X POST http://localhost:8080/v1/chat -H 'Content-Type: application/json' -d '{"session_id":"test","message":"What files are in this project?"}'` |
-| **CLI** | `cd cli && go build -o tendril-cli . && ./tendril-cli` |
-| **Web UI** | Open `http://localhost:8080/chat` |
-
-See [QUICKSTART.md](./QUICKSTART.md) for full setup, troubleshooting, and first-edit walkthrough.
+Tendril is designed as an **Intelligent Backend Protocol** (a Headless Kernel) that seamlessly powers the best developer frontends in the open-source ecosystem. Rather than locking you into a custom editor or a complex chat UI, Tendril runs as a lightweight local daemon that exposes:
+1. **OpenAI-Compatible API Endpoint** (`/v1/chat-completions`) — point Aider, Continue, or custom dashboards to it.
+2. **Model Context Protocol (MCP) stdio Server** — connect Claude Desktop, ChatGPT CLI, or any MCP client directly to access Tendril's secure sandboxed tools.
 
 ---
 
-## Ecosystem Integrations (The Headless Kernel)
+## Quick Start (Under 2 Minutes)
 
-Tendril is designed as an **Intelligent Backend Protocol** (a Headless Kernel) that seamlessly powers the best Terminal UIs and agents in the open-source ecosystem. 
+Get up and running locally with zero configuration friction.
 
-Because Tendril exposes a native **OpenAI-Compatible API Endpoint** (`/v1/chat/completions`), you can point your favorite third-party tool at your local Tendril Brain. Tendril will execute the edits autonomously in its sandbox, while streaming a continuous live narrative of its thoughts and actions back to your TUI of choice!
-
-### Supported Frontends
-
-#### 1. Aider
-The gold standard for Git-native code editing.
+### 1. Run the Installer
+Run the single-line installation script to download the Go gateway CLI and boot the backend daemon:
 ```bash
-export OPENAI_API_BASE="http://localhost:8080/v1"
-export OPENAI_API_KEY="tendril"
-aider --model openai/tendril
+curl -fsSL https://opentendril.com/install.sh | sh
 ```
 
-#### 2. Crush
-For a glamorous, blazing fast Terminal UI experience.
-```bash
-export OPENAI_API_BASE="http://localhost:8080/v1"
-export OPENAI_API_KEY="tendril"
-crush --model openai/tendril
-```
-
-#### 3. OpenCode
-For Neovim-centric, highly customizable agenting. Point OpenCode's custom provider configuration to `http://localhost:8080/v1`.
+### 2. Choose Your Onboarding Pathway
+On the first boot, Tendril will automatically assist you in selecting your runtime mode:
+* **Option A: Free Cloud Trial (No Key):** Instantly get started using our hosted gateway (`api.opentendril.com`). Routes requests anonymously to top-tier models (Claude 3.5 Sonnet / Gemini 1.5 Pro) using server-side trial credits. No signup or credit cards required.
+* **Option B: Auto-Ollama Detection (Local-First):** If Ollama is running locally on `localhost:11434`, Tendril automatically detects it and boots using your local coding models (e.g. `qwen2.5-coder`).
+* **Option C: Custom API Keys:** Provide your own Anthropic, OpenAI, or Google API keys directly in the CLI prompt.
 
 ---
 
-## How It Works
+## Connectivity & Interfaces
+
+Once the backend is live, you can connect your preferred interface:
+
+| Interface / Client | Connection Type | Command / Setup |
+|---|---|---|
+| **Claude Desktop** | MCP (stdio) | Add `tendril-cli -mcp` to your `claude_desktop_config.json` |
+| **Aider** | OpenAI API | `aider --openai-api-base http://localhost:8080/v1 --model openai/tendril` |
+| **LibreChat (Web UI)** | OpenAI API | Point LibreChat's custom endpoints to `http://localhost:8080/v1` |
+| **Interactive CLI** | WebSocket | Run `tendril-cli` in your terminal |
+
+---
+
+## How It Works (Decoupled Microservices)
 
 ```
-┌──────────────┐     ┌──────────────────┐     ┌──────────────────┐
-│  CLI (Go)    │────►│  Gateway (Go)    │────►│  Brain (Python)  │
-│  WebSocket   │ ws  │  :9090/ws        │ HTTP│  :8080/v1/chat   │
-└──────────────┘     └──────────────────┘     └──────┬───────────┘
-                                                     │ LangChain Tools:
-                                                     ├─ read_file
-                                                     ├─ write_file
-                                                     ├─ apply_code_patch
-                                                     ├─ search_project
-                                                     ├─ list_project_files
-                                                     ├─ run_bash_command
-                                                     ├─ git_commit
-                                                     └─ git_status
+                 ┌────────────────────────────────────────────────────────┐
+                 │                       CLIENTS                          │
+                 │   LibreChat (Web)  │  Cursor / VSCode  │  Claude CLI   │
+                 └───────────────────────────┬────────────────────────────┘
+                                             │ (MCP over stdio / SSE)
+                                             ▼
+                 ┌────────────────────────────────────────────────────────┐
+                 │                 LIGHTWEIGHT GO GATEWAY                 │
+                 │   `tendril-cli -mcp` (Instant boot, proxy routing)     │
+                 └──────┬────────────────────┬─────────────────────┬──────┘
+                        │                    │                     │
+                        ▼                    ▼                     ▼
+             ┌─────────────────────┐ ┌──────────────┐   ┌─────────────────────┐
+             │    SANDBOX CORE     │ │  MEMORY/RAG  │   │     LLM ROUTER      │
+             │   (Python/Docker)   │ │ (SQLite/MCP) │   │ (Ollama/Cloud/vLLM) │
+             └─────────────────────┘ └──────────────┘   └─────────────────────┘
 ```
 
-- **Your project** is mounted read-write at `/workspace` inside the container
-- **The LLM** (Claude, Grok, GPT-4, or local via vLLM) processes your request
-- **Tools** execute against your mounted codebase — file reads, writes, git operations
-- **Everything stays local** — no code leaves your machine except to the LLM API
+* **Go Gateway Proxy:** Handles incoming client protocols (stdio, HTTP, WebSocket) and routes them efficiently with sub-millisecond latencies.
+* **Sandbox Core:** Executes code edits, syntax validation, compile checks, and git operations inside an isolated container sandbox (standard Docker, gVisor, or Firecracker).
+* **Zero-Dependency Fallbacks:** For lightweight local execution on low-spec hardware:
+  * Uses **SQLite** instead of Postgres if Postgres is offline.
+  * Uses **in-memory arrays** instead of Redis if Redis is offline.
+  * Runs **Docker-free** (direct host execution) if containerization is disabled.
+* **Pluggable Memory:** Run memory-free for small codebases, use local vector stores, or delegate to external semantic indexers (like `codebase-mcp`).
 
-## Supported LLM Providers
+---
 
-| Provider | Env Var | Best For |
-|----------|---------|----------|
-| **Anthropic** (Claude) | `ANTHROPIC_API_KEY` | Code editing, tool use — recommended |
-| **xAI** (Grok) | `GROK_API_KEY` | Fast, good value |
-| **OpenAI** (GPT-4) | `OPENAI_API_KEY` | General purpose |
-| **Google** (Gemini) | `GOOGLE_API_KEY` | Multimodal |
-| **Local** (vLLM) | Uncomment in `docker-compose.yml` | Air-gapped, GPU required |
+## Self-Building Mode (The Root Agent)
 
-## API Reference
+When `TENDRIL_PROJECT_PATH` is not configured, Tendril operates on its own source code (the Root Agent mode). It self-heals and self-modifies through a secure staging pipeline: applies surgical patches $\rightarrow$ compiles $\rightarrow$ runs tests $\rightarrow$ commits to a staging branch $\rightarrow$ creates a GitHub Pull Request for human review.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/health` | System health + loaded providers |
-| `POST` | `/v1/chat` | Send a message (JSON API) |
-| `POST` | `/edit` | Self-building: edit files via LLM |
-| `GET`  | `/chat` | Web chat UI |
-| `GET`  | `/api/providers` | List available LLM providers |
-| `GET`  | `/health/providers` | Provider health + cooldown status |
-
-## GPU Inference (Optional)
-
-If you have an NVIDIA GPU, uncomment the `inference` service in `docker-compose.yml` to run models locally via vLLM. No API keys needed.
-
-## Self-Building Mode
-
-When `TENDRIL_PROJECT_PATH` is not set, Tendril operates on its own source code — the "Root Agent" mode. It can modify itself through a staged edit pipeline with syntax validation, branch-per-change, and PR creation.
+---
 
 ## License
 

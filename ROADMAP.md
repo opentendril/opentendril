@@ -20,6 +20,8 @@ Tendril instances run as sidecars or tools on any codebase (e.g., `jurnx/med-api
 - ✅ **Tool Adaptability:** File operations and Git committed directly to the external workspace.
 - [ ] **Enterprise Pipelines:** Native "Design → Plan → Pull Request" workflows distinct from the root `/edit` loop.
 - [ ] **Monetization & Credits:** The `credit_manager` enforcing limits on cloud-hosted usage, allowing unlimited local compute.
+- [ ] **MCP Server Integration:** Exposing the Headless Kernel via the Model Context Protocol for Claude Desktop compatibility.
+- [ ] **Shadow Workflows:** Hidden local git tracking (`.codebase`) and automated Quality Gates for safe, isolated AI iterations.
 
 ## Evolution 3: The Automated Hive (Distributed Registry)
 **Focus:** Sharing skills learned by deployed agents back to the Root.

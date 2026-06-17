@@ -1,46 +1,58 @@
-# Tendril Agent Taxonomy
+# OpenTendril Agent Taxonomy & External Builder Operating Model
 
-Tendril operates as a multi-node AI orchestrator rather than a monolithic chatbot. To ensure system security, determinism, and scalability (especially toward Evolution 3: The Federated Hive), Tendril delegates tasks to specific, bounded Agent profiles.
-
-This document serves as the conceptual architecture for how roles are deployed and constrained within the system framework.
+This document defines how AI agents—both internal background processes and external AI builders (like Antigravity)—interact with and modify the OpenTendril workspace. It acts as the formal operating agreement to maintain trust, safety, and security.
 
 ---
 
-## 1. The Root Agent
-**Identity:** The Core Orchestrator  
-**Role:** The primary interface and self-healing engine. It is responsible for debugging, expanding the codebase, and integrating new capabilities requested by the user.
+## 1. Operating Model with an External Builder
 
-*   **Primary Loop:** The "Moat Loop" (`/edit`). Translates natural language frustrations into syntax-tested, automatically committed code.
-*   **Tool Access:**
-    *   `FileEditor` (Root filesystem sandbox)
-    *   `GitManager` (Direct branch/commit/PR abilities)
-    *   `TestRunner` (Safe python syntax evaluation)
-*   **Guardrails:** Sandboxed dynamically to `TENDRIL_WORKSPACE_ROOT`. Edits must pass internal syntax checks before triggering Git primitives.
+When an external developer AI agent (the "Builder") is paired with OpenTendril, it must strictly follow this 5-stage lifecycle to prevent runtime corruption, directory clutter, or logic drift.
 
----
+### Stage 1: Research & Survey
+* **Rules:** The Builder may only use read-only tools (like `list_dir`, `view_file`, `grep_search`).
+* **Restriction:** No source code changes or modifying bash commands are allowed. The goal is to thoroughly inspect project requirements and configurations without affecting workspace state.
 
-## 2. The Marketing Agent (Zero-Touch Engine)
-**Identity:** Communications & Growth  
-**Role:** Monitors the repository for milestone achievements and automatically drafts "Build in Public" documentation, social assets, and project updates.
+### Stage 2: Plan & Approve
+* **Rules:** The Builder must construct a detailed implementation plan describing which files will be modified, created, or deleted.
+* **Artifact:** Create or update `implementation_plan.md` in the brain folder.
+* **Human Checkpoint:** Set `RequestFeedback: true` in the metadata. **The Builder must stop and wait for explicit human approval** before making any edits.
 
-*   **Primary Loop:** Headless cron/event triggers. Evaluates the `git log` and `PROGRESS.md` files.
-*   **Tool Access:**
-    *   `GitManager.read_logs` (Observability)
-    *   `ApprovalGate` (Mandatory human-in-the-loop checkpoint)
-*   **Guardrails:** CRITICAL constraint: This agent has absolutely no push access to live networks (X, LinkedIn, PyPI) without routing a payload through the `ApprovalGate` for explicit human cryptographic signing/approval.
+### Stage 3: Execute & Track
+* **Rules:** Once approved, the Builder creates `task.md` in the brain folder to track task checklists.
+* **Tracking:** Mark active items with `[/]` (in progress) and completed items with `[x]` (completed) before and after editing files. Work must progress through small, atomic changes.
 
----
+### Stage 4: Local Verification
+* **Rules:** The Builder must run the codebase tests locally before pushing any changes.
+* **Orchestration:** Run verification using the system `Makefile` (e.g. `make lint` and `make test`).
+* **Syntax Checks:** Python files must pass `py_compile` checks. Go files must compile without errors.
 
-## 3. The Dreamer Agent (Background Optimiser)
-**Identity:** Memory Janitor & Synthesizer  
-**Role:** Operates silently on background threads to ensure the system's vector database remains coherent, relevant, and free of cyclical logic.
-
-*   **Primary Loop:** `src/dreamer.py` (Cron-triggered, standard hourly intervals).
-*   **Tool Access:**
-    *   `Memory` (ChromaDB internal states)
-*   **Guardrails:** Bounded strictly to vector/RAG arrays. Cannot modify `.py` source code or execute `TestRunner` bash interactions.
+### Stage 5: Commit & Staging
+* **Rules:** Once verified, the Builder commits code using Conventional Commits.
+* **Branching:** The Builder must push changes to a dedicated AI staging branch (e.g., `staging/patch-description-timestamp`).
+* **Final Gate:** The Builder opens a GitHub Pull Request. A human reviewer validates the PR and merges it into `main`.
 
 ---
 
-## Evolution Roadblocks
-As Tendril scales into **Deployed Agents** (Evolution 2), new agents will be registered dynamically via the `skills/` directory (signed via local KMS). Before any new Agent is merged into standard capabilities, its specific tool boundaries MUST be mapped in this taxonomy document to ensure we don't accidentally give a social media manager the ability to run bash scripts.
+## 2. Internal Agent Taxonomy
+
+OpenTendril delegates background operations to specific, bounded agent profiles to enforce system security and scalability.
+
+### A. The Root Agent (Core Orchestrator)
+* **Role:** The primary self-healing engine. Debugs and expands OpenTendril's codebase based on user chat commands.
+* **Primary Loop:** The "Moat Loop" (`/edit`). Translates chat requests into syntax-tested, automatically committed code.
+* **Tool Access:** Bounded strictly to the designated `WORKSPACE_ROOT`. Edits must pass internal compilation and pytest suites before commit.
+
+### B. The Marketing Agent (Zero-Touch Engine)
+* **Role:** Monitors the repository for milestones and automatically drafts "Build in Public" documentation, social posts, and logs.
+* **Primary Loop:** Triggered by git commits and changes in `PROGRESS.md`.
+* **Guardrails:** This agent has **zero push access** to external networks (X/Twitter, LinkedIn, PyPI) without routing its draft payload through the `ApprovalGate` for cryptographic human signing.
+
+### C. The Dreamer Agent (Background Optimizer)
+* **Role:** Operates on background cron threads to optimize the vector database, clean memory logs, and summarize conversations.
+* **Primary Loop:** Runs hourly interval tasks (`src/dreamer.py`).
+* **Guardrails:** Bounded strictly to memory databases (SQLite or vector arrays). Cannot modify source files or execute shell command tools.
+
+---
+
+## 3. Governance and Evolution Roadblocks
+As OpenTendril scales, new agent profiles will be loaded dynamically via the `skills/` directory (signed using a cryptographic `SECRET_KEY`). Before any new agent profile is merged, its tool permissions and boundaries must be formally mapped in this document. Under no circumstances may an untrusted agent profile be granted direct shell execution capabilities.

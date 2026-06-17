@@ -70,6 +70,28 @@ To ensure Tendril remains infrastructure-agnostic and scalable, we are moving to
 - **Goal:** Spawn specialized worker agents (Security, Linter, Docs) for parallel, expert execution.
 - **Priority:** High
 
+## 🌐 Ecosystem & Workflow Enhancements
+
+### [ARCH] Model Context Protocol (MCP) Server Endpoint
+- **Status:** Backlog
+- **Goal:** Expose Tendril's toolset via MCP as a **new use-case**. While Tendril maintains its own autonomous "brain", this endpoint allows an external LLM (e.g. Claude Desktop) to delegate tasks to Tendril's secondary brain, turning Tendril into a secure, reliable executor for external workflows.
+- **Priority:** High
+
+### [AGENT] Robust Git & "Shadow" Branching Capability
+- **Status:** Backlog
+- **Goal:** Fix challenges in the self-improvement loop by iterating in an isolated "Shadow Git" state (`.codebase` or isolated branches). OpenTendril will safely do the work locally and automatically commit to a branch, only merging when tests pass, ensuring it never corrupts its own active runtime.
+- **Priority:** High
+
+### [RAG] Symbol-Level Local Indexing
+- **Status:** Backlog
+- **Goal:** Implement FAISS + local embeddings for symbol-level (functions, classes) semantic search to accelerate context retrieval.
+- **Priority:** Medium
+
+### [MEMORY] Persistent Cognitive Memory
+- **Status:** Backlog
+- **Goal:** Categorize learnings into progress, mistakes, and architecture, with pre-action semantic lookups to prevent repeating errors across sessions.
+- **Priority:** High
+
 ---
 
 ## 🤖 Evolution 2 & 3 Items
