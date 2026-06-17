@@ -1,8 +1,40 @@
 # OpenTendril SDLC & Planning Workflow
 
-This document codifies the step-by-step Software Development Lifecycle (SDLC) process for implementing features, fixing bugs, or refactoring components in OpenTendril. This process applies to human developers and external AI builders (like Antigravity) alike.
+This document codifies the Software Development Lifecycle (SDLC) process for implementing features, fixing bugs, or refactoring components in OpenTendril. To accommodate different project scales, speed requirements, and security compliance levels, OpenTendril supports three configurable **SDLC Profiles**.
 
 ---
+
+## 🛠️ Configurable SDLC Profiles
+
+The active workflow profile is set in the kernel configuration (e.g., `TENDRIL_SDLC_PROFILE=solo|collaborative|enterprise`).
+
+### 1. Solo Mode (`solo` / Fast-Track)
+* **Best for:** Prototyping, hobby projects, solo developers, and low-risk bug fixes or documentation updates.
+* **Friction Level:** Zero-friction.
+* **Process:**
+  1. **Direct Edit:** The agent analyzes requirements and edits the files directly in the workspace without drafting plans.
+  2. **Verification:** The agent compiles files and runs local tests (`make check-all`).
+  3. **Auto-Commit:** The agent commits the changes directly to the current active branch and pushes to the remote repository.
+
+### 2. Collaborative Mode (`collaborative` / Standard OS)
+* **Best for:** Open-source contributions, shared repositories, and standard feature development.
+* **Friction Level:** Balanced (staged reviews).
+* **Process:**
+  1. **Implementation Plan:** The agent drafts a lightweight implementation plan and waits for a single user approval.
+  2. **Branch Isolation:** The agent checks out a `staging/ai-*` branch to do the work.
+  3. **Draft PR:** The agent opens a Pull Request on GitHub and waits for the human to review and merge it.
+
+### 3. Enterprise Mode (`enterprise` / Compliance)
+* **Best for:** Production codebases, security-critical paths, corporate systems, and audited workflows.
+* **Friction Level:** High (strict safety first).
+* **Process:**
+  1. **Gate A (Design RFC):** The agent drafts a formal Design RFC to align on architecture and data models before any code is written.
+  2. **Gate B (Detailed Plan):** The agent drafts a comprehensive Implementation Plan citing line ranges of files to be changed. The user must approve each task slice before execution.
+  3. **Sandboxed Staging:** Code is modified inside isolated sandboxes, running automated pre-commit hook checks and linting pipelines.
+  4. **Gate C (Drift Review & PR):** The agent generates a Draft PR and runs an automated Drift Review to classify any deviations from the plan before human merge.
+
+---
+
 
 ## The 4-Phase Delivery Lifecycle
 

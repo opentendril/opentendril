@@ -17,7 +17,10 @@ Any external builder agent (e.g. Antigravity) must operate under strict boundary
 
 ## 2. The 3-Gate Execution Lifecycle
 
-To prevent "agent runaways" and maintain absolute system security, all non-trivial features or refactors must route through a 3-gate lifecycle.
+To prevent "agent runaways" and maintain absolute system security, all non-trivial features or refactors must route through a structured lifecycle. The strictness of this process is governed by the active `TENDRIL_SDLC_PROFILE` configuration (Solo, Collaborative, or Enterprise, as defined in `PLANNING.md`).
+
+In **Enterprise Mode** (`enterprise`), the full 3-gate lifecycle is strictly enforced:
+
 
 ```
  ┌──────────────────────┐      ┌──────────────────────┐      ┌──────────────────────┐
