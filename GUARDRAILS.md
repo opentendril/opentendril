@@ -52,7 +52,7 @@ The following kernel files must **never** be modified directly via the AI orches
 * `src/tendril.py` — Core agent orchestrator
 * `src/config.py` — Configuration file
 * `.env` — Environment secrets
-* `GUARDRAILS.md`, `DECISIONS.md`, `ARCHITECTURE.md` — Governance files
+* `GUARDRAILS.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `CAPABILITIES.md` — Governance files
 
 ### Staged Modification Pipeline
 If these protected files must be edited, they must route through the **`staged_edit`** tool. This tool:
