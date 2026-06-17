@@ -27,6 +27,15 @@ OpenTendril is split into distinct, specialized services. This allows the CLI/pr
              └─────────────────────┘ └──────────────┘   └─────────────────────┘
 ```
 
+### The Headless Kernel Split (Brain vs. Hands)
+
+To maximize safety and efficiency, OpenTendril enforces a strict separation of concerns between the client interface (the Brain) and the execution kernel (the Hands):
+
+* **The Brain (Client App):** High-end user interfaces (like Claude Desktop, ChatGPT CLI, or VS Code) handle high-level reasoning, system design, prompt construction, and external internet searches.
+* **The Hands (OpenTendril Kernel):** OpenTendril runs locally or in a sandbox. It receives structured requests (such as "read file X" or "run build compilation Y") via the Model Context Protocol (MCP) and executes them securely, returning raw outputs back to the client.
+
+This means OpenTendril does not need to duplicate chat interfaces or search tools; it focuses entirely on the secure execution and manipulation of code assets.
+
 ### A. The Go Gateway (`tendril-cli`)
 * **Role:** Low-overhead protocol adapter and system orchestrator.
 * **Responsibilities:**
@@ -86,6 +95,14 @@ To support both developer accessibility and enterprise-grade multi-tenant securi
     runtime: runsc
   ```
 * **`firecracker` (Enterprise Isolation):** Runs each execution inside a microVM using AWS Firecracker. Provides hardware-level virtualization via KVM, sub-second boot times, and strict memory/CPU limits.
+
+### De-Risking Local Command Execution (The Sandbox Trap)
+
+Traditional AI coding tools execute terminal commands directly on the developer's host machine (e.g. running test scripts, installing libraries). This introduces severe risks (malicious package installation hooks, accidental directory wipes). OpenTendril eliminates this risk by rerouting all tool commands through the active sandbox provider:
+
+1. **Gateway Redirection:** When the LLM calls `run_command`, the Go Gateway intercepts the request and routes it to the Sandbox Core inside the isolated container or microVM instead of running it on the host OS.
+2. **Resource Boundaries:** The sandbox runs with restricted privileges, mount maps locked strictly to the workspace directory, and a secure egress firewall (blocking outbound data exfiltration attempts).
+3. **Graceful Fallback (Solo Mode):** If a container runtime is not available (e.g. Docker is offline during first launch), OpenTendril falls back to host execution only after issuing a console warning and prompting the user for explicit consent.
 
 ---
 
