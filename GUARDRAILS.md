@@ -15,6 +15,15 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 * **Directories & Non-Code Files:** Must use **kebab-case** (e.g., `docker-compose.yml`, `dynamic-skills/`, `assets/`).
 * **Zero Underscores elsewhere:** No other files on the filesystem may use `snake_case` or underscores.
 
+> [!NOTE]
+> **Cognitive Load & File Scan Philosophy:**
+> In polyglot codebases, developers are often forced to constantly context-switch between snake_case filenames (Python), camelCase/PascalCase filenames (TypeScript/React), and flat-lowercase (Go/standard libraries). This fragmentation slows down visual scanning, autocomplete, and fuzzy-searching. 
+> OpenTendril eliminates this friction by enforcing a strict filesystem bifurcation:
+> 1. **Code Files are Flat Lowercase:** All source code files are merged lowercase (`llmrouter.py`, `mcpserver.go`), meaning you can scan the explorer tree or fuzzy-find files without thinking about punctuation boundaries.
+> 2. **Config & Folders are Kebab-case:** Non-code files and directories use hyphens (`docker-compose.yml`, `github-actions/`). This creates an instant visual distinction between the active code logic and the surrounding configuration scaffold.
+> 3. **Exceptions:** Go unit tests are named `*_test.go` because the Go build system strictly requires this pattern to discover and execute test suites. No other underscores are allowed.
+
+
 ### 2. Code Variables, Properties, and Methods
 * **Python Code:**
   * Functions, variables, and methods must use **`snake_case`** (e.g., `def search_memory(query: str):`).

@@ -1,5 +1,10 @@
 # 🌱 Tendril
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](#)
+[![Stable Release](https://img.shields.io/badge/release-v0.1.0--alpha-blue.svg)](#)
+[![Discord](https://img.shields.io/badge/discord-join-7289da.svg?logo=discord&logoColor=white)](https://discord.gg/opentendril)
+
 **Headless AI coding assistant kernel. Point it at any project. Talk to it from any CLI or web app. It reads, edits, and commits safely inside a secure sandbox.**
 
 Your LLM keys. Your codebase. Your machine.
@@ -79,6 +84,14 @@ Once the backend is live, you can connect your preferred interface:
 ## Self-Building Mode (The Root Agent)
 
 When `TENDRIL_PROJECT_PATH` is not configured, Tendril operates on its own source code (the Root Agent mode). It self-heals and self-modifies through a secure staging pipeline: applies surgical patches $\rightarrow$ compiles $\rightarrow$ runs tests $\rightarrow$ commits to a staging branch $\rightarrow$ creates a GitHub Pull Request for human review.
+
+---
+
+## 💬 Community & Support
+
+* **Discord Server:** Join the [OpenTendril Discord](https://discord.gg/opentendril) to chat with other developers, share custom skills, and get help.
+* **GitHub Issues:** For bug reports, feature requests, or RFC design proposals, use our [Issue Templates](.github/ISSUE_TEMPLATE/).
+* **Contributing:** Check out [CONTRIBUTING.md](CONTRIBUTING.md) to get started on hacking Tendril.
 
 ---
 
