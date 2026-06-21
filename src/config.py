@@ -99,6 +99,7 @@ DATA_ENV_PATH = os.path.join(PROJECT_ROOT, "data", ".env")
 
 # SDLC Pipeline Configuration
 SDLC_MODE: str = os.getenv("SDLC_MODE", "strict").lower()
+SDLC_STRATEGY: str = os.getenv("SDLC_STRATEGY", "trunk").lower()
 STRICT_LINTING: bool = os.getenv("STRICT_LINTING", "false").lower() == "true"
 
 # Sandbox Configuration (secure code execution)
