@@ -125,7 +125,51 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
 
         if approval_status in ("approved", "auto_approved"):
             commit_msg = f"tendril(/edit): Updated {req.file} - {req.instruction[:120]}"
-            git_result = orchestrator.git.commit_changes(commit_msg)
+            
+            from ..config import SDLC_STRATEGY
+            
+            if SDLC_STRATEGY == "pr":
+                current_branch = orchestrator.git.current_branch()
+                if current_branch == "main":
+                    branch_name = f"tendril-patch-{uuid.uuid4().hex[:8]}"
+                    orchestrator.git.create_branch(branch_name)
+                    logger.info(f"Created new branch for PR: {branch_name}")
+                
+                git_result = orchestrator.git.commit_changes(commit_msg)
+                push_result = orchestrator.git.push_branch()
+                
+                # Try to create PR
+                pr_result = ""
+                try:
+                    # In a real scenario, we'd want to extract repo name from context
+                    # For now we use the default opentendril/core or assume GitHub CLI / MCP will do it.
+                    # We can use orchestrator.git.create_pull_request directly if we know the repo.
+                    # As a safe default, we just log the branch creation and push.
+                    pr_title = f"Agent Patch: {req.instruction[:50]}"
+                    pr_body = f"Automated PR from OpenTendril.\n\nFile: `{req.file}`\nInstruction: {req.instruction}"
+                    
+                    # Get repo name using git
+                    remote_url = orchestrator.git._run_git("config", "--get", "remote.origin.url")
+                    repo_name = ""
+                    if "github.com" in remote_url:
+                        # Extract user/repo from git@github.com:user/repo.git or https://github.com/user/repo.git
+                        import re
+                        match = re.search(r'github\.com[:/](.+?)(?:\.git)?$', remote_url)
+                        if match:
+                            repo_name = match.group(1)
+                    
+                    if repo_name:
+                        pr_result = orchestrator.git.create_pull_request(repo_name, pr_title, pr_body, orchestrator.git.current_branch())
+                    else:
+                        pr_result = "Pushed branch, but could not determine GitHub repo name to open PR."
+                except Exception as e:
+                    pr_result = f"Failed to create PR automatically: {e}"
+                
+                git_result = f"{git_result}\n{push_result}\n{pr_result}"
+                
+            else:
+                git_result = orchestrator.git.commit_changes(commit_msg)
+                
             return {
                 "status": "applied",
                 "file": req.file,
