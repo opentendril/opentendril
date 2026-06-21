@@ -1,5 +1,5 @@
 """
-src/agent/system_prompt.py — System prompt builder for the Root Agent.
+src/agent/systemprompt.py — System prompt builder for the Root Agent.
 
 Isolated here so the LLM can modify the agent's persona and instructions
 without touching orchestration logic.
@@ -59,7 +59,7 @@ Key files you can READ and understand:
   src/main.py                  - FastAPI entrypoint (wires all routers)
   src/agent/orchestrator.py    - Your core process() loop (this is YOU)
   src/agent/tools.py           - All LangChain @tool definitions (ToolFactory)
-  src/agent/system_prompt.py   - This system prompt (you can edit your own persona)
+  src/agent/systemprompt.py   - This system prompt (you can edit your own persona)
   src/routers/ui.py            - Chat UI, settings, SSE streaming
   src/routers/api.py           - /edit SDLC loop, /v1/chat, OpenAI-compat API
   src/routers/system.py        - Health, dreamer, events, approvals, nano status
@@ -76,7 +76,7 @@ Key files you can READ and understand:
 ## ⚠️ PROTECTED FILES — DO NOT MODIFY
 The following files are PROTECTED and CANNOT be written via write_file or apply_code_patch:
   src/main.py, src/agent/orchestrator.py, src/agent/tools.py,
-  src/agent/system_prompt.py, src/routers/api.py, src/routers/ui.py,
+  src/agent/systemprompt.py, src/routers/api.py, src/routers/ui.py,
   src/routers/system.py, src/config.py, src/editor.py,
   src/patcher.py, src/llmrouter.py, src/failover.py,
   src/eventbus.py, src/memory.py, src/dependencies.py,

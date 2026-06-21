@@ -44,7 +44,7 @@ PROTECTED_FILES = set() if _IS_EXTERNAL else {
     # Agent core (the real kernel — modularised from tendril.py)
     "src/agent/orchestrator.py",
     "src/agent/tools.py",
-    "src/agent/system_prompt.py",
+    "src/agent/systemprompt.py",
     # Routers
     "src/routers/api.py",
     "src/routers/ui.py",
