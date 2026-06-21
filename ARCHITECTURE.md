@@ -130,3 +130,22 @@ To maintain clean separation between engine logic and user state, the system is 
    * **Purpose:** Houses the user's environment configuration (`.env`), custom `skills/` registry, local databases, and conversation `data/`.
    * **Deployment:** Contains the user-facing `docker-compose.yml` or setup scripts that pull pre-compiled container images from the `opentendril/core` registry, mounting the local workspace directories into the container runner.
 
+---
+
+## 6. The "Ephemeral Tendril" Architecture (Serverless Agents)
+
+Traditionally, AI "Agents" run as stateful Python loops in the background of a monolithic server. This leads to context degradation (forgetting instructions), memory bloat, and severe security risks because the agent shares the exact same filesystem and network access as the core API server.
+
+OpenTendril solves this by operating as a **Serverless Orchestrator**. 
+
+Instead of generic "Agents" or abstract "Skills", the system consists of **Tendrils**: lightweight, ephemeral workers (Docker containers or isolated sub-processes) that shoot out to execute a highly specialized task, and immediately retract (terminate) when finished.
+
+### A. How a Tendril Operates
+1. **The Orchestrator:** The core OpenTendril binary/API acts as an orchestrator and gateway.
+2. **Spawning a Tendril:** When a task is requested (e.g., "Review this PR"), the Orchestrator does not start a local `while True` loop. Instead, it spins up an instantaneous, lightweight sub-process or restricted Docker container. This is the **Tendril**.
+3. **Task Execution:** The Tendril boots up with *only* the specific configuration, runtime context (e.g., target repository), and guardrails needed for that exact job. It is not a generalized LLM. It executes its strictly defined inference loop, returns the result, and immediately terminates.
+
+### B. Architectural Benefits
+* **Zero Idle Cost:** Tendrils consume zero CPU or RAM when idle. They only exist during active task execution.
+* **Physical Guardrails:** Because the Tendril is an isolated process, its network and filesystem access can be physically restricted via Docker or Firecracker microVMs. It is impossible for the LLM to exceed its explicit permissions.
+* **No Context Degradation:** Because every Tendril starts fresh for a specific task and terminates afterward, there is zero risk of it forgetting structural rules or hallucinating past context.
