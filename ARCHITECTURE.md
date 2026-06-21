@@ -59,6 +59,16 @@ This means OpenTendril does not need to duplicate chat interfaces or search tool
   * Manages provider-specific failovers with exponential backoff if primary models hit rate limits.
   * Decouples the prompt engineering templates from the actual tool execution.
 
+### C. The 6-Stage Growth Model (Framework Lifecycle)
+The execution flow of the OpenTendril framework natively maps to the six major growth stages of a climbing vine:
+
+1. **Seed Germination (Activation):** The user installs OpenTendril. The Core reads `.env` and `mcp_config.json`, absorbing its environment.
+2. **Seedling Emergence (Sprouting):** The Go CLI orchestrator breaks through and binds to local ports, establishing the main API gateway.
+3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers and local vector databases ("The Roots").
+4. **Tendril Initiation:** When a specific task is requested, the Stem initiates a specialized persona context, signaling cells to form a Tendril (`initiation.py`).
+5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a Docker container boots via `emergence.py`) and begins sweeping the air. It touches the code, coils around it (executing the LLM loop via `elongation.py`), and pulls the project forward.
+6. **Reproductive Maturity:** With tasks completed, the framework redirects energy back to the user, producing final PRs, deliverables, and artifacts.
+
 ---
 
 ## 2. Zero-Dependency Fallbacks
