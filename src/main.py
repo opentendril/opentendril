@@ -53,6 +53,9 @@ if memory.redis:
 scheduler = AsyncIOScheduler()
 scheduler.add_job(dream, "interval", hours=1, args=[memory, llm_router])
 
+from .agent.ambient_consolidation import schedule_consolidation
+schedule_consolidation(scheduler, memory, llm_router)
+
 # --- Rate limiting ---
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/hour"])
 
@@ -91,10 +94,16 @@ async def start_scheduler():
     logger.info("⏰ Background dreamer scheduler started.")
 
     # Phase 2: Live model discovery — populate tier cache from provider APIs
+    import asyncio
     from .modeldiscovery import discover_all
     from .llmrouter import PROVIDER_CONFIG
-    await discover_all(PROVIDER_CONFIG)
-    logger.info("🔍 Model discovery complete.")
+    asyncio.create_task(discover_all(PROVIDER_CONFIG))
+    logger.info("🔍 Model discovery scheduled in background.")
+
+    # Phase 3: Start Memory Sideagent
+    from .agent.memory_sideagent import start_memory_sideagent
+    from .dependencies import memory
+    start_memory_sideagent(memory)
 
 
 

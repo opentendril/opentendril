@@ -92,3 +92,51 @@ func (b *BrainClient) Health() error {
 	}
 	return nil
 }
+
+// ListMCPTools fetches the tool schema definitions from the python backend.
+func (b *BrainClient) ListMCPTools() (json.RawMessage, error) {
+	url := b.BaseURL + "/api/mcp-tools"
+	resp, err := b.HTTPClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("list tools failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read list tools response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list tools returned %d: %s", resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+// CallMCPTool proxies a tool execution request to the Python sandbox.
+func (b *BrainClient) CallMCPTool(name string, args json.RawMessage) (json.RawMessage, error) {
+	url := b.BaseURL + "/api/mcp-call"
+	
+	reqBody := map[string]interface{}{
+		"name": name,
+		"args": args,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := b.HTTPClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("call tool failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read call tool response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("call tool returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
+}
