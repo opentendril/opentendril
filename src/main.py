@@ -53,7 +53,7 @@ if memory.redis:
 scheduler = AsyncIOScheduler()
 scheduler.add_job(dream, "interval", hours=1, args=[memory, llm_router])
 
-from .agent.ambient_consolidation import schedule_consolidation
+from .agent.ambientconsolidation import schedule_consolidation
 schedule_consolidation(scheduler, memory, llm_router)
 
 # --- Rate limiting ---
@@ -101,7 +101,7 @@ async def start_scheduler():
     logger.info("🔍 Model discovery scheduled in background.")
 
     # Phase 3: Start Memory Sideagent
-    from .agent.memory_sideagent import start_memory_sideagent
+    from .agent.memorysideagent import start_memory_sideagent
     from .dependencies import memory
     start_memory_sideagent(memory)
 
