@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       python-core: ${{ steps.filter.outputs['python-core'] }}
-      cli-go: ${{ steps.filter.outputs['cli-go'] }}
+      gateway-go: ${{ steps.filter.outputs['gateway-go'] }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,25 +45,25 @@ jobs:
           changed_files="$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }})"
 
           python_core=false
-          cli_go=false
+          gateway_go=false
 
           while IFS= read -r path; do
             case "$path" in
               .github/workflows/ci.yml|Makefile)
                 python_core=true
-                cli_go=true
+                gateway_go=true
                 ;;
               src/*|tests/*|requirements.txt|pyproject.toml)
                 python_core=true
                 ;;
               cmd/tendril/*|cmd/tendril/**|go.mod|go.sum)
-                cli_go=true
+                gateway_go=true
                 ;;
             esac
           done <<< "$changed_files"
 
           echo "python-core=$python_core" >> "$GITHUB_OUTPUT"
-          echo "cli-go=$cli_go" >> "$GITHUB_OUTPUT"
+          echo "gateway-go=$gateway_go" >> "$GITHUB_OUTPUT"
 
   python_core:
     name: Core Orchestrator Tests (Python)
@@ -90,11 +90,11 @@ jobs:
         run: |
           make test-core
 
-  cli_go:
-    name: CLI Gateway Tests (Go)
+  gateway_go:
+    name: Gateway Tests (Go)
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ needs.changes.outputs['cli-go'] == 'true' }}
+    if: ${{ needs.changes.outputs['gateway-go'] == 'true' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -109,9 +109,9 @@ jobs:
           cd cmd/tendril
           govulncheck ./...
           
-      - name: Run CLI Tests
+      - name: Run Gateway Tests
         run: |
-          make test-cli
+          make test-gateway
 
   pr:
     name: Native PR Gate
@@ -119,7 +119,7 @@ jobs:
     needs:
       - changes
       - python_core
-      - cli_go
+      - gateway_go
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -137,9 +137,9 @@ jobs:
             failed=true
           fi
 
-          if [ "${{ needs.changes.outputs['cli-go'] }}" = "true" ] && \
-             [ "${{ needs.cli_go.result }}" != "success" ]; then
-            echo "cli-go was required but finished with result: ${{ needs.cli_go.result }}"
+          if [ "${{ needs.changes.outputs['gateway-go'] }}" = "true" ] && \
+             [ "${{ needs.gateway_go.result }}" != "success" ]; then
+            echo "gateway-go was required but finished with result: ${{ needs.gateway_go.result }}"
             failed=true
           fi
 
