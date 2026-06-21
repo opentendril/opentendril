@@ -2,8 +2,8 @@
 
 # --- CLI Binaries ---
 CLI_VERSION := 0.1.0
-CLI_DIR := cli
-DIST_DIR := cli/dist
+CLI_DIR := cmd/tendril
+DIST_DIR := cmd/tendril/dist
 
 cli: ## Build CLI for current platform
 	cd $(CLI_DIR) && go build -ldflags="-s -w" -o tendril .
@@ -42,7 +42,7 @@ test: ## Run Python tests
 	cd src && python -m pytest ../tests/ -v
 
 clean: ## Remove build artifacts
-	rm -rf $(DIST_DIR) cli/tendril
+	rm -rf $(DIST_DIR) cmd/tendril/tendril
 	docker compose down -v --remove-orphans
 
 help: ## Show this help
