@@ -1,25 +1,25 @@
-.PHONY: cli cli-all build up down health test clean
+.PHONY: gateway gateway-all build up down health test clean
 
-# --- CLI Binaries ---
-CLI_VERSION := 0.1.0
-CLI_DIR := cmd/tendril
+# --- Gateway Binaries ---
+GATEWAY_VERSION := 0.1.0
+GATEWAY_DIR := cmd/tendril
 DIST_DIR := cmd/tendril/dist
 
-cli: ## Build CLI for current platform
-	cd $(CLI_DIR) && go build -ldflags="-s -w" -o tendril .
+gateway: ## Build Gateway for current platform
+	cd $(GATEWAY_DIR) && go build -ldflags="-s -w" -o tendril .
 
-install: cli ## Install tendril globally to ~/.local/bin
+install: gateway ## Install tendril globally to ~/.local/bin
 	mkdir -p ~/.local/bin
-	mv $(CLI_DIR)/tendril ~/.local/bin/tendril
+	mv $(GATEWAY_DIR)/tendril ~/.local/bin/tendril
 	@echo "✅ Installed tendril to ~/.local/bin/tendril"
 	@echo "Make sure ~/.local/bin is in your PATH."
 
-cli-all: ## Cross-compile CLI for linux and macOS
+gateway-all: ## Cross-compile Gateway for linux and macOS
 	mkdir -p $(DIST_DIR)
-	cd $(CLI_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(CLI_VERSION)-linux-amd64 .
-	cd $(CLI_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(CLI_VERSION)-linux-arm64 .
-	cd $(CLI_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(CLI_VERSION)-darwin-amd64 .
-	cd $(CLI_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(CLI_VERSION)-darwin-arm64 .
+	cd $(GATEWAY_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(GATEWAY_VERSION)-linux-amd64 .
+	cd $(GATEWAY_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(GATEWAY_VERSION)-linux-arm64 .
+	cd $(GATEWAY_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(GATEWAY_VERSION)-darwin-amd64 .
+	cd $(GATEWAY_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(GATEWAY_VERSION)-darwin-arm64 .
 	@echo "✅ Binaries in $(DIST_DIR)/"
 	@ls -lh $(DIST_DIR)/
 
@@ -38,8 +38,13 @@ health: ## Check service health
 	@echo "\nGateway:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
-test: ## Run Python tests
-	cd src && python -m pytest ../tests/ -v
+test-core: ## Run Python tests
+	cd src && python3 -m pytest ../tests/ -v
+
+test-gateway: ## Run Go tests
+	cd $(GATEWAY_DIR) && go test ./... -v
+
+test-all: test-core test-gateway ## Run all tests
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST_DIR) cmd/tendril/tendril
