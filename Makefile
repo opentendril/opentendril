@@ -38,8 +38,13 @@ health: ## Check service health
 	@echo "\nGateway:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
-test: ## Run Python tests
-	cd src && python -m pytest ../tests/ -v
+test-core: ## Run Python tests
+	cd src && python3 -m pytest ../tests/ -v
+
+test-cli: ## Run Go tests
+	cd $(CLI_DIR) && go test ./... -v
+
+test-all: test-core test-cli ## Run all tests
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST_DIR) cmd/tendril/tendril
