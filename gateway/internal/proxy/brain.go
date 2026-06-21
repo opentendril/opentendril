@@ -92,3 +92,37 @@ func (b *BrainClient) Health() error {
 	}
 	return nil
 }
+
+// SendMCPRequest proxies a standard JSON-RPC request to the Python brain's /v1 endpoint.
+func (b *BrainClient) SendMCPRequest(method string, params interface{}) (json.RawMessage, error) {
+	url := b.BaseURL + "/v1"
+	
+	reqBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+	}
+	if params != nil {
+		reqBody["params"] = params
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := b.HTTPClient.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("mcp request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read mcp response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("mcp returned %d: %s", resp.StatusCode, string(respBody))
+	}
+	return respBody, nil
+}

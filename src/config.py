@@ -15,6 +15,7 @@ ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+OPENTENDRIL_API_KEY: str = os.getenv("OPENTENDRIL_API_KEY", "")
 
 # Default provider for the LLM Router
 DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "grok")
@@ -101,7 +102,21 @@ SDLC_MODE: str = os.getenv("SDLC_MODE", "strict").lower()
 STRICT_LINTING: bool = os.getenv("STRICT_LINTING", "false").lower() == "true"
 
 # Sandbox Configuration (secure code execution)
+def _is_docker_active() -> bool:
+    import subprocess
+    try:
+        res = subprocess.run(["docker", "info"], capture_output=True, text=True, timeout=2.0)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+DOCKER_ACTIVE: bool = _is_docker_active()
 SANDBOX_ENABLED: bool = os.getenv("SANDBOX_ENABLED", "true").lower() == "true"
+if SANDBOX_ENABLED and not DOCKER_ACTIVE:
+    SANDBOX_ENABLED = False
+    logger.warning("⚠️ Host Mode Active. Zero Container Sandbox Isolation.")
+    print("⚠️ Host Mode Active. Zero Container Sandbox Isolation.")
+
 SANDBOX_URL: str = os.getenv("SANDBOX_URL", "http://sandbox:9999")
 SANDBOX_TOKEN: str = os.getenv("SANDBOX_TOKEN", "")
 
@@ -116,6 +131,7 @@ def has_active_llm_provider() -> bool:
         "openai": os.getenv("OPENAI_API_KEY", ""),
         "google": os.getenv("GOOGLE_API_KEY", ""),
         "openrouter": os.getenv("OPENROUTER_API_KEY", ""),
+        "opentendril": os.getenv("OPENTENDRIL_API_KEY", ""),
     }
     return any(v and len(v) > 5 for v in providers.values())
 
@@ -127,6 +143,7 @@ def validate_config():
         "openai": OPENAI_API_KEY,
         "google": GOOGLE_API_KEY,
         "openrouter": OPENROUTER_API_KEY,
+        "opentendril": OPENTENDRIL_API_KEY,
     }
     active = {k: v for k, v in providers.items() if v}
 

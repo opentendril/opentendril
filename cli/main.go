@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,7 @@ var (
 	httpFlag = flag.Bool("http", false, "Force HTTP connection (OpenAI-compatible)")
 	baseURL  = flag.String("url", "localhost:9090", "Base URL for the Tendril server")
 	helpFlag = flag.Bool("h", false, "Show help")
+	mcpFlag  = flag.Bool("mcp", false, "Run in MCP stdio mode")
 )
 
 type Message struct {
@@ -182,6 +184,25 @@ func main() {
 		os.Exit(0)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-c
+		log.Println("\nExiting...")
+		cancel()
+		if backendCmd != nil && backendCmd.Process != nil {
+			_ = backendCmd.Process.Kill()
+		}
+		os.Exit(0)
+	}()
+
+	if *mcpFlag {
+		runMCPRelay(ctx, "http://localhost:8080")
+		return
+	}
+
 	if *wsFlag && *httpFlag {
 		log.Fatal("Cannot use both --ws and --http")
 	}
@@ -201,15 +222,6 @@ func main() {
 	log.Println("Tip: Use --http to force HTTP mode.")
 
 	scanner := bufio.NewScanner(os.Stdin)
-	_, cancel := context.WithCancel(context.Background())
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-c
-		log.Println("\nExiting...")
-		cancel()
-	}()
 
 	for scanner.Scan() {
 		msg := strings.TrimSpace(scanner.Text())
@@ -219,11 +231,7 @@ func main() {
 
 		// --- Host-side Command Interception ---
 		if msg == "/restart" {
-			log.Println("🔄 Restarting Tendril containers...")
-			cmd := exec.Command("docker", "compose", "restart")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			_ = cmd.Run()
+			restartBackend(ctx, "http://localhost:8080")
 			continue
 		}
 
@@ -240,7 +248,8 @@ func main() {
 		// Let the backend process these first to save to .env, then intercept to restart Docker
 		isRepoCmd := strings.HasPrefix(msg, "/repo ")
 		isLocalCmd := msg == "/local"
-		isInitCmd := msg == "/init"
+		isInitCmd := strings.HasPrefix(msg, "/init")
+		isSecureCmd := msg == "/secure"
 
 		response, err := sendFunc(msg)
 		if err != nil {
@@ -250,12 +259,8 @@ func main() {
 		fmt.Println(response)
 
 		// After backend responds successfully, trigger the host-side Docker restart
-		if (isRepoCmd || isInitCmd) && !strings.Contains(response, "❌") {
-			log.Println("🔄 Remounting volumes and applying configuration...")
-			cmd := exec.Command("docker", "compose", "up", "-d")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			_ = cmd.Run()
+		if (isRepoCmd || isInitCmd || isSecureCmd) && !strings.Contains(response, "❌") {
+			restartBackend(ctx, "http://localhost:8080")
 		} else if isLocalCmd && !strings.Contains(response, "❌") {
 			log.Println("🔄 Restarting with GPU Profile enabled...")
 			cmd1 := exec.Command("docker", "compose", "down")
@@ -269,5 +274,233 @@ func main() {
 
 	if err := scanner.Err(); err != nil {
 		log.Printf("Scanner error: %v", err)
+	}
+}
+
+var backendCmd *exec.Cmd
+
+func runMCPRelay(ctx context.Context, brainURL string) {
+	ensureBackendOnline(ctx, brainURL)
+
+	reader := bufio.NewReader(os.Stdin)
+	client := &http.Client{Timeout: 300 * time.Second}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.Printf("Error reading stdin: %v", err)
+			break
+		}
+
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		var req struct {
+			ID interface{} `json:"id"`
+		}
+		_ = json.Unmarshal([]byte(line), &req)
+
+		resp, err := client.Post(brainURL+"/v1", "application/json", strings.NewReader(line))
+		if err != nil {
+			sendJSONRPCError(req.ID, -32603, "Failed to connect to backend: "+err.Error())
+			continue
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			sendJSONRPCError(req.ID, -32603, "Failed to read backend response: "+err.Error())
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			sendJSONRPCError(req.ID, -32603, fmt.Sprintf("Backend returned HTTP status %d: %s", resp.StatusCode, string(respBody)))
+			continue
+		}
+
+		fmt.Println(string(respBody))
+	}
+}
+
+func sendJSONRPCError(id interface{}, code int, message string) {
+	resp := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+		"id": id,
+	}
+	bytes, _ := json.Marshal(resp)
+	fmt.Println(string(bytes))
+}
+
+func ensureBackendOnline(ctx context.Context, brainURL string) {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	req, err := http.NewRequestWithContext(ctx, "GET", brainURL+"/health", nil)
+	if err == nil {
+		resp, err := client.Do(req)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			resp.Body.Close()
+			return
+		}
+	}
+
+	log.Println("⚠️ Backend FastAPI server is offline. Auto-booting...")
+	projectDir := findProjectDir()
+
+	if isSandboxEnabled() && isDockerRunning() {
+		log.Println("🐳 Booting backend via Docker Compose...")
+		c := exec.Command("docker", "compose", "up", "-d")
+		c.Dir = projectDir
+		c.Stdout = os.Stderr
+		c.Stderr = os.Stderr
+		_ = c.Run()
+	} else {
+		log.Println("🚀 Booting backend via standard subprocess (Solo Mode)...")
+		var uvicornCmd string
+		venvPath := filepath.Join(projectDir, "venv", "bin", "uvicorn")
+		if _, err := os.Stat(venvPath); err == nil {
+			uvicornCmd = venvPath
+		} else {
+			uvicornCmd = "uvicorn"
+		}
+
+		backendCmd = exec.Command(uvicornCmd, "src.main:app", "--host", "127.0.0.1", "--port", "8080")
+		backendCmd.Dir = projectDir
+		backendCmd.Stdout = os.Stderr
+		backendCmd.Stderr = os.Stderr
+		if err := backendCmd.Start(); err != nil {
+			log.Printf("Error starting uvicorn: %v", err)
+		}
+	}
+
+	for i := 0; i < 20; i++ {
+		time.Sleep(500 * time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, "GET", brainURL+"/health", nil)
+		if err == nil {
+			resp, err := client.Do(req)
+			if err == nil && resp.StatusCode == http.StatusOK {
+				resp.Body.Close()
+				log.Println("✅ Backend online!")
+				return
+			}
+		}
+	}
+	log.Println("❌ Timeout waiting for backend to start.")
+}
+
+func isSandboxEnabled() bool {
+	if val := os.Getenv("SANDBOX_ENABLED"); val != "" {
+		return strings.ToLower(val) == "true"
+	}
+	projectDir := findProjectDir()
+	paths := []string{
+		filepath.Join(projectDir, ".env"),
+		filepath.Join(projectDir, "core", ".env"),
+	}
+	for _, p := range paths {
+		file, err := os.Open(p)
+		if err == nil {
+			defer file.Close()
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if strings.HasPrefix(line, "SANDBOX_ENABLED=") {
+					parts := strings.SplitN(line, "=", 2)
+					if len(parts) == 2 {
+						val := strings.Trim(parts[1], `"' `)
+						return strings.ToLower(val) == "true"
+					}
+				}
+			}
+		}
+	}
+	return true
+}
+
+func isDockerRunning() bool {
+	cmd := exec.Command("docker", "info")
+	return cmd.Run() == nil
+}
+
+func findProjectDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	dir := cwd
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "src", "main.py")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "core", "src", "main.py")); err == nil {
+			return filepath.Join(dir, "core")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "."
+}
+
+func restartBackend(ctx context.Context, brainURL string) {
+	if isSandboxEnabled() && isDockerRunning() {
+		log.Println("🔄 Remounting volumes and applying configuration via Docker Compose...")
+		cmd := exec.Command("docker", "compose", "up", "-d")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	} else {
+		log.Println("🔄 Restarting backend subprocess (Solo Mode)...")
+		if backendCmd != nil && backendCmd.Process != nil {
+			_ = backendCmd.Process.Kill()
+			_ = backendCmd.Wait()
+		}
+
+		projectDir := findProjectDir()
+		var uvicornCmd string
+		venvPath := filepath.Join(projectDir, "venv", "bin", "uvicorn")
+		if _, err := os.Stat(venvPath); err == nil {
+			uvicornCmd = venvPath
+		} else {
+			uvicornCmd = "uvicorn"
+		}
+
+		backendCmd = exec.Command(uvicornCmd, "src.main:app", "--host", "127.0.0.1", "--port", "8080")
+		backendCmd.Dir = projectDir
+		backendCmd.Stdout = os.Stderr
+		backendCmd.Stderr = os.Stderr
+		if err := backendCmd.Start(); err != nil {
+			log.Printf("Error starting uvicorn: %v", err)
+			return
+		}
+
+		client := &http.Client{Timeout: 500 * time.Millisecond}
+		for i := 0; i < 20; i++ {
+			time.Sleep(500 * time.Millisecond)
+			req, err := http.NewRequestWithContext(ctx, "GET", brainURL+"/health", nil)
+			if err == nil {
+				resp, err := client.Do(req)
+				if err == nil && resp.StatusCode == http.StatusOK {
+					resp.Body.Close()
+					log.Println("✅ Backend online!")
+					return
+				}
+			}
+		}
 	}
 }
