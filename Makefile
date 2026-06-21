@@ -39,12 +39,12 @@ health: ## Check service health
 
 # --- Development ---
 test-core: ## Run Python tests
-	cd src && python3 -m pytest ../tests/ -v
+	PYTHONPATH=. python3 -m pytest tests/ -v
 
-test-gateway: ## Run Go tests
+test-sprout: ## Run Go tests
 	cd $(GATEWAY_DIR) && go test ./... -v
 
-test-all: test-core test-gateway ## Run all tests
+test-all: test-core test-sprout ## Run all tests
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST_DIR) cmd/tendril/tendril
