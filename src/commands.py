@@ -69,6 +69,7 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
 
 **System**
 - `/sdlc <strict|simple>` : Toggle strict security and testing gates
+- `/secure` : Promote to sandboxed container execution if Docker is online
 - `/status` : View current system configuration
 - `/test` : Run system health checks
 - `/restart` : Restart the Tendril container
@@ -135,7 +136,101 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
         from .config import WORKSPACE_ROOT
         from .eventbus import event_bus, TendrilEvent, generate_run_id
         from collections import Counter
+        import urllib.request
+        import json
 
+        args_str = args.strip()
+
+        # Handle sub-options
+        if args_str.startswith("1"):
+            try:
+                append_to_env("DEFAULT_LLM_PROVIDER", "opentendril")
+                append_to_env("OPENTENDRIL_API_KEY", "free-trial")
+                return (
+                    "✅ **Free Trial Cloud configured!**\n\n"
+                    "Default provider set to `opentendril`.\n"
+                    "The CLI will restart the server to apply changes."
+                )
+            except Exception as e:
+                return f"❌ Failed to save to disk: {e}"
+
+        elif args_str.startswith("2"):
+            ollama_models = []
+            try:
+                req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+                with urllib.request.urlopen(req, timeout=1.0) as response:
+                    if response.status == 200:
+                        data = json.loads(response.read().decode("utf-8"))
+                        ollama_models = [m["name"] for m in data.get("models", [])]
+            except Exception:
+                return "❌ **Ollama is offline or unreachable on http://localhost:11434.** Please start Ollama and try again, or select another option."
+
+            if not ollama_models:
+                return "❌ **Ollama is active, but no models are downloaded.** Please run `ollama pull qwen2.5-coder` first."
+
+            detected_model = "qwen2.5-coder"
+            coder_models = [m for m in ollama_models if "coder" in m.lower()]
+            qwen_models = [m for m in ollama_models if "qwen" in m.lower()]
+            llama_models = [m for m in ollama_models if "llama" in m.lower()]
+            
+            if coder_models:
+                detected_model = coder_models[0]
+            elif qwen_models:
+                detected_model = qwen_models[0]
+            elif llama_models:
+                detected_model = llama_models[0]
+            else:
+                detected_model = ollama_models[0]
+
+            try:
+                append_to_env("DEFAULT_LLM_PROVIDER", "local")
+                append_to_env("LOCAL_INFERENCE_URL", "http://localhost:11434/v1")
+                append_to_env("LOCAL_MODEL_NAME", detected_model)
+                return (
+                    f"✅ **Local Ollama configured!**\n\n"
+                    f"Detected model: `{detected_model}`.\n"
+                    f"Default provider set to `local` using base URL `http://localhost:11434/v1`.\n"
+                    f"The CLI will restart the server to apply changes."
+                )
+            except Exception as e:
+                return f"❌ Failed to save to disk: {e}"
+
+        elif args_str.startswith("3"):
+            subargs = args_str.split(maxsplit=2)
+            if len(subargs) < 3:
+                return (
+                    "🔑 **API Key Configuration**\n\n"
+                    "Please reply with your API key using the following format:\n"
+                    "👉 `/init 3 <PROVIDER_KEY> <API_KEY>`\n\n"
+                    "Supported provider keys:\n"
+                    "- `ANTHROPIC_API_KEY` (e.g. `/init 3 ANTHROPIC_API_KEY sk-ant-...`)\n"
+                    "- `OPENAI_API_KEY` (e.g. `/init 3 OPENAI_API_KEY sk-...`)\n"
+                    "- `GROK_API_KEY` (e.g. `/init 3 GROK_API_KEY sk-...`)\n"
+                    "- `GOOGLE_API_KEY` (e.g. `/init 3 GOOGLE_API_KEY AIzaSy...`)\n"
+                    "- `OPENROUTER_API_KEY` (e.g. `/init 3 OPENROUTER_API_KEY sk-or-...`)"
+                )
+            
+            provider_key = subargs[1].strip().upper()
+            val = subargs[2].strip()
+            
+            provider_name = provider_key.lower().replace("_api_key", "")
+            
+            success = llm_router.reconfigure_provider(provider_key, val)
+            if not success:
+                return "❌ Failed to configure key. Ensure the key matches a supported provider (OPENAI_API_KEY, ANTHROPIC_API_KEY, GROK_API_KEY, GOOGLE_API_KEY, OPENROUTER_API_KEY)."
+                
+            try:
+                append_to_env(provider_key, val)
+                append_to_env("DEFAULT_LLM_PROVIDER", provider_name)
+                return (
+                    f"✅ **API Key configured!**\n\n"
+                    f"Saved `{provider_key}` and set default provider to `{provider_name}`.\n"
+                    f"The CLI will restart the server to apply changes."
+                )
+            except Exception as e:
+                return f"❌ Failed to save to disk: {e}"
+
+        # Otherwise, run the initial survey & check Ollama status
         ignores = {".git", "venv", "__pycache__", "node_modules"}
         ext_counter = Counter()
 
@@ -153,6 +248,21 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
         if top_exts:
             top_ext_names = [f"{ext} ({count})" for ext, count in top_exts]
             dominant_text = f" Detected dominant extensions: {', '.join(top_ext_names)}."
+
+        # Autodetect Ollama
+        ollama_active = False
+        detected_models = []
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+            with urllib.request.urlopen(req, timeout=1.0) as response:
+                if response.status == 200:
+                    data = json.loads(response.read().decode("utf-8"))
+                    ollama_active = True
+                    detected_models = [m["name"] for m in data.get("models", [])]
+        except Exception:
+            pass
+
+        ollama_status = f"Active ({len(detected_models)} models detected)" if ollama_active else "Inactive (offline)"
             
         event_bus.emit(TendrilEvent(
             run_id=generate_run_id(),
@@ -163,8 +273,15 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
 
         return (
             f"✅ **Initialization Wizard Triggered.**\n\n"
-            f"🌱 Workspace Survey Complete:{dominant_text}\n\n"
-            f"Please set your default LLM provider to continue (e.g., `/model anthropic`)."
+            f"🌱 Workspace Survey Complete:{dominant_text}\n"
+            f"🤖 Local Ollama Status: **{ollama_status}**\n\n"
+            f"Please select a reasoning provider to configure:\n"
+            f"1️⃣ **Option 1: Free Trial Cloud** (anonymous routing via `api.opentendril.com`)\n"
+            f"   👉 Reply: `/init 1`\n"
+            f"2️⃣ **Option 2: Local Ollama** (auto-detect coding models)\n"
+            f"   👉 Reply: `/init 2`\n"
+            f"3️⃣ **Option 3: API Key Configuration** (custom Anthropic/OpenAI keys)\n"
+            f"   👉 Reply: `/init 3`"
         )
 
     elif cmd == "/local":
@@ -245,6 +362,16 @@ def intercept_slash_commands(message: str, session_id: str = "system") -> Option
             f"- Progress: {nano_state.progress_pct}%\n"
             f"- Message: {nano_state.progress_msg or 'N/A'}"
         )
+
+    elif cmd == "/secure":
+        from .config import _is_docker_active
+        if not _is_docker_active():
+            return "❌ **Docker is offline.** Cannot enable sandbox container isolation. Please start Docker and run `/secure` again."
+        try:
+            append_to_env("SANDBOX_ENABLED", "true")
+            return "✅ **Docker is online! Sandbox container isolation enabled.** The CLI will now restart the server to mount the secure sandboxed container."
+        except Exception as e:
+            return f"❌ Failed to save to disk: {e}"
 
     # Legacy /config handler
     elif cmd == "/config":

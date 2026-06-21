@@ -301,3 +301,137 @@ async def openai_chat_completions(req: ChatCompletionRequest):
     except Exception as e:
         logger.error(f"API error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def langchain_tool_to_mcp(t) -> dict:
+    """Converts a LangChain tool into a standard MCP tool schema."""
+    input_schema = {
+        "type": "object",
+        "properties": {},
+        "required": []
+    }
+    if hasattr(t, "args_schema") and t.args_schema is not None:
+        try:
+            schema = t.args_schema.model_json_schema()
+            input_schema = {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+                "required": schema.get("required", [])
+            }
+        except Exception:
+            pass
+    if not input_schema["properties"] and hasattr(t, "args"):
+        for name, info in getattr(t, "args", {}).items():
+            prop = {"type": info.get("type", "string")}
+            if "description" in info:
+                prop["description"] = info["description"]
+            input_schema["properties"][name] = prop
+            if "default" not in info:
+                input_schema["required"].append(name)
+    return {
+        "name": t.name,
+        "description": t.description,
+        "inputSchema": input_schema
+    }
+
+
+@router.post("/v1")
+async def mcp_jsonrpc_endpoint(req: dict):
+    """
+    Exposes an MCP JSON-RPC endpoint at /v1.
+    Handles 'initialize', 'tools/list', and 'tools/call'.
+    """
+    req_id = req.get("id")
+    method = req.get("method")
+    
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "tools": {}
+                },
+                "serverInfo": {
+                    "name": "tendril-brain",
+                    "version": "0.1.0"
+                }
+            },
+            "id": req_id
+        }
+        
+    elif method == "tools/list":
+        mcp_tools = []
+        for t in orchestrator.tools:
+            try:
+                mcp_tools.append(langchain_tool_to_mcp(t))
+            except Exception as e:
+                logger.error(f"Error converting tool {t.name} to MCP: {e}")
+        return {
+            "jsonrpc": "2.0",
+            "result": {
+                "tools": mcp_tools
+            },
+            "id": req_id
+        }
+        
+    elif method == "tools/call":
+        params = req.get("params", {})
+        tool_name = params.get("name")
+        tool_args = params.get("arguments", {})
+        
+        # Find tool
+        tool_func = next((t for t in orchestrator.tools if t.name == tool_name), None)
+        if not tool_func:
+            return {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32601,
+                    "message": f"Tool '{tool_name}' not found"
+                },
+                "id": req_id
+            }
+            
+        try:
+            # Execute tool
+            if getattr(tool_func, "is_async", False) or asyncio.iscoroutinefunction(tool_func._run):
+                result = await tool_func.ainvoke(tool_args)
+            else:
+                result = await asyncio.to_thread(tool_func.invoke, tool_args)
+                
+            return {
+                "jsonrpc": "2.0",
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": str(result)
+                        }
+                    ]
+                },
+                "id": req_id
+            }
+        except Exception as e:
+            logger.error(f"Error executing tool {tool_name}: {e}")
+            return {
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32603,
+                    "message": f"Tool execution failed: {str(e)}"
+                },
+                "id": req_id
+            }
+            
+    elif method is None:
+        return {"status": "notification received"}
+        
+    else:
+        return {
+            "jsonrpc": "2.0",
+            "error": {
+                "code": -32601,
+                "message": f"Method '{method}' not found"
+            },
+            "id": req_id
+        }
+

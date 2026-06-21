@@ -27,6 +27,7 @@ from .config import (
     OPENAI_API_KEY, OPENAI_FAST_MODEL, OPENAI_STANDARD_MODEL, OPENAI_POWER_MODEL,
     GOOGLE_API_KEY, GOOGLE_FAST_MODEL, GOOGLE_STANDARD_MODEL, GOOGLE_POWER_MODEL,
     OPENROUTER_API_KEY, OPENROUTER_FAST_MODEL, OPENROUTER_STANDARD_MODEL, OPENROUTER_POWER_MODEL,
+    OPENTENDRIL_API_KEY,
     DEFAULT_LLM_PROVIDER,
     LOCAL_INFERENCE_URL,
     LOCAL_MODEL_NAME,
@@ -40,6 +41,7 @@ _ENV_OVERRIDES: dict[str, dict[str, str]] = {
     "openai":     {"fast": OPENAI_FAST_MODEL,       "standard": OPENAI_STANDARD_MODEL,      "power": OPENAI_POWER_MODEL},
     "google":     {"fast": GOOGLE_FAST_MODEL,       "standard": GOOGLE_STANDARD_MODEL,      "power": GOOGLE_POWER_MODEL},
     "openrouter": {"fast": OPENROUTER_FAST_MODEL,   "standard": OPENROUTER_STANDARD_MODEL,  "power": OPENROUTER_POWER_MODEL},
+    "opentendril": {"fast": "", "standard": "", "power": ""},
 }
 
 
@@ -126,6 +128,16 @@ PROVIDER_CONFIG = {
             "fast": LOCAL_MODEL_NAME,
             "standard": LOCAL_MODEL_NAME,
             "power": LOCAL_MODEL_NAME,
+        },
+    },
+    "opentendril": {
+        "base_url": "https://api.opentendril.com/v1",
+        "api_key": OPENTENDRIL_API_KEY or "free-trial",
+        "type": "openai",
+        "models": {
+            "fast": "google/gemini-2.5-flash",
+            "standard": "anthropic/claude-3.5-sonnet",
+            "power": "google/gemini-3.1-pro-preview",
         },
     },
 }
@@ -260,7 +272,7 @@ class LLMRouter:
     def _get_fallback(self, failed_provider: str) -> Optional[str]:
         """Find a fallback provider when the requested one isn't available.
         Nano is always last resort — cloud first, then local, then nano."""
-        preference = ["grok", "anthropic", "openai", "google", "openrouter", "local", "nano"]
+        preference = ["grok", "anthropic", "openai", "google", "openrouter", "opentendril", "local", "nano"]
         for p in preference:
             if p != failed_provider and p in self._available_providers:
                 return p
