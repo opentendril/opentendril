@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: OpenTendril Core Governance
+    url: https://github.com/opentendril/core/blob/main/GUARDRAILS.md
+    about: Developer guidelines and project coding conventions.

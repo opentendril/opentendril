@@ -24,14 +24,14 @@ Tendril is designed as an **Intelligent Backend Protocol** (a Headless Kernel) t
 Get up and running locally with zero configuration friction.
 
 ### 1. Run the Installer
-Run the single-line installation script to download the Go gateway CLI and boot the backend daemon:
+Run the single-line installation script to download the Go sprout CLI and boot the backend daemon:
 ```bash
 curl -fsSL https://opentendril.com/install.sh | sh
 ```
 
 ### 2. Choose Your Onboarding Pathway
 On the first boot, Tendril will automatically assist you in selecting your runtime mode:
-* **Option A: Free Cloud Trial (No Key):** Instantly get started using our hosted gateway (`api.opentendril.com`). Routes requests anonymously to top-tier models (Claude 3.5 Sonnet / Gemini 1.5 Pro) using server-side trial credits. No signup or credit cards required.
+* **Option A: Free Cloud Trial (No Key):** Instantly get started using our hosted sprout (`api.opentendril.com`). Routes requests anonymously to top-tier models (Claude 3.5 Sonnet / Gemini 1.5 Pro) using server-side trial credits. No signup or credit cards required.
 * **Option B: Auto-Ollama Detection (Local-First):** If Ollama is running locally on `localhost:11434`, Tendril automatically detects it and boots using your local coding models (e.g. `qwen2.5-coder`).
 * **Option C: Custom API Keys:** Provide your own Anthropic, OpenAI, or Google API keys directly in the CLI prompt.
 
@@ -60,8 +60,8 @@ Once the backend is live, you can connect your preferred interface:
                                              │ (MCP over stdio / SSE)
                                              ▼
                  ┌────────────────────────────────────────────────────────┐
-                 │                 LIGHTWEIGHT GO GATEWAY                 │
-                 │   `tendril-cli -mcp` (Instant boot, proxy routing)     │
+                 │                 LIGHTWEIGHT GO SPROUT                  │
+                 │   `tendril -mcp` (Instant boot, proxy routing)         │
                  └──────┬────────────────────┬─────────────────────┬──────┘
                         │                    │                     │
                         ▼                    ▼                     ▼
@@ -71,7 +71,7 @@ Once the backend is live, you can connect your preferred interface:
              └─────────────────────┘ └──────────────┘   └─────────────────────┘
 ```
 
-* **Go Gateway Proxy:** Handles incoming client protocols (stdio, HTTP, WebSocket) and routes them efficiently with sub-millisecond latencies.
+* **Go Sprout Proxy:** Handles incoming client protocols (stdio, HTTP, WebSocket) and routes them efficiently with sub-millisecond latencies.
 * **Sandbox Core:** Executes code edits, syntax validation, compile checks, and git operations inside an isolated container sandbox (standard Docker, gVisor, or Firecracker).
 * **Zero-Dependency Fallbacks:** For lightweight local execution on low-spec hardware:
   * Uses **SQLite** instead of Postgres if Postgres is offline.
