@@ -113,8 +113,12 @@ class GitManager:
     def push_branch(self, branch_name: Optional[str] = None) -> str:
         """Push the given (or current) branch to origin."""
         branch = branch_name or self.current_branch()
-        self._run_git("push", "-u", "origin", branch)
-        return f"Pushed branch '{branch}' to origin."
+        try:
+            self._run_git("push", "-u", "origin", branch)
+            return f"Pushed branch '{branch}' to origin."
+        except Exception as e:
+            logger.error(f"Failed to push branch: {e}")
+            return f"Failed to push branch: {e}"
 
     def create_pull_request(
         self, repo_name: str, title: str, body: str, head_branch: str, base_branch: str = "main"
