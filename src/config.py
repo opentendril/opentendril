@@ -120,6 +120,9 @@ if SANDBOX_ENABLED and not DOCKER_ACTIVE:
 SANDBOX_URL: str = os.getenv("SANDBOX_URL", "http://sandbox:9999")
 SANDBOX_TOKEN: str = os.getenv("SANDBOX_TOKEN", "")
 
+# Tendril Lifecycle Configuration
+TENDRIL_RUNTIME: str = os.getenv("TENDRIL_RUNTIME", "docker")
+
 # --- Validation ---
 def has_active_llm_provider() -> bool:
     """Check if any LLM API key is configured, or nano model is enabled (always available)."""
