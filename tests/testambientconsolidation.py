@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from src.agent.ambient_consolidation import AmbientConsolidator, schedule_consolidation
+from src.agent.ambientconsolidation import AmbientConsolidator, schedule_consolidation
 
 @pytest.mark.asyncio
 async def test_ambient_consolidation_runs():

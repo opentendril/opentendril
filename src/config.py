@@ -9,6 +9,20 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# --- MCP Configuration ---
+MCP_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-config.json")
+MCP_SERVERS = {}
+
+if os.path.exists(MCP_CONFIG_PATH):
+    try:
+        import json
+        with open(MCP_CONFIG_PATH, "r") as f:
+            _mcp_data = json.load(f)
+            MCP_SERVERS = _mcp_data.get("mcpServers", {})
+            logger.info(f"Loaded MCP Config: found {len(MCP_SERVERS)} servers.")
+    except Exception as e:
+        logger.error(f"Failed to parse mcp-config.json: {e}")
+
 # --- LLM Provider Keys ---
 GROK_API_KEY: str = os.getenv("GROK_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
@@ -88,7 +102,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
 # Project paths (inside Docker container)
-PROJECT_ROOT = "/app"
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORKSPACE_ROOT = os.getenv("TENDRIL_WORKSPACE_ROOT", PROJECT_ROOT)
 
 SRC_DIR = os.path.join(WORKSPACE_ROOT, "src")
