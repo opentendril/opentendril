@@ -102,7 +102,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
 # Project paths (inside Docker container)
-PROJECT_ROOT = "/app"
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORKSPACE_ROOT = os.getenv("TENDRIL_WORKSPACE_ROOT", PROJECT_ROOT)
 
 SRC_DIR = os.path.join(WORKSPACE_ROOT, "src")

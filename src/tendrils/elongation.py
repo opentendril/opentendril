@@ -1,3 +1,11 @@
+"""
+=============================================================================
+Tendril: ElongationTendril
+Description: Executed inside the ephemeral container. Handles the LLM interaction loop and task execution.
+Revision History:
+- 2026-06-21: Initial creation (OpenTendril Bot)
+=============================================================================
+"""
 import os
 import json
 import sys

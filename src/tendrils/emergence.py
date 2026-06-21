@@ -1,3 +1,11 @@
+"""
+=============================================================================
+Tendril: EmergenceTendril
+Description: Bootstraps the Tendril by branching off the main Stem into an isolated container.
+Revision History:
+- 2026-06-21: Initial creation (OpenTendril Bot)
+=============================================================================
+"""
 import subprocess
 import logging
 import json

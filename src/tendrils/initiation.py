@@ -1,3 +1,11 @@
+"""
+=============================================================================
+Tendril: InitiationTendril
+Description: Bootstraps the environment and initializes early connections.
+Revision History:
+- 2026-06-21: Initial creation (OpenTendril Bot)
+=============================================================================
+"""
 import uuid
 from pydantic import BaseModel, Field
 from typing import Dict, Any, Optional

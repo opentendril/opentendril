@@ -1,6 +1,14 @@
 import asyncio
 import json
 import logging
+"""
+=============================================================================
+Tendril: GitHubTendril
+Description: Manages interactions with GitHub via MCP. Spins up an ephemeral stdio MCP server for zero-latency interactions without global singletons.
+Revision History:
+- 2026-06-21: Initial creation (OpenTendril Bot)
+=============================================================================
+"""
 import os
 import subprocess
 from typing import Dict, Any, Optional
