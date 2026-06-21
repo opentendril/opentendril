@@ -6,7 +6,13 @@ CLI_DIR := cli
 DIST_DIR := cli/dist
 
 cli: ## Build CLI for current platform
-	cd $(CLI_DIR) && go build -ldflags="-s -w" -o tendril-cli .
+	cd $(CLI_DIR) && go build -ldflags="-s -w" -o tendril .
+
+install: cli ## Install tendril globally to ~/.local/bin
+	mkdir -p ~/.local/bin
+	mv $(CLI_DIR)/tendril ~/.local/bin/tendril
+	@echo "✅ Installed tendril to ~/.local/bin/tendril"
+	@echo "Make sure ~/.local/bin is in your PATH."
 
 cli-all: ## Cross-compile CLI for linux and macOS
 	mkdir -p $(DIST_DIR)
@@ -36,7 +42,7 @@ test: ## Run Python tests
 	cd src && python -m pytest ../tests/ -v
 
 clean: ## Remove build artifacts
-	rm -rf $(DIST_DIR) cli/tendril-cli
+	rm -rf $(DIST_DIR) cli/tendril
 	docker compose down -v --remove-orphans
 
 help: ## Show this help
