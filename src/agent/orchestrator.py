@@ -5,7 +5,7 @@ Responsibilities:
   - Initialise all dependencies and ToolFactory
   - Run the agentic loop (LLM → tool calls → LLM → ...)
   - Emit structured events via the event bus
-  - Delegate system prompt construction to system_prompt.py
+  - Delegate system prompt construction to systemprompt.py
   - Delegate tool definitions to tools.py
 
 This file should NOT define tools or system prompt content.
@@ -30,7 +30,7 @@ from ..failover import ModelFailover, classify_error
 from ..eventbus import event_bus, TendrilEvent, generate_run_id
 from ..patcher import format_patch_for_prompt
 from .tools import ToolFactory
-from .system_prompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
+from .systemprompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
 from ..promptcache import build_cached_messages
 from ..assessor import assess_and_route, revise_execution_plan
 from langchain_core.messages import AIMessage, SystemMessage
