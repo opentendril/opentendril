@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	"github.com/opentendril/cli/internal/mcp"
-	"github.com/opentendril/cli/internal/proxy"
+	"github.com/opentendril/sprout/internal/mcp"
+	"github.com/opentendril/sprout/internal/proxy"
 )
 
 func runMCPCmd(args []string) {

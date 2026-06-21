@@ -9,6 +9,20 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# --- MCP Configuration ---
+MCP_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp-config.json")
+MCP_SERVERS = {}
+
+if os.path.exists(MCP_CONFIG_PATH):
+    try:
+        import json
+        with open(MCP_CONFIG_PATH, "r") as f:
+            _mcp_data = json.load(f)
+            MCP_SERVERS = _mcp_data.get("mcpServers", {})
+            logger.info(f"Loaded MCP Config: found {len(MCP_SERVERS)} servers.")
+    except Exception as e:
+        logger.error(f"Failed to parse mcp-config.json: {e}")
+
 # --- LLM Provider Keys ---
 GROK_API_KEY: str = os.getenv("GROK_API_KEY", "")
 ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")

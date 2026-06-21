@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/opentendril/cli/internal/proxy"
-	"github.com/opentendril/gateway/internal/protocol"
+	"github.com/opentendril/sprout/internal/protocol"
+	"github.com/opentendril/sprout/internal/proxy"
 )
 
 var upgrader = websocket.Upgrader{

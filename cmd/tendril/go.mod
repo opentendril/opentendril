@@ -1,4 +1,4 @@
-module github.com/opentendril/cli
+module github.com/opentendril/sprout
 
 go 1.23
 
