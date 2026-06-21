@@ -65,7 +65,7 @@ jobs:
           echo "python-core=$python_core" >> "$GITHUB_OUTPUT"
           echo "sprout-go=$sprout_go" >> "$GITHUB_OUTPUT"
 
-  python_core:
+  python-core:
     name: Core Orchestrator Tests (Python)
     runs-on: ubuntu-latest
     needs: changes
@@ -90,7 +90,7 @@ jobs:
         run: |
           make test-core
 
-  sprout_go:
+  sprout-go:
     name: Sprout Tests (Go)
     runs-on: ubuntu-latest
     needs: changes
@@ -101,7 +101,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.23.x'
           cache-dependency-path: cmd/tendril/go.sum
           
       - name: Vulnerability Scan (govulncheck)
@@ -119,8 +119,8 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - changes
-      - python_core
-      - sprout_go
+      - python-core
+      - sprout-go
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -133,14 +133,14 @@ jobs:
           fi
 
           if [ "${{ needs.changes.outputs['python-core'] }}" = "true" ] && \
-             [ "${{ needs.python_core.result }}" != "success" ]; then
-            echo "python-core was required but finished with result: ${{ needs.python_core.result }}"
+             [ "${{ needs.python-core.result }}" != "success" ]; then
+            echo "python-core was required but finished with result: ${{ needs.python-core.result }}"
             failed=true
           fi
 
           if [ "${{ needs.changes.outputs['sprout-go'] }}" = "true" ] && \
-             [ "${{ needs.sprout_go.result }}" != "success" ]; then
-            echo "sprout-go was required but finished with result: ${{ needs.sprout_go.result }}"
+             [ "${{ needs.sprout-go.result }}" != "success" ]; then
+            echo "sprout-go was required but finished with result: ${{ needs.sprout-go.result }}"
             failed=true
           fi
 
