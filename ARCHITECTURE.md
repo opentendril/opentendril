@@ -16,8 +16,8 @@ OpenTendril is split into distinct, specialized services. This allows the CLI/pr
                                              │ (MCP over stdio / SSE)
                                              ▼
                  ┌────────────────────────────────────────────────────────┐
-                 │                 LIGHTWEIGHT GO GATEWAY                 │
-                 │   `tendril-cli -mcp` (Instant boot, proxy routing)     │
+                 │                 LIGHTWEIGHT GO SPROUT                  │
+                 │   `tendril -mcp` (Instant boot, proxy routing)         │
                  └──────┬────────────────────┬─────────────────────┬──────┘
                         │                    │                     │
                         ▼                    ▼                     ▼
@@ -36,10 +36,10 @@ To maximize safety and efficiency, OpenTendril enforces a strict separation of c
 
 This means OpenTendril does not need to duplicate chat interfaces or search tools; it focuses entirely on the secure execution and manipulation of code assets.
 
-### A. The Go Gateway (`tendril-cli`)
+### A. The Go Sprout (`tendril`)
 * **Role:** Low-overhead protocol adapter and system orchestrator.
 * **Responsibilities:**
-  * Runs on the host machine.
+  * Runs on the host machine as the primary API surface.
   * Listens to incoming client requests via MCP (stdio/SSE), OpenAI HTTP REST APIs (`/v1/chat-completions`), and WebSockets.
   * Translates stdio JSON-RPC payloads into simple HTTP requests and routes them to the active Python backend container.
   * Auto-starts the Docker containers via `docker compose up -d` if it detects that the Python backend is offline.
@@ -63,7 +63,7 @@ This means OpenTendril does not need to duplicate chat interfaces or search tool
 The execution flow of the OpenTendril framework natively maps to the six major growth stages of a climbing vine:
 
 1. **Seed Germination (Activation):** The user installs OpenTendril. The Core reads `.env` and `mcp_config.json`, absorbing its environment.
-2. **Seedling Emergence (Sprouting):** The Go CLI orchestrator breaks through and binds to local ports, establishing the main API gateway.
+2. **Seedling Emergence (Sprouting):** The Go Sprout breaks through and binds to local ports, establishing the main API surface.
 3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers and local vector databases ("The Roots").
 4. **Tendril Initiation:** When a specific task is requested, the Stem initiates a specialized persona context, signaling cells to form a Tendril (`initiation.py`).
 5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a Docker container boots via `emergence.py`) and begins sweeping the air. It touches the code, coils around it (executing the LLM loop via `elongation.py`), and pulls the project forward.
@@ -76,7 +76,7 @@ graph TD
     classDef tendril fill:#98fb98,stroke:#2e8b57,stroke-width:2px,color:black;
     classDef fruit fill:#ff8c00,stroke:#8b4500,stroke-width:2px,color:white;
 
-    A(1. Seed Germination<br/>Read .env / Config) --> B(2. Seedling Emergence<br/>Go Gateway Binds)
+    A(1. Seed Germination<br/>Read .env / Config) --> B(2. Seedling Emergence<br/>Go Sprout Binds)
     B --> C(3. Vegetative Growth<br/>Connect to LLM/DB Roots)
     
     C --> D{4. Tendril Initiation<br/>Task Requested}
@@ -131,7 +131,7 @@ To support both developer accessibility and enterprise-grade multi-tenant securi
 
 Traditional AI coding tools execute terminal commands directly on the developer's host machine (e.g. running test scripts, installing libraries). This introduces severe risks (malicious package installation hooks, accidental directory wipes). OpenTendril eliminates this risk by rerouting all tool commands through the active sandbox provider:
 
-1. **Gateway Redirection:** When the LLM calls `run_command`, the Go Gateway intercepts the request and routes it to the Sandbox Core inside the isolated container or microVM instead of running it on the host OS.
+1. **Sprout Redirection:** When the LLM calls `run_command`, the Go Sprout intercepts the request and routes it to the Sandbox Core inside the isolated container or microVM instead of running it on the host OS.
 2. **Resource Boundaries:** The sandbox runs with restricted privileges, mount maps locked strictly to the workspace directory, and a secure egress firewall (blocking outbound data exfiltration attempts).
 3. **Graceful Fallback (Solo Mode):** If a container runtime is not available (e.g. Docker is offline during first launch), OpenTendril falls back to host execution only after issuing a console warning and prompting the user for explicit consent.
 
@@ -139,10 +139,10 @@ Traditional AI coding tools execute terminal commands directly on the developer'
 
 ## 4. Connectivity Specifications
 
-The Go Gateway and Python backend communicate over standard protocols, allowing endpoints to remain decoupled:
-1. **Dynamic Tool Registration:** On client initialization, the Go Gateway queries `GET http://localhost:8080/api/mcp-tools`. The Python backend returns all registered LangChain/system tools mapped to the official MCP JSON Schema format.
-2. **Dynamic Tool Execution:** When a client invokes a tool, the Go Gateway sends a `POST http://localhost:8080/api/mcp-call` containing the tool name and argument payload. Python executes the tool inside the container and returns the output.
-3. **Offline Subprocess Path:** If the FastAPI server is completely offline, the Go Gateway falls back to executing a Python subcommand:
+The Go Sprout and Python backend communicate over standard protocols, allowing endpoints to remain decoupled:
+1. **Dynamic Tool Registration:** On client initialization, the Go Sprout queries `GET http://localhost:8080/api/mcp-tools`. The Python backend returns all registered LangChain/system tools mapped to the official MCP JSON Schema format.
+2. **Dynamic Tool Execution:** When a client invokes a tool, the Go Sprout sends a `POST http://localhost:8080/api/mcp-call` containing the tool name and argument payload. Python executes the tool inside the container and returns the output.
+3. **Offline Subprocess Path:** If the FastAPI server is completely offline, the Go Sprout falls back to executing a Python subcommand:
    ```bash
    core/venv/bin/python -m src.agent.toolscli call <tool-name> <args-json>
    ```
