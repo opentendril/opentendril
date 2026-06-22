@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
-from ..dependencies import llm_router, memory, orchestrator
+from ..dependencies import llm_router, memory, tendril_loop
 from ..dreamer import dream, dreamer_state
 from ..credits import credit_manager
 from ..eventbus import event_bus
@@ -152,7 +152,7 @@ async def get_recent_events(limit: int = 20):
 @router.get("/health/providers")
 async def get_provider_health():
     """Get health status of all LLM providers (cooldowns, error rates)."""
-    return orchestrator.failover.get_provider_health()
+    return tendril_loop.failover.get_provider_health()
 
 
 @router.get("/v1/credits", response_class=HTMLResponse)

@@ -38,9 +38,9 @@ from langchain_core.messages import AIMessage, SystemMessage
 logger = logging.getLogger(__name__)
 
 
-class Orchestrator:
+class TendrilLoop:
     """
-    Tendril's central orchestrator.
+    Tendril's execution loop.
 
     Coordinates between LLMs (via Router), file editing (via Editor),
     memory (via RAG), skills, and git tooling to process user requests.

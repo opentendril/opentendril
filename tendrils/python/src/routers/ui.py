@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Form, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 
-from ..dependencies import llm_router, memory, orchestrator
+from ..dependencies import llm_router, memory, tendril_loop
 from ..commands import intercept_slash_commands
 from ..utils import safe
 
@@ -125,7 +125,7 @@ async def stream_chat(
             else:
                 prov = None if provider == "default" else provider
                 response_text = await asyncio.to_thread(
-                    orchestrator.process, sid, message, provider=prov
+                    tendril_loop.process, sid, message, provider=prov
                 )
 
             memory.store_convo(sid, "user", message)

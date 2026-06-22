@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..dependencies import llm_router, memory, orchestrator, approval
+from ..dependencies import llm_router, memory, tendril_loop, approval
 from ..editor import FileEditor
 from ..credits import credit_manager
 from ..eventbus import event_bus
@@ -90,13 +90,13 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
                 from ..config import STRICT_LINTING
                 lint_cmd = f"ruff check {req.file}" if STRICT_LINTING else f"ruff check --select E,F {req.file}"
 
-                lint_output = await orchestrator.tester.run_command(lint_cmd, safe=True)
+                lint_output = await tendril_loop.tester.run_command(lint_cmd, safe=True)
                 if "❌" in lint_output and "Command failed" in lint_output:
                     test_passed = False
                     check_msg = f"Linting failed:\n{lint_output}"
                 else:
                     test_cmd = f"python -m py_compile {req.file} && pytest tests/"
-                    test_output = await orchestrator.tester.run_command(test_cmd, safe=True)
+                    test_output = await tendril_loop.tester.run_command(test_cmd, safe=True)
                     if "❌" in test_output:
                         test_passed = False
                         check_msg = f"Automated tests failed:\n{test_output}"
@@ -129,27 +129,27 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
             from ..config import SDLC_STRATEGY
             
             if SDLC_STRATEGY == "pr":
-                current_branch = orchestrator.git.current_branch()
+                current_branch = tendril_loop.git.current_branch()
                 if current_branch == "main":
                     branch_name = f"tendril-patch-{uuid.uuid4().hex[:8]}"
-                    orchestrator.git.create_branch(branch_name)
+                    tendril_loop.git.create_branch(branch_name)
                     logger.info(f"Created new branch for PR: {branch_name}")
                 
-                git_result = orchestrator.git.commit_changes(commit_msg)
-                push_result = orchestrator.git.push_branch()
+                git_result = tendril_loop.git.commit_changes(commit_msg)
+                push_result = tendril_loop.git.push_branch()
                 
                 # Try to create PR
                 pr_result = ""
                 try:
                     # In a real scenario, we'd want to extract repo name from context
                     # For now we use the default opentendril/core or assume GitHub CLI / MCP will do it.
-                    # We can use orchestrator.git.create_pull_request directly if we know the repo.
+                    # We can use tendril_loop.git.create_pull_request directly if we know the repo.
                     # As a safe default, we just log the branch creation and push.
                     pr_title = f"Agent Patch: {req.instruction[:50]}"
                     pr_body = f"Automated PR from OpenTendril.\n\nFile: `{req.file}`\nInstruction: {req.instruction}"
                     
                     # Get repo name using git
-                    remote_url = orchestrator.git._run_git("config", "--get", "remote.origin.url")
+                    remote_url = tendril_loop.git._run_git("config", "--get", "remote.origin.url")
                     repo_name = ""
                     if "github.com" in remote_url:
                         # Extract user/repo from git@github.com:user/repo.git or https://github.com/user/repo.git
@@ -159,7 +159,7 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
                             repo_name = match.group(1)
                     
                     if repo_name:
-                        pr_result = orchestrator.git.create_pull_request(repo_name, pr_title, pr_body, orchestrator.git.current_branch())
+                        pr_result = tendril_loop.git.create_pull_request(repo_name, pr_title, pr_body, tendril_loop.git.current_branch())
                     else:
                         pr_result = "Pushed branch, but could not determine GitHub repo name to open PR."
                 except Exception as e:
@@ -168,7 +168,7 @@ Respond with ONLY the complete new file content. No explanations, no markdown fe
                 git_result = f"{git_result}\n{push_result}\n{pr_result}"
                 
             else:
-                git_result = orchestrator.git.commit_changes(commit_msg)
+                git_result = tendril_loop.git.commit_changes(commit_msg)
                 
             return {
                 "status": "applied",
@@ -213,7 +213,7 @@ async def chat_api(req: ChatRequest):
         else:
             prov = None if req.provider == "default" else req.provider
             response = await asyncio.to_thread(
-                orchestrator.process, req.session_id, req.message, provider=prov
+                tendril_loop.process, req.session_id, req.message, provider=prov
             )
         memory.store_convo(req.session_id, "user", req.message)
         memory.store_convo(req.session_id, "assistant", response)
@@ -275,7 +275,7 @@ async def openai_chat_completions(req: ChatCompletionRequest):
                 event_bus.subscribe(subscriber)
                 try:
                     task = asyncio.create_task(
-                        asyncio.to_thread(orchestrator.process, session_id, user_msg, provider=provider)
+                        asyncio.to_thread(tendril_loop.process, session_id, user_msg, provider=provider)
                     )
                     while True:
                         get_task = asyncio.create_task(queue.get())
@@ -327,7 +327,7 @@ async def openai_chat_completions(req: ChatCompletionRequest):
             return StreamingResponse(event_generator(), media_type="text/event-stream")
         else:
             response_text = await asyncio.to_thread(
-                orchestrator.process, session_id, user_msg, provider=provider
+                tendril_loop.process, session_id, user_msg, provider=provider
             )
             memory.store_convo(session_id, "user", user_msg)
             memory.store_convo(session_id, "assistant", response_text)
@@ -406,7 +406,7 @@ async def mcp_jsonrpc_endpoint(req: dict):
         
     elif method == "tools/list":
         mcp_tools = []
-        for t in orchestrator.tools:
+        for t in tendril_loop.tools:
             try:
                 mcp_tools.append(langchain_tool_to_mcp(t))
             except Exception as e:
@@ -425,7 +425,7 @@ async def mcp_jsonrpc_endpoint(req: dict):
         tool_args = params.get("arguments", {})
         
         # Find tool
-        tool_func = next((t for t in orchestrator.tools if t.name == tool_name), None)
+        tool_func = next((t for t in tendril_loop.tools if t.name == tool_name), None)
         if not tool_func:
             return {
                 "jsonrpc": "2.0",
