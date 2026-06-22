@@ -75,8 +75,7 @@ services:
       - ./logs:/app/logs
       - ./static:/app/static
       - ./tendrils/python/tests:/app/tests
-      - ./cli:/app/cli
-      - ./gateway:/app/gateway
+
       - ./docs:/app/docs
       # External project mode: set TENDRIL_PROJECT_PATH in .env
       # When set, mounts the external repo at /workspace and Tendril edits that.
@@ -84,17 +83,6 @@ services:
       - ${TENDRIL_PROJECT_PATH:-.}:/workspace
     restart: unless-stopped
 
-  # Go Chat Gateway — WebSocket entry point for all channels
-  gateway:
-    build: ./gateway
-    ports:
-      - "9090:9090"
-    environment:
-      BRAIN_URL: http://tendril:8080
-      GATEWAY_PORT: "9090"
-    depends_on:
-      - tendril
-    restart: unless-stopped
 
   # Nano profile: Tendril + CPU nano-model (llama-cpp-python, ~400MB larger image)
   # Opt-in for users who want zero-API-key operation via a CPU local model.
@@ -148,8 +136,7 @@ services:
       - ./logs:/app/logs
       - ./static:/app/static
       - ./tendrils/python/tests:/app/tests
-      - ./cli:/app/cli
-      - ./gateway:/app/gateway
+
       - ./docs:/app/docs
       - ${TENDRIL_PROJECT_PATH:-.}:/workspace
     restart: unless-stopped
