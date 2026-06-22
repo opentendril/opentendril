@@ -23,7 +23,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	// Build the docker run arguments
 	args := []string{
 		"run", "--rm",
-		"--network", "opentendril_default",
+		"--network", "opentendril-default",
 		// Allow the container to reach Ollama running on the host
 		"--add-host=host.docker.internal:host-gateway",
 		"--env-file", ".env",
