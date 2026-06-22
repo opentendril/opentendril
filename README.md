@@ -1,118 +1,209 @@
-# 🌱 Tendril
+# 🌱 OpenTendril
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](#)
-[![Stable Release](https://img.shields.io/badge/release-v0.1.0--alpha-blue.svg)](#)
-[![Discord](https://img.shields.io/badge/discord-join-7289da.svg?logo=discord&logoColor=white)](https://discord.gg/opentendril)
+Headless AI coding assistant. Runs locally. Talks to any frontend.
 
-**Headless AI coding assistant kernel. Point it at any project. Talk to it from any CLI or web app. It reads, edits, and commits safely inside a secure sandbox.**
-
-Your LLM keys. Your codebase. Your machine.
+**Prerequisites:** Docker, Go 1.21+, Git — and optionally [Ollama](https://ollama.ai) for free local inference (no API key needed).
 
 ---
 
-## The Vision: A Zero-Friction, Headless Kernel
+## 🚀 Quick Start (Fresh Install)
 
-Tendril is designed as an **Intelligent Backend Protocol** (a Headless Kernel) that seamlessly powers the best developer frontends in the open-source ecosystem. Rather than locking you into a custom editor or a complex chat UI, Tendril runs as a lightweight local daemon that exposes:
-1. **OpenAI-Compatible API Endpoint** (`/v1/chat-completions`) — point Aider, Continue, or custom dashboards to it.
-2. **Model Context Protocol (MCP) stdio Server** — connect Claude Desktop, ChatGPT CLI, or any MCP client directly to access Tendril's secure sandboxed tools.
+### Step 1 — Clone and install the CLI
 
----
-
-## Quick Start (Under 2 Minutes)
-
-Get up and running locally with zero configuration friction.
-
-### 1. Run the Installer
-Run the single-line installation script to download the Go sprout CLI and boot the backend daemon:
 ```bash
-curl -fsSL https://opentendril.com/install.sh | sh
+git clone https://github.com/opentendril/core.git
+cd core
+make install
 ```
 
-### 2. Choose Your Onboarding Pathway
-On the first boot, Tendril will automatically assist you in selecting your runtime mode:
-* **Option A: Free Cloud Trial (No Key):** Instantly get started using our hosted sprout (`api.opentendril.com`). Routes requests anonymously to top-tier models (Claude 3.5 Sonnet / Gemini 1.5 Pro) using server-side trial credits. No signup or credit cards required.
-* **Option B: Auto-Ollama Detection (Local-First):** If Ollama is running locally on `localhost:11434`, Tendril automatically detects it and boots using your local coding models (e.g. `qwen2.5-coder`).
-* **Option C: Custom API Keys:** Provide your own Anthropic, OpenAI, or Google API keys directly in the CLI prompt.
+This builds the `tendril` binary and installs it to `~/.local/bin/tendril`.
 
----
+> Make sure `~/.local/bin` is in your PATH:
+> ```bash
+> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+> ```
 
-## Connectivity & Interfaces
+### Step 2 — Build the Tendril worker image
 
-Once the backend is live, you can connect your preferred interface:
-
-| Interface / Client | Connection Type | Command / Setup |
-|---|---|---|
-| **Claude Desktop** | MCP (stdio) | Add `tendril-cli -mcp` to your `claude_desktop_config.json` |
-| **Aider** | OpenAI API | `aider --openai-api-base http://localhost:8080/v1 --model openai/tendril` |
-| **LibreChat (Web UI)** | OpenAI API | Point LibreChat's custom endpoints to `http://localhost:8080/v1` |
-| **Interactive CLI** | WebSocket | Run `tendril-cli` in your terminal |
-
----
-
-## How It Works (Decoupled Microservices)
-
-```
-                 ┌────────────────────────────────────────────────────────┐
-                 │                       CLIENTS                          │
-                 │   LibreChat (Web)  │  Cursor / VSCode  │  Claude CLI   │
-                 └───────────────────────────┬────────────────────────────┘
-                                             │ (MCP over stdio / SSE)
-                                             ▼
-                 ┌────────────────────────────────────────────────────────┐
-                 │                 LIGHTWEIGHT GO SPROUT                  │
-                 │   `tendril -mcp` (Instant boot, proxy routing)         │
-                 └──────┬────────────────────┬─────────────────────┬──────┘
-                        │                    │                     │
-                        ▼                    ▼                     ▼
-             ┌─────────────────────┐ ┌──────────────┐   ┌─────────────────────┐
-             │    SANDBOX CORE     │ │  MEMORY/RAG  │   │     LLM ROUTER      │
-             │   (Python/Docker)   │ │ (SQLite/MCP) │   │ (Ollama/Cloud/vLLM) │
-             └─────────────────────┘ └──────────────┘   └─────────────────────┘
+```bash
+docker compose build tendril
 ```
 
-* **Go Sprout Proxy:** Handles incoming client protocols (stdio, HTTP, WebSocket) and routes them efficiently with sub-millisecond latencies.
-* **Sandbox Core:** Executes code edits, syntax validation, compile checks, and git operations inside an isolated container sandbox (standard Docker, gVisor, or Firecracker).
-* **Zero-Dependency Fallbacks:** For lightweight local execution on low-spec hardware:
-  * Uses **SQLite** instead of Postgres if Postgres is offline.
-  * Uses **in-memory arrays** instead of Redis if Redis is offline.
-  * Runs **Docker-free** (direct host execution) if containerization is disabled.
-* **Pluggable Memory:** Run memory-free for small codebases, use local vector stores, or delegate to external semantic indexers (like `codebase-mcp`).
+This builds the Python AI worker container. Takes ~2 minutes on first run.
+
+### Step 3 — Start the backing services
+
+```bash
+docker compose up postgres redis -d
+```
+
+Starts the Postgres (memory/vector store) and Redis (event bus) containers.
+
+### Step 4 — Run the setup wizard
+
+```bash
+tendril init
+```
+
+This will:
+- Auto-detect local [Ollama](https://ollama.ai) models (no API key needed!)
+- Let you pick a model (auto-selects best `*coder*` model)
+- Or configure a cloud provider (Anthropic, OpenAI, Google, etc.)
+- Write your config to `.env`
+
+**With Ollama (recommended for local-first):**
+```
+🌱 Welcome to OpenTendril Setup Wizard!
+
+🔍 Scanning for local LLM providers...
+✅ Detected local Ollama with 4 model(s):
+  1) llama3.1:8b
+  2) qwen3.5:9b
+  3) qwen2.5-coder:7b
+  4) qwen2.5-coder:14b
+Would you like to use Ollama for local, private execution? (y/n)
+> y
+Auto-selected model: qwen2.5-coder:7b
+Press Enter to use it, or type a different model name:
+
+════════════════════════════════════════
+  🎉 OpenTendril Setup Complete!
+════════════════════════════════════════
+  Provider : Ollama (local, private)
+  Model    : qwen2.5-coder:7b
+  URL      : http://host.docker.internal:11434/v1
+
+  Next steps:
+  1. Start the Stem server:   tendril serve
+  2. Chat in a new terminal:  tendril chat
+════════════════════════════════════════
+```
+
+### Step 5 — Start the Stem server
+
+In one terminal:
+```bash
+tendril serve
+```
+
+### Step 6 — Chat!
+
+In a second terminal:
+```bash
+tendril chat
+```
+
+Type your task and press Enter. The AI will respond using your local Ollama model.
 
 ---
 
-## Self-Building Mode (The Root Agent)
+## 🏗️ Architecture
 
-When `TENDRIL_PROJECT_PATH` is not configured, Tendril operates on its own source code (the Root Agent mode). It self-heals and self-modifies through a secure staging pipeline: applies surgical patches $\rightarrow$ compiles $\rightarrow$ runs tests $\rightarrow$ commits to a staging branch $\rightarrow$ creates a GitHub Pull Request for human review.
+```
+You
+ │
+ ▼
+tendril chat          ← Terminal chat client
+ │  HTTP POST /v1/chat/completions
+ ▼
+tendril serve         ← Go Stem (port :8080)
+ │  Hormonal Trigger checks
+ │  docker run core-tendril:latest
+ ▼
+Python Tendril        ← Ephemeral Docker worker
+ │  LangChain agent loop
+ ▼
+Ollama (host)         ← Local LLM inference
+ + Postgres + Redis   ← Memory & event bus
+```
 
----
-
-## 🌿 Architectural Nomenclature
-
-OpenTendril uses precise botanical terminology to describe the lifecycle and states of its AI agents. This mental model perfectly mirrors the behavior of lightweight, sensitive, and adaptive agents reaching out to hook into data sources.
-
-| Botanical Term | Software Lifecycle Meaning |
-|---|---|
-| **`initiate`** | Bootstrapping a long-running or pinned agent that requires a formal setup phase. |
-| **`sprout`** / **`emerge`** | Launching a short-running, ephemeral agent (a run-once worker that pops up quickly for a specific task). |
-| **`extend`** | An active agent reaching out to execute a prompt or connect to an external API/database. |
-| **`elongation`** | The internal iterative LLM reasoning and execution loop (the ReAct loop). |
-| **`circumnutate`** | An agent sitting idle in a queue, waiting for a trigger (just like a physical tendril circling in the air). |
-| **`anchor`** / **`latch`** | A pinned agent permanently securing its connection to a persistent datastore or tool. |
-| **`senesce`** | A run-once ephemeral agent completing its lifecycle, dropping its context, and cleanly terminating. |
-
-> 🎨 **Interactive Visualization:** Check out our interactive HTML/CSS animation of this process in [`docs/botanical-visual.html`](docs/botanical-visual.html)!
-
----
-
-## 💬 Community & Support
-
-* **Discord Server:** Join the [OpenTendril Discord](https://discord.gg/opentendril) to chat with other developers, share custom skills, and get help.
-* **GitHub Issues:** For bug reports, feature requests, or RFC design proposals, use our [Issue Templates](.github/ISSUE_TEMPLATE/).
-* **Contributing:** Check out [CONTRIBUTING.md](CONTRIBUTING.md) to get started on hacking Tendril.
+**Key design principle:** The Python AI worker is an *ephemeral container* — it boots for each task, runs the agent loop, returns the result, and exits. Zero idle cost.
 
 ---
 
-## License
+## 🔌 Client Integrations
 
-MIT — Build freely. Scale with us.
+OpenTendril acts as a headless backend. You can connect it to your favorite developer tools using either the **Model Context Protocol (MCP)** or its **OpenAI-Compatible API**.
+
+### 1. Antigravity & Claude Desktop (via MCP)
+MCP allows clients to natively access Tendril's secure sandboxed tools.
+
+Edit your MCP configuration file:
+- **Antigravity:** `~/.gemini/config/mcp_config.json`
+- **Claude Desktop (Mac):** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Add the following configuration:
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "/home/<your-username>/.local/bin/tendril",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+*(Tip: Run `tendril init` to see the exact copy-paste block for your system's paths).*
+
+### 2. Aider & CodexCLI (via OpenAI API)
+Command-line coding assistants can use Tendril as their backend LLM provider, benefiting from its local inference and routing.
+
+Make sure `tendril serve` is running, then launch Aider:
+```bash
+aider --openai-api-base http://localhost:8080/v1 --model openai/tendril
+```
+
+### 3. VS Code / Cursor (via OpenAI API)
+Point any OpenAI-compatible VS Code extension (like Continue.dev) to your local Stem.
+
+In `continue.dev`'s `config.json`:
+```json
+{
+  "models": [
+    {
+      "title": "OpenTendril",
+      "provider": "openai",
+      "model": "tendril",
+      "apiBase": "http://localhost:8080/v1",
+      "apiKey": "sk-local"
+    }
+  ]
+}
+```
+
+### 4. LibreChat / AnythingLLM (Web UI)
+If you want a ChatGPT-like web interface, run LibreChat and add a custom endpoint:
+- **Base URL:** `http://localhost:8080/v1`
+- **API Key:** `sk-local`
+- **Model:** `tendril`
+
+---
+
+## ⚙️ Configuration API
+
+Manage Hormonal Triggers and AI personas via the REST API (requires `ADMIN_TOKEN` env var if set):
+
+```bash
+# List active security triggers
+curl http://localhost:8080/v1/config/triggers
+
+# Upload a new trigger script
+curl -X POST http://localhost:8080/v1/config/triggers \
+  -F "file=@my-trigger.sh"
+
+# List AI personas
+curl http://localhost:8080/v1/config/personas
+```
+
+---
+
+## 🛠️ Development Commands
+
+```bash
+make install          # Build + install tendril binary
+make test-core        # Run Python unit tests
+make test-sprout      # Run Go unit tests
+make test-all         # Run all tests
+docker compose build  # Build all Docker images
+docker compose up postgres redis -d  # Start backing services only
+```

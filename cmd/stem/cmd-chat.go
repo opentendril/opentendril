@@ -164,10 +164,10 @@ func connect(base *url.URL, useWS bool) (func(string) (string, error), error) {
 }
 
 func runChatCmd(ctx context.Context, args []string) {
-	useWS := true
+	useWS := false // Default to HTTP for Go Stem
 	for _, arg := range args {
-		if arg == "--http" {
-			useWS = false
+		if arg == "--ws" {
+			useWS = true
 		}
 	}
 
@@ -186,7 +186,7 @@ func runChatCmd(ctx context.Context, args []string) {
 	}
 
 	log.Println("Connected! Type your task below, or 'exit' to quit.")
-	log.Println("Tip: Use 'tendril chat --http' to force HTTP mode.")
+	log.Println("Tip: Use 'tendril chat --ws' to force WebSocket mode (if gateway is running).")
 
 	scanner := bufio.NewScanner(os.Stdin)
 

@@ -39,7 +39,7 @@ health: ## Check service health
 
 # --- Development ---
 test-core: ## Run Python tests
-	cd tendrils/python && PYTHONPATH=. python3 -m pytest tests/ -v
+	cd tendrils/python && PYTHONPATH=. python -m pytest tests/ -v
 
 test-sprout: ## Run Go tests
 	cd $(SPROUT_DIR) && go test ./... -v

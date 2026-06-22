@@ -29,7 +29,7 @@ func NewConfiguratorTendril(triggersDir string) *ConfiguratorTendril {
 
 // Execute processes a user task aimed at configuration management
 func (c *ConfiguratorTendril) Execute(ctx context.Context, taskPrompt string) (string, error) {
-	log.Printf("Spawning Configurator Tendril for task: %s", taskPrompt)
+	log.Printf("Sprouting Configurator Tendril for task: %s", taskPrompt)
 
 	systemPrompt := `You are the OpenTendril Configurator Tendril.
 Your job is to generate bash scripts for 'Hormonal Triggers' to secure the system.

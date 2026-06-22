@@ -1,3 +1,5 @@
+name: opentendril
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
