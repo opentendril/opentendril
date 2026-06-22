@@ -75,7 +75,6 @@ class ToolFactory:
         editor = self.editor
         tester = self.tester
         router = self.router
-        skills_manager = self.skills_manager
 
         @tool
         def search_memory(query: str) -> str:
