@@ -24,9 +24,9 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-from ..config import SECRET_KEY
-from ..patcher import parse_patch, validate_patch, apply_patch, PatchParseError
-from ..chronicler import chronicler
+from .config import SECRET_KEY
+from .patcher import parse_patch, validate_patch, apply_patch, PatchParseError
+from .chronicler import chronicler
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +48,12 @@ class ToolFactory:
     container-level isolation.
     """
 
-    def __init__(self, memory, editor, git, tester, router, skills_manager):
+    def __init__(self, memory, editor, git, tester, router):
         self.memory = memory
         self.editor = editor
         self.git = git
         self.tester = tester
         self.router = router
-        self.skills_manager = skills_manager
         self.git_available = git is not None
 
     def build(self) -> list:
@@ -76,7 +75,6 @@ class ToolFactory:
         editor = self.editor
         tester = self.tester
         router = self.router
-        skills_manager = self.skills_manager
 
         @tool
         def search_memory(query: str) -> str:
@@ -85,33 +83,6 @@ class ToolFactory:
             if not docs:
                 return "No relevant memories found."
             return "\n---\n".join(doc.page_content for doc in docs)
-
-        @tool
-        def build_skill(description: str) -> str:
-            """Build a new signed skill to extend Tendril's capabilities. Describe what it should do."""
-            llm = router.get(tier="standard")
-            gen_prompt = (
-                f"Generate JSON for a new skill:\n{description}\n\n"
-                f'Format: {{"name": "snake_case_name", "description": "brief", '
-                f'"system_prompt": "detailed instructions for using this skill"}}'
-            )
-            resp = llm.invoke(gen_prompt)
-            try:
-                skill_data = json.loads(resp.content)
-                content_str = json.dumps(
-                    {k: v for k, v in skill_data.items() if k != "signature"}, sort_keys=True
-                )
-                sig = hmac.new(SECRET_KEY.encode(), content_str.encode(), hashlib.sha256).hexdigest()
-                skill_data["signature"] = sig
-                dyn_dir = "/app/data/dynamic-skills"
-                os.makedirs(dyn_dir, exist_ok=True)
-                path = os.path.join(dyn_dir, f"{skill_data['name']}.skill.json")
-                with open(path, "w") as f:
-                    json.dump(skill_data, f, indent=2)
-                skills_manager.load_skills()
-                return f"✅ Built and loaded skill '{skill_data['name']}' at {path}"
-            except Exception as e:
-                return f"❌ Skill build failed: {str(e)}"
 
         @tool
         def read_file(filepath: str) -> str:
@@ -275,7 +246,7 @@ class ToolFactory:
 
             try:
                 # Fallback implementation or new subagent execution hook
-                from ..subagent import spawn
+                from .subagent import spawn, list_profiles
                 all_tools = core_tools  # Captured from outer scope below
                 result = spawn(
                     profile_name=profile,
@@ -288,7 +259,7 @@ class ToolFactory:
                 return "❌ [Meristem Failure]: The subagent spawning mechanism is currently undergoing architectural refactoring. Sprout aborted."
 
         core_tools = [
-            calculator, search_memory, build_skill, read_file, write_file,
+            calculator, search_memory, read_file, write_file,
             apply_code_patch, list_project_files, search_project,
             read_logs, run_bash_command, sprout_tendril,
         ]
@@ -351,7 +322,7 @@ class ToolFactory:
                 description:  Brief description of the change (used as commit message)
                 skip_canary:  If True, skip the Docker canary-build check.
             """
-            from ..editor import FileEditor
+            from .editor import FileEditor
 
             staging_editor = FileEditor(sandbox_root=editor.sandbox_root, enforce_protection=False)
 

@@ -7,7 +7,7 @@ import asyncio
 import logging
 from typing import List
 
-from ..eventbus import event_bus, TendrilEvent
+from .eventbus import event_bus, TendrilEvent
 
 logger = logging.getLogger(__name__)
 

@@ -8,6 +8,6 @@ The Orchestrator has been modularised into src/agent/:
 
 Any code importing `from .tendril import Orchestrator` continues to work.
 """
-from .agent.orchestrator import Orchestrator
+from .orchestrator import Orchestrator
 
 __all__ = ["Orchestrator"]

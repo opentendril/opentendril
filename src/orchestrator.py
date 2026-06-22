@@ -17,22 +17,22 @@ import os
 import time as _time
 from typing import Optional
 
-from ..config import WORKSPACE_ROOT, PROJECT_ROOT
-from ..llmrouter import LLMRouter
-from ..memory import Memory
-from ..skillsmanager import SkillsManager
-from ..editor import FileEditor
-from ..approval import ApprovalGate
-from ..gitmanager import GitManager
-from ..testrunner import TestRunner
-from ..credits import credit_manager
-from ..failover import ModelFailover, classify_error
-from ..eventbus import event_bus, TendrilEvent, generate_run_id
-from ..patcher import format_patch_for_prompt
-from .tools import ToolFactory
+from .config import WORKSPACE_ROOT, PROJECT_ROOT
+from .llmrouter import LLMRouter
+from .memory import Memory
+
+from .editor import FileEditor
+from .approval import ApprovalGate
+from .gitmanager import GitManager
+from .testrunner import TestRunner
+from .credits import credit_manager
+from .failover import ModelFailover, classify_error
+from .eventbus import event_bus, TendrilEvent, generate_run_id
+from .patcher import format_patch_for_prompt
+from .meristem import ToolFactory
 from .systemprompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
-from ..promptcache import build_cached_messages
-from ..assessor import assess_and_route, revise_execution_plan
+from .promptcache import build_cached_messages
+from .assessor import assess_and_route, revise_execution_plan
 from langchain_core.messages import AIMessage, SystemMessage
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,11 @@ class Orchestrator:
     def __init__(
         self,
         memory: Memory,
-        skills_manager: SkillsManager,
         llm_router: Optional[LLMRouter] = None,
         editor: Optional[FileEditor] = None,
         approval: Optional[ApprovalGate] = None,
     ):
         self.memory = memory
-        self.skills_manager = skills_manager
         self.router = llm_router or LLMRouter()
         self.editor = editor or FileEditor(WORKSPACE_ROOT)
         self.approval = approval or ApprovalGate(auto_approve=True)
@@ -71,7 +69,6 @@ class Orchestrator:
             git=self.git,
             tester=self.tester,
             router=self.router,
-            skills_manager=self.skills_manager,
         )
         self.tools = factory.build()
 
@@ -96,7 +93,7 @@ class Orchestrator:
             return "❌ Access Denied: Insufficient credits. Please upgrade at cloud.opentendril.com"
 
         # --- Complexity assessment (auto-tier routing) ---
-        from ..config import ASSESSOR_ENABLED
+        from .config import ASSESSOR_ENABLED
         _active_provider = provider or self.router.default_provider
         if ASSESSOR_ENABLED:
             _active_provider, tier = assess_and_route(
@@ -120,7 +117,7 @@ class Orchestrator:
         history = self.memory.get_convo(session_id)
         relevant_docs = self.memory.retrieve_relevant(message, session_id=session_id)
         rag_context = "\n".join(doc.page_content for doc in relevant_docs) if relevant_docs else "None"
-        skills_context = self.skills_manager.get_context() or "No skills loaded."
+        skills_context = "No skills loaded."
 
         tool_descriptions = "\n".join(
             f"  - {t.name}: {t.description}" for t in self.tools
@@ -159,7 +156,7 @@ class Orchestrator:
             ))
             return "⚠️ All LLM providers are currently in cooldown. Please try again in a few seconds."
 
-        from ..llmrouter import PROVIDER_CONFIG, _resolve_model
+        from .llmrouter import PROVIDER_CONFIG, _resolve_model
         _provider_cfg = PROVIDER_CONFIG.get(selected_provider, {})
         _default_model = _provider_cfg.get("models", {}).get(tier, "")
         resolved_model = _resolve_model(selected_provider, tier, _default_model)

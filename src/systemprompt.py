@@ -11,8 +11,8 @@ Prompt cache architecture:
 """
 
 import os
-from ..config import WORKSPACE_ROOT, PROJECT_ROOT
-from ..patcher import format_patch_for_prompt
+from .config import WORKSPACE_ROOT, PROJECT_ROOT
+from .patcher import format_patch_for_prompt
 
 
 def build_static_prompt(tool_descriptions: str) -> str:

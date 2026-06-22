@@ -27,7 +27,7 @@ from .config import validate_config, LOG_DIR
 from .dependencies import llm_router, memory
 from .dreamer import dream
 from .eventbus import event_bus
-from .waitlist import router as waitlist_router
+
 from .routers import ui, api, system
 
 # --- Logging ---
@@ -53,7 +53,7 @@ if memory.redis:
 scheduler = AsyncIOScheduler()
 scheduler.add_job(dream, "interval", hours=1, args=[memory, llm_router])
 
-from .agent.ambientconsolidation import schedule_consolidation
+from .ambientconsolidation import schedule_consolidation
 schedule_consolidation(scheduler, memory, llm_router)
 
 # --- Rate limiting ---
@@ -81,7 +81,7 @@ app.add_middleware(
 )
 
 # --- Routers ---
-app.include_router(waitlist_router)
+
 app.include_router(ui.router)
 app.include_router(api.router)
 app.include_router(system.router)
@@ -101,7 +101,7 @@ async def start_scheduler():
     logger.info("🔍 Model discovery scheduled in background.")
 
     # Phase 3: Start Memory Sideagent
-    from .agent.memorysideagent import start_memory_sideagent
+    from .memorysideagent import start_memory_sideagent
     from .dependencies import memory
     start_memory_sideagent(memory)
 

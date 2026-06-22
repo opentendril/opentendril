@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
-from ..dependencies import llm_router, memory, skills_manager, orchestrator
+from ..dependencies import llm_router, memory, orchestrator
 from ..dreamer import dream, dreamer_state
 from ..credits import credit_manager
 from ..eventbus import event_bus
@@ -28,7 +28,7 @@ async def health():
     return {
         "status": "healthy",
         "version": "0.1.0",
-        "skills_loaded": len(skills_manager.skills),
+        "skills_loaded": 0,
         "llm_providers": llm_router.available_providers,
     }
 
@@ -43,7 +43,7 @@ async def get_status():
             "identity": "The Root Agent",
         },
         "inventory": {
-            "skills": skills_manager.skills,
+            "skills": {},
             "memory_type": "Chroma (Local)",
             "credit_mode": credit_manager.mode.value,
         },
