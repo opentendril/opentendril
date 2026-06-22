@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenTendril — Architectural Nomenclature</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-panel: rgba(20, 20, 30, 0.6);
+            --border-glow: rgba(80, 200, 120, 0.3);
+            --accent-green: #39FF14;
+            --accent-cyan: #00F0FF;
+            --text-main: #E2E8F0;
+            --text-muted: #94A3B8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(57, 255, 20, 0.05), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(0, 240, 255, 0.05), transparent 25%);
+        }
+
+        header {
+            text-align: center;
+            padding: 3rem 1rem 1rem 1rem;
+            max-width: 800px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin-bottom: 1rem;
+            background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            line-height: 1.6;
+        }
+
+        .container {
+            display: flex;
+            width: 100%;
+            max-width: 1200px;
+            gap: 2rem;
+            padding: 2rem;
+            flex: 1;
+        }
+
+        /* UI Panel Controls */
+        .controls {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .card {
+            background: var(--bg-panel);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 1.5rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card:hover {
+            border-color: var(--border-glow);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px rgba(57, 255, 20, 0.1);
+        }
+
+        .card.active {
+            border-color: var(--accent-green);
+            background: rgba(57, 255, 20, 0.05);
+        }
+
+        .card h3 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.1rem;
+            color: var(--accent-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .card p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+        }
+
+        .badge {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 0.7rem;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Canvas / Animation Area */
+        .visualization {
+            flex: 2;
+            background: var(--bg-panel);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 500px;
+            overflow: hidden;
+        }
+
+        .grid-bg {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image: 
+                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-size: 30px 30px;
+            z-index: 0;
+        }
+
+        /* SVG Animation Layer */
+        svg {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        /* SVG Elements */
+        .stem {
+            stroke: #2e3532;
+            stroke-width: 6;
+            stroke-linecap: round;
+            fill: none;
+        }
+        
+        .stem-active {
+            stroke: var(--accent-green);
+            filter: drop-shadow(0 0 8px var(--accent-green));
+            transition: stroke 1s ease;
+        }
+
+        .node {
+            fill: var(--bg-dark);
+            stroke: #444;
+            stroke-width: 2;
+            r: 6;
+            transition: all 0.3s ease;
+        }
+
+        .node.active {
+            stroke: var(--accent-green);
+            fill: var(--accent-green);
+            filter: drop-shadow(0 0 5px var(--accent-green));
+        }
+
+        .tendril-path {
+            stroke: var(--accent-green);
+            stroke-width: 3;
+            stroke-linecap: round;
+            fill: none;
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            filter: drop-shadow(0 0 4px var(--accent-green));
+        }
+
+        .target-node {
+            fill: transparent;
+            stroke: var(--accent-cyan);
+            stroke-width: 2;
+            stroke-dasharray: 4;
+            r: 15;
+            animation: pulse-ring 2s infinite linear;
+            opacity: 0;
+        }
+
+        .target-label {
+            fill: var(--accent-cyan);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        /* Animations */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.8; stroke-width: 2; }
+            50% { transform: scale(1.2); opacity: 0.3; stroke-width: 1; }
+            100% { transform: scale(0.8); opacity: 0.8; stroke-width: 2; }
+        }
+
+        @keyframes grow-tendril {
+            to { stroke-dashoffset: 0; }
+        }
+
+        @keyframes circumnutate {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        @keyframes shrink-away {
+            to { stroke-dashoffset: 1000; opacity: 0; }
+        }
+
+        /* Status overlay */
+        .status-overlay {
+            position: absolute;
+            bottom: 2rem;
+            left: 2rem;
+            z-index: 20;
+            background: rgba(0,0,0,0.8);
+            border-left: 3px solid var(--accent-green);
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        @media (max-width: 900px) {
+            .container { flex-direction: column-reverse; }
+            .visualization { min-height: 350px; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Architectural Nomenclature</h1>
+        <p class="subtitle">OpenTendril models autonomous AI execution through a strict botanical metaphor. Click the events below to visualize the lifecycle of an agent.</p>
+    </header>
+
+    <div class="container">
+        
+        <div class="controls">
+            <div class="card" onclick="triggerSequence('initiate')">
+                <span class="badge">Boot</span>
+                <h3>1. initiate()</h3>
+                <p>The main orchestrator boots up. The core structural stem grows and establishes the environment, preparing nodes for agents.</p>
+            </div>
+
+            <div class="card" onclick="triggerSequence('circumnutate')">
+                <span class="badge">Idle</span>
+                <h3>2. circumnutate()</h3>
+                <p>An agent is in queue or polling for a trigger. In nature, a tendril physically swings in circles through the air waiting for contact.</p>
+            </div>
+
+            <div class="card" onclick="triggerSequence('sprout')">
+                <span class="badge">Spawn</span>
+                <h3>3. sprout() / emerge()</h3>
+                <p>A task is received. A short-lived, ephemeral worker agent rapidly breaks through the surface to handle the specific task.</p>
+            </div>
+
+            <div class="card" onclick="triggerSequence('extend')">
+                <span class="badge">Execute</span>
+                <h3>4. extend() & elongation()</h3>
+                <p>The agent executes the ReAct loop (elongation), reaching out across the network to hook into an API, database, or tool.</p>
+            </div>
+
+            <div class="card" onclick="triggerSequence('latch')">
+                <span class="badge">Resolution A</span>
+                <h3>5a. anchor() / latch()</h3>
+                <p>For pinned agents (like an active MCP server connection), the tendril wraps securely around the target and becomes a permanent structural tether.</p>
+            </div>
+
+            <div class="card" onclick="triggerSequence('senesce')">
+                <span class="badge">Resolution B</span>
+                <h3>5b. senesce() / drop()</h3>
+                <p>For ephemeral run-once agents, the task completes. The tendril drops its context, dries up, and terminates cleanly to free memory.</p>
+            </div>
+        </div>
+
+        <div class="visualization">
+            <div class="grid-bg"></div>
+            
+            <div class="status-overlay" id="statusBox">
+                System Status: <span id="statusText" style="color: var(--accent-cyan);">Idle</span>
+            </div>
+
+            <svg viewBox="0 0 600 500" preserveAspectRatio="xMidYMid meet">
+                <!-- Base Stem -->
+                <path class="stem" id="mainStem" d="M 100,500 Q 100,250 100,50" />
+                
+                <!-- Nodes -->
+                <circle class="node" id="node1" cx="100" cy="350" />
+                <circle class="node" id="node2" cx="100" cy="200" />
+                <circle class="node" id="node3" cx="100" cy="80" />
+
+                <!-- Targets -->
+                <circle class="target-node" id="target1" cx="450" cy="150" />
+                <text class="target-label" id="targetLabel1" x="430" y="120">GitHub API</text>
+
+                <!-- Tendrils -->
+                <g id="tendrilGroup" style="transform-origin: 100px 200px;">
+                    <path class="tendril-path" id="tendril1" d="M 100,200 Q 250,200 450,150" />
+                </g>
+                
+                <g id="tendrilCoilGroup" style="opacity: 0;">
+                    <!-- Coiling animation path -->
+                    <path class="tendril-path" id="coilPath" style="animation: none;" d="M 450,150 C 470,120 500,160 450,180 C 410,160 450,110 470,140" />
+                </g>
+            </svg>
+        </div>
+
+    </div>
+
+    <script>
+        const statusBox = document.getElementById('statusBox');
+        const statusText = document.getElementById('statusText');
+        const stem = document.getElementById('mainStem');
+        const node2 = document.getElementById('node2');
+        const tendrilGroup = document.getElementById('tendrilGroup');
+        const tendril1 = document.getElementById('tendril1');
+        const target1 = document.getElementById('target1');
+        const targetLabel = document.getElementById('targetLabel1');
+        const coilGroup = document.getElementById('tendrilCoilGroup');
+        const coilPath = document.getElementById('coilPath');
+        
+        let currentState = 'reset';
+
+        function updateStatus(text, color = 'var(--accent-green)') {
+            statusBox.style.opacity = '1';
+            statusText.textContent = text;
+            statusText.style.color = color;
+        }
+
+        function resetCanvas() {
+            stem.classList.remove('stem-active');
+            node2.classList.remove('active');
+            tendrilGroup.style.animation = 'none';
+            tendril1.style.animation = 'none';
+            tendril1.style.strokeDashoffset = '1000';
+            tendril1.style.opacity = '1';
+            target1.style.opacity = '0';
+            targetLabel.style.opacity = '0';
+            coilGroup.style.opacity = '0';
+            coilPath.style.animation = 'none';
+            
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('active'));
+        }
+
+        function triggerSequence(action) {
+            resetCanvas();
+            
+            // Highlight card
+            event.currentTarget.classList.add('active');
+
+            if (action === 'initiate') {
+                updateStatus('Orchestrator boot. Stem initiated.');
+                setTimeout(() => {
+                    stem.classList.add('stem-active');
+                    setTimeout(() => node2.classList.add('active'), 500);
+                }, 100);
+            }
+            
+            else if (action === 'circumnutate') {
+                stem.classList.add('stem-active');
+                node2.classList.add('active');
+                updateStatus('Agent allocated. Polling for trigger...', 'var(--accent-cyan)');
+                
+                // Small emerging bud that spins
+                tendril1.style.strokeDashoffset = '950'; // Just a tiny nub
+                tendrilGroup.style.animation = 'circumnutate 3s linear infinite';
+            }
+
+            else if (action === 'sprout') {
+                stem.classList.add('stem-active');
+                node2.classList.add('active');
+                updateStatus('Task received! Ephemeral agent emerging.');
+                
+                tendrilGroup.style.animation = 'none';
+                tendril1.style.animation = 'grow-tendril 1s ease forwards';
+                // Stop halfway
+                setTimeout(() => {
+                    tendril1.style.animationPlayState = 'paused';
+                }, 500);
+            }
+
+            else if (action === 'extend') {
+                stem.classList.add('stem-active');
+                node2.classList.add('active');
+                updateStatus('Elongation active. Resolving LLM Tool Call...');
+                
+                target1.style.opacity = '1';
+                targetLabel.style.opacity = '1';
+                
+                tendril1.style.animation = 'grow-tendril 1.5s ease forwards';
+            }
+
+            else if (action === 'latch') {
+                stem.classList.add('stem-active');
+                node2.classList.add('active');
+                target1.style.opacity = '1';
+                targetLabel.style.opacity = '1';
+                tendril1.style.strokeDashoffset = '0';
+                
+                updateStatus('Pinned Agent Latched to target. Thigmomorphogenesis active.', '#ff00ff');
+                
+                setTimeout(() => {
+                    coilGroup.style.opacity = '1';
+                    coilPath.style.animation = 'grow-tendril 1s ease forwards';
+                }, 100);
+            }
+
+            else if (action === 'senesce') {
+                stem.classList.add('stem-active');
+                node2.classList.add('active');
+                target1.style.opacity = '1';
+                targetLabel.style.opacity = '1';
+                tendril1.style.strokeDashoffset = '0';
+                
+                updateStatus('Task Complete. Agent senescing (dropping context).', '#ff4444');
+                
+                setTimeout(() => {
+                    tendril1.style.animation = 'shrink-away 1.5s ease forwards';
+                    setTimeout(() => {
+                        target1.style.opacity = '0';
+                        targetLabel.style.opacity = '0';
+                        node2.classList.remove('active');
+                    }, 1000);
+                }, 500);
+            }
+        }
+        
+        // Start in init state
+        setTimeout(() => document.querySelector('.card').click(), 500);
+    </script>
+</body>
+</html>

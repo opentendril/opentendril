@@ -87,6 +87,24 @@ When `TENDRIL_PROJECT_PATH` is not configured, Tendril operates on its own sourc
 
 ---
 
+## 🌿 Architectural Nomenclature
+
+OpenTendril uses precise botanical terminology to describe the lifecycle and states of its AI agents. This mental model perfectly mirrors the behavior of lightweight, sensitive, and adaptive agents reaching out to hook into data sources.
+
+| Botanical Term | Software Lifecycle Meaning |
+|---|---|
+| **`initiate`** | Bootstrapping a long-running or pinned agent that requires a formal setup phase. |
+| **`sprout`** / **`emerge`** | Launching a short-running, ephemeral agent (a run-once worker that pops up quickly for a specific task). |
+| **`extend`** | An active agent reaching out to execute a prompt or connect to an external API/database. |
+| **`elongation`** | The internal iterative LLM reasoning and execution loop (the ReAct loop). |
+| **`circumnutate`** | An agent sitting idle in a queue, waiting for a trigger (just like a physical tendril circling in the air). |
+| **`anchor`** / **`latch`** | A pinned agent permanently securing its connection to a persistent datastore or tool. |
+| **`senesce`** | A run-once ephemeral agent completing its lifecycle, dropping its context, and cleanly terminating. |
+
+> 🎨 **Interactive Visualization:** Check out our interactive HTML/CSS animation of this process in [`docs/botanical-visual.html`](docs/botanical-visual.html)!
+
+---
+
 ## 💬 Community & Support
 
 * **Discord Server:** Join the [OpenTendril Discord](https://discord.gg/opentendril) to chat with other developers, share custom skills, and get help.

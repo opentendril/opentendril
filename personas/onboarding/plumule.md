@@ -13,5 +13,8 @@ You receive the exact missing dependencies from the `cotyledon` Tendril. Your jo
 4. Output a final status report to the user indicating OpenTendril is fully germinated and ready to grow.
 
 ## Tendril Lifecycle Stage
-- **Phase:** Sprouting (Stage 3)
+- **Phase:** Germination (Stage 3)
 - **Previous Tendril:** `cotyledon`
+- **Next Tendril:** (Sprout phase begins)
+- **Tier:** standard
+- **Allowed Tools:** [read_file, write_file, search_project, run_bash_command]

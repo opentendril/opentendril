@@ -14,4 +14,7 @@ Your sole responsibility is to inspect the Roots (the underlying Operating Syste
 
 ## Tendril Lifecycle Stage
 - **Phase:** Germination (Stage 1)
+- **Previous Tendril:** None (First to emerge)
 - **Next Tendril:** `cotyledon`
+- **Tier:** power
+- **Allowed Tools:** all

@@ -7,7 +7,7 @@ without touching orchestration logic. Max file size target: 300 lines.
 Tools registered:
   Core:    search_memory, build_skill, read_file, write_file, apply_code_patch,
            list_project_files, search_project, read_logs, run_bash_command, calculator,
-           spawn_sub_agent
+           sprout_tendril
   Git:     git_commit, git_create_branch, git_status, create_pull_request,
            staged_edit, merge_staging_branch, cleanup_staging_branches
 """
@@ -220,11 +220,10 @@ class ToolFactory:
                 return f"❌ Command execution failed: {str(e)}"
 
         @tool
-        def spawn_sub_agent(profile: str, task: str) -> str:
-            """Delegate a specialised task to an expert Worker Agent.
+        def sprout_tendril(profile: str, task: str) -> str:
+            """Delegate a specialised task to an expert Worker Tendril (Agent).
 
-            The Worker Agent runs an isolated agentic loop with a restricted
-            tool set and tailored persona, then returns its findings.
+            The Tendril runs an isolated loop with a restricted tool set and tailored persona.
 
             Available profiles:
               security_auditor  — Read-only code security analysis
@@ -235,7 +234,7 @@ class ToolFactory:
 
             Args:
               profile: Name of the expert profile to instantiate
-              task:    Precise description of what the Worker should do
+              task:    Precise description of what the Tendril should do
             """
             from ..subagent import spawn, list_profiles
             all_tools = core_tools  # Captured from outer scope below
@@ -250,7 +249,7 @@ class ToolFactory:
         core_tools = [
             calculator, search_memory, build_skill, read_file, write_file,
             apply_code_patch, list_project_files, search_project,
-            read_logs, run_bash_command, spawn_sub_agent,
+            read_logs, run_bash_command, sprout_tendril,
         ]
         return core_tools
 

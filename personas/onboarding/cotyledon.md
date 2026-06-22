@@ -16,3 +16,5 @@ You receive the exact OS and Architecture context from the `radicle` Tendril. Yo
 - **Phase:** Germination (Stage 2)
 - **Previous Tendril:** `radicle`
 - **Next Tendril:** `plumule`
+- **Tier:** fast
+- **Allowed Tools:** [read_file, run_bash_command]
