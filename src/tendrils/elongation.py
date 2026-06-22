@@ -67,6 +67,23 @@ def elongate():
     if not all([tendril_id, persona_name, task]):
         print(json.dumps({"error": "Missing required Tendril context in environment."}))
         sys.exit(1)
+
+    # Load Genome (Context Seeds)
+    genome_dir = os.path.join(workspace, ".tendril", "genome")
+    genome_context = []
+    if os.path.isdir(genome_dir):
+        import logging
+        logging.info("🧬 Reading Genome context seeds...")
+        for f in sorted(os.listdir(genome_dir)):
+            if f.endswith(".md"):
+                try:
+                    with open(os.path.join(genome_dir, f), 'r') as fp:
+                        genome_context.append(f"\n### {f} ###\n{fp.read().strip()}")
+                except Exception as e:
+                    logging.warning(f"Failed to read genome file {f}: {e}")
+    
+    combined_genome = "\n".join(genome_context)
+    # The combined_genome is now ready to be injected into the system prompt when the ReAct loop executes.
         
     logger.info(f"🌿 Elongation initiated for Tendril '{tendril_id}' (Persona: {persona_name})")
     
@@ -116,8 +133,12 @@ def elongate():
         print(json.dumps({"error": f"LLM Initialization failed: {e}"}))
         sys.exit(1)
         
+    system_content = persona_data["content"]
+    if combined_genome:
+        system_content += f"\n\n# Project Genome (Core Architectural Rules)\n{combined_genome}"
+        
     messages = [
-        {"role": "system", "content": persona_data["content"]},
+        {"role": "system", "content": system_content},
         {"role": "user", "content": task}
     ]
     
