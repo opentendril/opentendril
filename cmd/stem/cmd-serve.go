@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/opentendril/core/cmd/stem/internal/api"
+	"github.com/opentendril/core/cmd/stem/internal/configurator"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/security"
 )
@@ -38,8 +40,13 @@ type Choice struct {
 func runServeCmd(ctx context.Context, args []string) {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("POST /v1/chat/completions", handleChatCompletions)
+	mux.HandleFunc("/v1/chat/completions", handleChatCompletions)
 	mux.HandleFunc("GET /health", handleHealth)
+
+	// Phase 4: Configuration API
+	tendrilDir := "./.tendril"
+	configHandler := api.NewConfigHandler(tendrilDir)
+	configHandler.SetupRoutes(mux)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -100,15 +107,28 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Spawning Tendril for task: %s", taskPrompt)
 
-	// Phase 3: Execute the Python Tendril via the Orchestrator
-	engine := orchestrator.NewDockerOrchestrator()
-	output, err := engine.RunTendril(r.Context(), taskPrompt)
+	var output string
+	var err error
+
+	// Route to internal Configurator Tendril or external Docker Tendril
+	if req.Model == "configurator" {
+		configTendril := configurator.NewConfiguratorTendril(triggersDir)
+		output, err = configTendril.Execute(r.Context(), taskPrompt)
+	} else {
+		// Phase 3: Execute the Python Tendril via the Orchestrator
+		orch := &orchestrator.DockerOrchestrator{
+			ImageName: "core-tendril:latest", // Hardcoded for now
+		}
+		output, err = orch.RunTendril(r.Context(), taskPrompt)
+	}
+
 	if err != nil {
 		log.Printf("Tendril execution failed: %v", err)
-		http.Error(w, "Tendril execution failed", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// Format response as OpenAI completion
 	resp := ChatCompletionResponse{
 		ID:      "chatcmpl-tendril",
 		Object:  "chat.completion",

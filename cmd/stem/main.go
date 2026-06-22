@@ -12,9 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env file if it exists
+	_ = godotenv.Load()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
