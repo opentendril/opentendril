@@ -40,3 +40,13 @@ tendril-node-*.pub
 # CLI build artifacts
 cli/dist/
 cli/tendril-cli
+
+# Go Stem build artifacts
+cmd/stem/stem
+cmd/stem/tendril
+cmd/stem/tendril-cli
+cmd/stem/server.log
+
+# Generated .tendril runtime files (user-local, not committed)
+.tendril/transduction/hormonal-triggers/block-trigger.sh
+.tendril/transduction/hormonal-triggers/*-generated.sh
