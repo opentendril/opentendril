@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/opentendril/sprout/internal/proxy"
+	"github.com/opentendril/core/cmd/stem/internal/proxy"
 )
 
 // Server handles the MCP JSON-RPC protocol over stdio.
