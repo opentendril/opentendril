@@ -15,7 +15,7 @@ type DockerOrchestrator struct {
 
 func NewDockerOrchestrator() *DockerOrchestrator {
 	return &DockerOrchestrator{
-		ImageName: "core-tendril:latest",
+		ImageName: "opentendril-tendril:latest",
 	}
 }
 
