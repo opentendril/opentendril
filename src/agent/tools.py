@@ -236,15 +236,56 @@ class ToolFactory:
               profile: Name of the expert profile to instantiate
               task:    Precise description of what the Tendril should do
             """
-            from ..subagent import spawn, list_profiles
-            all_tools = core_tools  # Captured from outer scope below
-            result = spawn(
-                profile_name=profile,
-                task=task,
-                parent_tools=all_tools,
-                router=router,
-            )
-            return f"[{profile.upper()} REPORT]\n{result}"
+            # --- HORMONAL TRIGGER CHECK (Pre-Tendril Security / Meristem) ---
+            workspace_root = getattr(self.git, "repo_path", os.getcwd())
+            trigger_dir = os.path.join(workspace_root, ".tendril", "transduction", "hormonal-triggers")
+            
+            if os.path.isdir(trigger_dir):
+                scripts = [f for f in os.listdir(trigger_dir) if os.path.isfile(os.path.join(trigger_dir, f)) and os.access(os.path.join(trigger_dir, f), os.X_OK)]
+                if scripts:
+                    logger.info(f"🧪 Meristem activating {len(scripts)} hormonal triggers before allowing bud to sprout...")
+                    import tempfile
+                    import subprocess
+                    
+                    # Serialize the bud payload
+                    payload = {"persona": profile, "task": task}
+                    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
+                        json.dump(payload, tmp)
+                        payload_path = tmp.name
+                    
+                    errors = []
+                    try:
+                        for script in scripts:
+                            try:
+                                subprocess.run(
+                                    [os.path.join(trigger_dir, script), payload_path],
+                                    cwd=workspace_root, capture_output=True, text=True, check=True
+                                )
+                            except subprocess.CalledProcessError as e:
+                                errors.append(f"❌ Hormonal Shift Failed [{script}]:\n{e.stderr.strip() or e.stdout.strip()}")
+                    finally:
+                        try:
+                            os.remove(payload_path)
+                        except OSError:
+                            pass
+                    
+                    if errors:
+                        return "❌ [Meristem Sprout Aborted]\n" + "\n".join(errors) + "\n\nFix these task parameters before attempting to sprout again."
+            # --- END HORMONAL TRIGGER CHECK ---
+
+            try:
+                # Fallback implementation or new subagent execution hook
+                from ..subagent import spawn
+                all_tools = core_tools  # Captured from outer scope below
+                result = spawn(
+                    profile_name=profile,
+                    task=task,
+                    parent_tools=all_tools,
+                    router=router,
+                )
+                return f"[{profile.upper()} REPORT]\n{result}"
+            except ImportError:
+                return "❌ [Meristem Failure]: The subagent spawning mechanism is currently undergoing architectural refactoring. Sprout aborted."
 
         core_tools = [
             calculator, search_memory, build_skill, read_file, write_file,
