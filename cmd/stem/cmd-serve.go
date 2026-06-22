@@ -105,7 +105,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Spawning Tendril for task: %s", taskPrompt)
+	log.Printf("Sprouting Tendril for task: %s", taskPrompt)
 
 	var output string
 	var err error
