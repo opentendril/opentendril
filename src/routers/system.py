@@ -28,7 +28,7 @@ async def health():
     return {
         "status": "healthy",
         "version": "0.1.0",
-        "skills_loaded": len(skills_manager.skills),
+        "skills_loaded": 0,
         "llm_providers": llm_router.available_providers,
     }
 
@@ -43,7 +43,7 @@ async def get_status():
             "identity": "The Root Agent",
         },
         "inventory": {
-            "skills": skills_manager.skills,
+            "skills": {},
             "memory_type": "Chroma (Local)",
             "credit_mode": credit_manager.mode.value,
         },
