@@ -117,7 +117,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Phase 3: Execute the Python Tendril via the Orchestrator
 		orch := &orchestrator.DockerOrchestrator{
-			ImageName: "core-tendril:latest", // Hardcoded for now
+			ImageName: "opentendril-tendril:latest", // Hardcoded for now
 		}
 		output, err = orch.RunTendril(r.Context(), taskPrompt)
 	}
