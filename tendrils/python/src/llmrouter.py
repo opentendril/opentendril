@@ -12,7 +12,7 @@ Providers:
   - openai:     GPT models (general purpose)
   - google:     Gemini models (via OpenAI-compatible endpoint)
   - openrouter: Universal gateway (access to 200+ models)
-  - local:      vLLM on local GPU (free, private)
+  - local:      Ollama or vLLM on local GPU (free, private, no API key needed)
 """
 
 import logging
@@ -122,7 +122,9 @@ PROVIDER_CONFIG = {
     },
     "local": {
         "base_url": LOCAL_INFERENCE_URL,
-        "api_key": "not-needed",
+        # Ollama requires a non-empty api_key — "ollama" is the conventional dummy value
+        # ChatOpenAI validator rejects empty strings, so we use this placeholder
+        "api_key": "ollama",
         "type": "openai",
         "models": {
             "fast": LOCAL_MODEL_NAME,
