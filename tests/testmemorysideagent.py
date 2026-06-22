@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from unittest.mock import MagicMock
-from src.agent.memorysideagent import MemorySideagent, start_memory_sideagent
+from src.memorysideagent import MemorySideagent, start_memory_sideagent
 from src.eventbus import TendrilEvent
 
 @pytest.mark.asyncio

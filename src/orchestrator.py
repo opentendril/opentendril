@@ -29,7 +29,7 @@ from .credits import credit_manager
 from .failover import ModelFailover, classify_error
 from .eventbus import event_bus, TendrilEvent, generate_run_id
 from .patcher import format_patch_for_prompt
-from .tools import ToolFactory
+from .meristem import ToolFactory
 from .systemprompt import build_static_prompt, build_dynamic_prompt, build_system_prompt
 from .promptcache import build_cached_messages
 from .assessor import assess_and_route, revise_execution_plan
