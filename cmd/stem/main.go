@@ -40,6 +40,8 @@ func main() {
 		runMCPCmd(os.Args[2:])
 	case "init":
 		runInitCmd(os.Args[2:])
+	case "serve":
+		runServeCmd(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		printUsage()
 	default:
@@ -57,4 +59,5 @@ func printUsage() {
 	fmt.Println("  chat    Start the interactive chat interface")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")
+	fmt.Println("  serve   Start the Go Stem Orchestrator API")
 }

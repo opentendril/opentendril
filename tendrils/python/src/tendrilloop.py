@@ -329,3 +329,18 @@ class TendrilLoop:
                 f"Drift detected in session {session_id}: similarity {similarity:.2f} "
                 f"between user message and last response"
             )
+
+if __name__ == "__main__":
+    # Isolated edge-worker execution
+    import sys
+    task = os.environ.get("TASK_PROMPT")
+    if not task:
+        print("❌ TASK_PROMPT environment variable is required.")
+        sys.exit(1)
+
+    print(f"Sprouting Tendril to execute: {task}")
+    mem = Memory()
+    loop = TendrilLoop(memory=mem)
+    result = loop.process(session_id="isolated-worker", message=task, provider="default")
+    print("\n--- FINAL RESULT ---\n")
+    print(result)

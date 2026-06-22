@@ -1,4 +1,4 @@
-module github.com/opentendril/sprout
+module github.com/opentendril/core
 
 go 1.24.0
 

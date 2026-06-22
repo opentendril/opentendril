@@ -2,8 +2,8 @@
 
 # --- Sprout Binaries ---
 SPROUT_VERSION := 0.1.0
-SPROUT_DIR := cmd/tendril
-DIST_DIR := cmd/tendril/dist
+SPROUT_DIR := cmd/stem
+DIST_DIR := cmd/stem/dist
 
 sprout: ## Build Sprout for current platform
 	cd $(SPROUT_DIR) && go build -ldflags="-s -w" -o tendril .
@@ -47,7 +47,7 @@ test-sprout: ## Run Go tests
 test-all: test-core test-sprout ## Run all tests
 
 clean: ## Remove build artifacts
-	rm -rf $(DIST_DIR) cmd/tendril/tendril
+	rm -rf $(DIST_DIR) cmd/stem/tendril
 	docker compose down -v --remove-orphans
 
 help: ## Show this help
