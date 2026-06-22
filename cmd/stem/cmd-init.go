@@ -27,19 +27,33 @@ func runInitCmd(args []string) {
 	inferenceURL := ""
 
 	if len(ollamaModels) > 0 {
-		fmt.Printf("✅ Detected local Ollama instance with %d models.\n", len(ollamaModels))
-		fmt.Println("Would you like to use Ollama for local execution? (y/n)")
+		fmt.Printf("✅ Detected local Ollama with %d model(s):\n", len(ollamaModels))
+		for i, m := range ollamaModels {
+			fmt.Printf("  %d) %s\n", i+1, m)
+		}
+		fmt.Println("Would you like to use Ollama for local, private execution? (y/n)")
 		fmt.Print("> ")
 		if scanner.Scan() {
 			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 			if ans == "y" || ans == "yes" {
 				defaultProvider = "local"
-				inferenceURL = "http://localhost:11434/v1"
+				// Use host.docker.internal so the Docker Tendril container can reach Ollama on the host
+				inferenceURL = "http://host.docker.internal:11434/v1"
 				localModel = selectOllamaModel(ollamaModels)
+				// Let user override model choice
+				fmt.Printf("Auto-selected model: %s\n", localModel)
+				fmt.Printf("Press Enter to use it, or type a different model name: ")
+				if scanner.Scan() {
+					if override := strings.TrimSpace(scanner.Text()); override != "" {
+						localModel = override
+					}
+				}
+				fmt.Printf("✅ Using Ollama model: %s\n", localModel)
 			}
 		}
 	} else {
-		fmt.Println("❌ No local Ollama instance detected.")
+		fmt.Println("ℹ️  No local Ollama instance detected at localhost:11434.")
+		fmt.Println("   Start Ollama with: ollama serve")
 	}
 
 	// If they didn't choose local, let's ask about cloud
@@ -125,20 +139,29 @@ func runInitCmd(args []string) {
 		fmt.Printf("✅ Saved to %s\n", envPath)
 	}
 
-	// Step 3: Print MCP integration guide
-	fmt.Println("\n🔌 MCP Integration Guide")
-	fmt.Println("To connect Antigravity (or Claude Desktop) to OpenTendril, add the following to your MCP configuration file:")
-	fmt.Println("For Antigravity, edit: ~/.gemini/config/mcp_config.json")
-	fmt.Println("\n{")
-	fmt.Println(`  "mcpServers": {`)
-	fmt.Println(`    "opentendril": {`)
-	fmt.Printf(`      "command": "%s",`+"\n", filepath.Join(homeDir, ".local", "bin", "tendril"))
-	fmt.Println(`      "args": ["mcp"],`)
-	fmt.Println(`      "env": {}`)
-	fmt.Println(`    }`)
-	fmt.Println(`  }`)
-	fmt.Println("}")
-	fmt.Println("\n🎉 Setup Complete! You can now run `tendril chat` to start coding, or restart your IDE to enable the MCP connection.")
+	// Step 3: Print next steps
+	homeBin := filepath.Join(homeDir, ".local", "bin", "tendril")
+	fmt.Println()
+	fmt.Println("════════════════════════════════════════")
+	fmt.Println("  🎉 OpenTendril Setup Complete!")
+	fmt.Println("════════════════════════════════════════")
+	if defaultProvider == "local" {
+		fmt.Printf("  Provider : Ollama (local, private)\n")
+		fmt.Printf("  Model    : %s\n", localModel)
+		fmt.Printf("  URL      : %s\n", inferenceURL)
+	} else {
+		fmt.Printf("  Provider : %s\n", defaultProvider)
+	}
+	fmt.Println()
+	fmt.Println("  Next steps:")
+	fmt.Println("  1. Start the Stem server:   tendril serve")
+	fmt.Println("  2. Chat in a new terminal:  tendril chat")
+	fmt.Println()
+	fmt.Println("  MCP Integration (for Antigravity / Claude Desktop):")
+	fmt.Println("  Edit: ~/.gemini/config/mcp_config.json")
+	fmt.Println("  Add:")
+	fmt.Printf("    {\"mcpServers\": {\"opentendril\": {\"command\": \"%s\", \"args\": [\"mcp\"]}}}\n", homeBin)
+	fmt.Println("════════════════════════════════════════")
 }
 
 func getOllamaModels() []string {

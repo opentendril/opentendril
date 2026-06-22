@@ -97,7 +97,8 @@ func sendHTTP(base *url.URL, msg string) (string, error) {
 	u := *base
 	u.Path = "/v1/chat/completions"
 	reqBody := ChatRequest{
-		Model: "gpt-4", // Default model; can be configured later
+		// Use model name from env, default to "local" so Go Stem routes correctly
+		Model: getEnvOrDefaultStr("LOCAL_MODEL_NAME", os.Getenv("DEFAULT_LLM_PROVIDER")),
 		Messages: []Message{
 			{Role: "user", Content: msg},
 		},
@@ -170,12 +171,13 @@ func runChatCmd(ctx context.Context, args []string) {
 		}
 	}
 
-	base, err := url.Parse("http://localhost:9090") // default URL
+	base, err := url.Parse("http://localhost:8080") // Go Stem default port
 	if err != nil {
 		log.Fatal("Invalid URL:", err)
 	}
 
-	// Ensure the backend is running before connecting
+	// Check Go Stem is reachable
+	fmt.Println("🌱 Connecting to OpenTendril Stem...")
 	ensureBackendOnline(ctx, "http://localhost:8080")
 
 	sendFunc, err := connect(base, useWS)
@@ -183,7 +185,7 @@ func runChatCmd(ctx context.Context, args []string) {
 		log.Fatal("Failed to connect:", err)
 	}
 
-	log.Println("Tendril CLI connected! Type 'exit' or Ctrl+C to quit.")
+	log.Println("Connected! Type your task below, or 'exit' to quit.")
 	log.Println("Tip: Use 'tendril chat --http' to force HTTP mode.")
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -240,4 +242,14 @@ func runChatCmd(ctx context.Context, args []string) {
 	if err := scanner.Err(); err != nil {
 		log.Printf("Scanner error: %v", err)
 	}
+}
+
+func getEnvOrDefaultStr(key, fallback string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "local" // final fallback for the Go Stem router
 }
