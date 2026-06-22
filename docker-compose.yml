@@ -27,8 +27,11 @@ services:
   tendril:
     build: tendrils/python
     user: "${UID:-1000}:${GID:-1000}"
-    ports:
-      - "8080:8080"
+    # Note: No port mapping — the Go Stem (tendril serve) owns :8080.
+    # The Tendril container is an ephemeral worker spawned by the Go Stem via docker run.
+    extra_hosts:
+      # Allow the Tendril container to reach Ollama running on the Docker host
+      - "host.docker.internal:host-gateway"
     env_file:
       - path: .env
         required: false
@@ -45,8 +48,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-tendril_default_redis_secret}
       SECRET_KEY: ${SECRET_KEY:-tendril_default_jwt_secret}
       DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-grok}
-      LOCAL_INFERENCE_URL: ${LOCAL_INFERENCE_URL:-http://inference:8000/v1}
-      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-Qwen/Qwen3-8B-AWQ}
+      # For host Ollama: set to http://host.docker.internal:11434/v1 (default for local dev)
+      LOCAL_INFERENCE_URL: ${LOCAL_INFERENCE_URL:-http://host.docker.internal:11434/v1}
+      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-qwen2.5-coder:7b}
       NANO_MODEL_ENABLED: ${NANO_MODEL_ENABLED:-false}
       TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
       SANDBOX_TOKEN: ${SANDBOX_TOKEN:-tendril_default_sandbox_token}
