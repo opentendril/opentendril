@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
 
-from ..dependencies import llm_router, memory, skills_manager, orchestrator
+from ..dependencies import llm_router, memory, orchestrator
 from ..dreamer import dream, dreamer_state
 from ..credits import credit_manager
 from ..eventbus import event_bus
