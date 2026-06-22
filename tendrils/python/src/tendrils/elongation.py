@@ -21,7 +21,7 @@ def load_persona(persona_name: str) -> dict:
     # This is a naive search. In production, we'd recursively search all persona dirs.
     # For now, we check personas/onboarding/
     workspace = os.environ.get("TENDRIL_WORKSPACE_ROOT", "/workspace")
-    path = os.path.join(workspace, "personas", "onboarding", f"{persona_name}.md")
+    path = os.path.join(workspace, ".tendril", "personas", "onboarding", f"{persona_name}.md")
     
     if not os.path.exists(path):
         return {"error": f"Persona '{persona_name}' not found at {path}"}
