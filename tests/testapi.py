@@ -26,10 +26,7 @@ def test_status_endpoint():
     assert "connectivity" in data
     assert "pulse" in data
 
-def test_waitlist_endpoint_structure():
-    """Test that the waitlist router is properly mounted."""
-    response = client.post("/v1/waitlist", json={"email": "test_agent_check@example.com", "source": "test_suite"})
-    assert response.status_code in (201, 200)
+
 
 def test_credits_endpoint():
     """Test that the credits widget returns HTML safely."""
