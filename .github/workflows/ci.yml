@@ -84,7 +84,7 @@ jobs:
           
       - name: Vulnerability Scan (pip-audit)
         run: |
-          pip-audit -r tendrils/python/requirements.txt || true
+          pip-audit -r tendrils/python/requirements.txt
           
       - name: Run Core Tests
         run: |

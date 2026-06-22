@@ -17,6 +17,7 @@ slowapi==0.1.9
 pgvector==0.2.5
 psycopg2-binary==2.9.9
 langchain-huggingface>=0.1.2
+transformers>=5.0.0rc3
 sentence-transformers==3.3.1
 langchain-postgres>=0.0.17
 sympy>=1.13
