@@ -69,6 +69,40 @@ class GitManager:
         self._run_git("checkout", "-b", branch_name)
         return f"Checked out new branch: {branch_name}"
 
+    def sync_and_clean(self) -> str:
+        """Fetch prune and delete stale local branches where remote tracking is gone."""
+        self._run_git("fetch", "--prune")
+        try:
+            result = subprocess.run(
+                "git for-each-ref --format '%(refname:short) %(upstream:track)' refs/heads | grep '\\[gone\\]' | awk '{print $1}'",
+                shell=True, cwd=self.repo_path, capture_output=True, text=True
+            )
+            stale_branches = [b.strip() for b in result.stdout.splitlines() if b.strip()]
+            pruned = 0
+            for branch in stale_branches:
+                if branch != "main" and branch != self.current_branch():
+                    self._run_git("branch", "-D", branch)
+                    pruned += 1
+            return f"Synced with remote. Pruned {pruned} stale local branch(es)."
+        except Exception as e:
+            return f"Sync completed, but stale branch cleanup failed: {e}"
+
+    def safe_checkout(self, branch_name: str, source: str = "origin/main") -> str:
+        """Strict checkout that guarantees branch is based on remote truth."""
+        try:
+            self._run_git("checkout", "-B", branch_name, source)
+            return f"Safely checked out branch {branch_name} explicitly from {source}"
+        except Exception as e:
+            return f"Safe checkout failed: {e}"
+
+    def init_worktree(self, branch_name: str, worktree_path: str, source: str = "origin/main") -> str:
+        """Create a parallel git worktree for isolated operations."""
+        try:
+            self._run_git("worktree", "add", "-b", branch_name, worktree_path, source)
+            return f"Initialized parallel worktree at {worktree_path} on branch {branch_name}"
+        except Exception as e:
+            return f"Failed to initialize worktree: {e}"
+
     def _is_signing_configured(self) -> bool:
         """Check if GPG commit signing is configured for this repository."""
         try:
@@ -95,6 +129,27 @@ class GitManager:
         status = self.status()
         if not status:
             return "No changes to commit."
+
+        # RUN TRANSDUCTION (LOCAL CI) CHECKS
+        transduction_dir = os.path.join(self.repo_path, ".tendril", "transduction")
+        if os.path.isdir(transduction_dir):
+            scripts = [f for f in os.listdir(transduction_dir) if os.path.isfile(os.path.join(transduction_dir, f)) and os.access(os.path.join(transduction_dir, f), os.X_OK)]
+            if scripts:
+                logger.info(f"⚡ Running {len(scripts)} transduction check(s)...")
+                errors = []
+                for script in scripts:
+                    try:
+                        subprocess.run(
+                            [os.path.join(transduction_dir, script)],
+                            cwd=self.repo_path, capture_output=True, text=True, check=True
+                        )
+                    except subprocess.CalledProcessError as e:
+                        errors.append(f"❌ Transduction Blocked by [{script}]:\n{e.stderr.strip() or e.stdout.strip()}")
+                
+                if errors:
+                    # If any script failed, unstage everything and return the error to the LLM
+                    self._run_git("reset", "HEAD")
+                    return "\n".join(errors) + "\n\nFix these Local CI errors before attempting to commit again."
 
         # Build commit command with optional signing
         commit_args = ["commit"]
