@@ -55,7 +55,7 @@ func connectWS(base *url.URL) (*websocket.Conn, error) {
 
 // sendWS sends a message over WebSocket and reads the response.
 func sendWS(conn *websocket.Conn, msg string) (string, error) {
-	err := conn.WriteJSON(WSMessage{Type: "user_message", Data: msg})
+	err := conn.WriteJSON(WSMessage{Type: "userMessage", Data: msg})
 	if err != nil {
 		return "", err
 	}

@@ -25,8 +25,8 @@ type IncomingMessage struct {
 	Type      string `json:"type"`                 // "message", "stop", "ping"
 	Content   string `json:"content,omitempty"`    // User's message text
 	Provider  string `json:"provider,omitempty"`   // LLM provider preference
-	SessionID string `json:"session_id,omitempty"` // Persistent session
-	RunID     string `json:"run_id,omitempty"`     // For stop/cancel commands
+	SessionID string `json:"sessionId,omitempty"` // Persistent session
+	RunID     string `json:"runId,omitempty"`     // For stop/cancel commands
 }
 
 // --- Gateway → Client ---
@@ -35,7 +35,7 @@ type IncomingMessage struct {
 type OutgoingMessage struct {
 	Type    string `json:"type"`              // "stream.start", "stream.token", "stream.end", "error", "pong"
 	Content string `json:"content,omitempty"` // Token text or full response
-	RunID   string `json:"run_id,omitempty"`  // Correlation ID
+	RunID   string `json:"runId,omitempty"`  // Correlation ID
 	Error   string `json:"error,omitempty"`   // Error message if type=="error"
 }
 
@@ -59,20 +59,20 @@ const (
 type UnifiedMessage struct {
 	ID        string         `json:"id"`
 	Source    Source         `json:"source"`
-	ChannelID string         `json:"channel_id,omitempty"`
-	ThreadID  string         `json:"thread_id,omitempty"`
-	UserID    string         `json:"user_id,omitempty"`
-	UserName  string         `json:"user_name,omitempty"`
+	ChannelID string         `json:"channelId,omitempty"`
+	ThreadID  string         `json:"threadId,omitempty"`
+	UserID    string         `json:"userId,omitempty"`
+	UserName  string         `json:"userName,omitempty"`
 	Content   string         `json:"content"`
 	Provider  string         `json:"provider,omitempty"`
-	SessionID string         `json:"session_id"`
+	SessionID string         `json:"sessionId"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`
 }
 
 // UnifiedResponse is what the brain returns, before platform-specific formatting.
 type UnifiedResponse struct {
-	ReplyTo string `json:"reply_to"`
+	ReplyTo string `json:"replyTo"`
 	Content string `json:"content"`
-	RunID   string `json:"run_id,omitempty"`
+	RunID   string `json:"runId,omitempty"`
 }

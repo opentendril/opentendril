@@ -30,7 +30,7 @@ func NewBrainClient(baseURL string) *BrainClient {
 
 // chatRequest matches the Python brain's ChatRequest pydantic model.
 type chatRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID string `json:"sessionId"`
 	Message   string `json:"message"`
 	Provider  string `json:"provider"`
 }

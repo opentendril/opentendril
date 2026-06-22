@@ -34,7 +34,7 @@ type ChatCompletionResponse struct {
 type Choice struct {
 	Index        int        `json:"index"`
 	Message      APIMessage `json:"message"`
-	FinishReason string     `json:"finish_reason"`
+	FinishReason string     `json:"finishReason"`
 }
 
 func runServeCmd(ctx context.Context, args []string) {
