@@ -158,7 +158,7 @@ func runInitCmd(args []string) {
 	fmt.Println("  2. Chat in a new terminal:  tendril chat")
 	fmt.Println()
 	fmt.Println("  MCP Integration (for Antigravity / Claude Desktop):")
-	fmt.Println("  Edit: ~/.gemini/config/mcp-config.json")
+	fmt.Println("  Edit: ~/.gemini/config/mcp_config.json")
 	fmt.Println("  Add:")
 	fmt.Printf("    {\"mcpServers\": {\"opentendril\": {\"command\": \"%s\", \"args\": [\"mcp\"]}}}\n", homeBin)
 	fmt.Println("════════════════════════════════════════")
