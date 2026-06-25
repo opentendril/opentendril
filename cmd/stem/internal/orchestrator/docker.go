@@ -72,6 +72,10 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		shadowPath, err := createShadowWorktree(sourcePath)
 		if err == nil {
 			mountPath = shadowPath
+			
+			// Inject node_modules, .venv, vendor from host if they exist
+			injectMycorrhizalCache(sourcePath, shadowPath)
+			
 			// Ensure cleanup after execution
 			defer func() {
 				removeShadowWorktree(sourcePath, shadowPath)
@@ -141,6 +145,25 @@ func createShadowWorktree(sourcePath string) (string, error) {
 	}
 	
 	return shadowPath, nil
+}
+
+// injectMycorrhizalCache hard-links dependency directories from the host to the shadow sandbox.
+func injectMycorrhizalCache(sourcePath, shadowPath string) {
+	cacheDirs := []string{"node_modules", ".venv", "venv", "vendor"}
+	
+	for _, dir := range cacheDirs {
+		srcDir := filepath.Join(sourcePath, dir)
+		if info, err := os.Stat(srcDir); err == nil && info.IsDir() {
+			dstDir := filepath.Join(shadowPath, dir)
+			// Use cp -rl to recursively hard-link the directory
+			cmd := exec.Command("cp", "-rl", srcDir, dstDir)
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to inject mycorrhizal cache %s: %v\n", dir, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "🍄 Injected Mycorrhizal Cache: %s\n", dir)
+			}
+		}
+	}
 }
 
 // removeShadowWorktree securely removes the temporary git worktree.

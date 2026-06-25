@@ -12,7 +12,21 @@ By the end you will have confirmed the system is live and can respond to a promp
 | Docker + Docker Compose | `docker compose version` |
 | Git | `git --version` |
 | An LLM API key | Anthropic, xAI (Grok), or OpenAI |
+| Fine-Grained GitHub PAT | See Step 0 below |
 | *(Optional)* Go 1.22+ | Only needed to build the CLI |
+
+---
+
+## Step 0 — GitHub Security & SDLC (Crucial)
+
+OpenTendril operates on a strict **Zero-Trust SDLC architecture**. It must *never* be allowed to push code directly to `main` without human review.
+
+1. **Protect your Main Branch:** In your GitHub/GitLab repository settings, enforce a branch protection rule on `main` that requires a Pull Request before merging.
+2. **Create a Fine-Grained PAT:** Generate a Personal Access Token that is strictly scoped to your repository with only **Read/Write** permissions for:
+   - Code/Contents
+   - Pull Requests
+   - Issues
+3. **Configure the Environment:** Store this token in your `.env` file as `GITHUB_TOKEN=...` or inject it via the MCP Server.
 
 ---
 
