@@ -32,6 +32,15 @@ OpenTendril is designed under a Zero-Trust architecture. We assume that the code
 * **Firecracker MicroVMs:** For multi-tenant enterprise deployments, each agent session runs in its own lightweight AWS Firecracker microVM, providing hardware-level KVM virtualization and sub-second boot times.
 * **No Host Mounts:** Write access is restricted to the `/workspace` folder. The host's system configurations are never exposed.
 
+### 3. Secrets Management & Vault Injection
+* **No Secrets in Files:** Agents should never have access to local `.env` files on disk. OpenTendril forces an architectural constraint where operators or dedicated security teams manage API keys in secure vaults (e.g., HashiCorp Vault, cloud secret managers).
+* **Memory-Only Ephemeral Tokens:** The OpenTendril Go orchestrator reads the vault and injects credentials directly into the short-lived Tendril container's memory as environment variables.
+* **Airgapped from the LLM:** The LLM code-generation models, and external MCP tools, never see the physical keys on disk. If a container crashes or is breached, the environment vanishes.
+
+### 4. Source Control Protection (GitHub/GitLab)
+* **Fine-Grained PATs:** Tendrils operate using strictly scoped, fine-grained Personal Access Tokens (PATs). These tokens are restricted exclusively to read/write access for source code, pull requests, and issues. They cannot manage webhooks, admin settings, or repo deletion.
+* **Branch Protection Enforcement:** OpenTendril assumes `main` is protected. Agents cannot directly push to `main` without generating a PR. This closes the loop on malicious commits bypassing human review, cementing the repository host (GitHub/GitLab) as the ultimate source of truth and SDLC gateway.
+
 ---
 
 ## 🏗️ 12-Factor App Compliance

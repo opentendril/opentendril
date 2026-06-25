@@ -42,7 +42,7 @@ func main() {
 	case "chat":
 		runChatCmd(ctx, os.Args[2:])
 	case "mcp":
-		runMCPCmd(os.Args[2:])
+		runMCPCmd(ctx, os.Args[2:])
 	case "init":
 		runInitCmd(os.Args[2:])
 	case "serve":

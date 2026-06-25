@@ -151,3 +151,10 @@ Instead of generic "Agents" or abstract "Skills", the system consists of **Tendr
 * **Zero Idle Cost:** Tendrils consume zero CPU or RAM when idle. They only exist during active task execution.
 * **Physical Guardrails:** Because the Tendril is an isolated process, its network and filesystem access can be physically restricted via Docker or Firecracker microVMs. It is impossible for the LLM to exceed its explicit permissions.
 * **No Context Degradation:** Because every Tendril starts fresh for a specific task and terminates afterward, there is zero risk of it forgetting structural rules or hallucinating past context.
+
+### C. Shadow Git (Ephemeral Worktrees)
+To protect the main local repository from corruption and isolate intermediate execution states, OpenTendril employs a **Shadow Git** pattern via Git Worktrees:
+1. **Creation:** Before execution, the Orchestrator runs `git worktree add /tmp/tendril-task-<id>`.
+2. **Mounting:** Only this sterile, ephemeral worktree is mounted into the container. The main repository (`/workspace`) is never exposed.
+3. **Execution & Teardown:** The Tendril edits code, runs tests, and commits locally. If successful, it pushes a PR branch. Once the task finishes, the Orchestrator violently deletes the `/tmp` worktree.
+This ensures zero bleed of `__pycache__`, build artifacts, or secret leakages into the developer's primary working directory.

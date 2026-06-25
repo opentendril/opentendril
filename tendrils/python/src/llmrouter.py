@@ -28,6 +28,7 @@ from .config import (
     GOOGLE_API_KEY, GOOGLE_FAST_MODEL, GOOGLE_STANDARD_MODEL, GOOGLE_POWER_MODEL,
     OPENROUTER_API_KEY, OPENROUTER_FAST_MODEL, OPENROUTER_STANDARD_MODEL, OPENROUTER_POWER_MODEL,
     OPENTENDRIL_API_KEY,
+    NVIDIA_API_KEY,
     DEFAULT_LLM_PROVIDER,
     LOCAL_INFERENCE_URL,
     LOCAL_MODEL_NAME,
@@ -118,6 +119,15 @@ PROVIDER_CONFIG = {
             "fast": "google/gemini-2.0-flash-001",
             "standard": "anthropic/claude-3.5-sonnet",
             "power": "openai/gpt-4o",
+        },
+    },
+    "nvidia": {
+        "api_key": NVIDIA_API_KEY,
+        "env_var": "NVIDIA_API_KEY",
+        "models": {
+            "expert": "meta/llama-3.1-405b-instruct",
+            "standard": "meta/llama-3.1-70b-instruct",
+            "fast": "meta/llama-3.1-8b-instruct",
         },
     },
     "local": {
@@ -231,6 +241,8 @@ class LLMRouter:
         Returns:
             BaseChatModel instance ready for .invoke() or .stream()
         """
+        if provider == "default":
+            provider = None
         provider = provider or self.default_provider
 
         # Fallback if requested provider isn't available
@@ -260,6 +272,14 @@ class LLMRouter:
                     temperature=temperature,
                     max_tokens=4096,
                 )
+            elif provider == "nvidia":
+                from langchain_nvidia_ai_endpoints import ChatNVIDIA
+                self._cache[cache_key] = ChatNVIDIA(
+                    model=model_name,
+                    api_key=config["api_key"],
+                    temperature=temperature,
+                    max_tokens=4096,
+                )
             else:
                 self._cache[cache_key] = ChatOpenAI(
                     model=model_name,
@@ -274,7 +294,7 @@ class LLMRouter:
     def _get_fallback(self, failed_provider: str) -> Optional[str]:
         """Find a fallback provider when the requested one isn't available.
         Nano is always last resort — cloud first, then local, then nano."""
-        preference = ["grok", "anthropic", "openai", "google", "openrouter", "opentendril", "local", "nano"]
+        preference = ["grok", "anthropic", "openai", "nvidia", "google", "openrouter", "opentendril", "local", "nano"]
         for p in preference:
             if p != failed_provider and p in self._available_providers:
                 return p
