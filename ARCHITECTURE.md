@@ -2,7 +2,7 @@
 
 This document defines the target-state architecture and data-flow specifications for OpenTendril. As the system evolves from a monolithic Python script into a distributed set of services, this document serves as the implementation blueprint.
 
-> **Note:** This document focuses strictly on technical execution and microservices. To understand the philosophy, biological terminology, and conceptual design of the framework, please read [The Tendril Design System](THE-TENDRIL-SYSTEM.md) first!
+> **Note:** This document focuses strictly on technical execution and microservices. To understand the philosophy, biological terminology, and conceptual design of the framework, please read the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) first!
 
 ---
 

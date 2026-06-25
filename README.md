@@ -4,7 +4,7 @@ Headless AI coding assistant. Runs locally. Talks to any frontend.
 
 **Prerequisites:** Docker, Go 1.21+, Git — and optionally [Ollama](https://ollama.ai) for free local inference (no API key needed).
 
-> **📖 Before you build:** OpenTendril is built entirely around organic, evolutionary design principles to escape traditional, deterministic IT constraints. Please read [The Tendril Design System](THE-TENDRIL-SYSTEM.md) to understand the architecture and terminology.
+> **📖 Before you build:** OpenTendril is built entirely around organic, evolutionary design principles to escape traditional, deterministic IT constraints. Please read the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to understand the architecture and terminology.
 
 ---
 

@@ -1,8 +1,8 @@
-# The Tendril Design System & Biological Metaphors
+# Synthetic Biological Taxonomy & Systematics
 
 OpenTendril replaces traditional, generic IT terminology with biological and botanical metaphors. By mimicking evolutionary and natural systems—systems that have spent billions of years optimizing for resilience, modularity, and rapid adaptation—OpenTendril achieves a highly robust and dynamic cognitive architecture. 
 
-This document serves to educate contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms, and *why* we built the system this way.
+This document serves as the formal **Taxonomy and Systematics** of this synthetic organism. It educates contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms, classifying the nomenclature and explaining *why* we built the system this way.
 
 ---
 
