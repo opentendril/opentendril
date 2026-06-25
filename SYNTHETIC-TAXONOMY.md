@@ -26,7 +26,8 @@ The core execution environment maps to the structural anatomy of a plant.
 
 *   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem transports nutrients and structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI.
 *   **Sprout**: The ephemeral Docker sandbox. A sprout is a brand new, isolated shoot of growth. In OpenTendril, every time a Transcript executes, a fresh container (the Sprout) is created, providing a clean, isolated environment.
-*   **Tendril**: The autonomous AI agent (the Python loop) running inside the Sprout. In nature, a tendril is a specialized stem/leaf that autonomously reaches out, senses its environment, and grasps objects to pull the plant forward. In our system, the Tendril autonomously reads files, runs commands, and accomplishes the user's objective.
+*   **Tendril**: The physical worker (e.g. the Python or Go runtime) inside the Sprout. A tendril is *not* a brain—plants do not have brains. A tendril is a dumb, specialized limb that blindly reaches out, touches code, and runs shell commands based purely on chemical signals it receives.
+*   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the dumb Tendril to execute.
 
 ---
 
