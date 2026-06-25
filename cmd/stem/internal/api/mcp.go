@@ -168,13 +168,13 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 								"type":        "string",
 								"description": "The absolute path to the target repository workspace (the 'substrate'). E.g. /home/user/project",
 							},
-							"substrate_url": map[string]interface{}{
+							"substrateUrl": map[string]interface{}{
 								"type":        "string",
 								"description": "Optional remote repository URL to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
 							},
-							"substrate_branch": map[string]interface{}{
+							"substrateBranch": map[string]interface{}{
 								"type":        "string",
-								"description": "Optional branch name to clone if substrate_url is provided.",
+								"description": "Optional branch name to clone if substrateUrl is provided.",
 							},
 						},
 						"required": []string{"transcript", "substrate"},
@@ -258,8 +258,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.formatError(req.ID, -32602, "Invalid arguments", "The 'transcript' and 'substrate' parameters are required.")
 		}
 
-		substrateURL, _ := params.Arguments["substrate_url"].(string)
-		substrateBranch, _ := params.Arguments["substrate_branch"].(string)
+		substrateURL, _ := params.Arguments["substrateUrl"].(string)
+		substrateBranch, _ := params.Arguments["substrateBranch"].(string)
 
 		log.Printf("[MCP] Delegating transcript to Tendril: %s (Substrate: %s, URL: %s)", transcript, substrate, substrateURL)
 		orch := &orchestrator.DockerOrchestrator{
