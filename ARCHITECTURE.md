@@ -161,7 +161,7 @@ This ensures zero bleed of `__pycache__`, build artifacts, or secret leakages in
 
 ### D. Cross-pollination (Foreign Substrates)
 While local operation utilizes Shadow Git worktrees from the active repository, OpenTendril is also capable of **Cross-pollination**. 
-If a Tendril is sprouted with a `substrate_url` (a remote Git repository URL), the Orchestrator will:
+If a Tendril is sprouted with a `substrateUrl` (a remote Git repository URL), the Orchestrator will:
 1. Bypass the local repository entirely.
 2. Authenticate and perform a full `git clone` of the remote repository into a temporary sandbox.
 3. Drop the Tendril into this foreign substrate to execute its task (e.g. reviewing code or submitting cross-repo patches).
