@@ -191,7 +191,7 @@ class ToolFactory:
                 return f"❌ Command execution failed: {str(e)}"
 
         @tool
-        def sprout_tendril(profile: str, task: str) -> str:
+        def sprout_tendril(profile: str, transcript: str) -> str:
             """Delegate a specialised task to an expert Worker Tendril (Agent).
 
             The Tendril runs an isolated loop with a restricted tool set and tailored genotype.
@@ -204,8 +204,8 @@ class ToolFactory:
               linter            — Runs linting tools and reports issues
 
             Args:
-              profile: Name of the expert profile to instantiate
-              task:    Precise description of what the Tendril should do
+              profile:    Name of the expert profile to instantiate
+              transcript: "A clear, actionable description of the transcript (task) for the sub-tendril to execute."
             """
             # --- HORMONAL TRIGGER CHECK (Pre-Tendril Security / Meristem) ---
             workspace_root = getattr(self.git, "repo_path", os.getcwd())
@@ -219,7 +219,7 @@ class ToolFactory:
                     import subprocess
                     
                     # Serialize the bud payload
-                    payload = {"genotype": profile, "task": task}
+                    payload = {"genotype": profile, "transcript": transcript}
                     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
                         json.dump(payload, tmp)
                         payload_path = tmp.name

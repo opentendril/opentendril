@@ -14,12 +14,12 @@ class TendrilContext(BaseModel):
     """The context required for a Tendril to emerge and elongate."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     genotype: str
-    task: str
+    transcript: str
     runtime: str = "docker"
     environment: Dict[str, str] = Field(default_factory=dict)
     workspace_mount: Optional[str] = None
     
-def initiate_tendril(genotype: str, task: str, workspace: Optional[str] = None) -> TendrilContext:
+def initiate_tendril(genotype: str, transcript: str, workspace: Optional[str] = None) -> TendrilContext:
     """
     Phase 1: Initiation.
     The Stem signals the creation of a Tendril. It builds the necessary 
@@ -32,7 +32,7 @@ def initiate_tendril(genotype: str, task: str, workspace: Optional[str] = None) 
     
     context = TendrilContext(
         genotype=genotype,
-        task=task,
+        transcript=transcript,
         runtime=TENDRIL_RUNTIME,
         workspace_mount=workspace
     )

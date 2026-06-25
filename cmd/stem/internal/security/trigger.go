@@ -13,7 +13,7 @@ import (
 
 type TriggerPayload struct {
 	Genotype string `json:"genotype"`
-	Task    string `json:"task"`
+	Transcript string `json:"transcript"`
 }
 
 // EvaluateTriggers executes all scripts in the given triggers directory.

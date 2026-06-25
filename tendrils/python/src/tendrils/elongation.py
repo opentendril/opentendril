@@ -62,10 +62,10 @@ def elongate():
     """
     tendril_id = os.environ.get("TENDRIL_ID")
     genotype_name = os.environ.get("TENDRIL_GENOTYPE")
-    task = os.environ.get("TENDRIL_TASK")
+    transcript = os.environ.get("TENDRIL_TRANSCRIPT")
     workspace = os.environ.get("TENDRIL_WORKSPACE_ROOT", "/workspace")
     
-    if not all([tendril_id, genotype_name, task]):
+    if not all([tendril_id, genotype_name, transcript]):
         print(json.dumps({"error": "Missing required Tendril context in environment."}))
         sys.exit(1)
 
@@ -140,7 +140,7 @@ def elongate():
         
     messages = [
         {"role": "system", "content": system_content},
-        {"role": "user", "content": task}
+        {"role": "user", "content": transcript}
     ]
     
     last_content = None

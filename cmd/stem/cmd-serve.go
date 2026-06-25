@@ -98,8 +98,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	
 	// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 	payload := security.TriggerPayload{
-		Genotype: req.Model,
-		Task:    taskPrompt,
+		Genotype:   req.Model,
+		Transcript: taskPrompt,
 	}
 	
 	triggersDir := "./.tendril/transduction/hormonal-triggers"

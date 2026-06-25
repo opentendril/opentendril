@@ -134,12 +134,12 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 					"inputSchema": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
-							"task": map[string]interface{}{
+							"transcript": map[string]interface{}{
 								"type":        "string",
-								"description": "A clear, actionable description of the task for Tendril to execute.",
+								"description": "A clear, actionable description of the transcript (task) for Tendril to execute.",
 							},
 						},
-						"required": []string{"task"},
+						"required": []string{"transcript"},
 					},
 				},
 				{
@@ -222,17 +222,17 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		task, ok := params.Arguments["task"].(string)
-		if !ok || strings.TrimSpace(task) == "" {
-			h.sendError(w, req.ID, -32602, "Invalid arguments", "The 'task' parameter is required.")
+		transcript, ok := params.Arguments["transcript"].(string)
+		if !ok || strings.TrimSpace(transcript) == "" {
+			h.sendError(w, req.ID, -32602, "Invalid arguments", "The 'transcript' parameter is required.")
 			return
 		}
 
-		log.Printf("[MCP] Delegating task to Tendril: %s", task)
+		log.Printf("[MCP] Delegating transcript to Tendril: %s", transcript)
 		orch := &orchestrator.DockerOrchestrator{
 			ImageName: "opentendril-tendril:latest",
 		}
-		output, err := orch.RunTendril(r.Context(), task)
+		output, err := orch.RunTendril(r.Context(), transcript)
 		if err != nil {
 			log.Printf("[MCP] Tendril execution failed: %v", err)
 			h.sendResult(w, req.ID, map[string]interface{}{

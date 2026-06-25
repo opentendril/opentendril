@@ -2,7 +2,7 @@
 
 # Hormonal Trigger: Network Security
 # Runs at the Meristem before a Tendril is allowed to sprout.
-# Arguments: $1 = Path to JSON payload containing 'genotype' and 'task'
+# Arguments: $1 = Path to JSON payload containing 'genotype' and 'transcript'
 
 PAYLOAD_FILE=$1
 

@@ -39,7 +39,7 @@ def _emerge_via_docker(context: TendrilContext) -> Dict[str, Any]:
         "docker", "run", "--rm",
         "-e", f"TENDRIL_ID={context.id}",
         "-e", f"TENDRIL_GENOTYPE={context.genotype}",
-        "-e", f"TENDRIL_TASK={context.task}"
+        "-e", f"TENDRIL_TRANSCRIPT={context.transcript}"
     ]
     
     if context.workspace_mount:
@@ -62,7 +62,7 @@ def _emerge_via_host(context: TendrilContext) -> Dict[str, Any]:
     env = os.environ.copy()
     env["TENDRIL_ID"] = context.id
     env["TENDRIL_GENOTYPE"] = context.genotype
-    env["TENDRIL_TASK"] = context.task
+    env["TENDRIL_TRANSCRIPT"] = context.transcript
     
     import sys
     cmd = [sys.executable, "-m", "src.tendrils.elongation"]
