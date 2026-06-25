@@ -1,10 +1,24 @@
-# 🌱 OpenTendril
+# 🌱 OpenTendril: The Synthetic AI Organism
 
-Headless AI coding assistant. Runs locally. Talks to any frontend.
+OpenTendril is a headless, local-first AI coding framework. It runs on your machine, talks to any frontend (Claude Desktop, VS Code, Cursor), and executes code in secure sandboxes.
+
+But fundamentally, **OpenTendril is a paradigm shift in AI orchestration.**
+
+### The Problem with "Agents"
+For years, the industry has tried to force organic, probabilistic neural networks into rigid, deterministic IT concepts ("tasks," "scripts," "agents"). This leads to fragile systems that break the moment a parameter is unexpected, suffer from memory bloat, and expose host machines to severe security risks by running continuous, stateful execution loops.
+
+### The Biological Paradigm
+OpenTendril solves this by embracing biological evolution—the exact chaotic, adaptable system that neural networks were originally modeled after. We have abandoned deterministic software patterns in favor of a **Synthetic Taxonomy**:
+
+*   **Zero-Idle Ephemerality (The Sprout):** OpenTendril does not run stateful agents. When an instruction is received, a fresh, isolated Docker container (a *Sprout*) instantly boots, executes the logic, and is destroyed. 
+*   **Contextual Interpretation (The Transcript):** We don't issue mechanical "tasks." We provide *Transcripts*—fuzzy instructions that the AI dynamically interprets through the lens of its core identity (its *Genotype*).
+*   **The Immune System (Hormonal Triggers):** Security isn't an afterthought; it's a biological reflex. Acute bash-script triggers instantly abort anomalous executions before the AI even boots, while automated test containers constantly ensure the organism rejects harmful code mutations.
+
+By mapping software components to evolutionary biology, OpenTendril provides a profoundly resilient, secure, and adaptable execution engine for Large Language Models.
+
+> 📖 **Read the full philosophy:** Dive into the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to explore the complete design system and architecture.
 
 **Prerequisites:** Docker, Go 1.21+, Git — and optionally [Ollama](https://ollama.ai) for free local inference (no API key needed).
-
-> **📖 Before you build:** OpenTendril is built entirely around organic, evolutionary design principles to escape traditional, deterministic IT constraints. Please read the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to understand the architecture and terminology.
 
 ---
 
