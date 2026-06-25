@@ -2,6 +2,8 @@
 
 This document defines the target-state architecture and data-flow specifications for OpenTendril. As the system evolves from a monolithic Python script into a distributed set of services, this document serves as the implementation blueprint.
 
+> **Note:** This document focuses strictly on technical execution and microservices. To understand the philosophy, biological terminology, and conceptual design of the framework, please read [The Tendril Design System](THE-TENDRIL-SYSTEM.md) first!
+
 ---
 
 ## 1. Decoupled Service Topography
@@ -58,37 +60,6 @@ This means OpenTendril does not need to duplicate chat interfaces or search tool
   * Resolves LLM calls using native SDK adapters (Anthropic, OpenAI, Google) or OpenAI-compatible local APIs (Ollama, OpenLLM).
   * Manages provider-specific failovers with exponential backoff if primary models hit rate limits.
   * Decouples the prompt engineering templates from the actual tool execution.
-
-### C. The 6-Stage Growth Model (Framework Lifecycle)
-The execution flow of the OpenTendril framework natively maps to the six major growth stages of a climbing vine:
-
-1. **Seed Germination (Activation):** The user installs OpenTendril. The Core reads `.env` and `mcp_config.json`, absorbing its environment.
-2. **Seedling Emergence (Sprouting):** The Go Sprout breaks through and binds to local ports, establishing the main API surface.
-3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers and local vector databases ("The Roots").
-4. **Tendril Initiation:** When a specific task is requested, the Stem initiates a specialized persona context, signaling cells to form a Tendril (`initiation.py`).
-5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a Docker container boots via `emergence.py`) and begins sweeping the air. It touches the code, coils around it (executing the LLM loop via `elongation.py`), and pulls the project forward.
-6. **Reproductive Maturity:** With tasks completed, the framework redirects energy back to the user, producing final PRs, deliverables, and artifacts.
-
-```mermaid
-graph TD
-    classDef seed fill:#8b5a2b,stroke:#5c3a21,stroke-width:2px,color:white;
-    classDef stem fill:#2e8b57,stroke:#1b4f30,stroke-width:2px,color:white;
-    classDef tendril fill:#98fb98,stroke:#2e8b57,stroke-width:2px,color:black;
-    classDef fruit fill:#ff8c00,stroke:#8b4500,stroke-width:2px,color:white;
-
-    A(1. Seed Germination<br/>Read .env / Config) --> B(2. Seedling Emergence<br/>Go Sprout Binds)
-    B --> C(3. Vegetative Growth<br/>Connect to LLM/DB Roots)
-    
-    C --> D{4. Tendril Initiation<br/>Task Requested}
-    D -->|Builds Context| E[5. Thigmotropism<br/>Boot Container & Execute]
-    
-    E --> F((6. Reproductive Maturity<br/>Deliver Artifacts / PRs))
-    
-    class A seed;
-    class B,C stem;
-    class D,E tendril;
-    class F fruit;
-```
 
 ---
 
