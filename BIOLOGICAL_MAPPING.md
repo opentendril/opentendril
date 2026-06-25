@@ -4,6 +4,14 @@ OpenTendril replaces traditional, generic IT terminology with biological and bot
 
 This document serves to educate contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms.
 
+## The Philosophy: Escaping Determinism
+
+In traditional software engineering, a **Task** implies deterministic, mechanical execution. If you give a computer a task (like a cron job or a build script), you expect it to blindly follow a rigid set of instructions and fail if anything deviates.
+
+However, when interacting with Large Language Models, we are not issuing rigid tasks. We provide fuzzy prompts, relying heavily on the model's human-like reasoning, problem-solving, and educated guessing to navigate ambiguity. Forcing old-school, deterministic IT language (like "Task") onto a non-deterministic reasoning engine creates a fundamental disconnect in how developers architect the system.
+
+OpenTendril solves this by embracing biological evolution—the exact same chaotic, adaptable, non-deterministic system that neural networks were originally modeled after. By using biological terminology, we inherently accept that our instructions require contextual interpretation rather than mechanical execution.
+
 ## The Cognitive Anatomy
 
 The core execution environment maps to the structural anatomy of a plant.
