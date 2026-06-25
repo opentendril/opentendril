@@ -13,8 +13,10 @@ import (
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
-	ImageName string
-	Substrate string
+	ImageName       string
+	Substrate       string
+	SubstrateURL    string
+	SubstrateBranch string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -68,7 +70,19 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 
 	mountPath := sourcePath
 
-	if isGitRepo(sourcePath) {
+	if d.SubstrateURL != "" {
+		// Clone foreign substrate
+		shadowPath, err := cloneForeignSubstrate(d.SubstrateURL, d.SubstrateBranch)
+		if err == nil {
+			mountPath = shadowPath
+			// Ensure cleanup after execution
+			defer os.RemoveAll(shadowPath)
+			fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", d.SubstrateURL)
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to cross-pollinate substrate: %v\n", err)
+		}
+	} else if isGitRepo(sourcePath) {
+		// Use local shadow git sandbox
 		shadowPath, err := createShadowWorktree(sourcePath)
 		if err == nil {
 			mountPath = shadowPath
@@ -175,4 +189,34 @@ func removeShadowWorktree(sourcePath, shadowPath string) {
 	
 	// Ensure the directory is actually gone
 	_ = os.RemoveAll(shadowPath)
+}
+
+// cloneForeignSubstrate clones a remote repository into a temporary sandbox.
+func cloneForeignSubstrate(url, branch string) (string, error) {
+	bytes := make([]byte, 4)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	runID := hex.EncodeToString(bytes)
+	
+	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-substrate-%s", runID))
+	
+	args := []string{"clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	
+	// Inject GitHub PAT if present
+	if pat := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN"); pat != "" && strings.Contains(url, "github.com") {
+		url = strings.Replace(url, "https://github.com", fmt.Sprintf("https://%s@github.com", pat), 1)
+	}
+	
+	args = append(args, url, shadowPath)
+	
+	cmd := exec.Command("git", args...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
+	}
+	
+	return shadowPath, nil
 }

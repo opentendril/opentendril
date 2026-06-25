@@ -158,3 +158,12 @@ To protect the main local repository from corruption and isolate intermediate ex
 2. **Mounting:** Only this sterile, ephemeral worktree is mounted into the container. The main repository (`/workspace`) is never exposed.
 3. **Execution & Teardown:** The Tendril edits code, runs tests, and commits locally. If successful, it pushes a PR branch. Once the task finishes, the Orchestrator violently deletes the `/tmp` worktree.
 This ensures zero bleed of `__pycache__`, build artifacts, or secret leakages into the developer's primary working directory.
+
+### D. Cross-pollination (Foreign Substrates)
+While local operation utilizes Shadow Git worktrees from the active repository, OpenTendril is also capable of **Cross-pollination**. 
+If a Tendril is sprouted with a `substrate_url` (a remote Git repository URL), the Orchestrator will:
+1. Bypass the local repository entirely.
+2. Authenticate and perform a full `git clone` of the remote repository into a temporary sandbox.
+3. Drop the Tendril into this foreign substrate to execute its task (e.g. reviewing code or submitting cross-repo patches).
+4. Erase the clone securely when the execution terminates.
+This allows a single OpenTendril orchestrator to autonomously operate across an entire organization's ecosystem of repositories.
