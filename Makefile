@@ -38,11 +38,11 @@ health: ## Check service health
 	@echo "\nSprout:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
-test-core: ## Run Python tests
-	cd tendrils/python && PYTHONPATH=. python -m pytest tests/ -v
+test-core: ## Run Python tests in a sterile Docker container
+	docker compose --profile test run --rm test-python
 
-test-sprout: ## Run Go tests
-	cd $(SPROUT_DIR) && go test ./... -v
+test-sprout: ## Run Go tests in a sterile Docker container
+	docker compose --profile test run --rm test-go
 
 test-all: test-core test-sprout ## Run all tests
 

@@ -48,6 +48,10 @@ func runServeCmd(ctx context.Context, args []string) {
 	configHandler := api.NewConfigHandler(tendrilDir)
 	configHandler.SetupRoutes(mux)
 
+	// Phase 5: MCP API
+	mcpHandler := api.NewMCPHandler()
+	mcpHandler.SetupRoutes(mux)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -94,8 +98,8 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	
 	// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 	payload := security.TriggerPayload{
-		Persona: req.Model,
-		Task:    taskPrompt,
+		Genotype:   req.Model,
+		Transcript: taskPrompt,
 	}
 	
 	triggersDir := "./.tendril/transduction/hormonal-triggers"

@@ -193,6 +193,30 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+
+  # -------------------------------------------------------------------------
+  # Automated Test Suite (Immune System)
+  # Run ephemerally via: docker compose --profile test run --rm test-<suite>
+  # -------------------------------------------------------------------------
+  test-python:
+    build: tendrils/python
+    profiles: ["test"]
+    environment:
+      PYTHONPATH: .
+    volumes:
+      - ./tendrils/python/src:/app/src
+      - ./tendrils/python/tests:/app/tests
+      - ./tendrils/python/pytest.ini:/app/pytest.ini
+    command: ["-m", "pytest", "tests/", "-v"]
+
+  test-go:
+    image: golang:1.24
+    profiles: ["test"]
+    working_dir: /src/cmd/stem
+    volumes:
+      - .:/src
+    command: ["go", "test", "./...", "-v"]
+
 volumes:
   postgres-data:
   redis-data:

@@ -20,7 +20,7 @@ def emerge_tendril(context: TendrilContext) -> Dict[str, Any]:
     The young Tendril visibly breaks out from the Stem. 
     This boots the isolated container/microVM and triggers Elongation.
     """
-    logger.info(f"🌱 Emergence: Booting Tendril [{context.id}] as {context.persona} via {context.runtime}")
+    logger.info(f"🌱 Emergence: Booting Tendril [{context.id}] as {context.genotype} via {context.runtime}")
     
     if context.runtime == "docker":
         return _emerge_via_docker(context)
@@ -38,8 +38,8 @@ def _emerge_via_docker(context: TendrilContext) -> Dict[str, Any]:
     cmd = [
         "docker", "run", "--rm",
         "-e", f"TENDRIL_ID={context.id}",
-        "-e", f"TENDRIL_PERSONA={context.persona}",
-        "-e", f"TENDRIL_TASK={context.task}"
+        "-e", f"TENDRIL_GENOTYPE={context.genotype}",
+        "-e", f"TENDRIL_TRANSCRIPT={context.transcript}"
     ]
     
     if context.workspace_mount:
@@ -61,8 +61,8 @@ def _emerge_via_host(context: TendrilContext) -> Dict[str, Any]:
     import os
     env = os.environ.copy()
     env["TENDRIL_ID"] = context.id
-    env["TENDRIL_PERSONA"] = context.persona
-    env["TENDRIL_TASK"] = context.task
+    env["TENDRIL_GENOTYPE"] = context.genotype
+    env["TENDRIL_TRANSCRIPT"] = context.transcript
     
     import sys
     cmd = [sys.executable, "-m", "src.tendrils.elongation"]

@@ -137,16 +137,46 @@ func (s *Server) handleRequest(req Request) {
 		s.sendResult(req.ID, jsonRpcResp.Result)
 
 	case "resources/list":
-		// Mock exposing Ambient Memory as resources
-		s.sendResult(req.ID, map[string]interface{}{
-			"resources": []map[string]interface{}{
-				{
-					"uri":         "memory://ambient",
-					"name":        "Ambient Vector Memory",
-					"description": "The unified semantic memory graph for OpenTendril.",
-				},
-			},
-		})
+		respRaw, err := s.brain.SendMCPRequest("resources/list", nil)
+		if err != nil {
+			s.sendError(req.ID, -32603, "Internal error", err.Error())
+			return
+		}
+
+		var jsonRpcResp Response
+		if err := json.Unmarshal(respRaw, &jsonRpcResp); err != nil {
+			s.sendError(req.ID, -32603, "Parse error from backend", err.Error())
+			return
+		}
+		if jsonRpcResp.Error != nil {
+			s.sendError(req.ID, jsonRpcResp.Error.Code, jsonRpcResp.Error.Message, jsonRpcResp.Error.Data)
+			return
+		}
+		s.sendResult(req.ID, jsonRpcResp.Result)
+
+	case "resources/read":
+		var params interface{}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			s.sendError(req.ID, -32602, "Invalid params", err.Error())
+			return
+		}
+
+		respRaw, err := s.brain.SendMCPRequest("resources/read", params)
+		if err != nil {
+			s.sendError(req.ID, -32603, "Internal error reading resource", err.Error())
+			return
+		}
+
+		var jsonRpcResp Response
+		if err := json.Unmarshal(respRaw, &jsonRpcResp); err != nil {
+			s.sendError(req.ID, -32603, "Parse error from backend", err.Error())
+			return
+		}
+		if jsonRpcResp.Error != nil {
+			s.sendError(req.ID, jsonRpcResp.Error.Code, jsonRpcResp.Error.Message, jsonRpcResp.Error.Data)
+			return
+		}
+		s.sendResult(req.ID, jsonRpcResp.Result)
 	default:
 		s.sendError(req.ID, -32601, "Method not found", nil)
 	}

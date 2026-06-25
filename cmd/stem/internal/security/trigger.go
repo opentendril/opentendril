@@ -12,8 +12,8 @@ import (
 )
 
 type TriggerPayload struct {
-	Persona string `json:"persona"`
-	Task    string `json:"task"`
+	Genotype string `json:"genotype"`
+	Transcript string `json:"transcript"`
 }
 
 // EvaluateTriggers executes all scripts in the given triggers directory.
