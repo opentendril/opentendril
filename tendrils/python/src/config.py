@@ -30,6 +30,7 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 OPENTENDRIL_API_KEY: str = os.getenv("OPENTENDRIL_API_KEY", "")
+NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
 
 # Default provider for the LLM Router
 DEFAULT_LLM_PROVIDER: str = os.getenv("DEFAULT_LLM_PROVIDER", "grok")

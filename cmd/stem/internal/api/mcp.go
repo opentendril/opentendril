@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -51,17 +52,47 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 
 	var req mcpRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.sendError(w, nil, -32700, "Parse error", err.Error())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(h.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}`)))
 		return
 	}
 
+	reqBytes, _ := json.Marshal(req)
+	respBytes := h.ProcessMCPMessage(reqBytes)
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respBytes)
+}
+
+func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
+	var req mcpRequest
+	if err := json.Unmarshal(reqBytes, &req); err != nil {
+		return h.formatError(nil, -32700, "Parse error", err.Error())
+	}
+
 	switch req.Method {
+	case "initialize":
+		return h.formatResult(req.ID, map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"serverInfo": map[string]string{
+				"name":    "opentendril",
+				"version": "0.1.0",
+			},
+			"capabilities": map[string]interface{}{
+				"tools":     map[string]interface{}{},
+				"resources": map[string]interface{}{},
+			},
+		})
+
+	case "notifications/initialized":
+		// Just acknowledge without response
+		return nil
+
 	case "resources/list":
 		genotypesDir := "./.tendril/genotypes"
 		entries, err := os.ReadDir(genotypesDir)
 		if err != nil && !os.IsNotExist(err) {
-			h.sendError(w, req.ID, -32603, "Internal error", err.Error())
-			return
+			return h.formatResult(req.ID, map[string]interface{}{"resources": []interface{}{}})
 		}
 
 		var resources []map[string]interface{}
@@ -80,7 +111,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			resources = []map[string]interface{}{}
 		}
 
-		h.sendResult(w, req.ID, map[string]interface{}{
+		return h.formatResult(req.ID, map[string]interface{}{
 			"resources": resources,
 		})
 
@@ -89,33 +120,28 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			URI string `json:"uri"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			h.sendError(w, req.ID, -32602, "Invalid params", err.Error())
-			return
+			return h.formatError(req.ID, -32602, "Invalid params", err.Error())
 		}
 
 		if !strings.HasPrefix(params.URI, "genotype://") {
-			h.sendError(w, req.ID, -32602, "Invalid URI scheme", nil)
-			return
+			return h.formatError(req.ID, -32602, "Invalid URI scheme", nil)
 		}
 
 		name := strings.TrimPrefix(params.URI, "genotype://")
 		if strings.Contains(name, "/") || strings.Contains(name, "\\") || name == "" {
-			h.sendError(w, req.ID, -32602, "Invalid genotype name", nil)
-			return
+			return h.formatError(req.ID, -32602, "Invalid genotype name", nil)
 		}
 
 		filePath := filepath.Join("./.tendril/genotypes", name+".json")
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				h.sendError(w, req.ID, -32602, "Resource not found", nil)
-			} else {
-				h.sendError(w, req.ID, -32603, "Internal error", err.Error())
+				return h.formatError(req.ID, -32602, "Resource not found", nil)
 			}
-			return
+			return h.formatError(req.ID, -32603, "Internal error", err.Error())
 		}
 
-		h.sendResult(w, req.ID, map[string]interface{}{
+		return h.formatResult(req.ID, map[string]interface{}{
 			"contents": []map[string]interface{}{
 				{
 					"uri":      params.URI,
@@ -126,7 +152,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		})
 
 	case "tools/list":
-		h.sendResult(w, req.ID, map[string]interface{}{
+		return h.formatResult(req.ID, map[string]interface{}{
 			"tools": []map[string]interface{}{
 				{
 					"name":        "sproutTendril",
@@ -138,8 +164,12 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 								"type":        "string",
 								"description": "A clear, actionable description of the transcript (task) for Tendril to execute.",
 							},
+							"substrate": map[string]interface{}{
+								"type":        "string",
+								"description": "The absolute path to the target repository workspace (the 'substrate'). E.g. /home/user/project",
+							},
 						},
-						"required": []string{"transcript"},
+						"required": []string{"transcript", "substrate"},
 					},
 				},
 				{
@@ -162,27 +192,23 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				},
 			},
 		})
-
 	case "tools/call":
 		var params struct {
 			Name      string                 `json:"name"`
 			Arguments map[string]interface{} `json:"arguments"`
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
-			h.sendError(w, req.ID, -32602, "Invalid params", err.Error())
-			return
+			return h.formatError(req.ID, -32602, "Invalid params", err.Error())
 		}
 
 		if params.Name == "createGenotype" {
 			name, nameOk := params.Arguments["name"].(string)
 			instructions, instOk := params.Arguments["instructions"].(string)
 			if !nameOk || !instOk || name == "" || instructions == "" {
-				h.sendError(w, req.ID, -32602, "Invalid arguments", "The 'name' and 'instructions' parameters are required.")
-				return
+				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'name' and 'instructions' parameters are required.")
 			}
 			if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-				h.sendError(w, req.ID, -32602, "Invalid name", "The 'name' cannot contain slashes.")
-				return
+				return h.formatError(req.ID, -32602, "Invalid name", "The 'name' cannot contain slashes.")
 			}
 
 			genotypesDir := "./.tendril/genotypes"
@@ -194,18 +220,16 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			}
 			fileContent, err := json.MarshalIndent(payload, "", "  ")
 			if err != nil {
-				h.sendError(w, req.ID, -32603, "Internal error", err.Error())
-				return
+				return h.formatError(req.ID, -32603, "Internal error", err.Error())
 			}
 
 			targetPath := filepath.Join(genotypesDir, name+".json")
 			if err := os.WriteFile(targetPath, fileContent, 0644); err != nil {
-				h.sendError(w, req.ID, -32603, "Failed to write genotype", err.Error())
-				return
+				return h.formatError(req.ID, -32603, "Failed to write genotype", err.Error())
 			}
 
 			log.Printf("[MCP] Dynamically created genotype: %s", name)
-			h.sendResult(w, req.ID, map[string]interface{}{
+			return h.formatResult(req.ID, map[string]interface{}{
 				"content": []map[string]interface{}{
 					{
 						"type": "text",
@@ -214,28 +238,27 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				},
 				"isError": false,
 			})
-			return
 		}
 
 		if params.Name != "sproutTendril" {
-			h.sendError(w, req.ID, -32601, "Tool not found", nil)
-			return
+			return h.formatError(req.ID, -32601, "Tool not found", nil)
 		}
 
 		transcript, ok := params.Arguments["transcript"].(string)
-		if !ok || strings.TrimSpace(transcript) == "" {
-			h.sendError(w, req.ID, -32602, "Invalid arguments", "The 'transcript' parameter is required.")
-			return
+		substrate, subOk := params.Arguments["substrate"].(string)
+		if !ok || !subOk || strings.TrimSpace(transcript) == "" || strings.TrimSpace(substrate) == "" {
+			return h.formatError(req.ID, -32602, "Invalid arguments", "The 'transcript' and 'substrate' parameters are required.")
 		}
 
-		log.Printf("[MCP] Delegating transcript to Tendril: %s", transcript)
+		log.Printf("[MCP] Delegating transcript to Tendril: %s (Substrate: %s)", transcript, substrate)
 		orch := &orchestrator.DockerOrchestrator{
 			ImageName: "opentendril-tendril:latest",
+			Substrate: substrate,
 		}
-		output, err := orch.RunTendril(r.Context(), transcript)
+		output, err := orch.RunTendril(context.Background(), transcript)
 		if err != nil {
 			log.Printf("[MCP] Tendril execution failed: %v", err)
-			h.sendResult(w, req.ID, map[string]interface{}{
+			return h.formatResult(req.ID, map[string]interface{}{
 				"content": []map[string]interface{}{
 					{
 						"type": "text",
@@ -244,10 +267,9 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				},
 				"isError": true,
 			})
-			return
 		}
 
-		h.sendResult(w, req.ID, map[string]interface{}{
+		return h.formatResult(req.ID, map[string]interface{}{
 			"content": []map[string]interface{}{
 				{
 					"type": "text",
@@ -258,22 +280,21 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		})
 
 	default:
-		h.sendError(w, req.ID, -32601, "Method not found", nil)
+		return h.formatError(req.ID, -32601, "Method not found", nil)
 	}
 }
 
-func (h *MCPHandler) sendResult(w http.ResponseWriter, id interface{}, result interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mcpResponse{
+func (h *MCPHandler) formatResult(id interface{}, result interface{}) []byte {
+	b, _ := json.Marshal(mcpResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  result,
 	})
+	return b
 }
 
-func (h *MCPHandler) sendError(w http.ResponseWriter, id interface{}, code int, msg string, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(mcpResponse{
+func (h *MCPHandler) formatError(id interface{}, code int, msg string, data interface{}) []byte {
+	b, _ := json.Marshal(mcpResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error: &mcpError{
@@ -282,4 +303,5 @@ func (h *MCPHandler) sendError(w http.ResponseWriter, id interface{}, code int, 
 			Data:    data,
 		},
 	})
+	return b
 }

@@ -2,15 +2,19 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
 	ImageName string
+	Substrate string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -56,13 +60,42 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		args = append(args, "-e", fmt.Sprintf("LOCAL_MODEL_NAME=%s", modelName))
 	}
 
+	// The path to the repository on the host
+	sourcePath := d.Substrate
+	if sourcePath == "" {
+		sourcePath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
+	}
+
+	mountPath := sourcePath
+
+	if isGitRepo(sourcePath) {
+		shadowPath, err := createShadowWorktree(sourcePath)
+		if err == nil {
+			mountPath = shadowPath
+			
+			// Inject node_modules, .venv, vendor from host if they exist
+			injectMycorrhizalCache(sourcePath, shadowPath)
+			
+			// Ensure cleanup after execution
+			defer func() {
+				removeShadowWorktree(sourcePath, shadowPath)
+			}()
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git sandboxing disabled.\n", sourcePath)
+	}
+
 	// Mount workspace and set working directory
 	args = append(args,
-		"-v", fmt.Sprintf("%s:/app", getEnvOrDefault("PWD", mustGetwd())),
+		"-v", fmt.Sprintf("%s:/app", mountPath),
 		"-w", "/app/tendrils/python",
 		d.ImageName,
 		"-m", "src.tendrilloop",
 	)
+
+	fmt.Fprintf(os.Stderr, "🚀 Executing docker: %s %s\n", "docker", strings.Join(args, " "))
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
@@ -83,4 +116,63 @@ func getEnvOrDefault(key, fallback string) string {
 func mustGetwd() string {
 	wd, _ := os.Getwd()
 	return wd
+}
+
+// isGitRepo checks if the given path is inside a git repository.
+func isGitRepo(path string) bool {
+	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = path
+	err := cmd.Run()
+	return err == nil
+}
+
+// createShadowWorktree creates a new git worktree in a temporary directory.
+func createShadowWorktree(sourcePath string) (string, error) {
+	bytes := make([]byte, 4)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	runID := hex.EncodeToString(bytes)
+	
+	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-sandbox-%s", runID))
+	
+	// Create the worktree pointing to HEAD (or a detached HEAD)
+	// We use --detach to avoid checking out the current branch which might be locked
+	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, "HEAD")
+	cmd.Dir = sourcePath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("git worktree add failed: %w, output: %s", err, string(output))
+	}
+	
+	return shadowPath, nil
+}
+
+// injectMycorrhizalCache hard-links dependency directories from the host to the shadow sandbox.
+func injectMycorrhizalCache(sourcePath, shadowPath string) {
+	cacheDirs := []string{"node_modules", ".venv", "venv", "vendor"}
+	
+	for _, dir := range cacheDirs {
+		srcDir := filepath.Join(sourcePath, dir)
+		if info, err := os.Stat(srcDir); err == nil && info.IsDir() {
+			dstDir := filepath.Join(shadowPath, dir)
+			// Use cp -rl to recursively hard-link the directory
+			cmd := exec.Command("cp", "-rl", srcDir, dstDir)
+			if err := cmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to inject mycorrhizal cache %s: %v\n", dir, err)
+			} else {
+				fmt.Fprintf(os.Stderr, "🍄 Injected Mycorrhizal Cache: %s\n", dir)
+			}
+		}
+	}
+}
+
+// removeShadowWorktree securely removes the temporary git worktree.
+func removeShadowWorktree(sourcePath, shadowPath string) {
+	// First tell git to remove the worktree references
+	cmd := exec.Command("git", "worktree", "remove", "--force", shadowPath)
+	cmd.Dir = sourcePath
+	_ = cmd.Run()
+	
+	// Ensure the directory is actually gone
+	_ = os.RemoveAll(shadowPath)
 }

@@ -64,6 +64,17 @@ class ToolFactory:
             logger.info("🔀 Git tools registered (repo detected).")
         else:
             logger.info("⚠️  No .git directory found — git tools and staged_edit disabled.")
+            
+        # Dynamically load MCP tools
+        try:
+            from .mcpclient import build_mcp_tools
+            mcp_tools = build_mcp_tools()
+            if mcp_tools:
+                tools += mcp_tools
+                logger.info(f"🔌 MCP: Loaded {len(mcp_tools)} tools from external servers.")
+        except ImportError as e:
+            logger.warning(f"⚠️ Could not load MCP client module: {e}")
+            
         return tools
 
     # -------------------------------------------------------------------------

@@ -121,8 +121,8 @@ Your objective is to revise the execution plan to circumvent these errors.
 Output a strict JSON array of objects representing the revised plan steps.
 Example:
 [
-  { "step": 1, "action": "spawn_sub_agent", "profile": "security_auditor", "instruction": "Audit the file before modifications." },
-  { "step": 2, "action": "direct_modification", "instruction": "Apply minimal fix to X without touching Y." }
+  {{ "step": 1, "action": "spawn_sub_agent", "profile": "security_auditor", "instruction": "Audit the file before modifications." }},
+  {{ "step": 2, "action": "direct_modification", "instruction": "Apply minimal fix to X without touching Y." }}
 ]
 Output ONLY valid JSON.\
 """
@@ -144,10 +144,18 @@ def revise_execution_plan(task: str, error_trace: str, llm: BaseChatModel, sessi
         plan = str(response.content).strip()
         # strip markdown block if present
         if plan.startswith("```json"):
-            plan = plan[7:]
+            plan = plan.replace("```json", "", 1)
         if plan.endswith("```"):
             plan = plan[:-3]
-        return plan.strip()
+        plan = plan.strip()
+        
+        import re
+        # Try to extract the JSON array if there's surrounding text
+        match = re.search(r"(\[\s*\{.*?\}\s*\])", plan, re.DOTALL)
+        if match:
+            plan = match.group(1)
+            
+        return plan
     except Exception as exc:
         logger.warning(f"⚠️  Assessor replan failed ({exc})")
         return '[\n  { "step": 1, "action": "fallback", "instruction": "Retry cautiously with a smaller scope." }\n]'

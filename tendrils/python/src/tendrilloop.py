@@ -210,6 +210,50 @@ class TendrilLoop:
                 return f"Sorry, I encountered an error communicating with the LLM: {str(e)}"
 
             if not resp.tool_calls:
+                # -------------------------------------------------------------
+                # PLASMID: Local Model JSON Output Parser
+                # Local open-weights models often emit markdown JSON blocks 
+                # instead of native structured function calls.
+                # -------------------------------------------------------------
+                if selected_provider == "local":
+                    try:
+                        import re
+                        import json
+                        
+                        text = str(resp.content).strip()
+                        # Extract anything that looks like a JSON object containing "name" and "arguments"
+                        match = re.search(r"(\{\s*\"name\"\s*:.*?\"arguments\"\s*:.*?\}\s*\}?)", text, re.DOTALL)
+                        
+                        # Or if the entire text is just a clean JSON string
+                        payload = None
+                        try:
+                            payload = json.loads(text.replace("```json", "").replace("```", "").strip())
+                        except:
+                            if match:
+                                try:
+                                    payload = json.loads(match.group(1))
+                                except:
+                                    pass
+                                    
+                        if payload and "name" in payload and "arguments" in payload:
+                            import uuid
+                            from langchain_core.messages import AIMessage
+                            tc = {
+                                "name": payload["name"],
+                                "args": payload["arguments"],
+                                "id": f"call_{uuid.uuid4().hex[:8]}"
+                            }
+                            # Clone the AIMessage with the synthesized tool call
+                            resp = AIMessage(
+                                content=resp.content,
+                                tool_calls=[tc],
+                                id=resp.id if getattr(resp, "id", None) and isinstance(resp.id, str) else None
+                            )
+                            logger.info(f"🧬 PLASMID: Successfully parsed local JSON into tool_call {tc['name']}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse local JSON output: {e}")
+
+            if not resp.tool_calls:
                 credit_manager.consume_request(session_id)
                 event_bus.emit(TendrilEvent(
                     run_id=run_id, event_type="request.end",
