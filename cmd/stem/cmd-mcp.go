@@ -30,8 +30,10 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 		respBytes := handler.ProcessMCPMessage(reqBytes)
 		
-		// Write response exactly as one line to stdout
-		fmt.Fprintln(os.Stdout, string(respBytes))
+		if len(respBytes) > 0 {
+			// Write response exactly as one line to stdout
+			fmt.Fprintln(os.Stdout, string(respBytes))
+		}
 	}
 
 	if err := scanner.Err(); err != nil {

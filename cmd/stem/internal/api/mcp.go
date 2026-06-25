@@ -71,6 +71,23 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 	}
 
 	switch req.Method {
+	case "initialize":
+		return h.formatResult(req.ID, map[string]interface{}{
+			"protocolVersion": "2024-11-05",
+			"serverInfo": map[string]string{
+				"name":    "opentendril",
+				"version": "0.1.0",
+			},
+			"capabilities": map[string]interface{}{
+				"tools":     map[string]interface{}{},
+				"resources": map[string]interface{}{},
+			},
+		})
+
+	case "notifications/initialized":
+		// Just acknowledge without response
+		return nil
+
 	case "resources/list":
 		genotypesDir := "./.tendril/genotypes"
 		entries, err := os.ReadDir(genotypesDir)
