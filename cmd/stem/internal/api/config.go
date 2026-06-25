@@ -121,39 +121,39 @@ func (h *ConfigHandler) UploadTrigger(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Trigger uploaded successfully.\n"))
 }
 
-// ListPersonas handles GET /v1/config/personas
-func (h *ConfigHandler) ListPersonas(w http.ResponseWriter, r *http.Request) {
+// ListGenotypes handles GET /v1/config/genotypes
+func (h *ConfigHandler) ListGenotypes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	personasDir := filepath.Join(h.TendrilDir, "personas")
-	entries, err := os.ReadDir(personasDir)
+	genotypesDir := filepath.Join(h.TendrilDir, "genotypes")
+	entries, err := os.ReadDir(genotypesDir)
 	if err != nil && !os.IsNotExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	var personas []string
+	var genotypes []string
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-			personas = append(personas, strings.TrimSuffix(entry.Name(), ".json"))
+			genotypes = append(genotypes, strings.TrimSuffix(entry.Name(), ".json"))
 		}
 	}
 
-	if personas == nil {
-		personas = []string{}
+	if genotypes == nil {
+		genotypes = []string{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"personas": personas,
+		"genotypes": genotypes,
 	})
 }
 
-// UploadPersona handles POST /v1/config/personas
-func (h *ConfigHandler) UploadPersona(w http.ResponseWriter, r *http.Request) {
+// UploadGenotype handles POST /v1/config/genotypes
+func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -176,10 +176,10 @@ func (h *ConfigHandler) UploadPersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	personasDir := filepath.Join(h.TendrilDir, "personas")
-	os.MkdirAll(personasDir, 0755)
+	genotypesDir := filepath.Join(h.TendrilDir, "genotypes")
+	os.MkdirAll(genotypesDir, 0755)
 
-	targetPath := filepath.Join(personasDir, name+".json")
+	targetPath := filepath.Join(genotypesDir, name+".json")
 	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
@@ -192,9 +192,9 @@ func (h *ConfigHandler) UploadPersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Uploaded new AI Persona: %s", name)
+	log.Printf("Uploaded new AI Genotype: %s", name)
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("Persona saved successfully.\n"))
+	w.Write([]byte("Genotype saved successfully.\n"))
 }
 
 // SetupRoutes registers the configuration endpoints
@@ -211,12 +211,12 @@ func (h *ConfigHandler) SetupRoutes(mux *http.ServeMux) {
 		})(w, r)
 	})
 
-	mux.HandleFunc("/v1/config/personas", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
 		AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodGet {
-				h.ListPersonas(w, r)
+				h.ListGenotypes(w, r)
 			} else if r.Method == http.MethodPost {
-				h.UploadPersona(w, r)
+				h.UploadGenotype(w, r)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}

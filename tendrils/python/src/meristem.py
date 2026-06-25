@@ -194,7 +194,7 @@ class ToolFactory:
         def sprout_tendril(profile: str, task: str) -> str:
             """Delegate a specialised task to an expert Worker Tendril (Agent).
 
-            The Tendril runs an isolated loop with a restricted tool set and tailored persona.
+            The Tendril runs an isolated loop with a restricted tool set and tailored genotype.
 
             Available profiles:
               security_auditor  — Read-only code security analysis
@@ -219,7 +219,7 @@ class ToolFactory:
                     import subprocess
                     
                     # Serialize the bud payload
-                    payload = {"persona": profile, "task": task}
+                    payload = {"genotype": profile, "task": task}
                     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp:
                         json.dump(payload, tmp)
                         payload_path = tmp.name

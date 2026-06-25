@@ -16,15 +16,16 @@ from typing import Optional, List
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("tendril.elongation")
 
-def load_persona(persona_name: str) -> dict:
-    """Load the persona markdown file and extract metadata."""
-    # This is a naive search. In production, we'd recursively search all persona dirs.
-    # For now, we check personas/onboarding/
+def load_genotype(genotype_name: str) -> dict:
+    """Load the genotype markdown file and extract metadata."""
+    # This is a naive search. In production, we'd recursively search all genotype dirs.
+    # For now, we check genotypes/onboarding/
+    # (Note: In production this would be .tendril/genotypes/)
     workspace = os.environ.get("TENDRIL_WORKSPACE_ROOT", "/workspace")
-    path = os.path.join(workspace, ".tendril", "personas", "onboarding", f"{persona_name}.md")
+    path = os.path.join(workspace, ".tendril", "genotypes", "onboarding", f"{genotype_name}.md")
     
     if not os.path.exists(path):
-        return {"error": f"Persona '{persona_name}' not found at {path}"}
+        return {"error": f"Genotype '{genotype_name}' not found at {path}"}
         
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
@@ -60,11 +61,11 @@ def elongate():
     returns the result via stdout, and terminates.
     """
     tendril_id = os.environ.get("TENDRIL_ID")
-    persona_name = os.environ.get("TENDRIL_PERSONA")
+    genotype_name = os.environ.get("TENDRIL_GENOTYPE")
     task = os.environ.get("TENDRIL_TASK")
     workspace = os.environ.get("TENDRIL_WORKSPACE_ROOT", "/workspace")
     
-    if not all([tendril_id, persona_name, task]):
+    if not all([tendril_id, genotype_name, task]):
         print(json.dumps({"error": "Missing required Tendril context in environment."}))
         sys.exit(1)
 
@@ -85,12 +86,12 @@ def elongate():
     combined_genome = "\n".join(genome_context)
     # The combined_genome is now ready to be injected into the system prompt when the ReAct loop executes.
         
-    logger.info(f"🌿 Elongation initiated for Tendril '{tendril_id}' (Persona: {persona_name})")
+    logger.info(f"🌿 Elongation initiated for Tendril '{tendril_id}' (Genotype: {genotype_name})")
     
-    # 1. Load Persona
-    persona_data = load_persona(persona_name)
-    if "error" in persona_data:
-        print(json.dumps({"error": persona_data["error"]}))
+    # 1. Load Genotype
+    genotype_data = load_genotype(genotype_name)
+    if "error" in genotype_data:
+        print(json.dumps({"error": genotype_data["error"]}))
         sys.exit(1)
         
     # 2. Setup Headless Dependencies
@@ -116,8 +117,8 @@ def elongate():
     factory = ToolFactory(memory, editor, git, tester, router, skills_manager)
     all_tools = factory.build()
     
-    # 3. Filter Tools based on Persona Allowlist
-    allowed = persona_data["allowed_tools"]
+    # 3. Filter Tools based on Genotype Allowlist
+    allowed = genotype_data["allowed_tools"]
     if allowed == "all":
         tools = all_tools
     else:
@@ -127,13 +128,13 @@ def elongate():
     
     # 4. Initialize LLM
     try:
-        llm = router.get(tier=persona_data["tier"], temperature=0.2)
+        llm = router.get(tier=genotype_data["tier"], temperature=0.2)
         llm_with_tools = llm.bind_tools(tools) if tools else llm
     except Exception as e:
         print(json.dumps({"error": f"LLM Initialization failed: {e}"}))
         sys.exit(1)
         
-    system_content = persona_data["content"]
+    system_content = genotype_data["content"]
     if combined_genome:
         system_content += f"\n\n# Project Genome (Core Architectural Rules)\n{combined_genome}"
         
@@ -186,7 +187,7 @@ def elongate():
 
     result_payload = {
         "tendril_id": tendril_id,
-        "persona": persona_name,
+        "genotype": genotype_name,
         "status": "completed",
         "output": last_content or "⚠️ Tendril produced no output."
     }

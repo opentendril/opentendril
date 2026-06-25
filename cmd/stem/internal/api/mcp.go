@@ -57,8 +57,8 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Method {
 	case "resources/list":
-		personasDir := "./.tendril/personas"
-		entries, err := os.ReadDir(personasDir)
+		genotypesDir := "./.tendril/genotypes"
+		entries, err := os.ReadDir(genotypesDir)
 		if err != nil && !os.IsNotExist(err) {
 			h.sendError(w, req.ID, -32603, "Internal error", err.Error())
 			return
@@ -69,7 +69,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
 				name := strings.TrimSuffix(entry.Name(), ".json")
 				resources = append(resources, map[string]interface{}{
-					"uri":      "persona://" + name,
+					"uri":      "genotype://" + name,
 					"name":     name,
 					"mimeType": "application/json",
 				})
@@ -93,18 +93,18 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if !strings.HasPrefix(params.URI, "persona://") {
+		if !strings.HasPrefix(params.URI, "genotype://") {
 			h.sendError(w, req.ID, -32602, "Invalid URI scheme", nil)
 			return
 		}
 
-		name := strings.TrimPrefix(params.URI, "persona://")
+		name := strings.TrimPrefix(params.URI, "genotype://")
 		if strings.Contains(name, "/") || strings.Contains(name, "\\") || name == "" {
-			h.sendError(w, req.ID, -32602, "Invalid persona name", nil)
+			h.sendError(w, req.ID, -32602, "Invalid genotype name", nil)
 			return
 		}
 
-		filePath := filepath.Join("./.tendril/personas", name+".json")
+		filePath := filepath.Join("./.tendril/genotypes", name+".json")
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -143,18 +143,18 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 				{
-					"name":        "createPersona",
-					"description": "Dynamically create or update an OpenTendril persona (skill). Creates a new JSON configuration file in the personas directory. This allows you to teach Tendril a new skill or define a new role before sprouting it.",
+					"name":        "createGenotype",
+					"description": "Dynamically create or update an OpenTendril genotype (core identity/persona). Creates a new JSON configuration file in the genotypes directory. This allows you to define a new base role before sprouting a tendril.",
 					"inputSchema": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{
 							"name": map[string]interface{}{
 								"type":        "string",
-								"description": "The unique name of the persona (e.g. 'frontend-dev'). Do not use spaces or special characters.",
+								"description": "The unique name of the genotype (e.g. 'frontend-dev'). Do not use spaces or special characters.",
 							},
 							"instructions": map[string]interface{}{
 								"type":        "string",
-								"description": "The system prompt or instructions detailing exactly what this persona's skill or role is.",
+								"description": "The system prompt or instructions detailing exactly what this genotype's core identity or role is.",
 							},
 						},
 						"required": []string{"name", "instructions"},
@@ -173,7 +173,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if params.Name == "createPersona" {
+		if params.Name == "createGenotype" {
 			name, nameOk := params.Arguments["name"].(string)
 			instructions, instOk := params.Arguments["instructions"].(string)
 			if !nameOk || !instOk || name == "" || instructions == "" {
@@ -185,8 +185,8 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			personasDir := "./.tendril/personas"
-			os.MkdirAll(personasDir, 0755)
+			genotypesDir := "./.tendril/genotypes"
+			os.MkdirAll(genotypesDir, 0755)
 
 			payload := map[string]interface{}{
 				"name":         name,
@@ -198,18 +198,18 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			targetPath := filepath.Join(personasDir, name+".json")
+			targetPath := filepath.Join(genotypesDir, name+".json")
 			if err := os.WriteFile(targetPath, fileContent, 0644); err != nil {
-				h.sendError(w, req.ID, -32603, "Failed to write persona", err.Error())
+				h.sendError(w, req.ID, -32603, "Failed to write genotype", err.Error())
 				return
 			}
 
-			log.Printf("[MCP] Dynamically created persona: %s", name)
+			log.Printf("[MCP] Dynamically created genotype: %s", name)
 			h.sendResult(w, req.ID, map[string]interface{}{
 				"content": []map[string]interface{}{
 					{
 						"type": "text",
-						"text": fmt.Sprintf("Successfully created persona '%s'. You can now use it.", name),
+						"text": fmt.Sprintf("Successfully created genotype '%s'. You can now use it.", name),
 					},
 				},
 				"isError": false,

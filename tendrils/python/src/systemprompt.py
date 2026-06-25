@@ -1,7 +1,7 @@
 """
 src/agent/systemprompt.py — System prompt builder for the Root Agent.
 
-Isolated here so the LLM can modify the agent's persona and instructions
+Isolated here so the LLM can modify the agent's genotype and instructions
 without touching orchestration logic.
 
 Prompt cache architecture:
@@ -17,7 +17,7 @@ from .patcher import format_patch_for_prompt
 
 def build_static_prompt(tool_descriptions: str) -> str:
     """
-    The static portion of the system prompt — persona, guardrails, tool list.
+    The static portion of the system prompt — genotype, guardrails, tool list.
     This only changes when the codebase changes, making it ideal for caching.
     """
     patch_format = format_patch_for_prompt()
@@ -59,7 +59,7 @@ Key files you can READ and understand:
   src/main.py                  - FastAPI entrypoint (wires all routers)
   src/agent/orchestrator.py    - Your core process() loop (this is YOU)
   src/agent/tools.py           - All LangChain @tool definitions (ToolFactory)
-  src/agent/systemprompt.py   - This system prompt (you can edit your own persona)
+  src/agent/systemprompt.py   - This system prompt (you can edit your own genotype)
   src/routers/ui.py            - Chat UI, settings, SSE streaming
   src/routers/api.py           - /edit SDLC loop, /v1/chat, OpenAI-compat API
   src/routers/system.py        - Health, dreamer, events, approvals, nano status

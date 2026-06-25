@@ -54,7 +54,7 @@ def build_cached_messages(
     Args:
         provider:       Active provider name (e.g. "anthropic", "openrouter")
         model_name:     Resolved model name (used to detect claude-* on openrouter)
-        static_system:  The portion that never changes (persona, tools, guardrails)
+        static_system:  The portion that never changes (genotype, tools, guardrails)
         dynamic_system: The portion that changes per-request (RAG, skills, file listing)
         history:        Recent conversation history
         user_message:   The current user turn

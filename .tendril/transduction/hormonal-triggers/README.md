@@ -6,7 +6,7 @@ In OpenTendril's Pure Micro-Agent Architecture, this directory serves as your **
 
 ## How It Works
 
-When an orchestrating agent invokes the `sprout_tendril` capability (The Meristem), the framework pauses. It serializes the requested `Persona` and `Task` into a JSON payload and executes every script inside this directory, passing the path to the JSON file as the first argument (`$1`).
+When an orchestrating agent invokes the `sprout_tendril` capability (The Meristem), the framework pauses. It serializes the requested `Genotype` and `Task` into a JSON payload and executes every script inside this directory, passing the path to the JSON file as the first argument (`$1`).
 
 - If all scripts exit with `0` (Success): The hormonal levels are correct, and the sub-tendril is allowed to sprout (the Docker container starts).
 - If any script exits with `>0` (Failure): The sprout is **blocked**. The bud remains dormant, the sub-tendril is never born, and the script's `stderr` output is fed directly back into the orchestrator's LLM context window so it understands why the biological action failed.

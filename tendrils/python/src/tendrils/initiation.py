@@ -13,13 +13,13 @@ from typing import Dict, Any, Optional
 class TendrilContext(BaseModel):
     """The context required for a Tendril to emerge and elongate."""
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    persona: str
+    genotype: str
     task: str
     runtime: str = "docker"
     environment: Dict[str, str] = Field(default_factory=dict)
     workspace_mount: Optional[str] = None
     
-def initiate_tendril(persona: str, task: str, workspace: Optional[str] = None) -> TendrilContext:
+def initiate_tendril(genotype: str, task: str, workspace: Optional[str] = None) -> TendrilContext:
     """
     Phase 1: Initiation.
     The Stem signals the creation of a Tendril. It builds the necessary 
@@ -27,11 +27,11 @@ def initiate_tendril(persona: str, task: str, workspace: Optional[str] = None) -
     """
     from src.config import TENDRIL_RUNTIME
     
-    # In a real scenario, this would load the Persona from the agency/ directory
+    # In a real scenario, this would load the Genotype from the agency/ directory
     # to enforce strict guardrails.
     
     context = TendrilContext(
-        persona=persona,
+        genotype=genotype,
         task=task,
         runtime=TENDRIL_RUNTIME,
         workspace_mount=workspace

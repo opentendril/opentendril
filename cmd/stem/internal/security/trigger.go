@@ -12,7 +12,7 @@ import (
 )
 
 type TriggerPayload struct {
-	Persona string `json:"persona"`
+	Genotype string `json:"genotype"`
 	Task    string `json:"task"`
 }
 
