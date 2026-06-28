@@ -397,7 +397,6 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 
 		log.Printf("[MCP] Delegating transcript to Tendril: %s (Substrate: %s, URL: %s)", transcript, substrate, substrateURL)
 		orch := &orchestrator.DockerOrchestrator{
-			ImageName:       "opentendril-tendril:latest",
 			Substrate:       substrate,
 			SubstrateURL:    substrateURL,
 			SubstrateBranch: substrateBranch,

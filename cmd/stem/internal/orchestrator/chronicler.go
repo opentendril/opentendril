@@ -2,49 +2,30 @@ package orchestrator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
+
+	"github.com/opentendril/core/cmd/stem/internal/llm"
 )
 
 const epigeneticGenomeHeader = "# Epigenetic Learnings"
 const genomeAutoPushCommitMessage = "chore(genome): epigenetic transcription update [skip ci]"
 
-type llmMode string
-
 const (
-	llmModeAnthropic llmMode = "anthropic"
-	llmModeOpenAIish llmMode = "openaiish"
-
 	defaultMaxSection       = 12000
 	defaultGenomeTokenLimit = 2000
 	genomeCharsPerToken     = 4
 )
 
-type providerSpec struct {
-	provider    string
-	baseURL     string
-	baseURLs    []string
-	apiKey      string
-	model       string
-	endpoint    string
-	mode        llmMode
-	temperature float64
-}
-
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
 type EpigeneticChronicler struct {
 	workspace string
-	client    *http.Client
-	spec      providerSpec
+	client    *llm.Client
 }
 
 // NewEpigeneticChronicler constructs a chronicler for the provided workspace.
@@ -55,10 +36,7 @@ func NewEpigeneticChronicler(workspace string) *EpigeneticChronicler {
 
 	return &EpigeneticChronicler{
 		workspace: repoRoot(workspace),
-		client: &http.Client{
-			Timeout: 20 * time.Second,
-		},
-		spec: resolveProviderSpec(),
+		client:    llm.NewClientFromEnv(),
 	}
 }
 
@@ -72,7 +50,7 @@ func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcri
 	}
 
 	systemPrompt, userPrompt := buildEpigeneticPrompt(transcript, diff, logs)
-	findings, err := c.callLLM(ctx, systemPrompt, userPrompt)
+	findings, err := c.client.CallPrompt(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return err
 	}
@@ -125,316 +103,6 @@ func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func resolveProviderSpec() providerSpec {
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
-	if provider == "" {
-		provider = detectProviderFallback()
-	}
-
-	switch provider {
-	case "local":
-		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		return providerSpec{
-			provider:    "local",
-			baseURL:     baseURL,
-			baseURLs:    localInferenceBaseURLs(baseURL),
-			model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "anthropic":
-		return providerSpec{
-			provider:    "anthropic",
-			baseURL:     envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			apiKey:      os.Getenv("ANTHROPIC_API_KEY"),
-			model:       envOr("ANTHROPIC_MODEL_NAME", "claude-sonnet-4-6"),
-			endpoint:    "/v1/messages",
-			mode:        llmModeAnthropic,
-			temperature: 0.1,
-		}
-	case "openai":
-		return providerSpec{
-			provider:    "openai",
-			baseURL:     envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			apiKey:      os.Getenv("OPENAI_API_KEY"),
-			model:       envOr("OPENAI_MODEL_NAME", "gpt-5.4-mini"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "grok":
-		return providerSpec{
-			provider:    "grok",
-			baseURL:     envOr("GROK_BASE_URL", "https://api.x.ai/v1"),
-			apiKey:      os.Getenv("GROK_API_KEY"),
-			model:       envOr("GROK_MODEL_NAME", "grok-4-fast-non-reasoning"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "google":
-		return providerSpec{
-			provider:    "google",
-			baseURL:     envOr("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
-			apiKey:      os.Getenv("GOOGLE_API_KEY"),
-			model:       envOr("GOOGLE_MODEL_NAME", "gemini-3-flash"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "openrouter":
-		return providerSpec{
-			provider:    "openrouter",
-			baseURL:     envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			apiKey:      os.Getenv("OPENROUTER_API_KEY"),
-			model:       envOr("OPENROUTER_MODEL_NAME", "anthropic/claude-3.5-sonnet"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "opentendril":
-		return providerSpec{
-			provider:    "opentendril",
-			baseURL:     envOr("OPENTENDRIL_BASE_URL", "https://api.opentendril.com/v1"),
-			apiKey:      os.Getenv("OPENTENDRIL_API_KEY"),
-			model:       envOr("OPENTENDRIL_MODEL_NAME", "anthropic/claude-3.5-sonnet"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	case "nvidia":
-		return providerSpec{
-			provider:    "nvidia",
-			baseURL:     envOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-			apiKey:      os.Getenv("NVIDIA_API_KEY"),
-			model:       envOr("NVIDIA_MODEL_NAME", "meta/llama-3.1-70b-instruct"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	default:
-		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		return providerSpec{
-			provider:    "local",
-			baseURL:     baseURL,
-			baseURLs:    localInferenceBaseURLs(baseURL),
-			model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
-			endpoint:    "/chat/completions",
-			mode:        llmModeOpenAIish,
-			temperature: 0.1,
-		}
-	}
-}
-
-func detectProviderFallback() string {
-	if os.Getenv("LOCAL_INFERENCE_URL") != "" || os.Getenv("LOCAL_MODEL_NAME") != "" {
-		return "local"
-	}
-	candidates := []struct {
-		provider string
-		key      string
-	}{
-		{provider: "openai", key: "OPENAI_API_KEY"},
-		{provider: "anthropic", key: "ANTHROPIC_API_KEY"},
-		{provider: "grok", key: "GROK_API_KEY"},
-		{provider: "google", key: "GOOGLE_API_KEY"},
-		{provider: "openrouter", key: "OPENROUTER_API_KEY"},
-		{provider: "opentendril", key: "OPENTENDRIL_API_KEY"},
-		{provider: "nvidia", key: "NVIDIA_API_KEY"},
-	}
-	for _, candidate := range candidates {
-		if strings.TrimSpace(os.Getenv(candidate.key)) != "" {
-			return candidate.provider
-		}
-	}
-	return "local"
-}
-
-func envOr(key, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func localInferenceBaseURLs(baseURL string) []string {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if baseURL == "" {
-		baseURL = "http://host.docker.internal:11434/v1"
-	}
-
-	candidates := []string{baseURL}
-	switch {
-	case strings.Contains(baseURL, "host.docker.internal"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"),
-			strings.ReplaceAll(baseURL, "host.docker.internal", "127.0.0.1"),
-		)
-	case strings.Contains(baseURL, "localhost"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "localhost", "127.0.0.1"),
-			strings.ReplaceAll(baseURL, "localhost", "host.docker.internal"),
-		)
-	case strings.Contains(baseURL, "127.0.0.1"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "127.0.0.1", "localhost"),
-			strings.ReplaceAll(baseURL, "127.0.0.1", "host.docker.internal"),
-		)
-	default:
-		candidates = append(candidates, strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"))
-	}
-
-	seen := make(map[string]struct{}, len(candidates))
-	out := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		out = append(out, candidate)
-	}
-
-	return out
-}
-
-func (c *EpigeneticChronicler) callLLM(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
-	if c.spec.baseURL == "" {
-		return "", fmt.Errorf("no LLM base URL configured for provider %q", c.spec.provider)
-	}
-	if c.spec.model == "" {
-		return "", fmt.Errorf("no LLM model configured for provider %q", c.spec.provider)
-	}
-	if c.spec.provider != "local" && strings.TrimSpace(c.spec.apiKey) == "" {
-		return "", fmt.Errorf("no API key configured for provider %q", c.spec.provider)
-	}
-
-	candidates := c.spec.baseURLs
-	if len(candidates) == 0 {
-		candidates = []string{c.spec.baseURL}
-	}
-
-	var lastErr error
-	for _, baseURL := range candidates {
-		content, err := c.callLLMAtBaseURL(ctx, baseURL, systemPrompt, userPrompt)
-		if err == nil {
-			return content, nil
-		}
-		lastErr = err
-	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("llm request failed for provider %q", c.spec.provider)
-	}
-
-	return "", lastErr
-}
-
-func (c *EpigeneticChronicler) callLLMAtBaseURL(ctx context.Context, baseURL string, systemPrompt string, userPrompt string) (string, error) {
-	var (
-		payload []byte
-		url     = strings.TrimRight(baseURL, "/") + c.spec.endpoint
-		req     *http.Request
-		err     error
-	)
-
-	switch c.spec.mode {
-	case llmModeAnthropic:
-		payload, err = json.Marshal(map[string]any{
-			"model":       c.spec.model,
-			"max_tokens":  1024,
-			"temperature": c.spec.temperature,
-			"system":      systemPrompt,
-			"messages": []map[string]string{
-				{"role": "user", "content": userPrompt},
-			},
-		})
-		if err != nil {
-			return "", fmt.Errorf("marshal anthropic request: %w", err)
-		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
-		if err != nil {
-			return "", fmt.Errorf("create anthropic request: %w", err)
-		}
-		req.Header.Set("x-api-key", c.spec.apiKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	default:
-		payload, err = json.Marshal(map[string]any{
-			"model":       c.spec.model,
-			"temperature": c.spec.temperature,
-			"stream":      false,
-			"messages": []map[string]string{
-				{"role": "system", "content": systemPrompt},
-				{"role": "user", "content": userPrompt},
-			},
-		})
-		if err != nil {
-			return "", fmt.Errorf("marshal chat request: %w", err)
-		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(payload)))
-		if err != nil {
-			return "", fmt.Errorf("create chat request: %w", err)
-		}
-		if c.spec.apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.spec.apiKey)
-		}
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("llm request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read llm response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-
-	switch c.spec.mode {
-	case llmModeAnthropic:
-		var decoded struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			return "", fmt.Errorf("decode anthropic response: %w", err)
-		}
-		for _, block := range decoded.Content {
-			if strings.TrimSpace(block.Text) != "" {
-				return strings.TrimSpace(block.Text), nil
-			}
-		}
-		return "", fmt.Errorf("anthropic response contained no text")
-	default:
-		var decoded struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			return "", fmt.Errorf("decode chat response: %w", err)
-		}
-		if len(decoded.Choices) == 0 {
-			return "", fmt.Errorf("chat response contained no choices")
-		}
-		content := strings.TrimSpace(decoded.Choices[0].Message.Content)
-		if content == "" {
-			return "", fmt.Errorf("chat response contained no content")
-		}
-		return content, nil
-	}
 }
 
 func buildEpigeneticPrompt(transcript string, diff string, logs string) (string, string) {
@@ -497,7 +165,7 @@ Genome content:
 
 func (c *EpigeneticChronicler) reduceGenomeContent(ctx context.Context, existing string) (string, error) {
 	systemPrompt, userPrompt := buildGenomeReductionPrompt(existing)
-	findings, err := c.callLLM(ctx, systemPrompt, userPrompt)
+	findings, err := c.client.CallPrompt(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", err
 	}
