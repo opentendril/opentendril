@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 )
@@ -167,6 +168,10 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 							"transcript": map[string]interface{}{
 								"type":        "string",
 								"description": "A clear, actionable description of the transcript (task) for Tendril to execute.",
+							},
+							"stepId": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional stable step identifier for a structured sequence run.",
 							},
 							"substrate": map[string]interface{}{
 								"type":        "string",
@@ -392,14 +397,22 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.formatError(req.ID, -32602, "Invalid arguments", "The 'transcript' and 'substrate' parameters are required.")
 		}
 
+		stepID, _ := params.Arguments["stepId"].(string)
+		if strings.TrimSpace(stepID) == "" {
+			stepID = fmt.Sprintf("step-%d", time.Now().UTC().UnixNano())
+		}
+
 		substrateURL, _ := params.Arguments["substrateUrl"].(string)
 		substrateBranch, _ := params.Arguments["substrateBranch"].(string)
+		statusPath := filepath.Join(resolveRepoRoot(substrate), "tendril-status.json")
 
-		log.Printf("[MCP] Delegating transcript to Tendril: %s (Substrate: %s, URL: %s)", transcript, substrate, substrateURL)
+		log.Printf("[MCP] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", stepID, transcript, substrate, substrateURL)
 		orch := &orchestrator.DockerOrchestrator{
 			Substrate:       substrate,
 			SubstrateURL:    substrateURL,
 			SubstrateBranch: substrateBranch,
+			StepID:          stepID,
+			StatusPath:      statusPath,
 		}
 		output, err := orch.RunTendril(context.Background(), transcript)
 		if err != nil {

@@ -7,14 +7,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/llm"
 )
@@ -25,6 +28,8 @@ type DockerOrchestrator struct {
 	Substrate       string
 	SubstrateURL    string
 	SubstrateBranch string
+	StepID          string
+	StatusPath      string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -36,12 +41,55 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		ctx = context.Background()
 	}
 
+	stepID := strings.TrimSpace(d.StepID)
+	if stepID == "" {
+		stepID = newTendrilExecutionID("step")
+		d.StepID = stepID
+	}
+
 	// The path to the repository on the host.
 	sourcePath := d.Substrate
 	if sourcePath == "" {
 		sourcePath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
 	}
 	sourcePath = repoRoot(sourcePath)
+	gitRepo := isGitRepo(sourcePath)
+
+	statusPath := strings.TrimSpace(d.StatusPath)
+	if statusPath != "" && !filepath.IsAbs(statusPath) {
+		statusPath = filepath.Join(sourcePath, statusPath)
+	}
+
+	if gitRepo && statusPath != "" {
+		if existing, err := loadTendrilStatus(statusPath); err != nil {
+			return "", err
+		} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
+			switch strings.ToLower(strings.TrimSpace(existing.Status)) {
+			case "complete":
+				message := fmt.Sprintf("Step %s already completed. Skipping.", stepID)
+				fmt.Fprintln(os.Stderr, message)
+				return message, nil
+			case "failed":
+				errText := strings.TrimSpace(existing.Error)
+				if errText == "" {
+					errText = "previous execution failed"
+				}
+				fmt.Fprintf(os.Stderr, "⚠️ Resumption halted for %s: %s\n", stepID, errText)
+				return "", fmt.Errorf("step %s previously failed: %s", stepID, errText)
+			}
+		}
+	}
+
+	hostStashed := false
+	if gitRepo {
+		var err error
+		hostStashed, err = stashHostWorkspace(ctx, sourcePath, stepID)
+		if err != nil {
+			return "", err
+		}
+	} else if statusPath != "" {
+		fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Tendril state externalization is disabled.\n", sourcePath)
+	}
 
 	mountPath := sourcePath
 	var cleanup func()
@@ -101,19 +149,102 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return "", err
 	}
 
-	result, err := agent.Run(ctx, taskPrompt)
-	if err != nil {
-		return "", err
-	}
+	result, runErr := agent.Run(ctx, taskPrompt)
 
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
 
+	if !gitRepo {
+		if runErr != nil {
+			return "", runErr
+		}
+		return result.Response, nil
+	}
+
+	var statusRelPath string
+	if statusPath != "" {
+		var err error
+		statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	modifiedFiles, diffErr := collectStageableFiles(ctx, mountPath, statusRelPath)
+	if diffErr != nil {
+		if hostStashed {
+			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+				diffErr = errors.Join(diffErr, restoreErr)
+			}
+		}
+		return "", diffErr
+	}
+
 	gitDiff, diffErr := collectGitDiff(ctx, mountPath)
 	if diffErr != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+	}
+
+	executionStatus := tendrilExecutionStatus{
+		StepID:        stepID,
+		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
+		FilesModified: modifiedFiles,
+	}
+	if runErr != nil {
+		executionStatus.Status = "failed"
+		executionStatus.Error = runErr.Error()
 	} else {
+		executionStatus.Status = "complete"
+	}
+
+	commitHash, commitErr := commitSandboxExecution(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
+	if commitErr != nil {
+		if hostStashed {
+			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+				commitErr = errors.Join(commitErr, restoreErr)
+			}
+		}
+		if runErr != nil {
+			return "", errors.Join(runErr, commitErr)
+		}
+		return "", commitErr
+	}
+
+	mergeErr := mergeSandboxCommit(ctx, sourcePath, commitHash)
+	if mergeErr != nil {
+		if runErr != nil {
+			if hostStashed {
+				if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+					mergeErr = errors.Join(mergeErr, restoreErr)
+				}
+			}
+			return "", errors.Join(runErr, mergeErr)
+		}
+		if hostStashed {
+			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+				mergeErr = errors.Join(mergeErr, restoreErr)
+			}
+		}
+		return "", mergeErr
+	}
+
+	var finalErr error
+	if runErr != nil {
+		finalErr = runErr
+	}
+
+	if hostStashed {
+		if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+			finalErr = errors.Join(finalErr, restoreErr)
+		}
+	}
+
+	if finalErr != nil {
+		return "", finalErr
+	}
+
+	if gitDiff != "" {
 		chronicler := NewEpigeneticChronicler(sourcePath)
 		if err := chronicler.TranscribeLearnings(ctx, result.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
@@ -536,6 +667,322 @@ func collectGitDiff(ctx context.Context, mountPath string) (string, error) {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+type tendrilExecutionStatus struct {
+	StepID        string   `json:"stepId"`
+	Status        string   `json:"status"`
+	Error         string   `json:"error,omitempty"`
+	Timestamp     string   `json:"timestamp"`
+	FilesModified []string `json:"filesModified"`
+}
+
+func newTendrilExecutionID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
+}
+
+func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmdArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+func stashHostWorkspace(ctx context.Context, root, runID string) (bool, error) {
+	statusOutput, err := runGitCommand(ctx, root, "status", "--porcelain")
+	if err != nil {
+		return false, fmt.Errorf("host pre-flight status check failed: %w", err)
+	}
+	if strings.TrimSpace(statusOutput) == "" {
+		return false, nil
+	}
+
+	stashName := fmt.Sprintf("opentendril-host-pre-flight-stash-%s", runID)
+	if _, err := runGitCommand(ctx, root, "stash", "save", "-u", stashName); err != nil {
+		return false, fmt.Errorf("git stash save failed: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "🧺 Stashed host workspace as %s\n", stashName)
+	return true, nil
+}
+
+func restoreHostStash(ctx context.Context, root string) error {
+	if _, err := runGitCommand(ctx, root, "stash", "pop"); err != nil {
+		return fmt.Errorf("git stash pop failed: %w", err)
+	}
+
+	return nil
+}
+
+func loadTendrilStatus(path string) (*tendrilExecutionStatus, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read tendril status %s: %w", path, err)
+	}
+
+	var status tendrilExecutionStatus
+	if err := json.Unmarshal(content, &status); err != nil {
+		return nil, fmt.Errorf("decode tendril status %s: %w", path, err)
+	}
+
+	return &status, nil
+}
+
+func writeTendrilStatus(path string, status tendrilExecutionStatus) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create tendril status directory: %w", err)
+	}
+
+	payload, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode tendril status: %w", err)
+	}
+	payload = append(payload, '\n')
+
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		return fmt.Errorf("write tendril status %s: %w", path, err)
+	}
+
+	return nil
+}
+
+func workspaceRelativePath(rootPath, targetPath string) (string, error) {
+	rootPath = strings.TrimSpace(rootPath)
+	targetPath = strings.TrimSpace(targetPath)
+	if rootPath == "" || targetPath == "" {
+		return "", nil
+	}
+
+	if !filepath.IsAbs(targetPath) {
+		targetPath = filepath.Join(rootPath, targetPath)
+	}
+
+	rel, err := filepath.Rel(rootPath, targetPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace relative path for %s: %w", targetPath, err)
+	}
+
+	rel = filepath.Clean(rel)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %s escapes workspace %s", targetPath, rootPath)
+	}
+
+	return filepath.ToSlash(rel), nil
+}
+
+func collectStageableFiles(ctx context.Context, mountPath string, excludedPaths ...string) ([]string, error) {
+	output, err := runGitCommand(ctx, mountPath, "status", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+
+	excluded := make(map[string]struct{}, len(excludedPaths))
+	for _, path := range excludedPaths {
+		normalized := filepath.ToSlash(strings.TrimSpace(path))
+		if normalized == "" {
+			continue
+		}
+		excluded[normalized] = struct{}{}
+	}
+
+	stageable := make(map[string]struct{})
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || len(line) < 3 {
+			continue
+		}
+
+		pathPart := strings.TrimSpace(line[3:])
+		if pathPart == "" {
+			continue
+		}
+
+		paths := []string{pathPart}
+		if strings.Contains(pathPart, " -> ") {
+			paths = strings.Split(pathPart, " -> ")
+		}
+
+		for _, path := range paths {
+			normalized := filepath.ToSlash(strings.TrimSpace(path))
+			if normalized == "" {
+				continue
+			}
+			if _, ok := excluded[normalized]; ok {
+				continue
+			}
+			if shouldIgnoreStagePath(normalized) {
+				continue
+			}
+			stageable[normalized] = struct{}{}
+		}
+	}
+
+	if len(stageable) == 0 {
+		return []string{}, nil
+	}
+
+	files := make([]string, 0, len(stageable))
+	for path := range stageable {
+		files = append(files, path)
+	}
+	sort.Strings(files)
+
+	return files, nil
+}
+
+func shouldIgnoreStagePath(path string) bool {
+	normalized := filepath.ToSlash(strings.TrimSpace(path))
+	if normalized == "" {
+		return true
+	}
+
+	lowerPath := strings.ToLower(normalized)
+	if strings.HasSuffix(lowerPath, ".log") {
+		return true
+	}
+
+	ignoredSegments := map[string]struct{}{
+		".cache":      {},
+		"build":       {},
+		"dist":        {},
+		"tmp":         {},
+		"__pycache__": {},
+	}
+
+	for _, segment := range strings.Split(normalized, "/") {
+		if _, ok := ignoredSegments[strings.ToLower(segment)]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+func commitSandboxExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
+	stagePaths := append([]string{}, executionStatus.FilesModified...)
+
+	if strings.TrimSpace(statusPath) != "" {
+		statusRelPath, err := workspaceRelativePath(sourcePath, statusPath)
+		if err != nil {
+			return "", err
+		}
+
+		statusSandboxPath := filepath.Join(mountPath, filepath.FromSlash(statusRelPath))
+		if err := writeTendrilStatus(statusSandboxPath, executionStatus); err != nil {
+			return "", err
+		}
+
+		stagePaths = append(stagePaths, statusRelPath)
+	}
+
+	stageSet := make(map[string]struct{}, len(stagePaths))
+	uniqueStagePaths := make([]string, 0, len(stagePaths))
+	for _, path := range stagePaths {
+		normalized := filepath.ToSlash(strings.TrimSpace(path))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := stageSet[normalized]; ok {
+			continue
+		}
+		stageSet[normalized] = struct{}{}
+		uniqueStagePaths = append(uniqueStagePaths, normalized)
+	}
+
+	if len(uniqueStagePaths) > 0 {
+		addArgs := append([]string{"add", "-A", "--"}, uniqueStagePaths...)
+		if _, err := runGitCommand(ctx, mountPath, addArgs...); err != nil {
+			return "", err
+		}
+	}
+
+	commitMessage := buildTendrilCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
+	commitArgs := []string{"commit", "-m", commitMessage}
+	if len(uniqueStagePaths) == 0 {
+		commitArgs = append([]string{"commit", "--allow-empty"}, "-m", commitMessage)
+	}
+
+	if _, err := runGitCommand(ctx, mountPath, commitArgs...); err != nil {
+		return "", err
+	}
+
+	commitHash, err := runGitCommand(ctx, mountPath, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+
+	return commitHash, nil
+}
+
+func mergeSandboxCommit(ctx context.Context, sourcePath, commitHash string) error {
+	if _, err := runGitCommand(ctx, sourcePath, "merge", "--ff-only", commitHash); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func buildTendrilCommitMessage(stepID, taskPrompt, status, failureError string) string {
+	if strings.ToLower(strings.TrimSpace(status)) == "failed" {
+		return fmt.Sprintf("tendril(%s) [INCOMPLETE]: %s", strings.TrimSpace(stepID), summarizeTendrilFailureError(failureError))
+	}
+
+	return fmt.Sprintf("tendril(%s): %s", strings.TrimSpace(stepID), summarizeTendrilPrompt(taskPrompt))
+}
+
+func summarizeTendrilPrompt(taskPrompt string) string {
+	summary := strings.Join(strings.Fields(strings.TrimSpace(taskPrompt)), " ")
+	if summary == "" {
+		return "tendril task"
+	}
+
+	const maxRunes = 72
+	runes := []rune(summary)
+	if len(runes) <= maxRunes {
+		return summary
+	}
+
+	summary = strings.TrimRight(string(runes[:maxRunes]), " ,.;:-")
+	if summary == "" {
+		summary = string(runes[:maxRunes])
+	}
+
+	return summary + "..."
+}
+
+func summarizeTendrilFailureError(failureError string) string {
+	summary := strings.Join(strings.Fields(strings.TrimSpace(failureError)), " ")
+	if summary == "" {
+		return "execution failed"
+	}
+
+	const maxRunes = 120
+	runes := []rune(summary)
+	if len(runes) <= maxRunes {
+		return summary
+	}
+
+	summary = strings.TrimRight(string(runes[:maxRunes]), " ,.;:-")
+	if summary == "" {
+		summary = string(runes[:maxRunes])
+	}
+
+	return summary + "..."
 }
 
 // cloneForeignSubstrate clones a remote repository into a temporary sandbox.
