@@ -3,6 +3,10 @@
 //   tendril chat  - Start the interactive chat interface
 //   tendril mcp   - Start the MCP JSON-RPC stdio server
 //   tendril init  - Run the Developer Onboarding Wizard
+//   tendril serve - Start the Go Stem Orchestrator API
+//   tendril adapt - Mine recent git history into the genome
+//   tendril genome - Inspect or reduce the active genome
+//   tendril plasmid - List or inject modular genome seeds
 
 package main
 
@@ -41,6 +45,12 @@ func main() {
 	switch os.Args[1] {
 	case "chat":
 		runChatCmd(ctx, os.Args[2:])
+	case "adapt":
+		runAdaptCmd(ctx, os.Args[2:])
+	case "genome":
+		runGenomeCmd(ctx, os.Args[2:])
+	case "plasmid":
+		runPlasmidCmd(os.Args[2:])
 	case "mcp":
 		runMCPCmd(ctx, os.Args[2:])
 	case "init":
@@ -62,6 +72,9 @@ func printUsage() {
 	fmt.Println("  tendril <command> [arguments]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  chat    Start the interactive chat interface")
+	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
+	fmt.Println("  genome  Inspect or reduce the active genome seeds")
+	fmt.Println("  plasmid Manage modular genome plasmids")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")
 	fmt.Println("  serve   Start the Go Stem Orchestrator API")

@@ -67,6 +67,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	if sourcePath == "" {
 		sourcePath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
 	}
+	sourcePath = repoRoot(sourcePath)
 
 	mountPath := sourcePath
 
@@ -122,13 +123,9 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	if diffErr != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
 	} else {
-		chronicler := NewEpigeneticChronicler(mountPath)
+		chronicler := NewEpigeneticChronicler(sourcePath)
 		if err := chronicler.TranscribeLearnings(ctx, taskPrompt, gitDiff, runLogs); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
-		} else if mountPath != sourcePath {
-			if err := syncGenomeToWorkspace(sourcePath, mountPath); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to sync epigenetic genome back to workspace: %v\n", err)
-			}
 		}
 	}
 
@@ -213,30 +210,6 @@ func collectGitDiff(ctx context.Context, mountPath string) (string, error) {
 		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func syncGenomeToWorkspace(sourcePath, mountPath string) error {
-	if sourcePath == "" || mountPath == "" || sourcePath == mountPath {
-		return nil
-	}
-
-	sourceGenome := filepath.Join(mountPath, ".tendril", "genome", "epigenetics.md")
-	content, err := os.ReadFile(sourceGenome)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read epigenetic genome from sandbox: %w", err)
-	}
-
-	destGenome := filepath.Join(sourcePath, ".tendril", "genome", "epigenetics.md")
-	if err := os.MkdirAll(filepath.Dir(destGenome), 0o755); err != nil {
-		return fmt.Errorf("create epigenetic genome destination: %w", err)
-	}
-	if err := os.WriteFile(destGenome, content, 0o644); err != nil {
-		return fmt.Errorf("write epigenetic genome destination: %w", err)
-	}
-	return nil
 }
 
 // cloneForeignSubstrate clones a remote repository into a temporary sandbox.

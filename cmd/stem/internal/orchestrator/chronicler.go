@@ -7,25 +7,32 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const epigeneticGenomeHeader = "# Epigenetic Learnings"
+const genomeAutoPushCommitMessage = "chore(genome): epigenetic transcription update [skip ci]"
 
 type llmMode string
 
 const (
-	llmModeAnthropic  llmMode = "anthropic"
-	llmModeOpenAIish  llmMode = "openaiish"
-	defaultMaxSection         = 12000
+	llmModeAnthropic llmMode = "anthropic"
+	llmModeOpenAIish llmMode = "openaiish"
+
+	defaultMaxSection       = 12000
+	defaultGenomeTokenLimit = 2000
+	genomeCharsPerToken     = 4
 )
 
 type providerSpec struct {
 	provider    string
 	baseURL     string
+	baseURLs    []string
 	apiKey      string
 	model       string
 	endpoint    string
@@ -47,9 +54,9 @@ func NewEpigeneticChronicler(workspace string) *EpigeneticChronicler {
 	}
 
 	return &EpigeneticChronicler{
-		workspace: workspace,
+		workspace: repoRoot(workspace),
 		client: &http.Client{
-			Timeout: 90 * time.Second,
+			Timeout: 20 * time.Second,
 		},
 		spec: resolveProviderSpec(),
 	}
@@ -75,7 +82,49 @@ func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcri
 		return nil
 	}
 
-	return c.appendToGenome(findings)
+	if err := c.appendToGenome(findings); err != nil {
+		return err
+	}
+
+	targetPath := c.genomePath()
+	if reduced, err := c.maybeReduceGenome(ctx, targetPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-reduction skipped: %v\n", err)
+	} else if reduced {
+		fmt.Fprintf(os.Stderr, "🧬 Genome auto-reduced at %s\n", targetPath)
+	}
+
+	if err := c.maybeAutoPushGenome(targetPath); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-push skipped: %v\n", err)
+	}
+
+	return nil
+}
+
+// ReduceGenomeFile consolidates the active epigenetic genome in place.
+func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	targetPath := c.genomePath()
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("epigenetic genome not found at %s", targetPath)
+		}
+		return fmt.Errorf("read epigenetic genome: %w", err)
+	}
+
+	reduced, err := c.reduceGenomeContent(ctx, string(content))
+	if err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(targetPath, []byte(reduced), 0o644); err != nil {
+		return fmt.Errorf("write reduced epigenetic genome: %w", err)
+	}
+
+	return nil
 }
 
 func resolveProviderSpec() providerSpec {
@@ -86,9 +135,11 @@ func resolveProviderSpec() providerSpec {
 
 	switch provider {
 	case "local":
+		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
 		return providerSpec{
 			provider:    "local",
-			baseURL:     envOr("LOCAL_INFERENCE_URL", "http://localhost:11434/v1"),
+			baseURL:     baseURL,
+			baseURLs:    localInferenceBaseURLs(baseURL),
 			model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
 			endpoint:    "/chat/completions",
 			mode:        llmModeOpenAIish,
@@ -165,9 +216,11 @@ func resolveProviderSpec() providerSpec {
 			temperature: 0.1,
 		}
 	default:
+		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
 		return providerSpec{
 			provider:    "local",
-			baseURL:     envOr("LOCAL_INFERENCE_URL", "http://localhost:11434/v1"),
+			baseURL:     baseURL,
+			baseURLs:    localInferenceBaseURLs(baseURL),
 			model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
 			endpoint:    "/chat/completions",
 			mode:        llmModeOpenAIish,
@@ -207,6 +260,46 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+func localInferenceBaseURLs(baseURL string) []string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		baseURL = "http://host.docker.internal:11434/v1"
+	}
+
+	candidates := []string{baseURL}
+	switch {
+	case strings.Contains(baseURL, "host.docker.internal"):
+		candidates = append(candidates,
+			strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"),
+			strings.ReplaceAll(baseURL, "host.docker.internal", "127.0.0.1"),
+		)
+	case strings.Contains(baseURL, "localhost"):
+		candidates = append(candidates,
+			strings.ReplaceAll(baseURL, "localhost", "127.0.0.1"),
+			strings.ReplaceAll(baseURL, "localhost", "host.docker.internal"),
+		)
+	case strings.Contains(baseURL, "127.0.0.1"):
+		candidates = append(candidates,
+			strings.ReplaceAll(baseURL, "127.0.0.1", "localhost"),
+			strings.ReplaceAll(baseURL, "127.0.0.1", "host.docker.internal"),
+		)
+	default:
+		candidates = append(candidates, strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"))
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := seen[candidate]; ok {
+			continue
+		}
+		seen[candidate] = struct{}{}
+		out = append(out, candidate)
+	}
+
+	return out
+}
+
 func (c *EpigeneticChronicler) callLLM(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
 	if c.spec.baseURL == "" {
 		return "", fmt.Errorf("no LLM base URL configured for provider %q", c.spec.provider)
@@ -218,9 +311,31 @@ func (c *EpigeneticChronicler) callLLM(ctx context.Context, systemPrompt string,
 		return "", fmt.Errorf("no API key configured for provider %q", c.spec.provider)
 	}
 
+	candidates := c.spec.baseURLs
+	if len(candidates) == 0 {
+		candidates = []string{c.spec.baseURL}
+	}
+
+	var lastErr error
+	for _, baseURL := range candidates {
+		content, err := c.callLLMAtBaseURL(ctx, baseURL, systemPrompt, userPrompt)
+		if err == nil {
+			return content, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("llm request failed for provider %q", c.spec.provider)
+	}
+
+	return "", lastErr
+}
+
+func (c *EpigeneticChronicler) callLLMAtBaseURL(ctx context.Context, baseURL string, systemPrompt string, userPrompt string) (string, error) {
 	var (
 		payload []byte
-		url     = strings.TrimRight(c.spec.baseURL, "/") + c.spec.endpoint
+		url     = strings.TrimRight(baseURL, "/") + c.spec.endpoint
 		req     *http.Request
 		err     error
 	)
@@ -355,6 +470,46 @@ Run logs:
 	return systemPrompt, strings.TrimSpace(userPrompt)
 }
 
+func buildGenomeReductionPrompt(existing string) (string, string) {
+	existing = truncateMiddle(strings.TrimSpace(existing), defaultMaxSection)
+
+	systemPrompt := strings.TrimSpace(`
+You are the OpenTendril Genome Reducer.
+Compress, deduplicate, and merge the genome into a clean list of high-level, durable principles.
+Return only concise Markdown bullet points.
+Do not mention temporary implementation details, commit hashes, or duplicated file paths.
+`)
+
+	userPrompt := fmt.Sprintf(`Reduce the following epigenetic genome into durable, reusable principles.
+
+Requirements:
+- Preserve only long-lived rules that should steer future Tendril runs.
+- Merge overlapping bullets.
+- Prefer generalized principles over one-off commands or task-specific notes.
+- Keep the final list concise, ideally under 12 bullets.
+
+Genome content:
+%s
+`, existing)
+
+	return systemPrompt, strings.TrimSpace(userPrompt)
+}
+
+func (c *EpigeneticChronicler) reduceGenomeContent(ctx context.Context, existing string) (string, error) {
+	systemPrompt, userPrompt := buildGenomeReductionPrompt(existing)
+	findings, err := c.callLLM(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return "", err
+	}
+
+	findings = normalizeMarkdownBullets(findings)
+	if strings.TrimSpace(findings) == "" {
+		return "", fmt.Errorf("LLM returned no genome reduction output")
+	}
+
+	return epigeneticGenomeHeader + "\n\n" + findings + "\n", nil
+}
+
 func truncateMiddle(text string, limit int) string {
 	text = strings.TrimSpace(text)
 	if limit <= 0 || len(text) <= limit {
@@ -415,7 +570,7 @@ func normalizeMarkdownBullets(content string) string {
 }
 
 func (c *EpigeneticChronicler) appendToGenome(findings string) error {
-	targetPath := filepath.Join(c.workspace, ".tendril", "genome", "epigenetics.md")
+	targetPath := c.genomePath()
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return fmt.Errorf("create genome directory: %w", err)
 	}
@@ -428,6 +583,69 @@ func (c *EpigeneticChronicler) appendToGenome(findings string) error {
 	merged := mergeGenomeContent(string(existing), findings)
 	if err := os.WriteFile(targetPath, []byte(merged), 0o644); err != nil {
 		return fmt.Errorf("write genome: %w", err)
+	}
+
+	return nil
+}
+
+func (c *EpigeneticChronicler) genomePath() string {
+	return filepath.Join(c.workspace, ".tendril", "genome", "epigenetics.md")
+}
+
+func (c *EpigeneticChronicler) maybeReduceGenome(ctx context.Context, targetPath string) (bool, error) {
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat genome: %w", err)
+	}
+
+	if info.Size() <= genomeMaxBytes() {
+		return false, nil
+	}
+
+	if err := c.ReduceGenomeFile(ctx); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (c *EpigeneticChronicler) maybeAutoPushGenome(targetPath string) error {
+	if strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_GENOME_AUTO_PUSH"))) != "true" {
+		return nil
+	}
+
+	if !isGitRepo(c.workspace) {
+		return fmt.Errorf("workspace %s is not a git repository", c.workspace)
+	}
+
+	relPath, err := filepath.Rel(c.workspace, targetPath)
+	if err != nil {
+		relPath = targetPath
+	}
+
+	addCmd := exec.Command("git", "-C", c.workspace, "add", relPath)
+	if output, err := addCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	diffCmd := exec.Command("git", "-C", c.workspace, "diff", "--cached", "--quiet", "--", relPath)
+	if err := diffCmd.Run(); err == nil {
+		return nil
+	} else if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		return fmt.Errorf("git diff --cached failed: %w", err)
+	}
+
+	commitCmd := exec.Command("git", "-C", c.workspace, "commit", "-m", genomeAutoPushCommitMessage)
+	if output, err := commitCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	pushCmd := exec.Command("git", "-C", c.workspace, "push", "origin", "HEAD")
+	if output, err := pushCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
 	return nil
@@ -450,4 +668,34 @@ func mergeGenomeContent(existing string, findings string) string {
 	}
 
 	return epigeneticGenomeHeader + "\n\n" + existing + "\n\n" + findings + "\n"
+}
+
+func genomeMaxBytes() int64 {
+	limit := defaultGenomeTokenLimit
+	if raw := strings.TrimSpace(os.Getenv("TENDRIL_GENOME_MAX_TOKENS")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	return int64(limit * genomeCharsPerToken)
+}
+
+func repoRoot(path string) string {
+	if strings.TrimSpace(path) == "" {
+		path = "."
+	}
+
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return path
+	}
+
+	root := strings.TrimSpace(string(output))
+	if root == "" {
+		return path
+	}
+
+	return root
 }

@@ -172,3 +172,27 @@ func restartBackend(ctx context.Context, brainURL string) {
 		}
 	}
 }
+
+func resolveRepoRoot(path string) string {
+	if strings.TrimSpace(path) == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			path = "."
+		} else {
+			path = wd
+		}
+	}
+
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return path
+	}
+
+	root := strings.TrimSpace(string(output))
+	if root == "" {
+		return path
+	}
+
+	return root
+}
