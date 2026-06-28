@@ -67,6 +67,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	if sourcePath == "" {
 		sourcePath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
 	}
+	sourcePath = repoRoot(sourcePath)
 
 	mountPath := sourcePath
 
@@ -86,10 +87,10 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		shadowPath, err := createShadowWorktree(sourcePath)
 		if err == nil {
 			mountPath = shadowPath
-			
+
 			// Inject node_modules, .venv, vendor from host if they exist
 			injectMycorrhizalCache(sourcePath, shadowPath)
-			
+
 			// Ensure cleanup after execution
 			defer func() {
 				removeShadowWorktree(sourcePath, shadowPath)
@@ -113,11 +114,22 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
+	runLogs := string(output)
 	if err != nil {
-		return string(output), fmt.Errorf("docker run failed: %w (output: %s)", err, string(output))
+		return runLogs, fmt.Errorf("docker run failed: %w (output: %s)", err, runLogs)
 	}
 
-	return string(output), nil
+	gitDiff, diffErr := collectGitDiff(ctx, mountPath)
+	if diffErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+	} else {
+		chronicler := NewEpigeneticChronicler(sourcePath)
+		if err := chronicler.TranscribeLearnings(ctx, taskPrompt, gitDiff, runLogs); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+		}
+	}
+
+	return runLogs, nil
 }
 
 func getEnvOrDefault(key, fallback string) string {
@@ -147,9 +159,9 @@ func createShadowWorktree(sourcePath string) (string, error) {
 		return "", err
 	}
 	runID := hex.EncodeToString(bytes)
-	
+
 	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-sandbox-%s", runID))
-	
+
 	// Create the worktree pointing to HEAD (or a detached HEAD)
 	// We use --detach to avoid checking out the current branch which might be locked
 	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, "HEAD")
@@ -157,14 +169,14 @@ func createShadowWorktree(sourcePath string) (string, error) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add failed: %w, output: %s", err, string(output))
 	}
-	
+
 	return shadowPath, nil
 }
 
 // injectMycorrhizalCache hard-links dependency directories from the host to the shadow sandbox.
 func injectMycorrhizalCache(sourcePath, shadowPath string) {
 	cacheDirs := []string{"node_modules", ".venv", "venv", "vendor"}
-	
+
 	for _, dir := range cacheDirs {
 		srcDir := filepath.Join(sourcePath, dir)
 		if info, err := os.Stat(srcDir); err == nil && info.IsDir() {
@@ -186,9 +198,18 @@ func removeShadowWorktree(sourcePath, shadowPath string) {
 	cmd := exec.Command("git", "worktree", "remove", "--force", shadowPath)
 	cmd.Dir = sourcePath
 	_ = cmd.Run()
-	
+
 	// Ensure the directory is actually gone
 	_ = os.RemoveAll(shadowPath)
+}
+
+func collectGitDiff(ctx context.Context, mountPath string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", mountPath, "diff", "--no-color", "--binary")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git diff failed: %w (output: %s)", err, string(output))
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // cloneForeignSubstrate clones a remote repository into a temporary sandbox.
@@ -198,25 +219,25 @@ func cloneForeignSubstrate(url, branch string) (string, error) {
 		return "", err
 	}
 	runID := hex.EncodeToString(bytes)
-	
+
 	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-substrate-%s", runID))
-	
+
 	args := []string{"clone"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	
+
 	// Inject GitHub PAT if present
 	if pat := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN"); pat != "" && strings.Contains(url, "github.com") {
 		url = strings.Replace(url, "https://github.com", fmt.Sprintf("https://%s@github.com", pat), 1)
 	}
-	
+
 	args = append(args, url, shadowPath)
-	
+
 	cmd := exec.Command("git", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
 	}
-	
+
 	return shadowPath, nil
 }
