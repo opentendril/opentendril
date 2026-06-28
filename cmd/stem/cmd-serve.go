@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
@@ -36,6 +39,17 @@ type Choice struct {
 	Index        int        `json:"index"`
 	Message      APIMessage `json:"message"`
 	FinishReason string     `json:"finishReason"`
+}
+
+type chatHistoryRecord struct {
+	ChatID    string `json:"chatId"`
+	StepID    string `json:"stepId"`
+	Model     string `json:"model"`
+	Prompt    string `json:"prompt"`
+	Status    string `json:"status"`
+	Response  string `json:"response,omitempty"`
+	Error     string `json:"error,omitempty"`
+	Timestamp string `json:"timestamp"`
 }
 
 func runServeCmd(ctx context.Context, args []string) {
@@ -143,6 +157,20 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskPrompt := req.Messages[len(req.Messages)-1].Content
+	runStarted := time.Now().UTC()
+	runStamp := runStarted.UnixNano()
+	chatID := fmt.Sprintf("chat-%d", runStamp)
+	stepID := fmt.Sprintf("step-%d", runStamp)
+	completionID := fmt.Sprintf("chatcmpl-%d", runStamp)
+	historyRoot := resolveRepoRoot("")
+	historyPath := filepath.Join(historyRoot, ".tendril", "history", chatID+".json")
+	historyRecord := chatHistoryRecord{
+		ChatID:    chatID,
+		StepID:    stepID,
+		Model:     req.Model,
+		Prompt:    taskPrompt,
+		Timestamp: runStarted.Format(time.RFC3339Nano),
+	}
 
 	// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 	payload := security.TriggerPayload{
@@ -158,6 +186,7 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Sprouting Tendril for task: %s", taskPrompt)
+	log.Printf("Chat run %s mapped to step %s", chatID, stepID)
 
 	var output string
 	var err error
@@ -168,20 +197,32 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		output, err = configTendril.Execute(r.Context(), taskPrompt)
 	} else {
 		orch := orchestrator.NewDockerOrchestrator()
+		orch.StepID = stepID
 		output, err = orch.RunTendril(r.Context(), taskPrompt)
 	}
 
+	historyRecord.Response = output
 	if err != nil {
 		log.Printf("Tendril execution failed: %v", err)
+		historyRecord.Status = "failed"
+		historyRecord.Error = err.Error()
+		if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
+			log.Printf("⚠️ Failed to write chat history: %v", writeErr)
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	historyRecord.Status = "complete"
+	if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
+		log.Printf("⚠️ Failed to write chat history: %v", writeErr)
+	}
+
 	// Format response as OpenAI completion
 	resp := ChatCompletionResponse{
-		ID:      "chatcmpl-tendril",
+		ID:      completionID,
 		Object:  "chat.completion",
-		Created: 0,
+		Created: runStarted.Unix(),
 		Model:   req.Model,
 		Choices: []Choice{
 			{
@@ -197,4 +238,22 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+func writeChatHistory(path string, record chatHistoryRecord) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create chat history directory: %w", err)
+	}
+
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode chat history: %w", err)
+	}
+	payload = append(payload, '\n')
+
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		return fmt.Errorf("write chat history %s: %w", path, err)
+	}
+
+	return nil
 }
