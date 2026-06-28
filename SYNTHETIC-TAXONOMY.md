@@ -4,6 +4,7 @@ OpenTendril replaces traditional, generic IT terminology with biological and bot
 
 This document serves as the formal **Taxonomy and Systematics** of this synthetic organism. It educates contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms, classifying the nomenclature and explaining *why* we built the system this way.
 
+> 🛠️ **Looking for how to build?** This document explains the *what* and *why*. For practical engineering decisions (which language to use where, how to build an executor), read the [Material & Architecture Guide](TENDRIL-GUIDE.md).
 ---
 
 ## 1. The Philosophy: Escaping Determinism
