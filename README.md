@@ -16,7 +16,8 @@ To understand OpenTendril, you must understand its anatomy:
 *   **The Sprout (Ephemeral Docker Container):** OpenTendril does not run continuous, stateful background agents. For every Transcript, a new isolated *Sprout* (container) instantly boots, executes, and is destroyed. Zero idle cost. Zero state corruption.
 *   **The Immune System (Security & Tests):** Security is a biological reflex. *Hormonal Triggers* (pre-execution bash scripts) instantly abort anomalous behavior, while an automated test suite (Adaptive Immune System) runs in sterile containers to ensure the organism rejects harmful code mutations.
 
-> 📖 **Read the full philosophy:** Dive into the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to explore the complete design system and architecture.
+> 📖 **Read the full philosophy:** Dive into the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to explore the complete design system.
+> 🛠️ **Read the engineering guide:** Check the [Material & Architecture Guide](TENDRIL-GUIDE.md) to understand how these concepts are physically built (languages, tools, and protocols).
 
 ### What does this actually mean for developers?
 In standard IT speak: **OpenTendril is a headless, local-first AI coding framework.** It runs entirely on your machine, talks to any frontend (Claude Desktop, VS Code, Cursor), and executes code safely within ephemeral Docker sandboxes. 
