@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
@@ -38,19 +39,45 @@ type Choice struct {
 }
 
 func runServeCmd(ctx context.Context, args []string) {
+	apiKey := resolveServeAPIKey()
+	if apiKey == "" {
+		log.Println("⚠️ WARNING: OPENTENDRIL_API_KEY is not set. API endpoints are running without authentication.")
+	}
+
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/v1/chat/completions", handleChatCompletions)
+	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions))
 	mux.HandleFunc("GET /health", handleHealth)
 
 	// Phase 4: Configuration API
 	tendrilDir := "./.tendril"
 	configHandler := api.NewConfigHandler(tendrilDir)
-	configHandler.SetupRoutes(mux)
+	mux.HandleFunc("/v1/config/triggers", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			configHandler.ListTriggers(w, r)
+			return
+		}
+		if r.Method == http.MethodPost {
+			configHandler.UploadTrigger(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}))
+	mux.HandleFunc("/v1/config/genotypes", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			configHandler.ListGenotypes(w, r)
+			return
+		}
+		if r.Method == http.MethodPost {
+			configHandler.UploadGenotype(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}))
 
 	// Phase 5: MCP API
 	mcpHandler := api.NewMCPHandler()
-	mcpHandler.SetupRoutes(mux)
+	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -71,6 +98,27 @@ func runServeCmd(ctx context.Context, args []string) {
 	log.Printf("Starting Go Stem API on port %s...", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+func resolveServeAPIKey() string {
+	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
+		return key
+	}
+	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+}
+
+func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+	if strings.TrimSpace(apiKey) == "" {
+		return next
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) != "Bearer "+apiKey {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
 
