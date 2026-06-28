@@ -143,13 +143,13 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	taskPrompt := req.Messages[len(req.Messages)-1].Content
-	
+
 	// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 	payload := security.TriggerPayload{
 		Genotype:   req.Model,
 		Transcript: taskPrompt,
 	}
-	
+
 	triggersDir := "./.tendril/transduction/hormonal-triggers"
 	if err := security.EvaluateTriggers(r.Context(), triggersDir, payload); err != nil {
 		log.Printf("Sprout blocked by Hormonal Triggers: %v", err)

@@ -63,7 +63,7 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 
 	reqBytes, _ := json.Marshal(req)
 	respBytes := h.ProcessMCPMessage(reqBytes)
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }
