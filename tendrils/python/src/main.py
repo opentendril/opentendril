@@ -1,0 +1,600 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+SKIP_DIRS = {".git", "node_modules", "vendor", ".venv", "venv", "dist", "build", "__pycache__"}
+
+
+@dataclass
+class ToolResponse:
+    status: str
+    output: Any | None = None
+    error: str | None = None
+
+
+def main() -> None:
+    workspace_root = Path.cwd().resolve()
+
+    for raw_line in sys.stdin:
+        trimmed = raw_line.strip()
+        if not trimmed:
+            continue
+
+        try:
+            call = json.loads(trimmed)
+            response = execute_tool(workspace_root, call)
+        except Exception as exc:  # noqa: BLE001
+            response = ToolResponse(status="error", error=str(exc))
+
+        print(json.dumps(response.__dict__, ensure_ascii=False), flush=True)
+
+
+def execute_tool(workspace_root: Path, call: dict[str, Any]) -> ToolResponse:
+    tool_name = str(call.get("tool", "")).strip()
+    arguments = call.get("arguments") or {}
+    if not tool_name:
+        return ToolResponse(status="error", error="tool name is required")
+
+    if tool_name == "readFile":
+        return read_file_tool(workspace_root, arguments)
+    if tool_name == "writeFile":
+        return write_file_tool(workspace_root, arguments)
+    if tool_name == "listFiles":
+        return list_files_tool(workspace_root, arguments)
+    if tool_name == "gitCommit":
+        return git_commit_tool(workspace_root, arguments)
+    if tool_name == "gitDiff":
+        return git_diff_tool(workspace_root, arguments)
+    if tool_name == "execCommand":
+        return exec_command_tool(workspace_root, arguments)
+    if tool_name == "runPytest":
+        return run_pytest_tool(workspace_root, arguments)
+    if tool_name == "runPip":
+        return run_pip_tool(workspace_root, arguments)
+    if tool_name == "listAvailableTools":
+        return ToolResponse(status="success", output={"tools": available_tools()})
+    return ToolResponse(status="error", error=f'unsupported tool "{tool_name}"')
+
+
+def available_tools() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "readFile",
+            "description": "Read a text file from the workspace.",
+            "arguments": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "description": "Path to the file, relative to the workspace root.",
+                    "required": True,
+                }
+            ],
+        },
+        {
+            "name": "writeFile",
+            "description": "Write text content to a file, creating parent directories when needed.",
+            "arguments": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "description": "Path to the file, relative to the workspace root.",
+                    "required": True,
+                },
+                {
+                    "name": "content",
+                    "type": "string",
+                    "description": "The full file contents to write.",
+                    "required": True,
+                },
+                {
+                    "name": "append",
+                    "type": "boolean",
+                    "description": "Append instead of overwriting the file.",
+                },
+            ],
+        },
+        {
+            "name": "listFiles",
+            "description": "List files and directories under a workspace path.",
+            "arguments": [
+                {
+                    "name": "path",
+                    "type": "string",
+                    "description": "Directory to list, relative to the workspace root.",
+                },
+                {
+                    "name": "maxDepth",
+                    "type": "number",
+                    "description": "Maximum recursion depth to traverse.",
+                },
+                {
+                    "name": "maxEntries",
+                    "type": "number",
+                    "description": "Maximum number of entries to return.",
+                },
+            ],
+        },
+        {
+            "name": "gitCommit",
+            "description": "Stage files and create a git commit.",
+            "arguments": [
+                {
+                    "name": "message",
+                    "type": "string",
+                    "description": "Commit message.",
+                    "required": True,
+                },
+                {
+                    "name": "paths",
+                    "type": "string[]",
+                    "description": "Optional list of paths to stage instead of all changes.",
+                },
+            ],
+        },
+        {
+            "name": "gitDiff",
+            "description": "Show the current git diff.",
+            "arguments": [
+                {
+                    "name": "cached",
+                    "type": "boolean",
+                    "description": "Show the staged diff instead of the working tree diff.",
+                },
+                {
+                    "name": "paths",
+                    "type": "string[]",
+                    "description": "Optional list of paths to limit the diff.",
+                },
+            ],
+        },
+        {
+            "name": "execCommand",
+            "description": "Run a shell command inside the workspace.",
+            "arguments": [
+                {
+                    "name": "command",
+                    "type": "string",
+                    "description": "Shell command to execute.",
+                    "required": True,
+                },
+                {
+                    "name": "cwd",
+                    "type": "string",
+                    "description": "Optional working directory, relative to the workspace root.",
+                },
+                {
+                    "name": "timeoutSeconds",
+                    "type": "number",
+                    "description": "Optional timeout in seconds.",
+                },
+            ],
+        },
+        {
+            "name": "runPytest",
+            "description": "Run pytest inside the workspace.",
+            "arguments": [
+                {
+                    "name": "args",
+                    "type": "string[]",
+                    "description": "Additional arguments to pass to pytest.",
+                },
+                {
+                    "name": "cwd",
+                    "type": "string",
+                    "description": "Optional working directory, relative to the workspace root.",
+                },
+                {
+                    "name": "timeoutSeconds",
+                    "type": "number",
+                    "description": "Optional timeout in seconds.",
+                },
+            ],
+        },
+        {
+            "name": "runPip",
+            "description": "Run pip inside the workspace.",
+            "arguments": [
+                {
+                    "name": "args",
+                    "type": "string[]",
+                    "description": "Arguments to pass to pip.",
+                    "required": True,
+                },
+                {
+                    "name": "cwd",
+                    "type": "string",
+                    "description": "Optional working directory, relative to the workspace root.",
+                },
+                {
+                    "name": "timeoutSeconds",
+                    "type": "number",
+                    "description": "Optional timeout in seconds.",
+                },
+            ],
+        },
+        {
+            "name": "listAvailableTools",
+            "description": "Return the executor tool catalog.",
+        },
+    ]
+
+
+def read_file_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    raw_path = string_arg(args, "path")
+    if not raw_path:
+        return ToolResponse(status="error", error="readFile requires a path")
+
+    resolved = resolve_workspace_path(workspace_root, raw_path)
+    if resolved.error:
+        return ToolResponse(status="error", error=resolved.error)
+
+    try:
+        content = resolved.abs_path.read_text(encoding="utf-8")
+        return ToolResponse(status="success", output={"path": resolved.rel_path, "content": content})
+    except Exception as exc:  # noqa: BLE001
+        return ToolResponse(status="error", error=str(exc))
+
+
+def write_file_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    raw_path = string_arg(args, "path")
+    content = string_arg(args, "content")
+    if not raw_path:
+        return ToolResponse(status="error", error="writeFile requires a path")
+    if content is None:
+        return ToolResponse(status="error", error="writeFile requires content")
+
+    resolved = resolve_workspace_path(workspace_root, raw_path)
+    if resolved.error:
+        return ToolResponse(status="error", error=resolved.error)
+
+    append = bool_arg(args, "append") or False
+    try:
+        resolved.abs_path.parent.mkdir(parents=True, exist_ok=True)
+        mode = "a" if append else "w"
+        with resolved.abs_path.open(mode, encoding="utf-8") as handle:
+            handle.write(content)
+        return ToolResponse(
+            status="success",
+            output={
+                "path": resolved.rel_path,
+                "bytesWritten": len(content.encode("utf-8")),
+                "mode": "append" if append else "overwrite",
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ToolResponse(status="error", error=str(exc))
+
+
+def list_files_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    raw_path = string_arg(args, "path") or "."
+    resolved = resolve_workspace_path(workspace_root, raw_path)
+    if resolved.error:
+        return ToolResponse(status="error", error=resolved.error)
+
+    max_depth = max(0, int(number_arg(args, "maxDepth") or 3))
+    max_entries = max(1, int(number_arg(args, "maxEntries") or 500))
+
+    try:
+        entries: list[dict[str, Any]] = []
+        truncated = False
+        if resolved.abs_path.is_dir():
+            truncated = walk_directory(resolved.abs_path, resolved.rel_path, 0, max_depth, max_entries, entries)
+        else:
+            entries.append(entry_for_path(resolved.rel_path, resolved.abs_path))
+
+        return ToolResponse(
+            status="success",
+            output={"root": resolved.rel_path, "entries": entries, "truncated": truncated},
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ToolResponse(status="error", error=str(exc))
+
+
+def git_commit_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    message = string_arg(args, "message")
+    if not message:
+        return ToolResponse(status="error", error="gitCommit requires a message")
+
+    paths = string_array_arg(args, "paths") or []
+
+    try:
+        if paths:
+            resolved_paths: list[str] = []
+            for raw_path in paths:
+                resolved = resolve_workspace_path(workspace_root, raw_path)
+                if resolved.error:
+                    return ToolResponse(status="error", error=resolved.error)
+                resolved_paths.append(resolved.rel_path)
+            run_git(workspace_root, "add", "--", *resolved_paths)
+        else:
+            run_git(workspace_root, "add", "-A")
+
+        status_output = run_git(workspace_root, "status", "--porcelain")
+        if not status_output.strip():
+            return ToolResponse(
+                status="success",
+                output={"committed": False, "message": "nothing to commit", "paths": paths},
+            )
+
+        run_git(
+            workspace_root,
+            "-c",
+            "user.name=OpenTendril",
+            "-c",
+            "user.email=opentendril@localhost",
+            "commit",
+            "-m",
+            message,
+        )
+        hash_output = run_git(workspace_root, "rev-parse", "HEAD").strip()
+
+        return ToolResponse(
+            status="success",
+            output={"committed": True, "hash": hash_output, "message": message, "paths": paths},
+        )
+    except subprocess.CalledProcessError as exc:
+        error_output = exc.stderr.strip() if exc.stderr else str(exc)
+        return ToolResponse(status="error", error=error_output)
+
+
+def git_diff_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    cached = bool_arg(args, "cached") or False
+    paths = string_array_arg(args, "paths") or []
+    try:
+        diff_args = ["diff", "--no-color", "--binary"]
+        if cached:
+            diff_args.append("--cached")
+        if paths:
+            diff_args.append("--")
+            diff_args.extend(paths)
+        diff_output = run_git(workspace_root, *diff_args)
+        return ToolResponse(
+            status="success",
+            output={"diff": diff_output, "cached": cached, "paths": paths},
+        )
+    except subprocess.CalledProcessError as exc:
+        error_output = exc.stderr.strip() if exc.stderr else str(exc)
+        return ToolResponse(status="error", error=error_output)
+
+
+def exec_command_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    command = string_arg(args, "command")
+    if not command:
+        return ToolResponse(status="error", error="execCommand requires a command")
+
+    cwd_raw = string_arg(args, "cwd") or "."
+    resolved_cwd = resolve_workspace_path(workspace_root, cwd_raw)
+    if resolved_cwd.error:
+        return ToolResponse(status="error", error=resolved_cwd.error)
+
+    timeout_seconds = number_arg(args, "timeoutSeconds") or 120
+    timeout = max(1, int(timeout_seconds))
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            cwd=resolved_cwd.abs_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        payload = {
+            "command": command,
+            "cwd": resolved_cwd.rel_path,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exitCode": result.returncode,
+        }
+        if result.returncode != 0:
+            return ToolResponse(status="error", output=payload, error=f"command exited with code {result.returncode}")
+        return ToolResponse(status="success", output=payload)
+    except subprocess.TimeoutExpired as exc:
+        return ToolResponse(
+            status="error",
+            error=f"command timed out after {timeout} seconds",
+            output={
+                "command": command,
+                "cwd": resolved_cwd.rel_path,
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
+                "exitCode": -1,
+            },
+        )
+
+
+def run_pytest_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    pytest_args = string_array_arg(args, "args") or []
+    cwd_raw = string_arg(args, "cwd") or "."
+    resolved_cwd = resolve_workspace_path(workspace_root, cwd_raw)
+    if resolved_cwd.error:
+        return ToolResponse(status="error", error=resolved_cwd.error)
+
+    timeout_seconds = number_arg(args, "timeoutSeconds") or 300
+    timeout = max(1, int(timeout_seconds))
+
+    return run_python_module(
+        workspace_root,
+        ["-m", "pytest", *pytest_args],
+        resolved_cwd,
+        timeout,
+        tool_name="runPytest",
+    )
+
+
+def run_pip_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
+    pip_args = string_array_arg(args, "args") or []
+    if not pip_args:
+        return ToolResponse(status="error", error="runPip requires args")
+
+    cwd_raw = string_arg(args, "cwd") or "."
+    resolved_cwd = resolve_workspace_path(workspace_root, cwd_raw)
+    if resolved_cwd.error:
+        return ToolResponse(status="error", error=resolved_cwd.error)
+
+    timeout_seconds = number_arg(args, "timeoutSeconds") or 300
+    timeout = max(1, int(timeout_seconds))
+
+    return run_python_module(
+        workspace_root,
+        ["-m", "pip", *pip_args],
+        resolved_cwd,
+        timeout,
+        tool_name="runPip",
+    )
+
+
+def run_python_module(
+    workspace_root: Path,
+    module_args: list[str],
+    resolved_cwd: "ResolvedPath",
+    timeout: int,
+    tool_name: str,
+) -> ToolResponse:
+    try:
+        result = subprocess.run(
+            [sys.executable, *module_args],
+            cwd=resolved_cwd.abs_path,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        payload = {
+            "command": " ".join(module_args),
+            "cwd": resolved_cwd.rel_path,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exitCode": result.returncode,
+        }
+        if result.returncode != 0:
+            return ToolResponse(status="error", output=payload, error=f"{tool_name} exited with code {result.returncode}")
+        return ToolResponse(status="success", output=payload)
+    except subprocess.TimeoutExpired as exc:
+        return ToolResponse(
+            status="error",
+            error=f"{tool_name} timed out after {timeout} seconds",
+            output={
+                "command": " ".join(module_args),
+                "cwd": resolved_cwd.rel_path,
+                "stdout": exc.stdout or "",
+                "stderr": exc.stderr or "",
+                "exitCode": -1,
+            },
+        )
+
+
+def walk_directory(
+    root_abs: Path,
+    root_rel: str,
+    depth: int,
+    max_depth: int,
+    max_entries: int,
+    entries: list[dict[str, Any]],
+) -> bool:
+    for child in sorted(root_abs.iterdir(), key=lambda entry: entry.name.lower()):
+        if len(entries) >= max_entries:
+            return True
+        if child.name in SKIP_DIRS:
+            continue
+
+        child_rel = "/".join(part for part in [root_rel if root_rel != "." else "", child.name] if part)
+        entries.append(entry_for_path(child_rel, child))
+        if len(entries) >= max_entries:
+            return True
+
+        if child.is_dir() and depth + 1 < max_depth:
+            if walk_directory(child, child_rel, depth + 1, max_depth, max_entries, entries):
+                return True
+    return False
+
+
+def entry_for_path(rel_path: str, target: Path) -> dict[str, Any]:
+    if target.is_dir():
+        entry_type = "dir"
+    elif target.is_symlink():
+        entry_type = "symlink"
+    else:
+        entry_type = "file"
+
+    size = target.lstat().st_size if target.exists() or target.is_symlink() else 0
+    return {"path": rel_path.replace(os.sep, "/"), "type": entry_type, "size": size}
+
+
+@dataclass
+class ResolvedPath:
+    abs_path: Path
+    rel_path: str
+    error: str | None = None
+
+
+def resolve_workspace_path(workspace_root: Path, raw_path: str) -> ResolvedPath:
+    root_abs = workspace_root.resolve()
+    cleaned = raw_path.strip() if raw_path.strip() else "."
+    abs_path = Path(cleaned).resolve() if Path(cleaned).is_absolute() else (root_abs / cleaned).resolve()
+    try:
+        rel_path = abs_path.relative_to(root_abs)
+    except ValueError:
+        return ResolvedPath(abs_path=abs_path, rel_path="", error=f'path "{raw_path}" escapes the workspace root')
+
+    return ResolvedPath(abs_path=abs_path, rel_path=str(rel_path).replace(os.sep, "/") or ".")
+
+
+def run_git(workspace_root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(workspace_root), *args],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def string_arg(args: dict[str, Any], key: str) -> str | None:
+    value = args.get(key)
+    return value if isinstance(value, str) else None
+
+
+def bool_arg(args: dict[str, Any], key: str) -> bool | None:
+    value = args.get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered == "true":
+            return True
+        if lowered == "false":
+            return False
+    return None
+
+
+def number_arg(args: dict[str, Any], key: str) -> float | None:
+    value = args.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def string_array_arg(args: dict[str, Any], key: str) -> list[str] | None:
+    value = args.get(key)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, str) and value.strip():
+        return [value]
+    return None
+
+
+if __name__ == "__main__":
+    main()
