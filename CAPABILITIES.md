@@ -45,7 +45,7 @@ If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plug
 * **How They are Allowed:** Located in `skills/` directories. Scanned automatically by the RAG indexer and activated conditionally based on user intent.
 
 ### C. Subagents (Concurrent Delegation)
-* **What:** Isolated LLM processes spawned dynamically to solve specific, granular subtasks (e.g., deep research, diff reviews).
+* **What:** Isolated LLM processes sprouted dynamically to solve specific, granular subtasks (e.g., deep research, diff reviews).
 * **Why:** Prevents prompt dilution and context pollution in the main orchestrator. Specialized agents perform better than generalists on complex, multi-step code operations.
 * **How They are Allowed:** Invoked strictly via the `invoke_subagent` tool. Subagents communicate asynchronously using JSON-RPC messaging and operate on git staging worktrees.
 

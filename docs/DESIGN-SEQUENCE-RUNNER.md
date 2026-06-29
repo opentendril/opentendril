@@ -69,7 +69,7 @@ steps:
 ### A. Parallel Dispatching (Go Goroutines)
 1.  Go Stem builds a dependency resolver.
 2.  In a loop, the Conductor identifies all steps with status `"pending"` whose `dependsOn` steps are `"complete"`.
-3.  Spawns a Go goroutine for each available step up to the `concurrencyLimit`.
+3.  Dispatches a Go goroutine for each available step up to the `concurrencyLimit`.
 4.  Each parallel step runs in a separate, isolated shadow git worktree (e.g. `/tmp/opentendril-sandbox-step-<id>-<random>`).
 5.  On completion, the sandbox changes are committed and merged back into the shared branch on the host, and the step status is updated in the YAML file in-place.
 

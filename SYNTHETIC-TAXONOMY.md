@@ -49,6 +49,8 @@ To scale our prompt engineering dynamically, OpenTendril maps prompt layers to g
 *   **Plasmid (Modular Skill Injection):** In microbiology, a plasmid is a small, modular packet of DNA that can be transferred between cells to instantly grant them new traits (like antibiotic resistance). In OpenTendril, a Plasmid is a reusable, modular block of context or tools injected into a Genotype on the fly (e.g., "Here is the syntax documentation for React.js"). *(Common IT term: RAG context block or Tool definition)*.
 *   **Transcript (Instruction Execution):** In biology, RNA transcription is the process of copying genetic instructions into a transient format (mRNA) that the cell immediately executes to perform an action. In OpenTendril, the Transcript is the one-off, contextual prompt fed to the Tendril for a single execution run (e.g., "Refactor this file"). *(Common IT term: User Prompt or Task)*.
 *   **Sequence (Workflow Automation):** A defined genetic sequence dictating a complex chain of events. In OpenTendril, a Sequence is a predefined workflow that chains multiple Tendrils together (e.g., A Frontend Genotype writes the code, then a Testing Genotype reviews it). *(Common IT term: Agentic Pipeline or Workflow)*.
+*   **Phenotypes (Speculative Variations):** Multiple speculative shoots or runs executing the same Transcript in parallel. Under **Phenotypic Selection (Natural Selection)**, Go Stem dispatches concurrent Sprouts under different environmental parameters (varying LLM temperatures or Plasmid rules), and merges only the first variant that compiles and passes the fitness test suite, weeding out weaker mutations. *(Common IT term: Speculative Parallel Execution)*.
+
 
 ---
 
@@ -107,7 +109,7 @@ graph TD
     subgraph The Go Stem
         API[Incoming Request] --> HT[Hormonal Triggers]
         HT -- Growth Blocked --> Abort
-        HT -- Growth Allowed --> OS[Sprout Spawner]
+        HT -- Growth Allowed --> OS[Sprout Initiator]
     end
 
     subgraph Ephemeral Sprout (Docker Sandbox)

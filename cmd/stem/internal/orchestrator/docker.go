@@ -24,14 +24,16 @@ import (
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
-	ImageName       string
-	Substrate       string
-	SubstrateURL    string
-	SubstrateBranch string
-	StepID          string
-	StatusPath      string
-	IsCoordinator   bool
-	Genotype        string
+	ImageName        string
+	Substrate        string
+	SubstrateURL     string
+	SubstrateBranch  string
+	StepID           string
+	StatusPath       string
+	IsCoordinator    bool
+	Genotype         string
+	Temperature      float64
+	DisableMergeBack bool
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -50,24 +52,31 @@ var (
 	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (tendrilRunner, error) {
 		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session)
 	}
-	stashHostWorkspaceFn     = stashHostWorkspace
-	restoreHostStashFn       = restoreHostStash
-	createShadowWorktreeFn   = createShadowWorktree
-	removeShadowWorktreeFn   = removeShadowWorktree
-	injectMycorrhizalCacheFn = injectMycorrhizalCache
-	collectStageableFilesFn  = collectStageableFiles
-	collectGitDiffFn         = collectGitDiff
-	commitSandboxExecutionFn = commitSandboxExecution
-	mergeSandboxCommitFn     = mergeSandboxCommit
-	pushSandboxCommitFn      = pushSandboxCommit
-	generateRepoMapFn        = GenerateRepoMap
+	stashHostWorkspaceFn      = stashHostWorkspace
+	restoreHostStashFn        = restoreHostStash
+	createShadowWorktreeFn    = createShadowWorktree
+	removeShadowWorktreeFn    = removeShadowWorktree
+	injectMycorrhizalCacheFn  = injectMycorrhizalCache
+	collectStageableFilesFn   = collectStageableFiles
+	collectGitDiffFn          = collectGitDiff
+	commitSandboxExecutionFn  = commitSandboxExecution
+	mergeSandboxCommitFn      = mergeSandboxCommit
+	pushSandboxCommitFn       = pushSandboxCommit
+	runContainerFitnessTestFn = runContainerFitnessTest
+	generateRepoMapFn         = GenerateRepoMap
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
+	var client *llm.Client
 	if d != nil && d.IsCoordinator {
-		return llm.NewCoordinatorClientFromEnv()
+		client = llm.NewCoordinatorClientFromEnv()
+	} else {
+		client = llm.NewClientFromEnv()
 	}
-	return llm.NewClientFromEnv()
+	if d != nil && d.Temperature > 0 {
+		client.SetTemperature(d.Temperature)
+	}
+	return client
 }
 
 func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (string, error) {
@@ -160,7 +169,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			}
 		}
 
-		if gitRepo && !plan.readOnly {
+		if gitRepo && !plan.readOnly && !d.DisableMergeBack {
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 			if err != nil {
 				return "", err
@@ -308,6 +317,13 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			return "", errors.Join(runErr, commitErr)
 		}
 		return "", commitErr
+	}
+
+	if d.DisableMergeBack {
+		if runErr != nil {
+			return commitHash, runErr
+		}
+		return commitHash, nil
 	}
 
 	if plan.remoteClone {
@@ -1071,6 +1087,37 @@ func commitSandboxExecution(ctx context.Context, mountPath, sourcePath, statusPa
 func mergeSandboxCommit(ctx context.Context, sourcePath, commitHash string) error {
 	if _, err := runGitCommand(ctx, sourcePath, "merge", "--ff-only", commitHash); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+func runContainerFitnessTest(ctx context.Context, imageName, shadowPath, fitnessTest string) error {
+	if strings.TrimSpace(fitnessTest) == "" {
+		return nil
+	}
+	if strings.TrimSpace(imageName) == "" {
+		return fmt.Errorf("fitness test image name is empty")
+	}
+	if strings.TrimSpace(shadowPath) == "" {
+		return fmt.Errorf("fitness test shadow path is empty")
+	}
+
+	args := []string{
+		"run",
+		"--rm",
+		"-v", fmt.Sprintf("%s:/app", shadowPath),
+		"-w", "/app",
+		imageName,
+		"sh",
+		"-c",
+		fitnessTest,
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker fitness test failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
 	return nil

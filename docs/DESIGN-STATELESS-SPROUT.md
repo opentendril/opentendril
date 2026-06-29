@@ -15,7 +15,7 @@ We will migrate the LLM reasoning loop from the Python container to the host **G
 ┌──────────────────────────────────────────────────┐
 │              Go Stem Orchestrator                │
 │  - Runs host-side ReAct Loop (LLM Chat calls)    │
-│  - Spawns Docker Sprout session container        │
+│  - Sprouts Docker Sprout session container       │
 │  - Pipes structured tool calls to Stdin          │
 │  - Reads JSON tool execution outputs from Stdout │
 └──────────────────────────────────────────────────┘
@@ -61,7 +61,7 @@ All Sprout executors will adhere to a strict universal interface using **camelCa
 We will move the LLM agent loop from `tendrilloop.py` onto the host Go Stem orchestrator:
 1.  **Shared LLM Client:** Extract the `callLLM` HTTP client logic from `chronicler.go` into a reusable internal package `github.com/opentendril/core/cmd/stem/internal/llm`.
 2.  **Agent Loop:** Implement a Go-native agent loop in `internal/orchestrator/agent.go`. The loop binds tools (like `readFile`, `writeFile`, `gitCommit`, `execCommand`), formats tool definitions for the LLM, and processes LLM responses.
-3.  **Interactive Session Containers:** Instead of spawning a Docker container for every single tool call (which adds cold start latency), the Go Stem will spawn **one container per task session** using interactive pipes (`docker run -i --rm`). It will keep the container alive, sending JSON lines on `stdin` and reading JSON lines from `stdout` sequentially until the task is done.
+3.  **Interactive Session Containers:** Instead of sprouting a Docker container for every single tool call (which adds cold start latency), the Go Stem will sprout **one container per task session** using interactive pipes (`docker run -i --rm`). It will keep the container alive, sending JSON lines on `stdin` and reading JSON lines from `stdout` sequentially until the task is done.
 4.  **Dynamic Tool Discovery:** At startup, the Go Stem will write a `listAvailableTools` command to the Sprout container. The container will return a list of JSON-defined tool schemas it supports. This allows the host to dynamically bind custom tools depending on the language/framework of the Sprout container.
 
 ---
@@ -128,9 +128,9 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 
 ### Automated Tests
 *   **Go Orchestration Tests:** Run `go test ./...` in the Go stem directory to verify agent loop parsing and HTTP LLM mocking.
-*   **Docker Integration Tests:** Run integration scripts to spawn `opentendril-go` and `opentendril-typescript` containers, feed mock JSON tool calls to stdin, and assert correct stdout JSON responses.
+*   **Docker Integration Tests:** Run integration scripts to sprout `opentendril-go` and `opentendril-typescript` containers, feed mock JSON tool calls to stdin, and assert correct stdout JSON responses.
 
 ### Manual Verification
 1.  Launch `tendril chat`.
 2.  Ask a question requiring file edits.
-3.  Confirm that Go Stem executes the LLM loop on the host, spawns the appropriate Docker container, pipes tool commands, and returns the finished edits.
+3.  Confirm that Go Stem executes the LLM loop on the host, sprouts the appropriate Docker container, pipes tool commands, and returns the finished edits.

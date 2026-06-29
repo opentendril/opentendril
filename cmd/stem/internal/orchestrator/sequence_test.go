@@ -238,7 +238,7 @@ func TestRunSequenceRetry(t *testing.T) {
 	}
 }
 
-func TestRunSequenceSpawnsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
+func TestRunSequenceBudsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "verifier.yaml")
 
@@ -307,7 +307,7 @@ func TestRunSequenceSpawnsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 	select {
 	case debuggerID = <-debuggerStarted:
 	case <-ctx.Done():
-		t.Fatalf("timed out waiting for recursive debugger spawn: %v", ctx.Err())
+		t.Fatalf("timed out waiting for recursive debugger sprout: %v", ctx.Err())
 	}
 
 	func() {
@@ -323,7 +323,7 @@ func TestRunSequenceSpawnsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 
 		verifierStep := latestStepByID(loaded.Steps, "verifier")
 		if verifierStep == nil {
-			t.Fatalf("verifier step missing after debugger spawn")
+			t.Fatalf("verifier step missing after debugger sprout")
 		}
 		if verifierStep.Status != sequenceStatusPending {
 			t.Fatalf("verifier status = %s, want pending", verifierStep.Status)
@@ -334,7 +334,7 @@ func TestRunSequenceSpawnsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 
 		debuggerStep := latestStepByID(loaded.Steps, debuggerID)
 		if debuggerStep == nil {
-			t.Fatalf("debugger step %s missing after spawn", debuggerID)
+			t.Fatalf("debugger step %s missing after sprout", debuggerID)
 		}
 		if debuggerStep.Status != sequenceStatusPending {
 			t.Fatalf("debugger status = %s, want pending", debuggerStep.Status)

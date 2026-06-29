@@ -43,7 +43,7 @@ type DockerOrchestrator struct {
 }
 ```
 
-When spawning a container sprout, the orchestrator passes the genotype name dynamically to the environment using `TENDRIL_GENOTYPE`.
+When sprouting a container, the orchestrator passes the genotype name dynamically to the environment using `TENDRIL_GENOTYPE`.
 
 ---
 

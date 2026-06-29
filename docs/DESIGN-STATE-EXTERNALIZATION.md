@@ -13,7 +13,7 @@ To ensure that starting state is clear and no temporary/compiled files are accid
 2.  If the host workspace is dirty:
     *   Go Stem automatically stashes the host changes: `git stash save -u "opentendril-host-pre-flight-stash-<id>"`.
     *   This ensures the host repository is clean, preventing conflicts during checkout/merge.
-3.  Go Stem spawns the detached shadow git worktree `/tmp/opentendril-sandbox-...` based on the clean `HEAD`.
+3.  Go Stem sprouts the detached shadow git worktree `/tmp/opentendril-sandbox-...` based on the clean `HEAD`.
 
 ### B. Post-Flight: File Sanitization & Merging
 1.  After sprout execution completes, Go Stem runs `git status --porcelain` inside the sandbox.
