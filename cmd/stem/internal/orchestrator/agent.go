@@ -52,14 +52,15 @@ type llmCaller interface {
 }
 
 type Agent struct {
-	workspace     string
-	genomeContext string
-	client        llmCaller
-	session       toolSession
-	tools         []ToolDefinition
-	toolIndex     map[string]ToolDefinition
-	messages      []llm.Message
-	transcript    strings.Builder
+	workspace       string
+	genotypeContext string
+	genomeContext   string
+	client          llmCaller
+	session         toolSession
+	tools           []ToolDefinition
+	toolIndex       map[string]ToolDefinition
+	messages        []llm.Message
+	transcript      strings.Builder
 }
 
 type agentResult struct {
@@ -67,9 +68,12 @@ type agentResult struct {
 	Transcript string
 }
 
-func newAgent(ctx context.Context, workspace string, client llmCaller, session toolSession) (*Agent, error) {
+func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (*Agent, error) {
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
+	}
+	if strings.TrimSpace(genotypeRoot) == "" {
+		genotypeRoot = workspace
 	}
 	if client == nil {
 		return nil, fmt.Errorf("llm client is nil")
@@ -82,6 +86,11 @@ func newAgent(ctx context.Context, workspace string, client llmCaller, session t
 	}
 
 	genomeContext, err := loadGenomeContext(workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	genotypeContext, err := loadGenotypeContext(genotypeRoot, genotypeName)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +115,13 @@ func newAgent(ctx context.Context, workspace string, client llmCaller, session t
 	}
 
 	return &Agent{
-		workspace:     workspace,
-		genomeContext: genomeContext,
-		client:        client,
-		session:       session,
-		tools:         tools,
-		toolIndex:     toolIndex,
+		workspace:       workspace,
+		genotypeContext: genotypeContext,
+		genomeContext:   genomeContext,
+		client:          client,
+		session:         session,
+		tools:           tools,
+		toolIndex:       toolIndex,
 	}, nil
 }
 
@@ -120,7 +130,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		ctx = context.Background()
 	}
 
-	systemPrompt := buildAgentSystemPrompt(a.workspace, a.genomeContext, a.tools)
+	systemPrompt := buildAgentSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: strings.TrimSpace(taskPrompt)},
@@ -217,7 +227,7 @@ func (a *Agent) availableToolNames() []string {
 	return names
 }
 
-func buildAgentSystemPrompt(workspace string, genomeContext string, tools []ToolDefinition) string {
+func buildAgentSystemPrompt(workspace string, genotypeContext string, genomeContext string, tools []ToolDefinition) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(`
 You are the OpenTendril host-side ReAct loop.
@@ -233,6 +243,12 @@ Rules:
 `))
 	builder.WriteString("\n\nWorkspace root:\n")
 	builder.WriteString(strings.TrimSpace(workspace))
+
+	if strings.TrimSpace(genotypeContext) != "" {
+		builder.WriteString("\n\nLoaded genotype context:\n")
+		builder.WriteString(strings.TrimSpace(genotypeContext))
+	}
+
 	builder.WriteString("\n\nAvailable tools:\n")
 	builder.WriteString(formatToolCatalog(tools))
 
@@ -390,4 +406,27 @@ func loadGenomeContext(workspace string) (string, error) {
 	}
 
 	return strings.TrimSpace(builder.String()), nil
+}
+
+func loadGenotypeContext(workspace string, genotypeName string) (string, error) {
+	genotypeName = strings.TrimSpace(genotypeName)
+	if genotypeName == "" {
+		return "", nil
+	}
+
+	genotypePath := filepath.Join(workspace, ".tendril", "genotypes", genotypeName+".json")
+	content, err := os.ReadFile(genotypePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read genotype file %s: %w", genotypePath, err)
+	}
+
+	var genotype genotypeDefinition
+	if err := json.Unmarshal(content, &genotype); err != nil {
+		return "", fmt.Errorf("decode genotype %s: %w", genotypePath, err)
+	}
+
+	return strings.TrimSpace(genotype.Instructions), nil
 }

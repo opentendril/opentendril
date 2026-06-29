@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -486,6 +487,16 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 				if output := strings.TrimSpace(result.output); output != "" {
 					fmt.Fprintln(r.opts.Stdout, output)
 				}
+				if isConductorStep(result.stepID) {
+					dynamicSteps, parseErr := parseDynamicSteps(result.output)
+					if parseErr != nil {
+						fmt.Fprintf(r.opts.Stderr, "⚠️ Failed to parse dynamic steps from %s: %v\n", result.stepID, parseErr)
+					} else if len(dynamicSteps) > 0 {
+						if err := r.appendDynamicSteps(dynamicSteps); err != nil {
+							fmt.Fprintf(r.opts.Stderr, "⚠️ Failed to append dynamic steps from %s: %v\n", result.stepID, err)
+						}
+					}
+				}
 				fmt.Fprintf(r.opts.Stdout, "✓ [%s] complete\n", result.stepID)
 				if err := SaveSequence(r.path, r.seq); err != nil {
 					return r.seq, err
@@ -679,12 +690,161 @@ func (r *sequenceRunner) describeStall() string {
 	return fmt.Sprintf("sequence %s stalled: %s", r.seq.Name, strings.Join(blocked, "; "))
 }
 
+func parseDynamicSteps(output string) ([]SequenceStep, error) {
+	payload := extractDynamicStepsPayload(output)
+	if strings.TrimSpace(payload) == "" {
+		return nil, nil
+	}
+
+	var steps []SequenceStep
+	if err := json.Unmarshal([]byte(payload), &steps); err != nil {
+		return nil, fmt.Errorf("decode dynamic steps: %w", err)
+	}
+
+	return steps, nil
+}
+
+func extractDynamicStepsPayload(output string) string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return ""
+	}
+
+	start := strings.Index(trimmed, "```")
+	if start < 0 {
+		return trimmed
+	}
+
+	trimmed = trimmed[start+3:]
+	if newline := strings.IndexByte(trimmed, '\n'); newline >= 0 {
+		trimmed = trimmed[newline+1:]
+	}
+	if end := strings.Index(trimmed, "```"); end >= 0 {
+		trimmed = trimmed[:end]
+	}
+
+	return strings.TrimSpace(trimmed)
+}
+
+func (r *sequenceRunner) appendDynamicSteps(steps []SequenceStep) error {
+	if len(steps) == 0 {
+		return nil
+	}
+
+	knownIDs := make(map[string]struct{}, len(r.stepByID)+len(steps))
+	for id := range r.stepByID {
+		knownIDs[id] = struct{}{}
+	}
+
+	for _, rawStep := range steps {
+		id := strings.TrimSpace(rawStep.ID)
+		if id == "" {
+			return fmt.Errorf("dynamic sequence contains a step with an empty id")
+		}
+		if _, ok := knownIDs[id]; ok {
+			return fmt.Errorf("dynamic sequence contains duplicate step id %q", id)
+		}
+		knownIDs[id] = struct{}{}
+	}
+
+	validated := make([]SequenceStep, 0, len(steps))
+	for _, rawStep := range steps {
+		step := SequenceStep{
+			ID:         strings.TrimSpace(rawStep.ID),
+			Transcript: strings.TrimSpace(rawStep.Transcript),
+			Status:     sequenceStatusPending,
+		}
+		if step.Transcript == "" {
+			return fmt.Errorf("dynamic sequence step %s has an empty transcript", step.ID)
+		}
+
+		deps, err := normalizeDynamicStepDependsOn(step.ID, rawStep.DependsOn, knownIDs)
+		if err != nil {
+			return err
+		}
+		step.DependsOn = deps
+		validated = append(validated, step)
+	}
+
+	baseIndex := len(r.seq.Steps)
+	r.seq.Steps = append(r.seq.Steps, validated...)
+	r.rebuildStepIndexes()
+
+	for i := range validated {
+		step := &r.seq.Steps[baseIndex+i]
+		r.remainingDeps[step.ID] = 0
+		if r.seq.OnFailure == sequenceOnFailureRetry {
+			retries := r.seq.MaxRetries
+			if retries <= 0 {
+				retries = defaultSequenceRetryLimit
+			}
+			r.retriesLeft[step.ID] = retries
+		}
+		for _, dep := range step.DependsOn {
+			depStep, ok := r.stepByID[dep]
+			if !ok {
+				return fmt.Errorf("dynamic sequence step %s depends on unknown step %q", step.ID, dep)
+			}
+			r.dependents[dep] = append(r.dependents[dep], step.ID)
+			if depStep.Status != sequenceStatusComplete {
+				r.remainingDeps[step.ID]++
+			}
+		}
+		if step.Status != sequenceStatusComplete && r.remainingDeps[step.ID] == 0 {
+			r.ready = append(r.ready, step.ID)
+			r.queued[step.ID] = true
+		}
+	}
+
+	r.sortReady()
+	return nil
+}
+
+func normalizeDynamicStepDependsOn(stepID string, dependsOn []string, knownIDs map[string]struct{}) ([]string, error) {
+	deps := make([]string, 0, len(dependsOn))
+	seen := make(map[string]struct{}, len(dependsOn))
+	for _, dep := range dependsOn {
+		trimmed := strings.TrimSpace(dep)
+		if trimmed == "" {
+			continue
+		}
+		if trimmed == stepID {
+			return nil, fmt.Errorf("dynamic sequence step %s cannot depend on itself", stepID)
+		}
+		if _, ok := knownIDs[trimmed]; !ok {
+			return nil, fmt.Errorf("dynamic sequence step %s depends on unknown step %q", stepID, trimmed)
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		deps = append(deps, trimmed)
+	}
+	return deps, nil
+}
+
+func (r *sequenceRunner) rebuildStepIndexes() {
+	r.stepByID = make(map[string]*SequenceStep, len(r.seq.Steps))
+	r.stepIndex = make(map[string]int, len(r.seq.Steps))
+	for i := range r.seq.Steps {
+		step := &r.seq.Steps[i]
+		r.stepByID[step.ID] = step
+		r.stepIndex[step.ID] = i
+	}
+}
+
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
 	orch := &DockerOrchestrator{
 		Substrate:       substratePath,
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isConductorStep(step.ID),
+	}
+	if isConductorStep(step.ID) {
+		if err := EnsureConductorGenotype(substratePath); err != nil {
+			return "", err
+		}
+		orch.Genotype = "conductor"
 	}
 	return runSequenceSprout(ctx, orch, step.Transcript)
 }
@@ -731,6 +891,10 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		}
 	}
 
+	if orch.Genotype != "" {
+		stagePlasmidsForGenotype(sourcePath, mountPath, orch.Genotype)
+	}
+
 	imageName := orch.resolveImageName(mountPath)
 	if err := ensureSproutImage(ctx, imageName); err != nil {
 		if cleanup != nil {
@@ -751,7 +915,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, orch.resolveLLMClient(), session)
+	agent, err := newAgent(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session)
 	if err != nil {
 		return "", err
 	}
