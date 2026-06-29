@@ -13,7 +13,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/opentendril/core/cmd/stem/internal/llm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -685,8 +684,14 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		Substrate:       substratePath,
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
+		IsCoordinator:   isConductorStep(step.ID),
 	}
 	return runSequenceSprout(ctx, orch, step.Transcript)
+}
+
+func isConductorStep(stepID string) bool {
+	stepID = strings.ToLower(strings.TrimSpace(stepID))
+	return stepID == "conductor" || strings.HasPrefix(stepID, "conductor-")
 }
 
 func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt string) (string, error) {
@@ -746,7 +751,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, llm.NewClientFromEnv(), session)
+	agent, err := newAgent(ctx, mountPath, orch.resolveLLMClient(), session)
 	if err != nil {
 		return "", err
 	}

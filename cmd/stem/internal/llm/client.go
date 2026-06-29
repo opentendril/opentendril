@@ -51,6 +51,10 @@ func NewClientFromEnv() *Client {
 	return NewClient(ResolveProviderSpec())
 }
 
+func NewCoordinatorClientFromEnv() *Client {
+	return NewClient(ResolveCoordinatorProviderSpec())
+}
+
 func (c *Client) CallPrompt(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
 	messages := []Message{
 		{Role: "system", Content: systemPrompt},
@@ -104,100 +108,30 @@ func ResolveProviderSpec() ProviderSpec {
 		provider = detectProviderFallback()
 	}
 
-	switch provider {
-	case "local":
-		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		return ProviderSpec{
-			Provider:    "local",
-			BaseURL:     baseURL,
-			BaseURLs:    localInferenceBaseURLs(baseURL),
-			Model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+	return resolveProviderSpec(provider, "", "")
+}
+
+func ResolveCoordinatorProviderSpec() ProviderSpec {
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("COORDINATOR_LLM_PROVIDER")))
+	if provider == "" {
+		spec := ResolveProviderSpec()
+		if model := strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")); model != "" {
+			spec.Model = model
 		}
-	case "anthropic":
-		return ProviderSpec{
-			Provider:    "anthropic",
-			BaseURL:     envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			APIKey:      os.Getenv("ANTHROPIC_API_KEY"),
-			Model:       envOr("ANTHROPIC_MODEL_NAME", "claude-sonnet-4-6"),
-			Endpoint:    "/v1/messages",
-			Mode:        ModeAnthropic,
-			Temperature: 0.1,
+		if strings.EqualFold(spec.Provider, "local") {
+			if baseURL := strings.TrimSpace(os.Getenv("COORDINATOR_LOCAL_INFERENCE_URL")); baseURL != "" {
+				spec.BaseURL = baseURL
+				spec.BaseURLs = localInferenceBaseURLs(baseURL)
+			}
 		}
-	case "openai":
-		return ProviderSpec{
-			Provider:    "openai",
-			BaseURL:     envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			APIKey:      os.Getenv("OPENAI_API_KEY"),
-			Model:       envOr("OPENAI_MODEL_NAME", "gpt-5.4-mini"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	case "grok":
-		return ProviderSpec{
-			Provider:    "grok",
-			BaseURL:     envOr("GROK_BASE_URL", "https://api.x.ai/v1"),
-			APIKey:      os.Getenv("GROK_API_KEY"),
-			Model:       envOr("GROK_MODEL_NAME", "grok-4-fast-non-reasoning"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	case "google":
-		return ProviderSpec{
-			Provider:    "google",
-			BaseURL:     envOr("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
-			APIKey:      os.Getenv("GOOGLE_API_KEY"),
-			Model:       envOr("GOOGLE_MODEL_NAME", "gemini-3-flash"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	case "openrouter":
-		return ProviderSpec{
-			Provider:    "openrouter",
-			BaseURL:     envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			APIKey:      os.Getenv("OPENROUTER_API_KEY"),
-			Model:       envOr("OPENROUTER_MODEL_NAME", "anthropic/claude-3.5-sonnet"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	case "opentendril":
-		return ProviderSpec{
-			Provider:    "opentendril",
-			BaseURL:     envOr("OPENTENDRIL_BASE_URL", "https://api.opentendril.com/v1"),
-			APIKey:      os.Getenv("OPENTENDRIL_API_KEY"),
-			Model:       envOr("OPENTENDRIL_MODEL_NAME", "anthropic/claude-3.5-sonnet"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	case "nvidia":
-		return ProviderSpec{
-			Provider:    "nvidia",
-			BaseURL:     envOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-			APIKey:      os.Getenv("NVIDIA_API_KEY"),
-			Model:       envOr("NVIDIA_MODEL_NAME", "meta/llama-3.1-70b-instruct"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
-	default:
-		baseURL := envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		return ProviderSpec{
-			Provider:    "local",
-			BaseURL:     baseURL,
-			BaseURLs:    localInferenceBaseURLs(baseURL),
-			Model:       envOr("LOCAL_MODEL_NAME", "llama3.2"),
-			Endpoint:    "/chat/completions",
-			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
-		}
+		return spec
 	}
+
+	return resolveProviderSpec(
+		provider,
+		strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")),
+		strings.TrimSpace(os.Getenv("COORDINATOR_LOCAL_INFERENCE_URL")),
+	)
 }
 
 func detectProviderFallback() string {
@@ -222,6 +156,148 @@ func detectProviderFallback() string {
 		}
 	}
 	return "local"
+}
+
+func resolveProviderSpec(provider string, modelOverride string, localInferenceOverride string) ProviderSpec {
+	modelOverride = strings.TrimSpace(modelOverride)
+	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
+
+	switch provider {
+	case "local":
+		baseURL := localInferenceOverride
+		if baseURL == "" {
+			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
+		}
+		model := modelOverride
+		if model == "" {
+			model = envOr("LOCAL_MODEL_NAME", "llama3.2")
+		}
+		return ProviderSpec{
+			Provider:    "local",
+			BaseURL:     baseURL,
+			BaseURLs:    localInferenceBaseURLs(baseURL),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "anthropic":
+		model := modelOverride
+		if model == "" {
+			model = envOr("ANTHROPIC_MODEL_NAME", "claude-sonnet-4-6")
+		}
+		return ProviderSpec{
+			Provider:    "anthropic",
+			BaseURL:     envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+			APIKey:      os.Getenv("ANTHROPIC_API_KEY"),
+			Model:       model,
+			Endpoint:    "/v1/messages",
+			Mode:        ModeAnthropic,
+			Temperature: 0.1,
+		}
+	case "openai":
+		model := modelOverride
+		if model == "" {
+			model = envOr("OPENAI_MODEL_NAME", "gpt-5.4-mini")
+		}
+		return ProviderSpec{
+			Provider:    "openai",
+			BaseURL:     envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+			APIKey:      os.Getenv("OPENAI_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "grok":
+		model := modelOverride
+		if model == "" {
+			model = envOr("GROK_MODEL_NAME", "grok-4-fast-non-reasoning")
+		}
+		return ProviderSpec{
+			Provider:    "grok",
+			BaseURL:     envOr("GROK_BASE_URL", "https://api.x.ai/v1"),
+			APIKey:      os.Getenv("GROK_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "google":
+		model := modelOverride
+		if model == "" {
+			model = envOr("GOOGLE_MODEL_NAME", "gemini-3-flash")
+		}
+		return ProviderSpec{
+			Provider:    "google",
+			BaseURL:     envOr("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
+			APIKey:      os.Getenv("GOOGLE_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "openrouter":
+		model := modelOverride
+		if model == "" {
+			model = envOr("OPENROUTER_MODEL_NAME", "anthropic/claude-3.5-sonnet")
+		}
+		return ProviderSpec{
+			Provider:    "openrouter",
+			BaseURL:     envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+			APIKey:      os.Getenv("OPENROUTER_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "opentendril":
+		model := modelOverride
+		if model == "" {
+			model = envOr("OPENTENDRIL_MODEL_NAME", "anthropic/claude-3.5-sonnet")
+		}
+		return ProviderSpec{
+			Provider:    "opentendril",
+			BaseURL:     envOr("OPENTENDRIL_BASE_URL", "https://api.opentendril.com/v1"),
+			APIKey:      os.Getenv("OPENTENDRIL_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	case "nvidia":
+		model := modelOverride
+		if model == "" {
+			model = envOr("NVIDIA_MODEL_NAME", "meta/llama-3.1-70b-instruct")
+		}
+		return ProviderSpec{
+			Provider:    "nvidia",
+			BaseURL:     envOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+			APIKey:      os.Getenv("NVIDIA_API_KEY"),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	default:
+		baseURL := localInferenceOverride
+		if baseURL == "" {
+			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
+		}
+		model := modelOverride
+		if model == "" {
+			model = envOr("LOCAL_MODEL_NAME", "llama3.2")
+		}
+		return ProviderSpec{
+			Provider:    "local",
+			BaseURL:     baseURL,
+			BaseURLs:    localInferenceBaseURLs(baseURL),
+			Model:       model,
+			Endpoint:    "/chat/completions",
+			Mode:        ModeOpenAIish,
+			Temperature: 0.1,
+		}
+	}
 }
 
 func envOr(key, fallback string) string {
