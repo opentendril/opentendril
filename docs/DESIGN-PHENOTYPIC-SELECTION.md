@@ -16,7 +16,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 
 ```
                   ┌───────────────────────────────┐
-                  │     1. Initiate Conductor     │
+                  │     1. Activate Meristem      │
                   └──────────────┬────────────────┘
                                  │
                    ┌─────────────┴─────────────┐
