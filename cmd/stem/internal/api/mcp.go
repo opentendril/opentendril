@@ -20,13 +20,35 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type MCPHandler struct{}
+type MCPHandler struct {
+	substratesConfig *orchestrator.SubstratesConfig
+}
 
 func NewMCPHandler() *MCPHandler {
 	if err := syncGenotypeIndex(); err != nil {
 		log.Printf("[MCP] Failed to sync genotype index on startup: %v", err)
 	}
-	return &MCPHandler{}
+
+	substratesConfig, err := orchestrator.LoadSubstratesConfig("")
+	if err != nil {
+		log.Printf("[MCP] Failed to load substrates config on startup: %v", err)
+	}
+
+	names := make([]string, 0)
+	if substratesConfig != nil {
+		names = make([]string, 0, len(substratesConfig.Substrates))
+		for name := range substratesConfig.Substrates {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+	}
+	if len(names) == 0 {
+		log.Printf("[MCP] Loaded substrates config. Named substrates: none")
+	} else {
+		log.Printf("[MCP] Loaded substrates config. Named substrates: %s", strings.Join(names, ", "))
+	}
+
+	return &MCPHandler{substratesConfig: substratesConfig}
 }
 
 func (h *MCPHandler) SetupRoutes(mux *http.ServeMux) {
@@ -196,11 +218,11 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 							},
 							"substrate": map[string]interface{}{
 								"type":        "string",
-								"description": "The absolute path to the target repository workspace (the 'substrate'). E.g. /home/user/project",
+								"description": "The absolute path or named substrate key for the target repository workspace. E.g. /home/user/project or core",
 							},
 							"substrateUrl": map[string]interface{}{
 								"type":        "string",
-								"description": "Optional remote repository URL to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
+								"description": "Optional remote repository URL override to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
 							},
 							"substrateBranch": map[string]interface{}{
 								"type":        "string",
@@ -472,12 +494,39 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		substrateURL, _ := params.Arguments["substrateUrl"].(string)
+		explicitSubstrateURL := strings.TrimSpace(substrateURL)
 		substrateBranch, _ := params.Arguments["substrateBranch"].(string)
-		statusPath := filepath.Join(resolveRepoRoot(substrate), "tendril-status.json")
+		resolvedSubstrate := strings.TrimSpace(substrate)
+		substrateIsNamed := false
+		substrateHasLocalPath := false
+		if substrateSpec, isName := orchestrator.ResolveSubstrate(substrate, h.substratesConfig); isName && substrateSpec != nil {
+			substrateIsNamed = true
+			if strings.TrimSpace(substrateURL) == "" {
+				substrateURL = strings.TrimSpace(substrateSpec.URL)
+			}
+			if strings.TrimSpace(substrateBranch) == "" {
+				substrateBranch = strings.TrimSpace(substrateSpec.Branch)
+			}
+			if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+				if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
+					resolvedSubstrate = trimmedPath
+					substrateHasLocalPath = true
+				}
+			}
+		}
 
-		log.Printf("[MCP] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", stepID, transcript, substrate, substrateURL)
+		statusPath := ""
+		if explicitSubstrateURL == "" {
+			if !substrateIsNamed || substrateHasLocalPath {
+				if resolvedSubstrate != "" {
+					statusPath = filepath.Join(resolveRepoRoot(resolvedSubstrate), "tendril-status.json")
+				}
+			}
+		}
+
+		log.Printf("[MCP] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", stepID, transcript, resolvedSubstrate, substrateURL)
 		orch := &orchestrator.DockerOrchestrator{
-			Substrate:       substrate,
+			Substrate:       resolvedSubstrate,
 			SubstrateURL:    substrateURL,
 			SubstrateBranch: substrateBranch,
 			StepID:          stepID,
