@@ -106,3 +106,5 @@ Workflow automation is managed by the **Sequence Conductor**:
     2.  **Worker:** Applies code edits to files.
     3.  **Verifier:** Compiles code and executes unit tests.
 *   **Recursive Debugging:** If a verifier step fails, the Conductor intercepts the exit code and dynamically sprouts a **Debugger** step. The debugger patches compile errors recursively (up to 3 times) before the verifier resets.
+*   **Phenotypic Selection (Speculative Parallel Execution):** When a step is configured with `phenotypesCount > 1`, Go Stem dispatches multiple parallel sprouts concurrently in separate worktrees under varying LLM temperatures (spread from `0.1` to `0.7`) and plasmid rules. It subjects each phenotype to a sterile container fitness test (e.g. `go test` or linters). The first variant to pass all compilation and unit tests successfully is declared the winner, while the losers are instantly aborted via context cancellation. The winner's branch is merged back to the host substrate.
+

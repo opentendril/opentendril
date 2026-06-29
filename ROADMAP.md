@@ -22,6 +22,8 @@ Tendril instances run as sidecars or tools on any codebase (e.g., `jurnx/med-api
 - [ ] **Monetization & Credits:** The `credit_manager` enforcing limits on cloud-hosted usage, allowing unlimited local compute.
 - ✅ **MCP Server Integration:** Exposing the Headless Kernel via the Model Context Protocol for Claude Desktop and Cursor compatibility.
 - ✅ **Shadow Workflows:** Ephemeral git shadow worktrees, pre-flight stashing, and automated validation gates for safe, isolated AI iterations.
+- ✅ **Phenotypic Selection:** Speculative parallel execution of sprouts under varying temperatures and plasmids, resolving winner branches via docker fitness check gates.
+
 
 ## Evolution 3: The Automated Hive (Distributed Registry)
 **Focus:** Sharing skills learned by deployed agents back to the Root.
