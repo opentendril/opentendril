@@ -7,6 +7,7 @@
 //   tendril adapt - Mine recent git history into the genome
 //   tendril genome - Inspect or reduce the active genome
 //   tendril plasmid - List or inject modular genome seeds
+//   tendril sequence - Run or list YAML task sequences
 
 package main
 
@@ -51,6 +52,8 @@ func main() {
 		runGenomeCmd(ctx, os.Args[2:])
 	case "plasmid":
 		runPlasmidCmd(os.Args[2:])
+	case "sequence":
+		runSequenceCmd(ctx, os.Args[2:])
 	case "mcp":
 		runMCPCmd(ctx, os.Args[2:])
 	case "init":
@@ -75,6 +78,7 @@ func printUsage() {
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Println("  genome  Inspect or reduce the active genome seeds")
 	fmt.Println("  plasmid Manage modular genome plasmids")
+	fmt.Println("  sequence Run or list YAML task sequences")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")
 	fmt.Println("  serve   Start the Go Stem Orchestrator API")
