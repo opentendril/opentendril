@@ -16,7 +16,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 
 ```
                   ┌───────────────────────────────┐
-                  │      1. Spawn Conductor       │
+                  │     1. Initiate Conductor     │
                   └──────────────┬────────────────┘
                                  │
                    ┌─────────────┴─────────────┐
@@ -99,7 +99,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 ## 5. Verification Plan
 
 ### Automated Tests
-*   **Speculative Concurrency test:** Verify that launching a step with 2 phenotypes spawns parallel goroutines, and cancelling the parent context halts the loser.
+*   **Speculative Concurrency test:** Verify that launching a step with 2 phenotypes dispatches parallel goroutines, and cancelling the parent context halts the loser.
 *   **Fitness Test Command test:** Mock a fitness test run that succeeds for one phenotype and fails for another, asserting the correct winner is selected.
 
 ### Manual Verification
