@@ -19,6 +19,14 @@ const (
 	ModeOpenAIish Mode = "openaiish"
 )
 
+type ModelTier string
+
+const (
+	TierPremium  ModelTier = "premium"
+	TierStandard ModelTier = "standard"
+	TierCheapest ModelTier = "cheapest"
+)
+
 type ProviderSpec struct {
 	Provider    string
 	BaseURL     string
@@ -55,6 +63,10 @@ func NewClient(spec ProviderSpec) *Client {
 
 func NewClientFromEnv() *Client {
 	return NewClient(ResolveProviderSpec())
+}
+
+func NewClientForTier(tier ModelTier) *Client {
+	return NewClient(ResolveTierProviderSpec(tier))
 }
 
 func NewCoordinatorClientFromEnv() *Client {
@@ -109,18 +121,22 @@ func (c *Client) Call(ctx context.Context, messages []Message) (string, error) {
 }
 
 func ResolveProviderSpec() ProviderSpec {
+	return ResolveTierProviderSpec(TierPremium)
+}
+
+func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
 	if provider == "" {
 		provider = detectProviderFallback()
 	}
 
-	return resolveProviderSpec(provider, "", "")
+	return resolveTierProviderSpecForProvider(provider, tier, "")
 }
 
 func ResolveCoordinatorProviderSpec() ProviderSpec {
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("COORDINATOR_LLM_PROVIDER")))
 	if provider == "" {
-		spec := ResolveProviderSpec()
+		spec := ResolveTierProviderSpec(TierPremium)
 		if model := strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")); model != "" {
 			spec.Model = model
 		}
@@ -133,11 +149,15 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 		return spec
 	}
 
-	return resolveProviderSpec(
+	spec := resolveTierProviderSpecForProvider(
 		provider,
-		strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")),
+		TierPremium,
 		strings.TrimSpace(os.Getenv("COORDINATOR_LOCAL_INFERENCE_URL")),
 	)
+	if model := strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")); model != "" {
+		spec.Model = model
+	}
+	return spec
 }
 
 func detectProviderFallback() string {
@@ -164,19 +184,17 @@ func detectProviderFallback() string {
 	return "local"
 }
 
-func resolveProviderSpec(provider string, modelOverride string, localInferenceOverride string) ProviderSpec {
-	modelOverride = strings.TrimSpace(modelOverride)
+func resolveTierProviderSpecForProvider(provider string, tier ModelTier, localInferenceOverride string) ProviderSpec {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	tier = canonicalModelTier(tier)
 	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
+	model := resolveModelForTier(provider, tier)
 
 	switch provider {
 	case "local":
 		baseURL := localInferenceOverride
 		if baseURL == "" {
 			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		}
-		model := modelOverride
-		if model == "" {
-			model = envOr("LOCAL_MODEL_NAME", "llama3.2")
 		}
 		return ProviderSpec{
 			Provider:    "local",
@@ -188,10 +206,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "anthropic":
-		model := modelOverride
-		if model == "" {
-			model = envOr("ANTHROPIC_MODEL_NAME", "claude-sonnet-4-6")
-		}
 		return ProviderSpec{
 			Provider:    "anthropic",
 			BaseURL:     envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
@@ -202,10 +216,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "openai":
-		model := modelOverride
-		if model == "" {
-			model = envOr("OPENAI_MODEL_NAME", "gpt-5.4-mini")
-		}
 		return ProviderSpec{
 			Provider:    "openai",
 			BaseURL:     envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
@@ -216,10 +226,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "grok":
-		model := modelOverride
-		if model == "" {
-			model = envOr("GROK_MODEL_NAME", "grok-4-fast-non-reasoning")
-		}
 		return ProviderSpec{
 			Provider:    "grok",
 			BaseURL:     envOr("GROK_BASE_URL", "https://api.x.ai/v1"),
@@ -230,10 +236,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "google":
-		model := modelOverride
-		if model == "" {
-			model = envOr("GOOGLE_MODEL_NAME", "gemini-3-flash")
-		}
 		return ProviderSpec{
 			Provider:    "google",
 			BaseURL:     envOr("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
@@ -244,10 +246,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "openrouter":
-		model := modelOverride
-		if model == "" {
-			model = envOr("OPENROUTER_MODEL_NAME", "anthropic/claude-3.5-sonnet")
-		}
 		return ProviderSpec{
 			Provider:    "openrouter",
 			BaseURL:     envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
@@ -258,10 +256,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "opentendril":
-		model := modelOverride
-		if model == "" {
-			model = envOr("OPENTENDRIL_MODEL_NAME", "anthropic/claude-3.5-sonnet")
-		}
 		return ProviderSpec{
 			Provider:    "opentendril",
 			BaseURL:     envOr("OPENTENDRIL_BASE_URL", "https://api.opentendril.com/v1"),
@@ -272,10 +266,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 			Temperature: 0.1,
 		}
 	case "nvidia":
-		model := modelOverride
-		if model == "" {
-			model = envOr("NVIDIA_MODEL_NAME", "meta/llama-3.1-70b-instruct")
-		}
 		return ProviderSpec{
 			Provider:    "nvidia",
 			BaseURL:     envOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
@@ -289,10 +279,6 @@ func resolveProviderSpec(provider string, modelOverride string, localInferenceOv
 		baseURL := localInferenceOverride
 		if baseURL == "" {
 			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
-		}
-		model := modelOverride
-		if model == "" {
-			model = envOr("LOCAL_MODEL_NAME", "llama3.2")
 		}
 		return ProviderSpec{
 			Provider:    "local",
@@ -311,6 +297,70 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func canonicalModelTier(tier ModelTier) ModelTier {
+	switch tier {
+	case TierPremium, TierStandard, TierCheapest:
+		return tier
+	default:
+		return TierPremium
+	}
+}
+
+func tierSpecificModelEnvName(provider string, tier ModelTier) string {
+	return fmt.Sprintf("%s_%s_MODEL", strings.ToUpper(strings.TrimSpace(provider)), strings.ToUpper(string(canonicalModelTier(tier))))
+}
+
+func providerModelEnvName(provider string) string {
+	return fmt.Sprintf("%s_MODEL_NAME", strings.ToUpper(strings.TrimSpace(provider)))
+}
+
+func resolveModelForTier(provider string, tier ModelTier) string {
+	if model := strings.TrimSpace(os.Getenv(tierSpecificModelEnvName(provider, tier))); model != "" {
+		return model
+	}
+	if model := strings.TrimSpace(os.Getenv(providerModelEnvName(provider))); model != "" {
+		return model
+	}
+	if model := strings.TrimSpace(os.Getenv("DEFAULT_MODEL_NAME")); model != "" {
+		return model
+	}
+	return fallbackModelForTier(provider, tier)
+}
+
+func fallbackModelForTier(provider string, tier ModelTier) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic":
+		return tierFallback(tier, "claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-4-5")
+	case "openai":
+		return tierFallback(tier, "gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano")
+	case "google":
+		return tierFallback(tier, "gemini-3-pro", "gemini-3-flash", "gemini-3-flash")
+	case "grok":
+		return tierFallback(tier, "grok-4", "grok-4-fast-non-reasoning", "grok-4-fast-non-reasoning")
+	case "openrouter":
+		return tierFallback(tier, "anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini", "google/gemini-3-flash")
+	case "local":
+		return tierFallback(tier, "qwen2.5-coder:14b", "qwen2.5-coder:7b", "llama3.2")
+	case "opentendril":
+		return "anthropic/claude-3.5-sonnet"
+	case "nvidia":
+		return "meta/llama-3.1-70b-instruct"
+	default:
+		return fallbackModelForTier("local", tier)
+	}
+}
+
+func tierFallback(tier ModelTier, premium string, standard string, cheapest string) string {
+	switch canonicalModelTier(tier) {
+	case TierStandard:
+		return standard
+	case TierCheapest:
+		return cheapest
+	default:
+		return premium
+	}
 }
 
 func localInferenceBaseURLs(baseURL string) []string {
@@ -364,33 +414,36 @@ func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []M
 	switch c.spec.Mode {
 	case ModeAnthropic:
 		systemParts := make([]string, 0, 2)
-		anthropicMessages := make([]map[string]string, 0, len(messages))
+		anthropicMessages := make([]map[string]any, 0, len(messages))
 		for _, message := range messages {
-			switch strings.ToLower(strings.TrimSpace(message.Role)) {
+			role := strings.ToLower(strings.TrimSpace(message.Role))
+			content := message.Content
+			trimmedContent := strings.TrimSpace(content)
+			switch role {
 			case "system":
-				if strings.TrimSpace(message.Content) != "" {
-					systemParts = append(systemParts, strings.TrimSpace(message.Content))
+				if trimmedContent != "" {
+					systemParts = append(systemParts, trimmedContent)
 				}
 			case "assistant", "user":
-				anthropicMessages = append(anthropicMessages, map[string]string{
-					"role":    strings.ToLower(strings.TrimSpace(message.Role)),
-					"content": message.Content,
-				})
+				anthropicMessages = append(anthropicMessages, anthropicMessagePayload(role, content))
 			default:
-				anthropicMessages = append(anthropicMessages, map[string]string{
-					"role":    "user",
-					"content": message.Content,
-				})
+				anthropicMessages = append(anthropicMessages, anthropicMessagePayload("user", content))
 			}
 		}
 
-		payload, err = json.Marshal(map[string]any{
+		payloadBody := map[string]any{
 			"model":       c.spec.Model,
 			"max_tokens":  2048,
 			"temperature": c.spec.Temperature,
-			"system":      strings.Join(systemParts, "\n\n"),
 			"messages":    anthropicMessages,
-		})
+		}
+		if len(systemParts) > 0 {
+			payloadBody["system"] = []map[string]any{
+				anthropicTextBlock(strings.Join(systemParts, "\n\n"), true),
+			}
+		}
+
+		payload, err = json.Marshal(payloadBody)
 		if err != nil {
 			return "", fmt.Errorf("marshal anthropic request: %w", err)
 		}
@@ -420,6 +473,9 @@ func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []M
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if c.spec.Mode == ModeAnthropic {
+		req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -472,4 +528,35 @@ func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []M
 		}
 		return content, nil
 	}
+}
+
+func anthropicTextBlock(text string, cache bool) map[string]any {
+	block := map[string]any{
+		"type": "text",
+		"text": text,
+	}
+	if cache {
+		block["cache_control"] = map[string]string{
+			"type": "ephemeral",
+		}
+	}
+	return block
+}
+
+func anthropicMessagePayload(role string, content string) map[string]any {
+	if shouldCacheAnthropicContent(content) {
+		return map[string]any{
+			"role":    role,
+			"content": []map[string]any{anthropicTextBlock(content, true)},
+		}
+	}
+	return map[string]any{
+		"role":    role,
+		"content": content,
+	}
+}
+
+func shouldCacheAnthropicContent(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	return strings.Contains(trimmed, "repomap.md") || len(trimmed) > 1000
 }
