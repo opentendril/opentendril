@@ -158,7 +158,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, d.resolveLLMClient(), session)
+	agent, err := newAgent(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session)
 	if err != nil {
 		return "", err
 	}

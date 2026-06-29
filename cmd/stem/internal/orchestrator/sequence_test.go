@@ -238,6 +238,86 @@ func TestRunSequenceRetry(t *testing.T) {
 	}
 }
 
+func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dynamic.yaml")
+
+	seq := &Sequence{
+		Name:             "dynamic",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt,
+		Steps: []SequenceStep{
+			{ID: "conductor", Transcript: "design the next steps"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls []string
+	var mu sync.Mutex
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		mu.Lock()
+		calls = append(calls, step.ID)
+		mu.Unlock()
+
+		switch step.ID {
+		case "conductor":
+			return "```json\n[{\"id\":\"step-a\",\"dependsOn\":[\"conductor\"],\"transcript\":\"do the first thing\"},{\"id\":\"step-b\",\"dependsOn\":[\"step-a\"],\"transcript\":\"do the second thing\"}]\n```", nil
+		case "step-a":
+			return "alpha", nil
+		case "step-b":
+			return "beta", nil
+		default:
+			return "", fmt.Errorf("unexpected step %s", step.ID)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:      io.Discard,
+		Stderr:      io.Discard,
+		Interactive: false,
+		StepRunner:  stepRunner,
+	})
+	if err != nil {
+		t.Fatalf("RunSequence failed: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("expected sequence result")
+	}
+	if len(result.Steps) != 3 {
+		t.Fatalf("result step count = %d, want 3", len(result.Steps))
+	}
+	for _, step := range result.Steps {
+		if step.Status != sequenceStatusComplete {
+			t.Fatalf("step %s status = %s, want complete", step.ID, step.Status)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 3 {
+		t.Fatalf("step call count = %d, want 3", len(calls))
+	}
+	if calls[0] != "conductor" || calls[1] != "step-a" || calls[2] != "step-b" {
+		t.Fatalf("unexpected step call order: %v", calls)
+	}
+
+	loaded, err := LoadSequence(path)
+	if err != nil {
+		t.Fatalf("LoadSequence failed: %v", err)
+	}
+	if len(loaded.Steps) != 3 {
+		t.Fatalf("persisted step count = %d, want 3", len(loaded.Steps))
+	}
+	if loaded.Steps[1].ID != "step-a" || loaded.Steps[2].ID != "step-b" {
+		t.Fatalf("persisted dynamic steps out of order: %#v", loaded.Steps)
+	}
+}
+
 func TestCreateShadowWorktreeUsesBranch(t *testing.T) {
 	repo := t.TempDir()
 
