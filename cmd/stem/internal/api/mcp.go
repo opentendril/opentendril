@@ -160,6 +160,20 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		return h.formatResult(req.ID, map[string]interface{}{
 			"tools": []map[string]interface{}{
 				{
+					"name":        "runSequence",
+					"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence conductor.",
+					"inputSchema": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"pathOrName": map[string]interface{}{
+								"type":        "string",
+								"description": "The sequence YAML file path or sequence name to run.",
+							},
+						},
+						"required": []string{"pathOrName"},
+					},
+				},
+				{
 					"name":        "sproutTendril",
 					"description": "Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure sandbox.",
 					"inputSchema": map[string]interface{}{
@@ -381,6 +395,51 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 					{
 						"type": "text",
 						"text": fmt.Sprintf("Successfully created genotype '%s'. You can now use it.", name),
+					},
+				},
+				"isError": false,
+			})
+		}
+
+		if params.Name == "runSequence" {
+			pathOrName, ok := params.Arguments["pathOrName"].(string)
+			if !ok || strings.TrimSpace(pathOrName) == "" {
+				if alt, altOK := params.Arguments["path"].(string); altOK {
+					pathOrName = alt
+				}
+			}
+			if strings.TrimSpace(pathOrName) == "" {
+				if alt, altOK := params.Arguments["sequence"].(string); altOK {
+					pathOrName = alt
+				}
+			}
+			if strings.TrimSpace(pathOrName) == "" {
+				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'pathOrName' parameter is required.")
+			}
+
+			seq, runErr := orchestrator.RunSequence(context.Background(), pathOrName, orchestrator.SequenceRunOptions{
+				Stdout:      io.Discard,
+				Stderr:      os.Stderr,
+				Interactive: false,
+			})
+			summary := summarizeSequenceResult(seq)
+			if runErr != nil {
+				return h.formatResult(req.ID, map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": fmt.Sprintf("Sequence run failed: %v\n\n%s", runErr, summary),
+						},
+					},
+					"isError": true,
+				})
+			}
+
+			return h.formatResult(req.ID, map[string]interface{}{
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": summary,
 					},
 				},
 				"isError": false,
@@ -651,6 +710,30 @@ func copyMarkdownFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+func summarizeSequenceResult(seq *orchestrator.Sequence) string {
+	if seq == nil {
+		return "Sequence run completed."
+	}
+
+	var lines []string
+	lines = append(lines, fmt.Sprintf("Sequence %s", seq.Name))
+	if strings.TrimSpace(seq.Substrate) != "" {
+		lines = append(lines, fmt.Sprintf("Substrate: %s", filepath.ToSlash(seq.Substrate)))
+	}
+	if strings.TrimSpace(seq.Branch) != "" {
+		lines = append(lines, fmt.Sprintf("Branch: %s", seq.Branch))
+	}
+	lines = append(lines, "Steps:")
+	for _, step := range seq.Steps {
+		line := fmt.Sprintf("- %s: %s", step.ID, step.Status)
+		if strings.TrimSpace(step.Transcript) != "" {
+			line += fmt.Sprintf(" | %s", strings.TrimSpace(step.Transcript))
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func samePath(a, b string) bool {

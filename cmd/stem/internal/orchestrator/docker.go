@@ -108,7 +108,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		}
 	} else if isGitRepo(sourcePath) {
 		// Use local shadow git sandbox
-		shadowPath, err := createShadowWorktree(sourcePath)
+		shadowPath, err := createShadowWorktree(sourcePath, d.SubstrateBranch)
 		if err == nil {
 			mountPath = shadowPath
 
@@ -610,7 +610,7 @@ func isGitRepo(path string) bool {
 }
 
 // createShadowWorktree creates a new git worktree in a temporary directory.
-func createShadowWorktree(sourcePath string) (string, error) {
+func createShadowWorktree(sourcePath, substrateBranch string) (string, error) {
 	bytes := make([]byte, 4)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -619,15 +619,35 @@ func createShadowWorktree(sourcePath string) (string, error) {
 
 	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-sandbox-%s", runID))
 
-	// Create the worktree pointing to HEAD (or a detached HEAD)
-	// We use --detach to avoid checking out the current branch which might be locked
-	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, "HEAD")
+	branch := strings.TrimSpace(substrateBranch)
+	var cmd *exec.Cmd
+	if branch == "" {
+		// Create the worktree pointing to HEAD (or a detached HEAD)
+		// We use --detach to avoid checking out the current branch which might be locked
+		cmd = exec.Command("git", "worktree", "add", "--detach", shadowPath, "HEAD")
+	} else if localBranchExists(sourcePath, branch) {
+		cmd = exec.Command("git", "worktree", "add", shadowPath, branch)
+	} else {
+		cmd = exec.Command("git", "worktree", "add", "-b", branch, shadowPath, "HEAD")
+	}
 	cmd.Dir = sourcePath
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git worktree add failed: %w, output: %s", err, string(output))
 	}
 
 	return shadowPath, nil
+}
+
+func localBranchExists(sourcePath, branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return false
+	}
+
+	ref := "refs/heads/" + strings.TrimPrefix(branch, "refs/heads/")
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref)
+	cmd.Dir = sourcePath
+	return cmd.Run() == nil
 }
 
 // injectMycorrhizalCache hard-links dependency directories from the host to the shadow sandbox.
