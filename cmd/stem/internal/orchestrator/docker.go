@@ -38,6 +38,30 @@ func NewDockerOrchestrator() *DockerOrchestrator {
 	return &DockerOrchestrator{}
 }
 
+type tendrilRunner interface {
+	Run(ctx context.Context, taskPrompt string) (agentResult, error)
+}
+
+var (
+	ensureSproutImageFn  = ensureSproutImage
+	startDockerSessionFn = func(ctx context.Context, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
+		return startDockerSession(ctx, imageName, mountPath, extraEnv...)
+	}
+	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (tendrilRunner, error) {
+		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session)
+	}
+	stashHostWorkspaceFn     = stashHostWorkspace
+	restoreHostStashFn       = restoreHostStash
+	createShadowWorktreeFn   = createShadowWorktree
+	removeShadowWorktreeFn   = removeShadowWorktree
+	injectMycorrhizalCacheFn = injectMycorrhizalCache
+	collectStageableFilesFn  = collectStageableFiles
+	collectGitDiffFn         = collectGitDiff
+	commitSandboxExecutionFn = commitSandboxExecution
+	mergeSandboxCommitFn     = mergeSandboxCommit
+	pushSandboxCommitFn      = pushSandboxCommit
+)
+
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	if d != nil && d.IsCoordinator {
 		return llm.NewCoordinatorClientFromEnv()
@@ -56,97 +80,123 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		d.StepID = stepID
 	}
 
-	// The path to the repository on the host.
-	sourcePath := d.Substrate
-	if sourcePath == "" {
-		sourcePath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
+	substratesConfig, err := LoadSubstratesConfig("")
+	if err != nil {
+		return "", err
 	}
-	sourcePath = repoRoot(sourcePath)
-	gitRepo := isGitRepo(sourcePath)
 
+	plan, err := resolveSubstrateExecutionPlan(d, substratesConfig)
+	if err != nil {
+		return "", err
+	}
+
+	if plan.readOnly {
+		fmt.Fprintln(os.Stderr, "⚠️ Substrate is configured as READONLY. Discarding sandbox modifications.")
+	}
+
+	sourcePath := plan.hostPath
+	mountPath := sourcePath
 	statusPath := strings.TrimSpace(d.StatusPath)
-	if statusPath != "" && !filepath.IsAbs(statusPath) {
-		statusPath = filepath.Join(sourcePath, statusPath)
+	gitRepo := false
+	var hostStashed bool
+	var cleanup func()
+	extraEnv := make([]string, 0, 1)
+	if plan.readOnly {
+		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
 
-	if gitRepo && statusPath != "" {
-		if existing, err := loadTendrilStatus(statusPath); err != nil {
-			return "", err
-		} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
-			switch strings.ToLower(strings.TrimSpace(existing.Status)) {
-			case "complete":
-				message := fmt.Sprintf("Step %s already completed. Skipping.", stepID)
-				fmt.Fprintln(os.Stderr, message)
-				return message, nil
-			case "failed":
-				errText := strings.TrimSpace(existing.Error)
-				if errText == "" {
-					errText = "previous execution failed"
-				}
-				fmt.Fprintf(os.Stderr, "⚠️ Resumption halted for %s: %s\n", stepID, errText)
-				return "", fmt.Errorf("step %s previously failed: %s", stepID, errText)
-			}
+	if plan.remoteClone {
+		authValue := ""
+		if plan.authRef != "" {
+			authValue = strings.TrimSpace(os.Getenv(plan.authRef))
 		}
-	}
 
-	hostStashed := false
-	if gitRepo {
-		var err error
-		hostStashed, err = stashHostWorkspace(ctx, sourcePath, stepID)
+		clonedPath, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.authRef, authValue)
 		if err != nil {
 			return "", err
 		}
-	} else if statusPath != "" {
-		fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Tendril state externalization is disabled.\n", sourcePath)
-	}
 
-	mountPath := sourcePath
-	var cleanup func()
-
-	if d.SubstrateURL != "" {
-		// Clone foreign substrate
-		shadowPath, err := cloneForeignSubstrate(d.SubstrateURL, d.SubstrateBranch)
-		if err == nil {
-			mountPath = shadowPath
-			cleanup = func() {
-				_ = os.RemoveAll(shadowPath)
-			}
-			fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", d.SubstrateURL)
-		} else {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to cross-pollinate substrate: %v\n", err)
+		sourcePath = clonedPath
+		mountPath = clonedPath
+		statusPath = ""
+		gitRepo = isGitRepo(sourcePath)
+		cleanup = func() {
+			_ = os.RemoveAll(clonedPath)
 		}
-	} else if isGitRepo(sourcePath) {
-		// Use local shadow git sandbox
-		shadowPath, err := createShadowWorktree(sourcePath, d.SubstrateBranch)
-		if err == nil {
-			mountPath = shadowPath
-
-			// Inject node_modules, .venv, vendor from host if they exist
-			injectMycorrhizalCache(sourcePath, shadowPath)
-
-			cleanup = func() {
-				removeShadowWorktree(sourcePath, shadowPath)
+		if !gitRepo {
+			if cleanup != nil {
+				cleanup()
 			}
-		} else {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
+			return "", fmt.Errorf("cloned substrate %s is not a git repository", clonedPath)
 		}
+
+		fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", plan.cloneURL)
 	} else {
-		fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git sandboxing disabled.\n", sourcePath)
+		sourcePath = repoRoot(sourcePath)
+		gitRepo = isGitRepo(sourcePath)
+
+		if statusPath != "" && !filepath.IsAbs(statusPath) {
+			statusPath = filepath.Join(sourcePath, statusPath)
+		}
+
+		if gitRepo && statusPath != "" {
+			if existing, err := loadTendrilStatus(statusPath); err != nil {
+				return "", err
+			} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
+				switch strings.ToLower(strings.TrimSpace(existing.Status)) {
+				case "complete":
+					message := fmt.Sprintf("Step %s already completed. Skipping.", stepID)
+					fmt.Fprintln(os.Stderr, message)
+					return message, nil
+				case "failed":
+					errText := strings.TrimSpace(existing.Error)
+					if errText == "" {
+						errText = "previous execution failed"
+					}
+					fmt.Fprintf(os.Stderr, "⚠️ Resumption halted for %s: %s\n", stepID, errText)
+					return "", fmt.Errorf("step %s previously failed: %s", stepID, errText)
+				}
+			}
+		}
+
+		if gitRepo && !plan.readOnly {
+			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
+			if err != nil {
+				return "", err
+			}
+		} else if statusPath != "" {
+			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Tendril state externalization is disabled.\n", sourcePath)
+		}
+
+		if gitRepo {
+			shadowPath, err := createShadowWorktreeFn(sourcePath, plan.cloneBranch)
+			if err == nil {
+				mountPath = shadowPath
+				injectMycorrhizalCacheFn(sourcePath, shadowPath)
+				cleanup = func() {
+					removeShadowWorktreeFn(sourcePath, shadowPath)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git sandboxing disabled.\n", sourcePath)
+		}
 	}
 
-	// Stage genotype plasmids in the sandbox if active
 	if d.Genotype != "" {
 		stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype)
 	}
 
 	imageName := d.resolveImageName(mountPath)
-	if err := ensureSproutImage(ctx, imageName); err != nil {
+	if err := ensureSproutImageFn(ctx, imageName); err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
 		return "", err
 	}
-	session, err := startDockerSession(ctx, imageName, mountPath)
+
+	session, err := startDockerSessionFn(ctx, imageName, mountPath, extraEnv...)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -158,7 +208,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session)
+	agent, err := newAgentFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session)
 	if err != nil {
 		return "", err
 	}
@@ -176,26 +226,38 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return result.Response, nil
 	}
 
+	if plan.readOnly {
+		if runErr != nil {
+			return "", runErr
+		}
+		return result.Response, nil
+	}
+
 	var statusRelPath string
 	if statusPath != "" {
 		var err error
 		statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
 		if err != nil {
+			if hostStashed {
+				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
+					err = errors.Join(err, restoreErr)
+				}
+			}
 			return "", err
 		}
 	}
 
-	modifiedFiles, diffErr := collectStageableFiles(ctx, mountPath, statusRelPath)
+	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, statusRelPath)
 	if diffErr != nil {
 		if hostStashed {
-			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+			if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
 				diffErr = errors.Join(diffErr, restoreErr)
 			}
 		}
 		return "", diffErr
 	}
 
-	gitDiff, diffErr := collectGitDiff(ctx, mountPath)
+	gitDiff, diffErr := collectGitDiffFn(ctx, mountPath)
 	if diffErr != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
 	}
@@ -212,10 +274,10 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		executionStatus.Status = "complete"
 	}
 
-	commitHash, commitErr := commitSandboxExecution(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
+	commitHash, commitErr := commitSandboxExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
 	if commitErr != nil {
 		if hostStashed {
-			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+			if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
 				commitErr = errors.Join(commitErr, restoreErr)
 			}
 		}
@@ -225,22 +287,36 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return "", commitErr
 	}
 
-	mergeErr := mergeSandboxCommit(ctx, sourcePath, commitHash)
-	if mergeErr != nil {
-		if runErr != nil {
+	if plan.remoteClone {
+		if pushErr := pushSandboxCommitFn(ctx, mountPath, plan.cloneBranch); pushErr != nil {
 			if hostStashed {
-				if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
+					pushErr = errors.Join(pushErr, restoreErr)
+				}
+			}
+			if runErr != nil {
+				return "", errors.Join(runErr, pushErr)
+			}
+			return "", pushErr
+		}
+	} else {
+		mergeErr := mergeSandboxCommitFn(ctx, sourcePath, commitHash)
+		if mergeErr != nil {
+			if runErr != nil {
+				if hostStashed {
+					if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
+						mergeErr = errors.Join(mergeErr, restoreErr)
+					}
+				}
+				return "", errors.Join(runErr, mergeErr)
+			}
+			if hostStashed {
+				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
 					mergeErr = errors.Join(mergeErr, restoreErr)
 				}
 			}
-			return "", errors.Join(runErr, mergeErr)
+			return "", mergeErr
 		}
-		if hostStashed {
-			if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
-				mergeErr = errors.Join(mergeErr, restoreErr)
-			}
-		}
-		return "", mergeErr
 	}
 
 	var finalErr error
@@ -249,7 +325,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if hostStashed {
-		if restoreErr := restoreHostStash(ctx, sourcePath); restoreErr != nil {
+		if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
 			finalErr = errors.Join(finalErr, restoreErr)
 		}
 	}
@@ -406,7 +482,7 @@ type dockerSproutSession struct {
 	closeErr   error
 }
 
-func startDockerSession(ctx context.Context, imageName string, mountPath string) (*dockerSproutSession, error) {
+func startDockerSession(ctx context.Context, imageName string, mountPath string, extraEnv ...string) (*dockerSproutSession, error) {
 	args := []string{
 		"run", "-i", "--rm",
 		"--network", "opentendril-default",
@@ -439,6 +515,12 @@ func startDockerSession(ctx context.Context, imageName string, mountPath string)
 	} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			args = append(args, "-e", fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	for _, env := range extraEnv {
+		if value := strings.TrimSpace(env); value != "" {
+			args = append(args, "-e", value)
 		}
 	}
 
@@ -1021,32 +1103,74 @@ func summarizeTendrilFailureError(failureError string) string {
 
 // cloneForeignSubstrate clones a remote repository into a temporary sandbox.
 func cloneForeignSubstrate(url, branch string) (string, error) {
+	return cloneNamedForeignSubstrate("", url, branch, "", "")
+}
+
+func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (string, error) {
 	bytes := make([]byte, 4)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
 	runID := hex.EncodeToString(bytes)
 
-	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-substrate-%s", runID))
+	prefix := "opentendril-substrate"
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		prefix = fmt.Sprintf("%s-%s", prefix, sanitizeTempComponent(trimmed))
+	}
+	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s", prefix, runID))
 
 	args := []string{"clone"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
 
-	// Inject GitHub PAT if present
-	if pat := os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN"); pat != "" && strings.Contains(url, "github.com") {
-		url = strings.Replace(url, "https://github.com", fmt.Sprintf("https://%s@github.com", pat), 1)
+	resolvedAuthRef := strings.TrimSpace(authRef)
+	resolvedAuthValue := strings.TrimSpace(authValue)
+	if resolvedAuthRef != "" && resolvedAuthValue == "" {
+		resolvedAuthValue = strings.TrimSpace(os.Getenv(resolvedAuthRef))
+	}
+	if resolvedAuthValue == "" && resolvedAuthRef == "" && strings.Contains(url, "github.com") {
+		if pat := strings.TrimSpace(os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")); pat != "" {
+			resolvedAuthRef = "GITHUB_PERSONAL_ACCESS_TOKEN"
+			resolvedAuthValue = pat
+		}
+	}
+	if resolvedAuthValue != "" && !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
+		url = strings.Replace(url, "https://", "https://"+resolvedAuthValue+"@", 1)
 	}
 
 	args = append(args, url, shadowPath)
 
 	cmd := exec.Command("git", args...)
+	if resolvedAuthRef != "" && resolvedAuthValue != "" {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", resolvedAuthRef, resolvedAuthValue))
+	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
 	}
 
 	return shadowPath, nil
+}
+
+func pushSandboxCommit(ctx context.Context, mountPath, branch string) error {
+	targetBranch := strings.TrimSpace(branch)
+	if targetBranch == "" {
+		currentBranch, err := runGitCommand(ctx, mountPath, "branch", "--show-current")
+		if err != nil {
+			return err
+		}
+		targetBranch = strings.TrimSpace(currentBranch)
+	}
+	if targetBranch == "" {
+		return fmt.Errorf("unable to determine branch for push")
+	}
+	targetBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
+
+	if _, err := runGitCommand(ctx, mountPath, "push", "origin", "HEAD:"+targetBranch); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
