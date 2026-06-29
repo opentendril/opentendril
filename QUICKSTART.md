@@ -193,6 +193,45 @@ Tendril will read the file, generate a diff, apply it, and commit to git.
 
 ---
 
+## Multi-Repository & Substrate Configuration
+
+If your workspace spans more than one repository, add a `substrates.yaml` file
+to the repo root or `.tendril/` directory.
+
+OpenTendril looks for substrate config in this order:
+
+1. `./substrates.yaml`
+2. `./.tendril/substrates.yaml`
+3. The repository root of the current working directory
+
+Example:
+
+```yaml
+substrates:
+  core:
+    path: /home/user/dev/opentendril/core
+    url: https://github.com/opentendril/core.git
+    branch: main
+    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    readonly: false
+
+  api:
+    url: https://github.com/myorg/api.git
+    branch: develop
+    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    readonly: true
+```
+
+Usage notes:
+
+- Pass the named key, such as `core` or `api`, as the `substrate` argument to `sproutTendril`.
+- `path` is optional. If it exists, Tendril uses the local checkout.
+- If `path` is missing or does not exist, Tendril clones `url` into a temporary workspace for that run.
+- `auth` should be the name of an environment variable, not the token itself.
+- `readonly: true` keeps the sandbox ephemeral and discards changes after the run.
+
+---
+
 ## Troubleshooting
 
 ### "Connection refused" on port 8080

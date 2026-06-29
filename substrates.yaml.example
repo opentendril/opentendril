@@ -1,0 +1,35 @@
+# OpenTendril substrate configuration.
+#
+# Place this file at:
+# - ./substrates.yaml
+# - ./.tendril/substrates.yaml
+#
+# Each key under `substrates` is a named repository target that can be passed
+# to `sproutTendril` as the `substrate` argument.
+
+substrates:
+  core:
+    path: /home/user/dev/opentendril/core
+    url: https://github.com/opentendril/core.git
+    branch: main
+    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    readonly: false
+
+  api:
+    url: https://github.com/myorg/api.git
+    branch: develop
+    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    readonly: true
+
+  docs:
+    path: /home/user/dev/docs-site
+    url: https://github.com/myorg/docs-site.git
+    branch: trunk
+    readonly: false
+
+# Notes:
+# - `path` is optional. If it exists, Tendril uses the local checkout.
+# - If `path` is missing or does not exist, Tendril clones `url` to a temporary
+#   workspace under /tmp/opentendril-substrate-<name>-<random>.
+# - `auth` must be the name of an environment variable, not the secret value.
+# - `readonly: true` keeps the sandbox ephemeral and discards any edits.
