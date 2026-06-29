@@ -56,12 +56,24 @@ To scale our prompt engineering dynamically, OpenTendril maps prompt layers to g
 
 The execution flow of the OpenTendril framework natively maps to the six major growth stages of a climbing vine:
 
-1. **Seed Germination (Activation):** The user installs OpenTendril. The Core reads `.env` and `mcp_config.json`, absorbing its environment.
-2. **Seedling Emergence (Sprouting):** The Go Sprout breaks through and binds to local ports, establishing the main API surface.
-3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers and local vector databases ("The Roots").
-4. **Tendril Initiation:** When a specific Transcript is requested, the Stem initiates a specialized Genotype context, signaling cells to form a Tendril (`initiation.py`).
-5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a Docker container boots via `emergence.py`) and begins sweeping the air. It touches the code, coils around it (executing the LLM loop via `elongation.py`), and pulls the project forward.
-6. **Reproductive Maturity:** With the Transcript completed, the framework redirects energy back to the user, producing final PRs, deliverables, and artifacts.
+1. **Seed Germination (Activation):** The user installs OpenTendril. Go Stem reads `.env`, `mcp-config.json`, and `substrates.yaml`, absorbing its environment configuration.
+2. **Seedling Emergence (Sprouting):** The Go Stem server boots and binds to local ports, establishing the main API and MCP surface areas.
+3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers ("The Roots") using the Dual LLM config (Coordinator + Worker).
+4. **Tendril Initiation:** When a specific task Transcript is requested, the Stem initiates a specialized Genotype context, dynamically resolving required Plasmids.
+5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a stateless Sprout Docker container is spawned) and sweeps the codebase. Under the **Codebase Assessor (Thigmotropism)**, the Stem generates a hierarchical **Repo Map Plasmid** (`repomap.md`) using native AST parsing, giving the sprout a tactile sense of the codebase architecture before coiling around it to execute edits.
+6. **Reproductive Maturity:** With the task completed, Go Stem runs post-flight sanitization, commits the changes, merges the sandbox worktree back to the host, and delivers the final PRs and artifacts.
+
+---
+
+## 6. Lamarckian Epigenetics (State Adaptation)
+
+In biology, Lamarckian evolution states that an organism can pass down traits and adaptations acquired during its lifetime to its offspring. 
+
+OpenTendril implements **Lamarckian Epigenetics** via the Go-native **Epigenetic Chronicler**:
+*   After every Sprout execution, Go Stem analyzes the git diff and execution transcript to extract lessons, guardrails, and conventions learned during that specific run.
+*   These learnings are automatically appended back to `.tendril/genome/epigenetics.md`.
+*   During future Sprout runs, these accumulated learnings are compressed and injected into the prompt context.
+*   This ensures future Sprouts (offspring) instantly inherit the acquired knowledge and mistakes of their predecessors, enabling self-improving codebase adaptation.
 
 ```mermaid
 graph TD
