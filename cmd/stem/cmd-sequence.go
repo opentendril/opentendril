@@ -111,7 +111,7 @@ func runSequenceDynamicCmd(ctx context.Context, args []string) {
 	seq := &orchestrator.Sequence{
 		Steps: []orchestrator.SequenceStep{
 			{
-				ID:         "conductor",
+				ID:         "meristem",
 				Transcript: prompt,
 			},
 		},
@@ -144,7 +144,7 @@ func printSequenceUsage() {
 	fmt.Println("Usage: tendril sequence <run|list|dynamic> [arguments]")
 	fmt.Println("  run <path_or_name>  Run a sequence YAML file from .tendril/sequences/ or a relative path")
 	fmt.Println("  list                List available sequence YAML files")
-	fmt.Println("  dynamic <prompt>    Bootstrap a conductor sequence that expands from a natural-language prompt")
+	fmt.Println("  dynamic <prompt>    Bootstrap a meristem sequence that expands from a natural-language prompt")
 }
 
 func stdinIsTerminal() bool {

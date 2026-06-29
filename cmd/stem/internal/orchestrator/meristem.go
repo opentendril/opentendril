@@ -13,9 +13,9 @@ type genotypeDefinition struct {
 	Plasmids     []string `json:"plasmids,omitempty"`
 }
 
-// EnsureConductorGenotype creates the built-in conductor genotype if it is missing.
-func EnsureConductorGenotype(root string) error {
-	return ensureGenotype(root, "conductor", "You are the OpenTendril Conductor. Analyze the user's dynamic transcript request and generate a list of execution steps to accomplish it as a JSON array. Each step in the array must be an object with: 'id' (string, unique name), 'transcript' (string, detailed task description for the worker), and 'dependsOn' (array of strings, prerequisite step IDs). Output ONLY the raw JSON array inside a ```json ``` code fence block, with no other conversational text.")
+// EnsureMeristemGenotype creates the built-in Meristem genotype if it is missing.
+func EnsureMeristemGenotype(root string) error {
+	return ensureGenotype(root, "meristem", "You are the OpenTendril Meristem planning node. Analyze the user's dynamic transcript request and generate a list of execution steps to accomplish it as a JSON array. Each step in the array must be an object with: 'id' (string, unique name), 'transcript' (string, detailed task description for the worker), and 'dependsOn' (array of strings, prerequisite step IDs). Output ONLY the raw JSON array inside a ```json ``` code fence block, with no other conversational text.")
 }
 
 // EnsureThinkerGenotype creates the built-in thinker genotype if it is missing.

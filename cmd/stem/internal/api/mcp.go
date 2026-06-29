@@ -190,7 +190,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			"tools": []map[string]interface{}{
 				{
 					"name":        "runSequence",
-					"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence conductor.",
+					"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence meristem.",
 					"inputSchema": map[string]interface{}{
 						"type": "object",
 						"properties": map[string]interface{}{

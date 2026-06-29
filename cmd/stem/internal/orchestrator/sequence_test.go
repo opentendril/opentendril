@@ -391,7 +391,7 @@ func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
 		ConcurrencyLimit: 1,
 		OnFailure:        sequenceOnFailureHalt,
 		Steps: []SequenceStep{
-			{ID: "conductor", Transcript: "design the next steps"},
+			{ID: "meristem", Transcript: "design the next steps"},
 		},
 	}
 	if err := SaveSequence(path, seq); err != nil {
@@ -406,8 +406,8 @@ func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
 		mu.Unlock()
 
 		switch step.ID {
-		case "conductor":
-			return "```json\n[{\"id\":\"step-a\",\"dependsOn\":[\"conductor\"],\"transcript\":\"do the first thing\"},{\"id\":\"step-b\",\"dependsOn\":[\"step-a\"],\"transcript\":\"do the second thing\"}]\n```", nil
+		case "meristem":
+			return "```json\n[{\"id\":\"step-a\",\"dependsOn\":[\"meristem\"],\"transcript\":\"do the first thing\"},{\"id\":\"step-b\",\"dependsOn\":[\"step-a\"],\"transcript\":\"do the second thing\"}]\n```", nil
 		case "step-a":
 			return "alpha", nil
 		case "step-b":
@@ -446,7 +446,7 @@ func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
 	if len(calls) != 3 {
 		t.Fatalf("step call count = %d, want 3", len(calls))
 	}
-	if calls[0] != "conductor" || calls[1] != "step-a" || calls[2] != "step-b" {
+	if calls[0] != "meristem" || calls[1] != "step-a" || calls[2] != "step-b" {
 		t.Fatalf("unexpected step call order: %v", calls)
 	}
 
@@ -505,22 +505,22 @@ func TestCreateShadowWorktreeUsesBranch(t *testing.T) {
 	}
 }
 
-func TestIsConductorStep(t *testing.T) {
+func TestIsMeristemStep(t *testing.T) {
 	tests := []struct {
 		name   string
 		stepID string
 		want   bool
 	}{
-		{name: "exact", stepID: "conductor", want: true},
-		{name: "prefixed", stepID: "Conductor-plan", want: true},
+		{name: "exact", stepID: "meristem", want: true},
+		{name: "prefixed", stepID: "Meristem-plan", want: true},
 		{name: "worker", stepID: "worker-plan", want: false},
-		{name: "embedded", stepID: "worker-conductor", want: false},
+		{name: "embedded", stepID: "worker-meristem", want: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isConductorStep(tt.stepID); got != tt.want {
-				t.Fatalf("isConductorStep(%q) = %v, want %v", tt.stepID, got, tt.want)
+			if got := isMeristemStep(tt.stepID); got != tt.want {
+				t.Fatalf("isMeristemStep(%q) = %v, want %v", tt.stepID, got, tt.want)
 			}
 		})
 	}
@@ -532,7 +532,7 @@ func TestStepModelTier(t *testing.T) {
 		stepID string
 		want   llm.ModelTier
 	}{
-		{name: "conductor", stepID: "conductor", want: llm.TierPremium},
+		{name: "meristem", stepID: "meristem", want: llm.TierPremium},
 		{name: "worker", stepID: "worker-sprout", want: llm.TierPremium},
 		{name: "verifier", stepID: "verifier-check", want: llm.TierStandard},
 		{name: "debugger", stepID: "recursive-debugger", want: llm.TierStandard},
