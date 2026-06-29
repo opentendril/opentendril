@@ -40,6 +40,12 @@ type Client struct {
 	spec       ProviderSpec
 }
 
+func (c *Client) SetTemperature(temp float64) {
+	if c != nil {
+		c.spec.Temperature = temp
+	}
+}
+
 func NewClient(spec ProviderSpec) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 20 * time.Second},

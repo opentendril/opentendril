@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -42,10 +44,12 @@ type Sequence struct {
 
 // SequenceStep describes one executable node in a sequence.
 type SequenceStep struct {
-	ID         string   `yaml:"id"`
-	Status     string   `yaml:"status"`
-	DependsOn  []string `yaml:"dependsOn,omitempty"`
-	Transcript string   `yaml:"transcript"`
+	ID              string   `yaml:"id"`
+	Status          string   `yaml:"status"`
+	DependsOn       []string `yaml:"dependsOn,omitempty"`
+	Transcript      string   `yaml:"transcript"`
+	PhenotypesCount int      `yaml:"phenotypesCount,omitempty"`
+	FitnessTest     string   `yaml:"fitnessTest,omitempty"`
 }
 
 // SequenceStepRunner executes a single sequence step.
@@ -313,6 +317,10 @@ func normalizeSequence(path string, seq *Sequence) error {
 		}
 		step.DependsOn = deps
 		step.Transcript = strings.TrimSpace(step.Transcript)
+		if step.PhenotypesCount <= 0 {
+			step.PhenotypesCount = 1
+		}
+		step.FitnessTest = strings.TrimSpace(step.FitnessTest)
 	}
 
 	return nil
@@ -918,9 +926,43 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 	}
 }
 
+var (
+	runSequenceSproutFn          = runSequenceSprout
+	runSequenceSproutAtPathFn    = runSequenceSproutAtPath
+	mergePhenotypeBranchToHostFn = mergePhenotypeBranchToHost
+)
+
+type sproutExecutionResult struct {
+	Response   string
+	CommitHash string
+	ImageName  string
+}
+
+type phenotypeRunResult struct {
+	index      int
+	branchName string
+	response   string
+	err        error
+}
+
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
 	if err := ensureSpecializedGenotypes(substratePath); err != nil {
 		return "", err
+	}
+
+	if isConductorStep(step.ID) {
+		if err := EnsureConductorGenotype(substratePath); err != nil {
+			return "", err
+		}
+	}
+
+	if step.PhenotypesCount > 1 {
+		return runPhenotypicSelection(ctx, seq, step, substratePath)
+	}
+
+	genotype := stepGenotype(step.ID)
+	if isConductorStep(step.ID) {
+		genotype = "conductor"
 	}
 
 	orch := &DockerOrchestrator{
@@ -928,20 +970,156 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isConductorStep(step.ID),
-		Genotype:        stepGenotype(step.ID),
+		Genotype:        genotype,
 	}
-	if isConductorStep(step.ID) {
-		if err := EnsureConductorGenotype(substratePath); err != nil {
-			return "", err
+	return runSequenceSproutFn(ctx, orch, step.Transcript)
+}
+
+func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (result string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sourcePath := repoRoot(substratePath)
+	if strings.TrimSpace(sourcePath) == "" {
+		sourcePath = strings.TrimSpace(substratePath)
+	}
+	if strings.TrimSpace(sourcePath) == "" {
+		return "", fmt.Errorf("phenotypic selection requires a substrate path")
+	}
+	if !isGitRepo(sourcePath) {
+		return "", fmt.Errorf("phenotypic selection requires a git repository at %s", sourcePath)
+	}
+
+	selectionCtx, cancel := context.WithCancel(ctx)
+
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	hostStashed, err := stashHostWorkspaceFn(ctx, sourcePath, step.ID)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if !hostStashed {
+			return
+		}
+		if restoreErr := restoreHostStashFn(cleanupCtx, sourcePath); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+	}()
+
+	branchBase := derivedSequenceBranch(seq.Branch, step.ID)
+	if branchBase == "" {
+		branchBase = sanitizeBranchComponent(step.ID)
+		if branchBase == "" {
+			branchBase = "phenotype"
 		}
 	}
-	if isConductorStep(step.ID) {
-		if err := EnsureConductorGenotype(substratePath); err != nil {
-			return "", err
-		}
-		orch.Genotype = "conductor"
+
+	phenotypeCount := step.PhenotypesCount
+	if phenotypeCount <= 0 {
+		phenotypeCount = 1
 	}
-	return runSequenceSprout(ctx, orch, step.Transcript)
+
+	resultsCh := make(chan phenotypeRunResult, phenotypeCount)
+	var wg sync.WaitGroup
+	for i := 0; i < phenotypeCount; i++ {
+		index := i
+		branchName := branchBase + "-phenotype-" + strconv.Itoa(index)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			shadowPath, err := createShadowWorktreeFn(sourcePath, branchName)
+			if err != nil {
+				resultsCh <- phenotypeRunResult{
+					index:      index,
+					branchName: branchName,
+					err:        fmt.Errorf("create phenotype worktree %s: %w", branchName, err),
+				}
+				return
+			}
+			injectMycorrhizalCacheFn(sourcePath, shadowPath)
+			defer removeShadowWorktreeFn(sourcePath, shadowPath)
+
+			genotype := stepGenotype(step.ID)
+			if isConductorStep(step.ID) {
+				genotype = "conductor"
+			}
+
+			orch := &DockerOrchestrator{
+				Substrate:        sourcePath,
+				SubstrateBranch:  branchName,
+				StepID:           step.ID,
+				IsCoordinator:    isConductorStep(step.ID),
+				Genotype:         genotype,
+				Temperature:      0.1 + float64(index)*0.3,
+				DisableMergeBack: true,
+			}
+
+			runResult, runErr := runSequenceSproutAtPathFn(selectionCtx, orch, step.Transcript, sourcePath, shadowPath)
+			if runErr != nil {
+				resultsCh <- phenotypeRunResult{
+					index:      index,
+					branchName: branchName,
+					err:        fmt.Errorf("phenotype %d (%s) sprout failed: %w", index, branchName, runErr),
+				}
+				return
+			}
+
+			if fitnessTest := strings.TrimSpace(step.FitnessTest); fitnessTest != "" {
+				if fitnessErr := runContainerFitnessTestFn(selectionCtx, runResult.ImageName, shadowPath, fitnessTest); fitnessErr != nil {
+					resultsCh <- phenotypeRunResult{
+						index:      index,
+						branchName: branchName,
+						err:        fmt.Errorf("phenotype %d (%s) fitness test failed: %w", index, branchName, fitnessErr),
+					}
+					return
+				}
+			}
+
+			resultsCh <- phenotypeRunResult{
+				index:      index,
+				branchName: branchName,
+				response:   runResult.Response,
+			}
+		}()
+	}
+
+	defer func() {
+		wg.Wait()
+	}()
+	defer cancel()
+
+	var firstErr error
+	var lastErr error
+	for completed := 0; completed < phenotypeCount; completed++ {
+		result := <-resultsCh
+		if result.err != nil {
+			if firstErr == nil {
+				firstErr = result.err
+			}
+			lastErr = result.err
+			continue
+		}
+
+		cancel()
+		mergeCtx := context.WithoutCancel(ctx)
+		if mergeErr := mergePhenotypeBranchToHostFn(mergeCtx, sourcePath, result.branchName); mergeErr != nil {
+			return "", mergeErr
+		}
+
+		return result.response, nil
+	}
+
+	if lastErr != nil {
+		return "", lastErr
+	}
+	if firstErr != nil {
+		return "", firstErr
+	}
+
+	return "", fmt.Errorf("phenotypic selection failed without a concrete error")
 }
 
 func isConductorStep(stepID string) bool {
@@ -986,55 +1164,111 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		}
 	}
 
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	executionResult, err := runSequenceSproutAtPathFn(ctx, orch, taskPrompt, sourcePath, mountPath)
+	if err != nil {
+		if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
+			return executionResult.CommitHash, err
+		}
+		return "", err
+	}
+
+	if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
+		return executionResult.CommitHash, nil
+	}
+
+	if executionResult.Response != "" {
+		return executionResult.Response, nil
+	}
+
+	return executionResult.CommitHash, nil
+}
+
+func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, taskPrompt, sourcePath, mountPath string) (result sproutExecutionResult, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if orch == nil {
+		orch = &DockerOrchestrator{}
+	}
+
+	stepID := strings.TrimSpace(orch.StepID)
+	if stepID == "" {
+		stepID = newTendrilExecutionID("step")
+		orch.StepID = stepID
+	}
+
+	sourcePath = repoRoot(sourcePath)
+	if strings.TrimSpace(sourcePath) == "" {
+		sourcePath = "."
+	}
+	gitRepo := isGitRepo(sourcePath)
+	cleanupCtx := context.WithoutCancel(ctx)
+	hostStashed := false
+	if gitRepo && !orch.DisableMergeBack {
+		hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
+		if err != nil {
+			return result, err
+		}
+		defer func() {
+			if !hostStashed {
+				return
+			}
+			if restoreErr := restoreHostStashFn(cleanupCtx, sourcePath); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
+		}()
+	}
+
 	if orch.Genotype != "" {
 		stagePlasmidsForGenotype(sourcePath, mountPath, orch.Genotype)
 	}
 
 	imageName := orch.resolveImageName(mountPath)
+	result.ImageName = imageName
 	if err := ensureSproutImage(ctx, imageName); err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return "", err
+		return result, err
 	}
 
-	session, err := startDockerSession(ctx, imageName, mountPath)
+	session, err := startDockerSessionFn(ctx, imageName, mountPath)
 	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return "", err
-	}
-	if cleanup != nil {
-		defer cleanup()
+		return result, err
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session)
+	agent, err := newAgentFn(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session)
 	if err != nil {
-		return "", err
+		return result, err
 	}
 
-	result, runErr := agent.Run(ctx, taskPrompt)
+	agentResult, runErr := agent.Run(ctx, taskPrompt)
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
 
+	result.Response = agentResult.Response
+
 	if !gitRepo {
 		if runErr != nil {
-			return "", runErr
+			return result, runErr
 		}
-		return result.Response, nil
+		return result, nil
 	}
 
-	modifiedFiles, diffErr := collectStageableFiles(ctx, mountPath, "tendril-status.json")
+	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, "tendril-status.json")
 	if diffErr != nil {
-		return "", diffErr
+		return result, diffErr
 	}
 
-	gitDiff, diffErr := collectGitDiff(ctx, mountPath)
-	if diffErr != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+	var gitDiff string
+	if !orch.DisableMergeBack {
+		gitDiff, diffErr = collectGitDiffFn(ctx, mountPath)
+		if diffErr != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+		}
 	}
 
 	executionStatus := tendrilExecutionStatus{
@@ -1049,40 +1283,80 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		executionStatus.Status = sequenceStatusComplete
 	}
 
-	commitHash, commitErr := commitSandboxExecution(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt)
+	commitHash, commitErr := commitSandboxExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt)
 	if commitErr != nil {
 		if runErr != nil {
-			return "", errors.Join(runErr, commitErr)
+			return result, errors.Join(runErr, commitErr)
 		}
-		return "", commitErr
+		return result, commitErr
+	}
+
+	result.CommitHash = commitHash
+
+	if orch.DisableMergeBack {
+		return result, runErr
 	}
 
 	mergeErr := mergeSequenceSandboxCommit(ctx, sourcePath, commitHash)
 	if mergeErr != nil {
 		if runErr != nil {
-			return "", errors.Join(runErr, mergeErr)
+			return result, errors.Join(runErr, mergeErr)
 		}
-		return "", mergeErr
+		return result, mergeErr
 	}
 
 	if gitDiff != "" && runErr == nil {
 		chronicler := NewEpigeneticChronicler(sourcePath)
-		if err := chronicler.TranscribeLearnings(ctx, result.Transcript, gitDiff, session.Logs()); err != nil {
+		if err := chronicler.TranscribeLearnings(ctx, agentResult.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}
 	}
 
 	if runErr != nil {
-		return "", runErr
+		return result, runErr
 	}
 
-	return result.Response, nil
+	return result, nil
 }
 
 func mergeSequenceSandboxCommit(ctx context.Context, sourcePath, commitHash string) error {
 	if _, err := runGitCommand(ctx, sourcePath, "merge", "--no-ff", "--no-edit", commitHash); err != nil {
 		return err
 	}
+	return nil
+}
+
+func mergePhenotypeBranchToHost(ctx context.Context, sourcePath, branchName string) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sourcePath = repoRoot(sourcePath)
+	branchName = strings.TrimSpace(branchName)
+	if strings.TrimSpace(sourcePath) == "" {
+		return fmt.Errorf("source path is empty")
+	}
+	if branchName == "" {
+		return fmt.Errorf("branch name is empty")
+	}
+
+	cleanupCtx := context.WithoutCancel(ctx)
+	hostStashed, err := stashHostWorkspaceFn(ctx, sourcePath, "phenotype-merge-"+sanitizeBranchComponent(branchName))
+	if err != nil {
+		return err
+	}
+	if hostStashed {
+		defer func() {
+			if restoreErr := restoreHostStashFn(cleanupCtx, sourcePath); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
+		}()
+	}
+
+	if _, err = runGitCommand(cleanupCtx, sourcePath, "merge", "--ff-only", branchName); err != nil {
+		return err
+	}
+
 	return nil
 }
 
