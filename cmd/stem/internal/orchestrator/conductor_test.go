@@ -58,3 +58,59 @@ func TestEnsureConductorGenotypeDoesNotOverwrite(t *testing.T) {
 		t.Fatalf("conductor genotype was overwritten:\n%s", string(content))
 	}
 }
+
+func TestEnsureSpecializedGenotypesCreateFiles(t *testing.T) {
+	tests := []struct {
+		name         string
+		ensure       func(string) error
+		persona      string
+		expectedName string
+	}{
+		{
+			name:         "thinker",
+			ensure:       EnsureThinkerGenotype,
+			persona:      "OpenTendril Thinker",
+			expectedName: "thinker",
+		},
+		{
+			name:         "verifier",
+			ensure:       EnsureVerifierGenotype,
+			persona:      "OpenTendril Verifier",
+			expectedName: "verifier",
+		},
+		{
+			name:         "debugger",
+			ensure:       EnsureDebuggerGenotype,
+			persona:      "OpenTendril Debugger",
+			expectedName: "debugger",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			if err := tt.ensure(root); err != nil {
+				t.Fatalf("%s ensure failed: %v", tt.name, err)
+			}
+
+			genotypePath := filepath.Join(root, ".tendril", "genotypes", tt.expectedName+".json")
+			content, err := os.ReadFile(genotypePath)
+			if err != nil {
+				t.Fatalf("read %s genotype: %v", tt.name, err)
+			}
+
+			var genotype genotypeDefinition
+			if err := json.Unmarshal(content, &genotype); err != nil {
+				t.Fatalf("decode %s genotype: %v", tt.name, err)
+			}
+
+			if genotype.Name != tt.expectedName {
+				t.Fatalf("genotype name = %q, want %q", genotype.Name, tt.expectedName)
+			}
+			if !strings.Contains(genotype.Instructions, tt.persona) {
+				t.Fatalf("genotype instructions missing persona %q: %q", tt.persona, genotype.Instructions)
+			}
+		})
+	}
+}

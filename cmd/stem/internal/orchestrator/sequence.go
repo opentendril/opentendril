@@ -514,6 +514,34 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 
 			fmt.Fprintf(r.opts.Stderr, "⚠️ [%s] failed: %v\n", result.stepID, result.err)
 			step.Status = sequenceStatusFailed
+
+			if shouldSpawnRecursiveDebugger(step) {
+				debuggerStepID := fmt.Sprintf("debugger-%s-%d", result.stepID, time.Now().UnixNano())
+				debuggerStep := SequenceStep{
+					ID:         debuggerStepID,
+					Transcript: fmt.Sprintf("Analyze and fix the compiler/test failure in step [%s]. Errors:\n%v", result.stepID, result.err),
+					DependsOn:  []string{},
+				}
+				if err := r.appendDynamicSteps([]SequenceStep{debuggerStep}); err != nil {
+					return r.seq, err
+				}
+
+				failedStep := r.stepByID[result.stepID]
+				if failedStep == nil {
+					return r.seq, fmt.Errorf("failed step %s disappeared during debugger spawn", result.stepID)
+				}
+				failedStep.DependsOn = append(failedStep.DependsOn, debuggerStepID)
+				failedStep.Status = sequenceStatusPending
+				r.remainingDeps[result.stepID]++
+				r.dependents[debuggerStepID] = append(r.dependents[debuggerStepID], result.stepID)
+
+				if err := SaveSequence(r.path, r.seq); err != nil {
+					return r.seq, err
+				}
+				fmt.Fprintf(r.opts.Stdout, "↺ Spawned recursive Debugger [%s] for failed verifier step [%s]\n", debuggerStepID, result.stepID)
+				continue
+			}
+
 			if err := SaveSequence(r.path, r.seq); err != nil {
 				return r.seq, err
 			}
@@ -580,6 +608,32 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 	}
 }
 
+func shouldSpawnRecursiveDebugger(step *SequenceStep) bool {
+	if step == nil {
+		return false
+	}
+
+	stepID := strings.ToLower(strings.TrimSpace(step.ID))
+	if !strings.Contains(stepID, "verifier") {
+		return false
+	}
+	if strings.Count(stepID, "debugger") >= 3 {
+		return false
+	}
+
+	return debuggerDependencyCount(step.DependsOn) < 3
+}
+
+func debuggerDependencyCount(dependsOn []string) int {
+	count := 0
+	for _, dep := range dependsOn {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(dep)), "debugger") {
+			count++
+		}
+	}
+	return count
+}
+
 func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr error) (string, error) {
 	if r.opts.Interactive {
 		fmt.Fprintf(r.opts.Stderr, "⚠️ Step %s failed. [R]etry or [H]alt? ", stepID)
@@ -634,6 +688,38 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 				return strings.ToLower(strings.TrimSpace(latest.OnFailure)), nil
 			}
 		}
+	}
+}
+
+func ensureSpecializedGenotypes(root string) error {
+	for _, ensure := range []func(string) error{
+		EnsureThinkerGenotype,
+		EnsureVerifierGenotype,
+		EnsureDebuggerGenotype,
+	} {
+		if err := ensure(root); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func stepGenotype(stepID string) string {
+	trimmed := strings.TrimSpace(stepID)
+	normalized := strings.ToLower(trimmed)
+
+	switch {
+	case isConductorStep(trimmed):
+		return "conductor"
+	case strings.Contains(normalized, "debugger"):
+		return "debugger"
+	case strings.Contains(normalized, "verifier"):
+		return "verifier"
+	case strings.Contains(normalized, "thinker"):
+		return "thinker"
+	default:
+		return trimmed
 	}
 }
 
@@ -834,17 +920,21 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 }
 
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+	if err := ensureSpecializedGenotypes(substratePath); err != nil {
+		return "", err
+	}
+
 	orch := &DockerOrchestrator{
 		Substrate:       substratePath,
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isConductorStep(step.ID),
+		Genotype:        stepGenotype(step.ID),
 	}
 	if isConductorStep(step.ID) {
 		if err := EnsureConductorGenotype(substratePath); err != nil {
 			return "", err
 		}
-		orch.Genotype = "conductor"
 	}
 	return runSequenceSprout(ctx, orch, step.Transcript)
 }

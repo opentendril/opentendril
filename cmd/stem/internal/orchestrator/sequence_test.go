@@ -238,6 +238,148 @@ func TestRunSequenceRetry(t *testing.T) {
 	}
 }
 
+func TestRunSequenceSpawnsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "verifier.yaml")
+
+	seq := &Sequence{
+		Name:             "verifier-loop",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt,
+		Steps: []SequenceStep{
+			{ID: "verifier", Status: sequenceStatusPending, Transcript: "run verification"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var verifierCalls int32
+	var mu sync.Mutex
+	var calls []string
+	debuggerStarted := make(chan string, 1)
+	releaseDebugger := make(chan struct{})
+
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		mu.Lock()
+		calls = append(calls, step.ID)
+		mu.Unlock()
+
+		switch {
+		case strings.HasPrefix(step.ID, "debugger-"):
+			select {
+			case debuggerStarted <- step.ID:
+			default:
+			}
+			select {
+			case <-releaseDebugger:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "patched", nil
+		case step.ID == "verifier":
+			if atomic.AddInt32(&verifierCalls, 1) == 1 {
+				return "", fmt.Errorf("compiler failure")
+			}
+			return "verification passed", nil
+		default:
+			return "", fmt.Errorf("unexpected step %s", step.ID)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	var result *Sequence
+	var runErr error
+	go func() {
+		defer close(done)
+		result, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:      io.Discard,
+			Stderr:      io.Discard,
+			Interactive: false,
+			StepRunner:  stepRunner,
+		})
+	}()
+
+	var debuggerID string
+	select {
+	case debuggerID = <-debuggerStarted:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for recursive debugger spawn: %v", ctx.Err())
+	}
+
+	func() {
+		defer close(releaseDebugger)
+
+		loaded, err := LoadSequence(path)
+		if err != nil {
+			t.Fatalf("LoadSequence failed: %v", err)
+		}
+		if len(loaded.Steps) != 2 {
+			t.Fatalf("loaded step count = %d, want 2", len(loaded.Steps))
+		}
+
+		verifierStep := latestStepByID(loaded.Steps, "verifier")
+		if verifierStep == nil {
+			t.Fatalf("verifier step missing after debugger spawn")
+		}
+		if verifierStep.Status != sequenceStatusPending {
+			t.Fatalf("verifier status = %s, want pending", verifierStep.Status)
+		}
+		if len(verifierStep.DependsOn) != 1 || verifierStep.DependsOn[0] != debuggerID {
+			t.Fatalf("verifier dependsOn = %#v, want [%s]", verifierStep.DependsOn, debuggerID)
+		}
+
+		debuggerStep := latestStepByID(loaded.Steps, debuggerID)
+		if debuggerStep == nil {
+			t.Fatalf("debugger step %s missing after spawn", debuggerID)
+		}
+		if debuggerStep.Status != sequenceStatusPending {
+			t.Fatalf("debugger status = %s, want pending", debuggerStep.Status)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for recursive debugger run: %v", ctx.Err())
+	}
+	if runErr != nil {
+		t.Fatalf("RunSequence failed: %v", runErr)
+	}
+	if result == nil {
+		t.Fatalf("expected sequence result")
+	}
+	if len(result.Steps) != 2 {
+		t.Fatalf("result step count = %d, want 2", len(result.Steps))
+	}
+	for _, step := range result.Steps {
+		if step.Status != sequenceStatusComplete {
+			t.Fatalf("step %s status = %s, want complete", step.ID, step.Status)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 3 {
+		t.Fatalf("step call count = %d, want 3", len(calls))
+	}
+	if calls[0] != "verifier" {
+		t.Fatalf("first call = %q, want verifier", calls[0])
+	}
+	if !strings.HasPrefix(calls[1], "debugger-") {
+		t.Fatalf("second call = %q, want recursive debugger", calls[1])
+	}
+	if calls[2] != "verifier" {
+		t.Fatalf("third call = %q, want verifier retry", calls[2])
+	}
+	if atomic.LoadInt32(&verifierCalls) != 2 {
+		t.Fatalf("verifier call count = %d, want 2", atomic.LoadInt32(&verifierCalls))
+	}
+}
+
 func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dynamic.yaml")
