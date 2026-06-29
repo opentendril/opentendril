@@ -280,3 +280,24 @@ func TestCreateShadowWorktreeUsesBranch(t *testing.T) {
 		t.Fatalf("shadow worktree HEAD = %q, want %q", got, branch)
 	}
 }
+
+func TestIsConductorStep(t *testing.T) {
+	tests := []struct {
+		name   string
+		stepID string
+		want   bool
+	}{
+		{name: "exact", stepID: "conductor", want: true},
+		{name: "prefixed", stepID: "Conductor-plan", want: true},
+		{name: "worker", stepID: "worker-plan", want: false},
+		{name: "embedded", stepID: "worker-conductor", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isConductorStep(tt.stepID); got != tt.want {
+				t.Fatalf("isConductorStep(%q) = %v, want %v", tt.stepID, got, tt.want)
+			}
+		})
+	}
+}

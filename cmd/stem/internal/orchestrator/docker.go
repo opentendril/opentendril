@@ -30,11 +30,19 @@ type DockerOrchestrator struct {
 	SubstrateBranch string
 	StepID          string
 	StatusPath      string
+	IsCoordinator   bool
 	Genotype        string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
 	return &DockerOrchestrator{}
+}
+
+func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
+	if d != nil && d.IsCoordinator {
+		return llm.NewCoordinatorClientFromEnv()
+	}
+	return llm.NewClientFromEnv()
 }
 
 func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (string, error) {
@@ -150,7 +158,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 	defer session.Close()
 
-	agent, err := newAgent(ctx, mountPath, llm.NewClientFromEnv(), session)
+	agent, err := newAgent(ctx, mountPath, d.resolveLLMClient(), session)
 	if err != nil {
 		return "", err
 	}
