@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/opentendril/core/cmd/stem/internal/llm"
 	"gopkg.in/yaml.v3"
 )
 
@@ -730,6 +731,33 @@ func stepGenotype(stepID string) string {
 	}
 }
 
+func stepModelTier(stepID string) llm.ModelTier {
+	normalized := strings.ToLower(strings.TrimSpace(stepID))
+	switch {
+	case isConductorStep(stepID):
+		return llm.TierPremium
+	case strings.Contains(normalized, "verifier"):
+		return llm.TierStandard
+	case strings.Contains(normalized, "debugger"):
+		return llm.TierStandard
+	case strings.Contains(normalized, "compiler"):
+		return llm.TierStandard
+	case strings.Contains(normalized, "compile"):
+		return llm.TierStandard
+	default:
+		return llm.TierPremium
+	}
+}
+
+func newEpigeneticChroniclerForTier(workspace string, tier llm.ModelTier) *EpigeneticChronicler {
+	chronicler := NewEpigeneticChronicler(workspace)
+	if chronicler == nil {
+		return nil
+	}
+	chronicler.client = llm.NewClientForTier(tier)
+	return chronicler
+}
+
 func latestStepByID(steps []SequenceStep, id string) *SequenceStep {
 	for i := range steps {
 		if steps[i].ID == id {
@@ -970,6 +998,7 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isConductorStep(step.ID),
+		Tier:            stepModelTier(step.ID),
 		Genotype:        genotype,
 	}
 	return runSequenceSproutFn(ctx, orch, step.Transcript)
@@ -1052,6 +1081,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				SubstrateBranch:  branchName,
 				StepID:           step.ID,
 				IsCoordinator:    isConductorStep(step.ID),
+				Tier:             stepModelTier(step.ID),
 				Genotype:         genotype,
 				Temperature:      0.1 + float64(index)*0.3,
 				DisableMergeBack: true,
@@ -1306,7 +1336,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 
 	if gitDiff != "" && runErr == nil {
-		chronicler := NewEpigeneticChronicler(sourcePath)
+		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
 		if err := chronicler.TranscribeLearnings(ctx, agentResult.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}

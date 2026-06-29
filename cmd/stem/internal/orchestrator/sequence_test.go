@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/opentendril/core/cmd/stem/internal/llm"
 )
 
 func TestSequenceLoadSaveRoundTrip(t *testing.T) {
@@ -519,6 +521,28 @@ func TestIsConductorStep(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isConductorStep(tt.stepID); got != tt.want {
 				t.Fatalf("isConductorStep(%q) = %v, want %v", tt.stepID, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStepModelTier(t *testing.T) {
+	tests := []struct {
+		name   string
+		stepID string
+		want   llm.ModelTier
+	}{
+		{name: "conductor", stepID: "conductor", want: llm.TierPremium},
+		{name: "worker", stepID: "worker-sprout", want: llm.TierPremium},
+		{name: "verifier", stepID: "verifier-check", want: llm.TierStandard},
+		{name: "debugger", stepID: "recursive-debugger", want: llm.TierStandard},
+		{name: "compiler", stepID: "compiler-check", want: llm.TierStandard},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stepModelTier(tt.stepID); got != tt.want {
+				t.Fatalf("stepModelTier(%q) = %q, want %q", tt.stepID, got, tt.want)
 			}
 		})
 	}

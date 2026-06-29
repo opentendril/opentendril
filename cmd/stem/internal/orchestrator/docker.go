@@ -31,6 +31,7 @@ type DockerOrchestrator struct {
 	StepID           string
 	StatusPath       string
 	IsCoordinator    bool
+	Tier             llm.ModelTier
 	Genotype         string
 	Temperature      float64
 	DisableMergeBack bool
@@ -68,10 +69,14 @@ var (
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	var client *llm.Client
+	tier := llm.TierPremium
+	if d != nil && d.Tier != "" {
+		tier = d.Tier
+	}
 	if d != nil && d.IsCoordinator {
 		client = llm.NewCoordinatorClientFromEnv()
 	} else {
-		client = llm.NewClientFromEnv()
+		client = llm.NewClientForTier(tier)
 	}
 	if d != nil && d.Temperature > 0 {
 		client.SetTemperature(d.Temperature)
@@ -374,7 +379,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if gitDiff != "" {
-		chronicler := NewEpigeneticChronicler(sourcePath)
+		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
 		if err := chronicler.TranscribeLearnings(ctx, result.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}
