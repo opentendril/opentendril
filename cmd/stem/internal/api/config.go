@@ -193,6 +193,9 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Uploaded new AI Genotype: %s", name)
+	if err := syncGenotypeIndex(); err != nil {
+		log.Printf("Failed to sync genotype index after upload: %v", err)
+	}
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("Genotype saved successfully.\n"))
 }

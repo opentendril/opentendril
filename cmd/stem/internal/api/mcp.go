@@ -3,9 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 
 	"log"
 	"net/http"
@@ -17,11 +17,15 @@ import (
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"gopkg.in/yaml.v3"
 )
 
 type MCPHandler struct{}
 
 func NewMCPHandler() *MCPHandler {
+	if err := syncGenotypeIndex(); err != nil {
+		log.Printf("[MCP] Failed to sync genotype index on startup: %v", err)
+	}
 	return &MCPHandler{}
 }
 
@@ -94,26 +98,28 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		return nil
 
 	case "resources/list":
-		genotypesDir := "./.tendril/genotypes"
-		entries, err := os.ReadDir(genotypesDir)
-		if err != nil && !os.IsNotExist(err) {
-			return h.formatResult(req.ID, map[string]interface{}{"resources": []interface{}{}})
+		root := resolveRepoRoot("")
+		if err := syncGenotypeIndex(); err != nil {
+			log.Printf("[MCP] Failed to sync genotype index before listing resources: %v", err)
 		}
 
-		var resources []map[string]interface{}
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
-				name := strings.TrimSuffix(entry.Name(), ".json")
-				resources = append(resources, map[string]interface{}{
-					"uri":      "genotype://" + name,
-					"name":     name,
-					"mimeType": "application/json",
-				})
+		index, err := loadGenotypeIndex(root)
+		if err != nil {
+			log.Printf("[MCP] Failed to load genotype index: %v", err)
+			index, err = collectGenotypeIndex(root)
+			if err != nil {
+				log.Printf("[MCP] Failed to scan genotype metadata: %v", err)
 			}
 		}
 
-		if resources == nil {
-			resources = []map[string]interface{}{}
+		resources := make([]map[string]interface{}, 0, len(index.Genotypes))
+		for _, genotype := range index.Genotypes {
+			resources = append(resources, map[string]interface{}{
+				"uri":         "genotype://" + genotype.Name,
+				"name":        genotype.Name,
+				"description": genotype.Description,
+				"mimeType":    "application/json",
+			})
 		}
 
 		return h.formatResult(req.ID, map[string]interface{}{
@@ -137,7 +143,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.formatError(req.ID, -32602, "Invalid genotype name", nil)
 		}
 
-		filePath := filepath.Join("./.tendril/genotypes", name+".json")
+		root := resolveRepoRoot("")
+		filePath := filepath.Join(root, ".tendril", "genotypes", name+".json")
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -333,7 +340,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			}
 
 			root := resolveRepoRoot("")
-			sourcePath, destPath, alreadyActive, err := injectPlasmidIntoGenome(root, name)
+			sourcePath, destPath, alreadyActive, err := orchestrator.InjectPlasmidIntoGenome(root, name)
 			if err != nil {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
@@ -390,6 +397,9 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			}
 
 			log.Printf("[MCP] Dynamically created genotype: %s", name)
+			if err := syncGenotypeIndex(); err != nil {
+				log.Printf("[MCP] Failed to sync genotype index after createGenotype: %v", err)
+			}
 			return h.formatResult(req.ID, map[string]interface{}{
 				"content": []map[string]interface{}{
 					{
@@ -524,6 +534,139 @@ func (h *MCPHandler) formatError(id interface{}, code int, msg string, data inte
 	return b
 }
 
+type genotypeIndex struct {
+	Genotypes []genotypeIndexEntry `yaml:"genotypes"`
+}
+
+type genotypeIndexEntry struct {
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+}
+
+type genotypeMetadata struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description,omitempty"`
+	Instructions string   `json:"instructions"`
+	Plasmids     []string `json:"plasmids,omitempty"`
+}
+
+func syncGenotypeIndex() error {
+	root := resolveRepoRoot("")
+	index, err := collectGenotypeIndex(root)
+	if writeErr := writeGenotypeIndex(root, index); writeErr != nil {
+		return writeErr
+	}
+	return err
+}
+
+func collectGenotypeIndex(root string) (genotypeIndex, error) {
+	genotypesDir := filepath.Join(root, ".tendril", "genotypes")
+	entries, err := os.ReadDir(genotypesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return genotypeIndex{Genotypes: []genotypeIndexEntry{}}, nil
+		}
+		return genotypeIndex{}, fmt.Errorf("read genotypes directory: %w", err)
+	}
+
+	index := genotypeIndex{Genotypes: []genotypeIndexEntry{}}
+	var errs []error
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+
+		filePath := filepath.Join(genotypesDir, entry.Name())
+		content, err := os.ReadFile(filePath)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("read genotype %s: %w", entry.Name(), err))
+			continue
+		}
+
+		var genotype genotypeMetadata
+		if err := json.Unmarshal(content, &genotype); err != nil {
+			errs = append(errs, fmt.Errorf("decode genotype %s: %w", entry.Name(), err))
+			continue
+		}
+
+		name := strings.TrimSpace(genotype.Name)
+		if name == "" {
+			name = strings.TrimSuffix(entry.Name(), ".json")
+		}
+
+		description := strings.TrimSpace(genotype.Description)
+		if description == "" {
+			description = firstNWords(genotype.Instructions, 20)
+		}
+
+		index.Genotypes = append(index.Genotypes, genotypeIndexEntry{
+			Name:        name,
+			Description: description,
+		})
+	}
+
+	sort.Slice(index.Genotypes, func(i, j int) bool {
+		return strings.ToLower(index.Genotypes[i].Name) < strings.ToLower(index.Genotypes[j].Name)
+	})
+
+	return index, errors.Join(errs...)
+}
+
+func loadGenotypeIndex(root string) (genotypeIndex, error) {
+	indexPath := filepath.Join(root, ".tendril", "genotypes", "index.yaml")
+	content, err := os.ReadFile(indexPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return genotypeIndex{Genotypes: []genotypeIndexEntry{}}, nil
+		}
+		return genotypeIndex{}, fmt.Errorf("read genotype index: %w", err)
+	}
+
+	var index genotypeIndex
+	if err := yaml.Unmarshal(content, &index); err != nil {
+		return genotypeIndex{}, fmt.Errorf("decode genotype index: %w", err)
+	}
+
+	if index.Genotypes == nil {
+		index.Genotypes = []genotypeIndexEntry{}
+	}
+
+	return index, nil
+}
+
+func writeGenotypeIndex(root string, index genotypeIndex) error {
+	genotypesDir := filepath.Join(root, ".tendril", "genotypes")
+	if err := os.MkdirAll(genotypesDir, 0o755); err != nil {
+		return fmt.Errorf("create genotypes directory: %w", err)
+	}
+
+	content, err := yaml.Marshal(index)
+	if err != nil {
+		return fmt.Errorf("encode genotype index: %w", err)
+	}
+
+	indexPath := filepath.Join(genotypesDir, "index.yaml")
+	if err := os.WriteFile(indexPath, content, 0o644); err != nil {
+		return fmt.Errorf("write genotype index: %w", err)
+	}
+
+	return nil
+}
+
+func firstNWords(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+
+	words := strings.Fields(strings.TrimSpace(text))
+	if len(words) <= limit {
+		return strings.Join(words, " ")
+	}
+
+	return strings.Join(words[:limit], " ")
+}
+
 func resolveRepoRoot(path string) string {
 	if strings.TrimSpace(path) == "" {
 		wd, err := os.Getwd()
@@ -578,138 +721,6 @@ func readGenomeMarkdown(root string) (string, int, error) {
 	}
 
 	return strings.Join(parts, "\n\n"), len(files), nil
-}
-
-func injectPlasmidIntoGenome(root, name string) (string, string, bool, error) {
-	sourcePath, err := findPlasmidSource(root, name)
-	if err != nil {
-		return "", "", false, err
-	}
-
-	destDir := filepath.Join(root, ".tendril", "genome")
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
-		return "", "", false, fmt.Errorf("create genome directory: %w", err)
-	}
-
-	destPath := filepath.Join(destDir, filepath.Base(sourcePath))
-	if samePath(sourcePath, destPath) {
-		return sourcePath, destPath, true, nil
-	}
-
-	if err := copyMarkdownFile(sourcePath, destPath); err != nil {
-		return "", "", false, err
-	}
-
-	return sourcePath, destPath, false, nil
-}
-
-func findPlasmidSource(root, name string) (string, error) {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return "", fmt.Errorf("missing plasmid name")
-	}
-
-	if filepath.IsAbs(trimmed) {
-		if info, err := os.Stat(trimmed); err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(trimmed), ".md") {
-			return trimmed, nil
-		}
-	}
-
-	directCandidates := []string{
-		filepath.Join(root, trimmed),
-		filepath.Join(root, ".tendril", "genotypes", trimmed),
-		filepath.Join(root, ".tendril", "genotypes", "plasmids", trimmed),
-	}
-	if filepath.Ext(trimmed) == "" {
-		directCandidates = append(directCandidates,
-			filepath.Join(root, trimmed+".md"),
-			filepath.Join(root, ".tendril", "genotypes", trimmed+".md"),
-			filepath.Join(root, ".tendril", "genotypes", "plasmids", trimmed+".md"),
-		)
-	}
-
-	for _, candidate := range directCandidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && strings.HasSuffix(strings.ToLower(candidate), ".md") {
-			return candidate, nil
-		}
-	}
-
-	searchRoots := []string{
-		filepath.Join(root, ".tendril", "genotypes", "plasmids"),
-		filepath.Join(root, ".tendril", "genotypes"),
-	}
-	var matches []string
-	targetBase := strings.TrimSuffix(filepath.Base(trimmed), filepath.Ext(trimmed))
-
-	for _, searchRoot := range searchRoots {
-		if info, err := os.Stat(searchRoot); err != nil || !info.IsDir() {
-			continue
-		}
-
-		_ = filepath.WalkDir(searchRoot, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d.IsDir() || !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
-				return nil
-			}
-
-			base := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
-			rel, relErr := filepath.Rel(searchRoot, path)
-			if relErr != nil {
-				rel = path
-			}
-
-			if strings.EqualFold(d.Name(), filepath.Base(trimmed)) ||
-				strings.EqualFold(base, targetBase) ||
-				strings.EqualFold(rel, trimmed) ||
-				strings.EqualFold(strings.TrimSuffix(rel, filepath.Ext(rel)), strings.TrimSuffix(trimmed, filepath.Ext(trimmed))) {
-				matches = append(matches, path)
-			}
-
-			return nil
-		})
-	}
-
-	switch len(matches) {
-	case 0:
-		return "", fmt.Errorf("plasmid %q not found in .tendril/genotypes", trimmed)
-	case 1:
-		return matches[0], nil
-	default:
-		sort.Strings(matches)
-		return "", fmt.Errorf("plasmid %q is ambiguous; matches: %s", trimmed, strings.Join(matches, ", "))
-	}
-}
-
-func copyMarkdownFile(src, dst string) error {
-	info, err := os.Stat(src)
-	if err != nil {
-		return fmt.Errorf("stat plasmid source: %w", err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("plasmid source is a directory: %s", src)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return fmt.Errorf("create plasmid destination directory: %w", err)
-	}
-	_ = os.Remove(dst)
-
-	in, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("open plasmid source: %w", err)
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
-	if err != nil {
-		return fmt.Errorf("create plasmid destination: %w", err)
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return fmt.Errorf("copy plasmid: %w", err)
-	}
-
-	return nil
 }
 
 func summarizeSequenceResult(seq *orchestrator.Sequence) string {

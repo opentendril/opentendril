@@ -30,6 +30,7 @@ type DockerOrchestrator struct {
 	SubstrateBranch string
 	StepID          string
 	StatusPath      string
+	Genotype        string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -123,6 +124,11 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		}
 	} else {
 		fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git sandboxing disabled.\n", sourcePath)
+	}
+
+	// Stage genotype plasmids in the sandbox if active
+	if d.Genotype != "" {
+		stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype)
 	}
 
 	imageName := d.resolveImageName(mountPath)
@@ -1033,4 +1039,43 @@ func cloneForeignSubstrate(url, branch string) (string, error) {
 	}
 
 	return shadowPath, nil
+}
+
+func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
+	genotypePath := filepath.Join(sourcePath, ".tendril", "genotypes", genotypeName+".json")
+	content, err := os.ReadFile(genotypePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Failed to read genotype %s for plasmid staging: %v\n", genotypeName, err)
+		return
+	}
+
+	var metadata struct {
+		Plasmids []string `json:"plasmids"`
+	}
+	if err := json.Unmarshal(content, &metadata); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Failed to parse genotype %s JSON: %v\n", genotypeName, err)
+		return
+	}
+
+	for _, name := range metadata.Plasmids {
+		sourceFile, err := FindPlasmidSource(sourcePath, name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to locate plasmid %s: %v\n", name, err)
+			continue
+		}
+
+		destDir := filepath.Join(targetPath, ".tendril", "genome")
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to create sandbox genome directory: %v\n", err)
+			continue
+		}
+
+		destFile := filepath.Join(destDir, filepath.Base(sourceFile))
+		if err := CopyMarkdownFile(sourceFile, destFile); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to stage sandbox plasmid %s: %v\n", name, err)
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "🧬 Staged sandbox plasmid: %s -> %s\n", name, destFile)
+	}
 }

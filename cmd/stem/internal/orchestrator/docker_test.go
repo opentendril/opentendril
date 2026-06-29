@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,3 +185,66 @@ func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 		t.Fatalf("expected dirty repo after stash pop, got clean status")
 	}
 }
+
+func TestStagePlasmidsForGenotype(t *testing.T) {
+	root := t.TempDir()
+	genotypesDir := filepath.Join(root, ".tendril", "genotypes")
+	plasmidsDir := filepath.Join(genotypesDir, "plasmids")
+	if err := os.MkdirAll(plasmidsDir, 0o755); err != nil {
+		t.Fatalf("mkdir plasmids dir: %v", err)
+	}
+
+	writeJSONFile(t, filepath.Join(genotypesDir, "frontend-dev.json"), map[string]any{
+		"name":         "frontend-dev",
+		"instructions": "write React code",
+		"plasmids":     []string{"react-conventions", "tailwind-styling"},
+	})
+
+	reactContent := "# React Conventions\nUse functional components.\n"
+	tailwindContent := "# Tailwind Styling\nUse flexbox layouts.\n"
+
+	if err := os.WriteFile(filepath.Join(plasmidsDir, "react-conventions.md"), []byte(reactContent), 0o644); err != nil {
+		t.Fatalf("write react-conventions plasmid: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(plasmidsDir, "tailwind-styling.md"), []byte(tailwindContent), 0o644); err != nil {
+		t.Fatalf("write tailwind-styling plasmid: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	stagePlasmidsForGenotype(root, destRoot, "frontend-dev")
+
+	reactDest := filepath.Join(destRoot, ".tendril", "genome", "react-conventions.md")
+	tailwindDest := filepath.Join(destRoot, ".tendril", "genome", "tailwind-styling.md")
+
+	if _, err := os.Stat(reactDest); err != nil {
+		t.Fatalf("expected react-conventions plasmid to be staged in sandbox: %v", err)
+	}
+	if _, err := os.Stat(tailwindDest); err != nil {
+		t.Fatalf("expected tailwind-styling plasmid to be staged in sandbox: %v", err)
+	}
+
+	c1, _ := os.ReadFile(reactDest)
+	c2, _ := os.ReadFile(tailwindDest)
+
+	if string(c1) != reactContent {
+		t.Fatalf("react conventions content mismatch, got %q", string(c1))
+	}
+	if string(c2) != tailwindContent {
+		t.Fatalf("tailwind styling content mismatch, got %q", string(c2))
+	}
+}
+
+func writeJSONFile(t *testing.T, path string, payload map[string]any) {
+	t.Helper()
+
+	content, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal %s: %v", path, err)
+	}
+	content = append(content, '\n')
+
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
