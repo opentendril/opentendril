@@ -1306,7 +1306,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, err
 	}
 
-	session, err := startDockerSessionFn(ctx, imageName, mountPath)
+	session, err := startSandboxSessionFn(ctx, resolveSandboxProviderName(orch), imageName, mountPath)
 	if err != nil {
 		return result, err
 	}

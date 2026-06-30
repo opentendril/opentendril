@@ -19,6 +19,8 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/sandbox"
 )
 
+const sandboxProviderEnvKey = "TENDRIL_SANDBOX_PROVIDER"
+
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
 	ImageName        string
@@ -43,9 +45,9 @@ type tendrilRunner interface {
 }
 
 var (
-	ensureSproutImageFn  = ensureSproutImage
-	startDockerSessionFn = func(ctx context.Context, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
-		return startDockerSession(ctx, imageName, mountPath, extraEnv...)
+	ensureSproutImageFn   = ensureSproutImage
+	startSandboxSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
+		return startSandboxSession(ctx, providerName, imageName, mountPath, extraEnv...)
 	}
 	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (tendrilRunner, error) {
 		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session)
@@ -230,7 +232,8 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return "", err
 	}
 
-	session, err := startDockerSessionFn(ctx, imageName, mountPath, extraEnv...)
+	providerName := resolveSandboxProviderName(d)
+	session, err := startSandboxSessionFn(ctx, providerName, imageName, mountPath, extraEnv...)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -516,8 +519,12 @@ type sandboxToolSession struct {
 	sandbox sandbox.Sandbox
 }
 
-func startDockerSession(ctx context.Context, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
-	provider := sandbox.NewDockerProvider()
+func startSandboxSession(ctx context.Context, providerName, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
+	provider, err := sandbox.NewProvider(ctx, providerName)
+	if err != nil {
+		return nil, err
+	}
+
 	instance, err := provider.Create(ctx, sandbox.SandboxSpec{
 		Image:          imageName,
 		WorkingDir:     "/app",
@@ -541,6 +548,22 @@ func startDockerSession(ctx context.Context, imageName string, mountPath string,
 	}
 
 	return &sandboxToolSession{sandbox: instance}, nil
+}
+
+func resolveSandboxProviderName(d *DockerOrchestrator) string {
+	if providerName := strings.TrimSpace(os.Getenv(sandboxProviderEnvKey)); providerName != "" {
+		return providerName
+	}
+	if d == nil {
+		return sandbox.ProviderDocker
+	}
+
+	switch strings.ToLower(strings.TrimSpace(d.Substrate)) {
+	case sandbox.ProviderDocker, sandbox.ProviderGVisor:
+		return strings.ToLower(strings.TrimSpace(d.Substrate))
+	default:
+		return sandbox.ProviderDocker
+	}
 }
 
 func (s *sandboxToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {

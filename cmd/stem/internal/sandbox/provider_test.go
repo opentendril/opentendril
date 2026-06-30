@@ -293,6 +293,13 @@ case "$cmd" in
       printf '%s\n' "$response"
     done
     ;;
+  info)
+    if [ -n "${FAKE_DOCKER_RUNSC_READY:-}" ]; then
+      printf 'runsc\n'
+    else
+      printf '<no value>\n'
+    fi
+    ;;
   exec)
     sandbox_id="${1:-}"
     if [ "$#" -gt 0 ]; then
@@ -346,6 +353,12 @@ func newTestSandbox(t *testing.T) Sandbox {
 	t.Helper()
 
 	provider := NewDockerProvider()
+	return newTestSandboxWithProvider(t, provider)
+}
+
+func newTestSandboxWithProvider(t *testing.T, provider SandboxProvider) Sandbox {
+	t.Helper()
+
 	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
 		Image:       "opentendril-go:latest",
 		WorkingDir:  "/app",
@@ -394,5 +407,349 @@ func assertCommandMetrics(t *testing.T, result CommandResult) {
 	}
 	if result.Duration <= 0 {
 		t.Fatalf("Duration = %s, want > 0", result.Duration)
+	}
+}
+
+func TestGVisorProviderCreateHonorsSandboxSpec(t *testing.T) {
+	testProviderCreateHonorsSandboxSpec(t, NewGVisorProvider(), ProviderGVisor, "--runtime=runsc")
+}
+
+func TestGVisorProviderCreateDefaultsToPidsLimit(t *testing.T) {
+	testProviderCreateDefaultsToPidsLimit(t, NewGVisorProvider())
+}
+
+func TestGVisorSandboxRunReturnsMetrics(t *testing.T) {
+	testProviderRunReturnsMetrics(t, NewGVisorProvider())
+}
+
+func TestGVisorSandboxRunTimeoutStopsSandbox(t *testing.T) {
+	testProviderRunTimeoutStopsSandbox(t, NewGVisorProvider())
+}
+
+func TestGVisorSandboxWatchdogStopsExpiredSandbox(t *testing.T) {
+	testProviderWatchdogStopsExpiredSandbox(t, NewGVisorProvider())
+}
+
+func TestGVisorSandboxCopyInCopyOutAndStop(t *testing.T) {
+	testProviderCopyInCopyOutAndStop(t, NewGVisorProvider())
+}
+
+func TestCheckGVisorReadiness(t *testing.T) {
+	t.Run("missing runtime", func(t *testing.T) {
+		fake := installFakeDocker(t)
+		t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+		err := CheckGVisorReadiness(context.Background())
+		if err == nil {
+			t.Fatal("CheckGVisorReadiness returned nil, want error")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "runsc") {
+			t.Fatalf("CheckGVisorReadiness error = %q, want runsc mention", err)
+		}
+	})
+
+	t.Run("available", func(t *testing.T) {
+		fake := installFakeDocker(t)
+		t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("FAKE_DOCKER_RUNSC_READY", "1")
+
+		if err := CheckGVisorReadiness(context.Background()); err != nil {
+			t.Fatalf("CheckGVisorReadiness returned error: %v", err)
+		}
+	})
+}
+
+func TestNewProviderResolvesSandboxProviders(t *testing.T) {
+	t.Run("defaults to docker", func(t *testing.T) {
+		provider, err := NewProvider(context.Background(), "")
+		if err != nil {
+			t.Fatalf("NewProvider returned error: %v", err)
+		}
+		if provider == nil {
+			t.Fatal("NewProvider returned nil provider")
+		}
+		if provider.Name() != ProviderDocker {
+			t.Fatalf("provider.Name() = %q, want %q", provider.Name(), ProviderDocker)
+		}
+	})
+
+	t.Run("selects gvisor when ready", func(t *testing.T) {
+		fake := installFakeDocker(t)
+		t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("FAKE_DOCKER_RUNSC_READY", "1")
+
+		provider, err := NewProvider(context.Background(), ProviderGVisor)
+		if err != nil {
+			t.Fatalf("NewProvider returned error: %v", err)
+		}
+		if provider == nil {
+			t.Fatal("NewProvider returned nil provider")
+		}
+		if provider.Name() != ProviderGVisor {
+			t.Fatalf("provider.Name() = %q, want %q", provider.Name(), ProviderGVisor)
+		}
+	})
+
+	t.Run("rejects unknown provider", func(t *testing.T) {
+		if _, err := NewProvider(context.Background(), "unknown"); err == nil {
+			t.Fatal("NewProvider returned nil error for unknown provider")
+		}
+	})
+}
+
+func testProviderCreateHonorsSandboxSpec(t *testing.T, provider SandboxProvider, expectedName string, extraNeedles ...string) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	envFile := filepath.Join(t.TempDir(), "sandbox.env")
+	if err := os.WriteFile(envFile, []byte("EXAMPLE=value\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	t.Setenv("TENDRIL_ENV_FILE", envFile)
+
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Image:          "opentendril-go:latest",
+		WorkingDir:     "/app",
+		NetworkMode:    NetworkModeBridge,
+		RunAsUser:      "1000:1000",
+		CPUQuota:       "1.5",
+		MemoryLimitMB:  1024,
+		ReadOnlyRootFS: true,
+		PidsLimit:      128,
+		Mounts: []MountSpec{
+			{Source: "/tmp/workspace", Target: "/app"},
+			{Source: "/tmp/cache", Target: "/cache", ReadOnly: true},
+		},
+		Environment: map[string]string{
+			"FIRST":  "1",
+			"SECOND": "2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	if provider.Name() != expectedName {
+		t.Fatalf("provider.Name() = %q, want %s", provider.Name(), expectedName)
+	}
+	capabilities := provider.Capabilities()
+	if !capabilities.SupportsMounts || !capabilities.SupportsCopyIn || !capabilities.SupportsCopyOut || !capabilities.SupportsInteractiveIO {
+		t.Fatalf("unexpected capabilities: %#v", capabilities)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i")
+	for _, needle := range append([]string{
+		"--network none",
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges:true",
+		"--cpus 1.5",
+		"--memory 1024m",
+		"--pids-limit 128",
+		"--read-only",
+		"--user 1000:1000",
+		"-v /tmp/workspace:/app",
+		"-v /tmp/cache:/cache:ro",
+		"--env-file " + envFile,
+		"-e FIRST=1",
+		"-e SECOND=2",
+		"-w /app",
+		"opentendril-go:latest",
+	}, extraNeedles...) {
+		if !strings.Contains(logOutput, needle) {
+			t.Fatalf("docker run args missing %q in log %q", needle, logOutput)
+		}
+	}
+}
+
+func testProviderCreateDefaultsToPidsLimit(t *testing.T, provider SandboxProvider) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	sandboxInstance := newTestSandboxWithProvider(t, provider)
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i")
+	if !strings.Contains(logOutput, "--pids-limit 512") {
+		t.Fatalf("docker run args missing default pids limit in log %q", logOutput)
+	}
+}
+
+func testProviderRunReturnsMetrics(t *testing.T, provider SandboxProvider) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_RESPONSE", `{"status":"success","output":{"tools":[]}}`)
+	t.Setenv("FAKE_DOCKER_EXEC_STDOUT", "exec-stdout")
+	t.Setenv("FAKE_DOCKER_EXEC_STDERR", "exec-stderr")
+	t.Setenv("FAKE_DOCKER_EXEC_EXIT_CODE", "7")
+
+	sandboxInstance := newTestSandboxWithProvider(t, provider)
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	interactiveResult, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Stdin: []byte(`{"tool":"listAvailableTools","arguments":{}}`),
+	})
+	if err != nil {
+		t.Fatalf("interactive Run returned error: %v", err)
+	}
+	if interactiveResult.Stdout != `{"status":"success","output":{"tools":[]}}` {
+		t.Fatalf("interactive stdout = %q", interactiveResult.Stdout)
+	}
+	if interactiveResult.ExitCode != 0 {
+		t.Fatalf("interactive exit code = %d, want 0", interactiveResult.ExitCode)
+	}
+	assertCommandMetrics(t, interactiveResult)
+
+	execResult, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sh", "-lc", "echo hi"},
+	})
+	if err != nil {
+		t.Fatalf("exec Run returned error: %v", err)
+	}
+	if execResult.Stdout != "exec-stdout" {
+		t.Fatalf("exec stdout = %q, want exec-stdout", execResult.Stdout)
+	}
+	if execResult.Stderr != "exec-stderr" {
+		t.Fatalf("exec stderr = %q, want exec-stderr", execResult.Stderr)
+	}
+	if execResult.ExitCode != 7 {
+		t.Fatalf("exec exit code = %d, want 7", execResult.ExitCode)
+	}
+	assertCommandMetrics(t, execResult)
+
+	stdinLog, err := os.ReadFile(fake.stdinPath)
+	if err != nil {
+		t.Fatalf("read stdin log: %v", err)
+	}
+	if !strings.Contains(string(stdinLog), `{"tool":"listAvailableTools","arguments":{}}`) {
+		t.Fatalf("stdin log missing tool payload: %s", string(stdinLog))
+	}
+
+	logs, err := sandboxInstance.SnapshotLogs(context.Background())
+	if err != nil {
+		t.Fatalf("SnapshotLogs returned error: %v", err)
+	}
+	if !strings.Contains(logs.Stdout, `{"status":"success","output":{"tools":[]}}`) {
+		t.Fatalf("stdout logs missing interactive response: %q", logs.Stdout)
+	}
+	if !strings.Contains(logs.Stderr, "sandbox stderr ready") {
+		t.Fatalf("stderr logs missing sandbox boot output: %q", logs.Stderr)
+	}
+}
+
+func testProviderRunTimeoutStopsSandbox(t *testing.T, provider SandboxProvider) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_EXEC_SLEEP", "1")
+
+	sandboxInstance := newTestSandboxWithProvider(t, provider)
+
+	result, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sh", "-lc", "sleep 60"},
+		Timeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.TimedOut {
+		t.Fatalf("TimedOut = false, want true")
+	}
+	if result.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", result.ExitCode)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	if !strings.Contains(logOutput, "stop opentendril-sandbox-") {
+		t.Fatalf("timeout did not stop sandbox, log %q", logOutput)
+	}
+}
+
+func testProviderWatchdogStopsExpiredSandbox(t *testing.T, provider SandboxProvider) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Image:     "opentendril-go:latest",
+		Timeout:   50 * time.Millisecond,
+		PidsLimit: 64,
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	if !strings.Contains(logOutput, "stop opentendril-sandbox-") {
+		t.Fatalf("watchdog did not stop sandbox, log %q", logOutput)
+	}
+}
+
+func testProviderCopyInCopyOutAndStop(t *testing.T, provider SandboxProvider) {
+	t.Helper()
+
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_COPYOUT_CONTENT", "artifact-data")
+
+	sandboxInstance := newTestSandboxWithProvider(t, provider)
+
+	if err := sandboxInstance.CopyIn(context.Background(), []FilePayload{
+		{
+			Path:    "nested/result.txt",
+			Content: []byte("hello sandbox"),
+			Mode:    0o640,
+		},
+	}); err != nil {
+		t.Fatalf("CopyIn returned error: %v", err)
+	}
+
+	artifacts, err := sandboxInstance.CopyOut(context.Background(), []string{"nested/result.txt"})
+	if err != nil {
+		t.Fatalf("CopyOut returned error: %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("CopyOut returned %d artifacts, want 1", len(artifacts))
+	}
+	if artifacts[0].Path != "nested/result.txt" {
+		t.Fatalf("artifact path = %q, want nested/result.txt", artifacts[0].Path)
+	}
+	if string(artifacts[0].Content) != "artifact-data" {
+		t.Fatalf("artifact content = %q, want artifact-data", string(artifacts[0].Content))
+	}
+
+	if err := sandboxInstance.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	for _, needle := range []string{
+		"exec opentendril-sandbox-",
+		"mkdir -p /app/nested",
+		"cp ",
+		"nested/result.txt",
+		"stop opentendril-sandbox-",
+		"rm opentendril-sandbox-",
+	} {
+		if !strings.Contains(logOutput, needle) {
+			t.Fatalf("docker lifecycle log missing %q in %q", needle, logOutput)
+		}
 	}
 }
