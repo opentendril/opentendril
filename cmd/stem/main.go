@@ -5,7 +5,7 @@
 //   tendril init  - Run the Developer Onboarding Wizard
 //   tendril serve - Start the Go Stem Orchestrator API
 //   tendril adapt - Mine recent git history into the genome
-//   tendril genome - Inspect or reduce the active genome
+//   tendril genome - Inspect, reduce, or evolve the active genome
 //   tendril plasmid - List or inject modular genome seeds
 //   tendril repomap - Generate the active repository map
 //   tendril sequence - Run or list YAML task sequences
@@ -79,7 +79,7 @@ func printUsage() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  chat    Start the interactive chat interface")
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
-	fmt.Println("  genome  Inspect or reduce the active genome seeds")
+	fmt.Println("  genome  Inspect, reduce, or evolve the active genome seeds")
 	fmt.Println("  plasmid Manage modular genome plasmids")
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")

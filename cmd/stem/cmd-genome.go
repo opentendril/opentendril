@@ -22,6 +22,8 @@ func runGenomeCmd(ctx context.Context, args []string) {
 		runGenomeViewCmd()
 	case "reduce":
 		runGenomeReduceCmd(ctx)
+	case "evolve":
+		runGenomeEvolveCmd(ctx)
 	case "-h", "--help", "help":
 		printGenomeUsage()
 	default:
@@ -87,8 +89,19 @@ func runGenomeReduceCmd(ctx context.Context) {
 	fmt.Printf("✅ Reduced genome at %s\n", filepath.Join(root, ".tendril", "genome", "epigenetics.md"))
 }
 
+func runGenomeEvolveCmd(ctx context.Context) {
+	root := resolveRepoRoot("")
+	if err := orchestrator.EvolveGenome(ctx, root); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to evolve genome: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Evolved genome at %s\n", filepath.Join(root, ".tendril", "genome", "epigenetics.md"))
+}
+
 func printGenomeUsage() {
-	fmt.Println("Usage: tendril genome <view|reduce>")
+	fmt.Println("Usage: tendril genome <view|reduce|evolve>")
 	fmt.Println("  view    Print the active genome seeds in alphabetical order")
 	fmt.Println("  reduce  Consolidate .tendril/genome/epigenetics.md in place")
+	fmt.Println("  evolve  Prune low-fitness genome material and rewrite epigenetics.md")
 }
