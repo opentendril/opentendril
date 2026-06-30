@@ -495,6 +495,232 @@ func TestNewProviderResolvesSandboxProviders(t *testing.T) {
 			t.Fatal("NewProvider returned nil error for unknown provider")
 		}
 	})
+
+	t.Run("selects firecracker when ready", func(t *testing.T) {
+		if err := CheckFirecrackerReadiness(context.Background()); err != nil {
+			t.Skipf("firecracker not available: %v", err)
+		}
+
+		provider, err := NewProvider(context.Background(), ProviderFirecracker)
+		if err != nil {
+			t.Fatalf("NewProvider returned error: %v", err)
+		}
+		if provider == nil {
+			t.Fatal("NewProvider returned nil provider")
+		}
+		if provider.Name() != ProviderFirecracker {
+			t.Fatalf("provider.Name() = %q, want %q", provider.Name(), ProviderFirecracker)
+		}
+	})
+}
+
+func TestCheckFirecrackerReadiness(t *testing.T) {
+	t.Run("missing binary", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		t.Setenv("TENDRIL_FC_KERNEL_PATH", "/tmp/vmlinux")
+		t.Setenv("TENDRIL_FC_ROOTFS_PATH", "/tmp/rootfs.ext4")
+
+		err := CheckFirecrackerReadiness(context.Background())
+		if err == nil {
+			t.Fatal("CheckFirecrackerReadiness returned nil, want error")
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "firecracker") {
+			t.Fatalf("CheckFirecrackerReadiness error = %q, want firecracker mention", err)
+		}
+	})
+
+	t.Run("missing kernel path", func(t *testing.T) {
+		fakeBin := installFakeFirecrackerBinary(t)
+		t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("TENDRIL_FC_KERNEL_PATH", "")
+		t.Setenv("TENDRIL_FC_ROOTFS_PATH", "/tmp/rootfs.ext4")
+
+		err := CheckFirecrackerReadiness(context.Background())
+		if err == nil {
+			t.Fatal("CheckFirecrackerReadiness returned nil, want error")
+		}
+		if !strings.Contains(err.Error(), "TENDRIL_FC_KERNEL_PATH") {
+			t.Fatalf("error = %q, want TENDRIL_FC_KERNEL_PATH mention", err)
+		}
+	})
+
+	t.Run("missing rootfs path", func(t *testing.T) {
+		fakeBin := installFakeFirecrackerBinary(t)
+		t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		t.Setenv("TENDRIL_FC_KERNEL_PATH", "/tmp/vmlinux")
+		t.Setenv("TENDRIL_FC_ROOTFS_PATH", "")
+
+		err := CheckFirecrackerReadiness(context.Background())
+		if err == nil {
+			t.Fatal("CheckFirecrackerReadiness returned nil, want error")
+		}
+		if !strings.Contains(err.Error(), "TENDRIL_FC_ROOTFS_PATH") {
+			t.Fatalf("error = %q, want TENDRIL_FC_ROOTFS_PATH mention", err)
+		}
+	})
+}
+
+// TestFirecrackerProvider* are integration tests that require KVM, the
+// firecracker binary, and TENDRIL_FC_KERNEL_PATH/TENDRIL_FC_ROOTFS_PATH.
+// They are automatically skipped when the environment does not support them.
+
+func TestFirecrackerProviderRunExec(t *testing.T) {
+	skipIfFirecrackerUnavailable(t)
+
+	provider := NewFirecrackerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		WorkingDir: "/root",
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = sandboxInstance.Stop(context.Background()) })
+
+	result, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"echo", "hello-firecracker"},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if strings.TrimSpace(result.Stdout) != "hello-firecracker" {
+		t.Fatalf("stdout = %q, want hello-firecracker", result.Stdout)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", result.ExitCode)
+	}
+	assertCommandMetrics(t, result)
+}
+
+func TestFirecrackerProviderRunExitCode(t *testing.T) {
+	skipIfFirecrackerUnavailable(t)
+
+	provider := NewFirecrackerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = sandboxInstance.Stop(context.Background()) })
+
+	result, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sh", "-c", "exit 42"},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if result.ExitCode != 42 {
+		t.Fatalf("exit code = %d, want 42", result.ExitCode)
+	}
+}
+
+func TestFirecrackerProviderRunTimeoutStopsSandbox(t *testing.T) {
+	skipIfFirecrackerUnavailable(t)
+
+	provider := NewFirecrackerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+
+	result, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sleep", "60"},
+		Timeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.TimedOut {
+		t.Fatalf("TimedOut = false, want true")
+	}
+	if result.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", result.ExitCode)
+	}
+}
+
+func TestFirecrackerProviderWatchdogStopsExpiredSandbox(t *testing.T) {
+	skipIfFirecrackerUnavailable(t)
+
+	provider := NewFirecrackerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Timeout: 100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = sandboxInstance.Stop(context.Background()) })
+
+	// The watchdog should kill the VM; a subsequent Run should fail.
+	time.Sleep(300 * time.Millisecond)
+	_, err = sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"echo", "hi"},
+	})
+	if err == nil {
+		t.Fatal("expected Run to fail after watchdog killed sandbox, got nil error")
+	}
+}
+
+func TestFirecrackerProviderCopyInCopyOut(t *testing.T) {
+	skipIfFirecrackerUnavailable(t)
+
+	provider := NewFirecrackerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		WorkingDir: "/root",
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = sandboxInstance.Stop(context.Background()) })
+
+	if err := sandboxInstance.CopyIn(context.Background(), []FilePayload{
+		{Path: "result.txt", Content: []byte("fc-artifact"), Mode: 0o640},
+	}); err != nil {
+		t.Fatalf("CopyIn returned error: %v", err)
+	}
+
+	artifacts, err := sandboxInstance.CopyOut(context.Background(), []string{"result.txt"})
+	if err != nil {
+		t.Fatalf("CopyOut returned error: %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("CopyOut returned %d artifacts, want 1", len(artifacts))
+	}
+	if string(artifacts[0].Content) != "fc-artifact" {
+		t.Fatalf("artifact content = %q, want fc-artifact", string(artifacts[0].Content))
+	}
+}
+
+func TestFirecrackerProviderCapabilities(t *testing.T) {
+	provider := NewFirecrackerProvider()
+	if provider.Name() != ProviderFirecracker {
+		t.Fatalf("Name() = %q, want %q", provider.Name(), ProviderFirecracker)
+	}
+	caps := provider.Capabilities()
+	if !caps.SupportsCopyIn {
+		t.Fatal("expected SupportsCopyIn = true")
+	}
+	if !caps.SupportsCopyOut {
+		t.Fatal("expected SupportsCopyOut = true")
+	}
+	if caps.SupportsInteractiveIO {
+		t.Fatal("expected SupportsInteractiveIO = false for firecracker provider")
+	}
+}
+
+func skipIfFirecrackerUnavailable(t *testing.T) {
+	t.Helper()
+	if err := CheckFirecrackerReadiness(context.Background()); err != nil {
+		t.Skipf("firecracker not available: %v", err)
+	}
+}
+
+func installFakeFirecrackerBinary(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	fcPath := filepath.Join(dir, "firecracker")
+	if err := os.WriteFile(fcPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake firecracker binary: %v", err)
+	}
+	return dir
 }
 
 func testProviderCreateHonorsSandboxSpec(t *testing.T, provider SandboxProvider, expectedName string, extraNeedles ...string) {

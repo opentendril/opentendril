@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	ProviderDocker = "docker"
-	ProviderGVisor = "gvisor"
+	ProviderDocker      = "docker"
+	ProviderGVisor      = "gvisor"
+	ProviderFirecracker = "firecracker"
 )
 
 // NewProvider resolves a sandbox provider from configuration or defaults to Docker.
@@ -21,6 +22,11 @@ func NewProvider(ctx context.Context, name string) (SandboxProvider, error) {
 			return nil, fmt.Errorf("gvisor provider is unavailable: %w", err)
 		}
 		return NewGVisorProvider(), nil
+	case ProviderFirecracker:
+		if err := CheckFirecrackerReadiness(ctx); err != nil {
+			return nil, fmt.Errorf("firecracker provider is unavailable: %w", err)
+		}
+		return NewFirecrackerProvider(), nil
 	default:
 		return nil, fmt.Errorf("unsupported sandbox provider %q", strings.TrimSpace(name))
 	}
