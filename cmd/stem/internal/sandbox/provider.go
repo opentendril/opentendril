@@ -44,13 +44,19 @@ const (
 
 // SandboxSpec defines the initial configuration for a sandbox.
 type SandboxSpec struct {
-	Image       string
-	Command     []string
-	WorkingDir  string
-	Environment map[string]string
-	NetworkMode NetworkMode
-	Mounts      []MountSpec
-	Files       []FilePayload
+	Image          string
+	Command        []string
+	WorkingDir     string
+	Environment    map[string]string
+	NetworkMode    NetworkMode
+	Mounts         []MountSpec
+	Files          []FilePayload
+	RunAsUser      string
+	CPUQuota       string
+	MemoryLimitMB  int
+	ReadOnlyRootFS bool
+	PidsLimit      int
+	Timeout        time.Duration
 }
 
 // CommandSpec describes a command or interactive payload to execute.
@@ -59,6 +65,7 @@ type CommandSpec struct {
 	WorkingDir  string
 	Environment map[string]string
 	Stdin       []byte
+	Timeout     time.Duration
 }
 
 // CommandResult captures execution outputs and timing metrics.
@@ -66,6 +73,7 @@ type CommandResult struct {
 	Stdout      string
 	Stderr      string
 	ExitCode    int
+	TimedOut    bool
 	StartedAt   time.Time
 	CompletedAt time.Time
 	Duration    time.Duration

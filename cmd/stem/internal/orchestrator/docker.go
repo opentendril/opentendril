@@ -519,9 +519,15 @@ type sandboxToolSession struct {
 func startDockerSession(ctx context.Context, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
 	provider := sandbox.NewDockerProvider()
 	instance, err := provider.Create(ctx, sandbox.SandboxSpec{
-		Image:       imageName,
-		WorkingDir:  "/app",
-		NetworkMode: sandbox.NetworkMode("opentendril-default"),
+		Image:          imageName,
+		WorkingDir:     "/app",
+		NetworkMode:    sandbox.NetworkModeNone,
+		RunAsUser:      "1000:1000",
+		CPUQuota:       "1.0",
+		MemoryLimitMB:  2048,
+		ReadOnlyRootFS: false,
+		PidsLimit:      512,
+		Timeout:        10 * time.Minute,
 		Mounts: []sandbox.MountSpec{
 			{
 				Source: mountPath,
