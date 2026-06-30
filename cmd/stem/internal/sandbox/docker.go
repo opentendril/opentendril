@@ -29,10 +29,18 @@ func NewDockerProvider() *DockerProvider {
 }
 
 func (p *DockerProvider) Name() string {
-	return "docker"
+	return ProviderDocker
 }
 
 func (p *DockerProvider) Capabilities() SandboxCapabilities {
+	return defaultSandboxCapabilities()
+}
+
+func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox, error) {
+	return createDockerSandbox(ctx, p, spec)
+}
+
+func defaultSandboxCapabilities() SandboxCapabilities {
 	return SandboxCapabilities{
 		SupportsMounts:        true,
 		SupportsCopyIn:        true,
@@ -46,9 +54,12 @@ func (p *DockerProvider) Capabilities() SandboxCapabilities {
 	}
 }
 
-func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox, error) {
+func createDockerSandbox(ctx context.Context, provider SandboxProvider, spec SandboxSpec, extraRunArgs ...string) (Sandbox, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if provider == nil {
+		provider = NewDockerProvider()
 	}
 	if strings.TrimSpace(spec.Image) == "" {
 		return nil, fmt.Errorf("sandbox image is required")
@@ -62,11 +73,14 @@ func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox,
 	args := []string{
 		"run",
 		"-i",
+	}
+	args = append(args, extraRunArgs...)
+	args = append(args,
 		"--name", sandboxID,
 		"--network", string(NetworkModeNone),
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges:true",
-	}
+	)
 	if cpuQuota := strings.TrimSpace(spec.CPUQuota); cpuQuota != "" && cpuQuota != "0" && cpuQuota != "0.0" {
 		args = append(args, "--cpus", cpuQuota)
 	}
@@ -140,7 +154,7 @@ func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox,
 	}
 
 	sandbox := &dockerSandbox{
-		provider:   p,
+		provider:   provider,
 		id:         sandboxID,
 		workingDir: strings.TrimSpace(spec.WorkingDir),
 		cmd:        cmd,
@@ -173,7 +187,7 @@ func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox,
 }
 
 type dockerSandbox struct {
-	provider   *DockerProvider
+	provider   SandboxProvider
 	id         string
 	workingDir string
 

@@ -236,7 +236,7 @@ substrates:
 `, root))
 
 	originalEnsure := ensureSproutImageFn
-	originalStart := startDockerSessionFn
+	originalStart := startSandboxSessionFn
 	originalNewAgent := newAgentFn
 	originalStash := stashHostWorkspaceFn
 	originalRestore := restoreHostStashFn
@@ -251,7 +251,7 @@ substrates:
 
 	t.Cleanup(func() {
 		ensureSproutImageFn = originalEnsure
-		startDockerSessionFn = originalStart
+		startSandboxSessionFn = originalStart
 		newAgentFn = originalNewAgent
 		stashHostWorkspaceFn = originalStash
 		restoreHostStashFn = originalRestore
@@ -270,7 +270,7 @@ substrates:
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error {
 		return nil
 	}
-	startDockerSessionFn = func(ctx context.Context, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
+	startSandboxSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
 		capturedExtraEnv = append([]string{}, extraEnv...)
 		repoMapPath := filepath.Join(mountPath, ".tendril", "genome", "repomap.md")
 		content, err := os.ReadFile(repoMapPath)
