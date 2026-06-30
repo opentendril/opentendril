@@ -2,11 +2,15 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -22,10 +26,23 @@ const (
 	genomeCharsPerToken     = 4
 )
 
+const (
+	genomicFitnessFilename         = "fitness.json"
+	genomicEpigeneticsFilename     = "epigenetics.md"
+	genomicPlasmidDisableThreshold = -5
+	genomicRulePruneThreshold      = -3
+)
+
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
 type EpigeneticChronicler struct {
 	workspace string
 	client    *llm.Client
+}
+
+// GenomicFitness tracks reinforcement scores for rules and active plasmids.
+type GenomicFitness struct {
+	Rules    map[string]int `json:"rules"`
+	Plasmids map[string]int `json:"plasmids"`
 }
 
 // NewEpigeneticChronicler constructs a chronicler for the provided workspace.
@@ -105,6 +122,111 @@ func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) error {
 	return nil
 }
 
+// RecordGenomicFitness reinforces genome rules and active plasmids after a sprout run.
+func RecordGenomicFitness(workspace string, success bool) error {
+	workspace = repoRoot(workspace)
+	genomeDir := filepath.Join(workspace, ".tendril", "genome")
+	fitnessPath := filepath.Join(genomeDir, genomicFitnessFilename)
+
+	fitness, err := loadGenomicFitness(fitnessPath)
+	if err != nil {
+		return err
+	}
+
+	genomeFiles, err := listGenomeMarkdownFiles(genomeDir)
+	if err != nil {
+		return err
+	}
+
+	delta := -1
+	if success {
+		delta = 1
+	}
+
+	for _, path := range genomeFiles {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read genome file %s: %w", path, err)
+		}
+
+		for _, rule := range extractGenomeRules(string(content)) {
+			fitness.Rules[rule] += delta
+		}
+
+		if isActiveGenomePlasmid(path) {
+			fitness.Plasmids[filepath.Base(path)] += delta
+		}
+	}
+
+	return saveGenomicFitness(fitnessPath, fitness)
+}
+
+// EvolveGenome prunes low-fitness genome material and rewrites the active epigenetic rules.
+func EvolveGenome(ctx context.Context, workspace string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	workspace = repoRoot(workspace)
+	genomeDir := filepath.Join(workspace, ".tendril", "genome")
+	fitnessPath := filepath.Join(genomeDir, genomicFitnessFilename)
+	epigeneticsPath := filepath.Join(genomeDir, genomicEpigeneticsFilename)
+
+	fitness, err := loadGenomicFitness(fitnessPath)
+	if err != nil {
+		return err
+	}
+
+	content, err := os.ReadFile(epigeneticsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("epigenetic genome not found at %s", epigeneticsPath)
+		}
+		return fmt.Errorf("read epigenetic genome: %w", err)
+	}
+
+	genomeFiles, err := listGenomeMarkdownFiles(genomeDir)
+	if err != nil {
+		return err
+	}
+
+	for _, path := range genomeFiles {
+		if !isActiveGenomePlasmid(path) {
+			continue
+		}
+
+		score := fitness.Plasmids[filepath.Base(path)]
+		if score > genomicPlasmidDisableThreshold {
+			continue
+		}
+
+		if _, disableErr := disableGenomePlasmid(path); disableErr != nil {
+			return disableErr
+		}
+	}
+
+	remainingRules := filterGenomeRules(string(content), fitness.Rules)
+	systemPrompt, userPrompt := buildGenomeEvolutionPrompt(remainingRules)
+	evolvedGenome, err := callGenomeEvolutionPrompt(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return err
+	}
+
+	evolvedGenome = normalizeMarkdownBullets(evolvedGenome)
+	if strings.TrimSpace(evolvedGenome) == "" {
+		return fmt.Errorf("LLM returned no genome evolution output")
+	}
+
+	if err := os.MkdirAll(genomeDir, 0o755); err != nil {
+		return fmt.Errorf("create genome directory: %w", err)
+	}
+	if err := os.WriteFile(epigeneticsPath, []byte(evolvedGenome+"\n"), 0o644); err != nil {
+		return fmt.Errorf("write evolved epigenetic genome: %w", err)
+	}
+
+	return nil
+}
+
 func buildEpigeneticPrompt(transcript string, diff string, logs string) (string, string) {
 	transcript = truncateMiddle(strings.TrimSpace(transcript), defaultMaxSection)
 	diff = truncateMiddle(strings.TrimSpace(diff), defaultMaxSection)
@@ -161,6 +283,49 @@ Genome content:
 `, existing)
 
 	return systemPrompt, strings.TrimSpace(userPrompt)
+}
+
+func buildGenomeEvolutionPrompt(remainingRules []string) (string, string) {
+	rulesBlock := "No active rules remain."
+	if len(remainingRules) > 0 {
+		bullets := make([]string, 0, len(remainingRules))
+		for _, rule := range remainingRules {
+			bullets = append(bullets, "- "+rule)
+		}
+		rulesBlock = truncateMiddle(strings.Join(bullets, "\n"), defaultMaxSection)
+	}
+
+	systemPrompt := strings.TrimSpace(`
+You are the OpenTendril Genome Evolver.
+Merge duplicates, consolidate overlapping ideas, and shorten the remaining epigenetic rules into a dense Markdown bullet list.
+Preserve durable meaning while removing repetition and implementation-specific clutter.
+Return only Markdown bullets. Do not include headings, code fences, or commentary.
+`)
+
+	userPrompt := fmt.Sprintf(`Rewrite the surviving epigenetic rules into a compact, high-density Markdown list.
+
+Rules that survived fitness pruning:
+%s
+
+If no rules remain, return:
+- No active rules remain.
+`, rulesBlock)
+
+	return systemPrompt, strings.TrimSpace(userPrompt)
+}
+
+func callGenomeEvolutionPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	var errs []error
+	for _, tier := range []llm.ModelTier{llm.TierStandard, llm.TierCheapest} {
+		client := llm.NewClientForTier(tier)
+		content, err := client.CallPrompt(ctx, systemPrompt, userPrompt)
+		if err == nil {
+			return content, nil
+		}
+		errs = append(errs, fmt.Errorf("%s tier: %w", tier, err))
+	}
+
+	return "", errors.Join(errs...)
 }
 
 func (c *EpigeneticChronicler) reduceGenomeContent(ctx context.Context, existing string) (string, error) {
@@ -336,6 +501,166 @@ func mergeGenomeContent(existing string, findings string) string {
 	}
 
 	return epigeneticGenomeHeader + "\n\n" + existing + "\n\n" + findings + "\n"
+}
+
+func loadGenomicFitness(path string) (*GenomicFitness, error) {
+	fitness := &GenomicFitness{
+		Rules:    map[string]int{},
+		Plasmids: map[string]int{},
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fitness, nil
+		}
+		return nil, fmt.Errorf("read genomic fitness: %w", err)
+	}
+
+	if strings.TrimSpace(string(content)) == "" {
+		return fitness, nil
+	}
+
+	if err := json.Unmarshal(content, fitness); err != nil {
+		return nil, fmt.Errorf("decode genomic fitness: %w", err)
+	}
+
+	if fitness.Rules == nil {
+		fitness.Rules = map[string]int{}
+	}
+	if fitness.Plasmids == nil {
+		fitness.Plasmids = map[string]int{}
+	}
+
+	return fitness, nil
+}
+
+func saveGenomicFitness(path string, fitness *GenomicFitness) error {
+	if fitness == nil {
+		return fmt.Errorf("genomic fitness is nil")
+	}
+
+	if fitness.Rules == nil {
+		fitness.Rules = map[string]int{}
+	}
+	if fitness.Plasmids == nil {
+		fitness.Plasmids = map[string]int{}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create genomic fitness directory: %w", err)
+	}
+
+	content, err := json.MarshalIndent(fitness, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode genomic fitness: %w", err)
+	}
+
+	if err := os.WriteFile(path, append(content, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write genomic fitness: %w", err)
+	}
+
+	return nil
+}
+
+func listGenomeMarkdownFiles(genomeDir string) ([]string, error) {
+	info, err := os.Stat(genomeDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("stat genome directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("genome path %s is not a directory", genomeDir)
+	}
+
+	var files []string
+	if err := filepath.WalkDir(genomeDir, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("scan genome directory: %w", err)
+	}
+
+	sort.Strings(files)
+	return files, nil
+}
+
+func extractGenomeRules(content string) []string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+
+	rules := make([]string, 0, len(lines))
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "*") {
+			continue
+		}
+
+		rule := strings.TrimSpace(line[1:])
+		if rule == "" {
+			continue
+		}
+
+		rules = append(rules, rule)
+	}
+
+	return rules
+}
+
+func filterGenomeRules(content string, ruleScores map[string]int) []string {
+	rules := extractGenomeRules(content)
+	filtered := make([]string, 0, len(rules))
+	seen := make(map[string]struct{}, len(rules))
+
+	for _, rule := range rules {
+		if score := ruleScores[rule]; score <= genomicRulePruneThreshold {
+			continue
+		}
+		if _, ok := seen[rule]; ok {
+			continue
+		}
+		seen[rule] = struct{}{}
+		filtered = append(filtered, rule)
+	}
+
+	return filtered
+}
+
+func isActiveGenomePlasmid(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return base != genomicEpigeneticsFilename && strings.HasSuffix(base, ".md")
+}
+
+func disableGenomePlasmid(path string) (string, error) {
+	disabledPath := path + ".disabled"
+	for suffix := 1; ; suffix++ {
+		if _, err := os.Stat(disabledPath); os.IsNotExist(err) {
+			break
+		} else if err != nil {
+			return "", fmt.Errorf("check disabled plasmid target %s: %w", disabledPath, err)
+		}
+		disabledPath = fmt.Sprintf("%s.%d", path+".disabled", suffix)
+	}
+
+	if err := os.Rename(path, disabledPath); err != nil {
+		return "", fmt.Errorf("disable plasmid %s: %w", path, err)
+	}
+
+	return disabledPath, nil
 }
 
 func genomeMaxBytes() int64 {

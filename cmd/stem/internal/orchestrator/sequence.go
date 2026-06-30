@@ -1385,6 +1385,10 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	}
 
+	if fitErr := RecordGenomicFitness(sourcePath, runErr == nil); fitErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Genome fitness record skipped: %v\n", fitErr)
+	}
+
 	if runErr != nil {
 		return result, runErr
 	}
