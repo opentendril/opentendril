@@ -22,6 +22,8 @@ import (
 // DockerProvider launches sandboxes via the local Docker daemon.
 type DockerProvider struct{}
 
+const defaultDockerPidsLimit = 512
+
 func NewDockerProvider() *DockerProvider {
 	return &DockerProvider{}
 }
@@ -57,11 +59,31 @@ func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox,
 		return nil, fmt.Errorf("generate sandbox id: %w", err)
 	}
 
-	args := []string{"run", "-i", "--name", sandboxID}
-	if network := strings.TrimSpace(string(spec.NetworkMode)); network != "" {
-		args = append(args, "--network", network)
+	args := []string{
+		"run",
+		"-i",
+		"--name", sandboxID,
+		"--network", string(NetworkModeNone),
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges:true",
 	}
-	args = append(args, "--add-host=host.docker.internal:host-gateway")
+	if cpuQuota := strings.TrimSpace(spec.CPUQuota); cpuQuota != "" && cpuQuota != "0" && cpuQuota != "0.0" {
+		args = append(args, "--cpus", cpuQuota)
+	}
+	if spec.MemoryLimitMB > 0 {
+		args = append(args, "--memory", fmt.Sprintf("%dm", spec.MemoryLimitMB))
+	}
+	pidsLimit := spec.PidsLimit
+	if pidsLimit <= 0 {
+		pidsLimit = defaultDockerPidsLimit
+	}
+	args = append(args, "--pids-limit", fmt.Sprintf("%d", pidsLimit))
+	if spec.ReadOnlyRootFS {
+		args = append(args, "--read-only")
+	}
+	if runAsUser := strings.TrimSpace(spec.RunAsUser); runAsUser != "" {
+		args = append(args, "--user", runAsUser)
+	}
 
 	for _, mount := range spec.Mounts {
 		source := strings.TrimSpace(mount.Source)
@@ -129,6 +151,12 @@ func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox,
 		stderrLog:  lockedBuffer{},
 	}
 
+	if spec.Timeout > 0 {
+		watchdogCtx, cancel := context.WithCancel(context.Background())
+		sandbox.watchdogCancel = cancel
+		go sandbox.watchdog(watchdogCtx, spec.Timeout)
+	}
+
 	go func() {
 		defer close(sandbox.stderrDone)
 		_, _ = io.Copy(io.MultiWriter(os.Stderr, &sandbox.stderrLog), stderr)
@@ -157,11 +185,12 @@ type dockerSandbox struct {
 	stdoutLog lockedBuffer
 	stderrLog lockedBuffer
 
-	callMu   sync.Mutex
-	stopOnce sync.Once
-	stopErr  error
-	waitOnce sync.Once
-	waitErr  error
+	callMu         sync.Mutex
+	stopOnce       sync.Once
+	stopErr        error
+	waitOnce       sync.Once
+	waitErr        error
+	watchdogCancel context.CancelFunc
 }
 
 func (s *dockerSandbox) ID() string {
@@ -242,6 +271,13 @@ func (s *dockerSandbox) Run(ctx context.Context, spec CommandSpec) (CommandResul
 		return CommandResult{}, fmt.Errorf("sandbox is not active")
 	}
 
+	runCtx := ctx
+	var cancel context.CancelFunc
+	if spec.Timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
+		defer cancel()
+	}
+
 	startedAt := time.Now().UTC()
 
 	if len(spec.Command) == 0 {
@@ -260,8 +296,40 @@ func (s *dockerSandbox) Run(ctx context.Context, spec CommandSpec) (CommandResul
 			return CommandResult{}, fmt.Errorf("write sandbox stdin: %w", err)
 		}
 
-		line, err := s.readResponseLine()
+		lineCh := make(chan []byte, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			line, err := s.readResponseLine()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			lineCh <- line
+		}()
+
 		completedAt := time.Now().UTC()
+		var line []byte
+		var err error
+		select {
+		case line = <-lineCh:
+		case err = <-errCh:
+		case <-runCtx.Done():
+			completedAt = time.Now().UTC()
+			result := CommandResult{
+				ExitCode:    -1,
+				TimedOut:    errors.Is(runCtx.Err(), context.DeadlineExceeded),
+				StartedAt:   startedAt,
+				CompletedAt: completedAt,
+				Duration:    completedAt.Sub(startedAt),
+			}
+			if result.TimedOut {
+				s.stopAfterTimeout()
+				return result, nil
+			}
+			return result, fmt.Errorf("interactive sandbox run canceled: %w", runCtx.Err())
+		}
+
+		completedAt = time.Now().UTC()
 		result := CommandResult{
 			Stdout:      string(line),
 			ExitCode:    0,
@@ -292,7 +360,7 @@ func (s *dockerSandbox) Run(ctx context.Context, spec CommandSpec) (CommandResul
 	args = append(args, s.id)
 	args = append(args, spec.Command...)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd := exec.CommandContext(runCtx, "docker", args...)
 	if len(spec.Stdin) > 0 {
 		cmd.Stdin = bytes.NewReader(spec.Stdin)
 	}
@@ -313,6 +381,12 @@ func (s *dockerSandbox) Run(ctx context.Context, spec CommandSpec) (CommandResul
 	}
 
 	if runErr != nil {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			result.ExitCode = -1
+			result.TimedOut = true
+			s.stopAfterTimeout()
+			return result, nil
+		}
 		var exitErr *exec.ExitError
 		if errors.As(runErr, &exitErr) {
 			result.ExitCode = exitErr.ExitCode()
@@ -401,6 +475,10 @@ func (s *dockerSandbox) Stop(ctx context.Context) error {
 	s.stopOnce.Do(func() {
 		var stopErr error
 
+		if s.watchdogCancel != nil {
+			s.watchdogCancel()
+		}
+
 		if s.stdin != nil {
 			_ = s.stdin.Close()
 		}
@@ -452,6 +530,24 @@ func (s *dockerSandbox) Stop(ctx context.Context) error {
 	})
 
 	return s.stopErr
+}
+
+func (s *dockerSandbox) watchdog(ctx context.Context, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+		s.stopAfterTimeout()
+	}
+}
+
+func (s *dockerSandbox) stopAfterTimeout() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.Stop(ctx)
 }
 
 func (s *dockerSandbox) readResponseLine() ([]byte, error) {
