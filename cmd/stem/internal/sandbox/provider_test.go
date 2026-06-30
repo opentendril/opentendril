@@ -21,9 +21,14 @@ func TestDockerProviderCreateHonorsSandboxSpec(t *testing.T) {
 
 	provider := NewDockerProvider()
 	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
-		Image:       "opentendril-go:latest",
-		WorkingDir:  "/app",
-		NetworkMode: NetworkMode("opentendril-default"),
+		Image:          "opentendril-go:latest",
+		WorkingDir:     "/app",
+		NetworkMode:    NetworkModeBridge,
+		RunAsUser:      "1000:1000",
+		CPUQuota:       "1.5",
+		MemoryLimitMB:  1024,
+		ReadOnlyRootFS: true,
+		PidsLimit:      128,
 		Mounts: []MountSpec{
 			{Source: "/tmp/workspace", Target: "/app"},
 			{Source: "/tmp/cache", Target: "/cache", ReadOnly: true},
@@ -50,8 +55,14 @@ func TestDockerProviderCreateHonorsSandboxSpec(t *testing.T) {
 
 	logOutput := waitForLogContent(t, fake.logPath, "run -i --name opentendril-sandbox-")
 	for _, needle := range []string{
-		"--network opentendril-default",
-		"--add-host=host.docker.internal:host-gateway",
+		"--network none",
+		"--cap-drop=ALL",
+		"--security-opt=no-new-privileges:true",
+		"--cpus 1.5",
+		"--memory 1024m",
+		"--pids-limit 128",
+		"--read-only",
+		"--user 1000:1000",
 		"-v /tmp/workspace:/app",
 		"-v /tmp/cache:/cache:ro",
 		"--env-file " + envFile,
@@ -63,6 +74,21 @@ func TestDockerProviderCreateHonorsSandboxSpec(t *testing.T) {
 		if !strings.Contains(logOutput, needle) {
 			t.Fatalf("docker run args missing %q in log %q", needle, logOutput)
 		}
+	}
+}
+
+func TestDockerProviderCreateDefaultsToPidsLimit(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	sandboxInstance := newTestSandbox(t)
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i --name opentendril-sandbox-")
+	if !strings.Contains(logOutput, "--pids-limit 512") {
+		t.Fatalf("docker run args missing default pids limit in log %q", logOutput)
 	}
 }
 
@@ -127,6 +153,56 @@ func TestDockerSandboxRunReturnsMetrics(t *testing.T) {
 	}
 	if !strings.Contains(logs.Stderr, "sandbox stderr ready") {
 		t.Fatalf("stderr logs missing sandbox boot output: %q", logs.Stderr)
+	}
+}
+
+func TestDockerSandboxRunTimeoutStopsSandbox(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_EXEC_SLEEP", "1")
+
+	sandboxInstance := newTestSandbox(t)
+
+	result, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sh", "-lc", "sleep 60"},
+		Timeout: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !result.TimedOut {
+		t.Fatalf("TimedOut = false, want true")
+	}
+	if result.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", result.ExitCode)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	if !strings.Contains(logOutput, "stop opentendril-sandbox-") {
+		t.Fatalf("timeout did not stop sandbox, log %q", logOutput)
+	}
+}
+
+func TestDockerSandboxWatchdogStopsExpiredSandbox(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := NewDockerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Image:     "opentendril-go:latest",
+		Timeout:   50 * time.Millisecond,
+		PidsLimit: 64,
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	if !strings.Contains(logOutput, "stop opentendril-sandbox-") {
+		t.Fatalf("watchdog did not stop sandbox, log %q", logOutput)
 	}
 }
 
@@ -224,6 +300,9 @@ case "$cmd" in
     fi
     if [ "${1:-}" = "mkdir" ] && [ "${2:-}" = "-p" ]; then
       exit 0
+    fi
+    if [ -n "${FAKE_DOCKER_EXEC_SLEEP:-}" ]; then
+      sleep "${FAKE_DOCKER_EXEC_SLEEP}"
     fi
     if [ -n "${FAKE_DOCKER_EXEC_STDOUT:-}" ]; then
       printf '%s' "${FAKE_DOCKER_EXEC_STDOUT}"
