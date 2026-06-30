@@ -90,8 +90,11 @@ tendril chat
              │  - Dynamic LLM Routing (Coordinator / Worker)
              │  - Substrate & Read-Only configs checked
              │  - Ephemeral git worktree checkout
+             │  - Stem Grafting (Delegates high-privilege pushes via WebSockets)
              ▼
-     Stateless Sprout      ← Ephemeral Docker Sandbox (Go/TypeScript)
+    Sandbox Provider       ← Extensible Execution Substrate
+             │  - Local: Ephemeral Docker Sandbox
+             │  - Enterprise: Firecracker / gVisor MicroVMs (WIP)
              │  - Injects Genotype plasmids & AST Repo Map
              │  - Executes file edits, compilation, and unit tests
              ▼
