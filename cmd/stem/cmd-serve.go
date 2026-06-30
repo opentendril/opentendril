@@ -13,6 +13,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
+	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/security"
 )
@@ -92,6 +93,11 @@ func runServeCmd(ctx context.Context, args []string) {
 	// Phase 5: MCP API
 	mcpHandler := api.NewMCPHandler()
 	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
+
+	// Phase 6: Mesh Grafting API
+	meshServer := mesh.NewServer(resolveRepoRoot(""))
+	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(strings.TrimSpace(os.Getenv("ADMIN_TOKEN")), meshServer.HandleAdminIssueToken))
+	mux.HandleFunc("/v1/mesh/graft", meshServer.HandleGraftWebSocket)
 
 	port := os.Getenv("PORT")
 	if port == "" {

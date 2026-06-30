@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"gopkg.in/yaml.v3"
 )
@@ -280,6 +281,54 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 						"required": []string{"name"},
 					},
 				},
+				{
+					"name":        "graftSubstrate",
+					"description": "Delegates the latest commit from a local substrate to the mesh graft endpoint and streams central validation logs.",
+					"inputSchema": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"substrate": map[string]interface{}{
+								"type":        "string",
+								"description": "The local substrate path or named substrate key to graft.",
+							},
+							"branch": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional branch to push to. Defaults to the current branch.",
+							},
+							"commit-message": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional commit message for the delegated push.",
+							},
+						},
+						"required": []string{"substrate"},
+					},
+				},
+				{
+					"name":        "promotePR",
+					"description": "Promotes a pull request branch through the mesh graft endpoint after local validation has completed.",
+					"inputSchema": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"substrate": map[string]interface{}{
+								"type":        "string",
+								"description": "The local substrate path or named substrate key to promote.",
+							},
+							"branch": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional branch to push to. Defaults to the current branch.",
+							},
+							"pr-number": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional pull request number associated with the promotion.",
+							},
+							"commit-message": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional commit message for the delegated push.",
+							},
+						},
+						"required": []string{"substrate"},
+					},
+				},
 			},
 		})
 	case "tools/call":
@@ -378,6 +427,108 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			message := fmt.Sprintf("Injected plasmid %s -> %s.", filepath.ToSlash(mustRel(root, sourcePath)), filepath.ToSlash(mustRel(root, destPath)))
 			if alreadyActive {
 				message = fmt.Sprintf("Plasmid already active: %s.", filepath.ToSlash(mustRel(root, destPath)))
+			}
+
+			return h.formatResult(req.ID, map[string]interface{}{
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": message,
+					},
+				},
+				"isError": false,
+			})
+		}
+
+		if params.Name == "graftSubstrate" {
+			substrate, ok := params.Arguments["substrate"].(string)
+			if !ok || strings.TrimSpace(substrate) == "" {
+				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'substrate' parameter is required.")
+			}
+
+			branch, _ := params.Arguments["branch"].(string)
+			commitMessage, _ := params.Arguments["commit-message"].(string)
+
+			workspace, err := h.resolveMeshWorkspace(substrate)
+			if err != nil {
+				return h.formatResult(req.ID, map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": "Failed to resolve substrate: " + err.Error(),
+						},
+					},
+					"isError": true,
+				})
+			}
+
+			commitHash, err := delegateMeshPush(workspace, branch, commitMessage)
+			if err != nil {
+				return h.formatResult(req.ID, map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": "Mesh graft failed: " + err.Error(),
+						},
+					},
+					"isError": true,
+				})
+			}
+
+			message := fmt.Sprintf("Delegated substrate %s through mesh graft. Commit %s.", filepath.ToSlash(workspace), commitHash)
+			return h.formatResult(req.ID, map[string]interface{}{
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": message,
+					},
+				},
+				"isError": false,
+			})
+		}
+
+		if params.Name == "promotePR" {
+			substrate, ok := params.Arguments["substrate"].(string)
+			if !ok || strings.TrimSpace(substrate) == "" {
+				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'substrate' parameter is required.")
+			}
+
+			branch, _ := params.Arguments["branch"].(string)
+			prNumber, _ := params.Arguments["pr-number"].(string)
+			commitMessage, _ := params.Arguments["commit-message"].(string)
+			if strings.TrimSpace(commitMessage) == "" && strings.TrimSpace(prNumber) != "" {
+				commitMessage = "promote PR #" + strings.TrimSpace(prNumber)
+			}
+
+			workspace, err := h.resolveMeshWorkspace(substrate)
+			if err != nil {
+				return h.formatResult(req.ID, map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": "Failed to resolve substrate: " + err.Error(),
+						},
+					},
+					"isError": true,
+				})
+			}
+
+			commitHash, err := delegateMeshPush(workspace, branch, commitMessage)
+			if err != nil {
+				return h.formatResult(req.ID, map[string]interface{}{
+					"content": []map[string]interface{}{
+						{
+							"type": "text",
+							"text": "PR promotion failed: " + err.Error(),
+						},
+					},
+					"isError": true,
+				})
+			}
+
+			message := fmt.Sprintf("Promoted pull request via mesh graft for %s. Commit %s.", filepath.ToSlash(workspace), commitHash)
+			if strings.TrimSpace(prNumber) != "" {
+				message = fmt.Sprintf("Promoted pull request #%s via mesh graft for %s. Commit %s.", strings.TrimSpace(prNumber), filepath.ToSlash(workspace), commitHash)
 			}
 
 			return h.formatResult(req.ID, map[string]interface{}{
@@ -819,4 +970,34 @@ func mustRel(root, target string) string {
 		return target
 	}
 	return rel
+}
+
+func (h *MCPHandler) resolveMeshWorkspace(substrate string) (string, error) {
+	substrate = strings.TrimSpace(substrate)
+	if substrate == "" {
+		return resolveRepoRoot(""), nil
+	}
+
+	if substrateSpec, isName := orchestrator.ResolveSubstrate(substrate, h.substratesConfig); isName && substrateSpec != nil {
+		if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+			if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
+				return resolveRepoRoot(trimmedPath), nil
+			}
+		}
+	}
+
+	if info, err := os.Stat(substrate); err == nil && info.IsDir() {
+		return resolveRepoRoot(substrate), nil
+	}
+
+	return "", fmt.Errorf("substrate %q does not resolve to a local git workspace", substrate)
+}
+
+func delegateMeshPush(workspace, branch, commitMessage string) (string, error) {
+	client := mesh.NewClientFromEnv()
+	if client == nil {
+		return "", fmt.Errorf("TENDRIL_GRAFT_URL and TENDRIL_GRAFT_TOKEN must be set to delegate a mesh graft")
+	}
+
+	return client.DelegatePush(context.Background(), workspace, branch, commitMessage)
 }

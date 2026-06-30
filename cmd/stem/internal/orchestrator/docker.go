@@ -1241,6 +1241,15 @@ func pushSandboxCommit(ctx context.Context, mountPath, branch string) error {
 	}
 	targetBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
 
+	commitMessage, err := runGitCommand(ctx, mountPath, "log", "-1", "--pretty=%B", "HEAD")
+	if err != nil {
+		return err
+	}
+
+	if delegated, err := delegateGitPushIfConfigured(ctx, mountPath, targetBranch, commitMessage); delegated {
+		return err
+	}
+
 	if _, err := runGitCommand(ctx, mountPath, "push", "origin", "HEAD:"+targetBranch); err != nil {
 		return err
 	}

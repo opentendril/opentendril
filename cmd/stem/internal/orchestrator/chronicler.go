@@ -88,7 +88,7 @@ func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcri
 		fmt.Fprintf(os.Stderr, "🧬 Genome auto-reduced at %s\n", targetPath)
 	}
 
-	if err := c.maybeAutoPushGenome(targetPath); err != nil {
+	if err := c.maybeAutoPushGenome(ctx, targetPath); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-push skipped: %v\n", err)
 	}
 
@@ -445,7 +445,7 @@ func (c *EpigeneticChronicler) maybeReduceGenome(ctx context.Context, targetPath
 	return true, nil
 }
 
-func (c *EpigeneticChronicler) maybeAutoPushGenome(targetPath string) error {
+func (c *EpigeneticChronicler) maybeAutoPushGenome(ctx context.Context, targetPath string) error {
 	if strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_GENOME_AUTO_PUSH"))) != "true" {
 		return nil
 	}
@@ -474,6 +474,15 @@ func (c *EpigeneticChronicler) maybeAutoPushGenome(targetPath string) error {
 	commitCmd := exec.Command("git", "-C", c.workspace, "commit", "-m", genomeAutoPushCommitMessage)
 	if output, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	}
+
+	currentBranch, err := runGitCommand(ctx, c.workspace, "branch", "--show-current")
+	if err != nil {
+		currentBranch = ""
+	}
+
+	if delegated, err := delegateGitPushIfConfigured(ctx, c.workspace, currentBranch, genomeAutoPushCommitMessage); delegated {
+		return err
 	}
 
 	pushCmd := exec.Command("git", "-C", c.workspace, "push", "origin", "HEAD")

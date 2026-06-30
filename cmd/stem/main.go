@@ -1,6 +1,7 @@
 // Package main implements the Unified Tendril CLI client.
 // Commands:
 //   tendril chat  - Start the interactive chat interface
+//   tendril mesh  - Manage mesh grafting keys and tokens
 //   tendril mcp   - Start the MCP JSON-RPC stdio server
 //   tendril init  - Run the Developer Onboarding Wizard
 //   tendril serve - Start the Go Stem Orchestrator API
@@ -57,6 +58,8 @@ func main() {
 		runRepoMapCmd(os.Args[2:])
 	case "sequence":
 		runSequenceCmd(ctx, os.Args[2:])
+	case "mesh":
+		runMeshCmd(ctx, os.Args[2:])
 	case "mcp":
 		runMCPCmd(ctx, os.Args[2:])
 	case "init":
@@ -83,6 +86,7 @@ func printUsage() {
 	fmt.Println("  plasmid Manage modular genome plasmids")
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")
+	fmt.Println("  mesh    Manage mesh grafting keys and tokens")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")
 	fmt.Println("  serve   Start the Go Stem Orchestrator API")
