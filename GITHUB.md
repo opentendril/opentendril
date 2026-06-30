@@ -72,3 +72,14 @@ All commits (human and AI-generated) must follow the [Conventional Commits](http
 * **`refactor`:** A code change that neither fixes a bug nor adds a feature (e.g. `refactor(db): migrate to sqlite database`).
 * **`test`:** Adding missing tests or correcting existing tests.
 * **`chore`:** Changes to the build process, auxiliary tools, or library dependencies.
+
+---
+
+## 5. AI Agent Artifact Management
+
+OpenTendril agents (like Codex, Antigravity, or local Planners) generate transient markdown artifacts to coordinate planning and progress tracking. 
+
+**CRITICAL RULE:** Transient artifacts (`task.md`, `walkthrough.md`, `implementation_plan.md`) must **NEVER** be committed to the repository. 
+* Add them to `.gitignore` to prevent accidental staging.
+* Instead of committing these files, agents MUST extract their contents and inject them directly into **GitHub Pull Request Descriptions** or **Issue Comments** using MCP GitHub tools (e.g., `create_pull_request`, `add_issue_comment`).
+* This ensures rich historical context remains on GitHub issues/PRs where it belongs, rather than cluttering the git tree.

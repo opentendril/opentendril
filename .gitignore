@@ -53,3 +53,8 @@ cmd/stem/server.log
 # Generated .tendril runtime files (user-local, not committed)
 .tendril/transduction/hormonal-triggers/block-trigger.sh
 .tendril/transduction/hormonal-triggers/*-generated.sh
+
+# Transient AI Agent Artifacts (Never commit these)
+implementation_plan.md
+task.md
+walkthrough.md
