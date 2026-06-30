@@ -25,7 +25,11 @@ To understand OpenTendril, you must understand its anatomy:
 ---
 
 ### What does this actually mean for developers?
-In standard IT speak: **OpenTendril is a headless, local-first AI coding framework.** It runs entirely on your host machine, coordinates with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely inside ephemeral language-specific Docker sandboxes.
+In standard IT speak: **OpenTendril is a headless, local-first and enterprise-ready AI coding framework.** 
+
+For individuals, it runs entirely on your host machine, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely inside ephemeral language-specific Docker sandboxes.
+
+For high-security and multi-tenant enterprise environments, OpenTendril supports **Stem Grafting** (securely delegating high-privilege operations over WebSockets to a Central Governance Stem) and is designed to support hardware-level sandbox isolation (e.g. Firecracker/gVisor) for zero-trust execution.
 
 ---
 
@@ -86,8 +90,11 @@ tendril chat
              │  - Dynamic LLM Routing (Coordinator / Worker)
              │  - Substrate & Read-Only configs checked
              │  - Ephemeral git worktree checkout
+             │  - Stem Grafting (Delegates high-privilege pushes via WebSockets)
              ▼
-     Stateless Sprout      ← Ephemeral Docker Sandbox (Go/TypeScript)
+    Sandbox Provider       ← Extensible Execution Substrate
+             │  - Local: Ephemeral Docker Sandbox
+             │  - Enterprise: Firecracker / gVisor MicroVMs (WIP)
              │  - Injects Genotype plasmids & AST Repo Map
              │  - Executes file edits, compilation, and unit tests
              ▼
