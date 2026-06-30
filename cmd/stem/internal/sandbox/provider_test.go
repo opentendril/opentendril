@@ -1,0 +1,319 @@
+package sandbox
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestDockerProviderCreateHonorsSandboxSpec(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	envFile := filepath.Join(t.TempDir(), "sandbox.env")
+	if err := os.WriteFile(envFile, []byte("EXAMPLE=value\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	t.Setenv("TENDRIL_ENV_FILE", envFile)
+
+	provider := NewDockerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Image:       "opentendril-go:latest",
+		WorkingDir:  "/app",
+		NetworkMode: NetworkMode("opentendril-default"),
+		Mounts: []MountSpec{
+			{Source: "/tmp/workspace", Target: "/app"},
+			{Source: "/tmp/cache", Target: "/cache", ReadOnly: true},
+		},
+		Environment: map[string]string{
+			"FIRST":  "1",
+			"SECOND": "2",
+		},
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	if provider.Name() != "docker" {
+		t.Fatalf("provider.Name() = %q, want docker", provider.Name())
+	}
+	capabilities := provider.Capabilities()
+	if !capabilities.SupportsMounts || !capabilities.SupportsCopyIn || !capabilities.SupportsCopyOut || !capabilities.SupportsInteractiveIO {
+		t.Fatalf("unexpected capabilities: %#v", capabilities)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i --name opentendril-sandbox-")
+	for _, needle := range []string{
+		"--network opentendril-default",
+		"--add-host=host.docker.internal:host-gateway",
+		"-v /tmp/workspace:/app",
+		"-v /tmp/cache:/cache:ro",
+		"--env-file " + envFile,
+		"-e FIRST=1",
+		"-e SECOND=2",
+		"-w /app",
+		"opentendril-go:latest",
+	} {
+		if !strings.Contains(logOutput, needle) {
+			t.Fatalf("docker run args missing %q in log %q", needle, logOutput)
+		}
+	}
+}
+
+func TestDockerSandboxRunReturnsMetrics(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_RESPONSE", `{"status":"success","output":{"tools":[]}}`)
+	t.Setenv("FAKE_DOCKER_EXEC_STDOUT", "exec-stdout")
+	t.Setenv("FAKE_DOCKER_EXEC_STDERR", "exec-stderr")
+	t.Setenv("FAKE_DOCKER_EXEC_EXIT_CODE", "7")
+
+	sandboxInstance := newTestSandbox(t)
+	t.Cleanup(func() {
+		_ = sandboxInstance.Stop(context.Background())
+	})
+
+	interactiveResult, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Stdin: []byte(`{"tool":"listAvailableTools","arguments":{}}`),
+	})
+	if err != nil {
+		t.Fatalf("interactive Run returned error: %v", err)
+	}
+	if interactiveResult.Stdout != `{"status":"success","output":{"tools":[]}}` {
+		t.Fatalf("interactive stdout = %q", interactiveResult.Stdout)
+	}
+	if interactiveResult.ExitCode != 0 {
+		t.Fatalf("interactive exit code = %d, want 0", interactiveResult.ExitCode)
+	}
+	assertCommandMetrics(t, interactiveResult)
+
+	execResult, err := sandboxInstance.Run(context.Background(), CommandSpec{
+		Command: []string{"sh", "-lc", "echo hi"},
+	})
+	if err != nil {
+		t.Fatalf("exec Run returned error: %v", err)
+	}
+	if execResult.Stdout != "exec-stdout" {
+		t.Fatalf("exec stdout = %q, want exec-stdout", execResult.Stdout)
+	}
+	if execResult.Stderr != "exec-stderr" {
+		t.Fatalf("exec stderr = %q, want exec-stderr", execResult.Stderr)
+	}
+	if execResult.ExitCode != 7 {
+		t.Fatalf("exec exit code = %d, want 7", execResult.ExitCode)
+	}
+	assertCommandMetrics(t, execResult)
+
+	stdinLog, err := os.ReadFile(fake.stdinPath)
+	if err != nil {
+		t.Fatalf("read stdin log: %v", err)
+	}
+	if !strings.Contains(string(stdinLog), `{"tool":"listAvailableTools","arguments":{}}`) {
+		t.Fatalf("stdin log missing tool payload: %s", string(stdinLog))
+	}
+
+	logs, err := sandboxInstance.SnapshotLogs(context.Background())
+	if err != nil {
+		t.Fatalf("SnapshotLogs returned error: %v", err)
+	}
+	if !strings.Contains(logs.Stdout, `{"status":"success","output":{"tools":[]}}`) {
+		t.Fatalf("stdout logs missing interactive response: %q", logs.Stdout)
+	}
+	if !strings.Contains(logs.Stderr, "sandbox stderr ready") {
+		t.Fatalf("stderr logs missing sandbox boot output: %q", logs.Stderr)
+	}
+}
+
+func TestDockerSandboxCopyInCopyOutAndStop(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_COPYOUT_CONTENT", "artifact-data")
+
+	sandboxInstance := newTestSandbox(t)
+
+	if err := sandboxInstance.CopyIn(context.Background(), []FilePayload{
+		{
+			Path:    "nested/result.txt",
+			Content: []byte("hello sandbox"),
+			Mode:    0o640,
+		},
+	}); err != nil {
+		t.Fatalf("CopyIn returned error: %v", err)
+	}
+
+	artifacts, err := sandboxInstance.CopyOut(context.Background(), []string{"nested/result.txt"})
+	if err != nil {
+		t.Fatalf("CopyOut returned error: %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("CopyOut returned %d artifacts, want 1", len(artifacts))
+	}
+	if artifacts[0].Path != "nested/result.txt" {
+		t.Fatalf("artifact path = %q, want nested/result.txt", artifacts[0].Path)
+	}
+	if string(artifacts[0].Content) != "artifact-data" {
+		t.Fatalf("artifact content = %q, want artifact-data", string(artifacts[0].Content))
+	}
+
+	if err := sandboxInstance.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+
+	logOutput := waitForLogContent(t, fake.logPath, "rm opentendril-sandbox-")
+	for _, needle := range []string{
+		"exec opentendril-sandbox-",
+		"mkdir -p /app/nested",
+		"cp ",
+		"nested/result.txt",
+		"stop opentendril-sandbox-",
+		"rm opentendril-sandbox-",
+	} {
+		if !strings.Contains(logOutput, needle) {
+			t.Fatalf("docker lifecycle log missing %q in %q", needle, logOutput)
+		}
+	}
+}
+
+type fakeDockerPaths struct {
+	binDir    string
+	logPath   string
+	stdinPath string
+}
+
+func installFakeDocker(t *testing.T) fakeDockerPaths {
+	t.Helper()
+
+	root := t.TempDir()
+	logPath := filepath.Join(root, "docker.log")
+	stdinPath := filepath.Join(root, "docker.stdin.log")
+	scriptPath := filepath.Join(root, "docker")
+
+	script := `#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"
+
+cmd="${1:-}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$cmd" in
+  run)
+    printf 'sandbox stderr ready\n' >&2
+    while IFS= read -r line; do
+      printf '%s\n' "$line" >> "${FAKE_DOCKER_STDIN_LOG}"
+      sleep 0.01
+      response="${FAKE_DOCKER_RESPONSE:-}"
+      if [ -z "$response" ]; then
+        response='{"status":"success","output":{}}'
+      fi
+      printf '%s\n' "$response"
+    done
+    ;;
+  exec)
+    sandbox_id="${1:-}"
+    if [ "$#" -gt 0 ]; then
+      shift
+    fi
+    if [ "${1:-}" = "mkdir" ] && [ "${2:-}" = "-p" ]; then
+      exit 0
+    fi
+    if [ -n "${FAKE_DOCKER_EXEC_STDOUT:-}" ]; then
+      printf '%s' "${FAKE_DOCKER_EXEC_STDOUT}"
+    fi
+    if [ -n "${FAKE_DOCKER_EXEC_STDERR:-}" ]; then
+      printf '%s' "${FAKE_DOCKER_EXEC_STDERR}" >&2
+    fi
+    exit "${FAKE_DOCKER_EXEC_EXIT_CODE:-0}"
+    ;;
+  cp)
+    src="${1:-}"
+    dst="${2:-}"
+    if printf '%s' "$src" | grep -q ':'; then
+      base=$(basename "${src#*:}")
+      mkdir -p "$dst"
+      printf '%s' "${FAKE_DOCKER_COPYOUT_CONTENT:-artifact-data}" > "$dst/$base"
+    else
+      cat "$src" >/dev/null
+    fi
+    ;;
+  stop|rm)
+    ;;
+esac
+`
+
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake docker script: %v", err)
+	}
+
+	t.Setenv("FAKE_DOCKER_LOG", logPath)
+	t.Setenv("FAKE_DOCKER_STDIN_LOG", stdinPath)
+
+	return fakeDockerPaths{
+		binDir:    root,
+		logPath:   logPath,
+		stdinPath: stdinPath,
+	}
+}
+
+func newTestSandbox(t *testing.T) Sandbox {
+	t.Helper()
+
+	provider := NewDockerProvider()
+	sandboxInstance, err := provider.Create(context.Background(), SandboxSpec{
+		Image:       "opentendril-go:latest",
+		WorkingDir:  "/app",
+		NetworkMode: NetworkModeBridge,
+		Mounts: []MountSpec{
+			{Source: t.TempDir(), Target: "/app"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+
+	return sandboxInstance
+}
+
+func waitForLogContent(t *testing.T, path string, needle string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(content), needle) {
+			return string(content)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log file %s: %v", path, err)
+	}
+	return string(content)
+}
+
+func assertCommandMetrics(t *testing.T, result CommandResult) {
+	t.Helper()
+
+	if result.StartedAt.IsZero() {
+		t.Fatalf("StartedAt was zero")
+	}
+	if result.CompletedAt.IsZero() {
+		t.Fatalf("CompletedAt was zero")
+	}
+	if result.CompletedAt.Before(result.StartedAt) {
+		t.Fatalf("CompletedAt %s before StartedAt %s", result.CompletedAt, result.StartedAt)
+	}
+	if result.Duration <= 0 {
+		t.Fatalf("Duration = %s, want > 0", result.Duration)
+	}
+}
