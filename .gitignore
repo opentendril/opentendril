@@ -54,7 +54,13 @@ cmd/stem/server.log
 .tendril/transduction/hormonal-triggers/block-trigger.sh
 .tendril/transduction/hormonal-triggers/*-generated.sh
 
-# Transient AI Agent Artifacts (Never commit these)
-implementation_plan.md
+# Transient AI Agent Artifacts & Workspaces (Never commit these)
+.ai/
+.scratch/
+scratch/
+scratch.md
 task.md
 walkthrough.md
+implementation_plan.md
+.aider*
+.cline*

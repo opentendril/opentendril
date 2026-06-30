@@ -77,9 +77,10 @@ All commits (human and AI-generated) must follow the [Conventional Commits](http
 
 ## 5. AI Agent Artifact Management
 
-OpenTendril agents (like Codex, Antigravity, or local Planners) generate transient markdown artifacts to coordinate planning and progress tracking. 
+OpenTendril agents (like Codex, Antigravity, Aider, Cline, or local Planners) generate transient markdown artifacts, logs, and plans to coordinate progress.
 
-**CRITICAL RULE:** Transient artifacts (`task.md`, `walkthrough.md`, `implementation_plan.md`) must **NEVER** be committed to the repository. 
-* Add them to `.gitignore` to prevent accidental staging.
-* Instead of committing these files, agents MUST extract their contents and inject them directly into **GitHub Pull Request Descriptions** or **Issue Comments** using MCP GitHub tools (e.g., `create_pull_request`, `add_issue_comment`).
-* This ensures rich historical context remains on GitHub issues/PRs where it belongs, rather than cluttering the git tree.
+**CRITICAL RULE:** Transient artifacts must **NEVER** be committed to the repository. 
+* All AI tools and agents MUST create and store their workspace files inside a dedicated `.ai/`, `.scratch/`, or `.tendril/scratch/` directory.
+* These directories and common artifact names (e.g. `task.md`, `walkthrough.md`, `.aider*`) are ignored in `.gitignore`.
+* Instead of committing these files, agents MUST extract their valuable contents and inject them directly into **GitHub Pull Request Descriptions** or **Issue Comments** using MCP GitHub tools.
+* This ensures rich historical context remains on GitHub where it belongs, rather than cluttering the git tree.
