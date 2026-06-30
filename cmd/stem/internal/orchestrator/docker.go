@@ -1,25 +1,22 @@
 package orchestrator
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/cmd/stem/internal/sandbox"
 )
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
@@ -515,33 +512,93 @@ func workspaceHasExtension(workspace string, extensions ...string) bool {
 	return found
 }
 
-type dockerSproutSession struct {
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	stdout     *bufio.Reader
-	stderr     bytes.Buffer
-	stderrDone chan struct{}
-	callMu     sync.Mutex
-	closeOnce  sync.Once
-	closeErr   error
+type sandboxToolSession struct {
+	sandbox sandbox.Sandbox
 }
 
-func startDockerSession(ctx context.Context, imageName string, mountPath string, extraEnv ...string) (*dockerSproutSession, error) {
-	args := []string{
-		"run", "-i", "--rm",
-		"--network", "opentendril-default",
-		"--add-host=host.docker.internal:host-gateway",
-		"-v", fmt.Sprintf("%s:/app", mountPath),
-		"-w", "/app",
+func startDockerSession(ctx context.Context, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
+	provider := sandbox.NewDockerProvider()
+	instance, err := provider.Create(ctx, sandbox.SandboxSpec{
+		Image:       imageName,
+		WorkingDir:  "/app",
+		NetworkMode: sandbox.NetworkMode("opentendril-default"),
+		Mounts: []sandbox.MountSpec{
+			{
+				Source: mountPath,
+				Target: "/app",
+			},
+		},
+		Environment: buildSandboxEnvironment(extraEnv...),
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	if envFile := strings.TrimSpace(os.Getenv("TENDRIL_ENV_FILE")); envFile != "" {
-		if _, err := os.Stat(envFile); err == nil {
-			args = append(args, "--env-file", envFile)
-		}
-	} else if _, err := os.Stat(".env"); err == nil {
-		args = append(args, "--env-file", ".env")
+	return &sandboxToolSession{sandbox: instance}, nil
+}
+
+func (s *sandboxToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {
+	response, err := s.Call(ctx, ToolCall{Tool: "listAvailableTools", Arguments: map[string]any{}})
+	if err != nil {
+		return nil, err
 	}
+	if strings.ToLower(strings.TrimSpace(response.Status)) != "success" {
+		if strings.TrimSpace(response.Error) != "" {
+			return nil, fmt.Errorf("listAvailableTools failed: %s", response.Error)
+		}
+		return nil, fmt.Errorf("listAvailableTools failed: %v", response.Output)
+	}
+
+	return decodeToolDefinitions(response.Output)
+}
+
+func (s *sandboxToolSession) Call(ctx context.Context, call ToolCall) (ToolResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.sandbox == nil {
+		return ToolResponse{}, fmt.Errorf("sandbox session is not active")
+	}
+
+	payload, err := json.Marshal(call)
+	if err != nil {
+		return ToolResponse{}, fmt.Errorf("encode tool call: %w", err)
+	}
+
+	result, err := s.sandbox.Run(ctx, sandbox.CommandSpec{Stdin: payload})
+	if err != nil {
+		return ToolResponse{}, err
+	}
+
+	var response ToolResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &response); err != nil {
+		return ToolResponse{}, fmt.Errorf("decode tool response: %w (payload: %s)", err, strings.TrimSpace(result.Stdout))
+	}
+
+	return response, nil
+}
+
+func (s *sandboxToolSession) Close() error {
+	if s == nil || s.sandbox == nil {
+		return nil
+	}
+	return s.sandbox.Stop(context.Background())
+}
+
+func (s *sandboxToolSession) Logs() string {
+	if s == nil || s.sandbox == nil {
+		return ""
+	}
+
+	logs, err := s.sandbox.SnapshotLogs(context.Background())
+	if err != nil {
+		return ""
+	}
+	return logs.Stderr
+}
+
+func buildSandboxEnvironment(extraEnv ...string) map[string]string {
+	values := make(map[string]string)
 
 	for _, key := range []string{
 		"OPENAI_API_KEY",
@@ -558,141 +615,19 @@ func startDockerSession(ctx context.Context, imageName string, mountPath string,
 		"LOCAL_MODEL_NAME",
 	} {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			args = append(args, "-e", fmt.Sprintf("%s=%s", key, value))
+			values[key] = value
 		}
 	}
 
-	for _, env := range extraEnv {
-		if value := strings.TrimSpace(env); value != "" {
-			args = append(args, "-e", value)
-		}
-	}
-
-	args = append(args, imageName)
-
-	fmt.Fprintf(os.Stderr, "🚀 Executing docker: %s %s\n", "docker", strings.Join(args, " "))
-
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("create sprout stdin pipe: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = stdin.Close()
-		return nil, fmt.Errorf("create sprout stdout pipe: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		return nil, fmt.Errorf("create sprout stderr pipe: %w", err)
-	}
-
-	session := &dockerSproutSession{
-		cmd:        cmd,
-		stdin:      stdin,
-		stdout:     bufio.NewReader(stdout),
-		stderrDone: make(chan struct{}),
-	}
-
-	go func() {
-		defer close(session.stderrDone)
-		_, _ = io.Copy(io.MultiWriter(os.Stderr, &session.stderr), stderr)
-	}()
-
-	if err := cmd.Start(); err != nil {
-		_ = stdin.Close()
-		_ = stdout.Close()
-		_ = stderr.Close()
-		return nil, fmt.Errorf("docker run failed: %w", err)
-	}
-
-	return session, nil
-}
-
-func (s *dockerSproutSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {
-	response, err := s.Call(ctx, ToolCall{Tool: "listAvailableTools", Arguments: map[string]any{}})
-	if err != nil {
-		return nil, err
-	}
-	if strings.ToLower(strings.TrimSpace(response.Status)) != "success" {
-		if strings.TrimSpace(response.Error) != "" {
-			return nil, fmt.Errorf("listAvailableTools failed: %s", response.Error)
-		}
-		return nil, fmt.Errorf("listAvailableTools failed: %v", response.Output)
-	}
-
-	return decodeToolDefinitions(response.Output)
-}
-
-func (s *dockerSproutSession) Call(ctx context.Context, call ToolCall) (ToolResponse, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if s == nil || s.cmd == nil {
-		return ToolResponse{}, fmt.Errorf("sprout session is not active")
-	}
-
-	s.callMu.Lock()
-	defer s.callMu.Unlock()
-
-	if err := json.NewEncoder(s.stdin).Encode(call); err != nil {
-		return ToolResponse{}, fmt.Errorf("write tool call: %w", err)
-	}
-
-	line, err := s.readResponseLine()
-	if err != nil {
-		return ToolResponse{}, err
-	}
-
-	var response ToolResponse
-	if err := json.Unmarshal(line, &response); err != nil {
-		return ToolResponse{}, fmt.Errorf("decode tool response: %w (payload: %s)", err, strings.TrimSpace(string(line)))
-	}
-
-	return response, nil
-}
-
-func (s *dockerSproutSession) readResponseLine() ([]byte, error) {
-	for {
-		line, err := s.stdout.ReadBytes('\n')
-		if err != nil {
-			if len(bytes.TrimSpace(line)) == 0 {
-				return nil, fmt.Errorf("read tool response: %w", err)
-			}
-		}
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) == 0 {
+	for _, entry := range extraEnv {
+		key, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
+		if !ok || strings.TrimSpace(key) == "" {
 			continue
 		}
-		return trimmed, nil
-	}
-}
-
-func (s *dockerSproutSession) Close() error {
-	if s == nil {
-		return nil
+		values[key] = value
 	}
 
-	s.closeOnce.Do(func() {
-		if s.stdin != nil {
-			_ = s.stdin.Close()
-		}
-		if s.cmd != nil {
-			s.closeErr = s.cmd.Wait()
-		}
-		<-s.stderrDone
-	})
-
-	return s.closeErr
-}
-
-func (s *dockerSproutSession) Logs() string {
-	if s == nil {
-		return ""
-	}
-	return s.stderr.String()
+	return values
 }
 
 func decodeToolDefinitions(output any) ([]ToolDefinition, error) {

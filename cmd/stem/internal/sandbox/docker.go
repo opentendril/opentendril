@@ -1,0 +1,611 @@
+package sandbox
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	pathpkg "path"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// DockerProvider launches sandboxes via the local Docker daemon.
+type DockerProvider struct{}
+
+func NewDockerProvider() *DockerProvider {
+	return &DockerProvider{}
+}
+
+func (p *DockerProvider) Name() string {
+	return "docker"
+}
+
+func (p *DockerProvider) Capabilities() SandboxCapabilities {
+	return SandboxCapabilities{
+		SupportsMounts:        true,
+		SupportsCopyIn:        true,
+		SupportsCopyOut:       true,
+		SupportsInteractiveIO: true,
+		SupportedNetworkModes: []NetworkMode{
+			NetworkModeBridge,
+			NetworkModeHost,
+			NetworkModeNone,
+		},
+	}
+}
+
+func (p *DockerProvider) Create(ctx context.Context, spec SandboxSpec) (Sandbox, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(spec.Image) == "" {
+		return nil, fmt.Errorf("sandbox image is required")
+	}
+
+	sandboxID, err := newSandboxID()
+	if err != nil {
+		return nil, fmt.Errorf("generate sandbox id: %w", err)
+	}
+
+	args := []string{"run", "-i", "--name", sandboxID}
+	if network := strings.TrimSpace(string(spec.NetworkMode)); network != "" {
+		args = append(args, "--network", network)
+	}
+	args = append(args, "--add-host=host.docker.internal:host-gateway")
+
+	for _, mount := range spec.Mounts {
+		source := strings.TrimSpace(mount.Source)
+		target := strings.TrimSpace(mount.Target)
+		if source == "" || target == "" {
+			return nil, fmt.Errorf("sandbox mounts require both source and target")
+		}
+
+		mountArg := fmt.Sprintf("%s:%s", source, target)
+		if mount.ReadOnly {
+			mountArg += ":ro"
+		}
+		args = append(args, "-v", mountArg)
+	}
+
+	if envFile := resolveDockerEnvFile(); envFile != "" {
+		args = append(args, "--env-file", envFile)
+	}
+
+	for _, key := range sortedKeys(spec.Environment) {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", key, spec.Environment[key]))
+	}
+
+	if workingDir := strings.TrimSpace(spec.WorkingDir); workingDir != "" {
+		args = append(args, "-w", workingDir)
+	}
+
+	args = append(args, spec.Image)
+	args = append(args, spec.Command...)
+
+	fmt.Fprintf(os.Stderr, "🚀 Executing docker: docker %s\n", strings.Join(args, " "))
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create sandbox stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, fmt.Errorf("create sandbox stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		return nil, fmt.Errorf("create sandbox stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		_ = stderr.Close()
+		return nil, fmt.Errorf("docker run failed: %w", err)
+	}
+
+	sandbox := &dockerSandbox{
+		provider:   p,
+		id:         sandboxID,
+		workingDir: strings.TrimSpace(spec.WorkingDir),
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     bufio.NewReader(stdout),
+		stderrDone: make(chan struct{}),
+		stdoutLog:  lockedBuffer{},
+		stderrLog:  lockedBuffer{},
+	}
+
+	go func() {
+		defer close(sandbox.stderrDone)
+		_, _ = io.Copy(io.MultiWriter(os.Stderr, &sandbox.stderrLog), stderr)
+	}()
+
+	if len(spec.Files) > 0 {
+		if err := sandbox.CopyIn(ctx, spec.Files); err != nil {
+			_ = sandbox.Stop(context.Background())
+			return nil, err
+		}
+	}
+
+	return sandbox, nil
+}
+
+type dockerSandbox struct {
+	provider   *DockerProvider
+	id         string
+	workingDir string
+
+	cmd        *exec.Cmd
+	stdin      io.WriteCloser
+	stdout     *bufio.Reader
+	stderrDone chan struct{}
+
+	stdoutLog lockedBuffer
+	stderrLog lockedBuffer
+
+	callMu   sync.Mutex
+	stopOnce sync.Once
+	stopErr  error
+	waitOnce sync.Once
+	waitErr  error
+}
+
+func (s *dockerSandbox) ID() string {
+	if s == nil {
+		return ""
+	}
+	return s.id
+}
+
+func (s *dockerSandbox) Provider() SandboxProvider {
+	if s == nil {
+		return nil
+	}
+	return s.provider
+}
+
+func (s *dockerSandbox) CopyIn(ctx context.Context, payloads []FilePayload) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil {
+		return fmt.Errorf("sandbox is nil")
+	}
+
+	for _, payload := range payloads {
+		containerPath, err := s.resolveContainerPath(payload.Path)
+		if err != nil {
+			return err
+		}
+
+		parent := pathpkg.Dir(containerPath)
+		if parent != "" && parent != "." && parent != "/" {
+			if _, _, err := runDockerCommand(ctx, "exec", s.id, "mkdir", "-p", parent); err != nil {
+				return fmt.Errorf("create sandbox directory %s: %w", parent, err)
+			}
+		}
+
+		shadowRoot, err := os.MkdirTemp("", "opentendril-sandbox-copyin-*")
+		if err != nil {
+			return fmt.Errorf("create copy-in temp dir: %w", err)
+		}
+
+		cleanLocalPath, err := localShadowPath(shadowRoot, containerPath)
+		if err != nil {
+			_ = os.RemoveAll(shadowRoot)
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(cleanLocalPath), 0o755); err != nil {
+			_ = os.RemoveAll(shadowRoot)
+			return fmt.Errorf("create copy-in parent dir: %w", err)
+		}
+
+		mode := payload.Mode
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(cleanLocalPath, payload.Content, mode); err != nil {
+			_ = os.RemoveAll(shadowRoot)
+			return fmt.Errorf("write copy-in payload: %w", err)
+		}
+
+		if _, _, err := runDockerCommand(ctx, "cp", cleanLocalPath, fmt.Sprintf("%s:%s", s.id, containerPath)); err != nil {
+			_ = os.RemoveAll(shadowRoot)
+			return fmt.Errorf("copy file into sandbox: %w", err)
+		}
+
+		_ = os.RemoveAll(shadowRoot)
+	}
+
+	return nil
+}
+
+func (s *dockerSandbox) Run(ctx context.Context, spec CommandSpec) (CommandResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.cmd == nil {
+		return CommandResult{}, fmt.Errorf("sandbox is not active")
+	}
+
+	startedAt := time.Now().UTC()
+
+	if len(spec.Command) == 0 {
+		s.callMu.Lock()
+		defer s.callMu.Unlock()
+
+		payload := append([]byte(nil), spec.Stdin...)
+		if len(payload) == 0 {
+			return CommandResult{}, fmt.Errorf("interactive sandbox run requires stdin payload")
+		}
+		if payload[len(payload)-1] != '\n' {
+			payload = append(payload, '\n')
+		}
+
+		if _, err := s.stdin.Write(payload); err != nil {
+			return CommandResult{}, fmt.Errorf("write sandbox stdin: %w", err)
+		}
+
+		line, err := s.readResponseLine()
+		completedAt := time.Now().UTC()
+		result := CommandResult{
+			Stdout:      string(line),
+			ExitCode:    0,
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			Duration:    completedAt.Sub(startedAt),
+		}
+		if err != nil {
+			return result, err
+		}
+
+		if len(line) > 0 {
+			_, _ = s.stdoutLog.Write(append(append([]byte(nil), line...), '\n'))
+		}
+
+		return result, nil
+	}
+
+	args := []string{"exec"}
+	if workingDir := strings.TrimSpace(spec.WorkingDir); workingDir != "" {
+		args = append(args, "-w", workingDir)
+	} else if s.workingDir != "" {
+		args = append(args, "-w", s.workingDir)
+	}
+	for _, key := range sortedKeys(spec.Environment) {
+		args = append(args, "-e", fmt.Sprintf("%s=%s", key, spec.Environment[key]))
+	}
+	args = append(args, s.id)
+	args = append(args, spec.Command...)
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	if len(spec.Stdin) > 0 {
+		cmd.Stdin = bytes.NewReader(spec.Stdin)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+	completedAt := time.Now().UTC()
+	result := CommandResult{
+		Stdout:      stdout.String(),
+		Stderr:      stderr.String(),
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		Duration:    completedAt.Sub(startedAt),
+	}
+
+	if runErr != nil {
+		var exitErr *exec.ExitError
+		if errors.As(runErr, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			return result, fmt.Errorf("docker exec failed: %w", runErr)
+		}
+	}
+
+	if result.ExitCode == 0 {
+		result.ExitCode = 0
+	}
+
+	if stdout.Len() > 0 {
+		_, _ = s.stdoutLog.Write(stdout.Bytes())
+	}
+	if stderr.Len() > 0 {
+		_, _ = s.stderrLog.Write(stderr.Bytes())
+	}
+
+	return result, nil
+}
+
+func (s *dockerSandbox) CopyOut(ctx context.Context, paths []string) ([]Artifact, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil {
+		return nil, fmt.Errorf("sandbox is nil")
+	}
+
+	artifacts := make([]Artifact, 0, len(paths))
+	for _, requestedPath := range paths {
+		containerPath, err := s.resolveContainerPath(requestedPath)
+		if err != nil {
+			return nil, err
+		}
+
+		shadowRoot, err := os.MkdirTemp("", "opentendril-sandbox-copyout-*")
+		if err != nil {
+			return nil, fmt.Errorf("create copy-out temp dir: %w", err)
+		}
+
+		if _, _, err := runDockerCommand(ctx, "cp", fmt.Sprintf("%s:%s", s.id, containerPath), shadowRoot); err != nil {
+			_ = os.RemoveAll(shadowRoot)
+			return nil, fmt.Errorf("copy file out of sandbox: %w", err)
+		}
+
+		localPath := filepath.Join(shadowRoot, pathpkg.Base(containerPath))
+		content, err := os.ReadFile(localPath)
+		_ = os.RemoveAll(shadowRoot)
+		if err != nil {
+			return nil, fmt.Errorf("read copied artifact: %w", err)
+		}
+
+		artifacts = append(artifacts, Artifact{
+			Path:    requestedPath,
+			Content: content,
+		})
+	}
+
+	return artifacts, nil
+}
+
+func (s *dockerSandbox) SnapshotLogs(ctx context.Context) (SandboxLogs, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil {
+		return SandboxLogs{}, fmt.Errorf("sandbox is nil")
+	}
+
+	return SandboxLogs{
+		Stdout: s.stdoutLog.String(),
+		Stderr: s.stderrLog.String(),
+	}, nil
+}
+
+func (s *dockerSandbox) Stop(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	s.stopOnce.Do(func() {
+		var stopErr error
+
+		if s.stdin != nil {
+			_ = s.stdin.Close()
+		}
+
+		waitCh := make(chan error, 1)
+		go func() {
+			waitCh <- s.wait()
+		}()
+
+		timer := time.NewTimer(500 * time.Millisecond)
+		defer timer.Stop()
+
+		waited := false
+		stopCalled := false
+		select {
+		case err := <-waitCh:
+			waited = true
+			if err != nil && !isIgnorableWaitError(err) {
+				stopErr = errors.Join(stopErr, err)
+			}
+		case <-timer.C:
+			stopCalled = true
+			if _, output, err := runDockerCommand(ctx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+
+		if !stopCalled {
+			if _, output, err := runDockerCommand(ctx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+
+		if !waited {
+			if err := <-waitCh; err != nil && !isIgnorableWaitError(err) {
+				stopErr = errors.Join(stopErr, err)
+			}
+		}
+
+		if s.stderrDone != nil {
+			<-s.stderrDone
+		}
+
+		if _, output, err := runDockerCommand(ctx, "rm", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+			stopErr = errors.Join(stopErr, err)
+		}
+
+		s.stopErr = stopErr
+	})
+
+	return s.stopErr
+}
+
+func (s *dockerSandbox) readResponseLine() ([]byte, error) {
+	for {
+		line, err := s.stdout.ReadBytes('\n')
+		if err != nil && len(bytes.TrimSpace(line)) == 0 {
+			return nil, fmt.Errorf("read sandbox response: %w", err)
+		}
+
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 {
+			if err != nil {
+				return nil, fmt.Errorf("read sandbox response: %w", err)
+			}
+			continue
+		}
+
+		return trimmed, nil
+	}
+}
+
+func (s *dockerSandbox) resolveContainerPath(rawPath string) (string, error) {
+	cleanPath := pathpkg.Clean(strings.TrimSpace(rawPath))
+	if cleanPath == "." || cleanPath == "/" || cleanPath == "" {
+		return "", fmt.Errorf("sandbox path is required")
+	}
+
+	if pathpkg.IsAbs(cleanPath) {
+		return cleanPath, nil
+	}
+
+	base := s.workingDir
+	if base == "" {
+		base = "/"
+	}
+	return pathpkg.Clean(pathpkg.Join(base, cleanPath)), nil
+}
+
+func (s *dockerSandbox) wait() error {
+	s.waitOnce.Do(func() {
+		if s.cmd == nil {
+			return
+		}
+		s.waitErr = s.cmd.Wait()
+	})
+	return s.waitErr
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func runDockerCommand(ctx context.Context, args ...string) (string, string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		trimmedOutput := strings.TrimSpace(stderr.String())
+		if trimmedOutput == "" {
+			trimmedOutput = strings.TrimSpace(stdout.String())
+		}
+		return stdout.String(), stderr.String(), fmt.Errorf("docker %s failed: %w (output: %s)", strings.Join(args, " "), err, trimmedOutput)
+	}
+
+	return stdout.String(), stderr.String(), nil
+}
+
+func resolveDockerEnvFile() string {
+	if envFile := strings.TrimSpace(os.Getenv("TENDRIL_ENV_FILE")); envFile != "" {
+		if _, err := os.Stat(envFile); err == nil {
+			return envFile
+		}
+	}
+	if _, err := os.Stat(".env"); err == nil {
+		return ".env"
+	}
+	return ""
+}
+
+func sortedKeys(values map[string]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func localShadowPath(root, containerPath string) (string, error) {
+	cleanPath := pathpkg.Clean(containerPath)
+	if cleanPath == "." || cleanPath == "/" {
+		return "", fmt.Errorf("sandbox path %q cannot be materialized locally", containerPath)
+	}
+
+	trimmed := strings.TrimPrefix(cleanPath, "/")
+	if trimmed == "" {
+		return "", fmt.Errorf("sandbox path %q cannot be materialized locally", containerPath)
+	}
+
+	return filepath.Join(root, filepath.FromSlash(trimmed)), nil
+}
+
+func newSandboxID() (string, error) {
+	bytes := make([]byte, 6)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "opentendril-sandbox-" + hex.EncodeToString(bytes), nil
+}
+
+func isIgnorableDockerLifecycleOutput(output string) bool {
+	lowerOutput := strings.ToLower(strings.TrimSpace(output))
+	if lowerOutput == "" {
+		return false
+	}
+
+	return strings.Contains(lowerOutput, "no such container") ||
+		strings.Contains(lowerOutput, "is not running") ||
+		strings.Contains(lowerOutput, "is already in progress")
+}
+
+func isIgnorableWaitError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+
+	return exitErr.ExitCode() == 137 || exitErr.ExitCode() == 143
+}
