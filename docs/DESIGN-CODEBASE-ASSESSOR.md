@@ -78,7 +78,7 @@ The generated map is formatted as a compact hierarchical list:
 ## 5. Open Questions
 
 > [!IMPORTANT]
-> 1.  **File Size Threshold:** In very large codebases, even the signature map can grow too large for a prompt. Should we cap the file parsing limit (e.g., skip parsing files in deep directories or only parse files with less than 2000 lines), or should the Conductor planner dynamically request AST mapping for specific directories?
+> 1.  **File Size Threshold:** In very large codebases, even the signature map can grow too large for a prompt. Should we cap the file parsing limit (e.g., skip parsing files in deep directories or only parse files with less than 2000 lines), or should the Meristem planner dynamically request AST mapping for specific directories?
 > 2.  **Excluding Test Files:** Should we skip generating AST maps for test files (e.g. `*_test.go`, `*.test.ts`, `test_*.py`) to keep the map focused strictly on the core application APIs?
 
 ---

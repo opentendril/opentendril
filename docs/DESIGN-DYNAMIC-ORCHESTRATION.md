@@ -10,7 +10,7 @@ Currently, OpenTendril sequences are executed using a static, pre-defined Direct
 
 To solve this, we introduce **Dynamic Orchestration** using a three-tiered model:
 1.  **Dual LLM Client Setup:** Routing lightweight planning and inspection tasks to a fast, cost-efficient Coordinator model, while leaving heavy code-writing tasks to the expert Worker model.
-2.  **Dynamic Sequence Generation (Conductor planning):** Sprouting a coordinator-level planner that evaluates the target workspace and dynamically writes the sequence DAG at execution time.
+2.  **Dynamic Sequence Generation (Meristem planning):** Sprouting a coordinator-level planner that evaluates the target workspace and dynamically writes the sequence DAG at execution time.
 3.  **Role Delegation & Recursive Sprouting:** Isolating planning (Thinker), editing (Worker), and verification (Verifier) tasks into specialized sprouts, and dynamically appending correction steps (Debugger sprouts) when verification fails.
 
 ---
@@ -53,14 +53,14 @@ Dynamic sequences replace static YAML files with planning steps designed at exec
 
 ### The Execution Loop
 1.  The Go Stem orchestrator reads the user Transcript.
-2.  It detects a "Conductor" step or sequence request and sprouts a planning container running the coordinator client.
+2.  It detects a "Meristem" step or sequence request and sprouts a planning container running the coordinator client.
 3.  The planning sprout inspects the workspace, designs a list of execution steps, and returns them as a JSON array.
 4.  The sequence runner parses this array on the host side and appends the steps directly to the active sequence.
 
 ### Code Changes
 In [sequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/sequence.go), when a step completes successfully, we check if it generated dynamic steps:
 ```go
-if isConductorStep(result.stepID) {
+if isMeristemStep(result.stepID) {
 	newSteps, err := parseDynamicSteps(result.output)
 	if err == nil && len(newSteps) > 0 {
 		r.appendDynamicSteps(newSteps)

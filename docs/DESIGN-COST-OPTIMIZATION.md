@@ -62,7 +62,7 @@ For Anthropic provider queries, Go Stem formats system and user prompts to lever
 
 ### C. Orchestrator Routing
 *   Orchestrator clients resolve their target LLM clients using the configured step/role Tier:
-    *   **Conductor Step Planning / Coordinator:** Uses `TierPremium` (complex reasoning).
+    *   **Meristem Step Planning / Coordinator:** Uses `TierPremium` (complex reasoning).
     *   **Worker Sprouts (making code edits):** Uses `TierPremium` (high accuracy code editing).
     *   **Verifier / Debugger / Compiler checks:** Uses `TierStandard` (fast, cost-effective confirmation).
     *   **Epigenetic Chronicler:** Uses `TierCheapest` (summarization and transcription of diff learnings).
