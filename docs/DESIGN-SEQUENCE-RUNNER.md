@@ -1,12 +1,12 @@
-# Sequence Conductor: Parallel Workflows & Failure recovery (Issue #60)
+# Vascular Cambium: Parallel Workflows & Failure recovery (Issue #60)
 
-This plan details the implementation of the **Sequence Conductor** in the Go Stem orchestrator. This allows developers and IDE agents to write structured, parallel-capable task graphs to `.tendril/sequences/<name>.yaml` and run them concurrently using Go goroutines, with advanced failure recovery options.
+This plan details the implementation of the **Vascular Cambium** (Sequence Runner) in the Go Stem orchestrator. This allows developers and IDE agents to write structured, parallel-capable task graphs to `.tendril/sequences/<name>.yaml` and run them concurrently using Go goroutines, with advanced failure recovery options.
 
 ---
 
 ## 1. Architectural Flow & Parallel Concurrency
 
-Instead of running steps strictly in order, the Conductor parses a **directed acyclic graph (DAG)** of tasks. Steps that have no dependencies (or whose dependencies are already complete) are executed concurrently in separate sandboxed worktrees up to a configurable concurrency limit.
+Instead of running steps strictly in order, the Vascular Cambium parses a **directed acyclic graph (DAG)** of tasks. Steps that have no dependencies (or whose dependencies are already complete) are executed concurrently in separate sandboxed worktrees up to a configurable concurrency limit.
 
 ```
                   [ Load Sequence YAML ]
@@ -68,10 +68,10 @@ steps:
 
 ### A. Parallel Dispatching (Go Goroutines)
 1.  Go Stem builds a dependency resolver.
-2.  In a loop, the Conductor identifies all steps with status `"pending"` whose `dependsOn` steps are `"complete"`.
+2.  In a loop, the Vascular Cambium identifies all steps with status `"pending"` whose `dependsOn` steps are `"complete"`.
 3.  Dispatches a Go goroutine for each available step up to the `concurrencyLimit`.
 4.  Each parallel step runs in a separate, isolated shadow git worktree (e.g. `/tmp/opentendril-sandbox-step-<id>-<random>`).
-5.  On completion, the sandbox changes are committed and merged back into the shared branch on the host, and the step status is updated in the YAML file in-place.
+5.  On completion, the sandbox changes are committed and merged back into the shared branch on the host (Phloem transport), and the step status is updated in the YAML file in-place.
 
 ### B. Failure Recovery Options (`onFailure`)
 *   `halt`: Immediately stops the sequence. No further steps are dispatched.

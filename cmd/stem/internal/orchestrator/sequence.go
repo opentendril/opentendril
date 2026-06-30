@@ -48,6 +48,7 @@ type SequenceStep struct {
 	ID              string   `yaml:"id"`
 	Status          string   `yaml:"status"`
 	DependsOn       []string `yaml:"dependsOn,omitempty"`
+	DependsOnLegacy []string `yaml:"depends_on,omitempty"`
 	Transcript      string   `yaml:"transcript"`
 	PhenotypesCount int      `yaml:"phenotypesCount,omitempty"`
 	FitnessTest     string   `yaml:"fitnessTest,omitempty"`
@@ -300,9 +301,14 @@ func normalizeSequence(path string, seq *Sequence) error {
 			return fmt.Errorf("sequence %s step %s has invalid status %q", path, step.ID, step.Status)
 		}
 
-		deps := make([]string, 0, len(step.DependsOn))
-		depSeen := make(map[string]struct{}, len(step.DependsOn))
-		for _, dep := range step.DependsOn {
+		dependsOn := step.DependsOn
+		if len(dependsOn) == 0 && len(step.DependsOnLegacy) > 0 {
+			dependsOn = append([]string(nil), step.DependsOnLegacy...)
+		}
+
+		deps := make([]string, 0, len(dependsOn))
+		depSeen := make(map[string]struct{}, len(dependsOn))
+		for _, dep := range dependsOn {
 			trimmed := strings.TrimSpace(dep)
 			if trimmed == "" {
 				continue
@@ -317,6 +323,7 @@ func normalizeSequence(path string, seq *Sequence) error {
 			deps = append(deps, trimmed)
 		}
 		step.DependsOn = deps
+		step.DependsOnLegacy = nil
 		step.Transcript = strings.TrimSpace(step.Transcript)
 		if step.PhenotypesCount <= 0 {
 			step.PhenotypesCount = 1
@@ -496,7 +503,7 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 				if output := strings.TrimSpace(result.output); output != "" {
 					fmt.Fprintln(r.opts.Stdout, output)
 				}
-				if isConductorStep(result.stepID) {
+				if isMeristemStep(result.stepID) {
 					dynamicSteps, parseErr := parseDynamicSteps(result.output)
 					if parseErr != nil {
 						fmt.Fprintf(r.opts.Stderr, "⚠️ Failed to parse dynamic steps from %s: %v\n", result.stepID, parseErr)
@@ -718,8 +725,8 @@ func stepGenotype(stepID string) string {
 	normalized := strings.ToLower(trimmed)
 
 	switch {
-	case isConductorStep(trimmed):
-		return "conductor"
+	case isMeristemStep(trimmed):
+		return "meristem"
 	case strings.Contains(normalized, "debugger"):
 		return "debugger"
 	case strings.Contains(normalized, "verifier"):
@@ -734,7 +741,7 @@ func stepGenotype(stepID string) string {
 func stepModelTier(stepID string) llm.ModelTier {
 	normalized := strings.ToLower(strings.TrimSpace(stepID))
 	switch {
-	case isConductorStep(stepID):
+	case isMeristemStep(stepID):
 		return llm.TierPremium
 	case strings.Contains(normalized, "verifier"):
 		return llm.TierStandard
@@ -958,6 +965,7 @@ var (
 	runSequenceSproutFn          = runSequenceSprout
 	runSequenceSproutAtPathFn    = runSequenceSproutAtPath
 	mergePhenotypeBranchToHostFn = mergePhenotypeBranchToHost
+	mergePhloemChannelToHostFn   = mergePhloemChannelToHost
 )
 
 type sproutExecutionResult struct {
@@ -978,30 +986,65 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		return "", err
 	}
 
-	if isConductorStep(step.ID) {
-		if err := EnsureConductorGenotype(substratePath); err != nil {
+	if isMeristemStep(step.ID) {
+		if err := EnsureMeristemGenotype(substratePath); err != nil {
 			return "", err
 		}
+	}
+
+	genotype := stepGenotype(step.ID)
+	if seq.ConcurrencyLimit > 1 {
+		return runParallelSequenceStep(ctx, seq, step, substratePath, genotype)
 	}
 
 	if step.PhenotypesCount > 1 {
 		return runPhenotypicSelection(ctx, seq, step, substratePath)
 	}
 
-	genotype := stepGenotype(step.ID)
-	if isConductorStep(step.ID) {
-		genotype = "conductor"
-	}
-
 	orch := &DockerOrchestrator{
 		Substrate:       substratePath,
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
-		IsCoordinator:   isConductorStep(step.ID),
+		IsCoordinator:   isMeristemStep(step.ID),
 		Tier:            stepModelTier(step.ID),
 		Genotype:        genotype,
 	}
 	return runSequenceSproutFn(ctx, orch, step.Transcript)
+}
+
+func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath, genotype string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	branchName := derivedSequenceBranch(seq.Branch, step.ID)
+	shadowPath, err := createShadowWorktreeFn(substratePath, branchName)
+	if err != nil {
+		return "", fmt.Errorf("create parallel worktree %s: %w", branchName, err)
+	}
+	injectMycorrhizalCacheFn(substratePath, shadowPath)
+	defer removeShadowWorktreeFn(substratePath, shadowPath)
+
+	orch := &DockerOrchestrator{
+		Substrate:        shadowPath,
+		SubstrateBranch:  branchName,
+		StepID:           step.ID,
+		IsCoordinator:    isMeristemStep(step.ID),
+		Tier:             stepModelTier(step.ID),
+		Genotype:         genotype,
+		DisableMergeBack: true,
+	}
+
+	result, err := runSequenceSproutAtPathFn(ctx, orch, step.Transcript, substratePath, shadowPath)
+	if err != nil {
+		return result.Response, err
+	}
+
+	if err := mergePhloemChannelToHostFn(ctx, substratePath, branchName, step.ID); err != nil {
+		return result.Response, err
+	}
+
+	return result.Response, nil
 }
 
 func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (result string, err error) {
@@ -1072,15 +1115,15 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 			defer removeShadowWorktreeFn(sourcePath, shadowPath)
 
 			genotype := stepGenotype(step.ID)
-			if isConductorStep(step.ID) {
-				genotype = "conductor"
+			if isMeristemStep(step.ID) {
+				genotype = "meristem"
 			}
 
 			orch := &DockerOrchestrator{
 				Substrate:        sourcePath,
 				SubstrateBranch:  branchName,
 				StepID:           step.ID,
-				IsCoordinator:    isConductorStep(step.ID),
+				IsCoordinator:    isMeristemStep(step.ID),
 				Tier:             stepModelTier(step.ID),
 				Genotype:         genotype,
 				Temperature:      0.1 + float64(index)*0.3,
@@ -1152,9 +1195,9 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 	return "", fmt.Errorf("phenotypic selection failed without a concrete error")
 }
 
-func isConductorStep(stepID string) bool {
+func isMeristemStep(stepID string) bool {
 	stepID = strings.ToLower(strings.TrimSpace(stepID))
-	return stepID == "conductor" || strings.HasPrefix(stepID, "conductor-")
+	return stepID == "meristem" || strings.HasPrefix(stepID, "meristem-")
 }
 
 func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt string) (string, error) {
@@ -1384,6 +1427,45 @@ func mergePhenotypeBranchToHost(ctx context.Context, sourcePath, branchName stri
 	}
 
 	if _, err = runGitCommand(cleanupCtx, sourcePath, "merge", "--ff-only", branchName); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func mergePhloemChannelToHost(ctx context.Context, sourcePath, branchName, stepID string) (err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sourcePath = repoRoot(sourcePath)
+	branchName = strings.TrimSpace(branchName)
+	stepID = strings.TrimSpace(stepID)
+	if strings.TrimSpace(sourcePath) == "" {
+		return fmt.Errorf("source path is empty")
+	}
+	if branchName == "" {
+		return fmt.Errorf("branch name is empty")
+	}
+
+	cleanupCtx := context.WithoutCancel(ctx)
+	hostStashed, err := stashHostWorkspaceFn(ctx, sourcePath, "phloem-merge-"+sanitizeBranchComponent(stepID))
+	if err != nil {
+		return err
+	}
+	if hostStashed {
+		defer func() {
+			if restoreErr := restoreHostStashFn(cleanupCtx, sourcePath); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
+		}()
+	}
+
+	mergeMessage := fmt.Sprintf("chore: merge parallel step %s", stepID)
+	if _, err = runGitCommand(cleanupCtx, sourcePath, "merge", "--no-ff", "-m", mergeMessage, branchName); err != nil {
+		if _, abortErr := runGitCommand(cleanupCtx, sourcePath, "merge", "--abort"); abortErr != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to abort parallel merge for %s: %v\n", stepID, abortErr)
+		}
 		return err
 	}
 

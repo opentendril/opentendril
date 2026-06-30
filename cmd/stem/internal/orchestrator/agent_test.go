@@ -71,7 +71,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if err := os.MkdirAll(genotypeDir, 0o755); err != nil {
 		t.Fatalf("mkdir genotype dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(genotypeDir, "conductor.json"), []byte(`{"name":"conductor","instructions":"You are the conductor."}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(genotypeDir, "meristem.json"), []byte(`{"name":"meristem","instructions":"You are the meristem."}`), 0o644); err != nil {
 		t.Fatalf("write genotype file: %v", err)
 	}
 
@@ -93,7 +93,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 		},
 	}
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "conductor", client, session)
+	agent, err := newAgent(context.Background(), workspace, workspace, "meristem", client, session)
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if !strings.Contains(client.calls[0][0].Content, "Genome note") {
 		t.Fatalf("system prompt missing genome context: %s", client.calls[0][0].Content)
 	}
-	if !strings.Contains(client.calls[0][0].Content, "You are the conductor.") {
+	if !strings.Contains(client.calls[0][0].Content, "You are the meristem.") {
 		t.Fatalf("system prompt missing genotype context: %s", client.calls[0][0].Content)
 	}
 }
