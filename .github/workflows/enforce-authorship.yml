@@ -1,0 +1,38 @@
+name: Enforce Authorship
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  verify-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Verify Commit Authors
+        run: |
+          echo "Checking commit authors for unauthorized AI agents..."
+          
+          # Check author emails
+          INVALID_COMMITS=$(git log origin/${{ github.base_ref }}..HEAD --format="%h - %an <%ae>" | grep -i -E "@anthropic\.com|@jurnx\.com|claude" || true)
+          
+          if [ -n "$INVALID_COMMITS" ]; then
+            echo "::error::Found unauthorized commit authors! AI builders must use the authorized OpenTendril identity."
+            echo "$INVALID_COMMITS"
+            exit 1
+          fi
+          
+          # Check Co-authored-by trailers in the commit body
+          INVALID_TRAILERS=$(git log origin/${{ github.base_ref }}..HEAD --format="%h - %b" | grep -i -E "Co-authored-by:.*(@anthropic\.com|claude|jurnx)" || true)
+          
+          if [ -n "$INVALID_TRAILERS" ]; then
+            echo "::error::Found unauthorized Co-authored-by trailers in commit messages!"
+            echo "$INVALID_TRAILERS"
+            exit 1
+          fi
+          
+          echo "✅ All commit authors and trailers verified successfully."
