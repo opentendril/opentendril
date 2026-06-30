@@ -1,0 +1,21 @@
+package orchestrator
+
+import (
+	"context"
+
+	"github.com/opentendril/core/cmd/stem/internal/mesh"
+)
+
+func delegateGitPushIfConfigured(ctx context.Context, workspace, branch, commitMessage string) (bool, error) {
+	client := mesh.NewClientFromEnv()
+	if client == nil {
+		return false, nil
+	}
+
+	_, err := client.DelegatePush(ctx, workspace, branch, commitMessage)
+	if err != nil {
+		return true, err
+	}
+
+	return true, nil
+}
