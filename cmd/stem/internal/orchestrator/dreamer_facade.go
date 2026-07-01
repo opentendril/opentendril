@@ -1,0 +1,85 @@
+package orchestrator
+
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/opentendril/core/cmd/stem/internal/dreamer"
+)
+
+// GenerateRepoMap initializes the Dreamer context engine, incrementally scans
+// the provided repository mount path, and returns a markdown-formatted map
+// of the repository's semantic signatures.
+func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tendrilDir := filepath.Join(mountPath, ".tendril")
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		return "", fmt.Errorf("create .tendril dir: %w", err)
+	}
+
+	keyPath := filepath.Join(tendrilDir, "dreamer.key")
+	key, err := getOrCreateIndexKey(keyPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve index key: %w", err)
+	}
+
+	encryptor, err := dreamer.NewEncryptor(key)
+	if err != nil {
+		return "", fmt.Errorf("initialize encryptor: %w", err)
+	}
+
+	dbPath := filepath.Join(tendrilDir, "dreamer.db")
+	store, err := dreamer.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
+	if err != nil {
+		return "", fmt.Errorf("open index store: %w", err)
+	}
+	defer store.Close()
+
+	absoluteMountPath, err := filepath.Abs(mountPath)
+	if err != nil {
+		absoluteMountPath = mountPath
+	}
+	repositoryName := filepath.Base(absoluteMountPath)
+	if repositoryName == "." || repositoryName == "" {
+		repositoryName = "workspace"
+	}
+
+	if _, err := dreamer.ScanRepository(ctx, mountPath, repositoryName, store, nil); err != nil {
+		return "", fmt.Errorf("scan repository: %w", err)
+	}
+
+	return dreamer.GenerateRepoMap(ctx, store, repositoryName, "*", 2000)
+}
+
+func getOrCreateIndexKey(keyPath string) ([]byte, error) {
+	if envKey := os.Getenv("OPEN_TENDRIL_INDEX_KEY"); envKey != "" {
+		if len(envKey) >= 32 {
+			return []byte(envKey[:32]), nil
+		}
+		// Pad to 32 bytes if shorter
+		padded := make([]byte, 32)
+		copy(padded, envKey)
+		return padded, nil
+	}
+
+	if content, err := os.ReadFile(keyPath); err == nil && len(content) == 32 {
+		return content, nil
+	}
+
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate random key: %w", err)
+	}
+
+	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
+		return nil, fmt.Errorf("save generated key: %w", err)
+	}
+
+	return key, nil
+}

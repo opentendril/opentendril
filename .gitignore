@@ -64,3 +64,5 @@ walkthrough.md
 implementation_plan.md
 .aider*
 .cline*
+.tendril/dreamer.db
+.tendril/dreamer.key
