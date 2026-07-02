@@ -129,7 +129,7 @@ func shouldSkipPath(path string, isDir bool) bool {
 
 	for _, segment := range strings.Split(normalized, "/") {
 		switch strings.ToLower(segment) {
-		case ".git", "node_modules", ".tendrilignore":
+		case ".git", "node_modules", ".tendrilignore", "venv", ".venv", "vendor", "dist", "build", "__pycache__":
 			return true
 		}
 	}

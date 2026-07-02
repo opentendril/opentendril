@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -16,7 +17,7 @@ func runRepoMapCmd(args []string) {
 		}
 	}
 
-	mapMarkdown, err := orchestrator.GenerateRepoMap(mustGetwd())
+	mapMarkdown, err := orchestrator.GenerateRepoMap(context.Background(), mustGetwd())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to generate repo map: %v\n", err)
 		os.Exit(1)

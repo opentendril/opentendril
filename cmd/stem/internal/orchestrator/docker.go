@@ -202,7 +202,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype)
 	}
 
-	repoMapMarkdown, err := generateRepoMapFn(mountPath)
+	repoMapMarkdown, err := generateRepoMapFn(ctx, mountPath)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
