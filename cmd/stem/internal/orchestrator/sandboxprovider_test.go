@@ -3,30 +3,30 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/sandbox"
+	"github.com/opentendril/core/cmd/stem/internal/terrarium"
 )
 
-func TestResolveSandboxProviderName(t *testing.T) {
+func TestResolveTerrariumProviderName(t *testing.T) {
 	t.Run("env wins", func(t *testing.T) {
-		t.Setenv(sandboxProviderEnvKey, "gvisor")
+		t.Setenv(terrariumProviderEnvKey, "gvisor")
 
-		got := resolveSandboxProviderName(&DockerOrchestrator{Substrate: "docker"})
-		if got != sandbox.ProviderGVisor {
-			t.Fatalf("resolveSandboxProviderName() = %q, want %q", got, sandbox.ProviderGVisor)
+		got := resolveTerrariumProviderName(&DockerOrchestrator{Substrate: "docker"})
+		if got != terrarium.ProviderGVisor {
+			t.Fatalf("resolveTerrariumProviderName() = %q, want %q", got, terrarium.ProviderGVisor)
 		}
 	})
 
 	t.Run("substrate fallback", func(t *testing.T) {
-		got := resolveSandboxProviderName(&DockerOrchestrator{Substrate: "gvisor"})
-		if got != sandbox.ProviderGVisor {
-			t.Fatalf("resolveSandboxProviderName() = %q, want %q", got, sandbox.ProviderGVisor)
+		got := resolveTerrariumProviderName(&DockerOrchestrator{Substrate: "gvisor"})
+		if got != terrarium.ProviderGVisor {
+			t.Fatalf("resolveTerrariumProviderName() = %q, want %q", got, terrarium.ProviderGVisor)
 		}
 	})
 
 	t.Run("defaults to docker", func(t *testing.T) {
-		got := resolveSandboxProviderName(&DockerOrchestrator{})
-		if got != sandbox.ProviderDocker {
-			t.Fatalf("resolveSandboxProviderName() = %q, want %q", got, sandbox.ProviderDocker)
+		got := resolveTerrariumProviderName(&DockerOrchestrator{})
+		if got != terrarium.ProviderDocker {
+			t.Fatalf("resolveTerrariumProviderName() = %q, want %q", got, terrarium.ProviderDocker)
 		}
 	})
 }

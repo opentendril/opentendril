@@ -55,18 +55,18 @@ services:
       LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-qwen2.5-coder:7b}
       NANO_MODEL_ENABLED: ${NANO_MODEL_ENABLED:-false}
       TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
-      SANDBOX_TOKEN: ${SANDBOX_TOKEN:-tendril_default_sandbox_token}
-      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
+      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
+      TERRARIUM_ENABLED: ${TERRARIUM_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      sandbox:
+      terrarium:
         condition: service_started
     networks:
       - default
-      - sandbox-net
+      - terrarium-net
     volumes:
       # Default: Mount internal source code for the "Root Agent" Moat loop
       - ./tendrils/python/src:/app/src
@@ -117,18 +117,18 @@ services:
       NANO_MODEL_NAME: ${NANO_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}
       NANO_MODEL_FILE: ${NANO_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
       TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
-      SANDBOX_TOKEN: ${SANDBOX_TOKEN:-tendril_default_sandbox_token}
-      SANDBOX_ENABLED: ${SANDBOX_ENABLED:-true}
+      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
+      TERRARIUM_ENABLED: ${TERRARIUM_ENABLED:-true}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-      sandbox:
+      terrarium:
         condition: service_started
     networks:
       - default
-      - sandbox-net
+      - terrarium-net
     volumes:
       - ./tendrils/python/src:/app/src
       - ./.git:/app/.git
@@ -141,18 +141,18 @@ services:
       - ${TENDRIL_PROJECT_PATH:-.}:/workspace
     restart: unless-stopped
 
-  # Secure sandbox for code execution (no secrets, no DB, no internet)
-  sandbox:
+  # Secure terrarium for code execution (no secrets, no DB, no internet)
+  terrarium:
     build:
       context: tendrils/python
-      dockerfile: Dockerfile.sandbox
+      dockerfile: Dockerfile.terrarium
     environment:
-      SANDBOX_TOKEN: ${SANDBOX_TOKEN:-tendril_default_sandbox_token}
+      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
     volumes:
       - ${TENDRIL_PROJECT_PATH:-.}:/workspace:ro
-      - ./data:/sandbox-data
+      - ./data:/terrarium-data
     networks:
-      - sandbox-net
+      - terrarium-net
     deploy:
       resources:
         limits:
@@ -224,5 +224,5 @@ volumes:
 networks:
   default:
     name: opentendril-default
-  sandbox-net:
+  terrarium-net:
     internal: true   # No outbound internet access

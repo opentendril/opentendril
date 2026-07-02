@@ -1,17 +1,17 @@
 # Contributing to OpenTendril Core
 
-Thank you for your interest in contributing to OpenTendril! We are building a secure, zero-friction, sandboxed execution kernel for AI coding agents, and we welcome contributions from human developers.
+Thank you for your interest in contributing to OpenTendril! We are building a secure, zero-friction, terrariumed execution kernel for AI coding agents, and we welcome contributions from human developers.
 
 ---
 
 ## 🚀 Quick Local Setup
 
-OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Sandbox Core**.
+OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terrarium Core**.
 
 ### Prerequisites:
 * **Go:** Version 1.23 or newer.
 * **Python:** Version 3.11 or newer.
-* **Docker:** Required for running the sandbox container tests locally.
+* **Docker:** Required for running the terrarium container tests locally.
 
 ### Installation Steps:
 1. **Fork and Clone:**

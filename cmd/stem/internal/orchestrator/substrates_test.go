@@ -236,7 +236,7 @@ substrates:
 `, root))
 
 	originalEnsure := ensureSproutImageFn
-	originalStart := startSandboxSessionFn
+	originalStart := startTerrariumSessionFn
 	originalNewAgent := newAgentFn
 	originalStash := stashHostWorkspaceFn
 	originalRestore := restoreHostStashFn
@@ -245,13 +245,13 @@ substrates:
 	originalInjectCache := injectMycorrhizalCacheFn
 	originalCollectFiles := collectStageableFilesFn
 	originalCollectDiff := collectGitDiffFn
-	originalCommit := commitSandboxExecutionFn
-	originalMerge := mergeSandboxCommitFn
-	originalPush := pushSandboxCommitFn
+	originalCommit := commitTerrariumExecutionFn
+	originalMerge := mergeTerrariumCommitFn
+	originalPush := pushTerrariumCommitFn
 
 	t.Cleanup(func() {
 		ensureSproutImageFn = originalEnsure
-		startSandboxSessionFn = originalStart
+		startTerrariumSessionFn = originalStart
 		newAgentFn = originalNewAgent
 		stashHostWorkspaceFn = originalStash
 		restoreHostStashFn = originalRestore
@@ -260,9 +260,9 @@ substrates:
 		injectMycorrhizalCacheFn = originalInjectCache
 		collectStageableFilesFn = originalCollectFiles
 		collectGitDiffFn = originalCollectDiff
-		commitSandboxExecutionFn = originalCommit
-		mergeSandboxCommitFn = originalMerge
-		pushSandboxCommitFn = originalPush
+		commitTerrariumExecutionFn = originalCommit
+		mergeTerrariumCommitFn = originalMerge
+		pushTerrariumCommitFn = originalPush
 	})
 
 	var capturedExtraEnv []string
@@ -270,7 +270,7 @@ substrates:
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error {
 		return nil
 	}
-	startSandboxSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
 		capturedExtraEnv = append([]string{}, extraEnv...)
 		repoMapPath := filepath.Join(mountPath, ".tendril", "genome", "repomap.md")
 		content, err := os.ReadFile(repoMapPath)
@@ -310,16 +310,16 @@ substrates:
 		t.Fatalf("collectGitDiff should not run for read-only substrates")
 		return "", nil
 	}
-	commitSandboxExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
-		t.Fatalf("commitSandboxExecution should not run for read-only substrates")
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
+		t.Fatalf("commitTerrariumExecution should not run for read-only substrates")
 		return "", nil
 	}
-	mergeSandboxCommitFn = func(ctx context.Context, sourcePath, commitHash string) error {
-		t.Fatalf("mergeSandboxCommit should not run for read-only substrates")
+	mergeTerrariumCommitFn = func(ctx context.Context, sourcePath, commitHash string) error {
+		t.Fatalf("mergeTerrariumCommit should not run for read-only substrates")
 		return nil
 	}
-	pushSandboxCommitFn = func(ctx context.Context, mountPath, branch string) error {
-		t.Fatalf("pushSandboxCommit should not run for read-only substrates")
+	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string) error {
+		t.Fatalf("pushTerrariumCommit should not run for read-only substrates")
 		return nil
 	}
 

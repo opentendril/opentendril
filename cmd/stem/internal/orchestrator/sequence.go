@@ -1306,7 +1306,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, err
 	}
 
-	session, err := startSandboxSessionFn(ctx, resolveSandboxProviderName(orch), imageName, mountPath)
+	session, err := startTerrariumSessionFn(ctx, resolveTerrariumProviderName(orch), imageName, mountPath)
 	if err != nil {
 		return result, err
 	}
@@ -1356,7 +1356,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		executionStatus.Status = sequenceStatusComplete
 	}
 
-	commitHash, commitErr := commitSandboxExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt)
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt)
 	if commitErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, commitErr)
@@ -1370,7 +1370,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, runErr
 	}
 
-	mergeErr := mergeSequenceSandboxCommit(ctx, sourcePath, commitHash)
+	mergeErr := mergeSequenceTerrariumCommit(ctx, sourcePath, commitHash)
 	if mergeErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, mergeErr)
@@ -1396,7 +1396,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	return result, nil
 }
 
-func mergeSequenceSandboxCommit(ctx context.Context, sourcePath, commitHash string) error {
+func mergeSequenceTerrariumCommit(ctx context.Context, sourcePath, commitHash string) error {
 	if _, err := runGitCommand(ctx, sourcePath, "merge", "--no-ff", "--no-edit", commitHash); err != nil {
 		return err
 	}

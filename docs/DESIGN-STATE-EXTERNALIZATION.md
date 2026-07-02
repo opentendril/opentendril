@@ -13,10 +13,10 @@ To ensure that starting state is clear and no temporary/compiled files are accid
 2.  If the host workspace is dirty:
     *   Go Stem automatically stashes the host changes: `git stash save -u "opentendril-host-pre-flight-stash-<id>"`.
     *   This ensures the host repository is clean, preventing conflicts during checkout/merge.
-3.  Go Stem sprouts the detached shadow git worktree `/tmp/opentendril-sandbox-...` based on the clean `HEAD`.
+3.  Go Stem sprouts the detached shadow git worktree `/tmp/opentendril-terrarium-...` based on the clean `HEAD`.
 
 ### B. Post-Flight: File Sanitization & Merging
-1.  After sprout execution completes, Go Stem runs `git status --porcelain` inside the sandbox.
+1.  After sprout execution completes, Go Stem runs `git status --porcelain` inside the terrarium.
 2.  **Sanitization Filter:** Before staging, Go Stem filters the list of modified/untracked files. Any path matching compiler/runtime artifacts (e.g., `*.log`, `__pycache__/`, `dist/`, `build/`, `.cache/`, `tmp/`) will **not** be staged. This safeguards the repository from "trash commits" even if `.gitignore` is missing.
 3.  Go Stem stages only the sanitized files: `git add <sanitized_files>`.
 4.  Go Stem commits the changes: `git commit -m "tendril(step-<id>): <prompt_summary>"`.
@@ -28,11 +28,11 @@ To ensure that starting state is clear and no temporary/compiled files are accid
 ## 2. Success vs. Failure Behaviours
 
 ### A. On Successful Execution
-*   Sanitize files, commit inside the sandbox, merge back to host, pop host stash.
+*   Sanitize files, commit inside the terrarium, merge back to host, pop host stash.
 *   If `TENDRIL_GENOME_AUTO_PUSH=true`, run `git -C hostPath push origin HEAD`.
 
 ### B. On Failed Execution (Crashes, Exit Errors, Timeouts)
-*   Write `tendril-status.json` into the sandbox.
+*   Write `tendril-status.json` into the terrarium.
 *   Sanitize files, commit partial progress as `tendril(step-<id>) [INCOMPLETE]: <error_message>`, merge back to host, and pop host stash.
 
 ---
@@ -77,7 +77,7 @@ Before executing a sprout task:
 ### Component: Go Stem Orchestrator
 
 #### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/docker.go)
-*   Implement `runGitCommand(dir string, args ...string)` to handle host/sandbox git calls.
+*   Implement `runGitCommand(dir string, args ...string)` to handle host/terrarium git calls.
 *   Implement pre-flight host stashing (`git stash -u`) and post-flight stash popping (`git stash pop`).
 *   Implement post-flight status checking (`git status --porcelain`) and file sanitization to exclude log/build/temp files before committing.
 *   Write `tendril-status.json` on failure, and check it at startup for resumption.
@@ -87,7 +87,7 @@ Before executing a sprout task:
 ## 6. Verification Plan
 
 ### Automated Tests
-*   **Stash-Pop Integration Tests:** Run test cases where a dirty host is stashed, a sandbox commit is merged, and the stash is popped.
+*   **Stash-Pop Integration Tests:** Run test cases where a dirty host is stashed, a terrarium commit is merged, and the stash is popped.
 *   **Sanitization Filter Tests:** Verify that temporary file extensions (`.log`, `.tmp`) created during execution are ignored during commits.
 
 ### Manual Verification

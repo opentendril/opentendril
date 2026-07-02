@@ -30,7 +30,7 @@ The active workflow profile is set in the kernel configuration (e.g., `TENDRIL_S
 * **Process:**
   1. **Gate A (Design RFC):** The agent drafts a formal Design RFC to align on architecture and data models before any code is written.
   2. **Gate B (Detailed Plan):** The agent drafts a comprehensive Implementation Plan citing line ranges of files to be changed. The user must approve each task slice before execution.
-  3. **Sandboxed Staging:** Code is modified inside isolated sandboxes, running automated pre-commit hook checks and linting pipelines.
+  3. **Terrariumed Staging:** Code is modified inside isolated terrariumes, running automated pre-commit hook checks and linting pipelines.
   4. **Gate C (Drift Review & PR):** The agent generates a Draft PR and runs an automated Drift Review to classify any deviations from the plan before human merge.
 
 ---

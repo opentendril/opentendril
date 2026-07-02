@@ -15,7 +15,7 @@ It is the human-readable counterpart to GitHub's GPG key verification. When a ne
 5. An existing **Trusted Administrator** reviews and merges the PR.
 6. The node's commits will now show as **Verified** on GitHub.
 
-> **Security Note:** Removing guardrails or sandbox protections in a forked copy of Tendril does not grant access to this repository. All contributions must pass through the PR review gate, and all commits on `main` must be signed by a key listed in this registry.
+> **Security Note:** Removing guardrails or terrarium protections in a forked copy of Tendril does not grant access to this repository. All contributions must pass through the PR review gate, and all commits on `main` must be signed by a key listed in this registry.
 
 ---
 

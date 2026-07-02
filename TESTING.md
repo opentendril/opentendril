@@ -25,11 +25,11 @@ If this command fails, the code is structurally invalid. Under the staging pipel
 
 ---
 
-## 3. Sandboxed Test Executions
+## 3. Terrariumed Test Executions
 To prevent tests from mutating the developer's local environment, all test executions of untrusted or AI-generated modules are isolated:
-* **The Sandbox HTTP Relay:** Tests are triggered by sending a payload to the sandbox container's HTTP server (`http://sandbox:9999/execute`).
-* **Environment Isolation:** The sandbox has **no internet access**, has a hard memory limit of **512MB**, and has a CPU execution limit of **1.0 core**. 
-* **State Persistence:** The sandbox mounts the staging path read-only, ensuring that test scripts cannot corrupt the root repository state.
+* **The Terrarium HTTP Relay:** Tests are triggered by sending a payload to the terrarium container's HTTP server (`http://terrarium:9999/execute`).
+* **Environment Isolation:** The terrarium has **no internet access**, has a hard memory limit of **512MB**, and has a CPU execution limit of **1.0 core**. 
+* **State Persistence:** The terrarium mounts the staging path read-only, ensuring that test scripts cannot corrupt the root repository state.
 
 ---
 

@@ -9,7 +9,7 @@ Implement the **Mycorrhizal Mesh Network** (Stem Grafting) to allow multiple Ope
 ## Decisions Made
 - **Token Cryptography**: `Ed25519` asymmetric cryptography will be used for signed Grafting Tokens. The Central Stem will hold the private key, and Local Stems will present JWTs signed by this key.
 - **Tunnel Protocol**: **WebSockets** (`github.com/gorilla/websocket`) will be used to ensure reliable bidirectional log streaming of the AST Assessor and security checks back to the local Stem during a delegation request.
-- **Governance Hooks**: The Central Stem will execute a `.tendril/mesh-governance.yaml` sequence inside an ephemeral sandbox before accepting a push. This enables full pre-push CI or fast security gating.
+- **Governance Hooks**: The Central Stem will execute a `.tendril/mesh-governance.yaml` sequence inside an ephemeral terrarium before accepting a push. This enables full pre-push CI or fast security gating.
 - **Token Management**: A **Layered Approach** is selected.
     1. Basic CLI tools (`tendril mesh keygen` and `tendril mesh issue-token`) for initial/offline setup.
     2. A secure Admin API endpoint (`POST /v1/mesh/admin/issue-token` secured via `ADMIN_TOKEN`) for enterprise automation and integrations.

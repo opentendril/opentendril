@@ -48,7 +48,7 @@ type rawSockaddrVM struct {
 	Zero      [3]byte
 }
 
-// Wire protocol types — mirrored on the host side in sandbox/firecracker.go.
+// Wire protocol types — mirrored on the host side in terrarium/firecracker.go.
 
 type agentRequest struct {
 	Type  string        `json:"type"`

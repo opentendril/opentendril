@@ -72,5 +72,5 @@ In OpenTendril, when a Sequence specifies a `concurrencyLimit > 1`, the **Vascul
 
 ### Manual Verification
 1.  Define a sequence with `concurrencyLimit: 2` and two independent steps (no `depends_on`).
-2.  Verify that both steps launch concurrently in separate sandboxes.
+2.  Verify that both steps launch concurrently in separate terrariumes.
 3.  Verify that both branches are merged cleanly back to the main branch upon completion.

@@ -34,7 +34,7 @@ This plan details the implementation of **Genotype Progressive Disclosure** to o
                     ┌────────────────────────────┐
                     │  On-Demand Plasmid Sync    │
                     │  Injects declared plasmids │
-                    │  into sandbox worktree     │
+                    │  into terrarium worktree     │
                     └────────────────────────────┘
 ```
 
@@ -69,7 +69,7 @@ To implement progressive disclosure for Plasmids:
       "plasmids": ["react-conventions", "tailwind-styling"]
     }
     ```
-2.  When a sprout runs with a specific genotype, the Go Stem will **dynamically inject** the declared plasmids (cloning/linking them from `.tendril/genotypes/plasmids/` into the sandbox's `.tendril/genome/` folder) *prior* to starting the execution session.
+2.  When a sprout runs with a specific genotype, the Go Stem will **dynamically inject** the declared plasmids (cloning/linking them from `.tendril/genotypes/plasmids/` into the terrarium's `.tendril/genome/` folder) *prior* to starting the execution session.
 3.  This ensures the Sprout is loaded with the necessary skills, but the developer's main host repository `.tendril/genome/` remains completely clean of task-specific plasmid files.
 
 ---
@@ -87,7 +87,7 @@ To implement progressive disclosure for Plasmids:
 
 #### [MODIFY] [internal/orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/docker.go)
 *   Parse the Genotype JSON file during sprouting.
-*   If the Genotype contains a `plasmids` array, call the plasmid injection helper to copy those files from `.tendril/genotypes/plasmids/` into the sandbox worktree's `.tendril/genome/` directory before starting the Sprout container.
+*   If the Genotype contains a `plasmids` array, call the plasmid injection helper to copy those files from `.tendril/genotypes/plasmids/` into the terrarium worktree's `.tendril/genome/` directory before starting the Sprout container.
 
 ---
 
@@ -108,4 +108,4 @@ To implement progressive disclosure for Plasmids:
 ### Manual Verification
 1.  Connect Claude Desktop or VS Code MCP to OpenTendril.
 2.  Verify that only the genotype names and short descriptions are listed as available resources initially.
-3.  Run a sprout task with `frontend-dev` and verify that the required plasmids are injected dynamically only inside the sandbox.
+3.  Run a sprout task with `frontend-dev` and verify that the required plasmids are injected dynamically only inside the terrarium.

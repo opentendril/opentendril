@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/llm"
-	"github.com/opentendril/core/cmd/stem/internal/sandbox"
+	"github.com/opentendril/core/cmd/stem/internal/terrarium"
 )
 
-const sandboxProviderEnvKey = "TENDRIL_SANDBOX_PROVIDER"
+const terrariumProviderEnvKey = "TENDRIL_TERRARIUM_PROVIDER"
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
@@ -46,8 +46,8 @@ type tendrilRunner interface {
 
 var (
 	ensureSproutImageFn   = ensureSproutImage
-	startSandboxSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
-		return startSandboxSession(ctx, providerName, imageName, mountPath, extraEnv...)
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, extraEnv ...string) (toolSession, error) {
+		return startTerrariumSession(ctx, providerName, imageName, mountPath, extraEnv...)
 	}
 	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (tendrilRunner, error) {
 		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session)
@@ -59,9 +59,9 @@ var (
 	injectMycorrhizalCacheFn  = injectMycorrhizalCache
 	collectStageableFilesFn   = collectStageableFiles
 	collectGitDiffFn          = collectGitDiff
-	commitSandboxExecutionFn  = commitSandboxExecution
-	mergeSandboxCommitFn      = mergeSandboxCommit
-	pushSandboxCommitFn       = pushSandboxCommit
+	commitTerrariumExecutionFn  = commitTerrariumExecution
+	mergeTerrariumCommitFn      = mergeTerrariumCommit
+	pushTerrariumCommitFn       = pushTerrariumCommit
 	runContainerFitnessTestFn = runContainerFitnessTest
 	generateRepoMapFn         = GenerateRepoMap
 )
@@ -105,7 +105,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if plan.readOnly {
-		fmt.Fprintln(os.Stderr, "⚠️ Substrate is configured as READONLY. Discarding sandbox modifications.")
+		fmt.Fprintln(os.Stderr, "⚠️ Substrate is configured as READONLY. Discarding terrarium modifications.")
 	}
 
 	sourcePath := plan.hostPath
@@ -194,7 +194,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 				fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
 			}
 		} else {
-			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git sandboxing disabled.\n", sourcePath)
+			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git terrariuming disabled.\n", sourcePath)
 		}
 	}
 
@@ -232,8 +232,8 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return "", err
 	}
 
-	providerName := resolveSandboxProviderName(d)
-	session, err := startSandboxSessionFn(ctx, providerName, imageName, mountPath, extraEnv...)
+	providerName := resolveTerrariumProviderName(d)
+	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, extraEnv...)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -311,7 +311,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		executionStatus.Status = "complete"
 	}
 
-	commitHash, commitErr := commitSandboxExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
 	if commitErr != nil {
 		if hostStashed {
 			if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
@@ -332,7 +332,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if plan.remoteClone {
-		if pushErr := pushSandboxCommitFn(ctx, mountPath, plan.cloneBranch); pushErr != nil {
+		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch); pushErr != nil {
 			if hostStashed {
 				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
 					pushErr = errors.Join(pushErr, restoreErr)
@@ -344,7 +344,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			return "", pushErr
 		}
 	} else {
-		mergeErr := mergeSandboxCommitFn(ctx, sourcePath, commitHash)
+		mergeErr := mergeTerrariumCommitFn(ctx, sourcePath, commitHash)
 		if mergeErr != nil {
 			if runErr != nil {
 				if hostStashed {
@@ -515,58 +515,58 @@ func workspaceHasExtension(workspace string, extensions ...string) bool {
 	return found
 }
 
-type sandboxToolSession struct {
-	sandbox sandbox.Sandbox
+type terrariumToolSession struct {
+	terrarium terrarium.Terrarium
 }
 
-func startSandboxSession(ctx context.Context, providerName, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
-	provider, err := sandbox.NewProvider(ctx, providerName)
+func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, extraEnv ...string) (toolSession, error) {
+	provider, err := terrarium.NewProvider(ctx, providerName)
 	if err != nil {
 		return nil, err
 	}
 
-	instance, err := provider.Create(ctx, sandbox.SandboxSpec{
+	instance, err := provider.Create(ctx, terrarium.TerrariumSpec{
 		Image:          imageName,
 		WorkingDir:     "/app",
-		NetworkMode:    sandbox.NetworkModeNone,
+		NetworkMode:    terrarium.NetworkModeNone,
 		RunAsUser:      "1000:1000",
 		CPUQuota:       "1.0",
 		MemoryLimitMB:  2048,
 		ReadOnlyRootFS: false,
 		PidsLimit:      512,
 		Timeout:        10 * time.Minute,
-		Mounts: []sandbox.MountSpec{
+		Mounts: []terrarium.MountSpec{
 			{
 				Source: mountPath,
 				Target: "/app",
 			},
 		},
-		Environment: buildSandboxEnvironment(extraEnv...),
+		Environment: buildTerrariumEnvironment(extraEnv...),
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return &sandboxToolSession{sandbox: instance}, nil
+	return &terrariumToolSession{terrarium: instance}, nil
 }
 
-func resolveSandboxProviderName(d *DockerOrchestrator) string {
-	if providerName := strings.TrimSpace(os.Getenv(sandboxProviderEnvKey)); providerName != "" {
+func resolveTerrariumProviderName(d *DockerOrchestrator) string {
+	if providerName := strings.TrimSpace(os.Getenv(terrariumProviderEnvKey)); providerName != "" {
 		return providerName
 	}
 	if d == nil {
-		return sandbox.ProviderDocker
+		return terrarium.ProviderDocker
 	}
 
 	switch strings.ToLower(strings.TrimSpace(d.Substrate)) {
-	case sandbox.ProviderDocker, sandbox.ProviderGVisor:
+	case terrarium.ProviderDocker, terrarium.ProviderGVisor:
 		return strings.ToLower(strings.TrimSpace(d.Substrate))
 	default:
-		return sandbox.ProviderDocker
+		return terrarium.ProviderDocker
 	}
 }
 
-func (s *sandboxToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {
+func (s *terrariumToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {
 	response, err := s.Call(ctx, ToolCall{Tool: "listAvailableTools", Arguments: map[string]any{}})
 	if err != nil {
 		return nil, err
@@ -581,12 +581,12 @@ func (s *sandboxToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefi
 	return decodeToolDefinitions(response.Output)
 }
 
-func (s *sandboxToolSession) Call(ctx context.Context, call ToolCall) (ToolResponse, error) {
+func (s *terrariumToolSession) Call(ctx context.Context, call ToolCall) (ToolResponse, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s == nil || s.sandbox == nil {
-		return ToolResponse{}, fmt.Errorf("sandbox session is not active")
+	if s == nil || s.terrarium == nil {
+		return ToolResponse{}, fmt.Errorf("terrarium session is not active")
 	}
 
 	payload, err := json.Marshal(call)
@@ -594,7 +594,7 @@ func (s *sandboxToolSession) Call(ctx context.Context, call ToolCall) (ToolRespo
 		return ToolResponse{}, fmt.Errorf("encode tool call: %w", err)
 	}
 
-	result, err := s.sandbox.Run(ctx, sandbox.CommandSpec{Stdin: payload})
+	result, err := s.terrarium.Run(ctx, terrarium.CommandSpec{Stdin: payload})
 	if err != nil {
 		return ToolResponse{}, err
 	}
@@ -607,26 +607,26 @@ func (s *sandboxToolSession) Call(ctx context.Context, call ToolCall) (ToolRespo
 	return response, nil
 }
 
-func (s *sandboxToolSession) Close() error {
-	if s == nil || s.sandbox == nil {
+func (s *terrariumToolSession) Close() error {
+	if s == nil || s.terrarium == nil {
 		return nil
 	}
-	return s.sandbox.Stop(context.Background())
+	return s.terrarium.Stop(context.Background())
 }
 
-func (s *sandboxToolSession) Logs() string {
-	if s == nil || s.sandbox == nil {
+func (s *terrariumToolSession) Logs() string {
+	if s == nil || s.terrarium == nil {
 		return ""
 	}
 
-	logs, err := s.sandbox.SnapshotLogs(context.Background())
+	logs, err := s.terrarium.SnapshotLogs(context.Background())
 	if err != nil {
 		return ""
 	}
 	return logs.Stderr
 }
 
-func buildSandboxEnvironment(extraEnv ...string) map[string]string {
+func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 	values := make(map[string]string)
 
 	for _, key := range []string{
@@ -721,7 +721,7 @@ func createShadowWorktree(sourcePath, substrateBranch string) (string, error) {
 	}
 	runID := hex.EncodeToString(bytes)
 
-	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-sandbox-%s", runID))
+	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-terrarium-%s", runID))
 
 	branch := strings.TrimSpace(substrateBranch)
 	var cmd *exec.Cmd
@@ -754,7 +754,7 @@ func localBranchExists(sourcePath, branch string) bool {
 	return cmd.Run() == nil
 }
 
-// injectMycorrhizalCache hard-links dependency directories from the host to the shadow sandbox.
+// injectMycorrhizalCache hard-links dependency directories from the host to the shadow terrarium.
 func injectMycorrhizalCache(sourcePath, shadowPath string) {
 	cacheDirs := []string{"node_modules", ".venv", "venv", "vendor"}
 
@@ -997,7 +997,7 @@ func shouldIgnoreStagePath(path string) bool {
 	return false
 }
 
-func commitSandboxExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
+func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
 	stagePaths := append([]string{}, executionStatus.FilesModified...)
 
 	if strings.TrimSpace(statusPath) != "" {
@@ -1006,8 +1006,8 @@ func commitSandboxExecution(ctx context.Context, mountPath, sourcePath, statusPa
 			return "", err
 		}
 
-		statusSandboxPath := filepath.Join(mountPath, filepath.FromSlash(statusRelPath))
-		if err := writeTendrilStatus(statusSandboxPath, executionStatus); err != nil {
+		statusTerrariumPath := filepath.Join(mountPath, filepath.FromSlash(statusRelPath))
+		if err := writeTendrilStatus(statusTerrariumPath, executionStatus); err != nil {
 			return "", err
 		}
 
@@ -1053,7 +1053,7 @@ func commitSandboxExecution(ctx context.Context, mountPath, sourcePath, statusPa
 	return commitHash, nil
 }
 
-func mergeSandboxCommit(ctx context.Context, sourcePath, commitHash string) error {
+func mergeTerrariumCommit(ctx context.Context, sourcePath, commitHash string) error {
 	if _, err := runGitCommand(ctx, sourcePath, "merge", "--ff-only", commitHash); err != nil {
 		return err
 	}
@@ -1140,7 +1140,7 @@ func summarizeTendrilFailureError(failureError string) string {
 	return summary + "..."
 }
 
-// cloneForeignSubstrate clones a remote repository into a temporary sandbox.
+// cloneForeignSubstrate clones a remote repository into a temporary terrarium.
 func cloneForeignSubstrate(url, branch string) (string, error) {
 	return cloneNamedForeignSubstrate("", url, branch, "", "")
 }
@@ -1191,7 +1191,7 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 	return shadowPath, nil
 }
 
-func pushSandboxCommit(ctx context.Context, mountPath, branch string) error {
+func pushTerrariumCommit(ctx context.Context, mountPath, branch string) error {
 	targetBranch := strings.TrimSpace(branch)
 	if targetBranch == "" {
 		currentBranch, err := runGitCommand(ctx, mountPath, "branch", "--show-current")
@@ -1246,16 +1246,16 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
 
 		destDir := filepath.Join(targetPath, ".tendril", "genome")
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to create sandbox genome directory: %v\n", err)
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to create terrarium genome directory: %v\n", err)
 			continue
 		}
 
 		destFile := filepath.Join(destDir, filepath.Base(sourceFile))
 		if err := CopyMarkdownFile(sourceFile, destFile); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to stage sandbox plasmid %s: %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to stage terrarium plasmid %s: %v\n", name, err)
 			continue
 		}
 
-		fmt.Fprintf(os.Stderr, "🧬 Staged sandbox plasmid: %s -> %s\n", name, destFile)
+		fmt.Fprintf(os.Stderr, "🧬 Staged terrarium plasmid: %s -> %s\n", name, destFile)
 	}
 }

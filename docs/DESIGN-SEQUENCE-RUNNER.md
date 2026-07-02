@@ -6,7 +6,7 @@ This plan details the implementation of the **Vascular Cambium** (Sequence Runne
 
 ## 1. Architectural Flow & Parallel Concurrency
 
-Instead of running steps strictly in order, the Vascular Cambium parses a **directed acyclic graph (DAG)** of tasks. Steps that have no dependencies (or whose dependencies are already complete) are executed concurrently in separate sandboxed worktrees up to a configurable concurrency limit.
+Instead of running steps strictly in order, the Vascular Cambium parses a **directed acyclic graph (DAG)** of tasks. Steps that have no dependencies (or whose dependencies are already complete) are executed concurrently in separate terrariumed worktrees up to a configurable concurrency limit.
 
 ```
                   [ Load Sequence YAML ]
@@ -17,7 +17,7 @@ Instead of running steps strictly in order, the Vascular Cambium parses a **dire
               ┌──────────────┴──────────────┐
               ▼                             ▼
         [ Run Step A ]                [ Run Step B ]
-       (Sandbox Worktree)            (Sandbox Worktree)
+       (Terrarium Worktree)            (Terrarium Worktree)
               │                             │
               ▼                             ▼
         [ Commit A ]                  [ Commit B ]
@@ -70,8 +70,8 @@ steps:
 1.  Go Stem builds a dependency resolver.
 2.  In a loop, the Vascular Cambium identifies all steps with status `"pending"` whose `dependsOn` steps are `"complete"`.
 3.  Dispatches a Go goroutine for each available step up to the `concurrencyLimit`.
-4.  Each parallel step runs in a separate, isolated shadow git worktree (e.g. `/tmp/opentendril-sandbox-step-<id>-<random>`).
-5.  On completion, the sandbox changes are committed and merged back into the shared branch on the host (Phloem transport), and the step status is updated in the YAML file in-place.
+4.  Each parallel step runs in a separate, isolated shadow git worktree (e.g. `/tmp/opentendril-terrarium-step-<id>-<random>`).
+5.  On completion, the terrarium changes are committed and merged back into the shared branch on the host (Phloem transport), and the step status is updated in the YAML file in-place.
 
 ### B. Failure Recovery Options (`onFailure`)
 *   `halt`: Immediately stops the sequence. No further steps are dispatched.
@@ -92,7 +92,7 @@ steps:
 
 ### 2. Can I (Antigravity) call OpenTendril?
 **Yes, but we should not do it for local git operations.** 
-While the `sproutTendril` tool is registered in my available MCP servers, running git checkout, commit, or push operations *inside* a Sprout container sandbox is less efficient for host management. Sprout sandboxes are meant for untrusted, isolated code editing. For host-side repo operations (like branch creation and pushes), executing commands directly on your host terminal using my approved `run_command` tool is much faster and cleaner.
+While the `sproutTendril` tool is registered in my available MCP servers, running git checkout, commit, or push operations *inside* a Sprout container terrarium is less efficient for host management. Sprout terrariumes are meant for untrusted, isolated code editing. For host-side repo operations (like branch creation and pushes), executing commands directly on your host terminal using my approved `run_command` tool is much faster and cleaner.
 
 ---
 

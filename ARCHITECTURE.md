@@ -9,7 +9,7 @@ This document defines the high-level architecture and data-flow specifications o
 OpenTendril separates high-level cognitive planning (the Brain) from secure file/shell execution (the Hands):
 
 *   **The Brain (Client App):** Developer interfaces (such as Claude Desktop, ChatGPT CLI, Cursor, or VS Code) handle rich system layout reasoning, user prompt processing, and external searches. They communicate with the Go Stem using the **Model Context Protocol (MCP)**.
-*   **The Hands (OpenTendril Kernel):** The Go Stem orchestrator runs on the host machine. It receives structured execution commands (e.g. read file, write patch, compile code, run tests) and executes them securely inside sterile sandboxes.
+*   **The Hands (OpenTendril Kernel):** The Go Stem orchestrator runs on the host machine. It receives structured execution commands (e.g. read file, write patch, compile code, run tests) and executes them securely inside sterile terrariumes.
 
 ```
 ┌────────────────────────────────────────────────────────┐
@@ -26,7 +26,7 @@ OpenTendril separates high-level cognitive planning (the Brain) from secure file
        ▼ (Direct LLM Client Calls)                ▼ (JSON payloads over Docker stdin)
 ┌──────────────────────────────┐          ┌──────────────────────────────┐
 │       LLM PROVIDERS          │          │      STATELESS SPROUTS       │
-│  Anthropic │ OpenAI │ Local  │          │  (Docker Sandboxes: Go/TS)   │
+│  Anthropic │ OpenAI │ Local  │          │  (Docker Terrariumes: Go/TS)   │
 └──────────────────────────────┘          └──────────────────────────────┘
 ```
 
@@ -41,21 +41,21 @@ The single source of truth for execution flow and orchestrator security. It runs
 1.  **Protocol Gateways:** Exposing MCP server handlers (stdio/SSE), WebSocket loops for interactive CLI chat, and REST config endpoints.
 2.  **LLM client management:** Directly resolving LLM API requests and prompt completions to Anthropic, OpenAI, or local providers (e.g. Ollama/vLLM) without running any external proxy services.
 3.  **Genotype & Plasmid resolution:** Auto-indexing system prompts (`index.yaml`) and staging markdown context templates.
-4.  **Sandbox Isolation:** Dynamically spawning stateless language sprouts and executing task scripts securely.
+4.  **Terrarium Isolation:** Dynamically spawning stateless language sprouts and executing task scripts securely.
 
-### B. Ephemeral Sprout Sandboxes
-*   **Role:** Safe, isolated containers running target programming languages (e.g. `opentendril-go`, `opentendril-typescript`).
+### B. Ephemeral Sprout Terrariumes
+*   **Role:** Safe, isolated containers running target programming languages (e.g. `opentendril-go`, `opentendril-typescript`). See [Terrarium Terrariuming](file:///home/dr3w/GitHub/opentendril/core/docs/terrarium.md) for details on supported isolation tiers (Docker, gVisor, Firecracker).
 *   **Responsibilities:**
     *   Boots ephemerally when a Sprout run starts.
-    *   Mounts the sandbox Git worktree locally.
+    *   Mounts the terrarium Git worktree locally.
     *   Receives structured JSON command payloads from the Go Stem host over persistent input/output pipes.
     *   Runs compilers, linters, and unit test suites inside the isolated container, keeping unverified code execution away from the developer's host machine.
 
 ---
 
-## 3. Sandboxed Execution Pipeline (Git-Safe SDLC)
+## 3. Terrariumed Execution Pipeline (Git-Safe SDLC)
 
-To protect the developer's primary working branch and repository state, Go Stem implements a git-safe sandbox pipeline:
+To protect the developer's primary working branch and repository state, Go Stem implements a git-safe terrarium pipeline:
 
 ```
                   ┌─────────────────────────────┐
@@ -64,7 +64,7 @@ To protect the developer's primary working branch and repository state, Go Stem 
                                  │
                                  ▼
                   ┌─────────────────────────────┐
-                  │    2. Create Sandbox        │  <-- Detached HEAD worktree
+                  │    2. Create Terrarium        │  <-- Detached HEAD worktree
                   └──────────────┬──────────────┘
                                  │
                                  ▼
@@ -74,12 +74,12 @@ To protect the developer's primary working branch and repository state, Go Stem 
                                  │
                                  ▼
                   ┌─────────────────────────────┐
-                  │   4. Sandbox Verification   │  <-- Tests pass inside sprout
+                  │   4. Terrarium Verification   │  <-- Tests pass inside sprout
                   └──────────────┬──────────────┘
                                  │
                                  ▼
                   ┌─────────────────────────────┐
-                  │    5. Host Merge Back       │  <-- Commit sandbox, ff-merge host,
+                  │    5. Host Merge Back       │  <-- Commit terrarium, ff-merge host,
                   └──────────────┬──────────────┘      teardown worktree, git stash pop
                                  │
                                  ▼
@@ -87,11 +87,11 @@ To protect the developer's primary working branch and repository state, Go Stem 
 ```
 
 1.  **Pre-Flight Stash:** If the host repository has uncommitted local files, Go Stem stashes them (`git stash -u`) before checking out.
-2.  **Detached Worktree:** Go Stem creates a temporary, detached git worktree in a sandboxed path.
+2.  **Detached Worktree:** Go Stem creates a temporary, detached git worktree in a terrariumed path.
 3.  **Staging Plasmids & AST Maps:** Instantiates the Codebase Assessor (Thigmotropism) to generate `repomap.md` and copies genotype plasmids into `.tendril/genome/`.
 4.  **Execution & Tests:** Runs the Sprout container. Code edits and tests are run entirely inside this isolated environment.
-5.  **Post-Flight Commit & Merge:** If compilation and tests succeed, Go Stem commits the edits inside the sandbox, merges the resulting commit back to the host branch natively, deletes the temporary worktree, and pops the developer's stash to restore local state.
-6.  **Read-Only Gating:** If the substrate is marked `readonly: true`, Go Stem skips stashing, blocks commits and merges, and safely discards all sandbox files upon completion.
+5.  **Post-Flight Commit & Merge:** If compilation and tests succeed, Go Stem commits the edits inside the terrarium, merges the resulting commit back to the host branch natively, deletes the temporary worktree, and pops the developer's stash to restore local state.
+6.  **Read-Only Gating:** If the substrate is marked `readonly: true`, Go Stem skips stashing, blocks commits and merges, and safely discards all terrarium files upon completion.
 
 ---
 

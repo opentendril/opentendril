@@ -8,7 +8,7 @@ This plan details the implementation of **Phenotypic Selection** (Natural Select
 
 In botany, a plant generates multiple shoots or variations (phenotypes) in response to the environmental conditions. Natural Selection filters these variations, ensuring only the ones with the highest environmental fitness survive and propagate.
 
-In OpenTendril, the **compiler, test suite, and linter** act as the objective environmental constraints. Rather than hoping a single LLM output is correct, Go Stem dispatches multiple parallel sprouts in isolated sandboxes (varying their temperature settings to generate diverse code solutions) and selects the "fittest" candidate that successfully satisfies all test validation suites.
+In OpenTendril, the **compiler, test suite, and linter** act as the objective environmental constraints. Rather than hoping a single LLM output is correct, Go Stem dispatches multiple parallel sprouts in isolated terrariumes (varying their temperature settings to generate diverse code solutions) and selects the "fittest" candidate that successfully satisfies all test validation suites.
 
 ---
 
@@ -47,8 +47,8 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 
 ### B. Environment Fitness Test
 *   After the Sprout agent run completes, if a `fitnessTest` command (e.g. `go test ./...` or `npm run lint`) is defined:
-    *   Go Stem executes this command inside a sterile container mounting the phenotype's sandbox directory:
-        `docker run --rm -v sandbox:/app -w /app imageName sh -c "fitnessTest"`
+    *   Go Stem executes this command inside a sterile container mounting the phenotype's terrarium directory:
+        `docker run --rm -v terrarium:/app -w /app imageName sh -c "fitnessTest"`
     *   A phenotype is declared **fit** if and only if both the agent edit loop and the fitness test command exit with code `0`.
 
 ### C. Selection & Merge
@@ -83,7 +83,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 *   Update `resolveLLMClient()` to set the temperature on the LLM client if `orch.Temperature > 0`.
 *   Inside `RunTendril`:
     *   If `d.DisableMergeBack` is true, skip stashing the host workspace at start.
-    *   In the post-flight section, if `d.DisableMergeBack` is true, skip host merging and stash popping, but still run `commitSandboxExecution` and return the commit hash.
+    *   In the post-flight section, if `d.DisableMergeBack` is true, skip host merging and stash popping, but still run `commitTerrariumExecution` and return the commit hash.
 *   Implement `SetTemperature(temp float64)` in `llm.Client`.
 
 ---

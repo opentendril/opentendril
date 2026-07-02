@@ -10,6 +10,7 @@
 //   tendril plasmid - List or inject modular genome seeds
 //   tendril repomap - Generate the active repository map
 //   tendril sequence - Run or list YAML task sequences
+//   tendril terrarium - Manage execution terrarium environments
 
 package main
 
@@ -58,6 +59,8 @@ func main() {
 		runRepoMapCmd(os.Args[2:])
 	case "sequence":
 		runSequenceCmd(ctx, os.Args[2:])
+	case "terrarium":
+		runTerrariumCmd(ctx, os.Args[2:])
 	case "mesh":
 		runMeshCmd(ctx, os.Args[2:])
 	case "mcp":
@@ -86,6 +89,7 @@ func printUsage() {
 	fmt.Println("  plasmid Manage modular genome plasmids")
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")
+	fmt.Println("  terrarium Manage execution terrarium environments")
 	fmt.Println("  mesh    Manage mesh grafting keys and tokens")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")

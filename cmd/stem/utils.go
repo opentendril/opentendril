@@ -28,7 +28,7 @@ func ensureBackendOnline(ctx context.Context, brainURL string) {
 	log.Println("⚠️ Backend FastAPI server is offline. Auto-booting...")
 	projectDir := findProjectDir()
 
-	if isSandboxEnabled() && isDockerRunning() {
+	if isTerrariumEnabled() && isDockerRunning() {
 		log.Println("🐳 Booting backend via Docker Compose...")
 		c := exec.Command("docker", "compose", "up", "-d")
 		c.Dir = projectDir
@@ -69,8 +69,8 @@ func ensureBackendOnline(ctx context.Context, brainURL string) {
 	log.Println("❌ Timeout waiting for backend to start.")
 }
 
-func isSandboxEnabled() bool {
-	if val := os.Getenv("SANDBOX_ENABLED"); val != "" {
+func isTerrariumEnabled() bool {
+	if val := os.Getenv("TERRARIUM_ENABLED"); val != "" {
 		return strings.ToLower(val) == "true"
 	}
 	projectDir := findProjectDir()
@@ -85,7 +85,7 @@ func isSandboxEnabled() bool {
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
 				line := strings.TrimSpace(scanner.Text())
-				if strings.HasPrefix(line, "SANDBOX_ENABLED=") {
+				if strings.HasPrefix(line, "TERRARIUM_ENABLED=") {
 					parts := strings.SplitN(line, "=", 2)
 					if len(parts) == 2 {
 						val := strings.Trim(parts[1], `"' `)
@@ -126,7 +126,7 @@ func findProjectDir() string {
 }
 
 func restartBackend(ctx context.Context, brainURL string) {
-	if isSandboxEnabled() && isDockerRunning() {
+	if isTerrariumEnabled() && isDockerRunning() {
 		log.Println("🔄 Remounting volumes and applying configuration via Docker Compose...")
 		cmd := exec.Command("docker", "compose", "up", "-d")
 		cmd.Stdout = os.Stdout

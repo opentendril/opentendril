@@ -217,10 +217,10 @@ func TestStagePlasmidsForGenotype(t *testing.T) {
 	tailwindDest := filepath.Join(destRoot, ".tendril", "genome", "tailwind-styling.md")
 
 	if _, err := os.Stat(reactDest); err != nil {
-		t.Fatalf("expected react-conventions plasmid to be staged in sandbox: %v", err)
+		t.Fatalf("expected react-conventions plasmid to be staged in terrarium: %v", err)
 	}
 	if _, err := os.Stat(tailwindDest); err != nil {
-		t.Fatalf("expected tailwind-styling plasmid to be staged in sandbox: %v", err)
+		t.Fatalf("expected tailwind-styling plasmid to be staged in terrarium: %v", err)
 	}
 
 	c1, _ := os.ReadFile(reactDest)

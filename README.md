@@ -16,8 +16,8 @@ To understand OpenTendril, you must understand its anatomy:
 *   **The Genotype (System Prompt / Persona):** The core DNA. We don't use generic system prompts; we inject Genotypes that dictate the fundamental identity and constraints of the AI (e.g. `thinker.json`, `verifier.json`, `debugger.json`).
 *   **The Plasmid (Modular Context / Skills):** Modular blocks of context, rules, or Repo Maps (`repomap.md`) injected into the genome on the fly.
 *   **The Transcript (Task / User Prompt):** We do not issue rigid "Tasks." We provide Transcripts—fuzzy, contextual instructions that the Genotype must dynamically interpret and execute.
-*   **The Sprout (Ephemeral Sandbox):** OpenTendril does not run continuous, stateful background agents. For every step, a new isolated *Sprout* (Docker container) instantly boots, executes local commands, and is destroyed.
-*   **The Stem (Go Orchestrator):** The Go-based CLI and API kernel. Just like a physical stem supporting a plant, the Go Stem handles networking, routes LLM completions, and orchestrates sandbox lifecycles.
+*   **The Sprout (Ephemeral Terrarium):** OpenTendril does not run continuous, stateful background agents. For every step, a new isolated *Sprout* (Docker container) instantly boots, executes local commands, and is destroyed.
+*   **The Stem (Go Orchestrator):** The Go-based CLI and API kernel. Just like a physical stem supporting a plant, the Go Stem handles networking, routes LLM completions, and orchestrates terrarium lifecycles.
 
 > 📖 **Read the full philosophy:** Explore the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to understand the concept design.
 > 🛠️ **Read the engineering guide:** Check the [Material & Architecture Guide](TENDRIL-GUIDE.md) to understand how these concepts are physically built (Go, Docker, and protocols).
@@ -27,9 +27,9 @@ To understand OpenTendril, you must understand its anatomy:
 ### What does this actually mean for developers?
 In standard IT speak: **OpenTendril is a headless, local-first and enterprise-ready AI coding framework.** 
 
-For individuals, it runs entirely on your host machine, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely inside ephemeral language-specific Docker sandboxes.
+For individuals, it runs entirely on your host machine, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely inside ephemeral language-specific Docker terrariumes.
 
-For high-security and multi-tenant enterprise environments, OpenTendril supports **Stem Grafting** (securely delegating high-privilege operations over WebSockets to a Central Governance Stem) and is designed to support hardware-level sandbox isolation (e.g. Firecracker/gVisor) for zero-trust execution.
+For high-security and multi-tenant enterprise environments, OpenTendril supports **Stem Grafting** (securely delegating high-privilege operations over WebSockets to a Central Governance Stem) and is designed to support hardware-level terrarium isolation (e.g. Firecracker/gVisor) for zero-trust execution.
 
 ---
 
@@ -92,8 +92,8 @@ tendril chat
              │  - Ephemeral git worktree checkout
              │  - Stem Grafting (Delegates high-privilege pushes via WebSockets)
              ▼
-    Sandbox Provider       ← Extensible Execution Substrate
-             │  - Local: Ephemeral Docker Sandbox
+    Terrarium Provider       ← Extensible Execution Substrate
+             │  - Local: Ephemeral Docker Terrarium
              │  - Enterprise: Firecracker / gVisor MicroVMs (WIP)
              │  - Injects Genotype plasmids & AST Repo Map
              │  - Executes file edits, compilation, and unit tests
@@ -108,7 +108,7 @@ tendril chat
 OpenTendril acts as a headless backend. You can connect it to your favorite developer tools using either the **Model Context Protocol (MCP)** or its **OpenAI-Compatible API**.
 
 ### 1. Claude Desktop & Cursor (via MCP)
-MCP allows clients to natively access Tendril's secure sandboxed tools.
+MCP allows clients to natively access Tendril's secure terrariumed tools.
 
 Edit your MCP configuration file:
 - **Claude Desktop (Mac):** `~/Library/Application Support/Claude/claude_desktop_config.json`

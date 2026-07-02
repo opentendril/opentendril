@@ -108,7 +108,7 @@ func TestPhenotypicSelectionDispatchesConcurrentSprouts(t *testing.T) {
 	disableFlags := make([]bool, 3)
 	branches := make([]string, 3)
 	allowWinner := make(chan struct{})
-	sandboxRoot := filepath.Join(t.TempDir(), "sandboxes")
+	terrariumRoot := filepath.Join(t.TempDir(), "terrariumes")
 
 	runSequenceSproutAtPathFn = func(ctx context.Context, orch *DockerOrchestrator, taskPrompt, sourcePath, mountPath string) (sproutExecutionResult, error) {
 		index := phenotypeIndexFromBranch(orch.SubstrateBranch)
@@ -152,7 +152,7 @@ func TestPhenotypicSelectionDispatchesConcurrentSprouts(t *testing.T) {
 	}
 
 	createShadowWorktreeFn = func(sourcePath, branchName string) (string, error) {
-		path := filepath.Join(sandboxRoot, strings.ReplaceAll(branchName, "/", "-"))
+		path := filepath.Join(terrariumRoot, strings.ReplaceAll(branchName, "/", "-"))
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return "", err
 		}
@@ -264,10 +264,10 @@ func TestPhenotypicSelectionRunsFitnessTests(t *testing.T) {
 	fitnessCalls := make(chan string, 2)
 	mergeCalls := make(chan string, 1)
 	winnerReady := make(chan struct{})
-	sandboxRoot := filepath.Join(t.TempDir(), "sandboxes")
+	terrariumRoot := filepath.Join(t.TempDir(), "terrariumes")
 
 	createShadowWorktreeFn = func(sourcePath, branchName string) (string, error) {
-		path := filepath.Join(sandboxRoot, strings.ReplaceAll(branchName, "/", "-"))
+		path := filepath.Join(terrariumRoot, strings.ReplaceAll(branchName, "/", "-"))
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return "", err
 		}

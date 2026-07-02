@@ -89,13 +89,13 @@ OpenTendril runs specific background processes restricted to distinct scopes:
 
 ### A. The Conductor (Orchestration & Planning)
 * **Scope:** Dynamic Sequence Manager. Compiles transcripts into Directed Acyclic Graph (DAG) sequences, handles topological sorting, and manages concurrency limits using Go routines.
-* **Sandbox:** Runs on the host Stem. It creates sandboxed shadow worktrees, schedules executions, and stages/commits/merges files back cleanly.
+* **Terrarium:** Runs on the host Stem. It creates terrariumed shadow worktrees, schedules executions, and stages/commits/merges files back cleanly.
 
 ### B. The Trinity Roles (Specialized Genotypes)
 * **Thinker (Genotype: `thinker.json`):** System architect. Parses the workspace repository maps and designs technical plans and step-by-step implementation logs.
-* **Worker (Genotypes: `go-dev`, `typescript-dev`, etc.):** Code editing sprouts. They ingest instructions from the Thinker, write local code edits inside the isolated sandbox, and format files.
+* **Worker (Genotypes: `go-dev`, `typescript-dev`, etc.):** Code editing sprouts. They ingest instructions from the Thinker, write local code edits inside the isolated terrarium, and format files.
 * **Verifier (Genotype: `verifier.json`):** Quality assurance. Compiles code, executes unit test runners (`pytest`, `vitest`, `go test`), and validates linter rules.
 
 ### C. The Debugger (Auto-Correction Sprout)
 * **Scope:** Ephemeral self-repair. Spawned dynamically by the Conductor when a Verifier step fails.
-* **Sandbox:** Ingests the Verifier's error output and compiler/test logs, applies targeted source patches inside the sandbox, and triggers a verifier retry loop (up to 3 times) to establish dynamic self-healing execution.
+* **Terrarium:** Ingests the Verifier's error output and compiler/test logs, applies targeted source patches inside the terrarium, and triggers a verifier retry loop (up to 3 times) to establish dynamic self-healing execution.

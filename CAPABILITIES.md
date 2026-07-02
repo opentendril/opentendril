@@ -1,6 +1,6 @@
 # OpenTendril Capabilities & Security Model (CAPABILITIES)
 
-OpenTendril is designed to be fully extensible. Developers and AI agents can extend the kernel's capabilities using Tools, Skills, Subagents, and Plugins. This document defines what these components are, why they exist, and how they are dynamically allowed, executed, and sandboxed.
+OpenTendril is designed to be fully extensible. Developers and AI agents can extend the kernel's capabilities using Tools, Skills, Subagents, and Plugins. This document defines what these components are, why they exist, and how they are dynamically allowed, executed, and terrariumed.
 
 ---
 
@@ -37,7 +37,7 @@ If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plug
 ### A. Tools (The LLM's Hands and Eyes)
 * **What:** Executable functions matching the Model Context Protocol (MCP) tool schema.
 * **Why:** LLMs are stateless text generators. Tools allow them to interact with filesystems, networks, shell runtimes, and external APIs.
-* **How They are Allowed:** Registered dynamically via the Go Gateway and executed inside the Sandbox container (Docker/gVisor).
+* **How They are Allowed:** Registered dynamically via the Go Gateway and executed inside the Terrarium container (Docker/gVisor).
 
 ### B. Skills (Targeted Context Domains)
 * **What:** Directories containing standard instruction manuals (`SKILL.md`), structural schema definitions, and helper script workflows.
@@ -79,7 +79,7 @@ Because executing arbitrary code and external tools can introduce security vulne
                   │                                   │ (Yes / Approve)
                   ▼                                   ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                       Sandbox Execution Zone                           │
+│                       Terrarium Execution Zone                           │
 │  - Dispatches execution inside containerized runner (gVisor/KVM)       │
 │  - Limits filesystem mounts strictly to `/workspace`                   │
 │  - Blocks or monitors network egress based on tool scopes              │
@@ -102,9 +102,9 @@ Because executing arbitrary code and external tools can introduce security vulne
 
 ---
 
-## 3. Sandboxing & Isolation Levels
+## 3. Terrariuming & Isolation Levels
 
-To guarantee safety, we decouple **what** a tool is allowed to do from **where** it does it. OpenTendril defines three sandbox tiers:
+To guarantee safety, we decouple **what** a tool is allowed to do from **where** it does it. OpenTendril defines three terrarium tiers:
 
 | Tier | Provider | Egress Security | Use Case |
 |---|---|---|---|
@@ -133,4 +133,4 @@ opentendril/
             └── SKILL.md        # Specialized local prompt instructions
 ```
 
-* **No Path Traversal:** The Sandbox Core rejects any tool call or skill lookup resolving outside the boundary of `core/` and `tendril/`.
+* **No Path Traversal:** The Terrarium Core rejects any tool call or skill lookup resolving outside the boundary of `core/` and `tendril/`.

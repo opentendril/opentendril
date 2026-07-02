@@ -12,7 +12,7 @@ assignees: ''
                    Do NOT reopen design questions — design is locked at Gate A.
   HUMAN: To approve a specific slice, comment exactly:
          approved, build slice 1
-  Lanes: L1=CLI & Gateway  L2=Orchestration & Tools  L3=Sandbox  L4=Storage & Config
+  Lanes: L1=CLI & Gateway  L2=Orchestration & Tools  L3=Terrarium  L4=Storage & Config
 -->
 
 ## Status

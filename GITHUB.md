@@ -29,12 +29,12 @@ OpenTendril segregates human development, automated AI edits, and production-sta
        ┌─────────────────────┐         ┌─────────────────────┐ │
        │    staging/ai-*     │         │       feat/*        │─┘
        │  (AI-Generated Edits│         │ (Human-Developed    │
-       │   & Sandbox Tested) │         │  Feature Branch)    │
+       │   & Terrarium Tested) │         │  Feature Branch)    │
        └─────────────────────┘         └─────────────────────┘
 ```
 
 1. **`main`:** The default branch. It must remain stable, compile successfully, and pass all tests at all times. Direct pushes to `main` are strictly disabled.
-2. **`staging/ai-[patch-description]-[timestamp]`:** Automatically created by AI builders (like Antigravity or OpenTendril's Root Agent) when performing workspace edits. Edits are tested inside the sandbox and committed here.
+2. **`staging/ai-[patch-description]-[timestamp]`:** Automatically created by AI builders (like Antigravity or OpenTendril's Root Agent) when performing workspace edits. Edits are tested inside the terrarium and committed here.
 3. **`feat/[feature-name]` or `fix/[bug-name]`:** Used by human developers when implementing manual changes or architectural migrations.
 
 ---
@@ -66,7 +66,7 @@ All commits (human and AI-generated) must follow the [Conventional Commits](http
 
 ### Type Definitions:
 * **`feat`:** A new feature (e.g., `feat(mcp): add stdio protocol gateway`).
-* **`fix`:** A bug fix (e.g., `fix(sandbox): correct host directory mapping error`).
+* **`fix`:** A bug fix (e.g., `fix(terrarium): correct host directory mapping error`).
 * **`docs`:** Documentation changes only (e.g., `docs(github): define branching model`).
 * **`style`:** Code changes that do not affect the meaning of the code (formatting, white-space).
 * **`refactor`:** A code change that neither fixes a bug nor adds a feature (e.g. `refactor(db): migrate to sqlite database`).

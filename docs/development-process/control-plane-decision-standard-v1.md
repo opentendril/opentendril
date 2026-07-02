@@ -39,7 +39,7 @@ If no current source-of-truth document exists for a risky area, the Control Plan
 These lane definitions follow `AGENTS.md` and are repeated here so Control Plane decisions can be read without guessing the stream labels:
 * **`L1`:** CLI & Gateway (Go / MCP)
 * **`L2`:** Agent Orchestration & Tools (Python)
-* **`L3`:** Sandbox & Execution (Docker / gVisor / Firecracker)
+* **`L3`:** Terrarium & Execution (Docker / gVisor / Firecracker)
 * **`L4`:** System Storage & Config (SQLite / Memory / env)
 * **`Cross-lane`:** Work that spans more than one stream lane and therefore requires explicit Control Plane coordination before build work starts.
 
@@ -62,13 +62,13 @@ These lane definitions follow `AGENTS.md` and are repeated here so Control Plane
 ## When a Control Plane Decision is Required
 A Control Plane decision is mandatory when any of the following apply:
 * The work crosses `L1`/`L2`/`L3`/`L4` lane boundaries.
-* The work changes authorization, security boundaries, secrets, public endpoints, sandbox environments, or database systems.
+* The work changes authorization, security boundaries, secrets, public endpoints, terrarium environments, or database systems.
 * The work introduces or changes external contracts such as API behavior, JSON shapes, enum values, or long-lived schema semantics.
 * The work changes deploy policy, runtime config, CLI options, or CI/workflows.
 * The work introduces a naming exception or other boundary exception that will affect future slices.
 * The work touches a single-thread area (e.g. `AGENTS.md`, workflows) and needs explicit coordination.
 * The work depends on choosing between conflicting docs, conflicting runtime behavior, or unresolved architectural alternatives.
-* The work is hard to unwind (such as sandbox isolation levels, database schemas, or public API structures).
+* The work is hard to unwind (such as terrarium isolation levels, database schemas, or public API structures).
 
 ---
 
@@ -100,7 +100,7 @@ That means the artifact must:
 For risky or ambiguous work, OpenTendril prefers this order:
 1. **Policy / Utopia:** Define the target model and invariants (*Design RFC issue — Gate A*).
 2. **Gap Audit:** Compare current `main` against the target model (*Implementation Plan issue — Gate B, first section*).
-3. **Foundation Slice:** Contracts, data model, authorizer, sandbox configuration, or other non-user-facing primitives.
+3. **Foundation Slice:** Contracts, data model, authorizer, terrarium configuration, or other non-user-facing primitives.
 4. **Surface Slice:** One API surface or module adopts the new foundation.
 5. **Exposure Slice:** Public endpoints, CLI flags, or wider product exposure.
 6. **Cleanup / Hardening:** Drift removal, migration cleanup, validation expansion.

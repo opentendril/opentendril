@@ -2,7 +2,7 @@
 
 While OpenTendril's primary development focus is secure and reliable software engineering, the underlying technology—**a headless, secure, local file-manipulation and code-execution kernel**—is highly versatile. 
 
-Because OpenTendril decouples the reasoning engine (the Cloud/Local LLM) from the execution sandbox (Docker/gVisor/Firecracker), users can safely apply agentic automation to any domain requiring local file processing and tool execution without risking their host systems or compromising data privacy.
+Because OpenTendril decouples the reasoning engine (the Cloud/Local LLM) from the execution terrarium (Docker/gVisor/Firecracker), users can safely apply agentic automation to any domain requiring local file processing and tool execution without risking their host systems or compromising data privacy.
 
 ---
 
@@ -11,29 +11,29 @@ Because OpenTendril decouples the reasoning engine (the Cloud/Local LLM) from th
 ### 📊 A. Secure Data Wrangling & Financial Analysis
 * **The Scenario:** A financial analyst, accountant, or HR manager has directories full of sensitive spreadsheets (CSV, Excel, PDF invoices) containing proprietary financial data or employee PII. They need to clean, merge, format, and generate charts from this data.
 * **Why OpenTendril Excels:** 
-  * **Zero Data Leakage:** Uploading sensitive payroll or financial files to public web tools is a compliance violation. OpenTendril executes python scripts (using `pandas`, `openpyxl`) *entirely locally* inside the sandbox.
-  * **The Safety Trap:** If the LLM makes a syntax error or writes an incorrect formula, the code execution fails inside the sandbox without corrupting the original master backups on the host machine.
+  * **Zero Data Leakage:** Uploading sensitive payroll or financial files to public web tools is a compliance violation. OpenTendril executes python scripts (using `pandas`, `openpyxl`) *entirely locally* inside the terrarium.
+  * **The Safety Trap:** If the LLM makes a syntax error or writes an incorrect formula, the code execution fails inside the terrarium without corrupting the original master backups on the host machine.
 
 ### 🗄️ B. Secured Personal Desktop Automation
 * **The Scenario:** A power user wants to automate clean-up and organization tasks on their computer (e.g. organizing their messy `/Downloads` folder, sorting thousands of raw photos by EXIF date/location metadata, converting audio formats, or deleting duplicate files).
 * **Why OpenTendril Excels:** 
-  * **The Sandbox Buffer:** Giving an LLM raw bash access to your home directory is extremely dangerous. By using OpenTendril, you only mount the specific target directories (e.g. `/Downloads`) to the container. The agent runs sorting scripts inside the sandbox, physically blocked from touching your system keychain, browser cookies, or root folders.
+  * **The Terrarium Buffer:** Giving an LLM raw bash access to your home directory is extremely dangerous. By using OpenTendril, you only mount the specific target directories (e.g. `/Downloads`) to the container. The agent runs sorting scripts inside the terrarium, physically blocked from touching your system keychain, browser cookies, or root folders.
 
 ### 📚 C. Local Academic Research & Citation Mapping
 * **The Scenario:** A researcher has downloaded hundreds of PDF journal articles, raw text files, and datasets. They want an AI to read them, build a cross-referenced citation index, extract tables, and summarize research methodologies.
 * **Why OpenTendril Excels:**
   * **Unlimited Scale:** Cloud-based PDF readers have strict file size limits and upload bottlenecks. OpenTendril running locally has direct, high-speed access to the local folders.
-  * **Custom Tooling:** The agent can dynamically install local PDF parsers (`pypdf`, `pdfplumber`) and semantic indexing tools within the sandbox runtime to build custom RAG indexes without leaking research data to third-party servers.
+  * **Custom Tooling:** The agent can dynamically install local PDF parsers (`pypdf`, `pdfplumber`) and semantic indexing tools within the terrarium runtime to build custom RAG indexes without leaking research data to third-party servers.
 
 ### ✍️ D. AI-Assisted Technical Writing & Local Publishing
 * **The Scenario:** A team of technical writers, authors, or translation specialists are writing a book, localized software documentation, or blog articles in markdown. They want to check link integrity, translate text, enforce style guides, and preview compilation.
 * **Why OpenTendril Excels:**
-  * **Compilation loop:** The agent doesn't just edit markdown. It can compile the documentation site (e.g. using Hugo, Docusaurus, or Sphinx) inside the sandbox to guarantee that its changes didn't break any internal links or ruin page rendering before committing.
+  * **Compilation loop:** The agent doesn't just edit markdown. It can compile the documentation site (e.g. using Hugo, Docusaurus, or Sphinx) inside the terrarium to guarantee that its changes didn't break any internal links or ruin page rendering before committing.
 
 ### 🛡️ E. Local Security Audits & System Compliance
 * **The Scenario:** A system administrator wants to audit a local server's configuration, active open ports, system logs, or Docker configuration against CIS security benchmarks.
 * **Why OpenTendril Excels:**
-  * **Safe Scanning:** The agent runs auditing scripts (such as Lynis or custom scanners) inside the sandbox. It can parse system logs safely without having root access to the host machine, drafting compliance reports and suggesting firewall rules in plain English.
+  * **Safe Scanning:** The agent runs auditing scripts (such as Lynis or custom scanners) inside the terrarium. It can parse system logs safely without having root access to the host machine, drafting compliance reports and suggesting firewall rules in plain English.
 
 ---
 

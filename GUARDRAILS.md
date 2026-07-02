@@ -38,7 +38,7 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 * **REST HTTP Endpoints:**
   * All URL paths and endpoints must use **`kebab-case`** (e.g., `/api/mcp-tools`, `/v1/chat-completions`).
 * **Configuration:**
-  * Environment variables and database keys must use **`SCREAMING_SNAKE_CASE`** (e.g., `SANDBOX_PROVIDER`, `GROK_API_KEY`).
+  * Environment variables and database keys must use **`SCREAMING_SNAKE_CASE`** (e.g., `TERRARIUM_PROVIDER`, `GROK_API_KEY`).
 
 ---
 

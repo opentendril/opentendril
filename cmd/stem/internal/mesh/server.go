@@ -191,29 +191,29 @@ func (s *Server) HandleGraftWebSocket(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if err := sendLog("server", "Preparing mesh graft sandbox."); err != nil {
+	if err := sendLog("server", "Preparing mesh graft terrarium."); err != nil {
 		return
 	}
 
-	sandboxPath, err := createGraftSandbox(ctx, s.workspace)
+	terrariumPath, err := createGraftTerrarium(ctx, s.workspace)
 	if err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
 	}
-	defer removeGraftSandbox(s.workspace, sandboxPath)
+	defer removeGraftTerrarium(s.workspace, terrariumPath)
 
-	if err := copyGovernanceSequence(s.workspace, sandboxPath, sequenceRelPath); err != nil {
+	if err := copyGovernanceSequence(s.workspace, terrariumPath, sequenceRelPath); err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
 	}
 
-	startingHead, err := runGitOutput(ctx, sandboxPath, "rev-parse", "HEAD")
+	startingHead, err := runGitOutput(ctx, terrariumPath, "rev-parse", "HEAD")
 	if err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
 	}
 
-	if err := applyPatchToSandbox(ctx, sandboxPath, req.Patch); err != nil {
+	if err := applyPatchToTerrarium(ctx, terrariumPath, req.Patch); err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
 	}
@@ -222,12 +222,12 @@ func (s *Server) HandleGraftWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := runGovernanceSequence(ctx, sandboxPath, sequenceRelPath, send); err != nil {
+	if err := runGovernanceSequence(ctx, terrariumPath, sequenceRelPath, send); err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
 	}
 
-	commitHash, err := commitAndPushValidatedSandbox(ctx, sandboxPath, branchName, req.CommitMessage, startingHead)
+	commitHash, err := commitAndPushValidatedTerrarium(ctx, terrariumPath, branchName, req.CommitMessage, startingHead)
 	if err != nil {
 		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
 		return
@@ -296,39 +296,39 @@ func resolveSequenceRelativePath(sequencePath string) (string, error) {
 	return cleaned, nil
 }
 
-func createGraftSandbox(ctx context.Context, sourceRoot string) (string, error) {
+func createGraftTerrarium(ctx context.Context, sourceRoot string) (string, error) {
 	sourceRoot = ResolveRepoRoot(sourceRoot)
 	if strings.TrimSpace(sourceRoot) == "" {
 		return "", fmt.Errorf("workspace root is required")
 	}
 
-	sandboxPath := filepath.Join(os.TempDir(), "opentendril-graft-"+shortCommitHash(randomTokenID()))
-	cmd := exec.CommandContext(ctx, "git", "-C", sourceRoot, "worktree", "add", "--detach", sandboxPath, "HEAD")
+	terrariumPath := filepath.Join(os.TempDir(), "opentendril-graft-"+shortCommitHash(randomTokenID()))
+	cmd := exec.CommandContext(ctx, "git", "-C", sourceRoot, "worktree", "add", "--detach", terrariumPath, "HEAD")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("create graft sandbox failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("create graft terrarium failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
 	}
 
-	return sandboxPath, nil
+	return terrariumPath, nil
 }
 
-func removeGraftSandbox(sourceRoot, sandboxPath string) {
+func removeGraftTerrarium(sourceRoot, terrariumPath string) {
 	sourceRoot = ResolveRepoRoot(sourceRoot)
 	if strings.TrimSpace(sourceRoot) != "" {
-		cmd := exec.Command("git", "-C", sourceRoot, "worktree", "remove", "--force", sandboxPath)
+		cmd := exec.Command("git", "-C", sourceRoot, "worktree", "remove", "--force", terrariumPath)
 		_ = cmd.Run()
 	}
-	_ = os.RemoveAll(sandboxPath)
+	_ = os.RemoveAll(terrariumPath)
 }
 
-func copyGovernanceSequence(sourceRoot, sandboxPath, sequenceRelPath string) error {
+func copyGovernanceSequence(sourceRoot, terrariumPath, sequenceRelPath string) error {
 	sourcePath := filepath.Join(sourceRoot, sequenceRelPath)
 	content, err := os.ReadFile(sourcePath)
 	if err != nil {
 		return fmt.Errorf("read mesh governance sequence %s: %w", sourcePath, err)
 	}
 
-	targetPath := filepath.Join(sandboxPath, sequenceRelPath)
+	targetPath := filepath.Join(terrariumPath, sequenceRelPath)
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return fmt.Errorf("create governance sequence directory: %w", err)
 	}
@@ -339,8 +339,8 @@ func copyGovernanceSequence(sourceRoot, sandboxPath, sequenceRelPath string) err
 	return nil
 }
 
-func applyPatchToSandbox(ctx context.Context, sandboxPath, patch string) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", sandboxPath, "apply", "--binary", "--whitespace=nowarn", "-")
+func applyPatchToTerrarium(ctx context.Context, terrariumPath, patch string) error {
+	cmd := exec.CommandContext(ctx, "git", "-C", terrariumPath, "apply", "--binary", "--whitespace=nowarn", "-")
 	cmd.Stdin = strings.NewReader(patch)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -350,7 +350,7 @@ func applyPatchToSandbox(ctx context.Context, sandboxPath, patch string) error {
 	return nil
 }
 
-func runGovernanceSequence(ctx context.Context, sandboxPath, sequenceRelPath string, send func(graftMessage) error) error {
+func runGovernanceSequence(ctx context.Context, terrariumPath, sequenceRelPath string, send func(graftMessage) error) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -361,7 +361,7 @@ func runGovernanceSequence(ctx context.Context, sandboxPath, sequenceRelPath str
 
 	args := []string{"sequence", "run", filepath.ToSlash(sequenceRelPath)}
 	cmd := exec.CommandContext(subCtx, executable, args...)
-	cmd.Dir = sandboxPath
+	cmd.Dir = terrariumPath
 	cmd.Env = sanitizedValidationEnv(os.Environ())
 	cmd.Stdin = strings.NewReader("")
 
@@ -431,20 +431,20 @@ func sanitizedValidationEnv(env []string) []string {
 	return filtered
 }
 
-func commitAndPushValidatedSandbox(ctx context.Context, sandboxPath, branchName, commitMessage, startingHead string) (string, error) {
-	status, err := runGitOutput(ctx, sandboxPath, "status", "--porcelain")
+func commitAndPushValidatedTerrarium(ctx context.Context, terrariumPath, branchName, commitMessage, startingHead string) (string, error) {
+	status, err := runGitOutput(ctx, terrariumPath, "status", "--porcelain")
 	if err != nil {
 		return "", err
 	}
 
-	currentHead, err := runGitOutput(ctx, sandboxPath, "rev-parse", "HEAD")
+	currentHead, err := runGitOutput(ctx, terrariumPath, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
 
 	dirty := strings.TrimSpace(status) != ""
 	if dirty {
-		if _, err := runGitOutput(ctx, sandboxPath, "add", "-A"); err != nil {
+		if _, err := runGitOutput(ctx, terrariumPath, "add", "-A"); err != nil {
 			return "", err
 		}
 
@@ -453,11 +453,11 @@ func commitAndPushValidatedSandbox(ctx context.Context, sandboxPath, branchName,
 			commitMsg = "mesh graft validation"
 		}
 
-		if _, err := runGitOutput(ctx, sandboxPath, "commit", "-m", commitMsg); err != nil {
+		if _, err := runGitOutput(ctx, terrariumPath, "commit", "-m", commitMsg); err != nil {
 			return "", err
 		}
 
-		currentHead, err = runGitOutput(ctx, sandboxPath, "rev-parse", "HEAD")
+		currentHead, err = runGitOutput(ctx, terrariumPath, "rev-parse", "HEAD")
 		if err != nil {
 			return "", err
 		}
@@ -472,7 +472,7 @@ func commitAndPushValidatedSandbox(ctx context.Context, sandboxPath, branchName,
 		pushBranch = "mesh-graft-" + shortCommitHash(currentHead)
 	}
 
-	if _, err := runGitOutput(ctx, sandboxPath, "push", "origin", "HEAD:"+pushBranch); err != nil {
+	if _, err := runGitOutput(ctx, terrariumPath, "push", "origin", "HEAD:"+pushBranch); err != nil {
 		return "", err
 	}
 

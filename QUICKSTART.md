@@ -168,7 +168,7 @@ substrates:
 
 *   **Usage:** Pass the named key (e.g. `core` or `my-api`) as the `substrate` argument to `sproutTendril`.
 *   **Dynamic Clones:** If `path` is omitted or does not exist, Go Stem automatically clones the `url` to a temporary directory under `/tmp`, runs the task, pushes the resulting branch to GitHub, and cleans up.
-*   **Gating:** `readonly: true` ensures edits are kept inside the sandbox and never merged back to the host branch.
+*   **Gating:** `readonly: true` ensures edits are kept inside the terrarium and never merged back to the host branch.
 
 ---
 
@@ -181,4 +181,4 @@ cd cmd/stem
 go test -v ./...
 ```
 
-All tests (API, Docker sandbox stashing, sequence conductors, and coordinator routing) should build and pass cleanly.
+All tests (API, Docker terrarium stashing, sequence conductors, and coordinator routing) should build and pass cleanly.

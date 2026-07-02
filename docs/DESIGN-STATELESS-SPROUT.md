@@ -2,7 +2,7 @@
 
 This plan details the implementation of a stateless, decoupled sprout architecture. 
 
-We will migrate the LLM reasoning loop from the Python container to the host **Go Stem**, converting Sprout containers into purely stateless, "dumb" tool execution sandboxes. We will build **Go** as the ultra-lightweight default general-purpose executor, and **TypeScript/Node** as the rich ecosystem executor, communicating over a universal stdin/stdout JSON-RPC protocol.
+We will migrate the LLM reasoning loop from the Python container to the host **Go Stem**, converting Sprout containers into purely stateless, "dumb" tool execution terrariumes. We will build **Go** as the ultra-lightweight default general-purpose executor, and **TypeScript/Node** as the rich ecosystem executor, communicating over a universal stdin/stdout JSON-RPC protocol.
 
 ---
 
@@ -70,7 +70,7 @@ We will move the LLM agent loop from `tendrilloop.py` onto the host Go Stem orch
 
 In botany, **grafting** is the act of joining tissues from two different plants so they grow together as a single organism. In OpenTendril, we map this to two concepts:
 
-1.  **Stem Grafting:** Connecting a local Go Stem on a developer's machine to a remote Go Stem running on an external server or VM. This allows the local workspace to command remote execution sandboxes or delegate workloads to heavier build environments transparently.
+1.  **Stem Grafting:** Connecting a local Go Stem on a developer's machine to a remote Go Stem running on an external server or VM. This allows the local workspace to command remote execution terrariumes or delegate workloads to heavier build environments transparently.
 2.  **Genotype Grafting:** Dynamically joining two genotypes (personae) or modular plasmids (skills) into a hybrid genotype (e.g., grafting a `frontendDev` persona with a `postgresDBA` persona to handle full-stack workflows).
 
 ---

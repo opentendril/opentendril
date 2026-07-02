@@ -32,4 +32,4 @@ substrates:
 # - If `path` is missing or does not exist, Tendril clones `url` to a temporary
 #   workspace under /tmp/opentendril-substrate-<name>-<random>.
 # - `auth` must be the name of an environment variable, not the secret value.
-# - `readonly: true` keeps the sandbox ephemeral and discards any edits.
+# - `readonly: true` keeps the terrarium ephemeral and discards any edits.

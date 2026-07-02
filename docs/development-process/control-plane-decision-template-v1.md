@@ -9,7 +9,7 @@ For the governing standard, see `docs/development-process/control-plane-decision
 ## Lane Abbreviations
 * **`L1`:** CLI & Gateway (Go / MCP)
 * **`L2`:** Agent Orchestration & Tools (Python)
-* **`L3`:** Sandbox & Execution (Docker / gVisor / Firecracker)
+* **`L3`:** Terrarium & Execution (Docker / gVisor / Firecracker)
 * **`L4`:** System Storage & Config (SQLite / Memory / env)
 * **`Cross-lane`:** Spans more than one lane and needs explicit Control Plane coordination.
 

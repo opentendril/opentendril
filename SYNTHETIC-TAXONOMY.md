@@ -27,8 +27,8 @@ The core execution environment maps to the structural anatomy of a plant.
 
 *   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem transports nutrients and structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI.
 *   **Vascular System (Xylem & Phloem)**: The transport mechanisms of the Stem. **Xylem channels** carry transcripts (inputs) from the Roots up to the active Sprouts (leaves). **Phloem channels** carry git diffs and code changes (synthesized sugar/energy) from the Sprouts back down to the Substrate (soil/host repository).
-*   **Vascular Cambium (Vascular Bundles)**: The tissue within the stem that coordinates parallel xylem and phloem transport tubes. This maps to the concurrent step runner managing multiple isolated sandbox channels (parallel execution branches).
-*   **Sprout**: The ephemeral Docker sandbox. A sprout is a brand new, isolated shoot of growth. In OpenTendril, every time a Transcript executes, a fresh container (the Sprout) is created, providing a clean, isolated environment.
+*   **Vascular Cambium (Vascular Bundles)**: The tissue within the stem that coordinates parallel xylem and phloem transport tubes. This maps to the concurrent step runner managing multiple isolated terrarium channels (parallel execution branches).
+*   **Sprout**: The ephemeral Docker terrarium. A sprout is a brand new, isolated shoot of growth. In OpenTendril, every time a Transcript executes, a fresh container (the Sprout) is created, providing a clean, isolated environment.
 *   **Tendril**: The physical worker (e.g. the Python or Go runtime) inside the Sprout. A tendril is *not* a brain—plants do not have brains. A tendril is a dumb, specialized limb that blindly reaches out, touches code, and runs shell commands based purely on chemical signals it receives.
 *   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the dumb Tendril to execute.
 
@@ -66,7 +66,7 @@ The execution flow of the OpenTendril framework natively maps to the six major g
 3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers ("The Roots") using the Dual LLM config (Coordinator + Worker).
 4. **Tendril Initiation:** When a specific task Transcript is requested, the Stem initiates a specialized Genotype context, dynamically resolving required Plasmids.
 5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a stateless Sprout Docker container is spawned) and sweeps the codebase. Under the **Codebase Assessor (Thigmotropism)**, the Stem generates a hierarchical **Repo Map Plasmid** (`repomap.md`) using native AST parsing, giving the sprout a tactile sense of the codebase architecture before coiling around it to execute edits.
-6. **Reproductive Maturity:** With the task completed, Go Stem runs post-flight sanitization, commits the changes, merges the sandbox worktree back to the host, and delivers the final PRs and artifacts.
+6. **Reproductive Maturity:** With the task completed, Go Stem runs post-flight sanitization, commits the changes, merges the terrarium worktree back to the host, and delivers the final PRs and artifacts.
 
 ---
 
@@ -115,7 +115,7 @@ graph TD
         HT -- Growth Allowed --> OS[Sprout Initiator]
     end
 
-    subgraph Ephemeral Sprout (Docker Sandbox)
+    subgraph Ephemeral Sprout (Docker Terrarium)
         OS --> T[The Tendril AI]
         
         subgraph Genetic Injection

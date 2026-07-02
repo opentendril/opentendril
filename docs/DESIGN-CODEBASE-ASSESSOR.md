@@ -41,14 +41,14 @@ The generated map is formatted as a compact hierarchical list:
 
 ---
 
-## 3. Dynamic Sandbox Injection Lifecycle
+## 3. Dynamic Terrarium Injection Lifecycle
 
 1.  When `RunTendril` starts, before the Sprout boots:
     *   Go Stem runs the AST parser over the resolved workspace (`mountPath`), ignoring `.git`, `node_modules`, `vendor`, and `.venv` directories.
     *   Generates the compressed `repomap.md` text.
 2.  Go Stem writes `repomap.md` to `mountPath/.tendril/genome/repomap.md`.
 3.  Since it is staged under `.tendril/genome/`, when the Sprout boots, the host agent automatically reads it as part of the active genome prompts.
-4.  Once the Sprout finishes execution, the sandbox worktree is cleaned up, safely discarding the temporary repo map from disk.
+4.  Once the Sprout finishes execution, the terrarium worktree is cleaned up, safely discarding the temporary repo map from disk.
 
 ---
 
@@ -87,7 +87,7 @@ The generated map is formatted as a compact hierarchical list:
 
 ### Automated Tests
 *   **AST Parser Tests:** Verify that Go, TypeScript, and Python parsers correctly extract signatures from mock files.
-*   **Injection Lifecycle Tests:** Verify that `repomap.md` is generated and staged inside a temporary sandbox directory.
+*   **Injection Lifecycle Tests:** Verify that `repomap.md` is generated and staged inside a temporary terrarium directory.
 
 ### Manual Verification
 1.  Run `tendril repomap` inside the `opentendril/core` repository.

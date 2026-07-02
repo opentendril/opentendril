@@ -10,7 +10,7 @@ assignees: ''
   Governing standard: docs/development-process/control-plane-decision-standard-v1.md
   ARCHITECT AGENT: Fill all sections. Leave "Assigned Builder" blank.
   HUMAN: Review, then fill "Assigned Builder" and change Status to approved.
-  Lanes: L1=CLI & Gateway  L2=Orchestration & Tools  L3=Sandbox  L4=Storage & Config
+  Lanes: L1=CLI & Gateway  L2=Orchestration & Tools  L3=Terrarium  L4=Storage & Config
 -->
 
 ## Status
@@ -48,7 +48,7 @@ Human Control Plane
 ## Lane impact
 - [ ] L1 — CLI & Gateway (Go / MCP)
 - [ ] L2 — Agent Orchestration & Tools (Python)
-- [ ] L3 — Sandbox & Execution (Docker / gVisor / Firecracker)
+- [ ] L3 — Terrarium & Execution (Docker / gVisor / Firecracker)
 - [ ] L4 — System Storage & Config (SQLite / Memory / env)
 - [ ] Cross-lane (requires Control Plane approval before build starts)
 

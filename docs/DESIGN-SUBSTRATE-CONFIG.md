@@ -34,8 +34,8 @@ substrates:
 
 ### A. Read-Only Gating (Environmental Protections)
 *   If a substrate is marked `readonly: true`:
-    *   The Sprout sandbox **is allowed to modify files locally** (to enable compiler checks, test executions, and validation suites inside the container).
-    *   Go Stem **strictly blocks** git stashing on the host, git commits in the sandbox, and fast-forward merging back to the host workspace. All edits are safely discarded when the sandbox is torn down.
+    *   The Sprout terrarium **is allowed to modify files locally** (to enable compiler checks, test executions, and validation suites inside the container).
+    *   Go Stem **strictly blocks** git stashing on the host, git commits in the terrarium, and fast-forward merging back to the host workspace. All edits are safely discarded when the terrarium is torn down.
     *   Go Stem passes the environment variable `TENDRIL_READONLY=true` to the Sprout container. The Sprout's internal executor can read this env var to warn the reasoning agent that its edits are ephemeral.
 
 ### B. On-Demand Remote Clones
@@ -65,7 +65,7 @@ substrates:
     *   `SubstrateURL` $\rightarrow$ config `url` (if not overridden by `SubstrateURL` field).
     *   `SubstrateBranch` $\rightarrow$ config `branch` (if not overridden by `SubstrateBranch` field).
     *   Dynamically set the auth environment variable during git clone (e.g. using the token referenced by the config's `auth` env var name).
-*   **Read-Only Gating:** If `readonly: true` is resolved, skip git stashing before boot, and disable post-flight commits and fast-forward merging back to the host, outputting: `"⚠️ Substrate is configured as READONLY. Discarding sandbox modifications."`
+*   **Read-Only Gating:** If `readonly: true` is resolved, skip git stashing before boot, and disable post-flight commits and fast-forward merging back to the host, outputting: `"⚠️ Substrate is configured as READONLY. Discarding terrarium modifications."`
 
 #### [MODIFY] [internal/api/mcp.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/api/mcp.go)
 *   On startup, load and validate `substrates.yaml`. Log the active named substrates found to `log.Printf`.

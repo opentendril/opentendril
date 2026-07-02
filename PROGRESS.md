@@ -22,7 +22,7 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 - [x] **Zero-Restriction Mode**: `PROTECTED_FILES` and `SDLC` gates are context-aware (disabled for external projects).
 - [x] **Universal File Support**: Expanded editor to support `.go`, `.rs`, `.java`, `.rb`, `.c`, etc.
 - [x] **Git safe.directory**: Fixed volume mount ownership issues in Docker.
-- [x] **Sandbox Volume Fix**: Resolved OCI runtime mount errors for read-only workspaces.
+- [x] **Terrarium Volume Fix**: Resolved OCI runtime mount errors for read-only workspaces.
 - [x] **Automated Releases**: GitHub Actions workflow for cross-platform CLI binaries.
 
 ---

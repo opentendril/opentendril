@@ -6,7 +6,7 @@ Tendril is evolving from a local "Root Agent" that builds itself, into a globall
 
 ## Evolution 1: The Root Agent (Current State)
 **Focus:** Self-healing, self-building, and creating the "Moat."
-Tendril points its sandbox at its own source code (`opentendril/core`).
+Tendril points its terrarium at its own source code (`opentendril/core`).
 - ✅ **Multi-LLM Routing:** Tiered reasoning (Grok, Gemini, Claude, local models).
 - ✅ **Approval Gate:** Human-in-the-loop security for file edits.
 - ✅ **The `/edit` Endpoint Loop:** The core moat. Generate → Syntax Check → Auto-Commit → Chronicle.
