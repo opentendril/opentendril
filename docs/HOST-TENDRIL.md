@@ -4,10 +4,16 @@ OpenTendril primarily uses **Docker** (or gVisor/Firecracker) to run "Sprouts" i
 
 For this, OpenTendril provides the `host` Terrarium provider.
 
-## Security Warning
-> [!WARNING]
-> **Use With Caution:** The `host` provider runs processes with the full permissions of the user running the OpenTendril Stem. 
-> Only route trusted internal sequences (like delegating prompts to Codex) to a host substrate. Never allow an autonomous agent to execute arbitrary shell commands via the host provider.
+## Security Posture: Default Deny
+
+> [!CAUTION]
+> **The host provider is disabled by default.** Even if you configure a substrate using `provider: host` in `substrates.yaml`, the OpenTendril Stem will **refuse to start the Terrarium** and emit a fatal error unless the following environment variable is explicitly set:
+>
+> ```
+> TENDRIL_ALLOW_HOST_EXECUTION=true
+> ```
+>
+> This is a deliberate **default-deny** security gate at the engine level. It cannot be overridden by configuration alone — it requires a runtime decision by the operator.
 
 ## Configuring a Host Substrate
 
