@@ -32,12 +32,29 @@ func (GoParser) Supports(path string) bool {
 
 func (GoParser) Parse(path string, content []byte) ([]Symbol, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, content, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, path, content, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("parse Go file: %w", err)
 	}
 
 	symbols := make([]Symbol, 0)
+	
+	// Generate file_context pseudo-symbol
+	var importPaths []string
+	for _, imp := range file.Imports {
+		if imp.Path != nil {
+			importPaths = append(importPaths, imp.Path.Value)
+		}
+	}
+	fileContextStub := fmt.Sprintf("package %s\nImports: %s", file.Name.Name, strings.Join(importPaths, ", "))
+	symbols = append(symbols, Symbol{
+		Name:        "file_context",
+		Type:        "file_context",
+		LineStart:   1,
+		LineEnd:     1,
+		StubContent: fileContextStub,
+	})
+
 	for _, decl := range file.Decls {
 		switch node := decl.(type) {
 		case *ast.GenDecl:
@@ -56,12 +73,20 @@ func (GoParser) Parse(path string, content []byte) ([]Symbol, error) {
 				case *ast.InterfaceType:
 					symbolType = "interface"
 				}
+				doc := ""
+				if node.Doc != nil {
+					doc = strings.TrimSpace(node.Doc.Text())
+				}
+				stub := renderGoDeclarationStub(fset, node)
+				if doc != "" {
+					stub = doc + "\n" + stub
+				}
 				symbols = append(symbols, Symbol{
 					Name:        typeSpec.Name.Name,
 					Type:        symbolType,
 					LineStart:   fset.Position(typeSpec.Pos()).Line,
 					LineEnd:     fset.Position(typeSpec.End()).Line,
-					StubContent: renderGoDeclarationStub(fset, node),
+					StubContent: stub,
 				})
 			}
 		case *ast.FuncDecl:
@@ -69,12 +94,20 @@ func (GoParser) Parse(path string, content []byte) ([]Symbol, error) {
 			if node.Recv != nil {
 				symbolType = "method"
 			}
+			doc := ""
+			if node.Doc != nil {
+				doc = strings.TrimSpace(node.Doc.Text())
+			}
+			stub := renderGoFunctionStub(node)
+			if doc != "" {
+				stub = doc + "\n" + stub
+			}
 			symbols = append(symbols, Symbol{
 				Name:        node.Name.Name,
 				Type:        symbolType,
 				LineStart:   fset.Position(node.Pos()).Line,
 				LineEnd:     fset.Position(node.End()).Line,
-				StubContent: renderGoFunctionStub(node),
+				StubContent: stub,
 			})
 		}
 	}
@@ -209,6 +242,36 @@ func (p RegexParser) Parse(path string, content []byte) ([]Symbol, error) {
 	extension := normalizeRegexExtension(path)
 	symbols := make([]Symbol, 0)
 
+	// 1. Extract file_context (imports)
+	var imports []string
+	importRegexPy := regexp.MustCompile(`^(?:import\s+|from\s+.*?import\s+)(.+)`)
+	importRegexJS := regexp.MustCompile(`^(?:import\s+.*from\s+['"]|require\(['"])([^'"]+)`)
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if extension == ".py" {
+			if matches := importRegexPy.FindStringSubmatch(trimmed); len(matches) > 1 {
+				imports = append(imports, matches[1])
+			}
+		} else {
+			if matches := importRegexJS.FindStringSubmatch(trimmed); len(matches) > 1 {
+				imports = append(imports, matches[1])
+			}
+		}
+	}
+
+	if len(imports) > 0 {
+		fileContextStub := fmt.Sprintf("Imports: %s", strings.Join(imports, ", "))
+		symbols = append(symbols, Symbol{
+			Name:        "file_context",
+			Type:        "file_context",
+			LineStart:   1,
+			LineEnd:     1,
+			StubContent: fileContextStub,
+		})
+	}
+
+	// 2. Extract symbols and heuristic docstrings
 	for index, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
@@ -223,12 +286,34 @@ func (p RegexParser) Parse(path string, content []byte) ([]Symbol, error) {
 				continue
 			}
 			lineNumber := index + 1
+			stub := trimmed
+
+			// Heuristic docstring extraction
+			if extension == ".py" && index+1 < len(lines) {
+				nextLine := strings.TrimSpace(lines[index+1])
+				if strings.HasPrefix(nextLine, `"""`) || strings.HasPrefix(nextLine, `'''`) {
+					stub = nextLine + "\n" + stub
+				}
+			} else if (extension == ".js" || extension == ".ts") && index > 0 {
+				prevLine := strings.TrimSpace(lines[index-1])
+				if prevLine == "*/" || strings.HasSuffix(prevLine, "*/") {
+					for back := index - 1; back >= 0; back-- {
+						backLine := strings.TrimSpace(lines[back])
+						if strings.HasPrefix(backLine, "/**") {
+							docLines := lines[back:index]
+							stub = strings.Join(docLines, "\n") + "\n" + stub
+							break
+						}
+					}
+				}
+			}
+
 			symbols = append(symbols, Symbol{
 				Name:        matches[1],
 				Type:        pattern.symbolType,
 				LineStart:   lineNumber,
 				LineEnd:     lineNumber,
-				StubContent: strings.TrimSpace(line),
+				StubContent: stub,
 			})
 			break
 		}

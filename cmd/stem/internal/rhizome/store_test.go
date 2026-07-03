@@ -68,7 +68,7 @@ func TestScanRepositorySkipsUnchangedFilesAndUpdatesChangedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanRepository returned error: %v", err)
 	}
-	if stats.FilesParsed != 1 || stats.FilesSkipped != 0 || stats.SymbolsStored != 1 {
+	if stats.FilesParsed != 1 || stats.FilesSkipped != 0 || stats.SymbolsStored != 2 {
 		t.Fatalf("unexpected first scan stats: %+v", stats)
 	}
 
@@ -87,7 +87,7 @@ func TestScanRepositorySkipsUnchangedFilesAndUpdatesChangedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("third ScanRepository returned error: %v", err)
 	}
-	if stats.FilesParsed != 1 || stats.SymbolsStored != 1 {
+	if stats.FilesParsed != 1 || stats.SymbolsStored != 2 {
 		t.Fatalf("unexpected changed scan stats: %+v", stats)
 	}
 

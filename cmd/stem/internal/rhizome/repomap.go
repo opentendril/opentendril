@@ -22,6 +22,15 @@ func GenerateRepoMap(ctx context.Context, store IndexStore, repositoryName strin
 
 	sort.Slice(symbols, func(i, j int) bool {
 		if symbols[i].FilePath == symbols[j].FilePath {
+			isIFileContext := symbols[i].Type == "file_context"
+			isJFileContext := symbols[j].Type == "file_context"
+			if isIFileContext && !isJFileContext {
+				return true
+			}
+			if !isIFileContext && isJFileContext {
+				return false
+			}
+
 			if symbols[i].LineStart == symbols[j].LineStart {
 				return symbols[i].Name < symbols[j].Name
 			}
@@ -48,7 +57,11 @@ func GenerateRepoMap(ctx context.Context, store IndexStore, repositoryName strin
 			builder.WriteString(currentPath)
 			builder.WriteString("`\n")
 		}
-		fmt.Fprintf(&builder, "- `%s` %s lines %d-%d\n", symbol.Name, symbol.Type, symbol.LineStart, symbol.LineEnd)
+		if symbol.Type == "file_context" {
+			fmt.Fprintf(&builder, "- `%s`\n", symbol.Name)
+		} else {
+			fmt.Fprintf(&builder, "- `%s` %s lines %d-%d\n", symbol.Name, symbol.Type, symbol.LineStart, symbol.LineEnd)
+		}
 		builder.WriteString("  ```\n")
 		builder.WriteString(symbol.StubContent)
 		builder.WriteString("\n  ```\n")
