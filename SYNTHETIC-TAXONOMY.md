@@ -48,12 +48,26 @@ Biological organisms must constantly defend against diseases and harmful mutatio
 
 To scale our prompt engineering dynamically, OpenTendril maps prompt layers to genetics.
 
-*   **Genotype (Base Model Identity):** The core DNA of the AI. A Genotype is the foundational system prompt defining the overall identity, behavioral constraints, and role of the Tendril (e.g., "You are a Senior Go Engineer"). It is the fundamental blueprint. *(Common IT term: Persona or System Prompt)*.
-*   **Plasmid (Modular Skill Injection):** In microbiology, a plasmid is a small, modular packet of DNA that can be transferred between cells to instantly grant them new traits (like antibiotic resistance). In OpenTendril, a Plasmid is a reusable, modular block of context or tools injected into a Genotype on the fly (e.g., "Here is the syntax documentation for React.js"). *(Common IT term: RAG context block or Tool definition)*.
-*   **Transcript (Instruction Execution):** In biology, RNA transcription is the process of copying genetic instructions into a transient format (mRNA) that the cell immediately executes to perform an action. In OpenTendril, the Transcript is the one-off, contextual prompt fed to the Tendril for a single execution run (e.g., "Refactor this file"). *(Common IT term: User Prompt or Task)*.
-*   **Sequence (Workflow Automation):** A defined genetic sequence dictating a complex chain of events. In OpenTendril, a Sequence is a predefined workflow that chains multiple Tendrils together (e.g., A Frontend Genotype writes the code, then a Testing Genotype reviews it). A sequence is initiated by **activating the meristem** (the growth center). *(Common IT term: Agentic Pipeline or Workflow)*.
-*   **Meristem Step (Dynamic Planning Node):** A sequence step that dynamically plans or generates new steps during execution. Named after **Meristematic tissue** which divides to branch out new shoots. *(Common IT term: Workflow Conductor or Planner)*.
-*   **Phenotypes (Speculative Variations):** Multiple speculative shoots or runs executing the same Transcript in parallel. Under **Phenotypic Selection (Natural Selection)**, Go Stem dispatches concurrent Sprouts under different environmental parameters (varying LLM temperatures or Plasmid rules), and merges only the first variant that compiles and passes the fitness test suite, weeding out weaker mutations. *(Common IT term: Speculative Parallel Execution)*.
+*   **Genotype (Base Model Identity):** The core DNA of the AI. A Genotype is the foundational system prompt defining the overall identity, behavioral constraints, and role of the Tendril (e.g., "You are a Senior Go Engineer"). It is the fundamental blueprint. Critically, a Genotype defines *who the Tendril is and how it should think* — it does not define *what workflow to run*. *(Common IT term: Persona or System Prompt)*
+*   **Plasmid (Modular Skill Injection):** In microbiology, a plasmid is a small, modular packet of DNA that can be transferred between cells to instantly grant them new traits (like antibiotic resistance). In OpenTendril, a Plasmid is a reusable, modular block of context or tools injected into a Genotype on the fly (e.g., "Here is the syntax documentation for React.js"). *(Common IT term: RAG context block or Tool definition)*
+*   **Transcript (Instruction Execution):** In biology, RNA transcription is the process of copying genetic instructions into a transient format (mRNA) that the cell immediately executes to perform an action. In OpenTendril, the Transcript is the one-off, contextual prompt fed to the Tendril for a single execution run (e.g., "Refactor this file"). *(Common IT term: User Prompt or Task)*
+*   **Sequence (Workflow Automation):** A defined genetic sequence dictating a complex chain of events. In OpenTendril, a Sequence is a predefined YAML workflow that *orchestrates* multiple Tendrils, each running a specific Genotype. A Sequence defines *what steps to run and in what order* — it does not define how to think. A Sequence is initiated by **activating the meristem** (the growth center), and can only be triggered by the Stem or a human operator — never by a Tendril operating inside a Terrarium Sandbox. *(Common IT term: Agentic Pipeline or Workflow)*
+*   **Meristem Step (Dynamic Planning Node):** A sequence step that dynamically plans or generates new steps during execution. Named after **Meristematic tissue** which divides to branch out new shoots. *(Common IT term: Workflow Conductor or Planner)*
+*   **Phenotypes (Speculative Variations):** Multiple speculative shoots or runs executing the same Transcript in parallel. Under **Phenotypic Selection (Natural Selection)**, Go Stem dispatches concurrent Sprouts under different environmental parameters (varying LLM temperatures or Plasmid rules), and merges only the first variant that compiles and passes the fitness test suite, weeding out weaker mutations. *(Common IT term: Speculative Parallel Execution)*
+
+### System Genotypes and System Sequences
+
+A critical distinction exists between *workspace-level* and *system-level* definitions:
+
+*   **Workspace Genotypes/Sequences** live in `.tendril/genotypes/` and `.tendril/sequences/` within the project repository. They are user-customisable but are not trusted for privileged operations — a Tendril inside a Terrarium can read and modify these files, so they cannot be the basis for security decisions.
+
+*   **System Genotypes/Sequences** are shipped with OpenTendril and installed to `~/.opentendril/` or `/etc/opentendril/`. They are **never mounted into any Terrarium container**, making them physically inaccessible to any agent. They carry immutable `deny` lists of blocked Plasmids, ensuring a single-responsibility design that provides both:
+    1. **Security isolation** — a `github-ops` Genotype cannot accidentally (or maliciously) write to the filesystem, even if injected with a crafted Transcript.
+    2. **Reliability** — fewer Plasmids means fewer dependencies and a narrower blast radius when something goes wrong.
+
+> 📐 See [docs/ARCHITECTURE-TAXONOMY.md](docs/ARCHITECTURE-TAXONOMY.md) for visual diagrams of the Genotype hierarchy and trust boundaries.
+> 📋 See [docs/DESIGN-SYSTEM-SEQUENCES.md](docs/DESIGN-SYSTEM-SEQUENCES.md) for the full System Sequences RFC including pre-built Git workflow definitions.
+> 🐙 Tracking Issues: [#115 — System Genotypes](https://github.com/opentendril/core/issues/115) · [#116 — System Sequences & Git Workflows](https://github.com/opentendril/core/issues/116)
 
 
 ---
