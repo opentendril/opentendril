@@ -1,0 +1,14 @@
+version: 1.0
+name: codex-delegate
+description: Passes a prompt to the Codex CLI via a Host Tendril
+parameters:
+  - name: transcript
+    required: true
+steps:
+  - id: codex-run
+    description: "Invoking Codex CLI on the host"
+    substrate: codex-host
+    execute:
+      tool: execCommand
+      arguments:
+        command: 'codex --approval-mode full-auto -q "{{ transcript }}"'
