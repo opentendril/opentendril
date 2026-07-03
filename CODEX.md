@@ -1,6 +1,6 @@
 # CODEX.md — Codex CLI Integration Spec
 
-> This file defines how **Codex CLI** integrates as an external tool within OpenTendril's orchestration pipeline. Codex is not a sub-agent of Antigravity — it is one of many external tools that OpenTendril can invoke via its `execCommand` tool surface. The long-term goal is for OpenTendril itself to orchestrate Codex (and tools like it) autonomously. This document exists to make that integration testable now.
+> This file defines how **Codex CLI** integrates as an external tool within OpenTendril's orchestration pipeline. Codex is one of many external tools that OpenTendril can invoke via its `execCommand` tool surface. The long-term goal is for OpenTendril itself to orchestrate tools autonomously. This document exists to formalize that integration.
 
 ---
 
