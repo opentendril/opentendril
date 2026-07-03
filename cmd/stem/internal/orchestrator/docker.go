@@ -1163,7 +1163,7 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 	}
 	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s", prefix, runID))
 
-	args := []string{"clone"}
+	args := []string{"-c", "protocol.ext.allow=never", "clone"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
@@ -1183,7 +1183,7 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 		url = strings.Replace(url, "https://", "https://"+resolvedAuthValue+"@", 1)
 	}
 
-	args = append(args, url, shadowPath)
+	args = append(args, "--", url, shadowPath)
 
 	cmd := exec.Command("git", args...)
 	if resolvedAuthRef != "" && resolvedAuthValue != "" {

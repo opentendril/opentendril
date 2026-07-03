@@ -1064,6 +1064,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 	}
 
 	selectionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	cleanupCtx := context.WithoutCancel(ctx)
 
