@@ -10,6 +10,7 @@ const (
 	ProviderDocker      = "docker"
 	ProviderGVisor      = "gvisor"
 	ProviderFirecracker = "firecracker"
+	ProviderHost        = "host"
 )
 
 // NewProvider resolves a terrarium provider from configuration or defaults to Docker.
@@ -17,6 +18,8 @@ func NewProvider(ctx context.Context, name string) (TerrariumProvider, error) {
 	switch normalizeProviderName(name) {
 	case "", ProviderDocker:
 		return NewDockerProvider(), nil
+	case ProviderHost:
+		return NewHostProvider(), nil
 	case ProviderGVisor:
 		if err := CheckGVisorReadiness(ctx); err != nil {
 			return nil, fmt.Errorf("gvisor provider is unavailable: %w", err)
