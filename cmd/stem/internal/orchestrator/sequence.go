@@ -783,7 +783,7 @@ func stepGenotype(stepID string) string {
 	}
 }
 
-func stepModelTier(stepID string) llm.ModelTier {
+func fallbackStepModelTier(stepID string) llm.ModelTier {
 	normalized := strings.ToLower(strings.TrimSpace(stepID))
 	switch {
 	case isMeristemStep(stepID):
@@ -796,6 +796,31 @@ func stepModelTier(stepID string) llm.ModelTier {
 		return llm.TierStandard
 	case strings.Contains(normalized, "compile"):
 		return llm.TierStandard
+	default:
+		return llm.TierPremium
+	}
+}
+
+func resolveStepModelTier(ctx context.Context, step *SequenceStep) llm.ModelTier {
+	if step == nil {
+		return llm.TierPremium
+	}
+	if isMeristemStep(step.ID) {
+		return llm.TierPremium
+	}
+
+	fallbackTier := fallbackStepModelTier(step.ID)
+	if fallbackTier != llm.TierPremium {
+		return fallbackTier
+	}
+
+	assessedTier, err := AssessTaskComplexity(ctx, step.Transcript)
+	if err != nil {
+		return llm.TierPremium
+	}
+	switch assessedTier {
+	case llm.TierPremium, llm.TierStandard, llm.TierCheapest:
+		return assessedTier
 	default:
 		return llm.TierPremium
 	}
@@ -1045,7 +1070,7 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isMeristemStep(step.ID),
-		Tier:            stepModelTier(step.ID),
+		Tier:            resolveStepModelTier(ctx, step),
 		Genotype:        genotype,
 	}
 	return runSequenceSproutFn(ctx, orch, step.Transcript)
@@ -1069,7 +1094,7 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 		SubstrateBranch:  branchName,
 		StepID:           step.ID,
 		IsCoordinator:    isMeristemStep(step.ID),
-		Tier:             stepModelTier(step.ID),
+		Tier:             resolveStepModelTier(ctx, step),
 		Genotype:         genotype,
 		DisableMergeBack: true,
 	}
@@ -1132,6 +1157,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 	if phenotypeCount <= 0 {
 		phenotypeCount = 1
 	}
+	modelTier := resolveStepModelTier(ctx, step)
 
 	resultsCh := make(chan phenotypeRunResult, phenotypeCount)
 	var wg sync.WaitGroup
@@ -1164,7 +1190,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				SubstrateBranch:  branchName,
 				StepID:           step.ID,
 				IsCoordinator:    isMeristemStep(step.ID),
-				Tier:             stepModelTier(step.ID),
+				Tier:             modelTier,
 				Genotype:         genotype,
 				Temperature:      0.1 + float64(index)*0.3,
 				DisableMergeBack: true,

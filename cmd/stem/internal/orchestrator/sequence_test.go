@@ -526,7 +526,7 @@ func TestIsMeristemStep(t *testing.T) {
 	}
 }
 
-func TestStepModelTier(t *testing.T) {
+func TestFallbackStepModelTier(t *testing.T) {
 	tests := []struct {
 		name   string
 		stepID string
@@ -541,8 +541,8 @@ func TestStepModelTier(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := stepModelTier(tt.stepID); got != tt.want {
-				t.Fatalf("stepModelTier(%q) = %q, want %q", tt.stepID, got, tt.want)
+			if got := fallbackStepModelTier(tt.stepID); got != tt.want {
+				t.Fatalf("fallbackStepModelTier(%q) = %q, want %q", tt.stepID, got, tt.want)
 			}
 		})
 	}
