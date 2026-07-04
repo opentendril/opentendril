@@ -32,6 +32,8 @@ const (
 	defaultSequenceRetryLimit = 3
 )
 
+var ErrRequiresReview = errors.New("script requires review")
+
 // Sequence describes a DAG workflow stored as YAML.
 type Sequence struct {
 	Name             string         `yaml:"name"`
@@ -219,7 +221,7 @@ func ListSequenceFiles(basePath string) ([]string, error) {
 			if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
 				return nil
 			}
-			
+
 			// For system paths, we want to return just the base name since it's global
 			// For workspace paths, we can return the relative path
 			var rel string
@@ -229,7 +231,7 @@ func ListSequenceFiles(basePath string) ([]string, error) {
 			} else {
 				rel = entry.Name()
 			}
-			
+
 			fileSet[rel] = true
 			return nil
 		})
@@ -546,6 +548,47 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 
 			step.Status = sequenceStatusFailed
 
+			if errors.Is(result.err, ErrRequiresReview) {
+				r.seq.OnFailure = sequenceOnFailurePause
+				if err := SaveSequence(r.path, r.seq); err != nil {
+					return r.seq, err
+				}
+				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err)
+				if pauseErr != nil {
+					return r.seq, pauseErr
+				}
+				switch decision {
+				case "retry":
+					step.Status = sequenceStatusPending
+					if err := SaveSequence(r.path, r.seq); err != nil {
+						return r.seq, err
+					}
+					r.ready = append(r.ready, result.stepID)
+					r.queued[result.stepID] = true
+					r.sortReady()
+					continue
+				case "completed":
+					step.Status = sequenceStatusComplete
+					completed++
+					if err := SaveSequence(r.path, r.seq); err != nil {
+						return r.seq, err
+					}
+					for _, dependentID := range r.dependents[result.stepID] {
+						r.remainingDeps[dependentID]--
+						if r.remainingDeps[dependentID] <= 0 && r.stepByID[dependentID].Status != sequenceStatusComplete && !r.queued[dependentID] {
+							r.ready = append(r.ready, dependentID)
+							r.queued[dependentID] = true
+						}
+					}
+					r.sortReady()
+					continue
+				case "halt":
+					return r.seq, fmt.Errorf("step %s halted after review requirement: %w", result.stepID, result.err)
+				default:
+					return r.seq, fmt.Errorf("step %s returned unknown pause decision %q", result.stepID, decision)
+				}
+			}
+
 			if shouldBudRecursiveDebugger(step) {
 				debuggerStepID := fmt.Sprintf("debugger-%s-%d", result.stepID, time.Now().UnixNano())
 				debuggerStep := SequenceStep{
@@ -727,6 +770,7 @@ func ensureSpecializedGenotypes(root string) error {
 		EnsureThinkerGenotype,
 		EnsureVerifierGenotype,
 		EnsureDebuggerGenotype,
+		EnsureScriptReviewerGenotype,
 	} {
 		if err := ensure(root); err != nil {
 			return err
@@ -1229,7 +1273,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	}
 
 	sourcePath := orch.Substrate
-	
+
 	if config, _ := LoadSubstratesConfig(""); config != nil {
 		if plan, err := resolveSubstrateExecutionPlan(orch, config); err == nil && plan != nil && plan.hostPath != "" {
 			sourcePath = plan.hostPath
@@ -1332,7 +1376,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 	substratesConfig, _ := LoadSubstratesConfig("")
 	sequencePlan, planErr := resolveSubstrateExecutionPlan(orch, substratesConfig)
-	
+
 	providerName := resolveTerrariumProviderName(orch)
 	if planErr == nil && sequencePlan != nil && sequencePlan.provider != "" {
 		providerName = sequencePlan.provider
@@ -1360,6 +1404,22 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 
 	result.Response = agentResult.Response
+	if agentResult.ActionResult != nil {
+		verdict := strings.ToUpper(strings.TrimSpace(agentResult.ActionResult.Verdict))
+		switch verdict {
+		case "DANGEROUS":
+			if quarantineErr := quarantineScriptPrompt(stepID, taskPrompt); quarantineErr != nil {
+				return result, errors.Join(fmt.Errorf("script quarantined: %v", agentResult.ActionResult.Risks), quarantineErr)
+			}
+			return result, fmt.Errorf("script quarantined: %v", agentResult.ActionResult.Risks)
+		case "REVIEW":
+			return result, ErrRequiresReview
+		case "SAFE":
+		case "":
+		default:
+			return result, fmt.Errorf("unknown script review verdict %q", agentResult.ActionResult.Verdict)
+		}
+	}
 
 	if !gitRepo {
 		if runErr != nil {
@@ -1431,6 +1491,30 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 
 	return result, nil
+}
+
+func quarantineScriptPrompt(stepID, taskPrompt string) error {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("resolve user config dir: %w", err)
+	}
+
+	quarantineDir := filepath.Join(configDir, "opentendril", "quarantine")
+	if err := os.MkdirAll(quarantineDir, 0o755); err != nil {
+		return fmt.Errorf("create quarantine directory: %w", err)
+	}
+
+	fileStepID := sanitizeBranchComponent(stepID)
+	if fileStepID == "" {
+		fileStepID = "step"
+	}
+	timestamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	quarantinePath := filepath.Join(quarantineDir, fileStepID+"-"+timestamp+".txt")
+	if err := os.WriteFile(quarantinePath, []byte(taskPrompt), 0o600); err != nil {
+		return fmt.Errorf("write quarantine file: %w", err)
+	}
+
+	return nil
 }
 
 func mergeSequenceTerrariumCommit(ctx context.Context, sourcePath, commitHash string) error {
@@ -1637,7 +1721,7 @@ func sequencePathCandidates(input, cwd, root string) []string {
 			add(filepath.Join(sysUserDir, baseNoExt+".yml"))
 		}
 	}
-	
+
 	sysEtcDir := filepath.Join("/etc", "opentendril", "sequences")
 	if !strings.Contains(trimmed, string(filepath.Separator)) {
 		add(filepath.Join(sysEtcDir, trimmed))

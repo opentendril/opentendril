@@ -65,10 +65,12 @@ type Agent struct {
 }
 
 type ActionResult struct {
-	ActionType string `json:"actionType"`
-	Target     string `json:"target"`
-	Summary    string `json:"summary"`
-	Success    bool   `json:"success"`
+	ActionType string   `json:"actionType"`
+	Target     string   `json:"target"`
+	Summary    string   `json:"summary"`
+	Success    bool     `json:"success"`
+	Verdict    string   `json:"verdict,omitempty"`
+	Risks      []string `json:"risks,omitempty"`
 }
 
 type agentResult struct {
@@ -124,7 +126,7 @@ func newAgent(ctx context.Context, workspace string, genotypeRoot string, genoty
 		if strings.TrimSpace(tool.Name) == "" {
 			continue
 		}
-		
+
 		denied := false
 		for _, deniedName := range denyPlasmids {
 			if strings.EqualFold(tool.Name, deniedName) {
@@ -132,7 +134,7 @@ func newAgent(ctx context.Context, workspace string, genotypeRoot string, genoty
 				break
 			}
 		}
-		
+
 		if !denied {
 			toolIndex[tool.Name] = tool
 			filteredTools = append(filteredTools, tool)
