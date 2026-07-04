@@ -45,25 +45,25 @@ type tendrilRunner interface {
 }
 
 var (
-	ensureSproutImageFn   = ensureSproutImage
+	ensureSproutImageFn     = ensureSproutImage
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv...)
 	}
 	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (tendrilRunner, error) {
 		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session)
 	}
-	stashHostWorkspaceFn      = stashHostWorkspace
-	restoreHostStashFn        = restoreHostStash
-	createShadowWorktreeFn    = createShadowWorktree
-	removeShadowWorktreeFn    = removeShadowWorktree
-	injectMycorrhizalCacheFn  = injectMycorrhizalCache
-	collectStageableFilesFn   = collectStageableFiles
-	collectGitDiffFn          = collectGitDiff
-	commitTerrariumExecutionFn  = commitTerrariumExecution
-	mergeTerrariumCommitFn      = mergeTerrariumCommit
-	pushTerrariumCommitFn       = pushTerrariumCommit
-	runContainerFitnessTestFn = runContainerFitnessTest
-	generateRepoMapFn         = GenerateRepoMap
+	stashHostWorkspaceFn       = stashHostWorkspace
+	restoreHostStashFn         = restoreHostStash
+	createShadowWorktreeFn     = createShadowWorktree
+	removeShadowWorktreeFn     = removeShadowWorktree
+	injectMycorrhizalCacheFn   = injectMycorrhizalCache
+	collectStageableFilesFn    = collectStageableFiles
+	collectGitDiffFn           = collectGitDiff
+	commitTerrariumExecutionFn = commitTerrariumExecution
+	mergeTerrariumCommitFn     = mergeTerrariumCommit
+	pushTerrariumCommitFn      = pushTerrariumCommit
+	runContainerFitnessTestFn  = runContainerFitnessTest
+	generateRepoMapFn          = GenerateRepoMap
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -199,7 +199,12 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if d.Genotype != "" {
-		stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype)
+		if err := stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return "", err
+		}
 	}
 
 	repoMapMarkdown, err := generateRepoMapFn(ctx, mountPath)
@@ -1226,17 +1231,18 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string) error {
 	return nil
 }
 
-func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
+func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) error {
 	genotype, err := loadGenotypeContext(sourcePath, genotypeName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to read genotype %s for plasmid staging: %v\n", genotypeName, err)
-		return
+		return nil
 	}
 	if genotype == nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Genotype %s not found for plasmid staging\n", genotypeName)
-		return
+		return nil
 	}
 
+	var sigVerifyFailed bool
 	for _, name := range genotype.Plasmids {
 		denied := false
 		for _, deny := range genotype.DenyPlasmids {
@@ -1256,6 +1262,20 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
 			continue
 		}
 
+		if genotype.RequirePlasmidSignatures {
+			key, err := NodeSigningKey()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to load node signing key for plasmid %s: %v\n", name, err)
+				sigVerifyFailed = true
+				continue
+			}
+			if err := VerifyPlasmidSignature(sourceFile, key); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to verify plasmid signature for %s: %v\n", name, err)
+				sigVerifyFailed = true
+				continue
+			}
+		}
+
 		destDir := filepath.Join(targetPath, ".tendril", "genome")
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Failed to create terrarium genome directory: %v\n", err)
@@ -1270,4 +1290,9 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) {
 
 		fmt.Fprintf(os.Stderr, "🧬 Staged terrarium plasmid: %s -> %s\n", name, destFile)
 	}
+
+	if sigVerifyFailed {
+		return fmt.Errorf("one or more required plasmid signature checks failed")
+	}
+	return nil
 }

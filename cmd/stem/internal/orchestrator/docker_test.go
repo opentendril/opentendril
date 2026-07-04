@@ -211,7 +211,9 @@ func TestStagePlasmidsForGenotype(t *testing.T) {
 	}
 
 	destRoot := t.TempDir()
-	stagePlasmidsForGenotype(root, destRoot, "frontend-dev")
+	if err := stagePlasmidsForGenotype(root, destRoot, "frontend-dev"); err != nil {
+		t.Fatalf("stage plasmids: %v", err)
+	}
 
 	reactDest := filepath.Join(destRoot, ".tendril", "genome", "react-conventions.md")
 	tailwindDest := filepath.Join(destRoot, ".tendril", "genome", "tailwind-styling.md")
@@ -247,4 +249,3 @@ func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
-

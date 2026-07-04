@@ -20,6 +20,15 @@ func runPlasmidCmd(args []string) {
 	switch strings.ToLower(args[0]) {
 	case "list":
 		runPlasmidListCmd()
+	case "sign":
+		if len(args) != 2 {
+			fmt.Fprintln(os.Stderr, "❌ Missing plasmid path. Usage: tendril plasmid sign <path>")
+			os.Exit(1)
+		}
+		if err := runPlasmidSignCmd(args[1]); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
 	case "inject":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, "❌ Missing plasmid name. Usage: tendril plasmid inject <name>")
@@ -36,6 +45,24 @@ func runPlasmidCmd(args []string) {
 		printPlasmidUsage()
 		os.Exit(1)
 	}
+}
+
+func runPlasmidSignCmd(path string) error {
+	key, err := orchestrator.NodeSigningKey()
+	if err != nil {
+		return fmt.Errorf("load node signing key: %w", err)
+	}
+
+	sig, err := orchestrator.SignPlasmid(path, key)
+	if err != nil {
+		return fmt.Errorf("sign plasmid: %w", err)
+	}
+	if err := orchestrator.WritePlasmidSignature(path, sig); err != nil {
+		return fmt.Errorf("write plasmid signature: %w", err)
+	}
+
+	fmt.Println(path + ".sig")
+	return nil
 }
 
 func runPlasmidListCmd() {
@@ -138,7 +165,8 @@ func mustRel(root, target string) string {
 }
 
 func printPlasmidUsage() {
-	fmt.Println("Usage: tendril plasmid <list|inject>")
+	fmt.Println("Usage: tendril plasmid <list|inject|sign>")
 	fmt.Println("  list           List available plasmid Markdown files")
 	fmt.Println("  inject <name>  Copy a plasmid into .tendril/genome/")
+	fmt.Println("  sign <path>    Sign a plasmid Markdown file")
 }

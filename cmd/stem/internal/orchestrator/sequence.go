@@ -1370,7 +1370,9 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 
 	if orch.Genotype != "" {
-		stagePlasmidsForGenotype(sourcePath, mountPath, orch.Genotype)
+		if err := stagePlasmidsForGenotype(sourcePath, mountPath, orch.Genotype); err != nil {
+			return result, err
+		}
 	}
 
 	imageName := orch.resolveImageName(mountPath)

@@ -11,11 +11,12 @@ import (
 )
 
 type genotypeDefinition struct {
-	Name         string   `json:"name"`
-	System       bool     `json:"system,omitempty"`
-	Instructions string   `json:"instructions"`
-	Plasmids     []string `json:"plasmids,omitempty"`
-	DenyPlasmids []string `json:"denyPlasmids,omitempty"`
+	Name                     string   `json:"name"`
+	System                   bool     `json:"system,omitempty"`
+	Instructions             string   `json:"instructions"`
+	Plasmids                 []string `json:"plasmids,omitempty"`
+	DenyPlasmids             []string `json:"denyPlasmids,omitempty"`
+	RequirePlasmidSignatures bool     `json:"requirePlasmidSignatures,omitempty"`
 }
 
 // EnsureBuiltinGenotypes creates missing built-in genotypes from embedded JSON files.
