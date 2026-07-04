@@ -35,6 +35,7 @@ const (
 // Sequence describes a DAG workflow stored as YAML.
 type Sequence struct {
 	Name             string         `yaml:"name"`
+	System           bool           `yaml:"system,omitempty"`
 	Substrate        string         `yaml:"substrate"`
 	Branch           string         `yaml:"branch"`
 	ConcurrencyLimit int            `yaml:"concurrencyLimit"`
@@ -180,7 +181,7 @@ func ResolveSequencePath(input string) (string, error) {
 	return "", fmt.Errorf("sequence %q not found", trimmed)
 }
 
-// ListSequenceFiles returns available YAML files in .tendril/sequences.
+// ListSequenceFiles returns available YAML files from system configs and .tendril/sequences.
 func ListSequenceFiles(basePath string) ([]string, error) {
 	root := strings.TrimSpace(basePath)
 	if root == "" {
@@ -193,35 +194,50 @@ func ListSequenceFiles(basePath string) ([]string, error) {
 	}
 	root = repoRoot(root)
 
-	sequencesDir := filepath.Join(root, ".tendril", "sequences")
-	if _, err := os.Stat(sequencesDir); err != nil {
-		if os.IsNotExist(err) {
-			return []string{}, nil
+	var searchDirs []string
+	if configDir, err := os.UserConfigDir(); err == nil {
+		searchDirs = append(searchDirs, filepath.Join(configDir, "opentendril", "sequences"))
+	}
+	searchDirs = append(searchDirs, filepath.Join("/etc", "opentendril", "sequences"))
+	searchDirs = append(searchDirs, filepath.Join(root, ".tendril", "sequences"))
+
+	fileSet := make(map[string]bool)
+
+	for _, dir := range searchDirs {
+		if _, err := os.Stat(dir); err != nil {
+			continue
 		}
-		return nil, fmt.Errorf("read sequence directory: %w", err)
+
+		_ = filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			lower := strings.ToLower(entry.Name())
+			if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
+				return nil
+			}
+			
+			// For system paths, we want to return just the base name since it's global
+			// For workspace paths, we can return the relative path
+			var rel string
+			if strings.HasPrefix(path, root) {
+				rel, _ = filepath.Rel(root, path)
+				rel = filepath.ToSlash(rel)
+			} else {
+				rel = entry.Name()
+			}
+			
+			fileSet[rel] = true
+			return nil
+		})
 	}
 
 	var files []string
-	err := filepath.WalkDir(sequencesDir, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		lower := strings.ToLower(entry.Name())
-		if !strings.HasSuffix(lower, ".yaml") && !strings.HasSuffix(lower, ".yml") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		files = append(files, filepath.ToSlash(rel))
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk sequence directory: %w", err)
+	for file := range fileSet {
+		files = append(files, file)
 	}
 
 	sort.Strings(files)
@@ -1609,6 +1625,27 @@ func sequencePathCandidates(input, cwd, root string) []string {
 	add(trimmed)
 	add(filepath.Join(cwd, trimmed))
 	add(filepath.Join(root, trimmed))
+
+	// System sequence directories take priority before workspace sequences
+	if configDir, err := os.UserConfigDir(); err == nil {
+		sysUserDir := filepath.Join(configDir, "opentendril", "sequences")
+		if !strings.Contains(trimmed, string(filepath.Separator)) {
+			add(filepath.Join(sysUserDir, trimmed))
+		}
+		if !hasExt {
+			add(filepath.Join(sysUserDir, baseNoExt+".yaml"))
+			add(filepath.Join(sysUserDir, baseNoExt+".yml"))
+		}
+	}
+	
+	sysEtcDir := filepath.Join("/etc", "opentendril", "sequences")
+	if !strings.Contains(trimmed, string(filepath.Separator)) {
+		add(filepath.Join(sysEtcDir, trimmed))
+	}
+	if !hasExt {
+		add(filepath.Join(sysEtcDir, baseNoExt+".yaml"))
+		add(filepath.Join(sysEtcDir, baseNoExt+".yml"))
+	}
 
 	if !strings.Contains(trimmed, string(filepath.Separator)) {
 		add(filepath.Join(root, ".tendril", "sequences", trimmed))

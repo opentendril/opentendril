@@ -134,7 +134,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 }
 
 func TestParseModelResponseFinalText(t *testing.T) {
-	call, isToolCall, final, err := parseModelResponse("plain final response")
+	call, isToolCall, final, actionResult, err := parseModelResponse("plain final response")
 	if err != nil {
 		t.Fatalf("parseModelResponse returned error: %v", err)
 	}
@@ -146,6 +146,9 @@ func TestParseModelResponseFinalText(t *testing.T) {
 	}
 	if call.Tool != "" {
 		t.Fatalf("expected no tool call, got %+v", call)
+	}
+	if actionResult != nil {
+		t.Fatalf("expected no ACTION_RESULT for plain text, got %+v", actionResult)
 	}
 }
 
@@ -233,5 +236,116 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	}
 	if !strings.Contains(result.Transcript, "restricted by the active system genotype") {
 		t.Errorf("expected transcript to contain error about restricted injectPlasmid target, got: %s", result.Transcript)
+	}
+}
+
+func TestParseActionResult(t *testing.T) {
+	// A response that includes an embedded ACTION_RESULT block.
+	responseWithActionResult := `{"final":"I posted the comment. ACTION_RESULT {\"action_type\":\"github_comment\",\"target\":\"https://github.com/opentendril/core/pull/117\",\"summary\":\"Posted changelog comment to PR #117.\",\"success\":true}"}`
+
+	_, isToolCall, final, actionResult, err := parseModelResponse(responseWithActionResult)
+	if err != nil {
+		t.Fatalf("parseModelResponse returned error: %v", err)
+	}
+	if isToolCall {
+		t.Fatalf("expected not a tool call")
+	}
+	if actionResult == nil {
+		t.Fatalf("expected ACTION_RESULT to be parsed, got nil")
+	}
+	if actionResult.ActionType != "github_comment" {
+		t.Errorf("expected action_type=github_comment, got %q", actionResult.ActionType)
+	}
+	if !actionResult.Success {
+		t.Errorf("expected success=true")
+	}
+	// The ACTION_RESULT block should be stripped from the final response text
+	if strings.Contains(final, "ACTION_RESULT") {
+		t.Errorf("expected ACTION_RESULT to be stripped from final text, got: %q", final)
+	}
+}
+
+func TestSequenceSystemFlag(t *testing.T) {
+	tmp := t.TempDir()
+	seqPath := filepath.Join(tmp, "system-seq.yaml")
+
+	content := `
+name: system-seq
+system: true
+steps:
+  - id: step1
+    transcript: "do something"
+`
+	if err := os.WriteFile(seqPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write sequence: %v", err)
+	}
+
+	seq, err := LoadSequence(seqPath)
+	if err != nil {
+		t.Fatalf("LoadSequence: %v", err)
+	}
+	if !seq.System {
+		t.Errorf("expected System=true for sequence with system: true")
+	}
+	if seq.Name != "system-seq" {
+		t.Errorf("expected name=system-seq, got %q", seq.Name)
+	}
+}
+
+func TestSystemSequencePathResolution(t *testing.T) {
+	// Create a temp dir to act as XDG_CONFIG_HOME
+	configHome := t.TempDir()
+	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
+	os.Setenv("XDG_CONFIG_HOME", configHome)
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
+
+	// Create a system sequence in the XDG config dir
+	sysSeqDir := filepath.Join(configHome, "opentendril", "sequences")
+	if err := os.MkdirAll(sysSeqDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	sysSeqPath := filepath.Join(sysSeqDir, "pr-close-cycle.yaml")
+	seqContent := `name: pr-close-cycle
+system: true
+steps:
+  - id: analyse
+    transcript: "analyse commits"
+`
+	if err := os.WriteFile(sysSeqPath, []byte(seqContent), 0o644); err != nil {
+		t.Fatalf("write system sequence: %v", err)
+	}
+
+	// workspace has NO .tendril/sequences directory
+	workspace := t.TempDir()
+	cwd := workspace
+
+	// sequencePathCandidates should include the system path
+	candidates := sequencePathCandidates("pr-close-cycle", cwd, workspace)
+
+	found := false
+	for _, c := range candidates {
+		if c == sysSeqPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected system sequence path %q to be in candidates, got: %v", sysSeqPath, candidates)
+	}
+
+	// Verify system path appears before workspace path
+	sysIdx := -1
+	wsIdx := -1
+	wsSeqPath := filepath.Join(workspace, ".tendril", "sequences", "pr-close-cycle.yaml")
+	for i, c := range candidates {
+		if c == sysSeqPath {
+			sysIdx = i
+		}
+		if c == wsSeqPath {
+			wsIdx = i
+		}
+	}
+	if wsIdx != -1 && sysIdx != -1 && sysIdx > wsIdx {
+		t.Errorf("expected system sequence (idx %d) to have higher priority than workspace sequence (idx %d)", sysIdx, wsIdx)
 	}
 }
