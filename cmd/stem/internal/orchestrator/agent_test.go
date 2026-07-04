@@ -241,7 +241,7 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 
 func TestParseActionResult(t *testing.T) {
 	// A response that includes an embedded ACTION_RESULT block.
-	responseWithActionResult := `{"final":"I posted the comment. ACTION_RESULT {\"action_type\":\"github_comment\",\"target\":\"https://github.com/opentendril/core/pull/117\",\"summary\":\"Posted changelog comment to PR #117.\",\"success\":true}"}`
+	responseWithActionResult := `{"final":"I posted the comment. ACTION_RESULT {\"actionType\":\"github_comment\",\"target\":\"https://github.com/opentendril/core/pull/117\",\"summary\":\"Posted changelog comment to PR #117.\",\"success\":true}"}`
 
 	_, isToolCall, final, actionResult, err := parseModelResponse(responseWithActionResult)
 	if err != nil {
@@ -254,7 +254,7 @@ func TestParseActionResult(t *testing.T) {
 		t.Fatalf("expected ACTION_RESULT to be parsed, got nil")
 	}
 	if actionResult.ActionType != "github_comment" {
-		t.Errorf("expected action_type=github_comment, got %q", actionResult.ActionType)
+		t.Errorf("expected actionType=github_comment, got %q", actionResult.ActionType)
 	}
 	if !actionResult.Success {
 		t.Errorf("expected success=true")

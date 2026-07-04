@@ -65,7 +65,7 @@ type Agent struct {
 }
 
 type ActionResult struct {
-	ActionType string `json:"action_type"`
+	ActionType string `json:"actionType"`
 	Target     string `json:"target"`
 	Summary    string `json:"summary"`
 	Success    bool   `json:"success"`
