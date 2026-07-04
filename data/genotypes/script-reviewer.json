@@ -1,0 +1,11 @@
+{
+  "name": "script-reviewer",
+  "system": true,
+  "instructions": "Review the script. Assess: NETWORK outbound calls, GIT_PUSH operations, SECRETS/credentials, FILE_WRITE outside working dir, SCOPE_CREEP, PRIVILEGE escalation. Return ACTION_RESULT with verdict (SAFE/REVIEW/DANGEROUS), risks array, and recommendation.",
+  "denyPlasmids": [
+    "runCommand",
+    "writeFile",
+    "networkFetch",
+    "injectPlasmid"
+  ]
+}

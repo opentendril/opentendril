@@ -765,21 +765,6 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 	}
 }
 
-func ensureSpecializedGenotypes(root string) error {
-	for _, ensure := range []func(string) error{
-		EnsureThinkerGenotype,
-		EnsureVerifierGenotype,
-		EnsureDebuggerGenotype,
-		EnsureScriptReviewerGenotype,
-	} {
-		if err := ensure(root); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func stepGenotype(stepID string) string {
 	trimmed := strings.TrimSpace(stepID)
 	normalized := strings.ToLower(trimmed)
@@ -1042,14 +1027,8 @@ type phenotypeRunResult struct {
 }
 
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
-	if err := ensureSpecializedGenotypes(substratePath); err != nil {
+	if err := EnsureBuiltinGenotypes(substratePath); err != nil {
 		return "", err
-	}
-
-	if isMeristemStep(step.ID) {
-		if err := EnsureMeristemGenotype(substratePath); err != nil {
-			return "", err
-		}
 	}
 
 	genotype := stepGenotype(step.ID)
