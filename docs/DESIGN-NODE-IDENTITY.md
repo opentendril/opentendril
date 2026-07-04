@@ -117,6 +117,8 @@ secrets:
   - tendril_gpg_passphrase
 ```
 
+> **Note on naming:** `tendril_gpg_passphrase` is lowercase because it is a Docker secret identifier, which by convention uses lowercase with underscores, unlike POSIX environment variables (e.g. `TENDRIL_NODE_NAME`) which are uppercase.
+
 The `TENDRIL_NODE_NAME` and `TENDRIL_NODE_EMAIL` environment variables control
 the identity without requiring interactive input.
 
