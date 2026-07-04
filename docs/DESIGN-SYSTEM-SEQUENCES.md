@@ -187,7 +187,7 @@ A key requirement for System Sequences is **consistent, parseable output** at ea
 
 Each Genotype's system prompt should include a **structured reply contract** specifying the expected output format. For example, the `github-ops` Genotype's prompt should instruct:
 
-> *"When you complete an action, always end your response with a JSON block tagged `ACTION_RESULT` containing: action_type, target (URL or file path), summary (one sentence), and success (bool)."*
+> *"When you complete an action, always end your response with a JSON block tagged `ACTION_RESULT` containing: `actionType`, `target` (URL or file path), `summary` (one sentence), and `success` (bool)."*
 
 This allows the Stem to parse Tendril outputs programmatically without relying on fragile regex over free-text LLM responses.
 

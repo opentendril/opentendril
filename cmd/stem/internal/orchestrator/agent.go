@@ -64,9 +64,17 @@ type Agent struct {
 	transcript      strings.Builder
 }
 
+type ActionResult struct {
+	ActionType string `json:"actionType"`
+	Target     string `json:"target"`
+	Summary    string `json:"summary"`
+	Success    bool   `json:"success"`
+}
+
 type agentResult struct {
-	Response   string
-	Transcript string
+	Response     string
+	Transcript   string
+	ActionResult *ActionResult
 }
 
 func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession) (*Agent, error) {
@@ -169,22 +177,24 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response})
 		a.appendTranscript("assistant", response)
 
-		call, isToolCall, finalResponse, err := parseModelResponse(response)
+		call, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
 		if err != nil {
 			return agentResult{}, err
 		}
 
 		if strings.TrimSpace(finalResponse) != "" {
 			return agentResult{
-				Response:   strings.TrimSpace(finalResponse),
-				Transcript: a.transcript.String(),
+				Response:     strings.TrimSpace(finalResponse),
+				Transcript:   a.transcript.String(),
+				ActionResult: actionResult,
 			}, nil
 		}
 
 		if !isToolCall {
 			return agentResult{
-				Response:   strings.TrimSpace(response),
-				Transcript: a.transcript.String(),
+				Response:     strings.TrimSpace(response),
+				Transcript:   a.transcript.String(),
+				ActionResult: actionResult,
 			}, nil
 		}
 
@@ -342,30 +352,56 @@ type modelResponse struct {
 	Final     string         `json:"final,omitempty"`
 }
 
-func parseModelResponse(content string) (ToolCall, bool, string, error) {
+func parseModelResponse(content string) (ToolCall, bool, string, *ActionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
-		return ToolCall{}, false, "", nil
+		return ToolCall{}, false, "", nil, nil
 	}
 
 	candidate := stripCodeFences(trimmed)
 	var decoded modelResponse
 	if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
-		return ToolCall{}, false, trimmed, nil
+		return ToolCall{}, false, trimmed, nil, nil
 	}
 
 	if strings.TrimSpace(decoded.Tool) != "" {
 		if decoded.Arguments == nil {
 			decoded.Arguments = map[string]any{}
 		}
-		return ToolCall{Tool: decoded.Tool, Arguments: decoded.Arguments}, true, "", nil
+		return ToolCall{Tool: decoded.Tool, Arguments: decoded.Arguments}, true, "", nil, nil
 	}
 
 	if strings.TrimSpace(decoded.Final) != "" {
-		return ToolCall{}, false, decoded.Final, nil
+		finalText := decoded.Final
+		var actionResult *ActionResult
+
+		// Look for `ACTION_RESULT` block in the final text
+		// format: ```json ACTION_RESULT ... ``` or just embedded JSON after ACTION_RESULT
+		idx := strings.Index(finalText, "ACTION_RESULT")
+		if idx != -1 {
+			// Find the JSON block after ACTION_RESULT
+			openBrace := strings.Index(finalText[idx:], "{")
+			if openBrace != -1 {
+				openBrace += idx
+				// Find matching close brace. A naive string index could fail if there are nested braces,
+				// but for a flat struct this is often sufficient, or we just take the last '}'
+				closeBrace := strings.LastIndex(finalText[openBrace:], "}")
+				if closeBrace != -1 {
+					closeBrace += openBrace
+					jsonStr := finalText[openBrace : closeBrace+1]
+					var ar ActionResult
+					if err := json.Unmarshal([]byte(jsonStr), &ar); err == nil {
+						actionResult = &ar
+						// Optionally strip the ACTION_RESULT block from the final text
+						finalText = strings.TrimSpace(finalText[:idx])
+					}
+				}
+			}
+		}
+		return ToolCall{}, false, finalText, actionResult, nil
 	}
 
-	return ToolCall{}, false, trimmed, nil
+	return ToolCall{}, false, trimmed, nil, nil
 }
 
 func stripCodeFences(content string) string {
