@@ -125,12 +125,21 @@ func ResolveProviderSpec() ProviderSpec {
 }
 
 func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
+	tier = canonicalModelTier(tier)
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
 	if provider == "" {
 		provider = detectProviderFallback()
 	}
+	if model, ok := explicitModelForTier(provider, tier); ok {
+		return providerSpecForModel(provider, tier, model, "")
+	}
 
-	return resolveTierProviderSpecForProvider(provider, tier, "")
+	model, err := SelectBestModel(Capabilities{MaxCostTier: tier})
+	if err == nil {
+		return providerSpecForModel(model.Provider, tier, model.Name, "")
+	}
+
+	return providerSpecForModel(provider, tier, "", "")
 }
 
 func ResolveCoordinatorProviderSpec() ProviderSpec {
@@ -188,7 +197,14 @@ func resolveTierProviderSpecForProvider(provider string, tier ModelTier, localIn
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	tier = canonicalModelTier(tier)
 	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
-	model := resolveModelForTier(provider, tier)
+	model, _ := explicitModelForTier(provider, tier)
+	return providerSpecForModel(provider, tier, model, localInferenceOverride)
+}
+
+func providerSpecForModel(provider string, tier ModelTier, model string, localInferenceOverride string) ProviderSpec {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	tier = canonicalModelTier(tier)
+	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
 
 	switch provider {
 	case "local":
@@ -316,51 +332,17 @@ func providerModelEnvName(provider string) string {
 	return fmt.Sprintf("%s_MODEL_NAME", strings.ToUpper(strings.TrimSpace(provider)))
 }
 
-func resolveModelForTier(provider string, tier ModelTier) string {
+func explicitModelForTier(provider string, tier ModelTier) (string, bool) {
 	if model := strings.TrimSpace(os.Getenv(tierSpecificModelEnvName(provider, tier))); model != "" {
-		return model
+		return model, true
 	}
 	if model := strings.TrimSpace(os.Getenv(providerModelEnvName(provider))); model != "" {
-		return model
+		return model, true
 	}
 	if model := strings.TrimSpace(os.Getenv("DEFAULT_MODEL_NAME")); model != "" {
-		return model
+		return model, true
 	}
-	return fallbackModelForTier(provider, tier)
-}
-
-func fallbackModelForTier(provider string, tier ModelTier) string {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "anthropic":
-		return tierFallback(tier, "claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-4-5")
-	case "openai":
-		return tierFallback(tier, "gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano")
-	case "google":
-		return tierFallback(tier, "gemini-3-pro", "gemini-3-flash", "gemini-3-flash")
-	case "grok":
-		return tierFallback(tier, "grok-4", "grok-4-fast-non-reasoning", "grok-4-fast-non-reasoning")
-	case "openrouter":
-		return tierFallback(tier, "anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini", "google/gemini-3-flash")
-	case "local":
-		return tierFallback(tier, "qwen2.5-coder:14b", "qwen2.5-coder:7b", "llama3.2")
-	case "opentendril":
-		return "anthropic/claude-3.5-sonnet"
-	case "nvidia":
-		return "meta/llama-3.1-70b-instruct"
-	default:
-		return fallbackModelForTier("local", tier)
-	}
-}
-
-func tierFallback(tier ModelTier, premium string, standard string, cheapest string) string {
-	switch canonicalModelTier(tier) {
-	case TierStandard:
-		return standard
-	case TierCheapest:
-		return cheapest
-	default:
-		return premium
-	}
+	return "", false
 }
 
 func localInferenceBaseURLs(baseURL string) []string {
