@@ -411,6 +411,10 @@ func (d *DockerOrchestrator) resolveImageName(workspace string) string {
 		return trimmed
 	}
 
+	if _, err := os.Stat(filepath.Join(workspace, "package.json")); err == nil {
+		return "opentendril-node:latest"
+	}
+
 	if workspaceHasExtension(workspace, ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx") {
 		return "opentendril-typescript:latest"
 	}
@@ -457,6 +461,8 @@ func sproutBuildSpec(imageName string) (string, string, error) {
 		return coreRoot, filepath.Join(coreRoot, "tendrils", "go", "Dockerfile"), nil
 	case "opentendril-typescript:latest":
 		return coreRoot, filepath.Join(coreRoot, "tendrils", "typescript", "Dockerfile"), nil
+	case "opentendril-node:latest":
+		return coreRoot, filepath.Join(coreRoot, "tendrils", "node", "Dockerfile"), nil
 	case "opentendril-python:latest":
 		return filepath.Join(coreRoot, "tendrils", "python"), filepath.Join(coreRoot, "tendrils", "python", "Dockerfile"), nil
 	default:
