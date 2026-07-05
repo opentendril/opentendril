@@ -16,7 +16,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/cmd/stem/internal/terrarium"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +70,7 @@ type SequenceRunOptions struct {
 	Interactive        bool
 	StepRunner         SequenceStepRunner
 	ResumePollInterval time.Duration
+	EventBus           *eventbus.Bus
 }
 
 type sequenceRunner struct {
@@ -493,6 +496,9 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			if err := SaveSequence(r.path, r.seq); err != nil {
 				return r.seq, err
 			}
+			r.publishSequenceEvent(eventbus.EventSequenceComplete, "", nil, map[string]interface{}{
+				"sequence": r.seq.Name,
+			})
 			return r.seq, nil
 		}
 
@@ -547,6 +553,7 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			}
 
 			step.Status = sequenceStatusFailed
+			r.publishStepFailure(result.stepID, result.err)
 
 			if errors.Is(result.err, ErrRequiresReview) {
 				r.seq.OnFailure = sequenceOnFailurePause
@@ -680,6 +687,73 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			}
 		}
 	}
+}
+
+type commandResultCarrier interface {
+	CommandResult() terrarium.CommandResult
+}
+
+func (r *sequenceRunner) publishStepFailure(stepID string, stepErr error) {
+	data := map[string]interface{}{
+		"stepId": stepID,
+	}
+	if stepErr != nil {
+		data["error"] = stepErr.Error()
+	}
+
+	if result, ok := commandResultFromError(stepErr); ok {
+		data["exitCode"] = result.ExitCode
+		data["timedOut"] = result.TimedOut
+		if result.ExitCode == 137 {
+			r.publishSequenceEvent(eventbus.EventTerrariumOOM, stepID, stepErr, map[string]interface{}{
+				"stepId":   stepID,
+				"exitCode": result.ExitCode,
+			})
+		}
+		if result.TimedOut {
+			r.publishSequenceEvent(eventbus.EventTerrariumTimeout, stepID, stepErr, map[string]interface{}{
+				"stepId":   stepID,
+				"timedOut": result.TimedOut,
+			})
+		}
+	}
+
+	r.publishSequenceEvent(eventbus.EventSequenceFailure, stepID, stepErr, data)
+}
+
+func (r *sequenceRunner) publishSequenceEvent(eventType eventbus.EventType, stepID string, eventErr error, data map[string]interface{}) {
+	if r == nil || r.opts.EventBus == nil {
+		return
+	}
+	if data == nil {
+		data = make(map[string]interface{})
+	}
+	if _, ok := data["sequence"]; !ok && r.seq != nil {
+		data["sequence"] = r.seq.Name
+	}
+	if stepID != "" {
+		data["stepId"] = stepID
+	}
+	if eventErr != nil {
+		data["error"] = eventErr.Error()
+	}
+
+	r.opts.EventBus.Publish(eventbus.Event{
+		Type:   eventType,
+		Source: "sequence-runner",
+		Data:   data,
+	})
+}
+
+func commandResultFromError(err error) (terrarium.CommandResult, bool) {
+	if err == nil {
+		return terrarium.CommandResult{}, false
+	}
+	var carrier commandResultCarrier
+	if errors.As(err, &carrier) {
+		return carrier.CommandResult(), true
+	}
+	return terrarium.CommandResult{}, false
 }
 
 func shouldBudRecursiveDebugger(step *SequenceStep) bool {

@@ -27,7 +27,10 @@ venv.bak/
 .idea/
 
 # Data & logs
-data/
+data/*
+data/.*
+!data/genotypes/
+!data/genotypes/*.json
 logs/
 skills/dynamic-skills/
 

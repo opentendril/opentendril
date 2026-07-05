@@ -11,6 +11,7 @@
 //   tendril repomap - Generate the active repository map
 //   tendril sequence - Run or list YAML task sequences
 //   tendril terrarium - Manage execution terrarium environments
+//   tendril health - Run infrastructure health diagnostics
 
 package main
 
@@ -61,6 +62,8 @@ func main() {
 		runSequenceCmd(ctx, os.Args[2:])
 	case "terrarium":
 		runTerrariumCmd(ctx, os.Args[2:])
+	case "health":
+		runHealthCmd(ctx, os.Args[2:])
 	case "mesh":
 		runMeshCmd(ctx, os.Args[2:])
 	case "mcp":
@@ -90,6 +93,7 @@ func printUsage() {
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")
 	fmt.Println("  terrarium Manage execution terrarium environments")
+	fmt.Println("  health  Run infrastructure health diagnostics")
 	fmt.Println("  mesh    Manage mesh grafting keys and tokens")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")

@@ -17,7 +17,7 @@ func TestEnsureBuiltinGenotypes(t *testing.T) {
 		t.Fatalf("EnsureBuiltinGenotypes failed: %v", err)
 	}
 
-	names := []string{"debugger", "meristem", "script-reviewer", "thinker", "verifier"}
+	names := []string{"debugger", "meristem", "script-reviewer", "sre-monitor", "thinker", "verifier"}
 	entries, err := os.ReadDir(filepath.Join(root, ".tendril", "genotypes"))
 	if err != nil {
 		t.Fatalf("read genotype directory: %v", err)

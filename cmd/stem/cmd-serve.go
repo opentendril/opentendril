@@ -143,11 +143,14 @@ func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	monitor := newDefaultHealthMonitor(nil, 30*time.Second)
+	report := monitor.RunOnce(r.Context())
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "healthy",
-		"kernel": "Go Stem",
-	})
+	if !report.Overall {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	json.NewEncoder(w).Encode(report)
 }
 
 func handleChatCompletions(w http.ResponseWriter, r *http.Request) {

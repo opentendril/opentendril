@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/cmd/stem/internal/terrarium"
 )
 
 func TestSequenceLoadSaveRoundTrip(t *testing.T) {
@@ -237,6 +239,117 @@ func TestRunSequenceRetry(t *testing.T) {
 	}
 	if result.Steps[0].Status != sequenceStatusComplete {
 		t.Fatalf("step status = %s, want complete", result.Steps[0].Status)
+	}
+}
+
+type sequenceCommandResultError struct {
+	err    error
+	result terrarium.CommandResult
+}
+
+func (e sequenceCommandResultError) Error() string {
+	return e.err.Error()
+}
+
+func (e sequenceCommandResultError) Unwrap() error {
+	return e.err
+}
+
+func (e sequenceCommandResultError) CommandResult() terrarium.CommandResult {
+	return e.result
+}
+
+func TestRunSequencePublishesFailureEvents(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "failure-events.yaml")
+
+	seq := &Sequence{
+		Name:             "failure-events",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	bus := eventbus.New()
+	stepErr := sequenceCommandResultError{
+		err: fmt.Errorf("killed"),
+		result: terrarium.CommandResult{
+			ExitCode: 137,
+			TimedOut: true,
+		},
+	}
+
+	_, err := RunSequence(context.Background(), path, SequenceRunOptions{
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		EventBus: bus,
+		StepRunner: func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+			return "", stepErr
+		},
+	})
+	if err == nil {
+		t.Fatal("RunSequence returned nil error, want failure")
+	}
+
+	history := bus.History(10)
+	if len(history) != 3 {
+		t.Fatalf("event count = %d, want 3", len(history))
+	}
+	wantTypes := []eventbus.EventType{
+		eventbus.EventTerrariumOOM,
+		eventbus.EventTerrariumTimeout,
+		eventbus.EventSequenceFailure,
+	}
+	for i, want := range wantTypes {
+		if history[i].Type != want {
+			t.Fatalf("event %d type = %q, want %q", i, history[i].Type, want)
+		}
+		if history[i].Data["stepId"] != "step-a" {
+			t.Fatalf("event %d stepId = %v, want step-a", i, history[i].Data["stepId"])
+		}
+	}
+}
+
+func TestRunSequencePublishesCompleteEvent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "complete-events.yaml")
+
+	seq := &Sequence{
+		Name:             "complete-events",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	bus := eventbus.New()
+	_, err := RunSequence(context.Background(), path, SequenceRunOptions{
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		EventBus: bus,
+		StepRunner: func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+			return "ok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSequence failed: %v", err)
+	}
+
+	history := bus.History(1)
+	if len(history) != 1 {
+		t.Fatalf("event count = %d, want 1", len(history))
+	}
+	if history[0].Type != eventbus.EventSequenceComplete {
+		t.Fatalf("event type = %q, want %q", history[0].Type, eventbus.EventSequenceComplete)
 	}
 }
 
