@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/llm"
 )
 
 func TestLoadSubstratesConfigSearchOrder(t *testing.T) {

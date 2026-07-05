@@ -209,9 +209,21 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	sysContent := `{"name":"secure","instructions":"I am secure","denyPlasmids":["evilTool","injectPlasmidTarget"]}`
 	os.WriteFile(filepath.Join(sysGenotypeDir, "secure.json"), []byte(sysContent), 0o644)
 
-	fakeLLM := &fakeLLM{response: `{"tool":"test_tool","arguments":{}}`}
-	fakeSession := &fakeSession{toolResult: "Tool success"}
-	agent, err := newAgent(context.Background(), workspace, workspace, "secure", fakeLLM, fakeSession, nil, "")
+	client := &fakeLLM{
+		responses: []string{
+			`{"tool":"evilTool"}`,
+			`{"tool":"injectPlasmid","arguments":{"name":"injectPlasmidTarget"}}`,
+			`{"final":"done"}`,
+		},
+	}
+	session := &fakeSession{
+		tools: []ToolDefinition{
+			{Name: "evilTool"},
+			{Name: "safeTool"},
+			{Name: "injectPlasmid"},
+		},
+	}
+	agent, err := newAgent(context.Background(), workspace, workspace, "secure", client, session, nil, "")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
