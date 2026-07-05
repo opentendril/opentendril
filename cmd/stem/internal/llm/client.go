@@ -9,8 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type Mode string
@@ -49,6 +52,23 @@ type Client struct {
 	spec       ProviderSpec
 }
 
+type tendrilConfig struct {
+	LLM tendrilLLMConfig `yaml:"llm"`
+}
+
+type tendrilLLMConfig struct {
+	DefaultProvider string                           `yaml:"default-provider"`
+	Providers       map[string]tendrilProviderConfig `yaml:"providers"`
+}
+
+type tendrilProviderConfig struct {
+	BaseURL     string  `yaml:"base-url"`
+	APIKey      string  `yaml:"api-key"`
+	Model       string  `yaml:"model"`
+	Endpoint    string  `yaml:"endpoint"`
+	Temperature float64 `yaml:"temperature"`
+}
+
 func (c *Client) SetTemperature(temp float64) {
 	if c != nil {
 		c.spec.Temperature = temp
@@ -74,6 +94,10 @@ func NewCoordinatorClientFromEnv() *Client {
 	return NewClient(ResolveCoordinatorProviderSpec())
 }
 
+func ResolveLocalProviderSpec() ProviderSpec {
+	return resolveTierProviderSpecForProvider("local", TierPremium, "")
+}
+
 func (c *Client) CallPrompt(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
 	messages := []Message{
 		{Role: "system", Content: systemPrompt},
@@ -92,6 +116,36 @@ func (c *Client) CallStreamPrompt(ctx context.Context, systemPrompt string, user
 
 func (c *Client) Call(ctx context.Context, messages []Message) (string, error) {
 	return c.CallStream(ctx, messages, nil)
+}
+
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	if c == nil {
+		return nil, fmt.Errorf("llm client is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if c.spec.BaseURL == "" {
+		return nil, fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
+	}
+
+	candidates := c.spec.BaseURLs
+	if len(candidates) == 0 {
+		candidates = []string{c.spec.BaseURL}
+	}
+
+	var lastErr error
+	for _, baseURL := range candidates {
+		models, err := c.listModelsAtBaseURL(ctx, baseURL)
+		if err == nil {
+			return models, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("list models failed for provider %q", c.spec.Provider)
+	}
+	return nil, lastErr
 }
 
 func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan chan<- string) (string, error) {
@@ -148,9 +202,15 @@ func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
 	tier = canonicalModelTier(tier)
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
 	if provider == "" {
+		provider = configuredDefaultProvider()
+	}
+	if provider == "" {
 		provider = detectProviderFallback()
 	}
 	if model, ok := explicitModelForTier(provider, tier); ok {
+		return providerSpecForModel(provider, tier, model, "")
+	}
+	if model := configuredModelForProvider(provider); model != "" {
 		return providerSpecForModel(provider, tier, model, "")
 	}
 
@@ -225,105 +285,111 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	tier = canonicalModelTier(tier)
 	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
+	providerConfig := configuredProvider(provider)
+	if model == "" {
+		model = strings.TrimSpace(providerConfig.Model)
+	}
+	temperature := configuredTemperature(providerConfig, 0.1)
 
 	switch provider {
 	case "local":
 		baseURL := localInferenceOverride
 		if baseURL == "" {
-			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
+			baseURL = envOrConfig("LOCAL_INFERENCE_URL", providerConfig.BaseURL, "http://host.docker.internal:11434/v1")
 		}
+		endpoint := configOrDefault(providerConfig.Endpoint, "/chat/completions")
 		return ProviderSpec{
 			Provider:    "local",
 			BaseURL:     baseURL,
 			BaseURLs:    localInferenceBaseURLs(baseURL),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    endpoint,
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "anthropic":
 		return ProviderSpec{
 			Provider:    "anthropic",
-			BaseURL:     envOr("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-			APIKey:      os.Getenv("ANTHROPIC_API_KEY"),
+			BaseURL:     envOrConfig("ANTHROPIC_BASE_URL", providerConfig.BaseURL, "https://api.anthropic.com"),
+			APIKey:      envOrConfig("ANTHROPIC_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/v1/messages",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/v1/messages"),
 			Mode:        ModeAnthropic,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "openai":
 		return ProviderSpec{
 			Provider:    "openai",
-			BaseURL:     envOr("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-			APIKey:      os.Getenv("OPENAI_API_KEY"),
+			BaseURL:     envOrConfig("OPENAI_BASE_URL", providerConfig.BaseURL, "https://api.openai.com/v1"),
+			APIKey:      envOrConfig("OPENAI_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "grok":
 		return ProviderSpec{
 			Provider:    "grok",
-			BaseURL:     envOr("GROK_BASE_URL", "https://api.x.ai/v1"),
-			APIKey:      os.Getenv("GROK_API_KEY"),
+			BaseURL:     envOrConfig("GROK_BASE_URL", providerConfig.BaseURL, "https://api.x.ai/v1"),
+			APIKey:      envOrConfig("GROK_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "google":
 		return ProviderSpec{
 			Provider:    "google",
-			BaseURL:     envOr("GOOGLE_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai"),
-			APIKey:      os.Getenv("GOOGLE_API_KEY"),
+			BaseURL:     envOrConfig("GOOGLE_BASE_URL", providerConfig.BaseURL, "https://generativelanguage.googleapis.com/v1beta/openai"),
+			APIKey:      envOrConfig("GOOGLE_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "openrouter":
 		return ProviderSpec{
 			Provider:    "openrouter",
-			BaseURL:     envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-			APIKey:      os.Getenv("OPENROUTER_API_KEY"),
+			BaseURL:     envOrConfig("OPENROUTER_BASE_URL", providerConfig.BaseURL, "https://openrouter.ai/api/v1"),
+			APIKey:      envOrConfig("OPENROUTER_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "opentendril":
 		return ProviderSpec{
 			Provider:    "opentendril",
-			BaseURL:     envOr("OPENTENDRIL_BASE_URL", "https://api.opentendril.com/v1"),
-			APIKey:      os.Getenv("OPENTENDRIL_API_KEY"),
+			BaseURL:     envOrConfig("OPENTENDRIL_BASE_URL", providerConfig.BaseURL, "https://api.opentendril.com/v1"),
+			APIKey:      envOrConfig("OPENTENDRIL_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	case "nvidia":
 		return ProviderSpec{
 			Provider:    "nvidia",
-			BaseURL:     envOr("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-			APIKey:      os.Getenv("NVIDIA_API_KEY"),
+			BaseURL:     envOrConfig("NVIDIA_BASE_URL", providerConfig.BaseURL, "https://integrate.api.nvidia.com/v1"),
+			APIKey:      envOrConfig("NVIDIA_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	default:
 		baseURL := localInferenceOverride
 		if baseURL == "" {
-			baseURL = envOr("LOCAL_INFERENCE_URL", "http://host.docker.internal:11434/v1")
+			baseURL = envOrConfig("LOCAL_INFERENCE_URL", providerConfig.BaseURL, "http://host.docker.internal:11434/v1")
 		}
 		return ProviderSpec{
 			Provider:    "local",
 			BaseURL:     baseURL,
 			BaseURLs:    localInferenceBaseURLs(baseURL),
 			Model:       model,
-			Endpoint:    "/chat/completions",
+			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
-			Temperature: 0.1,
+			Temperature: temperature,
 		}
 	}
 }
@@ -333,6 +399,91 @@ func envOr(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envOrConfig(key, configured string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	return fallback
+}
+
+func configOrDefault(configured string, fallback string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	return fallback
+}
+
+func configuredTemperature(config tendrilProviderConfig, fallback float64) float64 {
+	if config.Temperature != 0 {
+		return config.Temperature
+	}
+	return fallback
+}
+
+func configuredDefaultProvider() string {
+	return strings.ToLower(strings.TrimSpace(loadTendrilConfig().LLM.DefaultProvider))
+}
+
+func configuredProvider(provider string) tendrilProviderConfig {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return tendrilProviderConfig{}
+	}
+	providers := loadTendrilConfig().LLM.Providers
+	if providers == nil {
+		return tendrilProviderConfig{}
+	}
+	for name, config := range providers {
+		if strings.EqualFold(strings.TrimSpace(name), provider) {
+			return config
+		}
+	}
+	return tendrilProviderConfig{}
+}
+
+func configuredModelForProvider(provider string) string {
+	return strings.TrimSpace(configuredProvider(provider).Model)
+}
+
+func loadTendrilConfig() tendrilConfig {
+	path := findTendrilConfigPath()
+	if path == "" {
+		return tendrilConfig{}
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return tendrilConfig{}
+	}
+
+	var config tendrilConfig
+	if err := yaml.Unmarshal(content, &config); err != nil {
+		return tendrilConfig{}
+	}
+	return config
+}
+
+func findTendrilConfigPath() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		candidate := filepath.Join(dir, ".tendril", "config.yaml")
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 func canonicalModelTier(tier ModelTier) ModelTier {
@@ -407,6 +558,52 @@ func localInferenceBaseURLs(baseURL string) []string {
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
 	return c.doCall(ctx, baseURL, messages, false, nil)
+}
+
+func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]string, error) {
+	url := strings.TrimRight(baseURL, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create models request: %w", err)
+	}
+	if c.spec.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.spec.APIKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("list models request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read models response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var decoded struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("decode models response: %w", err)
+	}
+
+	models := make([]string, 0, len(decoded.Data))
+	for _, model := range decoded.Data {
+		id := strings.TrimSpace(model.ID)
+		if id != "" {
+			models = append(models, id)
+		}
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("models response contained no model ids")
+	}
+	return models, nil
 }
 
 func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, stream bool, tokenChan chan<- string) (string, error) {
