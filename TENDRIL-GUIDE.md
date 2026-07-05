@@ -19,9 +19,10 @@ Each layer of OpenTendril is constructed from the material that best serves its 
 | **Genotypes / Plasmids / Sequences** | **YAML + Markdown** | Configuration and prompt data are not code. They must be human-readable, editable without an IDE, and git-diffable. |
 | **Sprout** | **OCI / Docker** | The isolation mechanism. The Sprout itself is language-agnostic; the image *inside* the Sprout changes per task. |
 | **Default Executor** | **TypeScript / Node** | Used when the Substrate language is unknown or mixed. MCP SDK is TypeScript-first. Excellent async I/O. Tiny Docker image (`node:alpine`). Type-safe JSON boundaries. |
+| **Node Executor** | **Node (Debian + NVM)** | Dynamically instantiated when the Substrate is a Node project (detected via `package.json`). Decouples the Tendril's internal runner requirements from the Substrate's Node version (via `.nvmrc`) so it can natively execute ecosystem tools like `npm test` without version conflicts. |
 | **Python Executor** | **Python** | Only instantiated when the Substrate *is* a Python project. Essential for `pytest`, `pip`, Python AST manipulation, and tree-sitter bindings. |
 | **Go Executor** | **Go** | Only instantiated when the Substrate *is* a Go project. Used for `go test`, `go build`, and understanding Go module structure. |
-| **AST / Repo Map** | **Go + Tree-sitter** | Pre-flight analysis that runs inside the Go Stem binary *before* a Tendril is spawned. |
+| **AST / Repo Map** | **Go + Tree-sitter** | Pre-flight analysis that runs inside the Go Stem binary *before* sprouting a Tendril. |
 | **Memory / RAG** | **MCP Sidecar** | Persistent memory is handled by external MCP servers (e.g., `mcp-memory-service` or `pgvector`), not bespoke internal code. |
 
 ---
@@ -72,9 +73,15 @@ When introducing support for a new Substrate ecosystem (e.g., Rust, Java, Ruby),
 *   **Does the task require native ecosystem tools?** (e.g., `cargo test`, `maven build`). You must build a language-specific executor (e.g., a Rust executor, a Java executor).
 
 ### 2. Define the Genotype
-Create the identity for this Tendril in `.tendril/genotypes/<name>.md`. Use progressive disclosure:
-*   **Frontmatter:** A lightweight YAML block containing the name and a short description (loaded by the Mycorrhizal LLM for selection).
-*   **Body:** The full Markdown system prompt detailing the constraints, persona, and default Plasmids (injected into the context when instantiated).
+Create the identity for this Tendril in `.tendril/genotypes/<name>.json`. 
+A Genotype is defined as a JSON file containing the Tendril's name and its core system instructions (the persona, constraints, and default behaviors). 
+For example:
+```json
+{
+  "name": "thinker",
+  "instructions": "You are the OpenTendril Thinker. Analyze the user's task request..."
+}
+```
 
 ### 3. Create the Executor Scaffold
 In the `tendrils/<language>/` directory, create:
