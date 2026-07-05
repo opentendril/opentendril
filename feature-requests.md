@@ -67,7 +67,7 @@ To ensure Tendril remains infrastructure-agnostic and scalable, we are moving to
 
 ### [AGENT] Ephemeral Sub-Agent Orchestration
 - **Status:** Backlog ([Issue #18](https://github.com/opentendril/core/issues/18))
-- **Goal:** Spawn specialized worker agents (Security, Linter, Docs) for parallel, expert execution.
+- **Goal:** Initiate specialized worker agents (Security, Linter, Docs) for parallel, expert execution.
 - **Priority:** High
 
 ## 🌐 Ecosystem & Workflow Enhancements

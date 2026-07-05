@@ -97,5 +97,5 @@ OpenTendril runs specific background processes restricted to distinct scopes:
 * **Verifier (Genotype: `verifier.json`):** Quality assurance. Compiles code, executes unit test runners (`pytest`, `vitest`, `go test`), and validates linter rules.
 
 ### C. The Debugger (Auto-Correction Sprout)
-* **Scope:** Ephemeral self-repair. Spawned dynamically by the Conductor when a Verifier step fails.
+* **Scope:** Ephemeral self-repair. Sprouted dynamically by the Conductor when a Verifier step fails.
 * **Terrarium:** Ingests the Verifier's error output and compiler/test logs, applies targeted source patches inside the terrarium, and triggers a verifier retry loop (up to 3 times) to establish dynamic self-healing execution.
