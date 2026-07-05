@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,6 +29,16 @@ type Symbol struct {
 	StubContent    string
 }
 
+type Memory struct {
+	RepositoryName string    `json:"repositoryName"`
+	Category       string    `json:"category"`
+	Title          string    `json:"title"`
+	Content        string    `json:"content"`
+	Tags           string    `json:"tags"`
+	CreatedAt      time.Time `json:"createdAt"`
+	SessionID      string    `json:"sessionId"`
+}
+
 type IndexStore interface {
 	Close() error
 	DeleteSymbolsForFile(ctx context.Context, repositoryName string, filePath string) error
@@ -34,6 +46,23 @@ type IndexStore interface {
 	SearchSymbols(ctx context.Context, repositoryName string, query string, limit int) ([]Symbol, error)
 	UpsertFile(ctx context.Context, file FileRecord) error
 	UpsertSymbols(ctx context.Context, symbols []Symbol) error
+}
+
+type MemoryBackend interface {
+	DeleteMemory(ctx context.Context, repositoryName string, title string) error
+	ListMemories(ctx context.Context, repositoryName string, category string, limit int) ([]Memory, error)
+	SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]Memory, error)
+	StoreMemory(ctx context.Context, memory Memory) error
+}
+
+type MemoryConfig struct {
+	Backend           string
+	SQLitePath        string
+	PineconeAPIKey    string
+	PineconeBaseURL   string
+	PineconeDimension int
+	WeaviateAPIKey    string
+	WeaviateBaseURL   string
 }
 
 type SQLiteIndexStore struct {
@@ -85,6 +114,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS symbols USING fts5(
 	lineStart UNINDEXED,
 	lineEnd UNINDEXED,
 	stubContent UNINDEXED
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5(
+	repositoryName,
+	category,
+	title,
+	content UNINDEXED,
+	tags,
+	createdAt UNINDEXED,
+	sessionId UNINDEXED
 );`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -241,4 +280,166 @@ func (s *SQLiteIndexStore) scanSymbolRows(rows *sql.Rows) ([]Symbol, error) {
 	}
 
 	return symbols, nil
+}
+
+func (s *SQLiteIndexStore) StoreMemory(ctx context.Context, memory Memory) error {
+	if memory.CreatedAt.IsZero() {
+		memory.CreatedAt = time.Now().UTC()
+	}
+
+	encryptedContent, err := s.encryptor.EncryptString(memory.Content)
+	if err != nil {
+		return fmt.Errorf("encrypt memory content: %w", err)
+	}
+
+	const statement = `
+INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId)
+VALUES (?, ?, ?, ?, ?, ?, ?)`
+	if _, err := s.db.ExecContext(ctx, statement, memory.RepositoryName, memory.Category, memory.Title, encryptedContent, memory.Tags, memory.CreatedAt.UTC().Format(time.RFC3339Nano), memory.SessionID); err != nil {
+		return fmt.Errorf("store memory: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteIndexStore) SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]Memory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	trimmedQuery := strings.TrimSpace(query)
+	if trimmedQuery == "" || trimmedQuery == "*" {
+		return s.ListMemories(ctx, repositoryName, category, limit)
+	}
+
+	statement := `
+SELECT repositoryName, category, title, content, tags, createdAt, sessionId
+FROM memories
+WHERE repositoryName = ? AND memories MATCH ?`
+	args := []any{repositoryName, trimmedQuery}
+	if strings.TrimSpace(category) != "" {
+		statement += ` AND category = ?`
+		args = append(args, category)
+	}
+	statement += `
+ORDER BY rank
+LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search memories: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanMemoryRows(rows)
+}
+
+func (s *SQLiteIndexStore) ListMemories(ctx context.Context, repositoryName string, category string, limit int) ([]Memory, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	statement := `
+SELECT repositoryName, category, title, content, tags, createdAt, sessionId
+FROM memories
+WHERE repositoryName = ?`
+	args := []any{repositoryName}
+	if strings.TrimSpace(category) != "" {
+		statement += ` AND category = ?`
+		args = append(args, category)
+	}
+	statement += `
+ORDER BY createdAt DESC
+LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list memories: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanMemoryRows(rows)
+}
+
+func (s *SQLiteIndexStore) DeleteMemory(ctx context.Context, repositoryName string, title string) error {
+	const statement = `DELETE FROM memories WHERE repositoryName = ? AND title = ?`
+	if _, err := s.db.ExecContext(ctx, statement, repositoryName, title); err != nil {
+		return fmt.Errorf("delete memory: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
+	memories := make([]Memory, 0)
+	for rows.Next() {
+		var memory Memory
+		var encryptedContent string
+		var createdAt string
+		if err := rows.Scan(&memory.RepositoryName, &memory.Category, &memory.Title, &encryptedContent, &memory.Tags, &createdAt, &memory.SessionID); err != nil {
+			return nil, fmt.Errorf("scan memory: %w", err)
+		}
+		var err error
+		memory.Content, err = s.encryptor.DecryptString(encryptedContent)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt memory content: %w", err)
+		}
+		memory.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse memory createdAt: %w", err)
+		}
+		memories = append(memories, memory)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate memories: %w", err)
+	}
+
+	return memories, nil
+}
+
+func LoadMemoryConfig() (MemoryConfig, error) {
+	backend := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_MEMORY_BACKEND")))
+	if backend == "" {
+		backend = "sqlite"
+	}
+
+	sqlitePath := strings.TrimSpace(os.Getenv("TENDRIL_MEMORY_SQLITE_PATH"))
+	if sqlitePath == "" {
+		sqlitePath = filepath.Join(".", ".tendril", "rhizome.db")
+	}
+
+	dimension := 8
+	if configured := strings.TrimSpace(os.Getenv("TENDRIL_PINECONE_DIMENSION")); configured != "" {
+		if _, err := fmt.Sscanf(configured, "%d", &dimension); err != nil || dimension <= 0 {
+			return MemoryConfig{}, fmt.Errorf("invalid TENDRIL_PINECONE_DIMENSION: %q", configured)
+		}
+	}
+
+	return MemoryConfig{
+		Backend:           backend,
+		SQLitePath:        sqlitePath,
+		PineconeAPIKey:    os.Getenv("TENDRIL_PINECONE_API_KEY"),
+		PineconeBaseURL:   strings.TrimRight(os.Getenv("TENDRIL_PINECONE_BASE_URL"), "/"),
+		PineconeDimension: dimension,
+		WeaviateAPIKey:    os.Getenv("TENDRIL_WEAVIATE_API_KEY"),
+		WeaviateBaseURL:   strings.TrimRight(os.Getenv("TENDRIL_WEAVIATE_BASE_URL"), "/"),
+	}, nil
+}
+
+func OpenMemoryBackend(ctx context.Context, config MemoryConfig, encryptor *Encryptor) (MemoryBackend, error) {
+	switch strings.ToLower(strings.TrimSpace(config.Backend)) {
+	case "", "sqlite":
+		if encryptor == nil {
+			return nil, fmt.Errorf("encryptor is required")
+		}
+		if err := os.MkdirAll(filepath.Dir(config.SQLitePath), 0o755); err != nil {
+			return nil, fmt.Errorf("create memory database directory: %w", err)
+		}
+		return OpenSQLiteIndexStore(ctx, config.SQLitePath, encryptor)
+	case "pinecone":
+		return NewPineconeMemoryBackend(config)
+	case "weaviate":
+		return NewWeaviateMemoryBackend(config)
+	default:
+		return nil, fmt.Errorf("unsupported memory backend %q", config.Backend)
+	}
 }

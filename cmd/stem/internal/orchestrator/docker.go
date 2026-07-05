@@ -64,6 +64,7 @@ var (
 	pushTerrariumCommitFn      = pushTerrariumCommit
 	runContainerFitnessTestFn  = runContainerFitnessTest
 	generateRepoMapFn          = GenerateRepoMap
+	generateMemoryMapFn        = GenerateMemoryMap
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -227,6 +228,12 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			cleanup()
 		}
 		return "", fmt.Errorf("write repo map plasmid: %w", err)
+	}
+
+	memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, mountPath)
+	if memErr == nil && memoryMapMarkdown != "" {
+		memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", "memorymap.md")
+		_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
 	}
 
 	imageName := d.resolveImageName(mountPath)
