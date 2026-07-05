@@ -5,6 +5,7 @@ OpenTendril replaces traditional, generic IT terminology with biological and bot
 This document serves as the formal **Taxonomy and Systematics** of this synthetic organism. It educates contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms, classifying the nomenclature and explaining *why* we built the system this way.
 
 > 🛠️ **Looking for how to build?** This document explains the *what* and *why*. For practical engineering decisions (which language to use where, how to build an executor), read the [Material & Architecture Guide](TENDRIL-GUIDE.md).
+> 📖 **Need a quick translation?** If you are looking for a quick bidirectional mapping of OpenTendril terms to standard IT terms, see the [Glossary](GLOSSARY.md).
 ---
 
 ## 1. The Philosophy: Escaping Determinism
@@ -124,16 +125,16 @@ The interaction between the components looks like this in practice:
 
 ```mermaid
 graph TD
-    subgraph The Go Stem
+    subgraph stem [The Go Stem]
         API[Incoming Request] --> HT[Hormonal Triggers]
         HT -- Growth Blocked --> Abort
         HT -- Growth Allowed --> OS[Sprout Initiator]
     end
 
-    subgraph Ephemeral Sprout (Docker Terrarium)
+    subgraph sprout [Ephemeral Sprout Docker Terrarium]
         OS --> T[The Tendril AI]
         
-        subgraph Genetic Injection
+        subgraph genetics [Genetic Injection]
             G[Genotype: Core Persona] --> T
             P1[Plasmid: Skill A] -.-> T
             P2[Plasmid: Skill B] -.-> T
