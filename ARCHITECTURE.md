@@ -41,7 +41,7 @@ The single source of truth for execution flow and orchestrator security. It runs
 1.  **Protocol Gateways:** Exposing MCP server handlers (stdio/SSE), WebSocket loops for interactive CLI chat, and REST config endpoints.
 2.  **LLM client management:** Directly resolving LLM API requests and prompt completions to Anthropic, OpenAI, or local providers (e.g. Ollama/vLLM) without running any external proxy services.
 3.  **Genotype & Plasmid resolution:** Auto-indexing system prompts (`index.yaml`) and staging markdown context templates.
-4.  **Terrarium Isolation:** Dynamically spawning stateless language sprouts and executing task scripts securely.
+4.  **Terrarium Isolation:** Dynamically growing stateless language sprouts and executing task scripts securely.
 
 ### B. Ephemeral Sprout Terrariumes
 *   **Role:** Safe, isolated containers running target programming languages (e.g. `opentendril-go`, `opentendril-typescript`). See [Terrarium Terrariuming](file:///home/dr3w/GitHub/opentendril/core/docs/terrarium.md) for details on supported isolation tiers (Docker, gVisor, Firecracker).

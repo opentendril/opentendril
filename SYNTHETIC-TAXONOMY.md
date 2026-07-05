@@ -81,7 +81,7 @@ The execution flow of the OpenTendril framework natively maps to the six major g
 2. **Seedling Emergence (Sprouting):** The Go Stem server boots and binds to local ports, establishing the main API and MCP surface areas.
 3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers ("The Roots") using the Dual LLM config (Coordinator + Worker).
 4. **Tendril Initiation:** When a specific task Transcript is requested, the Stem initiates a specialized Genotype context, dynamically resolving required Plasmids.
-5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a stateless Sprout Docker container is spawned) and sweeps the codebase. Under the **Codebase Assessor (Thigmotropism)**, the Stem generates a hierarchical **Repo Map Plasmid** (`repomap.md`) using native AST parsing, giving the sprout a tactile sense of the codebase architecture before coiling around it to execute edits.
+5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a stateless Sprout Docker container is grown) and sweeps the codebase. Under the **Codebase Assessor (Thigmotropism)**, the Stem generates a hierarchical **Repo Map Plasmid** (`repomap.md`) using native AST parsing, giving the sprout a tactile sense of the codebase architecture before coiling around it to execute edits.
 6. **Reproductive Maturity:** With the task completed, Go Stem runs post-flight sanitization, commits the changes, merges the terrarium worktree back to the host, and delivers the final PRs and artifacts.
 
 ---
