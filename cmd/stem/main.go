@@ -8,6 +8,7 @@
 //   tendril adapt - Mine recent git history into the genome
 //   tendril genome - Inspect, reduce, or evolve the active genome
 //   tendril plasmid - Sign, list, or inject modular genome seeds
+//   tendril memory - Store, search, and export project memory
 //   tendril repomap - Generate the active repository map
 //   tendril sequence - Run or list YAML task sequences
 //   tendril terrarium - Manage execution terrarium environments
@@ -56,6 +57,8 @@ func main() {
 		runGenomeCmd(ctx, os.Args[2:])
 	case "plasmid":
 		runPlasmidCmd(os.Args[2:])
+	case "memory":
+		runMemoryCmd(ctx, os.Args[2:])
 	case "repomap":
 		runRepoMapCmd(os.Args[2:])
 	case "sequence":
@@ -90,6 +93,7 @@ func printUsage() {
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Println("  genome  Inspect, reduce, or evolve the active genome seeds")
 	fmt.Println("  plasmid   Sign and verify Plasmid integrity")
+	fmt.Println("  memory  Store, search, and export project memory")
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")
 	fmt.Println("  terrarium Manage execution terrarium environments")

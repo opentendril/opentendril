@@ -57,6 +57,55 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 	return rhizome.GenerateRepoMap(ctx, store, repositoryName, "*", 2000)
 }
 
+// GenerateMemoryMap initializes the Rhizome memory backend for the provided
+// repository mount path and returns a markdown-formatted project memory map.
+func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tendrilDir := filepath.Join(mountPath, ".tendril")
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		return "", fmt.Errorf("create .tendril dir: %w", err)
+	}
+
+	keyPath := filepath.Join(tendrilDir, "rhizome.key")
+	key, err := getOrCreateIndexKey(keyPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve index key: %w", err)
+	}
+
+	encryptor, err := rhizome.NewEncryptor(key)
+	if err != nil {
+		return "", fmt.Errorf("initialize encryptor: %w", err)
+	}
+
+	dbPath := filepath.Join(tendrilDir, "rhizome.db")
+	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
+	if err != nil {
+		return "", fmt.Errorf("open index store: %w", err)
+	}
+	defer store.Close()
+
+	absoluteMountPath, err := filepath.Abs(mountPath)
+	if err != nil {
+		absoluteMountPath = mountPath
+	}
+	repositoryName := filepath.Base(absoluteMountPath)
+	if repositoryName == "." || repositoryName == "" {
+		repositoryName = "workspace"
+	}
+
+	memoryMap, err := rhizome.GenerateMemoryMap(ctx, store, repositoryName, "*", 2000)
+	if err != nil {
+		return "", err
+	}
+	if memoryMap == "" {
+		return "", nil
+	}
+	return memoryMap, nil
+}
+
 func getOrCreateIndexKey(keyPath string) ([]byte, error) {
 	if envKey := os.Getenv("OPEN_TENDRIL_INDEX_KEY"); envKey != "" {
 		if len(envKey) >= 32 {
