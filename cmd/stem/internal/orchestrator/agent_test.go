@@ -81,7 +81,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if err := os.MkdirAll(genotypeDir, 0o755); err != nil {
 		t.Fatalf("mkdir genotype dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(genotypeDir, "meristem.json"), []byte(`{"name":"meristem","instructions":"You are the meristem."}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(genotypeDir, "workspace-agent.json"), []byte(`{"name":"workspace-agent","instructions":"You are the workspace agent."}`), 0o644); err != nil {
 		t.Fatalf("write genotype file: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 		},
 	}
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "meristem", client, session, nil, "")
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if !strings.Contains(client.calls[0][0].Content, "Genome note") {
 		t.Fatalf("system prompt missing genome context: %s", client.calls[0][0].Content)
 	}
-	if !strings.Contains(client.calls[0][0].Content, "You are the meristem.") {
+	if !strings.Contains(client.calls[0][0].Content, "You are the workspace agent.") {
 		t.Fatalf("system prompt missing genotype context: %s", client.calls[0][0].Content)
 	}
 }
@@ -169,7 +169,7 @@ func TestSystemGenotypePriority(t *testing.T) {
 	// Mock UserConfigDir via environment variable for tests
 	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
 	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
-	
+
 	sysConfigDir := filepath.Join(workspace, "sysconfig")
 	os.Setenv("XDG_CONFIG_HOME", sysConfigDir)
 
@@ -194,6 +194,41 @@ func TestSystemGenotypePriority(t *testing.T) {
 	if len(genotype.DenyPlasmids) != 1 || genotype.DenyPlasmids[0] != "evilTool" {
 		t.Errorf("expected denyPlasmids=[evilTool], got %v", genotype.DenyPlasmids)
 	}
+	if !genotype.System {
+		t.Errorf("expected genotype loaded from system path to be marked system")
+	}
+}
+
+func TestEmbeddedGenotypePriority(t *testing.T) {
+	workspace := t.TempDir()
+	genotypeName := "code-writer"
+
+	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
+	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
+	os.Setenv("XDG_CONFIG_HOME", filepath.Join(workspace, "sysconfig"))
+
+	workspaceGenotypeDir := filepath.Join(workspace, ".tendril", "genotypes")
+	if err := os.MkdirAll(workspaceGenotypeDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace genotype dir: %v", err)
+	}
+	workspaceContent := `{"name":"code-writer","instructions":"I am a mutable workspace override","denyPlasmids":[]}`
+	if err := os.WriteFile(filepath.Join(workspaceGenotypeDir, genotypeName+".json"), []byte(workspaceContent), 0o644); err != nil {
+		t.Fatalf("write workspace genotype: %v", err)
+	}
+
+	genotype, err := loadGenotypeContext(workspace, genotypeName)
+	if err != nil {
+		t.Fatalf("loadGenotypeContext failed: %v", err)
+	}
+	if genotype == nil {
+		t.Fatalf("expected embedded genotype, got nil")
+	}
+	if genotype.Instructions == "I am a mutable workspace override" {
+		t.Fatalf("workspace genotype override took priority over embedded system genotype")
+	}
+	if !genotype.System {
+		t.Fatalf("expected embedded genotype to be marked system")
+	}
 }
 
 func TestAgentDenyPlasmidsFilter(t *testing.T) {
@@ -203,7 +238,7 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
 	sysConfigDir := filepath.Join(workspace, "sysconfig")
 	os.Setenv("XDG_CONFIG_HOME", sysConfigDir)
-	
+
 	sysGenotypeDir := filepath.Join(sysConfigDir, "opentendril", "genotypes")
 	os.MkdirAll(sysGenotypeDir, 0o755)
 	sysContent := `{"name":"secure","instructions":"I am secure","denyPlasmids":["evilTool","injectPlasmidTarget"]}`

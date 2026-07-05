@@ -11,6 +11,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/data/genotypes"
 )
 
 const (
@@ -82,6 +83,7 @@ type agentResult struct {
 	Transcript   string
 	ActionResult *ActionResult
 }
+
 func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (*Agent, error) {
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
@@ -564,12 +566,23 @@ func loadGenotypeContext(workspace string, genotypeName string) (*genotypeDefini
 	var content []byte
 	var err error
 	var genotypePath string
+	var systemGenotype bool
 
 	for _, p := range getSystemGenotypePaths(genotypeName) {
 		if c, errRead := os.ReadFile(p); errRead == nil {
 			content = c
 			genotypePath = p
+			systemGenotype = true
 			break
+		}
+	}
+
+	if content == nil {
+		embeddedPath := genotypeName + ".json"
+		if c, errRead := genotypes.FS.ReadFile(embeddedPath); errRead == nil {
+			content = c
+			genotypePath = "embedded:" + embeddedPath
+			systemGenotype = true
 		}
 	}
 
@@ -587,6 +600,9 @@ func loadGenotypeContext(workspace string, genotypeName string) (*genotypeDefini
 	var genotype genotypeDefinition
 	if err := json.Unmarshal(content, &genotype); err != nil {
 		return nil, fmt.Errorf("decode genotype %s: %w", genotypePath, err)
+	}
+	if systemGenotype {
+		genotype.System = true
 	}
 
 	return &genotype, nil

@@ -1250,9 +1250,29 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) error
 		fmt.Fprintf(os.Stderr, "⚠️ Genotype %s not found for plasmid staging\n", genotypeName)
 		return nil
 	}
+	if len(genotype.Plasmids) == 0 {
+		return nil
+	}
 
 	var sigVerifyFailed bool
+	allowedPlasmids := make(map[string]struct{}, len(genotype.Plasmids))
+	for _, allowed := range genotype.Plasmids {
+		allowed = strings.TrimSpace(allowed)
+		if allowed != "" {
+			allowedPlasmids[strings.ToLower(allowed)] = struct{}{}
+		}
+	}
+
 	for _, name := range genotype.Plasmids {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := allowedPlasmids[strings.ToLower(name)]; !ok {
+			fmt.Fprintf(os.Stderr, "⚠️ Skipping staging of non-allowlisted plasmid %s\n", name)
+			continue
+		}
+
 		denied := false
 		for _, deny := range genotype.DenyPlasmids {
 			if strings.EqualFold(name, deny) {

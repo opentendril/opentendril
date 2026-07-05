@@ -1126,10 +1126,6 @@ type phenotypeRunResult struct {
 }
 
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
-	if err := EnsureBuiltinGenotypes(substratePath); err != nil {
-		return "", err
-	}
-
 	genotype := stepGenotype(step.ID)
 	if seq.ConcurrencyLimit > 1 {
 		return runParallelSequenceStep(ctx, seq, step, substratePath, genotype)

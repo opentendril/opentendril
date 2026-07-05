@@ -236,6 +236,40 @@ func TestStagePlasmidsForGenotype(t *testing.T) {
 	}
 }
 
+func TestStagePlasmidsForGenotypeUsesAllowlist(t *testing.T) {
+	root := t.TempDir()
+	genotypesDir := filepath.Join(root, ".tendril", "genotypes")
+	plasmidsDir := filepath.Join(genotypesDir, "plasmids")
+	if err := os.MkdirAll(plasmidsDir, 0o755); err != nil {
+		t.Fatalf("mkdir plasmids dir: %v", err)
+	}
+
+	writeJSONFile(t, filepath.Join(genotypesDir, "reader.json"), map[string]any{
+		"name":         "reader",
+		"instructions": "read code",
+		"plasmids":     []string{"rhizome"},
+	})
+
+	if err := os.WriteFile(filepath.Join(plasmidsDir, "rhizome.md"), []byte("# Rhizome\n"), 0o644); err != nil {
+		t.Fatalf("write rhizome plasmid: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(plasmidsDir, "filesystem.md"), []byte("# Filesystem\n"), 0o644); err != nil {
+		t.Fatalf("write filesystem plasmid: %v", err)
+	}
+
+	destRoot := t.TempDir()
+	if err := stagePlasmidsForGenotype(root, destRoot, "reader"); err != nil {
+		t.Fatalf("stage plasmids: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(destRoot, ".tendril", "genome", "rhizome.md")); err != nil {
+		t.Fatalf("expected allowlisted plasmid to be staged: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destRoot, ".tendril", "genome", "filesystem.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected non-allowlisted plasmid to remain unstaged, stat err=%v", err)
+	}
+}
+
 func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 	t.Helper()
 
