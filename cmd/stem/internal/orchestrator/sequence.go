@@ -55,6 +55,9 @@ type SequenceStep struct {
 	DependsOn         []string `yaml:"dependsOn,omitempty"`
 	DependsOnLegacy   []string `yaml:"depends_on,omitempty"`
 	Transcript        string   `yaml:"transcript"`
+	Parallel          bool     `yaml:"parallel,omitempty"`
+	SproutCount       int      `yaml:"sproutCount,omitempty"`
+	MergeTranscript   string   `yaml:"mergeTranscript,omitempty"`
 	PhenotypesCount   int      `yaml:"phenotypesCount,omitempty"`
 	FitnessTest       string   `yaml:"fitnessTest,omitempty"`
 	RequiresReasoning bool     `yaml:"requiresReasoning,omitempty"`
@@ -350,6 +353,15 @@ func normalizeSequence(path string, seq *Sequence) error {
 		step.DependsOn = deps
 		step.DependsOnLegacy = nil
 		step.Transcript = strings.TrimSpace(step.Transcript)
+		step.MergeTranscript = strings.TrimSpace(step.MergeTranscript)
+		if step.Parallel {
+			if step.SproutCount <= 0 {
+				step.SproutCount = defaultParallelSproutCount
+			}
+			if step.SproutCount > maxParallelSproutCount {
+				step.SproutCount = maxParallelSproutCount
+			}
+		}
 		if step.PhenotypesCount <= 0 {
 			step.PhenotypesCount = 1
 		}
@@ -373,7 +385,10 @@ func normalizeSequenceRunOptions(opts SequenceRunOptions) SequenceRunOptions {
 		opts.ResumePollInterval = time.Second
 	}
 	if opts.StepRunner == nil {
-		opts.StepRunner = defaultSequenceStepRunner
+		bus := opts.EventBus
+		opts.StepRunner = func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+			return defaultSequenceStepRunnerWithBus(ctx, seq, step, substratePath, bus)
+		}
 	}
 	return opts
 }
@@ -1193,7 +1208,15 @@ type phenotypeRunResult struct {
 }
 
 func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+	return defaultSequenceStepRunnerWithBus(ctx, seq, step, substratePath, nil)
+}
+
+func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string, bus *eventbus.Bus) (string, error) {
 	genotype := stepGenotype(step.ID)
+	if step.Parallel {
+		return runParallelSprouting(ctx, seq, step, substratePath, bus)
+	}
+
 	if seq.ConcurrencyLimit > 1 {
 		return runParallelSequenceStep(ctx, seq, step, substratePath, genotype)
 	}

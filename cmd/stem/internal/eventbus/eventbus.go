@@ -10,20 +10,24 @@ const maxHistory = 100
 type EventType string
 
 const (
-	EventHealthCheck      EventType = "health-check"
-	EventHealthDegraded   EventType = "health-degraded"
-	EventHealthRecovered  EventType = "health-recovered"
-	EventTerrariumOOM     EventType = "terrarium-oom"
-	EventTerrariumTimeout EventType = "terrarium-timeout"
-	EventAPIKeyInvalid    EventType = "api-key-invalid"
-	EventSequenceFailure  EventType = "sequence-failure"
-	EventSequenceComplete EventType = "sequence-complete"
-	EventStreamToken      EventType = "stream-token"
-	EventThoughtBranch    EventType = "thought-branch"
-	EventSproutEmerged    EventType = "sprout-emerged"
-	EventHormonalTrigger  EventType = "hormonal-trigger"
-	EventRhizomeUpdate    EventType = "rhizome-update"
-	EventXylemTransport   EventType = "xylem-transport"
+	EventHealthCheck       EventType = "health-check"
+	EventHealthDegraded    EventType = "health-degraded"
+	EventHealthRecovered   EventType = "health-recovered"
+	EventTerrariumOOM      EventType = "terrarium-oom"
+	EventTerrariumTimeout  EventType = "terrarium-timeout"
+	EventAPIKeyInvalid     EventType = "api-key-invalid"
+	EventSequenceFailure   EventType = "sequence-failure"
+	EventSequenceComplete  EventType = "sequence-complete"
+	EventStreamToken       EventType = "stream-token"
+	EventThoughtBranch     EventType = "thought-branch"
+	EventSproutEmerged     EventType = "sprout-emerged"
+	EventSproutMatured     EventType = "sprout-matured"
+	EventSproutWithered    EventType = "sprout-withered"
+	EventHormonalTrigger   EventType = "hormonal-trigger"
+	EventRhizomeUpdate     EventType = "rhizome-update"
+	EventXylemTransport    EventType = "xylem-transport"
+	EventParallelSprouting EventType = "parallel-sprouting"
+	EventMycelialMerge     EventType = "mycelial-merge"
 )
 
 // AllEventTypes returns every registered event type for broad telemetry subscriptions.
@@ -40,9 +44,13 @@ func AllEventTypes() []EventType {
 		EventStreamToken,
 		EventThoughtBranch,
 		EventSproutEmerged,
+		EventSproutMatured,
+		EventSproutWithered,
 		EventHormonalTrigger,
 		EventRhizomeUpdate,
 		EventXylemTransport,
+		EventParallelSprouting,
+		EventMycelialMerge,
 	}
 }
 
