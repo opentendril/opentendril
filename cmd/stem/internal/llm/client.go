@@ -90,6 +90,19 @@ func NewClientForTier(tier ModelTier) *Client {
 	return NewClient(ResolveTierProviderSpec(tier))
 }
 
+func NewClientForModel(provider string, model string) *Client {
+	return NewClient(ResolveModelProviderSpec(provider, model))
+}
+
+func ResolveModelProviderSpec(provider string, model string) ProviderSpec {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	model = strings.TrimSpace(model)
+	if provider == "" {
+		return ResolveTierProviderSpec(TierPremium)
+	}
+	return providerSpecForModel(provider, TierPremium, model, "")
+}
+
 func NewCoordinatorClientFromEnv() *Client {
 	return NewClient(ResolveCoordinatorProviderSpec())
 }

@@ -35,6 +35,8 @@ type DockerOrchestrator struct {
 	StatusPath       string
 	IsCoordinator    bool
 	Tier             llm.ModelTier
+	Provider         string
+	Model            string
 	Genotype         string
 	Temperature      float64
 	DisableMergeBack bool
@@ -75,13 +77,15 @@ var (
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	var client *llm.Client
-	tier := llm.TierPremium
-	if d != nil && d.Tier != "" {
-		tier = d.Tier
-	}
 	if d != nil && d.IsCoordinator {
 		client = llm.NewCoordinatorClientFromEnv()
+	} else if d != nil && strings.TrimSpace(d.Provider) != "" && strings.TrimSpace(d.Model) != "" {
+		client = llm.NewClientForModel(d.Provider, d.Model)
 	} else {
+		tier := llm.TierPremium
+		if d != nil && d.Tier != "" {
+			tier = d.Tier
+		}
 		client = llm.NewClientForTier(tier)
 	}
 	if d != nil && d.Temperature > 0 {

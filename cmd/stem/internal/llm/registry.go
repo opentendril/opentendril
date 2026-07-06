@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 type ModelDefinition struct {
@@ -17,7 +18,8 @@ type ModelDefinition struct {
 	CostTier     ModelTier
 }
 
-var KnownModels = []ModelDefinition{
+// FallbackModels preserves capability metadata for providers that do not expose a models API.
+var FallbackModels = []ModelDefinition{
 	{Provider: "anthropic", Name: "claude-3-5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierPremium},
 	{Provider: "anthropic", Name: "claude-3-5-haiku", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierCheapest},
 	{Provider: "openai", Name: "gpt-4o", Family: ModelFamilyGPT, ContextSize: 128000, HasVision: true, CostTier: TierPremium},
@@ -56,15 +58,28 @@ func AvailableProviders() []string {
 	return providers
 }
 
+func activeModelRegistry() []ModelDefinition {
+	modelRegistryMu.RLock()
+	defer modelRegistryMu.RUnlock()
+	if len(modelRegistryCache) > 0 && time.Since(modelRegistryLoaded) < ModelRegistryCacheTTL {
+		return append([]ModelDefinition(nil), modelRegistryCache...)
+	}
+	return append([]ModelDefinition(nil), FallbackModels...)
+}
+
 func SelectBestModel(caps Capabilities) (ModelDefinition, error) {
+	return SelectBestModelFromRegistry(caps, activeModelRegistry())
+}
+
+func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) (ModelDefinition, error) {
 	providers := AvailableProviders()
 	available := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
 		available[strings.ToLower(strings.TrimSpace(provider))] = struct{}{}
 	}
 
-	matches := make([]ModelDefinition, 0, len(KnownModels))
-	for _, model := range KnownModels {
+	matches := make([]ModelDefinition, 0, len(registry))
+	for _, model := range registry {
 		if _, ok := available[strings.ToLower(strings.TrimSpace(model.Provider))]; !ok {
 			continue
 		}
