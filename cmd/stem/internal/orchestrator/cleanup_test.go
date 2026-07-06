@@ -119,3 +119,81 @@ func TestRunTendrilRestoresHostStashAfterCanceledContext(t *testing.T) {
 		t.Fatal("expected restored dirty workspace after stash pop")
 	}
 }
+
+func TestRunTendrilAutoBranchesBeforeStash(t *testing.T) {
+	root := t.TempDir()
+	if _, err := runGitCommand(context.Background(), root, "init"); err != nil {
+		t.Fatalf("git init failed: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), root, "config", "user.email", "test@example.com"); err != nil {
+		t.Fatalf("git config email failed: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), root, "config", "user.name", "Test User"); err != nil {
+		t.Fatalf("git config name failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("baseline\n"), 0o644); err != nil {
+		t.Fatalf("write baseline file: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), root, "add", "README.md"); err != nil {
+		t.Fatalf("git add baseline: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), root, "commit", "-m", "baseline"); err != nil {
+		t.Fatalf("git commit baseline: %v", err)
+	}
+
+	currentBranch, err := runGitCommand(context.Background(), root, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("read initial branch: %v", err)
+	}
+	if currentBranch != "main" && currentBranch != "master" {
+		if _, err := runGitCommand(context.Background(), root, "branch", "-m", "main"); err != nil {
+			t.Fatalf("rename branch to main: %v", err)
+		}
+		currentBranch = "main"
+	}
+	if currentBranch != "main" && currentBranch != "master" {
+		t.Fatalf("initial branch = %q, want main or master", currentBranch)
+	}
+
+	chdirToTempDir(t)
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir repo root: %v", err)
+	}
+
+	originalPreflight := runSproutPreflightChecksFn
+	originalStash := stashHostWorkspaceFn
+
+	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
+		stashHostWorkspaceFn = originalStash
+	})
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+
+	stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) {
+		branch, err := runGitCommand(ctx, repoRoot, "branch", "--show-current")
+		if err != nil {
+			return false, err
+		}
+		if branch != "tendril/task-step-1" {
+			t.Fatalf("branch at stash time = %q, want tendril/task-step-1", branch)
+		}
+		return false, errors.New("stop after branch isolation check")
+	}
+
+	_, err = (&DockerOrchestrator{
+		Substrate: root,
+		StepID:    "step-1",
+	}).RunTendril(context.Background(), "verify auto-branching")
+	if err == nil {
+		t.Fatal("RunTendril() error = nil, want stop after branch isolation check")
+	}
+
+	finalBranch, err := runGitCommand(context.Background(), root, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("read final branch: %v", err)
+	}
+	if finalBranch != "tendril/task-step-1" {
+		t.Fatalf("final branch = %q, want tendril/task-step-1", finalBranch)
+	}
+}

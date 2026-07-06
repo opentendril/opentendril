@@ -196,6 +196,17 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		}
 
 		if gitRepo && !plan.readOnly && !d.DisableMergeBack {
+			branchOutput, err := runGitCommand(ctx, sourcePath, "rev-parse", "--abbrev-ref", "HEAD")
+			if err == nil {
+				currentBranch := strings.TrimSpace(branchOutput)
+				if currentBranch == "main" || currentBranch == "master" {
+					newBranch := fmt.Sprintf("tendril/task-%s", stepID)
+					fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching from %s to %s\n", currentBranch, newBranch)
+					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {
+						return "", fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
+					}
+				}
+			}
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 			if err != nil {
 				return "", err
