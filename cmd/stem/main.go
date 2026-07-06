@@ -25,11 +25,13 @@ import (
 	"syscall"
 
 	"github.com/joho/godotenv"
+	"github.com/opentendril/core/cmd/stem/internal/llm"
 )
 
 func main() {
 	// Load .env file if it exists
 	_ = godotenv.Load()
+	llm.StartModelDiscovery()
 
 	if len(os.Args) < 2 {
 		printUsage()

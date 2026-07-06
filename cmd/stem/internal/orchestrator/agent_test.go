@@ -154,7 +154,7 @@ func TestParseModelResponseFinalText(t *testing.T) {
 	if final != "plain final response" {
 		t.Fatalf("expected final response to echo plain text, got %q", final)
 	}
-	if call.Tool != "" {
+	if len(call) != 0 {
 		t.Fatalf("expected no tool call, got %+v", call)
 	}
 	if actionResult != nil {

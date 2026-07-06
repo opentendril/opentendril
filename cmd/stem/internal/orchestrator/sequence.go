@@ -50,13 +50,17 @@ type Sequence struct {
 
 // SequenceStep describes one executable node in a sequence.
 type SequenceStep struct {
-	ID              string   `yaml:"id"`
-	Status          string   `yaml:"status"`
-	DependsOn       []string `yaml:"dependsOn,omitempty"`
-	DependsOnLegacy []string `yaml:"depends_on,omitempty"`
-	Transcript      string   `yaml:"transcript"`
-	PhenotypesCount int      `yaml:"phenotypesCount,omitempty"`
-	FitnessTest     string   `yaml:"fitnessTest,omitempty"`
+	ID                string   `yaml:"id"`
+	Status            string   `yaml:"status"`
+	DependsOn         []string `yaml:"dependsOn,omitempty"`
+	DependsOnLegacy   []string `yaml:"depends_on,omitempty"`
+	Transcript        string   `yaml:"transcript"`
+	PhenotypesCount   int      `yaml:"phenotypesCount,omitempty"`
+	FitnessTest       string   `yaml:"fitnessTest,omitempty"`
+	RequiresReasoning bool     `yaml:"requiresReasoning,omitempty"`
+	RequiresVision    bool     `yaml:"requiresVision,omitempty"`
+	ModelProvider     string   `yaml:"modelProvider,omitempty"`
+	ModelName         string   `yaml:"modelName,omitempty"`
 }
 
 // SequenceStepRunner executes a single sequence step.
@@ -875,28 +879,91 @@ func fallbackStepModelTier(stepID string) llm.ModelTier {
 	}
 }
 
-func resolveStepModelTier(ctx context.Context, step *SequenceStep) llm.ModelTier {
+type stepLLMSelection struct {
+	Provider string
+	Model    string
+	Tier     llm.ModelTier
+}
+
+func resolveStepLLMSelection(ctx context.Context, step *SequenceStep) stepLLMSelection {
 	if step == nil {
-		return llm.TierPremium
+		return stepLLMSelection{Tier: llm.TierPremium}
 	}
+
+	if provider := strings.TrimSpace(step.ModelProvider); provider != "" {
+		if model := strings.TrimSpace(step.ModelName); model != "" {
+			return stepLLMSelection{Provider: provider, Model: model, Tier: llm.TierPremium}
+		}
+	}
+
 	if isMeristemStep(step.ID) {
-		return llm.TierPremium
+		return stepLLMSelection{Tier: llm.TierPremium}
 	}
 
 	fallbackTier := fallbackStepModelTier(step.ID)
 	if fallbackTier != llm.TierPremium {
-		return fallbackTier
+		return stepLLMSelection{Tier: fallbackTier}
+	}
+
+	caps := llm.Capabilities{}
+	if step.RequiresReasoning {
+		caps.RequiresReasoning = true
+	}
+	if step.RequiresVision {
+		caps.RequiresVision = true
+	}
+
+	registry := llm.GetModelRegistry(ctx)
+	if selection, err := RouteTask(ctx, step.Transcript, caps, registry); err == nil {
+		if strings.TrimSpace(selection.Provider) != "" && strings.TrimSpace(selection.Model) != "" {
+			return stepLLMSelection{
+				Provider: selection.Provider,
+				Model:    selection.Model,
+				Tier:     inferSelectionTier(registry, selection),
+			}
+		}
 	}
 
 	assessedTier, err := AssessTaskComplexity(ctx, step.Transcript)
 	if err != nil {
-		return llm.TierPremium
+		return stepLLMSelection{Tier: llm.TierPremium}
 	}
 	switch assessedTier {
 	case llm.TierPremium, llm.TierStandard, llm.TierCheapest:
-		return assessedTier
+		return stepLLMSelection{Tier: assessedTier}
 	default:
-		return llm.TierPremium
+		return stepLLMSelection{Tier: llm.TierPremium}
+	}
+}
+
+func inferSelectionTier(registry []llm.ModelDefinition, selection llm.RouteSelection) llm.ModelTier {
+	for _, model := range registry {
+		if strings.EqualFold(model.Provider, selection.Provider) && model.Name == selection.Model {
+			switch model.CostTier {
+			case llm.TierCheapest:
+				return llm.TierCheapest
+			case llm.TierStandard:
+				return llm.TierStandard
+			default:
+				return llm.TierPremium
+			}
+		}
+	}
+	return llm.TierPremium
+}
+
+func resolveStepModelTier(ctx context.Context, step *SequenceStep) llm.ModelTier {
+	return resolveStepLLMSelection(ctx, step).Tier
+}
+
+func applyStepLLMSelection(orch *DockerOrchestrator, selection stepLLMSelection) {
+	if orch == nil {
+		return
+	}
+	orch.Tier = selection.Tier
+	if strings.TrimSpace(selection.Provider) != "" && strings.TrimSpace(selection.Model) != "" {
+		orch.Provider = selection.Provider
+		orch.Model = selection.Model
 	}
 }
 
@@ -1140,9 +1207,9 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
 		IsCoordinator:   isMeristemStep(step.ID),
-		Tier:            resolveStepModelTier(ctx, step),
 		Genotype:        genotype,
 	}
+	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
 	return runSequenceSproutFn(ctx, orch, step.Transcript)
 }
 
@@ -1164,10 +1231,10 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 		SubstrateBranch:  branchName,
 		StepID:           step.ID,
 		IsCoordinator:    isMeristemStep(step.ID),
-		Tier:             resolveStepModelTier(ctx, step),
 		Genotype:         genotype,
 		DisableMergeBack: true,
 	}
+	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
 
 	result, err := runSequenceSproutAtPathFn(ctx, orch, step.Transcript, substratePath, shadowPath)
 	if err != nil {
@@ -1227,7 +1294,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 	if phenotypeCount <= 0 {
 		phenotypeCount = 1
 	}
-	modelTier := resolveStepModelTier(ctx, step)
+	llmSelection := resolveStepLLMSelection(ctx, step)
 
 	resultsCh := make(chan phenotypeRunResult, phenotypeCount)
 	var wg sync.WaitGroup
@@ -1260,11 +1327,11 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				SubstrateBranch:  branchName,
 				StepID:           step.ID,
 				IsCoordinator:    isMeristemStep(step.ID),
-				Tier:             modelTier,
 				Genotype:         genotype,
 				Temperature:      0.1 + float64(index)*0.3,
 				DisableMergeBack: true,
 			}
+			applyStepLLMSelection(orch, llmSelection)
 
 			runResult, runErr := runSequenceSproutAtPathFn(selectionCtx, orch, step.Transcript, sourcePath, shadowPath)
 			if runErr != nil {
