@@ -64,6 +64,53 @@ type SequenceStep struct {
 	RequiresVision    bool     `yaml:"requiresVision,omitempty"`
 	ModelProvider     string   `yaml:"modelProvider,omitempty"`
 	ModelName         string   `yaml:"modelName,omitempty"`
+
+	// Selection, when present, promotes a step from single-shot execution to a
+	// true generational genetic algorithm (phenotypic selection). See
+	// SelectionConfig and selection.go.
+	Selection *SelectionConfig `yaml:"selection,omitempty"`
+}
+
+// SelectionConfig governs a generational genetic algorithm for a step. When a
+// step carries a non-nil Selection, the Stem grows a population of mutated
+// Phenotypes per generation, scores each against a numeric fitness metric,
+// breeds the fittest survivors into the next generation's Genotypes, and grafts
+// the single AlphaPhenotype (the fittest variant discovered across all
+// generations) back into the substrate.
+type SelectionConfig struct {
+	// PopulationSize is the number of parallel Phenotype sprouts grown per
+	// generation. Defaults to defaultSelectionPopulation, clamped to
+	// [minSelectionPopulation, maxSelectionPopulation].
+	PopulationSize int `yaml:"populationSize,omitempty"`
+	// MaxGenerations bounds the generational loop. Defaults to
+	// defaultSelectionGenerations, clamped to [1, maxSelectionGenerations].
+	MaxGenerations int `yaml:"maxGenerations,omitempty"`
+	// FitnessTest is the shell command run inside each Phenotype's terrarium
+	// (e.g. "make benchmark"). Its stdout/stderr is parsed for a FitnessScore.
+	// Falls back to the step-level FitnessTest when empty.
+	FitnessTest string `yaml:"fitnessTest,omitempty"`
+	// FitnessPattern is an optional regular expression whose first capture group
+	// (or whole match) yields the numeric FitnessScore from the test output.
+	// When empty the engine looks for a Go "<n> ns/op" benchmark line and then
+	// falls back to the last number in the output.
+	FitnessPattern string `yaml:"fitnessPattern,omitempty"`
+	// FitnessGoal is "minimize" (default, e.g. ns/op or latency) or "maximize"
+	// (e.g. throughput or ops/sec).
+	FitnessGoal string `yaml:"fitnessGoal,omitempty"`
+	// FitnessThreshold, when set, stops evolution early as soon as the
+	// AlphaPhenotype's score reaches it (<= for minimize, >= for maximize).
+	FitnessThreshold *float64 `yaml:"fitnessThreshold,omitempty"`
+	// SurvivorFraction is the top percentile of a generation carried forward as
+	// breeding parents. Defaults to defaultSelectionSurvivorFraction, clamped to
+	// (0, 1].
+	SurvivorFraction float64 `yaml:"survivorFraction,omitempty"`
+	// MutationTemperature is the base LLM sampling temperature for the
+	// population. Defaults to defaultSelectionMutationTemperature.
+	MutationTemperature float64 `yaml:"mutationTemperature,omitempty"`
+	// TemperatureSpread widens temperature across the population so lower-index
+	// Phenotypes exploit and higher-index Phenotypes explore. Defaults to
+	// defaultSelectionTemperatureSpread.
+	TemperatureSpread float64 `yaml:"temperatureSpread,omitempty"`
 }
 
 // SequenceStepRunner executes a single sequence step.
@@ -366,6 +413,73 @@ func normalizeSequence(path string, seq *Sequence) error {
 			step.PhenotypesCount = 1
 		}
 		step.FitnessTest = strings.TrimSpace(step.FitnessTest)
+		if err := normalizeSelectionConfig(path, step); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func normalizeSelectionConfig(path string, step *SequenceStep) error {
+	cfg := step.Selection
+	if cfg == nil {
+		return nil
+	}
+
+	if cfg.PopulationSize <= 0 {
+		cfg.PopulationSize = defaultSelectionPopulation
+	}
+	if cfg.PopulationSize < minSelectionPopulation {
+		cfg.PopulationSize = minSelectionPopulation
+	}
+	if cfg.PopulationSize > maxSelectionPopulation {
+		cfg.PopulationSize = maxSelectionPopulation
+	}
+
+	if cfg.MaxGenerations <= 0 {
+		cfg.MaxGenerations = defaultSelectionGenerations
+	}
+	if cfg.MaxGenerations > maxSelectionGenerations {
+		cfg.MaxGenerations = maxSelectionGenerations
+	}
+
+	cfg.FitnessTest = strings.TrimSpace(cfg.FitnessTest)
+	if cfg.FitnessTest == "" {
+		cfg.FitnessTest = step.FitnessTest
+	}
+	if cfg.FitnessTest == "" {
+		return fmt.Errorf("sequence %s step %s enables selection but sets no fitnessTest", path, step.ID)
+	}
+
+	cfg.FitnessPattern = strings.TrimSpace(cfg.FitnessPattern)
+	cfg.FitnessGoal = strings.ToLower(strings.TrimSpace(cfg.FitnessGoal))
+	switch cfg.FitnessGoal {
+	case "":
+		cfg.FitnessGoal = selectionGoalMinimize
+	case selectionGoalMinimize, selectionGoalMaximize:
+	default:
+		return fmt.Errorf("sequence %s step %s has invalid selection fitnessGoal %q", path, step.ID, cfg.FitnessGoal)
+	}
+
+	if cfg.SurvivorFraction <= 0 {
+		cfg.SurvivorFraction = defaultSelectionSurvivorFraction
+	}
+	if cfg.SurvivorFraction > 1 {
+		cfg.SurvivorFraction = 1
+	}
+
+	if cfg.MutationTemperature <= 0 {
+		cfg.MutationTemperature = defaultSelectionMutationTemperature
+	}
+	if cfg.MutationTemperature > maxSelectionTemperature {
+		cfg.MutationTemperature = maxSelectionTemperature
+	}
+	if cfg.TemperatureSpread < 0 {
+		cfg.TemperatureSpread = 0
+	}
+	if cfg.TemperatureSpread == 0 {
+		cfg.TemperatureSpread = defaultSelectionTemperatureSpread
 	}
 
 	return nil
@@ -1215,6 +1329,10 @@ func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *
 	genotype := stepGenotype(step.ID)
 	if step.Parallel {
 		return runParallelSprouting(ctx, seq, step, substratePath, bus)
+	}
+
+	if step.Selection != nil {
+		return runGeneticSelectionFn(ctx, seq, step, substratePath, bus)
 	}
 
 	if seq.ConcurrencyLimit > 1 {
