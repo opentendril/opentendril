@@ -30,6 +30,7 @@ var FallbackModels = []ModelDefinition{
 	{Provider: "grok", Name: "grok-beta", Family: ModelFamilyGPT, ContextSize: 128000, CostTier: TierPremium},
 	{Provider: "openrouter", Name: "google/gemini-1.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, CostTier: TierCheapest},
 	{Provider: "opentendril", Name: "anthropic/claude-3.5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierPremium},
+	{Provider: "nvidia", Name: "meta/llama-3.1-405b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierPremium},
 	{Provider: "nvidia", Name: "meta/llama-3.1-70b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierStandard},
 	{Provider: "local", Name: "llama3.2", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierCheapest},
 	{Provider: "local", Name: "qwen2.5-coder:7b", Family: ModelFamilyQwen, ContextSize: 128000, CostTier: TierStandard},
