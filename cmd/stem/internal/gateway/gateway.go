@@ -35,33 +35,38 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			send: make(chan []byte, 256),
 		}
 
-		// Subscribe to eventbus
 		handler := func(event eventbus.Event) {
+			msg := map[string]interface{}{
+				"type":      string(event.Type),
+				"timestamp": event.Timestamp,
+				"source":    event.Source,
+			}
+			if len(event.Data) > 0 {
+				msg["data"] = event.Data
+			}
 			if event.Type == eventbus.EventStreamToken {
-				msg := map[string]interface{}{
-					"type":    "stream.token",
-					"content": event.Data["token"],
+				if token, ok := event.Data["token"]; ok {
+					msg["content"] = token
 				}
-				if payload, err := json.Marshal(msg); err == nil {
-					client.send <- payload
+			}
+			if event.Type == eventbus.EventThoughtBranch {
+				if thought, ok := event.Data["thought"]; ok {
+					msg["content"] = thought
 				}
-			} else if event.Type == eventbus.EventThoughtBranch {
-				msg := map[string]interface{}{
-					"type":    "thought-branch",
-					"content": event.Data["thought"],
-				}
-				if payload, err := json.Marshal(msg); err == nil {
-					client.send <- payload
-				}
+			}
+			payload, err := json.Marshal(msg)
+			if err != nil {
+				return
+			}
+			select {
+			case client.send <- payload:
+			default:
 			}
 		}
 
-		// We could use a unique ID for the handler if we wanted to unsubscribe,
-		// but since EventBus doesn't have Unsubscribe, we'll just let it leak for now,
-		// or ideally we add Unsubscribe to EventBus. Since this is a simple implementation,
-		// we will just subscribe. Wait, if it leaks it's bad. Let's look at eventbus.go later.
-		bus.Subscribe(eventbus.EventStreamToken, handler)
-		bus.Subscribe(eventbus.EventThoughtBranch, handler)
+		for _, eventType := range eventbus.AllEventTypes() {
+			bus.Subscribe(eventType, handler)
+		}
 
 		// Send connected message
 		connectedMsg, _ := json.Marshal(map[string]string{"type": "connected"})
