@@ -81,3 +81,4 @@ substrates.yaml
 .tendril/dreamer.db
 .tendril/dreamer.key
 .tendril/genome/fitness.json
+.tendril/
