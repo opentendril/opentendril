@@ -119,6 +119,16 @@ graph TD
 
 ---
 
+## 7. Observability & Telemetry (Metabolism and Excretion)
+
+Enterprise systems require robust logging and telemetry. OpenTendril maps these observability concepts to metabolic byproducts and cellular transport:
+
+*   **Resin (Sap):** The internal logging trace. Just as plants exude sap or resin as a byproduct of their metabolism, the Stem produces Resin to trap "bugs" (errors) and record real-time state for debugging.
+*   **Amber:** Persistent log storage. When Resin hardens over time, it becomes Amber—representing archived, immutable historical logs (e.g., local SQLite log dumps or cold storage).
+*   **Transporters (ABC Transporters):** The pub-sub telemetry emitters. In nature, ATP-binding cassette (ABC) transporters are molecular pumps that use energy to move compounds across cellular membranes out of the system. In OpenTendril, Transporters act as active molecular pumps that push metrics and events across the system boundary to external platforms like Kafka, Prometheus, or Datadog.
+
+---
+
 ## Architectural Flow Summary
 
 The interaction between the components looks like this in practice:
