@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenTendril — Cyber-Botanical Dashboard</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <div id="danger-overlay" class="danger-overlay" aria-hidden="true"></div>
+
+  <header class="dashboard-header">
+    <div class="brand">
+      <span class="brand-glyph" aria-hidden="true">◈</span>
+      <h1>OpenTendril</h1>
+      <p class="brand-subtitle">Cyber-Botanical Observatory</p>
+    </div>
+    <div class="status-bar">
+      <span id="ws-status" class="status-pill status-disconnected">Disconnected</span>
+      <span id="event-count" class="status-pill">Events: 0</span>
+    </div>
+  </header>
+
+  <main class="ecosystem-grid">
+    <section id="mycorrhizal-network" class="panel panel-mycorrhizal" aria-label="Mycorrhizal Network">
+      <header class="panel-header">
+        <h2>Mycorrhizal Network</h2>
+        <span class="panel-tag">LLM Activity</span>
+      </header>
+      <div id="thought-stream" class="thought-stream">
+        <p class="panel-placeholder">Awaiting neural mycelium signals…</p>
+      </div>
+    </section>
+
+    <section id="rhizome" class="panel panel-rhizome" aria-label="Rhizome">
+      <header class="panel-header">
+        <h2>Rhizome</h2>
+        <span class="panel-tag">Vector Index</span>
+      </header>
+      <ul id="rhizome-feed" class="rhizome-feed">
+        <li class="panel-placeholder">No rhizome mutations yet.</li>
+      </ul>
+    </section>
+
+    <section id="hormonal-triggers" class="panel panel-hormonal" aria-label="Hormonal Triggers">
+      <header class="panel-header">
+        <h2>Hormonal Triggers</h2>
+        <span class="panel-tag">Growth Alerts</span>
+      </header>
+      <ul id="trigger-feed" class="trigger-feed">
+        <li class="panel-placeholder">All hormonal pathways clear.</li>
+      </ul>
+    </section>
+
+    <section id="sprout-terrarium" class="panel panel-terrarium" aria-label="Sprout Terrarium">
+      <header class="panel-header">
+        <h2>Sprout Terrarium</h2>
+        <span class="panel-tag">Active Tasks</span>
+      </header>
+      <div id="sprout-garden" class="sprout-garden">
+        <p class="panel-placeholder">No sprouts emerged.</p>
+      </div>
+    </section>
+
+    <section id="xylem-phloem" class="panel panel-xylem" aria-label="Xylem and Phloem">
+      <header class="panel-header">
+        <h2>Xylem / Phloem</h2>
+        <span class="panel-tag">Token Transport</span>
+      </header>
+      <pre id="xylem-terminal" class="xylem-terminal" aria-live="polite"><code id="xylem-output"></code></pre>
+    </section>
+  </main>
+
+  <footer class="dashboard-footer">
+    <span>Resin trace · Transporter mesh · ABC pumps idle</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

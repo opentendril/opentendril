@@ -91,6 +91,9 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	mux := http.NewServeMux()
 
+	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir("./dashboard"))))
+	mux.HandleFunc("/ws", gateway.HandleWebSocket(bus))
+
 	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus)))
 	mux.HandleFunc("GET /health", handleHealth)
 
