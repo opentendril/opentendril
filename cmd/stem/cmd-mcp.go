@@ -7,12 +7,36 @@ import (
 	"os"
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
+	"github.com/opentendril/core/cmd/stem/internal/historydb"
+	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
 func runMCPCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, "🚀 OpenTendril MCP Stdio Server initializing...")
 
 	handler := api.NewMCPHandler()
+
+	// Unified Interface Layer: bind this stdio server process to one Tendril
+	// session so MCP interactions share state with the CLI and REST surfaces.
+	history, err := historydb.OpenFromEnv(ctx, resolveRepoRoot(""))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ History database unavailable: %v (continuing without persistence)\n", err)
+		history = nil
+	}
+	var sessionStore session.Store
+	if history != nil {
+		sessionStore = history
+		defer history.Close()
+	}
+	if manager, err := session.NewManager(ctx, sessionStore); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Session manager unavailable: %v (continuing without sessions)\n", err)
+	} else if sess, err := manager.Sprout(ctx, session.OriginMCP, session.Preferences{}); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Failed to sprout MCP session: %v (continuing without sessions)\n", err)
+	} else {
+		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID)
+		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
+	}
+
 	scanner := bufio.NewScanner(os.Stdin)
 
 	// Increase buffer size to handle large MCP schemas
@@ -29,7 +53,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 		}
 
 		respBytes := handler.ProcessMCPMessage(reqBytes)
-		
+
 		if len(respBytes) > 0 {
 			// Write response exactly as one line to stdout
 			fmt.Fprintln(os.Stdout, string(respBytes))

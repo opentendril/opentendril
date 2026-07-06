@@ -41,6 +41,9 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 				"timestamp": event.Timestamp,
 				"source":    event.Source,
 			}
+			if event.SessionID != "" {
+				msg["sessionId"] = event.SessionID
+			}
 			if len(event.Data) > 0 {
 				msg["data"] = event.Data
 			}

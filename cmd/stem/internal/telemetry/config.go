@@ -27,6 +27,7 @@ type TransporterConfig struct {
 	Endpoint string   `yaml:"endpoint,omitempty"`
 	Port     int      `yaml:"port,omitempty"`
 	Brokers  []string `yaml:"brokers,omitempty"`
+	Channel  string   `yaml:"channel,omitempty"`
 	APIKey   string   `yaml:"api_key,omitempty"`
 }
 

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
@@ -41,6 +43,16 @@ func NewTransporter(cfg TransporterConfig) (Transporter, error) {
 			return nil, fmt.Errorf("webhook transporter requires endpoint")
 		}
 		return NewWebhookTransporter(cfg.Endpoint, cfg.APIKey), nil
+	case "redis":
+		if cfg.Endpoint == "" {
+			return nil, fmt.Errorf("redis transporter requires endpoint (host:port)")
+		}
+		return NewRedisTransporter(cfg.Endpoint, cfg.Channel, cfg.APIKey), nil
+	case "websocket":
+		if cfg.Endpoint == "" {
+			return nil, fmt.Errorf("websocket transporter requires endpoint")
+		}
+		return NewRemoteWebSocketTransporter(cfg.Endpoint, cfg.APIKey), nil
 	case "prometheus":
 		return NewPrometheusTransporter(cfg.Port), nil
 	case "kafka":
@@ -74,14 +86,29 @@ func NewKafkaTransporter(brokers []string, apiKey string) *KafkaTransporter {
 	}
 }
 
-// AttachTransporter subscribes the transporter to all bus events.
+// transporterSink adapts a Transporter to the eventbus.Sink interface so
+// remote emission runs on the bus's buffered sink pump instead of inline on
+// the publish path.
+type transporterSink struct {
+	transporter Transporter
+	failures    atomic.Int64
+}
+
+func (s *transporterSink) Consume(event eventbus.Event) {
+	if err := s.transporter.Emit(event); err != nil {
+		if s.failures.Add(1)%100 == 1 {
+			log.Printf("⚠️ telemetry: remote transporter emit failed: %v", err)
+		}
+	}
+}
+
+// AttachTransporter attaches the transporter to the bus as an asynchronous
+// sink receiving every event.
 func AttachTransporter(bus *eventbus.Bus, t Transporter) {
 	if bus == nil || t == nil {
 		return
 	}
-	attachHandler(bus, func(event eventbus.Event) {
-		_ = t.Emit(event)
-	})
+	bus.AttachSink(&transporterSink{transporter: t}, 0)
 }
 
 func (t *WebhookTransporter) Emit(event eventbus.Event) error {

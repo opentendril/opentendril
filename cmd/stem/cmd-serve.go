@@ -15,15 +15,18 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/gateway"
+	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/security"
+	"github.com/opentendril/core/cmd/stem/internal/session"
 	"github.com/opentendril/core/cmd/stem/internal/telemetry"
 )
 
 type ChatCompletionRequest struct {
-	Model    string       `json:"model"`
-	Messages []APIMessage `json:"messages"`
+	Model     string       `json:"model"`
+	SessionID string       `json:"sessionId,omitempty"`
+	Messages  []APIMessage `json:"messages"`
 }
 
 type APIMessage struct {
@@ -32,11 +35,12 @@ type APIMessage struct {
 }
 
 type ChatCompletionResponse struct {
-	ID      string   `json:"id"`
-	Object  string   `json:"object"`
-	Created int64    `json:"created"`
-	Model   string   `json:"model"`
-	Choices []Choice `json:"choices"`
+	ID        string   `json:"id"`
+	Object    string   `json:"object"`
+	Created   int64    `json:"created"`
+	Model     string   `json:"model"`
+	SessionID string   `json:"sessionId,omitempty"`
+	Choices   []Choice `json:"choices"`
 }
 
 type Choice struct {
@@ -48,6 +52,7 @@ type Choice struct {
 type chatHistoryRecord struct {
 	ChatID    string `json:"chatId"`
 	StepID    string `json:"stepId"`
+	SessionID string `json:"sessionId,omitempty"`
 	Model     string `json:"model"`
 	Prompt    string `json:"prompt"`
 	Status    string `json:"status"`
@@ -63,6 +68,45 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	bus := eventbus.New()
+	repoRoot := resolveRepoRoot("")
+
+	// Persistent state layer (.tendril/history.db). OPENTENDRIL_DB_LOGGING=false
+	// bypasses SQLite entirely for high-performance headless runs.
+	history, err := historydb.OpenFromEnv(ctx, repoRoot)
+	if err != nil {
+		log.Printf("⚠️ Failed to open history database: %v (continuing without persistence)", err)
+		history = nil
+	}
+	if history != nil {
+		bus.AttachSink(history, 0)
+		log.Printf("Persistent state enabled at %s", history.Path())
+	} else {
+		log.Println("Persistent state disabled (OPENTENDRIL_DB_LOGGING=false or open failure)")
+	}
+
+	// Unified SessionManager: every interface surface (CLI, MCP, REST, WS)
+	// resolves its Tendril sessions through this single manager.
+	var sessionStore session.Store
+	if history != nil {
+		sessionStore = history
+	}
+	sessions, err := session.NewManager(ctx, sessionStore)
+	if err != nil {
+		log.Printf("⚠️ Failed to resume persisted sessions: %v (starting empty)", err)
+		sessions, _ = session.NewManager(ctx, nil)
+	}
+
+	// Remote EventBus sinks (Redis / remote WebSockets / webhooks) from env.
+	remoteSinks, sinkErrs := telemetry.TransportersFromEnv()
+	for _, sinkErr := range sinkErrs {
+		log.Printf("⚠️ Skipping malformed remote sink: %v", sinkErr)
+	}
+	for _, transporter := range remoteSinks {
+		telemetry.AttachTransporter(bus, transporter)
+	}
+	if len(remoteSinks) > 0 {
+		log.Printf("%d remote telemetry sink(s) attached from %s", len(remoteSinks), telemetry.EnvRemoteSinks)
+	}
 
 	tendrilDir := "./.tendril"
 	telemetryPath := filepath.Join(tendrilDir, "telemetry.yaml")
@@ -94,8 +138,14 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir("./dashboard"))))
 	mux.HandleFunc("/ws", gateway.HandleWebSocket(bus))
 
-	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus)))
+	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus, sessions, history)))
 	mux.HandleFunc("GET /health", handleHealth)
+
+	// Unified Interface Layer: Tendril session REST API.
+	sessionsHandler := api.NewSessionsHandler(sessions, history)
+	sessionsHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, next)
+	})
 
 	// Phase 4: Configuration API
 	configHandler := api.NewConfigHandler(tendrilDir)
@@ -122,8 +172,8 @@ func runServeCmd(ctx context.Context, args []string) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
 
-	// Phase 5: MCP API
-	mcpHandler := api.NewMCPHandler()
+	// Phase 5: MCP API (session-aware — shares the unified SessionManager)
+	mcpHandler := api.NewMCPHandler().WithSessions(sessions, history)
 	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
@@ -145,6 +195,13 @@ func runServeCmd(ctx context.Context, args []string) {
 		<-ctx.Done()
 		log.Println("Shutting down API server...")
 		server.Shutdown(context.Background())
+		// Drain telemetry sinks, then release the history database.
+		bus.Shutdown()
+		if history != nil {
+			if err := history.Close(); err != nil {
+				log.Printf("⚠️ Failed to close history database: %v", err)
+			}
+		}
 	}()
 
 	// Start Gateway server
@@ -199,7 +256,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(report)
 }
 
-func handleChatCompletions(bus *eventbus.Bus) http.HandlerFunc {
+func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history *historydb.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ChatCompletionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -210,6 +267,25 @@ func handleChatCompletions(bus *eventbus.Bus) http.HandlerFunc {
 		if len(req.Messages) == 0 {
 			http.Error(w, "no messages provided", http.StatusBadRequest)
 			return
+		}
+
+		// Bind this interaction to a Tendril session. Clients pass sessionId in
+		// the body or the X-Tendril-Session header; absent both, a fresh
+		// session sprouts so every run is still traceable.
+		requestedSessionID := strings.TrimSpace(req.SessionID)
+		if requestedSessionID == "" {
+			requestedSessionID = strings.TrimSpace(r.Header.Get("X-Tendril-Session"))
+		}
+		sess, err := sessions.GetOrSprout(r.Context(), requestedSessionID, session.OriginREST)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Session preferences fill in anything the request leaves unset.
+		model := strings.TrimSpace(req.Model)
+		if model == "" {
+			model = sess.Preferences.Model
 		}
 
 		taskPrompt := req.Messages[len(req.Messages)-1].Content
@@ -223,14 +299,15 @@ func handleChatCompletions(bus *eventbus.Bus) http.HandlerFunc {
 		historyRecord := chatHistoryRecord{
 			ChatID:    chatID,
 			StepID:    stepID,
-			Model:     req.Model,
+			SessionID: sess.ID,
+			Model:     model,
 			Prompt:    taskPrompt,
 			Timestamp: runStarted.Format(time.RFC3339Nano),
 		}
 
 		// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 		payload := security.TriggerPayload{
-			Genotype:   req.Model,
+			Genotype:   model,
 			Transcript: taskPrompt,
 		}
 
@@ -241,43 +318,81 @@ func handleChatCompletions(bus *eventbus.Bus) http.HandlerFunc {
 			return
 		}
 
+		if recordErr := sessions.RecordMessage(r.Context(), session.Message{
+			SessionID: sess.ID,
+			Role:      "user",
+			Content:   taskPrompt,
+			Model:     model,
+			CreatedAt: runStarted,
+		}); recordErr != nil {
+			log.Printf("⚠️ Failed to record user message: %v", recordErr)
+		}
+
+		sproutRun := historydb.SproutRun{
+			RunID:      stepID,
+			SessionID:  sess.ID,
+			StepID:     stepID,
+			Origin:     sess.Origin,
+			Model:      model,
+			Genotype:   sess.Preferences.Genotype,
+			Transcript: taskPrompt,
+			Status:     "running",
+			StartedAt:  runStarted,
+		}
+		if history != nil {
+			if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
+				log.Printf("⚠️ Failed to record sprout run start: %v", recordErr)
+			}
+		}
+
 		// Emit stream start event
 		bus.Publish(eventbus.Event{
-			Type:   eventbus.EventStreamToken, // Not exact, but we'll use a hack or just rely on the first token. Actually wait!
-			Source: stepID,
-			Data:   map[string]interface{}{"type": "stream.start"}, // We can just use thought-branch or add a new eventbus type.
-		}) // We don't necessarily need stream.start, the UI handles `stream.token`. Let's skip stream.start since UI can clear on first token if we want.
-		// Wait, `app.js` has `stream.start`. Let's just not send it for now, or just let UI clear it when we send the user message.
+			Type:      eventbus.EventStreamToken,
+			Source:    stepID,
+			SessionID: sess.ID,
+			Data:      map[string]interface{}{"type": "stream.start"},
+		})
 
 		log.Printf("Sprouting Tendril for task: %s", taskPrompt)
-		log.Printf("Chat run %s mapped to step %s", chatID, stepID)
+		log.Printf("Chat run %s mapped to step %s (session %s)", chatID, stepID, sess.ID)
 
 		var output string
-		var err error
 
 		// Route to internal Configurator Tendril or external Docker Tendril
-		if req.Model == "configurator" {
+		if model == "configurator" {
 			configTendril := configurator.NewConfiguratorTendril(triggersDir)
 			output, err = configTendril.Execute(r.Context(), taskPrompt)
 		} else {
 			orch := orchestrator.NewDockerOrchestrator()
 			orch.StepID = stepID
 			orch.EventBus = bus
+			orch.Provider = sess.Preferences.Provider
+			orch.Model = sess.Preferences.Model
+			orch.Genotype = sess.Preferences.Genotype
 			output, err = orch.RunTendril(r.Context(), taskPrompt)
 		}
 
 		// Emit stream end event
 		bus.Publish(eventbus.Event{
-			Type:   eventbus.EventStreamToken,
-			Source: stepID,
-			Data:   map[string]interface{}{"type": "stream.end", "content": output},
+			Type:      eventbus.EventStreamToken,
+			Source:    stepID,
+			SessionID: sess.ID,
+			Data:      map[string]interface{}{"type": "stream.end", "content": output},
 		})
 
+		sproutRun.FinishedAt = time.Now().UTC()
 		historyRecord.Response = output
 		if err != nil {
 			log.Printf("Tendril execution failed: %v", err)
 			historyRecord.Status = "failed"
 			historyRecord.Error = err.Error()
+			sproutRun.Status = "withered"
+			sproutRun.Error = err.Error()
+			if history != nil {
+				if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
+					log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
+				}
+			}
 			if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
 				log.Printf("⚠️ Failed to write chat history: %v", writeErr)
 			}
@@ -286,16 +401,33 @@ func handleChatCompletions(bus *eventbus.Bus) http.HandlerFunc {
 		}
 
 		historyRecord.Status = "complete"
+		sproutRun.Status = "matured"
+		sproutRun.Output = output
+		if history != nil {
+			if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
+				log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
+			}
+		}
 		if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
 			log.Printf("⚠️ Failed to write chat history: %v", writeErr)
 		}
 
+		if recordErr := sessions.RecordMessage(r.Context(), session.Message{
+			SessionID: sess.ID,
+			Role:      "assistant",
+			Content:   output,
+			Model:     model,
+		}); recordErr != nil {
+			log.Printf("⚠️ Failed to record assistant message: %v", recordErr)
+		}
+
 		// Format response as OpenAI completion
 		resp := ChatCompletionResponse{
-			ID:      completionID,
-			Object:  "chat.completion",
-			Created: runStarted.Unix(),
-			Model:   req.Model,
+			ID:        completionID,
+			Object:    "chat.completion",
+			Created:   runStarted.Unix(),
+			Model:     model,
+			SessionID: sess.ID,
 			Choices: []Choice{
 				{
 					Index: 0,

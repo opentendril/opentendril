@@ -23,17 +23,23 @@ type Message struct {
 }
 
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
+	Model     string    `json:"model"`
+	SessionID string    `json:"sessionId,omitempty"`
+	Messages  []Message `json:"messages"`
+	Stream    bool      `json:"stream"`
 }
 
 type ChatResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Choices []struct {
+	ID        string `json:"id"`
+	Object    string `json:"object"`
+	SessionID string `json:"sessionId,omitempty"`
+	Choices   []struct {
 		Message Message `json:"message"`
 	} `json:"choices"`
+}
+
+type sessionCreateResponse struct {
+	SessionID string `json:"sessionId"`
 }
 
 type WSMessage struct {
@@ -92,13 +98,56 @@ func sendWS(conn *websocket.Conn, msg string) (string, error) {
 	}
 }
 
+// sproutCLISession asks the Go Stem for a new CLI-origin Tendril session so
+// every message in this chat run shares one unified session ID.
+func sproutCLISession(base *url.URL) (string, error) {
+	u := *base
+	u.Path = "/v1/sessions"
+
+	req, err := http.NewRequest("POST", u.String(), strings.NewReader(`{"origin":"cli"}`))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var created sessionCreateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return "", err
+	}
+	if created.SessionID == "" {
+		return "", fmt.Errorf("server returned no sessionId")
+	}
+	return created.SessionID, nil
+}
+
+func chatAPIKey() string {
+	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
+		return key
+	}
+	return "sk-123" // Dummy key; server skips auth when OPENTENDRIL_API_KEY is unset
+}
+
 // sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.
-func sendHTTP(base *url.URL, msg string) (string, error) {
+func sendHTTP(base *url.URL, msg, sessionID string) (string, error) {
 	u := *base
 	u.Path = "/v1/chat/completions"
 	reqBody := ChatRequest{
 		// Use model name from env, default to "local" so Go Stem routes correctly
-		Model: getEnvOrDefaultStr("LOCAL_MODEL_NAME", os.Getenv("DEFAULT_LLM_PROVIDER")),
+		Model:     getEnvOrDefaultStr("LOCAL_MODEL_NAME", os.Getenv("DEFAULT_LLM_PROVIDER")),
+		SessionID: sessionID,
 		Messages: []Message{
 			{Role: "user", Content: msg},
 		},
@@ -115,7 +164,10 @@ func sendHTTP(base *url.URL, msg string) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer sk-123") // Dummy key; configure via env or flag
+	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
+	if sessionID != "" {
+		req.Header.Set("X-Tendril-Session", sessionID)
+	}
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -141,10 +193,10 @@ func sendHTTP(base *url.URL, msg string) (string, error) {
 }
 
 // connect attempts WS first, falls back to HTTP after retries.
-func connect(base *url.URL, useWS bool) (func(string) (string, error), error) {
+func connect(base *url.URL, useWS bool, sessionID string) (func(string) (string, error), error) {
 	if !useWS {
 		log.Println("Using HTTP mode")
-		return func(msg string) (string, error) { return sendHTTP(base, msg) }, nil
+		return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
 	}
 
 	// Try WS with retries
@@ -159,7 +211,7 @@ func connect(base *url.URL, useWS bool) (func(string) (string, error), error) {
 	}
 
 	log.Println("WS failed; falling back to HTTP")
-	return func(msg string) (string, error) { return sendHTTP(base, msg) }, nil
+	return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
 }
 
 func runChatCmd(ctx context.Context, args []string) {
@@ -179,7 +231,16 @@ func runChatCmd(ctx context.Context, args []string) {
 	fmt.Println("🌱 Connecting to OpenTendril Stem...")
 	ensureBackendOnline(ctx, "http://localhost:8080")
 
-	sendFunc, err := connect(base, useWS)
+	// Bind this chat run to a unified Tendril session; older servers without
+	// the sessions API still work (messages just run session-less).
+	sessionID, err := sproutCLISession(base)
+	if err != nil {
+		log.Printf("⚠️ Could not sprout a Tendril session (continuing without one): %v", err)
+	} else {
+		log.Printf("🪴 Chat bound to Tendril session %s", sessionID)
+	}
+
+	sendFunc, err := connect(base, useWS, sessionID)
 	if err != nil {
 		log.Fatal("Failed to connect:", err)
 	}

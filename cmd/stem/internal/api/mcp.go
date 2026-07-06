@@ -16,13 +16,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/session"
 	"gopkg.in/yaml.v3"
 )
 
 type MCPHandler struct {
 	substratesConfig *orchestrator.SubstratesConfig
+	sessions         *session.Manager
+	history          *historydb.Store
+	defaultSessionID string
 }
 
 func NewMCPHandler() *MCPHandler {
@@ -50,6 +55,41 @@ func NewMCPHandler() *MCPHandler {
 	}
 
 	return &MCPHandler{substratesConfig: substratesConfig}
+}
+
+// WithSessions binds the unified SessionManager (and optional history store)
+// so MCP interactions share state with the CLI and REST surfaces.
+func (h *MCPHandler) WithSessions(manager *session.Manager, history *historydb.Store) *MCPHandler {
+	h.sessions = manager
+	h.history = history
+	return h
+}
+
+// WithDefaultSession pins the Tendril session that MCP calls bind to when the
+// client does not pass an explicit sessionId (e.g. one session per stdio
+// server process).
+func (h *MCPHandler) WithDefaultSession(sessionID string) *MCPHandler {
+	h.defaultSessionID = sessionID
+	return h
+}
+
+// resolveSession maps an optional explicit sessionId to a live Tendril
+// session, falling back to the handler's default binding.
+func (h *MCPHandler) resolveSession(ctx context.Context, explicit string) (session.Session, bool) {
+	if h.sessions == nil {
+		return session.Session{}, false
+	}
+
+	id := strings.TrimSpace(explicit)
+	if id == "" {
+		id = h.defaultSessionID
+	}
+	sess, err := h.sessions.GetOrSprout(ctx, id, session.OriginMCP)
+	if err != nil {
+		log.Printf("[MCP] Failed to resolve session %q: %v", id, err)
+		return session.Session{}, false
+	}
+	return sess, true
 }
 
 func (h *MCPHandler) SetupRoutes(mux *http.ServeMux) {
@@ -167,7 +207,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		root := resolveRepoRoot("")
-		
+
 		var searchDirs []string
 		if configDir, err := os.UserConfigDir(); err == nil {
 			searchDirs = append(searchDirs, filepath.Join(configDir, "opentendril", "genotypes"))
@@ -235,6 +275,10 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 							"stepId": map[string]interface{}{
 								"type":        "string",
 								"description": "Optional stable step identifier for a structured sequence run.",
+							},
+							"sessionId": map[string]interface{}{
+								"type":        "string",
+								"description": "Optional Tendril session identifier binding this run to a unified chat session (its preferences, models, and history).",
 							},
 							"substrate": map[string]interface{}{
 								"type":        "string",
@@ -663,6 +707,9 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			stepID = fmt.Sprintf("step-%d", time.Now().UTC().UnixNano())
 		}
 
+		explicitSessionID, _ := params.Arguments["sessionId"].(string)
+		sess, hasSession := h.resolveSession(context.Background(), explicitSessionID)
+
 		substrateURL, _ := params.Arguments["substrateUrl"].(string)
 		explicitSubstrateURL := strings.TrimSpace(substrateURL)
 		substrateBranch, _ := params.Arguments["substrateBranch"].(string)
@@ -702,7 +749,46 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			StepID:          stepID,
 			StatusPath:      statusPath,
 		}
+
+		run := historydb.SproutRun{
+			RunID:      stepID,
+			StepID:     stepID,
+			Origin:     session.OriginMCP,
+			Transcript: transcript,
+			Status:     "running",
+			StartedAt:  time.Now().UTC(),
+		}
+		if hasSession {
+			run.SessionID = sess.ID
+			// Session preferences shape this Tendril's sprout.
+			orch.Provider = sess.Preferences.Provider
+			orch.Model = sess.Preferences.Model
+			orch.Genotype = sess.Preferences.Genotype
+			run.Model = sess.Preferences.Model
+			run.Genotype = sess.Preferences.Genotype
+			h.sessions.Touch(context.Background(), sess.ID)
+		}
+		if h.history != nil {
+			if recordErr := h.history.RecordSproutRun(context.Background(), run); recordErr != nil {
+				log.Printf("[MCP] Failed to record sprout run start: %v", recordErr)
+			}
+		}
+
 		output, err := orch.RunTendril(context.Background(), transcript)
+		run.FinishedAt = time.Now().UTC()
+		if err != nil {
+			run.Status = "withered"
+			run.Error = err.Error()
+		} else {
+			run.Status = "matured"
+			run.Output = output
+		}
+		if h.history != nil {
+			if recordErr := h.history.RecordSproutRun(context.Background(), run); recordErr != nil {
+				log.Printf("[MCP] Failed to record sprout run result: %v", recordErr)
+			}
+		}
+
 		if err != nil {
 			log.Printf("[MCP] Tendril execution failed: %v", err)
 			return h.formatResult(req.ID, map[string]interface{}{
