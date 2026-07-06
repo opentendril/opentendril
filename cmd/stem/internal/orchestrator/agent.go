@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -218,7 +219,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response})
 		a.appendTranscript("assistant", response)
 
-		call, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
+		calls, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
 		if err != nil {
 			return agentResult{}, err
 		}
@@ -239,13 +240,20 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 			}, nil
 		}
 
-		_, observation, err := a.executeTool(ctx, call)
-		if err != nil {
-			return agentResult{}, err
+		var combinedObservation strings.Builder
+		for _, call := range calls {
+			_, obs, err := a.executeTool(ctx, call)
+			if err != nil {
+				return agentResult{}, err
+			}
+			if combinedObservation.Len() > 0 {
+				combinedObservation.WriteString("\n\n")
+			}
+			combinedObservation.WriteString(obs)
 		}
 
-		a.messages = append(a.messages, llm.Message{Role: "user", Content: observation})
-		a.appendTranscript("user", observation)
+		a.messages = append(a.messages, llm.Message{Role: "user", Content: combinedObservation.String()})
+		a.appendTranscript("user", combinedObservation.String())
 
 		// Tool results are part of the conversation history; the next loop
 		// iteration lets the model decide whether the task is complete.
@@ -405,10 +413,10 @@ type modelResponse struct {
 	Final     string         `json:"final,omitempty"`
 }
 
-func parseModelResponse(content string) (ToolCall, bool, string, *ActionResult, error) {
+func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
-		return ToolCall{}, false, "", nil, nil
+		return nil, false, "", nil, nil
 	}
 
 	for {
@@ -428,14 +436,19 @@ func parseModelResponse(content string) (ToolCall, bool, string, *ActionResult, 
 	candidate := stripCodeFences(trimmed)
 	var decoded modelResponse
 	if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
-		return ToolCall{}, false, trimmed, nil, nil
+		// FALLBACK: If JSON parsing fails, attempt to extract markdown code blocks as synthetic ToolCalls.
+		syntheticCalls := extractMarkdownSyntheticCalls(content)
+		if len(syntheticCalls) > 0 {
+			return syntheticCalls, true, "", nil, nil
+		}
+		return nil, false, trimmed, nil, nil
 	}
 
 	if strings.TrimSpace(decoded.Tool) != "" {
 		if decoded.Arguments == nil {
 			decoded.Arguments = map[string]any{}
 		}
-		return ToolCall{Tool: decoded.Tool, Arguments: decoded.Arguments}, true, "", nil, nil
+		return []ToolCall{{Tool: decoded.Tool, Arguments: decoded.Arguments}}, true, "", nil, nil
 	}
 
 	if strings.TrimSpace(decoded.Final) != "" {
@@ -465,10 +478,46 @@ func parseModelResponse(content string) (ToolCall, bool, string, *ActionResult, 
 				}
 			}
 		}
-		return ToolCall{}, false, finalText, actionResult, nil
+		return nil, false, finalText, actionResult, nil
 	}
 
-	return ToolCall{}, false, trimmed, nil, nil
+	return nil, false, trimmed, nil, nil
+}
+
+var markdownBlockRegex = regexp.MustCompile("(?s)```[a-zA-Z0-9]*\n(.*?)\n```")
+var filePathRegex = regexp.MustCompile(`(?i)(?:^|//|#|/\*|<!--)\s*(?:path|file)?\s*:?\s*([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)`)
+
+func extractMarkdownSyntheticCalls(content string) []ToolCall {
+	var calls []ToolCall
+	matches := markdownBlockRegex.FindAllStringSubmatch(content, -1)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		code := match[1]
+		
+		// Attempt to infer the file path from the first few lines
+		lines := strings.SplitN(code, "\n", 5)
+		var path string
+		for _, line := range lines {
+			if m := filePathRegex.FindStringSubmatch(line); len(m) > 1 {
+				path = m[1]
+				break
+			}
+		}
+		
+		if path != "" {
+			calls = append(calls, ToolCall{
+				Tool: "writeFile",
+				Arguments: map[string]any{
+					"path":    path,
+					"content": code,
+					"append":  false,
+				},
+			})
+		}
+	}
+	return calls
 }
 
 func stripCodeFences(content string) string {
