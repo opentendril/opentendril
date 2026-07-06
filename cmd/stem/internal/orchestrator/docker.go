@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
@@ -67,6 +70,7 @@ var (
 	runContainerFitnessTestFn  = runContainerFitnessTest
 	generateRepoMapFn          = GenerateRepoMap
 	generateMemoryMapFn        = GenerateMemoryMap
+	runSproutPreflightChecksFn = runSproutPreflightChecks
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -86,9 +90,14 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	return client
 }
 
-func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (string, error) {
+func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (result string, err error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	cleanupCtx := context.WithoutCancel(ctx)
+
+	if err := runSproutPreflightChecksFn(ctx); err != nil {
+		return "", err
 	}
 
 	stepID := strings.TrimSpace(d.StepID)
@@ -116,7 +125,17 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	statusPath := strings.TrimSpace(d.StatusPath)
 	gitRepo := false
 	var hostStashed bool
+	var hostRestorePath string
 	var cleanup func()
+
+	defer func() {
+		if !hostStashed || strings.TrimSpace(hostRestorePath) == "" {
+			return
+		}
+		if restoreErr := restoreHostStashFn(cleanupCtx, hostRestorePath); restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+	}()
 	extraEnv := make([]string, 0, 1)
 	if plan.readOnly {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
@@ -180,6 +199,9 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 			if err != nil {
 				return "", err
+			}
+			if hostStashed {
+				hostRestorePath = sourcePath
 			}
 		} else if statusPath != "" {
 			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Tendril state externalization is disabled.\n", sourcePath)
@@ -268,7 +290,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		return "", err
 	}
 
-	result, runErr := agent.Run(ctx, taskPrompt)
+	agentResult, runErr := agent.Run(ctx, taskPrompt)
 
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
@@ -278,14 +300,14 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		if runErr != nil {
 			return "", runErr
 		}
-		return result.Response, nil
+		return agentResult.Response, nil
 	}
 
 	if plan.readOnly {
 		if runErr != nil {
 			return "", runErr
 		}
-		return result.Response, nil
+		return agentResult.Response, nil
 	}
 
 	var statusRelPath string
@@ -293,22 +315,12 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		var err error
 		statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
 		if err != nil {
-			if hostStashed {
-				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-					err = errors.Join(err, restoreErr)
-				}
-			}
 			return "", err
 		}
 	}
 
 	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, statusRelPath)
 	if diffErr != nil {
-		if hostStashed {
-			if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-				diffErr = errors.Join(diffErr, restoreErr)
-			}
-		}
 		return "", diffErr
 	}
 
@@ -331,11 +343,6 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 
 	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
 	if commitErr != nil {
-		if hostStashed {
-			if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-				commitErr = errors.Join(commitErr, restoreErr)
-			}
-		}
 		if runErr != nil {
 			return "", errors.Join(runErr, commitErr)
 		}
@@ -351,11 +358,6 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 
 	if plan.remoteClone {
 		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch); pushErr != nil {
-			if hostStashed {
-				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-					pushErr = errors.Join(pushErr, restoreErr)
-				}
-			}
 			if runErr != nil {
 				return "", errors.Join(runErr, pushErr)
 			}
@@ -365,45 +367,24 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		mergeErr := mergeTerrariumCommitFn(ctx, sourcePath, commitHash)
 		if mergeErr != nil {
 			if runErr != nil {
-				if hostStashed {
-					if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-						mergeErr = errors.Join(mergeErr, restoreErr)
-					}
-				}
 				return "", errors.Join(runErr, mergeErr)
-			}
-			if hostStashed {
-				if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-					mergeErr = errors.Join(mergeErr, restoreErr)
-				}
 			}
 			return "", mergeErr
 		}
 	}
 
-	var finalErr error
 	if runErr != nil {
-		finalErr = runErr
-	}
-
-	if hostStashed {
-		if restoreErr := restoreHostStashFn(ctx, sourcePath); restoreErr != nil {
-			finalErr = errors.Join(finalErr, restoreErr)
-		}
-	}
-
-	if finalErr != nil {
-		return "", finalErr
+		return "", runErr
 	}
 
 	if gitDiff != "" {
 		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-		if err := chronicler.TranscribeLearnings(ctx, result.Transcript, gitDiff, session.Logs()); err != nil {
+		if err := chronicler.TranscribeLearnings(ctx, agentResult.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}
 	}
 
-	return result.Response, nil
+	return agentResult.Response, nil
 }
 
 func (d *DockerOrchestrator) resolveImageName(workspace string) string {
@@ -723,6 +704,88 @@ func getEnvOrDefault(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+func runSproutPreflightChecks(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", "info")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		_ = output
+		return fmt.Errorf("❌ Docker daemon is not responding. OpenTendril requires Docker to spawn secure Sprouts.")
+	}
+
+	env := buildTerrariumEnvironment()
+	if !strings.EqualFold(strings.TrimSpace(env["DEFAULT_LLM_PROVIDER"]), "local") {
+		return nil
+	}
+
+	inferenceURL := strings.TrimSpace(env["LOCAL_INFERENCE_URL"])
+	if inferenceURL == "" {
+		inferenceURL = "http://localhost:11434/v1"
+	}
+
+	return checkLocalInferenceReachable(ctx, inferenceURL)
+}
+
+func checkLocalInferenceReachable(ctx context.Context, inferenceURL string) error {
+	checkURL := hostInferenceHealthURL(inferenceURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
+	if err != nil {
+		return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+	}
+
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		if isConnectionRefused(err) {
+			return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+		}
+		return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+		return nil
+	}
+
+	return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+}
+
+func hostInferenceHealthURL(inferenceURL string) string {
+	trimmed := strings.TrimSpace(inferenceURL)
+	trimmed = strings.ReplaceAll(trimmed, "host.docker.internal", "localhost")
+
+	if strings.HasSuffix(trimmed, "/v1") {
+		return strings.TrimSuffix(trimmed, "/v1") + "/api/tags"
+	}
+	if strings.HasSuffix(trimmed, "/v1/") {
+		return strings.TrimSuffix(trimmed, "/v1/") + "/api/tags"
+	}
+
+	if strings.Contains(trimmed, "/api/") {
+		return trimmed
+	}
+
+	return strings.TrimRight(trimmed, "/") + "/api/tags"
+}
+
+func isConnectionRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if sysErr, ok := opErr.Err.(syscall.Errno); ok && sysErr == syscall.ECONNREFUSED {
+			return true
+		}
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "connection refused")
 }
 
 func mustGetwd() string {

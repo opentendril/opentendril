@@ -237,6 +237,7 @@ substrates:
     readonly: true
 `, root))
 
+	originalPreflight := runSproutPreflightChecksFn
 	originalEnsure := ensureSproutImageFn
 	originalStart := startTerrariumSessionFn
 	originalNewAgent := newAgentFn
@@ -252,6 +253,7 @@ substrates:
 	originalPush := pushTerrariumCommitFn
 
 	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
 		ensureSproutImageFn = originalEnsure
 		startTerrariumSessionFn = originalStart
 		newAgentFn = originalNewAgent
@@ -266,6 +268,8 @@ substrates:
 		mergeTerrariumCommitFn = originalMerge
 		pushTerrariumCommitFn = originalPush
 	})
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
 
 	var capturedExtraEnv []string
 	var capturedRepoMap string
