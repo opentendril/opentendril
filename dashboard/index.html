@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenTendril — Cyber-Botanical Dashboard</title>
+  <title>OpenTendril Telemetry Hub</title>
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
@@ -12,16 +12,46 @@
   <header class="dashboard-header">
     <div class="brand">
       <span class="brand-glyph" aria-hidden="true">◈</span>
-      <h1>OpenTendril</h1>
-      <p class="brand-subtitle">Cyber-Botanical Observatory</p>
+      <div>
+        <h1>OpenTendril</h1>
+        <p class="brand-subtitle">Enterprise Telemetry Hub</p>
+      </div>
     </div>
-    <div class="status-bar">
+    <div class="status-bar" aria-label="Connection status">
       <span id="ws-status" class="status-pill status-disconnected">Disconnected</span>
       <span id="event-count" class="status-pill">Events: 0</span>
     </div>
   </header>
 
   <main class="ecosystem-grid">
+    <section id="telemetry-hub" class="panel panel-telemetry" aria-label="Telemetry Hub">
+      <header class="telemetry-header">
+        <div>
+          <p class="eyebrow">Live Orchestrator Stream</p>
+          <h2>Telemetry Hub</h2>
+          <p class="telemetry-copy">Real-time JSON events rendered as operational signal cards or a branch-aware timeline.</p>
+        </div>
+
+        <div class="mode-control" role="group" aria-label="Telemetry display mode">
+          <span id="terminal-mode-label" class="mode-label active">Terminal Mode</span>
+          <label class="mode-switch">
+            <input id="mode-toggle" type="checkbox" aria-labelledby="terminal-mode-label timeline-mode-label">
+            <span class="mode-slider" aria-hidden="true"></span>
+          </label>
+          <span id="timeline-mode-label" class="mode-label">Timeline Mode</span>
+        </div>
+      </header>
+
+      <div class="telemetry-shell">
+        <div id="telemetry-feed" class="telemetry-feed" aria-live="polite">
+          <div class="empty-state">
+            <span class="empty-orb" aria-hidden="true"></span>
+            <p>Awaiting telemetry from the Go orchestrator at <code>/ws</code>.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section id="mycorrhizal-network" class="panel panel-mycorrhizal" aria-label="Mycorrhizal Network">
       <header class="panel-header">
         <h2>Mycorrhizal Network</h2>
@@ -72,7 +102,7 @@
   </main>
 
   <footer class="dashboard-footer">
-    <span>Resin trace · Transporter mesh · ABC pumps idle</span>
+    <span>WebSocket telemetry · Exponential reconnect · Glass canopy online</span>
   </footer>
 
   <script src="app.js"></script>
