@@ -20,7 +20,31 @@ const (
 	EventSequenceComplete EventType = "sequence-complete"
 	EventStreamToken      EventType = "stream-token"
 	EventThoughtBranch    EventType = "thought-branch"
+	EventSproutEmerged    EventType = "sprout-emerged"
+	EventHormonalTrigger  EventType = "hormonal-trigger"
+	EventRhizomeUpdate    EventType = "rhizome-update"
+	EventXylemTransport   EventType = "xylem-transport"
 )
+
+// AllEventTypes returns every registered event type for broad telemetry subscriptions.
+func AllEventTypes() []EventType {
+	return []EventType{
+		EventHealthCheck,
+		EventHealthDegraded,
+		EventHealthRecovered,
+		EventTerrariumOOM,
+		EventTerrariumTimeout,
+		EventAPIKeyInvalid,
+		EventSequenceFailure,
+		EventSequenceComplete,
+		EventStreamToken,
+		EventThoughtBranch,
+		EventSproutEmerged,
+		EventHormonalTrigger,
+		EventRhizomeUpdate,
+		EventXylemTransport,
+	}
+}
 
 type Event struct {
 	Type      EventType              `json:"type"`

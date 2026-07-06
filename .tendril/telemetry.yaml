@@ -1,0 +1,10 @@
+enabled: true
+
+resin:
+  enabled: true
+  format: json
+  level: info
+
+transporters:
+  - type: webhook
+    endpoint: http://localhost:9999/telemetry

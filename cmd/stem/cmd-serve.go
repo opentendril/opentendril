@@ -18,6 +18,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/security"
+	"github.com/opentendril/core/cmd/stem/internal/telemetry"
 )
 
 type ChatCompletionRequest struct {
@@ -63,13 +64,37 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	bus := eventbus.New()
 
+	tendrilDir := "./.tendril"
+	telemetryPath := filepath.Join(tendrilDir, "telemetry.yaml")
+	if cfg, err := telemetry.LoadConfig(telemetryPath); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("⚠️ Failed to load telemetry config: %v", err)
+		}
+	} else if cfg.Enabled {
+		if cfg.Resin.Enabled {
+			if _, err := telemetry.InitResinSink(bus, cfg.Resin, filepath.Join(tendrilDir, "logs", "resin.log")); err != nil {
+				log.Printf("⚠️ Failed to initialize Resin sink: %v", err)
+			} else {
+				log.Println("Resin telemetry sink enabled")
+			}
+		}
+		for _, transporterCfg := range cfg.Transporters {
+			transporter, err := telemetry.NewTransporter(transporterCfg)
+			if err != nil {
+				log.Printf("⚠️ Failed to create transporter %q: %v", transporterCfg.Type, err)
+				continue
+			}
+			telemetry.AttachTransporter(bus, transporter)
+			log.Printf("Transporter %q attached to event bus", transporterCfg.Type)
+		}
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus)))
 	mux.HandleFunc("GET /health", handleHealth)
 
 	// Phase 4: Configuration API
-	tendrilDir := "./.tendril"
 	configHandler := api.NewConfigHandler(tendrilDir)
 	mux.HandleFunc("/v1/config/triggers", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
