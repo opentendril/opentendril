@@ -172,6 +172,38 @@ substrates:
 
 ---
 
+## Step 6 — Production Service Installation
+
+For a persistent background deployment, install OpenTendril as a systemd service. The service runs as your user (not root) so it can access the host Docker socket and your local `.env` configuration.
+
+Make the installer executable:
+
+```bash
+chmod +x install.sh
+```
+
+Run the installer from the repository root:
+
+```bash
+sudo ./install.sh
+```
+
+The script compiles `tendril`, installs it to `/usr/local/bin/tendril`, registers `opentendril.service`, and starts the orchestrator automatically.
+
+View service logs:
+
+```bash
+journalctl -u opentendril -f
+```
+
+Check service status:
+
+```bash
+systemctl status opentendril
+```
+
+---
+
 ## Running the Test Suite
 
 To verify the orchestrator internals and API routing:
