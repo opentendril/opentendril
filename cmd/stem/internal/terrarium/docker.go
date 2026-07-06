@@ -485,6 +485,7 @@ func (s *dockerTerrarium) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	cleanupCtx := context.WithoutCancel(ctx)
 
 	s.stopOnce.Do(func() {
 		var stopErr error
@@ -515,13 +516,13 @@ func (s *dockerTerrarium) Stop(ctx context.Context) error {
 			}
 		case <-timer.C:
 			stopCalled = true
-			if _, output, err := runDockerCommand(ctx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+			if _, output, err := runDockerCommand(cleanupCtx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
 				stopErr = errors.Join(stopErr, err)
 			}
 		}
 
 		if !stopCalled {
-			if _, output, err := runDockerCommand(ctx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+			if _, output, err := runDockerCommand(cleanupCtx, "stop", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
 				stopErr = errors.Join(stopErr, err)
 			}
 		}
@@ -536,7 +537,7 @@ func (s *dockerTerrarium) Stop(ctx context.Context) error {
 			<-s.stderrDone
 		}
 
-		if _, output, err := runDockerCommand(ctx, "rm", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
+		if _, output, err := runDockerCommand(cleanupCtx, "rm", s.id); err != nil && !isIgnorableDockerLifecycleOutput(output) {
 			stopErr = errors.Join(stopErr, err)
 		}
 

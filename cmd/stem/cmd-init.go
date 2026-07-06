@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -162,6 +163,11 @@ func runInitCmd(args []string) {
 	fmt.Println("  Add:")
 	fmt.Printf("    {\"mcpServers\": {\"opentendril\": {\"command\": \"%s\", \"args\": [\"mcp\"]}}}\n", homeBin)
 	fmt.Println("════════════════════════════════════════")
+
+	go func() {
+		cmd := exec.Command("docker", "pull", "opentendril-typescript:latest")
+		_ = cmd.Start()
+	}()
 }
 
 func getOllamaModels() []string {
