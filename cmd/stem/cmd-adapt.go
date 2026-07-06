@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
@@ -15,7 +16,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("adapt", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	commits := fs.Int("commits", 5, "number of recent commits to analyze")
+	commits := fs.Int("commits", 50, "number of recent commits to analyze")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -26,6 +27,11 @@ func runAdaptCmd(ctx context.Context, args []string) {
 	}
 
 	root := resolveRepoRoot("")
+	if !gitHasCommits(ctx, root) {
+		fmt.Println("🌱 Substrate has no commit history yet — nothing to adapt.")
+		return
+	}
+
 	hashes, err := gitCommitHashes(ctx, root, *commits)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to read git history: %v\n", err)
@@ -33,13 +39,14 @@ func runAdaptCmd(ctx context.Context, args []string) {
 	}
 
 	if len(hashes) == 0 {
-		fmt.Println("No commits found to adapt.")
+		fmt.Println("🌱 No commits found to adapt.")
 		return
 	}
 
-	chronicler := orchestrator.NewEpigeneticChronicler(root)
+	fmt.Printf("🧬 Mining %d commit(s) from %s for Epigenetic Traits...\n", len(hashes), root)
+
+	samples := make([]orchestrator.CommitSample, 0, len(hashes))
 	hadError := false
-	transcriptionSkipped := false
 
 	for index, hash := range hashes {
 		shortHash := hash
@@ -47,7 +54,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 			shortHash = shortHash[:12]
 		}
 
-		fmt.Fprintf(os.Stdout, "🧬 [%d/%d] Analyzing commit %s\n", index+1, len(hashes), shortHash)
+		fmt.Fprintf(os.Stdout, "🧬 [%d/%d] Extracting commit %s\n", index+1, len(hashes), shortHash)
 
 		commitMessage, err := gitCommitMessage(ctx, root, hash)
 		if err != nil {
@@ -63,23 +70,35 @@ func runAdaptCmd(ctx context.Context, args []string) {
 			continue
 		}
 
-		logs := fmt.Sprintf("Commit hash: %s", hash)
-		if err := chronicler.TranscribeLearnings(ctx, commitMessage, diff, logs); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic transcription failed for %s: %v\n", shortHash, err)
-			transcriptionSkipped = true
-		}
+		samples = append(samples, orchestrator.CommitSample{
+			Hash:    hash,
+			Message: commitMessage,
+			Diff:    diff,
+		})
 	}
 
-	if hadError {
+	if len(samples) == 0 {
+		fmt.Fprintln(os.Stderr, "❌ No commit diffs could be extracted.")
 		os.Exit(1)
 	}
 
-	if transcriptionSkipped {
-		fmt.Printf("⚠️ Parsed %d commit(s); epigenetic transcription was skipped because no LLM endpoint was reachable.\n", len(hashes))
+	chronicler := orchestrator.NewEpigeneticChronicler(root)
+	if err := chronicler.AdaptFromHistory(ctx, samples); err != nil {
+		fmt.Printf("⚠️ Extracted %d commit(s); Adaptation was skipped because the Meristem was unreachable: %v\n", len(samples), err)
 		return
 	}
 
-	fmt.Printf("✅ Adapted %d commit(s) into %s\n", len(hashes), strings.TrimSpace(root))
+	if hadError {
+		fmt.Printf("⚠️ Adapted %d of %d commit(s); some diffs could not be read.\n", len(samples), len(hashes))
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ Adapted %d commit(s) into %s\n", len(samples), filepath.Join(root, ".tendril", "genome", "epigenetics.md"))
+}
+
+func gitHasCommits(ctx context.Context, repoRoot string) bool {
+	_, err := runGit(ctx, repoRoot, "rev-parse", "--verify", "HEAD")
+	return err == nil
 }
 
 func gitCommitHashes(ctx context.Context, repoRoot string, commits int) ([]string, error) {

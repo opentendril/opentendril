@@ -35,8 +35,9 @@ const (
 
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
 type EpigeneticChronicler struct {
-	workspace string
-	client    *llm.Client
+	workspace   string
+	client      *llm.Client
+	coordinator llmCaller
 }
 
 // GenomicFitness tracks reinforcement scores for rules and active plasmids.
