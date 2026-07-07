@@ -84,7 +84,21 @@ To eliminate case mismatch bugs across Go, Python, and JSON boundaries:
 
 ---
 
-## 5. Internal Agent Taxonomy
+## 5. Interface Parity — Adapters Translate Only
+
+The CLI, MCP, and OpenAPI/REST surfaces are **projections of one core capability registry**, not independent implementations (issue #159). To keep them from silently diverging:
+
+* **One Core owns command authority.** Every governed command capability lives in `cmd/stem/internal/core` as a declarative `Capability` in the registry. A capability MUST be invokable with **zero HTTP, CLI, or MCP types in scope** — that is the litmus test for the boundary.
+* **Adapters translate transport ↔ core only.** The REST handlers (`internal/api`), the MCP server (`internal/api/mcp.go`, `cmd-mcp.go`), and the CLI subcommands (`cmd/stem/cmd-*.go`) may decode/encode their transport and map errors, and **nothing else**. No business logic in a handler. Do not reach for orchestrator/terrarium/gateway internals from an adapter path for a governed capability — route it through `core.Core`.
+* **Parity is enforced, not disciplinary.** `core.CapabilityNames()` is the canonical set. The parity tests under `cmd/stem` (`TestInterfaceParityCoverage`) assert REST == MCP == CLI == that canonical set and go **red** the moment a capability is added to one surface but not the others. The boundary test (`internal/core/boundary_test.go`) fails if the Core imports a transport or execution internal. Never weaken or skip these to land a change — add the capability to the registry and wire all three surfaces.
+* **To add a command capability:** declare it once in the `core` registry (Name, InputSchema, Invoke), then project it onto all three adapters. Adding it to only one surface is a CI failure by design.
+* **Views are exempt.** The `/ws` event stream and `?replay` are *views*, not commands, and are deliberately outside the registry and the parity tests (issue #158, commands-vs-views). Do not pull them into the capability registry.
+
+> **Current scope:** the governed registry covers the session-lifecycle family (`session.create|list|get|update|delete|history`). The remaining Stem capabilities (sprout/run, sequence, genome, plasmid, substrate grafting) are not yet migrated into the Core and remain out of parity — migrating each into the registry is the follow-up work.
+
+---
+
+## 6. Internal Agent Taxonomy
 
 OpenTendril runs specific background processes restricted to distinct scopes:
 

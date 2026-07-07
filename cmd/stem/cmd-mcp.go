@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
@@ -33,7 +34,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 	} else if sess, err := manager.Sprout(ctx, session.OriginMCP, session.Preferences{}); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to sprout MCP session: %v (continuing without sessions)\n", err)
 	} else {
-		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID)
+		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(core.NewService(manager))
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
 	}
 

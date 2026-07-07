@@ -13,6 +13,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/gateway"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
@@ -152,8 +153,13 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus, sessions, history)))
 	mux.HandleFunc("GET /health", handleHealth)
 
-	// Unified Interface Layer: Tendril session REST API.
-	sessionsHandler := api.NewSessionsHandler(sessions, history)
+	// Unified Interface Layer: the transport-free Core owns the session-
+	// lifecycle capabilities; the REST, MCP, and CLI surfaces are adapters that
+	// route through this one service (issue #159, interface parity).
+	coreSvc := core.NewService(sessions)
+
+	// Tendril session REST API (adapter).
+	sessionsHandler := api.NewSessionsHandler(coreSvc, sessions, history)
 	sessionsHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
@@ -183,8 +189,9 @@ func runServeCmd(ctx context.Context, args []string) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
 
-	// Phase 5: MCP API (session-aware — shares the unified SessionManager)
-	mcpHandler := api.NewMCPHandler().WithSessions(sessions, history)
+	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
+	// projects the same Core session capabilities as REST and the CLI)
+	mcpHandler := api.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc)
 	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
@@ -28,6 +29,7 @@ type MCPHandler struct {
 	sessions         *session.Manager
 	history          *historydb.Store
 	defaultSessionID string
+	core             core.Core
 }
 
 func NewMCPHandler() *MCPHandler {
@@ -71,6 +73,81 @@ func (h *MCPHandler) WithSessions(manager *session.Manager, history *historydb.S
 func (h *MCPHandler) WithDefaultSession(sessionID string) *MCPHandler {
 	h.defaultSessionID = sessionID
 	return h
+}
+
+// WithCore binds the transport-free Core so this MCP adapter projects the same
+// session-lifecycle capabilities as the REST and CLI surfaces (issue #159).
+func (h *MCPHandler) WithCore(coreSvc core.Core) *MCPHandler {
+	h.core = coreSvc
+	return h
+}
+
+// CoreCapabilityNames returns the governed capability names this MCP adapter
+// projects as tools. The parity tests assert this equals core.CapabilityNames().
+func (h *MCPHandler) CoreCapabilityNames() []string {
+	if h.core == nil {
+		return nil
+	}
+	names := make([]string, 0, len(h.core.Capabilities()))
+	for _, capability := range h.core.Capabilities() {
+		names = append(names, capability.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// coreToolDefs projects the Core capability registry into MCP tool definitions.
+func (h *MCPHandler) coreToolDefs() []map[string]interface{} {
+	if h.core == nil {
+		return nil
+	}
+	defs := make([]map[string]interface{}, 0, len(h.core.Capabilities()))
+	for _, capability := range h.core.Capabilities() {
+		defs = append(defs, map[string]interface{}{
+			"name":        capability.Name,
+			"description": capability.Description,
+			"inputSchema": capability.InputSchema,
+		})
+	}
+	return defs
+}
+
+// isCoreCapability reports whether a tool name is a governed Core capability.
+func (h *MCPHandler) isCoreCapability(name string) bool {
+	if h.core == nil {
+		return false
+	}
+	for _, capability := range h.core.Capabilities() {
+		if capability.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// callCoreCapability invokes a Core capability and wraps its JSON result in an
+// MCP tool-result envelope. Adapter translation only — no business logic.
+func (h *MCPHandler) callCoreCapability(id interface{}, name string, args map[string]interface{}) []byte {
+	result, err := h.core.Invoke(context.Background(), name, args)
+	if err != nil {
+		text := err.Error()
+		if errors.Is(err, core.ErrNotFound) {
+			text = "session not found"
+		}
+		return h.formatResult(id, map[string]interface{}{
+			"content": []map[string]interface{}{{"type": "text", "text": text}},
+			"isError": true,
+		})
+	}
+
+	payload, marshalErr := json.MarshalIndent(result, "", "  ")
+	if marshalErr != nil {
+		return h.formatError(id, -32603, "Internal error", marshalErr.Error())
+	}
+	return h.formatResult(id, map[string]interface{}{
+		"content": []map[string]interface{}{{"type": "text", "text": string(payload)}},
+		"isError": false,
+	})
 }
 
 // resolveSession maps an optional explicit sessionId to a live Tendril
@@ -246,153 +323,157 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		})
 
 	case "tools/list":
-		return h.formatResult(req.ID, map[string]interface{}{
-			"tools": []map[string]interface{}{
-				{
-					"name":        "runSequence",
-					"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence meristem.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"pathOrName": map[string]interface{}{
-								"type":        "string",
-								"description": "The sequence YAML file path or sequence name to run.",
-							},
+		tools := []map[string]interface{}{
+			{
+				"name":        "runSequence",
+				"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence meristem.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"pathOrName": map[string]interface{}{
+							"type":        "string",
+							"description": "The sequence YAML file path or sequence name to run.",
 						},
-						"required": []string{"pathOrName"},
 					},
-				},
-				{
-					"name":        "sproutTendril",
-					"description": "Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"transcript": map[string]interface{}{
-								"type":        "string",
-								"description": "A clear, actionable description of the transcript (task) for Tendril to execute.",
-							},
-							"stepId": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional stable step identifier for a structured sequence run.",
-							},
-							"sessionId": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional Tendril session identifier binding this run to a unified chat session (its preferences, models, and history).",
-							},
-							"substrate": map[string]interface{}{
-								"type":        "string",
-								"description": "The absolute path or named substrate key for the target repository workspace. E.g. /home/user/project or core",
-							},
-							"substrateUrl": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional remote repository URL override to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
-							},
-							"substrateBranch": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional branch name to clone if substrateUrl is provided.",
-							},
-						},
-						"required": []string{"transcript", "substrate"},
-					},
-				},
-				{
-					"name":        "createGenotype",
-					"description": "Dynamically create or update an OpenTendril genotype (core identity/persona). Creates a new JSON configuration file in the genotypes directory. This allows you to define a new base role before sprouting a tendril.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"name": map[string]interface{}{
-								"type":        "string",
-								"description": "The unique name of the genotype (e.g. 'frontend-dev'). Do not use spaces or special characters.",
-							},
-							"instructions": map[string]interface{}{
-								"type":        "string",
-								"description": "The system prompt or instructions detailing exactly what this genotype's core identity or role is.",
-							},
-						},
-						"required": []string{"name", "instructions"},
-					},
-				},
-				{
-					"name":        "viewGenome",
-					"description": "Returns the concatenated contents of all Markdown files in .tendril/genome/ so the agent can read active repository rules and guidelines.",
-					"inputSchema": map[string]interface{}{
-						"type":       "object",
-						"properties": map[string]interface{}{},
-					},
-				},
-				{
-					"name":        "reduceGenome",
-					"description": "Deduplicates, compresses, and merges the epigenetic rules in .tendril/genome/epigenetics.md to prevent context window bloat.",
-					"inputSchema": map[string]interface{}{
-						"type":       "object",
-						"properties": map[string]interface{}{},
-					},
-				},
-				{
-					"name":        "injectPlasmid",
-					"description": "Injects a modular plasmid rule file (e.g. go-rules, react-style) into the active project genome.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"name": map[string]interface{}{
-								"type":        "string",
-								"description": "The plasmid name to inject into the active genome.",
-							},
-						},
-						"required": []string{"name"},
-					},
-				},
-				{
-					"name":        "graftSubstrate",
-					"description": "Delegates the latest commit from a local substrate to the mesh graft endpoint and streams central validation logs.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"substrate": map[string]interface{}{
-								"type":        "string",
-								"description": "The local substrate path or named substrate key to graft.",
-							},
-							"branch": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional branch to push to. Defaults to the current branch.",
-							},
-							"commit-message": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional commit message for the delegated push.",
-							},
-						},
-						"required": []string{"substrate"},
-					},
-				},
-				{
-					"name":        "promotePR",
-					"description": "Promotes a pull request branch through the mesh graft endpoint after local validation has completed.",
-					"inputSchema": map[string]interface{}{
-						"type": "object",
-						"properties": map[string]interface{}{
-							"substrate": map[string]interface{}{
-								"type":        "string",
-								"description": "The local substrate path or named substrate key to promote.",
-							},
-							"branch": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional branch to push to. Defaults to the current branch.",
-							},
-							"pr-number": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional pull request number associated with the promotion.",
-							},
-							"commit-message": map[string]interface{}{
-								"type":        "string",
-								"description": "Optional commit message for the delegated push.",
-							},
-						},
-						"required": []string{"substrate"},
-					},
+					"required": []string{"pathOrName"},
 				},
 			},
+			{
+				"name":        "sproutTendril",
+				"description": "Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"transcript": map[string]interface{}{
+							"type":        "string",
+							"description": "A clear, actionable description of the transcript (task) for Tendril to execute.",
+						},
+						"stepId": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional stable step identifier for a structured sequence run.",
+						},
+						"sessionId": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional Tendril session identifier binding this run to a unified chat session (its preferences, models, and history).",
+						},
+						"substrate": map[string]interface{}{
+							"type":        "string",
+							"description": "The absolute path or named substrate key for the target repository workspace. E.g. /home/user/project or core",
+						},
+						"substrateUrl": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional remote repository URL override to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
+						},
+						"substrateBranch": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional branch name to clone if substrateUrl is provided.",
+						},
+					},
+					"required": []string{"transcript", "substrate"},
+				},
+			},
+			{
+				"name":        "createGenotype",
+				"description": "Dynamically create or update an OpenTendril genotype (core identity/persona). Creates a new JSON configuration file in the genotypes directory. This allows you to define a new base role before sprouting a tendril.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "The unique name of the genotype (e.g. 'frontend-dev'). Do not use spaces or special characters.",
+						},
+						"instructions": map[string]interface{}{
+							"type":        "string",
+							"description": "The system prompt or instructions detailing exactly what this genotype's core identity or role is.",
+						},
+					},
+					"required": []string{"name", "instructions"},
+				},
+			},
+			{
+				"name":        "viewGenome",
+				"description": "Returns the concatenated contents of all Markdown files in .tendril/genome/ so the agent can read active repository rules and guidelines.",
+				"inputSchema": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+			{
+				"name":        "reduceGenome",
+				"description": "Deduplicates, compresses, and merges the epigenetic rules in .tendril/genome/epigenetics.md to prevent context window bloat.",
+				"inputSchema": map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+			{
+				"name":        "injectPlasmid",
+				"description": "Injects a modular plasmid rule file (e.g. go-rules, react-style) into the active project genome.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"name": map[string]interface{}{
+							"type":        "string",
+							"description": "The plasmid name to inject into the active genome.",
+						},
+					},
+					"required": []string{"name"},
+				},
+			},
+			{
+				"name":        "graftSubstrate",
+				"description": "Delegates the latest commit from a local substrate to the mesh graft endpoint and streams central validation logs.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"substrate": map[string]interface{}{
+							"type":        "string",
+							"description": "The local substrate path or named substrate key to graft.",
+						},
+						"branch": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional branch to push to. Defaults to the current branch.",
+						},
+						"commit-message": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional commit message for the delegated push.",
+						},
+					},
+					"required": []string{"substrate"},
+				},
+			},
+			{
+				"name":        "promotePR",
+				"description": "Promotes a pull request branch through the mesh graft endpoint after local validation has completed.",
+				"inputSchema": map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"substrate": map[string]interface{}{
+							"type":        "string",
+							"description": "The local substrate path or named substrate key to promote.",
+						},
+						"branch": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional branch to push to. Defaults to the current branch.",
+						},
+						"pr-number": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional pull request number associated with the promotion.",
+						},
+						"commit-message": map[string]interface{}{
+							"type":        "string",
+							"description": "Optional commit message for the delegated push.",
+						},
+					},
+					"required": []string{"substrate"},
+				},
+			},
+		}
+		// Interface parity (#159): project the Core session capabilities as MCP
+		// tools so this surface stays in lockstep with REST and the CLI.
+		tools = append(tools, h.coreToolDefs()...)
+		return h.formatResult(req.ID, map[string]interface{}{
+			"tools": tools,
 		})
 	case "tools/call":
 		var params struct {
@@ -401,6 +482,12 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 		if err := json.Unmarshal(req.Params, &params); err != nil {
 			return h.formatError(req.ID, -32602, "Invalid params", err.Error())
+		}
+
+		// Interface parity (#159): Core session capabilities are dispatched
+		// through the shared service, identically to REST and the CLI.
+		if h.isCoreCapability(params.Name) {
+			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
 		}
 
 		if params.Name == "viewGenome" {
