@@ -62,6 +62,17 @@ type chatHistoryRecord struct {
 }
 
 func runServeCmd(ctx context.Context, args []string) {
+	if len(args) >= 2 && strings.EqualFold(strings.TrimSpace(args[0]), "mcp") && strings.EqualFold(strings.TrimSpace(args[1]), "stdio") {
+		runMCPCmd(ctx, args[2:])
+		return
+	}
+	if len(args) > 0 {
+		fmt.Fprintf(os.Stderr, "Unknown serve command: %s\n", strings.Join(args, " "))
+		fmt.Fprintln(os.Stderr, "Usage: tendril serve")
+		fmt.Fprintln(os.Stderr, "       tendril serve mcp stdio")
+		os.Exit(1)
+	}
+
 	apiKey := resolveServeAPIKey()
 	if apiKey == "" {
 		log.Println("⚠️ WARNING: OPENTENDRIL_API_KEY is not set. API endpoints are running without authentication.")
