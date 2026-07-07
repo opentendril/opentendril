@@ -80,6 +80,7 @@ To eliminate case mismatch bugs across Go, Python, and JSON boundaries:
   * HTTP API endpoint paths.
   * Stored database keys and domain enums.
 * **Filesystem separators:** No underscores are allowed in filenames across the entire filesystem, with the single exception of Go test files (`*_test.go`) and platform build suffixes (e.g. `*_linux.go`).
+* **Frontend exception (`ui/`):** The Command Center UI tree follows standard React/TypeScript convention — `PascalCase.tsx` component files, `camelCase.ts` modules, and `PascalCase/` component-family folders. Builders must **not** rewrite these to merged-lowercase; the casing/boundary rules above apply to Go and Python. JSON keys and API paths in `ui/` still follow the external-contract rules (`camelCase` keys, `kebab-case` paths).
 
 ---
 

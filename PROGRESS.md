@@ -29,6 +29,8 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 
 ## 📈 Pulse (Latest Logs)
 
+- **2026-07-07:** 🖥️ **COMMAND CENTER (OS of OT frontend):** Shipped the decoupled visual UI under `ui/` (React 18 + Vite + TypeScript). Multi-session command center, refresh-resilient REST→WebSocket hydration, sprout-run drill-down drawer, no-`.env` onboarding, and a **living botanical garden** that renders EventBus telemetry as growing/mutating/withering tendrils and phenotypic-selection arenas. Talks to the Stem only over the documented REST + `/ws` surface. Shipped with four additive Stem changes (register `phenotypic-selection` as a forwarded EventType, opt-in `/ws?replay=N` history replay, `GATEWAY_PORT`, and graceful gateway-bind degradation). Docs: [`ui/README.md`](ui/README.md), [`docs/COMMAND-CENTER.md`](docs/COMMAND-CENTER.md).
+
 - **2026-04-27 (Session 2):** 🤖 **MULTI-AGENT KERNEL:** Shipped ephemeral sub-agent orchestration:
   - `src/subagent.py` — 5 expert Worker profiles (security_auditor, code_reviewer, test_writer, documenter, linter). Each worker has a tailored persona and restricted tool whitelist (principle of least privilege). Root Agent delegates via `sproutSubAgent()` tool.
   - `src/vectorstore.py` — Vector store factory: pgvector (default), Pinecone, Weaviate. Switch with one env var: `VECTOR_STORE_PROVIDER=pinecone`.

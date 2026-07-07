@@ -135,6 +135,28 @@ Make sure `tendril serve` is running, then launch Aider:
 aider --openai-api-base http://localhost:8080/v1 --model openai/tendril
 ```
 
+### 3. Web Command Center (the visual UI)
+
+The **Command Center** is a desktop-grade web dashboard for watching every
+Tendril the Stem is growing in real time — the visual frontend of the "OS of
+OT". It is a strictly decoupled React client that talks to the Stem only over
+the documented REST + WebSocket surface, and renders live orchestration as a
+**living botanical garden**: parallel sprouts emerge and wither, mycelial merges
+converge, and phenotypic-selection runs compete for fitness on screen.
+
+```bash
+cd ui
+npm install
+STEM_TARGET=http://localhost:8080 npm run dev   # http://localhost:5173
+```
+
+Operators enter their Stem address and API key in an onboarding screen (no
+`.env` editing). See [`ui/README.md`](ui/README.md) for running it, the
+component tree, the refresh-resilient hydration flow, and the full
+EventBus-event → botanical-visual mapping; and
+[docs/COMMAND-CENTER.md](docs/COMMAND-CENTER.md) for how it fits the OS-of-OT
+architecture and the REST/WebSocket contract it consumes.
+
 ---
 
 ## ⚙️ Configuration API
@@ -157,4 +179,8 @@ curl http://localhost:8080/v1/config/personas
 make install          # Build + install tendril binary
 make test-sprout      # Run Go unit tests
 make test-all         # Run all tests
+
+cd ui && npm install  # Install Command Center UI deps
+npm run dev           # Run the UI dev server (proxies to the Stem)
+npm run build         # Type-check + build the static UI bundle to ui/dist/
 ```
