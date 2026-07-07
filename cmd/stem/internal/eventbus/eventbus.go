@@ -28,6 +28,9 @@ const (
 	EventXylemTransport    EventType = "xylem-transport"
 	EventParallelSprouting EventType = "parallel-sprouting"
 	EventMycelialMerge     EventType = "mycelial-merge"
+	// EventPhenotypicSelection reports Genetic Algorithm progress (start,
+	// generation, evaluated, complete phases) from the selection runner.
+	EventPhenotypicSelection EventType = "phenotypic-selection"
 )
 
 // AllEventTypes returns every registered event type for broad telemetry subscriptions.
@@ -51,6 +54,7 @@ func AllEventTypes() []EventType {
 		EventXylemTransport,
 		EventParallelSprouting,
 		EventMycelialMerge,
+		EventPhenotypicSelection,
 	}
 }
 

@@ -204,17 +204,23 @@ func runServeCmd(ctx context.Context, args []string) {
 		}
 	}()
 
-	// Start Gateway server
+	// Start the standalone Gateway server. The same /ws surface is also
+	// mounted on the main API mux, so a bind failure here (e.g. another Stem
+	// already owns the port) degrades gracefully instead of killing the API.
+	gatewayPort := os.Getenv("GATEWAY_PORT")
+	if gatewayPort == "" {
+		gatewayPort = "9090"
+	}
 	go func() {
 		gatewayMux := http.NewServeMux()
 		gatewayMux.HandleFunc("/ws", gateway.HandleWebSocket(bus))
 		gatewayServer := &http.Server{
-			Addr:    ":9090",
+			Addr:    ":" + gatewayPort,
 			Handler: gatewayMux,
 		}
-		log.Printf("Starting Gateway WebSocket server on port 9090...")
+		log.Printf("Starting Gateway WebSocket server on port %s...", gatewayPort)
 		if err := gatewayServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Gateway Server failed: %v", err)
+			log.Printf("⚠️ Gateway WebSocket server unavailable on port %s: %v (main /ws endpoint still serves)", gatewayPort, err)
 		}
 	}()
 

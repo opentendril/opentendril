@@ -4,11 +4,17 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 )
+
+// maxReplay caps how many buffered bus events a client may request on
+// connect via the opt-in ?replay=N query parameter (bounded by the bus's own
+// in-memory history window).
+const maxReplay = 100
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -74,6 +80,20 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 		// Send connected message
 		connectedMsg, _ := json.Marshal(map[string]string{"type": "connected"})
 		client.send <- connectedMsg
+
+		// Opt-in replay: ?replay=N asks for the bus's recent in-memory event
+		// history before the live feed, so a refreshed client can re-grow
+		// state that never carried a session id (e.g. sequence telemetry).
+		if raw := r.URL.Query().Get("replay"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				if n > maxReplay {
+					n = maxReplay
+				}
+				for _, event := range bus.History(n) {
+					handler(event)
+				}
+			}
+		}
 
 		// Start write pump
 		go client.writePump()
