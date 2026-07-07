@@ -572,7 +572,7 @@ func publishSelectionEvent(bus *eventbus.Bus, seq *Sequence, step *SequenceStep,
 		data["stepId"] = step.ID
 	}
 	bus.Publish(eventbus.Event{
-		Type:   eventbus.EventType("phenotypic-selection"),
+		Type:   eventbus.EventPhenotypicSelection,
 		Source: "phenotypic-selection",
 		Data:   data,
 	})
