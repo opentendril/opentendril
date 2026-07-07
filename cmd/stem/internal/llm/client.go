@@ -245,7 +245,7 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 		if strings.EqualFold(spec.Provider, "local") {
 			if baseURL := strings.TrimSpace(os.Getenv("COORDINATOR_LOCAL_INFERENCE_URL")); baseURL != "" {
 				spec.BaseURL = baseURL
-				spec.BaseURLs = localInferenceBaseURLs(baseURL)
+				spec.BaseURLs = LocalInferenceBaseURLs(baseURL)
 			}
 		}
 		return spec
@@ -314,7 +314,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 		return ProviderSpec{
 			Provider:    "local",
 			BaseURL:     baseURL,
-			BaseURLs:    localInferenceBaseURLs(baseURL),
+			BaseURLs:    LocalInferenceBaseURLs(baseURL),
 			Model:       model,
 			Endpoint:    endpoint,
 			Mode:        ModeOpenAIish,
@@ -398,7 +398,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 		return ProviderSpec{
 			Provider:    "local",
 			BaseURL:     baseURL,
-			BaseURLs:    localInferenceBaseURLs(baseURL),
+			BaseURLs:    LocalInferenceBaseURLs(baseURL),
 			Model:       model,
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
@@ -529,7 +529,7 @@ func explicitModelForTier(provider string, tier ModelTier) (string, bool) {
 	return "", false
 }
 
-func localInferenceBaseURLs(baseURL string) []string {
+func LocalInferenceBaseURLs(baseURL string) []string {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = "http://host.docker.internal:11434/v1"

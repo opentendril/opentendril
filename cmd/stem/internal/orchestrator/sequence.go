@@ -64,6 +64,7 @@ type SequenceStep struct {
 	RequiresVision    bool     `yaml:"requiresVision,omitempty"`
 	ModelProvider     string   `yaml:"modelProvider,omitempty"`
 	ModelName         string   `yaml:"modelName,omitempty"`
+	ModelBaseURL      string   `yaml:"modelBaseURL,omitempty"`
 
 	// Selection, when present, promotes a step from single-shot execution to a
 	// true generational genetic algorithm (phenotypic selection). See
@@ -122,6 +123,9 @@ type SequenceRunOptions struct {
 	Stderr             io.Writer
 	Stdin              io.Reader
 	Interactive        bool
+	Provider           string
+	Model              string
+	BaseURL            string
 	StepRunner         SequenceStepRunner
 	ResumePollInterval time.Duration
 	EventBus           *eventbus.Bus
@@ -500,8 +504,11 @@ func normalizeSequenceRunOptions(opts SequenceRunOptions) SequenceRunOptions {
 	}
 	if opts.StepRunner == nil {
 		bus := opts.EventBus
+		provider := opts.Provider
+		model := opts.Model
+		baseURL := opts.BaseURL
 		opts.StepRunner = func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
-			return defaultSequenceStepRunnerWithBus(ctx, seq, step, substratePath, bus)
+			return defaultSequenceStepRunnerWithOpts(ctx, seq, step, substratePath, bus, provider, model, baseURL)
 		}
 	}
 	return opts
@@ -1009,9 +1016,10 @@ func fallbackStepModelTier(stepID string) llm.ModelTier {
 }
 
 type stepLLMSelection struct {
+	Tier     llm.ModelTier
 	Provider string
 	Model    string
-	Tier     llm.ModelTier
+	BaseURL  string
 }
 
 func resolveStepLLMSelection(ctx context.Context, step *SequenceStep) stepLLMSelection {
@@ -1020,8 +1028,10 @@ func resolveStepLLMSelection(ctx context.Context, step *SequenceStep) stepLLMSel
 	}
 
 	if provider := strings.TrimSpace(step.ModelProvider); provider != "" {
-		if model := strings.TrimSpace(step.ModelName); model != "" {
-			return stepLLMSelection{Provider: provider, Model: model, Tier: llm.TierPremium}
+		model := strings.TrimSpace(step.ModelName)
+		baseURL := strings.TrimSpace(step.ModelBaseURL)
+		if model != "" || baseURL != "" {
+			return stepLLMSelection{Provider: provider, Model: model, BaseURL: baseURL, Tier: llm.TierPremium}
 		}
 	}
 
@@ -1089,10 +1099,12 @@ func applyStepLLMSelection(orch *DockerOrchestrator, selection stepLLMSelection)
 	if orch == nil {
 		return
 	}
-	orch.Tier = selection.Tier
-	if strings.TrimSpace(selection.Provider) != "" && strings.TrimSpace(selection.Model) != "" {
+	if selection.Provider != "" {
 		orch.Provider = selection.Provider
 		orch.Model = selection.Model
+		orch.BaseURL = selection.BaseURL
+	} else if selection.Tier != "" {
+		orch.Tier = selection.Tier
 	}
 }
 
@@ -1326,6 +1338,10 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 }
 
 func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string, bus *eventbus.Bus) (string, error) {
+	return defaultSequenceStepRunnerWithOpts(ctx, seq, step, substratePath, bus, "", "", "")
+}
+
+func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string, bus *eventbus.Bus, provider, model, baseURL string) (string, error) {
 	genotype := stepGenotype(step.ID)
 	if step.Parallel {
 		return runParallelSprouting(ctx, seq, step, substratePath, bus)
@@ -1349,8 +1365,20 @@ func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *
 		StepID:          step.ID,
 		IsCoordinator:   isMeristemStep(step.ID),
 		Genotype:        genotype,
+		Provider:        provider,
+		Model:           model,
+		BaseURL:         baseURL,
 	}
 	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
+	if provider != "" {
+		orch.Provider = provider
+	}
+	if model != "" {
+		orch.Model = model
+	}
+	if baseURL != "" {
+		orch.BaseURL = baseURL
+	}
 	return runSequenceSproutFn(ctx, orch, step.Transcript)
 }
 

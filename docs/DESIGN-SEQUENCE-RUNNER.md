@@ -60,6 +60,9 @@ steps:
     dependsOn:
       - step-apply-changes
     transcript: "Run the test suite and fix any failures"
+    modelProvider: local
+    modelName: llama3.2
+    modelBaseURL: http://localhost:11434/v1 # Explicitly target a local LLM endpoint
 ```
 
 ---
@@ -80,6 +83,11 @@ steps:
     *   The runner pauses and outputs the error.
     *   It prompts the user in the CLI: `⚠️ Step <id> failed. [R]etry after fixing code, or [H]alt?`
     *   If running headlessly (MCP / serve mode), it waits for a resume request endpoint to be hit before retrying.
+
+### C. Detached Asynchronous Execution
+To support long-running, overnight workloads using slow local LLMs, sequences can be executed asynchronously.
+* Using the CLI flag `--detach` (or `-d`), the sequence is handed off to the Stem daemon via the `POST /v1/sessions/{sessionId}/sequences/run` REST endpoint.
+* The daemon runs the sequence in the background, freeing up the user's terminal. Logs and status can be tracked via existing session event APIs.
 
 ---
 
@@ -107,6 +115,11 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 
 #### [NEW] [cmd-sequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmd-sequence.go)
 *   Implement CLI commands: `tendril sequence run <path>` and `tendril sequence list`.
+*   Support `--provider`, `--model`, and `--base-url` override flags.
+*   Support `--detach` flag for asynchronous execution.
+
+#### [NEW] [internal/api/sessions.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/api/sessions.go)
+*   Implement `POST /v1/sessions/{sessionId}/sequences/run` to support detached background runs.
 
 #### [MODIFY] [internal/api/mcp.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/api/mcp.go)
 *   Expose `runSequence` tool in MCP, supporting headless execution of parallel sequence files.

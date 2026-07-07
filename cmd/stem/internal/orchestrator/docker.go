@@ -37,6 +37,7 @@ type DockerOrchestrator struct {
 	Tier             llm.ModelTier
 	Provider         string
 	Model            string
+	BaseURL          string
 	Genotype         string
 	Temperature      float64
 	DisableMergeBack bool
@@ -76,18 +77,29 @@ var (
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
-	var client *llm.Client
+	var spec llm.ProviderSpec
 	if d != nil && d.IsCoordinator {
-		client = llm.NewCoordinatorClientFromEnv()
+		spec = llm.ResolveCoordinatorProviderSpec()
 	} else if d != nil && strings.TrimSpace(d.Provider) != "" && strings.TrimSpace(d.Model) != "" {
-		client = llm.NewClientForModel(d.Provider, d.Model)
+		spec = llm.ResolveModelProviderSpec(d.Provider, d.Model)
 	} else {
 		tier := llm.TierPremium
 		if d != nil && d.Tier != "" {
 			tier = d.Tier
 		}
-		client = llm.NewClientForTier(tier)
+		spec = llm.ResolveTierProviderSpec(tier)
 	}
+
+	if d != nil && strings.TrimSpace(d.BaseURL) != "" {
+		spec.BaseURL = strings.TrimSpace(d.BaseURL)
+		if spec.Provider == "local" {
+			spec.BaseURLs = llm.LocalInferenceBaseURLs(spec.BaseURL)
+		} else {
+			spec.BaseURLs = []string{spec.BaseURL}
+		}
+	}
+
+	client := llm.NewClient(spec)
 	if d != nil && d.Temperature > 0 {
 		client.SetTemperature(d.Temperature)
 	}

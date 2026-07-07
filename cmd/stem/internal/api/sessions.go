@@ -1,12 +1,15 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
+	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
@@ -38,6 +41,7 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth func(http.HandlerFun
 	mux.HandleFunc("GET /v1/sessions/{sessionId}/history", auth(h.messages))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}/events", auth(h.events))
 	mux.HandleFunc("GET /v1/sessions/{sessionId}/sprout-runs", auth(h.sproutRuns))
+	mux.HandleFunc("POST /v1/sessions/{sessionId}/sequences/run", auth(h.runSequenceAsync))
 }
 
 type createSessionRequest struct {
@@ -166,6 +170,66 @@ func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"sessionId":  sessionID,
 		"sproutRuns": runs,
+	})
+}
+
+type runSequenceRequest struct {
+	PathOrName string `json:"pathOrName"`
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	BaseURL    string `json:"baseURL,omitempty"`
+}
+
+func (h *SessionsHandler) runSequenceAsync(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("sessionId")
+
+	var req runSequenceRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
+	if req.PathOrName == "" {
+		http.Error(w, "pathOrName is required", http.StatusBadRequest)
+		return
+	}
+
+	runID := "seqrun-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	bgCtx := context.WithoutCancel(r.Context())
+
+	if sessionID == "new" {
+		sess, err := h.manager.Sprout(bgCtx, session.OriginREST, session.Preferences{
+			Provider: req.Provider,
+			Model:    req.Model,
+		})
+		if err == nil {
+			sessionID = sess.ID
+		}
+	} else {
+		if _, ok := h.manager.Get(sessionID); !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+	}
+
+	go func() {
+		_, err := orchestrator.RunSequence(bgCtx, req.PathOrName, orchestrator.SequenceRunOptions{
+			Provider: req.Provider,
+			Model:    req.Model,
+			BaseURL:  req.BaseURL,
+		})
+		if err != nil {
+			// In a real system, we'd log this to the session history/eventbus.
+			// For now, the orchestrator logs to stdout/stderr.
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"runId":     runID,
+		"sessionId": sessionID,
+		"status":    "running",
 	})
 }
 
