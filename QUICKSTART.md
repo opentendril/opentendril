@@ -140,6 +140,26 @@ curl -s -X POST http://localhost:8080/v1/chat \
 
 ---
 
+### Option D — Session Management CLI
+
+Manage Tendril sessions directly from the terminal. These commands project the same Core capabilities as the MCP and REST surfaces:
+
+```bash
+# Create a new session
+tendril session create --provider anthropic --model claude-sonnet-4-20250514
+
+# List active sessions
+tendril session list
+
+# View session history
+tendril session history <session-id> --limit 20
+
+# Delete a session
+tendril session delete <session-id>
+```
+
+---
+
 ## Step 5 — Multi-Repository & Substrate Config
 
 If your workspace spans more than one repository, add a `substrates.yaml` file to your project root. OpenTendril looks for it in these locations:
