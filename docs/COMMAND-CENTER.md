@@ -188,7 +188,12 @@ operable with this container absent.
   Stem's own graceful gateway-bind degradation (§4).
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
-  port binding by default.
+  port binding by default. The CSP locks `script-src` to `'self'` (no inline
+  scripts, no `eval`) and, since #171's posture audit, splits `style-src` so
+  `<style>` tags/stylesheets are `'self'`-only (`style-src-elem`) while only
+  React's inline `style=""` attributes keep `'unsafe-inline'`
+  (`style-src-attr`) — an XSS payload can no longer inject an arbitrary
+  `<style>` element for CSS-based exfiltration or UI redress.
 - **Growth path:** any future server-side layer — BFF, operator auth/SSO,
   enterprise integration, the optional concierge mini-model (#164) — grows
   **inside this UI component**, never in the Stem. The Stem's surface stays
