@@ -22,13 +22,13 @@ OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terr
    ```
 2. **Build the CLI:**
    ```bash
-   make sprout      # builds cmd/stem/tendril (use 'make install' to put it on your PATH)
+   make stem      # builds cmd/stem/tendril (use 'make install' to put it on your PATH)
    ```
 3. **Set Up Python Virtualenv:**
    ```bash
    python3 -m venv venv
    source venv/bin/activate
-   pip install -r requirements.txt
+   pip install -r tendrils/python/requirements.txt
    ```
 4. **Verify Your Environment:**
    Run the full lint and test suites to verify your local configuration:

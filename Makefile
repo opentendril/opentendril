@@ -1,25 +1,25 @@
 .PHONY: sprout sprout-all build up down health test clean check-all
 
-# --- Sprout Binaries ---
-SPROUT_VERSION := 0.1.0
-SPROUT_DIR := cmd/stem
+# --- Stem Binaries ---
+STEM_VERSION := 0.1.0
+STEM_DIR := cmd/stem
 DIST_DIR := cmd/stem/dist
 
-sprout: ## Build Sprout for current platform
-	cd $(SPROUT_DIR) && go build -ldflags="-s -w" -o tendril .
+stem: ## Build Stem for current platform
+	cd $(STEM_DIR) && go build -ldflags="-s -w" -o tendril .
 
-install: sprout ## Install tendril globally to ~/.local/bin
+install: stem ## Install tendril globally to ~/.local/bin
 	mkdir -p ~/.local/bin
-	mv $(SPROUT_DIR)/tendril ~/.local/bin/tendril
+	mv $(STEM_DIR)/tendril ~/.local/bin/tendril
 	@echo "✅ Installed tendril to ~/.local/bin/tendril"
 	@echo "Make sure ~/.local/bin is in your PATH."
 
-sprout-all: ## Cross-compile Sprout for linux and macOS
+stem-all: ## Cross-compile Stem for linux and macOS
 	mkdir -p $(DIST_DIR)
-	cd $(SPROUT_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(SPROUT_VERSION)-linux-amd64 .
-	cd $(SPROUT_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(SPROUT_VERSION)-linux-arm64 .
-	cd $(SPROUT_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(SPROUT_VERSION)-darwin-amd64 .
-	cd $(SPROUT_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(SPROUT_VERSION)-darwin-arm64 .
+	cd $(STEM_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-linux-amd64 .
+	cd $(STEM_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-linux-arm64 .
+	cd $(STEM_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-darwin-amd64 .
+	cd $(STEM_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-darwin-arm64 .
 	@echo "✅ Binaries in $(DIST_DIR)/"
 	@ls -lh $(DIST_DIR)/
 
@@ -34,20 +34,20 @@ down: ## Stop all services
 	docker compose down
 
 health: ## Check service health
-	@echo "Brain:" && curl -s http://localhost:8080/health | python3 -m json.tool
-	@echo "\nSprout:" && curl -s http://localhost:9090/health | python3 -m json.tool
+	@echo "Stem:" && curl -s http://localhost:8080/health | python3 -m json.tool
+	@echo "\nTendril:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
 test-core: ## Run Python tests in a sterile Docker container
 	docker compose --profile test run --rm test-python
 
-test-sprout: ## Run Go tests in a sterile Docker container
+test-stem: ## Run Go tests in a sterile Docker container
 	docker compose --profile test run --rm test-go
 
-test-all: test-core test-sprout ## Run all tests
+test-all: test-core test-stem ## Run all tests
 
 check-all: ## Full pre-merge gate: clean build + all tests (see CONTRIBUTING.md / TESTING.md)
-	$(MAKE) sprout
+	$(MAKE) stem
 	$(MAKE) test-all
 
 clean: ## Remove build artifacts
