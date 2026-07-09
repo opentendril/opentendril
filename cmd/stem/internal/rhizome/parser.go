@@ -38,7 +38,7 @@ func (GoParser) Parse(path string, content []byte) ([]Symbol, error) {
 	}
 
 	symbols := make([]Symbol, 0)
-	
+
 	// Generate file_context pseudo-symbol
 	var importPaths []string
 	for _, imp := range file.Imports {

@@ -19,16 +19,16 @@ type SubstratesConfig struct {
 
 // SubstrateSpec describes one named substrate entry.
 type SubstrateSpec struct {
-	Path     string   `yaml:"path,omitempty"`
-	URL      string   `yaml:"url"`
-	Branch   string   `yaml:"branch,omitempty"`
-	Auth     string   `yaml:"auth,omitempty"`
-	ReadOnly bool     `yaml:"readonly,omitempty"`
+	Path     string `yaml:"path,omitempty"`
+	URL      string `yaml:"url"`
+	Branch   string `yaml:"branch,omitempty"`
+	Auth     string `yaml:"auth,omitempty"`
+	ReadOnly bool   `yaml:"readonly,omitempty"`
 	// Provider selects the terrarium backend ("docker", "host", "gvisor", "firecracker").
 	// Defaults to "docker" when omitted.
-	Provider string   `yaml:"provider,omitempty"`
+	Provider string `yaml:"provider,omitempty"`
 	// Command overrides the container entrypoint when provider is "host".
-	Command  []string `yaml:"command,omitempty"`
+	Command []string `yaml:"command,omitempty"`
 }
 
 type substrateExecutionPlan struct {

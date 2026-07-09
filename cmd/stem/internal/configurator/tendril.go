@@ -74,11 +74,11 @@ Do not include any explanations. Only output the script.`
 	if strings.Contains(strings.ToLower(taskPrompt), "block") {
 		filename = "block-trigger.sh"
 	}
-	
+
 	os.MkdirAll(c.TriggersDir, 0755)
 
 	targetPath := filepath.Join(c.TriggersDir, filename)
-	
+
 	// Create file as executable
 	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
 	if err != nil {

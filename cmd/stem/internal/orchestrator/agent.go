@@ -495,7 +495,7 @@ func extractMarkdownSyntheticCalls(content string) []ToolCall {
 			continue
 		}
 		code := match[1]
-		
+
 		// Attempt to infer the file path from the first few lines
 		lines := strings.SplitN(code, "\n", 5)
 		var path string
@@ -505,7 +505,7 @@ func extractMarkdownSyntheticCalls(content string) []ToolCall {
 				break
 			}
 		}
-		
+
 		if path != "" {
 			calls = append(calls, ToolCall{
 				Tool: "writeFile",

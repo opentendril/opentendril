@@ -54,8 +54,8 @@ func checkHostExecutionAllowed() error {
 		return nil
 	}
 	return fmt.Errorf(
-		"host terrarium provider is disabled by default: " +
-			"set %s=true to explicitly opt in to running Tendril processes on the local host. " +
+		"host terrarium provider is disabled by default: "+
+			"set %s=true to explicitly opt in to running Tendril processes on the local host. "+
 			"Note: host terrariums run with your full user permissions and bypass all isolation.",
 		EnvAllowHostExecution,
 	)

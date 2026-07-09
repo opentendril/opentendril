@@ -12,7 +12,7 @@ import (
 )
 
 type TriggerPayload struct {
-	Genotype string `json:"genotype"`
+	Genotype   string `json:"genotype"`
 	Transcript string `json:"transcript"`
 }
 
@@ -67,7 +67,7 @@ func EvaluateTriggers(ctx context.Context, triggersDir string, payload TriggerPa
 	// Execute each script
 	for _, script := range scripts {
 		cmd := exec.CommandContext(ctx, script, tmpFile.Name())
-		
+
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
 		cmd.Stdout = io.Discard // Discard stdout as per requirements, or we could capture it.

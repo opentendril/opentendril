@@ -201,7 +201,7 @@ func submitSequenceAsync(ctx context.Context, pathOrName, provider, model, baseU
 		Model      string `json:"model,omitempty"`
 		BaseURL    string `json:"baseURL,omitempty"`
 	}
-	
+
 	payload, _ := json.Marshal(runReq{
 		PathOrName: pathOrName,
 		Provider:   provider,

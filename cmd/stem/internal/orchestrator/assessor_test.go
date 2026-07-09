@@ -8,11 +8,11 @@ import (
 
 func TestParseRouterResponse(t *testing.T) {
 	tests := []struct {
-		name     string
-		text     string
-		wantProv string
+		name      string
+		text      string
+		wantProv  string
 		wantModel string
-		wantErr  bool
+		wantErr   bool
 	}{
 		{name: "valid", text: `{"provider":"grok","model":"grok-beta"}`, wantProv: "grok", wantModel: "grok-beta"},
 		{name: "whitespace", text: "\n {\"provider\":\"openai\",\"model\":\"gpt-4o\"}\n", wantProv: "openai", wantModel: "gpt-4o"},
