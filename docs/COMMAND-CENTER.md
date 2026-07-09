@@ -194,8 +194,5 @@ operable with this container absent.
   **inside this UI component**, never in the Stem. The Stem's surface stays
   the headless CLI/MCP/OpenAPI capability core (#158, #159).
 
-The legacy `/dashboard/` file handler on the Stem predates the Command Center
-and is untouched by this topology; it is a candidate for future cleanup.
-
 See [`ui/README.md`](../ui/README.md) for commands, configuration variables,
 and the manual static-build alternative.
