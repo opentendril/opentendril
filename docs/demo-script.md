@@ -5,7 +5,7 @@ This script is designed for a **2-minute terminal recording** (e.g., via `asciin
 ## Prerequisites
 - Tendril running in Docker (`docker compose up`)
 - Env vars set up to point to an external project (e.g., `/home/dr3w/GitHub/jurnx`)
-- `tendril-cli` built (`make cli`)
+- the `tendril` CLI built (`make sprout`)
 
 ---
 

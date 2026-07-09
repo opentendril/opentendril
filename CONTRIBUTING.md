@@ -22,7 +22,7 @@ OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terr
    ```
 2. **Build the CLI:**
    ```bash
-   make cli
+   make sprout      # builds cmd/stem/tendril (use 'make install' to put it on your PATH)
    ```
 3. **Set Up Python Virtualenv:**
    ```bash
