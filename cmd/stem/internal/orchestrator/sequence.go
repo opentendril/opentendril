@@ -902,7 +902,10 @@ func shouldBudRecursiveDebugger(step *SequenceStep) bool {
 	}
 
 	stepID := strings.ToLower(strings.TrimSpace(step.ID))
-	if !strings.Contains(stepID, "verifier") {
+	// Verifier: LLM-interpreted compiler/test failures. Macrophage: the
+	// deterministic fuzz-crash failures from runMacrophageFuzzCheck (issue
+	// #154) — both loop back to the same recursive Debugger.
+	if !strings.Contains(stepID, "verifier") && !strings.Contains(stepID, "macrophage") {
 		return false
 	}
 	if strings.Count(stepID, "debugger") >= 3 {
@@ -988,6 +991,8 @@ func stepGenotype(stepID string) string {
 		return "meristem"
 	case strings.Contains(normalized, "debugger"):
 		return "debugger"
+	case strings.Contains(normalized, "macrophage"):
+		return "macrophage"
 	case strings.Contains(normalized, "verifier"):
 		return "verifier"
 	case strings.Contains(normalized, "thinker"):
@@ -1003,6 +1008,8 @@ func fallbackStepModelTier(stepID string) llm.ModelTier {
 	case isMeristemStep(stepID):
 		return llm.TierPremium
 	case strings.Contains(normalized, "verifier"):
+		return llm.TierStandard
+	case strings.Contains(normalized, "macrophage"):
 		return llm.TierStandard
 	case strings.Contains(normalized, "debugger"):
 		return llm.TierStandard
@@ -1681,6 +1688,12 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	}
 
+	// Note: even for a "macrophage" step, the agent's own session below still
+	// uses the ordinary per-language image (opentendril-go:latest for a Go
+	// workspace) to write the fuzz test file via the normal tool-call
+	// protocol. The deterministic fuzz-*execution* half after the agent turn
+	// runs in a separate, Go-toolchain-enabled terrarium (macrophageFuzzImage,
+	// tendrils/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
 	imageName := orch.resolveImageName(mountPath)
 	result.ImageName = imageName
 	if err := ensureSproutImage(ctx, imageName); err != nil {
@@ -1731,6 +1744,17 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		case "":
 		default:
 			return result, fmt.Errorf("unknown script review verdict %q", agentResult.ActionResult.Verdict)
+		}
+	}
+
+	// Symbiotic Immune System (issue #154): once the Macrophage's agent turn
+	// has written its fuzz test, deterministically run it — no LLM judgment
+	// call — and treat a crash exactly like a Verifier compiler/test failure,
+	// so shouldBudRecursiveDebugger sprouts a Debugger to fix it and retries.
+	// Skipped if the agent turn itself already failed; nothing to fuzz.
+	if runErr == nil && orch.Genotype == "macrophage" {
+		if fuzzErr := runMacrophageFuzzCheckFn(ctx, providerName, mountPath); fuzzErr != nil {
+			runErr = fuzzErr
 		}
 	}
 

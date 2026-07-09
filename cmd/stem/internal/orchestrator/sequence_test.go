@@ -495,6 +495,198 @@ func TestRunSequenceBudsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 	}
 }
 
+// TestRunSequenceBudsRecursiveDebuggerOnMacrophageFuzzFailure is the
+// Symbiotic Immune System's (issue #154) end-to-end orchestration proof:
+// simulate a Worker having generated a function with a panic condition — the
+// stand-in "macrophage" step here plays the role runMacrophageFuzzCheck
+// would in production, returning a macrophageFuzzError the first time it
+// runs (as if the fuzzer found the crash) — and assert the sequence sprouts
+// a recursive Debugger to patch it, then retries and succeeds, exactly like
+// a Verifier compiler/test failure does today. No Docker/Go toolchain
+// involved: this proves the DAG retry/reject wiring
+// (shouldBudRecursiveDebugger's new "macrophage" branch), which is the part
+// that actually decides whether a crash blocks the merge.
+func TestRunSequenceBudsRecursiveDebuggerOnMacrophageFuzzFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "macrophage.yaml")
+
+	seq := &Sequence{
+		Name:             "macrophage-loop",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt,
+		Steps: []SequenceStep{
+			{ID: "macrophage", Status: sequenceStatusPending, Transcript: "fuzz the recently generated code"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var macrophageCalls int32
+	var mu sync.Mutex
+	var calls []string
+	debuggerStarted := make(chan string, 1)
+	releaseDebugger := make(chan struct{})
+
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		mu.Lock()
+		calls = append(calls, step.ID)
+		mu.Unlock()
+
+		switch {
+		case strings.HasPrefix(step.ID, "debugger-"):
+			select {
+			case debuggerStarted <- step.ID:
+			default:
+			}
+			select {
+			case <-releaseDebugger:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			return "patched the panic condition", nil
+		case step.ID == "macrophage":
+			if atomic.AddInt32(&macrophageCalls, 1) == 1 {
+				// Stand-in for runMacrophageFuzzCheck finding a crash: same
+				// hard error type, same failure shape a real fuzz run would
+				// produce (issue #154 task 5's simulated scenario).
+				return "", &macrophageFuzzError{
+					summary: "fuzzer triggered a panic:\npanic: runtime error: division by zero",
+					result:  terrarium.CommandResult{ExitCode: 2},
+				}
+			}
+			return "fuzz verification passed", nil
+		default:
+			return "", fmt.Errorf("unexpected step %s", step.ID)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	var result *Sequence
+	var runErr error
+	go func() {
+		defer close(done)
+		result, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:      io.Discard,
+			Stderr:      io.Discard,
+			Interactive: false,
+			StepRunner:  stepRunner,
+		})
+	}()
+
+	var debuggerID string
+	select {
+	case debuggerID = <-debuggerStarted:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for recursive debugger sprout: %v", ctx.Err())
+	}
+
+	func() {
+		defer close(releaseDebugger)
+
+		loaded, err := LoadSequence(path)
+		if err != nil {
+			t.Fatalf("LoadSequence failed: %v", err)
+		}
+		if len(loaded.Steps) != 2 {
+			t.Fatalf("loaded step count = %d, want 2", len(loaded.Steps))
+		}
+
+		macrophageStep := latestStepByID(loaded.Steps, "macrophage")
+		if macrophageStep == nil {
+			t.Fatalf("macrophage step missing after debugger sprout")
+		}
+		if macrophageStep.Status != sequenceStatusPending {
+			t.Fatalf("macrophage status = %s, want pending (the crashing merge must not be accepted yet)", macrophageStep.Status)
+		}
+		if len(macrophageStep.DependsOn) != 1 || macrophageStep.DependsOn[0] != debuggerID {
+			t.Fatalf("macrophage dependsOn = %#v, want [%s]", macrophageStep.DependsOn, debuggerID)
+		}
+
+		debuggerStep := latestStepByID(loaded.Steps, debuggerID)
+		if debuggerStep == nil {
+			t.Fatalf("debugger step %s missing after sprout", debuggerID)
+		}
+		if debuggerStep.Status != sequenceStatusPending {
+			t.Fatalf("debugger status = %s, want pending", debuggerStep.Status)
+		}
+		if !strings.Contains(debuggerStep.Transcript, "panic: runtime error: division by zero") {
+			t.Fatalf("debugger transcript = %q, want it to carry the fuzz crash detail so it can actually fix it", debuggerStep.Transcript)
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for recursive debugger run: %v", ctx.Err())
+	}
+	if runErr != nil {
+		t.Fatalf("RunSequence failed: %v", runErr)
+	}
+	if result == nil {
+		t.Fatalf("expected sequence result")
+	}
+	if len(result.Steps) != 2 {
+		t.Fatalf("result step count = %d, want 2", len(result.Steps))
+	}
+	for _, step := range result.Steps {
+		if step.Status != sequenceStatusComplete {
+			t.Fatalf("step %s status = %s, want complete", step.ID, step.Status)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 3 {
+		t.Fatalf("step call count = %d, want 3", len(calls))
+	}
+	if calls[0] != "macrophage" {
+		t.Fatalf("first call = %q, want macrophage", calls[0])
+	}
+	if !strings.HasPrefix(calls[1], "debugger-") {
+		t.Fatalf("second call = %q, want recursive debugger", calls[1])
+	}
+	if calls[2] != "macrophage" {
+		t.Fatalf("third call = %q, want macrophage retry (re-fuzzing the patched code)", calls[2])
+	}
+	if atomic.LoadInt32(&macrophageCalls) != 2 {
+		t.Fatalf("macrophage call count = %d, want 2", atomic.LoadInt32(&macrophageCalls))
+	}
+}
+
+// TestShouldBudRecursiveDebuggerCoversMacrophage locks in the specific
+// substring-matching contract shouldBudRecursiveDebugger relies on: a step
+// whose ID merely contains "macrophage" gets the recursive-debugger retry
+// loop, exactly like "verifier", and the existing 3-generation debugger cap
+// still applies to it.
+func TestShouldBudRecursiveDebuggerCoversMacrophage(t *testing.T) {
+	cases := []struct {
+		name string
+		step *SequenceStep
+		want bool
+	}{
+		{"plain macrophage step", &SequenceStep{ID: "macrophage"}, true},
+		{"namespaced macrophage step", &SequenceStep{ID: "macrophage-fuzz-1"}, true},
+		{"unrelated step", &SequenceStep{ID: "worker"}, false},
+		{
+			"debugger cap already exhausted",
+			&SequenceStep{ID: "macrophage-debugger-debugger-debugger"},
+			false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldBudRecursiveDebugger(tc.step); got != tc.want {
+				t.Fatalf("shouldBudRecursiveDebugger(%q) = %v, want %v", tc.step.ID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunSequenceAppendsDynamicSteps(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dynamic.yaml")
