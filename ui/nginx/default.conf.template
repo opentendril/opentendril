@@ -43,7 +43,16 @@ server {
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options DENY always;
     add_header Referrer-Policy no-referrer always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+    # style-src keeps 'unsafe-inline' only as a fallback for browsers that
+    # don't understand the CSP3 style-src-elem/style-src-attr split below
+    # (issue #171 CSP tightening). Where the split is understood:
+    #   - style-src-attr allows the React inline style="" attributes the UI
+    #     actually uses (e.g. ui/src/components/CommandCenter.tsx).
+    #   - style-src-elem locks <style> tags / stylesheets to 'self', so an
+    #     XSS payload can no longer inject an arbitrary <style> element for
+    #     CSS-based exfiltration or UI redress. script-src already blocks
+    #     inline/eval script execution; this closes the analogous style gap.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
 
     # ---- Static SPA shell ---------------------------------------------------
     location / {
