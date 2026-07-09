@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -74,9 +77,19 @@ func runServeCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	apiKey := resolveServeAPIKey()
-	if apiKey == "" {
-		log.Println("⚠️ WARNING: OPENTENDRIL_API_KEY is not set. API endpoints are running without authentication.")
+	tendrilDir := "./.tendril"
+
+	// The Stem must never serve its API unauthenticated (issue #171 finding
+	// 1): an explicit key wins, otherwise a previously generated key is
+	// reused, otherwise a new one is generated and persisted so the
+	// zero-config CLI/dashboard flow keeps working without a fail-open gap.
+	apiKey, generatedKey, err := getOrCreateAPIKey(tendrilDir)
+	if err != nil {
+		log.Fatalf("⚠️ Failed to establish an API key: %v", err)
+	}
+	if generatedKey {
+		log.Printf("🔑 Generated API key (saved to %s): %s", apiKeyFilePath(tendrilDir), apiKey)
+		log.Println("   Set OPENTENDRIL_API_KEY to use your own instead.")
 	}
 
 	bus := eventbus.New()
@@ -120,7 +133,6 @@ func runServeCmd(ctx context.Context, args []string) {
 		log.Printf("%d remote telemetry sink(s) attached from %s", len(remoteSinks), telemetry.EnvRemoteSinks)
 	}
 
-	tendrilDir := "./.tendril"
 	telemetryPath := filepath.Join(tendrilDir, "telemetry.yaml")
 	if cfg, err := telemetry.LoadConfig(telemetryPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -148,7 +160,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux := http.NewServeMux()
 
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir("./dashboard"))))
-	mux.HandleFunc("/ws", gateway.HandleWebSocket(bus))
+	mux.HandleFunc("/ws", withWebSocketAuth(apiKey, gateway.HandleWebSocket(bus)))
 
 	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus, sessions, history)))
 	mux.HandleFunc("GET /health", handleHealth)
@@ -196,7 +208,13 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
-	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(strings.TrimSpace(os.Getenv("ADMIN_TOKEN")), meshServer.HandleAdminIssueToken))
+	adminKey := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	if adminKey == "" {
+		// No dedicated admin secret configured: fall back to the Stem's own
+		// (never-empty) API key rather than fail open on mesh token issuance.
+		adminKey = apiKey
+	}
+	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, meshServer.HandleAdminIssueToken))
 	mux.HandleFunc("/v1/mesh/graft", meshServer.HandleGraftWebSocket)
 
 	port := os.Getenv("PORT")
@@ -231,7 +249,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	go func() {
 		gatewayMux := http.NewServeMux()
-		gatewayMux.HandleFunc("/ws", gateway.HandleWebSocket(bus))
+		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, gateway.HandleWebSocket(bus)))
 		gatewayServer := &http.Server{
 			Addr:    ":" + gatewayPort,
 			Handler: gatewayMux,
@@ -255,17 +273,89 @@ func resolveServeAPIKey() string {
 	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 }
 
-func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
-	if strings.TrimSpace(apiKey) == "" {
-		return next
+// apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
+// mirroring the getOrCreateMemoryKey pattern (cmd-memory.go) used for the
+// rhizome encryption key.
+func apiKeyFilePath(tendrilDir string) string {
+	return filepath.Join(tendrilDir, "api-key")
+}
+
+func readPersistedAPIKey(tendrilDir string) string {
+	content, err := os.ReadFile(apiKeyFilePath(tendrilDir))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(content))
+}
+
+// getOrCreateAPIKey resolves the Stem's bearer key: OPENTENDRIL_API_KEY/
+// ADMIN_TOKEN win, then a previously generated key on disk, then a freshly
+// generated one persisted for next time. It never returns an empty key, so
+// the Stem can never come up serving its API unauthenticated (issue #171
+// finding 1).
+func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
+	if key = resolveServeAPIKey(); key != "" {
+		return key, false, nil
+	}
+	if key = readPersistedAPIKey(tendrilDir); key != "" {
+		return key, false, nil
 	}
 
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", false, fmt.Errorf("generate API key: %w", err)
+	}
+	key = hex.EncodeToString(buf)
+
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		return "", false, fmt.Errorf("create %s: %w", tendrilDir, err)
+	}
+	if err := os.WriteFile(apiKeyFilePath(tendrilDir), []byte(key+"\n"), 0o600); err != nil {
+		return "", false, fmt.Errorf("persist generated API key: %w", err)
+	}
+	return key, true, nil
+}
+
+// bearerMatches compares an Authorization header against the configured key
+// in constant time (issue #171 finding 4).
+func bearerMatches(header, apiKey string) bool {
+	want := "Bearer " + apiKey
+	got := strings.TrimSpace(header)
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if strings.TrimSpace(r.Header.Get("Authorization")) != "Bearer "+apiKey {
+		// An empty apiKey is a caller bug, not an invitation to skip auth:
+		// fail closed rather than repeat issue #171 finding 1.
+		if strings.TrimSpace(apiKey) == "" || !bearerMatches(r.Header.Get("Authorization"), apiKey) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
+	}
+}
+
+// withWebSocketAuth gates a WebSocket upgrade handler behind the same bearer
+// key as the REST/MCP surface (issue #171 finding 2). Browsers cannot attach
+// custom headers to the native WebSocket handshake, so a `key` query
+// parameter is accepted alongside the Authorization header used by non-browser
+// clients (e.g. the CLI's gorilla/websocket dialer).
+func withWebSocketAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(apiKey) == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if bearerMatches(r.Header.Get("Authorization"), apiKey) {
+			next(w, r)
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("key")), []byte(apiKey)) == 1 {
+			next(w, r)
+			return
+		}
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 	}
 }
 

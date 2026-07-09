@@ -117,11 +117,15 @@ export const stemApi = {
 
 /** Build the /ws URL for a connection (ws:// or wss:// derived from baseUrl).
  *  ?replay=100 asks the gateway to prepend the bus's recent in-memory event
- *  history so a refreshed client re-grows sequence state with no session id. */
+ *  history so a refreshed client re-grows sequence state with no session id.
+ *  The bearer key rides as `?key=` too: the Stem now requires auth on /ws
+ *  (issue #171 finding 2), and the browser's native WebSocket API cannot set
+ *  an Authorization header on the upgrade request. */
 export function websocketUrl(conn: StemConnection): string {
+  const key = conn.apiKey ? `&key=${encodeURIComponent(conn.apiKey)}` : "";
   if (!conn.baseUrl) {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/ws?replay=100`;
+    return `${proto}//${window.location.host}/ws?replay=100${key}`;
   }
-  return conn.baseUrl.replace(/^http/, "ws") + "/ws?replay=100";
+  return conn.baseUrl.replace(/^http/, "ws") + `/ws?replay=100${key}`;
 }

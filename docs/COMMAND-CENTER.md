@@ -52,8 +52,11 @@ It leans on three Phase 1 backend capabilities:
 ## 2. REST surface consumed by the Command Center
 
 All endpoints are served by the Go Stem on its API port (default `:8080`) and
-authenticated with the operator bearer key (`OPENTENDRIL_API_KEY`) when one is
-configured. Handlers: `cmd/stem/internal/api/sessions.go`.
+authenticated with the operator bearer key. `OPENTENDRIL_API_KEY` (or
+`ADMIN_TOKEN`) sets it explicitly; if neither is set, the Stem generates one on
+first run and persists it to `.tendril/api-key` (printed once to the log) —
+the API is never served unauthenticated (issue #171). Handlers:
+`cmd/stem/internal/api/sessions.go`.
 
 | Method & path | Used for |
 | --- | --- |
@@ -73,6 +76,14 @@ The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` wh
 ---
 
 ## 3. WebSocket surface — the EventBus gateway (`/ws`)
+
+`/ws` requires the same bearer key as the REST surface (issue #171). Native
+WebSocket clients (e.g. the CLI's gorilla/websocket dialer) send it as an
+`Authorization: Bearer <key>` header on the upgrade request; browsers cannot
+attach custom headers to a WebSocket handshake, so the Command Center instead
+appends it as a `?key=` query parameter (`ui/src/lib/api.ts#websocketUrl`).
+Gating is applied identically on both the main API mux (`:8080`) and the
+dedicated gateway listener (`:9090`).
 
 Handler: `cmd/stem/internal/gateway/gateway.go`. On connect the client receives
 a `{"type":"connected"}` frame, then a live stream of EventBus events. Each
