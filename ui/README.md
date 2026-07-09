@@ -84,6 +84,20 @@ so `/v1`, `/health`, and `/ws` resolve without cross-origin requests — the Ste
 sets no CORS headers by design. A full Stem URL in onboarding is only for a
 cross-origin Stem that has been configured to allow it.
 
+### Testing
+
+```bash
+npm run test:e2e   # builds ui/dist, serves it via `vite preview`, runs Playwright
+```
+
+`tests/e2e.spec.ts` is a foundational Playwright suite covering onboarding,
+the `/ws` EventBus connection, and session-rail rendering. It mocks the Go
+Stem entirely at the network layer — HTTP via `page.route`, `/ws` via
+`page.routeWebSocket` — so it needs no Docker, no real Stem, and no LLM
+provider, and runs identically in CI. Playwright lives in `devDependencies`
+only; `ui/Dockerfile`'s production stage copies just `dist/`, never
+`node_modules`, so it never reaches the shipped image.
+
 ### Onboarding (no `.env`)
 
 On first load a welcome screen asks a non-technical operator for the Stem
