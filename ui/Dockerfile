@@ -32,6 +32,7 @@ ENV STEM_HOST=host.docker.internal \
     STEM_GATEWAY_PORT=9090
 
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chmod=755 nginx/30-check-bind.sh /docker-entrypoint.d/30-check-bind.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 8080

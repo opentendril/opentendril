@@ -223,6 +223,7 @@ services:
       STEM_HOST: ${STEM_HOST:-host.docker.internal}
       STEM_PORT: ${STEM_PORT:-8080}
       STEM_GATEWAY_PORT: ${STEM_GATEWAY_PORT:-9090}
+      UI_BIND: ${UI_BIND:-127.0.0.1}
     # Hardening: non-root image (nginx-unprivileged), immutable root fs,
     # no capabilities, no privilege escalation.
     read_only: true
