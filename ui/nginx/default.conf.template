@@ -1,0 +1,90 @@
+# Command Center front: static SPA + single-origin reverse proxy to the
+# host Stem. Rendered at container start by the nginx image entrypoint;
+# only ${STEM_*} variables are substituted (NGINX_ENVSUBST_FILTER=^STEM_),
+# every other $variable below is native nginx.
+#
+# Security posture (issue #160):
+#   - Single origin: the browser only ever talks to this container, so the
+#     Stem needs no CORS headers (adding them was explicitly rejected).
+#   - Auth passthrough: the operator's `Authorization: Bearer` key is
+#     forwarded untouched; the Stem's withAPIKeyAuth remains the sole
+#     authority. This proxy adds no credentials and bypasses nothing.
+#   - Nothing else on the host is reachable: only /health, /v1*, and /ws
+#     are proxied; every other path serves the static bundle.
+
+# WebSocket upgrade negotiation (issue #160 acceptance criterion).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# REST + MCP surface on the Stem's main API port.
+upstream stem_api {
+    server ${STEM_HOST}:${STEM_PORT};
+}
+
+# /ws prefers the dedicated gateway listener (:9090). The Stem mounts the
+# same /ws handler on the main API mux and degrades gracefully when the
+# gateway port fails to bind (cmd/stem/cmd-serve.go) — mirror that here
+# with a backup upstream.
+upstream stem_ws {
+    server ${STEM_HOST}:${STEM_GATEWAY_PORT};
+    server ${STEM_HOST}:${STEM_PORT} backup;
+}
+
+server {
+    listen 8080;
+    server_name _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    # Hardening headers (apply to the SPA and proxied API responses alike).
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options DENY always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+
+    # ---- Static SPA shell ---------------------------------------------------
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # ---- Reverse proxy: the Stem's documented API surface -------------------
+    location = /health {
+        proxy_pass http://stem_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # /v1 and everything under it: sessions, history/events/sprout-runs,
+    # chat completions, config, MCP. Upgrade headers included so any future
+    # WebSocket endpoint under /v1 (e.g. mesh grafting) also negotiates.
+    location /v1 {
+        proxy_pass http://stem_api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- Live EventBus feed (WebSocket) --------------------------------------
+    location = /ws {
+        proxy_pass http://stem_ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $connection_upgrade;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # An idle operator dashboard must not be disconnected mid-shift.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+}

@@ -136,10 +136,55 @@ unchanged.
 
 ---
 
-## 5. Deployment
+## 5. Deployment — the containerized UI front (#160)
 
-The UI is a static bundle (`ui/dist/`) with no server of its own. In production
-it is served from the **same origin as the Stem** (or behind a reverse proxy
-fronting both), so `/v1`, `/health`, and `/ws` resolve same-origin — the Stem
-sets no CORS headers. In development, Vite proxies those paths to the Stem via
-`STEM_TARGET`. See [`ui/README.md`](../ui/README.md) for the exact commands.
+The Command Center ships as a **separate, optional, isolated, containerized
+component**: a hardened nginx container (built by
+[`ui/Dockerfile`](../ui/Dockerfile), configured by
+[`ui/nginx/default.conf.template`](../ui/nginx/default.conf.template)) that
+serves the static bundle **and** reverse-proxies the Stem's documented API
+surface, giving the browser a single origin. The Stem itself stays **on the
+host and headless** (#158) — it never serves the UI, and the system is fully
+operable with this container absent.
+
+```
+   Operator's browser ── single origin, e.g. http://127.0.0.1:4173
+         │
+         ▼
+   ┌───────────────────────────────────────────────┐
+   │   ui container (nginx, non-root, read-only)   │   docker compose --profile ui
+   │     /            → static ui/dist bundle      │
+   │     /health /v1* → host.docker.internal:8080  │
+   │     /ws          → host.docker.internal:9090  │   (falls back to :8080)
+   └───────────────────────────────────────────────┘
+         │  host-gateway
+         ▼
+   Unified Go Stem (host daemon — headless, unchanged)
+```
+
+- **Opt-in:** the `ui` compose service sits behind the `ui` profile and never
+  starts unless `--profile ui` is passed. One command brings it up alongside
+  the host Stem: `docker compose --profile ui up -d`.
+- **Single origin, no CORS:** the browser only ever talks to the container, so
+  the Stem needs no CORS headers (adding them was explicitly rejected in #160).
+  In development, Vite's proxy plays the same role via `STEM_TARGET`.
+- **Auth preserved:** the proxy forwards the operator's bearer key untouched;
+  the Stem's `withAPIKeyAuth` remains the sole authority. Only `/health`,
+  `/v1*`, and `/ws` are proxied — nothing else on the host is reachable.
+- **WebSocket upgrade:** the `/ws` proxy speaks HTTP/1.1 with
+  `Upgrade`/`Connection` headers, prefers the dedicated gateway listener
+  (`:9090`), and falls back to the main API mux (`:8080`) — mirroring the
+  Stem's own graceful gateway-bind degradation (§4).
+- **Hardened:** non-root image (`nginx-unprivileged`), read-only root
+  filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
+  port binding by default.
+- **Growth path:** any future server-side layer — BFF, operator auth/SSO,
+  enterprise integration, the optional concierge mini-model (#164) — grows
+  **inside this UI component**, never in the Stem. The Stem's surface stays
+  the headless CLI/MCP/OpenAPI capability core (#158, #159).
+
+The legacy `/dashboard/` file handler on the Stem predates the Command Center
+and is untouched by this topology; it is a candidate for future cleanup.
+
+See [`ui/README.md`](../ui/README.md) for commands, configuration variables,
+and the manual static-build alternative.

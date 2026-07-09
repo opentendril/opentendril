@@ -144,6 +144,16 @@ the documented REST + WebSocket surface, and renders live orchestration as a
 **living botanical garden**: parallel sprouts emerge and wither, mycelial merges
 converge, and phenotypic-selection runs compete for fitness on screen.
 
+It is **optional and containerized** — one command brings it up alongside the
+host Stem (no Node/npm required), served from a single origin that
+reverse-proxies the Stem's API and `/ws` surfaces:
+
+```bash
+docker compose --profile ui up -d               # http://127.0.0.1:4173
+```
+
+For UI development, run the Vite dev server instead:
+
 ```bash
 cd ui
 npm install

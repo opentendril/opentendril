@@ -195,6 +195,55 @@ services:
       start_period: 120s
 
   # -------------------------------------------------------------------------
+  # OS of OT — Command Center UI front (opt-in via Docker Profile)  [#160]
+  #
+  # Separate, optional, isolated, containerized. Serves the built ui/dist
+  # AND reverse-proxies /v1, /health, and /ws to the HOST Stem, so the
+  # browser sees a single origin (no CORS anywhere, Stem auth preserved).
+  # The Stem stays headless (#158) and on the host; the system is fully
+  # operable without this service. Requires no local Node/npm — the image
+  # builds the bundle itself.
+  #
+  # Usage: docker compose --profile ui up -d
+  #        → http://127.0.0.1:4173  (override with UI_BIND / UI_PORT)
+  # -------------------------------------------------------------------------
+  ui:
+    build: ui
+    profiles: ["ui"]
+    ports:
+      # Loopback-only by default (secure by default). Set UI_BIND=0.0.0.0
+      # to expose on the LAN — the Stem's bearer-key auth still gates every
+      # proxied API call.
+      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-4173}:8080"
+    extra_hosts:
+      # Reach the host Stem from inside the container (same precedent as
+      # the tendril service above).
+      - "host.docker.internal:host-gateway"
+    environment:
+      STEM_HOST: ${STEM_HOST:-host.docker.internal}
+      STEM_PORT: ${STEM_PORT:-8080}
+      STEM_GATEWAY_PORT: ${STEM_GATEWAY_PORT:-9090}
+    # Hardening: non-root image (nginx-unprivileged), immutable root fs,
+    # no capabilities, no privilege escalation.
+    read_only: true
+    tmpfs:
+      - /tmp
+      # The image entrypoint renders the nginx config template here at
+      # start; uid 101 is the unprivileged nginx user.
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Checks the UI front itself, not the Stem: the dashboard stays up
+      # (and shows reachability) even while the host Stem is down.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
   # Automated Test Suite (Immune System)
   # Run ephemerally via: docker compose --profile test run --rm test-<suite>
   # -------------------------------------------------------------------------

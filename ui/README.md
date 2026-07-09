@@ -33,18 +33,56 @@ The proxy (see [`vite.config.ts`](./vite.config.ts)) forwards `/v1`, `/health`,
 and `/ws` (with WebSocket upgrade) to the Stem, so the browser makes only
 same-origin requests.
 
-### Production
+### Production — the containerized UI front (recommended)
+
+The supported deployment is the **optional, isolated, containerized UI front**
+(issue #160): a hardened nginx container that serves the built bundle **and**
+reverse-proxies `/v1`, `/health`, and `/ws` (with WebSocket upgrade) to the
+**host** Stem via `host.docker.internal`. The browser sees a **single origin**,
+so no CORS configuration exists anywhere and the Stem stays headless (#158).
+Docker is already a core dependency (Tendrils sprout into containerized
+substrates), so this adds no new requirement — and no local Node/npm is needed;
+the image builds the bundle itself in a multi-stage build.
+
+```bash
+docker compose --profile ui up -d     # from the repo root
+# → http://127.0.0.1:4173
+```
+
+The service is **opt-in**: without `--profile ui` it never starts, and the
+system is 100% operable without it (CLI / MCP / OpenAPI are capability-parity
+peers, #159). Configuration knobs (all optional, via environment):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `UI_BIND` | `127.0.0.1` | Host interface to publish on. Loopback-only by default; set `0.0.0.0` for LAN access. |
+| `UI_PORT` | `4173` | Host port for the UI front. |
+| `STEM_HOST` | `host.docker.internal` | Where the container finds the Stem. |
+| `STEM_PORT` | `8080` | The Stem's main API port. |
+| `STEM_GATEWAY_PORT` | `9090` | The dedicated `/ws` gateway listener; the proxy falls back to `STEM_PORT` automatically if it is down. |
+
+**Security posture:** the proxy adds no credentials and bypasses nothing — the
+operator's `Authorization: Bearer` key passes through untouched and the Stem's
+`withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
+are proxied; nothing else on the host is reachable. The container runs as a
+non-root user with a read-only root filesystem, all capabilities dropped, and
+`no-new-privileges`. Future server-side layers (BFF, auth, enterprise SSO, the
+#164 concierge) grow **inside this component** — never in the Stem.
+
+With the container in front, the operator leaves the **Stem address** blank in
+onboarding (same origin) and enters only the operator API key.
+
+### Manual static build (alternative)
 
 ```bash
 npm run build     # type-checks with tsc, emits static assets to ui/dist/
 ```
 
 `ui/dist/` is a self-contained static bundle. Serve it from the **same origin
-as the Stem** (or behind a reverse proxy that fronts both the Stem and these
-assets), so `/v1`, `/health`, and `/ws` resolve without cross-origin requests.
-When served same-origin the operator leaves the **Stem address** blank in
-onboarding; a full URL is only needed for a cross-origin Stem that has been
-configured to allow it.
+as the Stem's API surface** (i.e. behind your own reverse proxy fronting both),
+so `/v1`, `/health`, and `/ws` resolve without cross-origin requests — the Stem
+sets no CORS headers by design. A full Stem URL in onboarding is only for a
+cross-origin Stem that has been configured to allow it.
 
 ### Onboarding (no `.env`)
 
