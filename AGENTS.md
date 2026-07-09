@@ -112,5 +112,9 @@ OpenTendril runs specific background processes restricted to distinct scopes:
 * **Verifier (Genotype: `verifier.json`):** Quality assurance. Compiles code, executes unit test runners (`pytest`, `vitest`, `go test`), and validates linter rules.
 
 ### C. The Debugger (Auto-Correction Sprout)
-* **Scope:** Ephemeral self-repair. Sprouted dynamically by the Conductor when a Verifier step fails.
-* **Terrarium:** Ingests the Verifier's error output and compiler/test logs, applies targeted source patches inside the terrarium, and triggers a verifier retry loop (up to 3 times) to establish dynamic self-healing execution.
+* **Scope:** Ephemeral self-repair. Sprouted dynamically by the Conductor when a Verifier — or a Macrophage (below) — step fails.
+* **Terrarium:** Ingests the failing step's error output and compiler/test/fuzz-crash logs, applies targeted source patches inside the terrarium, and triggers a retry loop (up to 3 times) to establish dynamic self-healing execution.
+
+### D. The Macrophage (Destructive Fuzz Verification, issue #154)
+* **Scope:** The immune system. A step whose ID contains `macrophage` runs the `macrophage.json` genotype, which reads the recently changed code and writes a native Go fuzz test (`FuzzXxx(f *testing.F)`) targeting the most volatile function it touched — parsers, deserializers, anything shaped by attacker/adversarial input.
+* **Terrarium:** After that agent turn, the Conductor deterministically executes the fuzz test (`go test -fuzz=Fuzz -fuzztime=10s`) itself, inside a dedicated Go-toolchain terrarium (`opentendril-go-fuzz:latest`) — network-isolated exactly like every other terrarium, with the host's read-only Go module cache mounted in since this repo doesn't vendor and the terrarium has no network. This is a deliberate, structural check: a crash is decided by exit code and panic/failure-marker detection in Go code (`macrophageFuzzFailed`), never by asking the LLM whether its own fuzz run "passed." A crash is a hard failure that sprouts a recursive Debugger exactly like a Verifier failure does, blocking a clean merge until the Debugger's patch survives re-fuzzing.

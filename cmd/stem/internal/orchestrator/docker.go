@@ -467,6 +467,8 @@ func sproutBuildSpec(imageName string) (string, string, error) {
 	switch imageName {
 	case "opentendril-go:latest":
 		return coreRoot, filepath.Join(coreRoot, "tendrils", "go", "Dockerfile"), nil
+	case macrophageFuzzImage:
+		return coreRoot, filepath.Join(coreRoot, "tendrils", "go-fuzz", "Dockerfile"), nil
 	case "opentendril-typescript:latest":
 		return coreRoot, filepath.Join(coreRoot, "tendrils", "typescript", "Dockerfile"), nil
 	case "opentendril-node:latest":
