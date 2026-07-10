@@ -48,11 +48,13 @@ OpenTendril operates a self-building pipeline. To protect the orchestrator from 
 
 ### Protected Files (No AI Edits in Session)
 The following kernel files must **never** be modified directly via the AI orchestrator's `write_file` or `apply_code_patch` tools during active chat execution:
-* `src/main.py` — Core FastAPI application server
-* `src/tendril.py` — Core agent orchestrator
-* `src/config.py` — Configuration file
+* `cmd/stem/main.go` — Stem kernel entry point
+* `cmd/stem/cmd-serve.go` — daemon / gateway surface bootstrap
+* `cmd/stem/internal/core/` — the governed capability registry and its boundary/parity tests
+* `.github/workflows/` — CI pipelines (the Adaptive Immune System)
+* `.github/dependabot.yml` — supply-chain update policy
 * `.env` — Environment secrets
-* `GUARDRAILS.md`, `DECISIONS.md`, `ARCHITECTURE.md`, `CAPABILITIES.md`, `USE_CASES.md` — Governance files
+* `AGENTS.md`, `GUARDRAILS.md`, `ARCHITECTURE.md`, `SYNTHETIC-TAXONOMY.md`, `CAPABILITIES.md`, `USE-CASES.md` — Governance files
 
 ### Staged Modification Pipeline
 If these protected files must be edited, they must route through the **`staged_edit`** tool. This tool:
@@ -64,6 +66,6 @@ If these protected files must be edited, they must route through the **`staged_e
 ---
 
 ## 📚 Documentation Governance
-* No major design shift, architectural choice, or branding change exists unless recorded in `DECISIONS.md`.
+* No major design shift, architectural choice, or branding change exists unless recorded where decisions actually live: a Design-RFC issue (label `design-rfc`, per the AGENTS.md 3-gate lifecycle) and/or a `docs/DESIGN-*.md` document.
 * Technical structures are maintained in `ARCHITECTURE.md`.
-* Progress, roadmaps, and immediate task lists are maintained in `PROGRESS.md` and `task.md`.
+* Progress and roadmaps are maintained in `PROGRESS.md` and `ROADMAP.md`.
