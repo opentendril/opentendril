@@ -22,9 +22,9 @@ const (
 
 // IncomingMessage is what clients send over WebSocket.
 type IncomingMessage struct {
-	Type      string `json:"type"`                 // "message", "stop", "ping"
-	Content   string `json:"content,omitempty"`    // User's message text
-	Provider  string `json:"provider,omitempty"`   // LLM provider preference
+	Type      string `json:"type"`                // "message", "stop", "ping"
+	Content   string `json:"content,omitempty"`   // User's message text
+	Provider  string `json:"provider,omitempty"`  // LLM provider preference
 	SessionID string `json:"sessionId,omitempty"` // Persistent session
 	RunID     string `json:"runId,omitempty"`     // For stop/cancel commands
 }
@@ -35,7 +35,7 @@ type IncomingMessage struct {
 type OutgoingMessage struct {
 	Type    string `json:"type"`              // "stream.start", "stream.token", "stream.end", "error", "pong"
 	Content string `json:"content,omitempty"` // Token text or full response
-	RunID   string `json:"runId,omitempty"`  // Correlation ID
+	RunID   string `json:"runId,omitempty"`   // Correlation ID
 	Error   string `json:"error,omitempty"`   // Error message if type=="error"
 }
 

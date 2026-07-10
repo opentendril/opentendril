@@ -67,7 +67,7 @@ func runInitFirecracker(ctx context.Context) {
 
 	rootfsPath := filepath.Join(terrariumDir, "rootfs.ext4")
 	fmt.Println("Building Alpine ext4 rootfs (requires Docker privilege for loop mount)...")
-	
+
 	dockerScript := `
 set -e
 echo "Installing e2fsprogs..."

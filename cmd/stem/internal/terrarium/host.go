@@ -55,7 +55,7 @@ func (p *HostProvider) Create(ctx context.Context, spec TerrariumSpec) (Terrariu
 	}
 
 	cmd := exec.CommandContext(ctx, spec.Command[0], spec.Command[1:]...)
-	
+
 	if workingDir := strings.TrimSpace(spec.WorkingDir); workingDir != "" {
 		cmd.Dir = workingDir
 	}
@@ -173,7 +173,7 @@ func (s *hostTerrarium) CopyIn(ctx context.Context, payloads []FilePayload) erro
 
 	for _, payload := range payloads {
 		targetPath := filepath.Join(baseDir, filepath.Clean(payload.Path))
-		
+
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 			return fmt.Errorf("create copy-in parent dir: %w", err)
 		}
@@ -283,7 +283,7 @@ func (s *hostTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandResul
 	} else if s.workingDir != "" {
 		cmd.Dir = s.workingDir
 	}
-	
+
 	cmd.Env = os.Environ()
 	for _, key := range sortedKeys(spec.Environment) {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, spec.Environment[key]))
@@ -389,7 +389,7 @@ func (s *hostTerrarium) Stop(ctx context.Context) error {
 		if s.stdin != nil {
 			_ = s.stdin.Close()
 		}
-		
+
 		if s.cmd != nil && s.cmd.Process != nil {
 			_ = s.cmd.Process.Kill()
 		}
