@@ -51,6 +51,16 @@ The single source of truth for execution flow and orchestrator security. It runs
     *   Receives structured JSON command payloads from the Go Stem host over persistent input/output pipes.
     *   Runs compilers, linters, and unit test suites inside the isolated container, keeping unverified code execution away from the developer's host machine.
 
+### C. Branches (Capability Groups)
+*   **Role:** Logical security zones or capability groupings initialized by the Stem at boot time (e.g., Core Branch, Enterprise Branch).
+*   **Responsibilities:** They dictate the blast radius and authorization scope. A Sprout that grows on the Core Branch physically cannot access integrations (Tendrils) located on the Enterprise Branch.
+
+### D. Tendrils (External Integrations)
+*   **Role:** Persistent, modular integration plugins that reach out and attach to external enterprise systems (e.g., GCP, AWS, Datadog) without bloating the lightweight Go Stem binary. Tendrils are **grafted** onto specific Branches.
+*   **Architectural Approaches:**
+    1.  **Downstream MCP Servers:** The Stem speaks the Model Context Protocol downstream to external Tendril tools (e.g., `opentendril-gcp-mcp`).
+    2.  **Core Capability Interfaces:** Conditionally compiled Go interfaces (`internal/core`) tailored for enterprise builds using build tags (`go build -tags enterprise`).
+
 ---
 
 ## 3. Terrariumed Execution Pipeline (Git-Safe SDLC)

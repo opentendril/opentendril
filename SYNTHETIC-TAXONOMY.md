@@ -26,13 +26,21 @@ By modeling the system after a plant (Stems, Sprouts, Tendrils, Genotypes, and H
 
 The core execution environment maps to the structural anatomy of a plant.
 
-*   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem transports nutrients and structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI.
+*   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI. It is lean, deterministic, and devoid of any business logic or LLM "smarts".
 *   **Vascular System (Xylem & Phloem)**: The transport mechanisms of the Stem. **Xylem channels** carry transcripts (inputs) from the Roots up to the active Sprouts (leaves). **Phloem channels** carry git diffs and code changes (synthesized sugar/energy) from the Sprouts back down to the Substrate (soil/host repository).
 *   **Vascular Cambium (Vascular Bundles)**: The tissue within the stem that coordinates parallel xylem and phloem transport tubes. This maps to the concurrent step runner managing multiple isolated terrarium channels (parallel execution branches).
-*   **Sprout**: The ephemeral Docker terrarium. A sprout is a brand new, isolated shoot of growth. In OpenTendril, every time a Transcript executes, a fresh container (the Sprout) is created, providing a clean, isolated environment.
-*   **Tendril**: The physical worker (e.g. the Python or Go runtime) inside the Sprout. A tendril is *not* a brain—plants do not have brains. A tendril is a dumb, specialized limb that blindly reaches out, touches code, and runs shell commands based purely on chemical signals it receives.
+*   **Branch**: A Capability Group or Security Zone initialized by the Stem at boot time (e.g., Core Branch, Enterprise Branch). Branches organize Tendrils and limit access scope for Sprouts.
+*   **Tendril**: A persistent external integration plugin (e.g., GitHub, GCP) that is **grafted** onto a specific Branch. Tendrils reach out and attach to external enterprise systems without bloating the Stem.
+*   **Sprout**: An ephemeral, strictly isolated worker container that is dynamically **sprouted** on a Branch to perform a task.
 *   **Rhizome (The Index Engine)**: A continuous underground stem network that stores nutrients and information, connecting the plant under the soil. In OpenTendril, the Rhizome acts as the foundational map of the entire project. It runs in the background, scanning the entire Substrate, parsing code, and storing a topological map of the repository into a local SQLite database for the AI to draw from.
-*   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the dumb Tendril to execute.
+*   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the Sprout.
+
+### Strict Botanical Verbs
+
+To maintain clarity, these verbs have specific architectural meanings:
+*   **Branching**: The act of the Stem initializing different Capability Groups/Security Zones at boot time based on configuration.
+*   **Grafting**: The act of installing or attaching a persistent plugin (Tendril) onto a Branch.
+*   **Sprouting**: The dynamic, real-time act of the system spinning up an ephemeral Docker container (Sprout) to execute a task.
 
 ---
 
