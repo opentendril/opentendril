@@ -27,9 +27,9 @@ type adminIssueTokenRequest struct {
 	Issuer        string `json:"issuer,omitempty"`
 	Subject       string `json:"subject,omitempty"`
 	Audience      string `json:"audience,omitempty"`
-	MeshScope     string `json:"mesh-scope,omitempty"`
-	WorkspacePath string `json:"workspace-path,omitempty"`
-	TokenID       string `json:"token-id,omitempty"`
+	MeshScope     string `json:"meshScope,omitempty"`
+	WorkspacePath string `json:"workspacePath,omitempty"`
+	TokenID       string `json:"tokenId,omitempty"`
 	TTL           string `json:"ttl,omitempty"`
 }
 

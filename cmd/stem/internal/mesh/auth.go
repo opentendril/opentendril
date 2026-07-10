@@ -77,8 +77,8 @@ type TokenClaims struct {
 	ExpiresAt     int64    `json:"exp,omitempty"`
 	NotBefore     int64    `json:"nbf,omitempty"`
 	ID            string   `json:"jti,omitempty"`
-	MeshScope     string   `json:"mesh-scope,omitempty"`
-	WorkspacePath string   `json:"workspace-path,omitempty"`
+	MeshScope     string   `json:"meshScope,omitempty"`
+	WorkspacePath string   `json:"workspacePath,omitempty"`
 }
 
 type jwtHeader struct {

@@ -26,11 +26,11 @@ type Client struct {
 
 type graftRequest struct {
 	Type          string `json:"type"`
-	WorkspacePath string `json:"workspace-path,omitempty"`
+	WorkspacePath string `json:"workspacePath,omitempty"`
 	Branch        string `json:"branch,omitempty"`
-	CommitMessage string `json:"commit-message,omitempty"`
-	CommitHash    string `json:"commit-hash,omitempty"`
-	SequencePath  string `json:"sequence-path,omitempty"`
+	CommitMessage string `json:"commitMessage,omitempty"`
+	CommitHash    string `json:"commitHash,omitempty"`
+	SequencePath  string `json:"sequencePath,omitempty"`
 	Patch         string `json:"patch"`
 }
 
@@ -39,7 +39,7 @@ type graftMessage struct {
 	Status     string `json:"status,omitempty"`
 	Stream     string `json:"stream,omitempty"`
 	Message    string `json:"message,omitempty"`
-	CommitHash string `json:"commit-hash,omitempty"`
+	CommitHash string `json:"commitHash,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
