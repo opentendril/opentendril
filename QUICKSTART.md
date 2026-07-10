@@ -62,11 +62,15 @@ The wizard will generate a `.env` file containing your configurations in the roo
 
 ## Step 3 — Boot the Orchestrator API
 
-Start the Go Stem background orchestrator API server:
+Start the Go Stem background orchestrator API server natively from the repository:
 
 ```bash
-tendril serve
+make up
 ```
+
+This runs `go run ./cmd/stem serve` on the Stem API port (`http://localhost:8080`).
+The remaining compose services are optional: use `docker compose --profile ui up`
+to launch the UI, or `make test-stem` to run the Go test container.
 
 Expected output:
 ```
