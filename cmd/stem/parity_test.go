@@ -26,27 +26,35 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
+	root := t.TempDir()
 	svc := core.NewService(manager).WithGenome(core.GenomeOps{
-		Root:   t.TempDir(),
+		Root:   root,
 		Reduce: func(context.Context, string) error { return nil },
 		Evolve: func(context.Context, string) error { return nil },
+	}).WithPlasmid(core.PlasmidOps{
+		Root: root,
+		Inject: func(context.Context, string, string) (core.PlasmidInjection, error) {
+			return core.PlasmidInjection{}, nil
+		},
 	})
 	rest := receptors.NewSessionsHandler(svc, manager, nil)
 	genomeRest := receptors.NewGenomeHandler(svc)
+	plasmidRest := receptors.NewPlasmidHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
+	plasmidRest.Register(mux, nil)
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -102,17 +110,19 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
-	//          (sessions handler + genome handler).
+	//          (sessions + genome + plasmid handlers).
 	//   MCP  — names parsed from the live tools/list response.
 	//   CLI  — capabilities of the subcommands registered on the command trees
-	//          (`tendril session` + `tendril genome`).
+	//          (`tendril session` + `tendril genome` + `tendril plasmid`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
+	restCaps = append(restCaps, plasmidRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
+	cliCaps = append(cliCaps, plasmidCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
@@ -123,7 +133,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -302,6 +312,19 @@ func (m *mockCore) GenomeEvolve(_ context.Context) (string, error) {
 	return ".tendril/genome/epigenetics.md", nil
 }
 
+func (m *mockCore) PlasmidList(_ context.Context) ([]string, error) {
+	m.record("PlasmidList", struct{}{})
+	return nil, nil
+}
+
+func (m *mockCore) PlasmidInject(_ context.Context, in core.PlasmidInjectInput) (core.PlasmidInjection, error) {
+	m.record("PlasmidInject", in)
+	return core.PlasmidInjection{
+		Source: ".tendril/genotypes/plasmids/go-rules.md",
+		Dest:   ".tendril/genome/go-rules.md",
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -403,6 +426,24 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return map[string]any{"path": path, "evolved": true}, nil
 			},
 		},
+		{
+			Name:        core.CapPlasmidList,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				return m.PlasmidList(ctx)
+			},
+		},
+		{
+			Name:        core.CapPlasmidInject,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.PlasmidInjectInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.PlasmidInject(ctx, in)
+			},
+		},
 	}
 }
 
@@ -449,9 +490,11 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 
 	rest := receptors.NewSessionsHandler(mock, manager, nil)
 	genomeRest := receptors.NewGenomeHandler(mock)
+	plasmidRest := receptors.NewPlasmidHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
+	plasmidRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
@@ -714,4 +757,92 @@ func TestBehavioralParity_GenomeReduce(t *testing.T) {
 	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
 		t.Fatalf("CLI genome.reduce: Core.GenomeReduce called %d times, want 1", len(calls))
 	}
+}
+
+// TestBehavioralParity_PlasmidInject extends the zero-business-logic proof to
+// the plasmid family (issue #181 slice 2): REST, MCP (governed name and the
+// deprecated injectPlasmid alias), and the CLI dispatch path must each decode
+// an equivalent request into the identical typed input and invoke
+// Core.PlasmidInject exactly once.
+func TestBehavioralParity_PlasmidInject(t *testing.T) {
+	const plasmidName = "go-rules"
+	want := core.PlasmidInjectInput{Name: plasmidName}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOneInjectCall := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("PlasmidInject")
+		if len(calls) != 1 {
+			t.Fatalf("%s plasmid.inject: Core.PlasmidInject called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s plasmid.inject: Core.PlasmidInject received %#v, want %#v", surface, calls[0], want)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/plasmids/inject", "application/json",
+		bytes.NewBufferString(`{"name":"go-rules"}`))
+	if err != nil {
+		t.Fatalf("REST plasmid.inject: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST plasmid.inject status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOneInjectCall(t, "REST")
+
+	// --- MCP (governed name) ----------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plasmid.inject","arguments":{"name":"go-rules"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP plasmid.inject response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP plasmid.inject failed: %s", mcpResp)
+	}
+	assertOneInjectCall(t, "MCP")
+
+	// --- MCP (deprecated alias injectPlasmid routes through the same Core) -----
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"injectPlasmid","arguments":{"name":"go-rules"}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
+		t.Fatalf("parse MCP injectPlasmid response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP injectPlasmid alias failed: %s", aliasResp)
+	}
+	assertOneInjectCall(t, "MCP alias")
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupPlasmidCommand("inject")
+	if !ok {
+		t.Fatal("CLI: no plasmid subcommand registered for \"inject\"")
+	}
+	if command.capability != core.CapPlasmidInject {
+		t.Fatalf("CLI subcommand \"inject\" maps to %q, want %q", command.capability, core.CapPlasmidInject)
+	}
+	input, err := parsePlasmidArgs(command.capability, []string{plasmidName})
+	if err != nil {
+		t.Fatalf("CLI parsePlasmidArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI plasmid.inject: Core.Invoke: %v", err)
+	}
+	assertOneInjectCall(t, "CLI")
 }

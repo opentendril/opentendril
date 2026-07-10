@@ -6,13 +6,14 @@
 // invokable with zero HTTP, CLI, or MCP types in scope.
 //
 // This began as the first slice of Interface Parity (issue #159). It governs
-// the session-lifecycle capability family and, since issue #181 slice 1, the
-// genome family (view/reduce/evolve) — all three surfaces project both
-// identically through this one Core. The remaining Stem capabilities
-// (sprout/run, sequence, plasmid, substrate grafting) are NOT yet part of the
-// governed registry — they are tracked in issue #181, and the parity tests
-// deliberately assert only the governed set so the three surfaces cannot
-// silently diverge on it.
+// the session-lifecycle capability family, the genome family (issue #181
+// slice 1), and the plasmid family (issue #181 slice 2) — all three surfaces
+// project each identically through this one Core. The remaining Stem
+// capabilities (sprout/run, sequence, substrate grafting) are NOT yet part of
+// the governed registry — they are tracked in issue #181, and the parity
+// tests deliberately assert only the governed set so the three surfaces
+// cannot silently diverge on it. plasmid.sign stays deliberately ungoverned
+// (see plasmid.go).
 package core
 
 import (
@@ -46,6 +47,11 @@ type Core interface {
 	GenomeView(ctx context.Context) ([]GenomeSeed, error)
 	GenomeReduce(ctx context.Context) (string, error)
 	GenomeEvolve(ctx context.Context) (string, error)
+
+	// Plasmid family (issue #181, slice 2). Listing is pure filesystem work;
+	// injection runs through the injected PlasmidOps execution port.
+	PlasmidList(ctx context.Context) ([]string, error)
+	PlasmidInject(ctx context.Context, in PlasmidInjectInput) (PlasmidInjection, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
@@ -90,11 +96,13 @@ type SessionHistoryInput struct {
 // --- service implementation -------------------------------------------------
 
 // Service is the concrete Core, backed by the unified SessionManager. It is the
-// only place session-command business logic lives. The genome field is the
-// injected execution port for the genome family (see genome.go / WithGenome).
+// only place session-command business logic lives. The genome and plasmid
+// fields are the injected execution ports for their capability families (see
+// genome.go / WithGenome and plasmid.go / WithPlasmid).
 type Service struct {
 	sessions *session.Manager
 	genome   GenomeOps
+	plasmid  PlasmidOps
 }
 
 // NewService builds a Core over the shared SessionManager.

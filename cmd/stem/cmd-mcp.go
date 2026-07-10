@@ -34,7 +34,10 @@ func runMCPCmd(ctx context.Context, args []string) {
 	} else if sess, err := manager.Sprout(ctx, session.OriginMCP, session.Preferences{}); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to sprout MCP session: %v (continuing without sessions)\n", err)
 	} else {
-		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(core.NewService(manager).WithGenome(genomeOps(resolveRepoRoot(""))))
+		coreSvc := core.NewService(manager).
+			WithGenome(genomeOps(resolveRepoRoot(""))).
+			WithPlasmid(plasmidOps(resolveRepoRoot("")))
+		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
 	}
 

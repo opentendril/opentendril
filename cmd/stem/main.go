@@ -64,7 +64,7 @@ func main() {
 	case "genome":
 		runGenomeCmd(ctx, os.Args[2:])
 	case "plasmid":
-		runPlasmidCmd(os.Args[2:])
+		runPlasmidCmd(ctx, os.Args[2:])
 	case "memory":
 		runMemoryCmd(ctx, os.Args[2:])
 	case "repomap":

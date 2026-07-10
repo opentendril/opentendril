@@ -408,7 +408,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "injectPlasmid",
-				"description": "Injects a modular plasmid rule file (e.g. go-rules, react-style) into the active project genome.",
+				"description": "Deprecated alias of the governed plasmid.inject capability. Injects a modular plasmid rule file (e.g. go-rules, react-style) into the active project genome.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -566,14 +566,21 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
+		// Deprecated alias of the governed plasmid.inject capability (#181
+		// slice 2): same Core, legacy tool name and text rendering preserved
+		// for existing MCP clients. Adapter translation only — the business
+		// logic that used to live inline here is now behind the Core's
+		// PlasmidOps port.
 		if params.Name == "injectPlasmid" {
 			name, ok := params.Arguments["name"].(string)
 			if !ok || strings.TrimSpace(name) == "" {
 				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'name' parameter is required.")
 			}
+			if h.core == nil {
+				return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+			}
 
-			root := resolveRepoRoot("")
-			sourcePath, destPath, alreadyActive, err := conductor.InjectPlasmidIntoGenome(root, name)
+			injection, err := h.core.PlasmidInject(context.Background(), core.PlasmidInjectInput{Name: name})
 			if err != nil {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
@@ -586,9 +593,9 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				})
 			}
 
-			message := fmt.Sprintf("Injected plasmid %s -> %s.", filepath.ToSlash(mustRel(root, sourcePath)), filepath.ToSlash(mustRel(root, destPath)))
-			if alreadyActive {
-				message = fmt.Sprintf("Plasmid already active: %s.", filepath.ToSlash(mustRel(root, destPath)))
+			message := fmt.Sprintf("Injected plasmid %s -> %s.", injection.Source, injection.Dest)
+			if injection.AlreadyActive {
+				message = fmt.Sprintf("Plasmid already active: %s.", injection.Dest)
 			}
 
 			return h.formatResult(req.ID, map[string]interface{}{
