@@ -17,6 +17,7 @@ To understand OpenTendril, you must understand its anatomy:
 *   **The Branches**: Capability groups or security zones initialized by the Stem at boot time to organize integrations and limit access scope.
 *   **The Tendrils**: Lean microservices (ideally written in Go) grafted onto Branches. They act as simple MCP gateways to remote functions and external enterprise systems.
 *   **The Sprouts**: Ephemeral, strictly isolated worker containers that dynamically sprout on a Branch to perform code execution, and are then destroyed.
+*   **The Greenhouse (UI)**: The external observer dashboard. It sits completely outside the biological entity to observe telemetry.
 *   **(Prompt Elements)**: We use **Genotypes** (personas), **Plasmids** (modular context blocks), and **Transcripts** (user tasks) to dynamically assemble instructions for the LLM.
 
 > 📖 **Read the full philosophy:** Explore the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to understand the concept design.
@@ -135,7 +136,7 @@ Make sure `tendril serve` is running, then launch Aider:
 aider --openai-api-base http://localhost:8080/v1 --model openai/tendril
 ```
 
-### 3. Web Command Center (the visual UI)
+### 3. The Greenhouse (Command Center UI)
 
 The **Command Center** is a desktop-grade web dashboard for watching every
 Sprout the Stem is growing in real time — the visual frontend of the "OS of

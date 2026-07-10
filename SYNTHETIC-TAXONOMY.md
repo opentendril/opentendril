@@ -26,7 +26,7 @@ By modeling the system after a plant (Stems, Sprouts, Tendrils, Genotypes, and H
 
 The core execution environment maps to the structural anatomy of a plant.
 
-*   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI. It is lean, deterministic, and devoid of any business logic or LLM "smarts".
+*   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI. It is explicitly **not** a brain (plants do not have brains). It is a vascular routing highway that blindly receives chemical signals (instructions) from the Mycorrhizae (LLM) and routes them to a Branch, triggering a Sprout to grow there. It is lean, deterministic, and devoid of any business logic.
 *   **Vascular System (Xylem & Phloem)**: The transport mechanisms of the Stem. **Xylem channels** carry transcripts (inputs) from the Roots up to the active Sprouts (leaves). **Phloem channels** carry git diffs and code changes (synthesized sugar/energy) from the Sprouts back down to the Substrate (soil/host repository).
 *   **Vascular Cambium (Vascular Bundles)**: The tissue within the stem that coordinates parallel xylem and phloem transport tubes. This maps to the concurrent step runner managing multiple isolated terrarium channels (parallel execution branches).
 *   **Branch**: A Capability Group or Security Zone initialized by the Stem at boot time (e.g., Core Branch, Enterprise Branch). Branches organize Tendrils and limit access scope for Sprouts.
@@ -34,6 +34,13 @@ The core execution environment maps to the structural anatomy of a plant.
 *   **Sprout**: An ephemeral, strictly isolated worker container that is dynamically **sprouted** on a Branch to perform a task.
 *   **Rhizome (The Index Engine)**: A continuous underground stem network that stores nutrients and information, connecting the plant under the soil. In OpenTendril, the Rhizome acts as the foundational map of the entire project. It runs in the background, scanning the entire Substrate, parsing code, and storing a topological map of the repository into a local SQLite database for the AI to draw from.
 *   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the Sprout.
+*   **The Greenhouse (The Observer)**: The Command Center UI. The Greenhouse is structurally outside the plant. It is the pane of glass through which a botanist (the developer) observes the headless organism growing and functioning via telemetry (REST/WebSockets), without being part of the biological execution itself.
+
+### Microservices & Symbiosis
+
+The OpenTendril architecture natively maps to biological microservices:
+*   **Symbiotic Nodules (Tendrils)**: If a plant needs a highly specialized capability—like fixing nitrogen—it doesn't bloat its own core DNA (a monolith). Instead, it interfaces with external, highly specialized organisms (like Rhizobia bacteria in root nodules). OpenTendril Tendrils are Symbiotic Nodules: external microservices (like a GCP or GitHub Tendril) that interface with the Stem to provide a service the Stem doesn't natively build into its core binary.
+*   **Phytomers & Abscission (Sprouts)**: Plants grow in distinct, semi-independent modules (phytomers). If one leaf or branch gets infected, the plant performs **abscission**—it literally drops the infected leaf to protect the core Stem. This is the biological equivalent of microservice fault tolerance. If a Sprout crashes, the Stem simply drops the connection and routes around it. The core organism survives.
 
 ### Strict Botanical Verbs
 
