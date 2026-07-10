@@ -1,12 +1,12 @@
 FROM node:22-alpine AS build
 
-WORKDIR /src/tendrils/node
+WORKDIR /src/sprouts/node
 
-COPY tendrils/node/package.json tendrils/node/tsconfig.json ./
+COPY sprouts/node/package.json sprouts/node/tsconfig.json ./
 
 RUN npm install
 
-COPY tendrils/node/src ./src
+COPY sprouts/node/src ./src
 
 RUN npm run build && npm prune --omit=dev
 
@@ -30,10 +30,10 @@ ENV PATH=$NVM_DIR/v$NODE_VERSION/bin:$PATH
 
 WORKDIR /app
 
-COPY --from=build /src/tendrils/node/dist /opt/opentendril-node/dist
-COPY --from=build /src/tendrils/node/node_modules /opt/opentendril-node/node_modules
-COPY --from=build /src/tendrils/node/package.json /opt/opentendril-node/package.json
-COPY tendrils/node/entrypoint.sh /opt/opentendril-node/entrypoint.sh
+COPY --from=build /src/sprouts/node/dist /opt/opentendril-node/dist
+COPY --from=build /src/sprouts/node/node_modules /opt/opentendril-node/node_modules
+COPY --from=build /src/sprouts/node/package.json /opt/opentendril-node/package.json
+COPY sprouts/node/entrypoint.sh /opt/opentendril-node/entrypoint.sh
 
 RUN chmod +x /opt/opentendril-node/entrypoint.sh
 

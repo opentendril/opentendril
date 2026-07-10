@@ -31,7 +31,7 @@ The generated map is formatted as a compact hierarchical list:
   - func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (string, error)
   - func (d *DockerOrchestrator) resolveImageName(workspace string) string
 
-## [TypeScript] tendrils/typescript/src/main.ts
+## [TypeScript] sprouts/typescript/src/main.ts
 - class TypeScriptExecutor
   - method executeTask(task: Task): Promise<Result>
 
