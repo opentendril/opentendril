@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
 	"log"
 	"net/http"
@@ -325,7 +324,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		tools := []map[string]interface{}{
 			{
 				"name":        "runSequence",
-				"description": "Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence meristem.",
+				"description": "Deprecated alias of the governed sequence.run capability. Runs a YAML sequence from .tendril/sequences/ or a relative path using the parallel sequence meristem.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -743,6 +742,11 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
+		// Deprecated alias of the governed sequence.run capability (#181
+		// slice 4): same Core, legacy tool name, legacy argument-key fallbacks
+		// (path/sequence), and text rendering preserved for existing MCP
+		// clients. Adapter translation only — the execution that used to run
+		// inline here is now behind the Core's SequenceOps port.
 		if params.Name == "runSequence" {
 			pathOrName, ok := params.Arguments["pathOrName"].(string)
 			if !ok || strings.TrimSpace(pathOrName) == "" {
@@ -758,13 +762,12 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			if strings.TrimSpace(pathOrName) == "" {
 				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'pathOrName' parameter is required.")
 			}
+			if h.core == nil {
+				return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+			}
 
-			seq, runErr := conductor.RunSequence(context.Background(), pathOrName, conductor.SequenceRunOptions{
-				Stdout:      io.Discard,
-				Stderr:      os.Stderr,
-				Interactive: false,
-			})
-			summary := summarizeSequenceResult(seq)
+			result, runErr := h.core.SequenceRun(context.Background(), core.SequenceRunInput{PathOrName: pathOrName})
+			summary := summarizeSequenceResult(result)
 			if runErr != nil {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
@@ -1111,21 +1114,23 @@ func resolveRepoRoot(path string) string {
 	return root
 }
 
-func summarizeSequenceResult(seq *conductor.Sequence) string {
-	if seq == nil {
+// summarizeSequenceResult renders the legacy runSequence text summary from
+// the Core's transport-free run result.
+func summarizeSequenceResult(result core.SequenceRunResult) string {
+	if result.Name == "" && len(result.Steps) == 0 {
 		return "Sequence run completed."
 	}
 
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Sequence %s", seq.Name))
-	if strings.TrimSpace(seq.Substrate) != "" {
-		lines = append(lines, fmt.Sprintf("Substrate: %s", filepath.ToSlash(seq.Substrate)))
+	lines = append(lines, fmt.Sprintf("Sequence %s", result.Name))
+	if strings.TrimSpace(result.Substrate) != "" {
+		lines = append(lines, fmt.Sprintf("Substrate: %s", filepath.ToSlash(result.Substrate)))
 	}
-	if strings.TrimSpace(seq.Branch) != "" {
-		lines = append(lines, fmt.Sprintf("Branch: %s", seq.Branch))
+	if strings.TrimSpace(result.Branch) != "" {
+		lines = append(lines, fmt.Sprintf("Branch: %s", result.Branch))
 	}
 	lines = append(lines, "Steps:")
-	for _, step := range seq.Steps {
+	for _, step := range result.Steps {
 		line := fmt.Sprintf("- %s: %s", step.ID, step.Status)
 		if strings.TrimSpace(step.Transcript) != "" {
 			line += fmt.Sprintf(" | %s", strings.TrimSpace(step.Transcript))

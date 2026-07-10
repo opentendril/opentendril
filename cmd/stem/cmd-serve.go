@@ -165,13 +165,14 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.HandleFunc("GET /health", handleHealth)
 
 	// Unified Interface Layer: the transport-free Core owns the session-
-	// lifecycle, genome, plasmid, and substrate-grafting capabilities; the REST, MCP,
+	// lifecycle, genome, plasmid, substrate-grafting, and sequence capabilities; the REST, MCP,
 	// and CLI surfaces are adapters that route through this one service
 	// (issues #159, #181).
 	coreSvc := core.NewService(sessions).
 		WithGenome(genomeOps(resolveRepoRoot(""))).
 		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
-		WithMesh(meshOps())
+		WithMesh(meshOps()).
+		WithSequence(serveSequenceOps(resolveRepoRoot("")))
 
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history)
@@ -196,6 +197,12 @@ func runServeCmd(ctx context.Context, args []string) {
 	// delegation commands.
 	graftHandler := receptors.NewGraftHandler(coreSvc)
 	graftHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, next)
+	})
+
+	// Sequence REST API (adapter, issue #181 slice 4).
+	sequenceHandler := receptors.NewSequenceHandler(coreSvc)
+	sequenceHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 

@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.SequenceHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -50,6 +50,7 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	genomeRest := receptors.NewGenomeHandler(svc)
 	plasmidRest := receptors.NewPlasmidHandler(svc)
 	graftRest := receptors.NewGraftHandler(svc)
+	sequenceRest := receptors.NewSequenceHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
@@ -58,8 +59,10 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
+	sequenceRest.Register(mux, nil)
+
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, plasmidRest, graftRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, graftRest, sequenceRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -115,21 +118,23 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, plasmidRest, graftRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, graftRest, sequenceRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
-	//          (sessions + genome + plasmid + graft handlers).
+	//          (sessions + genome + plasmid + graft + sequence handlers).
 	//   MCP  — names parsed from the live tools/list response.
 	//   CLI  — capabilities of the subcommands registered on the command trees
-	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh`).
+	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril sequence`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
 	restCaps = append(restCaps, plasmidRest.Capabilities()...)
 	restCaps = append(restCaps, graftRest.Capabilities()...)
+	restCaps = append(restCaps, sequenceRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
 	cliCaps = append(cliCaps, plasmidCLICapabilityNames()...)
 	cliCaps = append(cliCaps, meshCLICapabilityNames()...)
+	cliCaps = append(cliCaps, sequenceCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
@@ -140,7 +145,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -342,6 +347,19 @@ func (m *mockCore) MeshPromote(_ context.Context, in core.MeshPromoteInput) (cor
 	return core.MeshPromotion{Workspace: "/workspaces/core", Commit: "deadbeef", PRNumber: in.PRNumber}, nil
 }
 
+func (m *mockCore) SequenceList(_ context.Context) ([]string, error) {
+	m.record("SequenceList", struct{}{})
+	return nil, nil
+}
+
+func (m *mockCore) SequenceRun(_ context.Context, in core.SequenceRunInput) (core.SequenceRunResult, error) {
+	m.record("SequenceRun", in)
+	return core.SequenceRunResult{
+		Name:  "deploy",
+		Steps: []core.SequenceStepOutcome{{ID: "meristem", Status: "matured"}},
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -483,6 +501,24 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return m.MeshPromote(ctx, in)
 			},
 		},
+		{
+			Name:        core.CapSequenceList,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				return m.SequenceList(ctx)
+			},
+		},
+		{
+			Name:        core.CapSequenceRun,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.SequenceRunInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.SequenceRun(ctx, in)
+			},
+		},
 	}
 }
 
@@ -531,11 +567,13 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	genomeRest := receptors.NewGenomeHandler(mock)
 	plasmidRest := receptors.NewPlasmidHandler(mock)
 	graftRest := receptors.NewGraftHandler(mock)
+	sequenceRest := receptors.NewSequenceHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
+	sequenceRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
@@ -1001,5 +1039,110 @@ func TestBehavioralParity_MeshPromote(t *testing.T) {
 	}
 	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
 		t.Fatalf("MCP graftSubstrate alias: Core.MeshGraft called %d times, want 1", len(calls))
+	}
+}
+
+// TestBehavioralParity_SequenceRun extends the zero-business-logic proof to
+// the sequence family (issue #181 slice 4): REST, MCP (governed name and the
+// deprecated runSequence alias, including its legacy `path` argument
+// fallback), and the CLI dispatch path must each decode an equivalent request
+// into the identical typed input and invoke Core.SequenceRun exactly once.
+func TestBehavioralParity_SequenceRun(t *testing.T) {
+	want := core.SequenceRunInput{PathOrName: "deploy", Provider: "local"}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOneRunCall := func(t *testing.T, surface string, wantInput core.SequenceRunInput) {
+		t.Helper()
+		calls := mock.inputsFor("SequenceRun")
+		if len(calls) != 1 {
+			t.Fatalf("%s sequence.run: Core.SequenceRun called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], wantInput) {
+			t.Errorf("%s sequence.run: Core.SequenceRun received %#v, want %#v", surface, calls[0], wantInput)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/sequences/run", "application/json",
+		bytes.NewBufferString(`{"pathOrName":"deploy","provider":"local"}`))
+	if err != nil {
+		t.Fatalf("REST sequence.run: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST sequence.run status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOneRunCall(t, "REST", want)
+
+	// --- MCP (governed name) ------------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sequence.run","arguments":{"pathOrName":"deploy","provider":"local"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP sequence.run response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP sequence.run failed: %s", mcpResp)
+	}
+	assertOneRunCall(t, "MCP", want)
+
+	// --- MCP (deprecated runSequence alias, legacy `path` fallback key) --------
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"runSequence","arguments":{"path":"deploy"}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
+		t.Fatalf("parse MCP runSequence response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP runSequence alias failed: %s", aliasResp)
+	}
+	// The alias never carried provider overrides — it maps to a bare run.
+	assertOneRunCall(t, "MCP alias", core.SequenceRunInput{PathOrName: "deploy"})
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupSequenceCommand("run")
+	if !ok {
+		t.Fatal("CLI: no sequence subcommand registered for \"run\"")
+	}
+	if command.capability != core.CapSequenceRun {
+		t.Fatalf("CLI subcommand \"run\" maps to %q, want %q", command.capability, core.CapSequenceRun)
+	}
+	input, detach, err := parseSequenceArgs(command.capability, []string{"deploy", "--provider", "local"})
+	if err != nil {
+		t.Fatalf("CLI parseSequenceArgs: %v", err)
+	}
+	if detach {
+		t.Fatal("CLI parseSequenceArgs: detach must default to false")
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI sequence.run: Core.Invoke: %v", err)
+	}
+	assertOneRunCall(t, "CLI", want)
+
+	// --- List, quickly: REST and CLI dispatch reach SequenceList ---------------
+	mock.reset()
+	listResp, err := http.Get(server.URL + "/v1/sequences")
+	if err != nil {
+		t.Fatalf("REST sequence.list: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode >= 300 {
+		t.Fatalf("REST sequence.list status = %d", listResp.StatusCode)
+	}
+	if calls := mock.inputsFor("SequenceList"); len(calls) != 1 {
+		t.Fatalf("REST sequence.list: Core.SequenceList called %d times, want 1", len(calls))
 	}
 }

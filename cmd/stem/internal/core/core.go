@@ -7,13 +7,14 @@
 //
 // This began as the first slice of Interface Parity (issue #159). It governs
 // the session-lifecycle capability family, the genome family (issue #181
-// slice 1), the plasmid family (issue #181 slice 2), and the substrate-grafting
-// family (issue #181 slice 3) — all three surfaces project each identically
-// through this one Core. The remaining Stem capabilities (sprout/run, sequence)
-// are NOT yet part of the governed registry — they are tracked in issue #181,
-// and the parity tests deliberately assert only the governed set so the three
-// surfaces cannot silently diverge on it. plasmid.sign and mesh key-management
-// commands stay deliberately ungoverned (see plasmid.go and mesh.go).
+// slice 1), the plasmid family (issue #181 slice 2), the substrate-grafting
+// family (issue #181 slice 3), and the sequence family (issue #181 slice 4) —
+// all three surfaces project each identically through this one Core. The remaining
+// Stem capabilities (sprout/run) are NOT yet part of the governed registry — they
+// are tracked in issue #181, and the parity tests deliberately assert only the
+// governed set so the three surfaces cannot silently diverge on it. plasmid.sign
+// and mesh key-management commands stay deliberately ungoverned (see plasmid.go
+// and mesh.go).
 package core
 
 import (
@@ -58,6 +59,11 @@ type Core interface {
 	MeshGraft(ctx context.Context, in MeshGraftInput) (MeshDelegation, error)
 	MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPromotion, error)
 
+	// Sequence family (issue #181, slice 4). Both operations run through the
+	// injected SequenceOps execution port.
+	SequenceList(ctx context.Context) ([]string, error)
+	SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error)
+
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
 	// appear (and be required) on all three surfaces.
@@ -101,14 +107,15 @@ type SessionHistoryInput struct {
 // --- service implementation -------------------------------------------------
 
 // Service is the concrete Core, backed by the unified SessionManager. It is the
-// only place session-command business logic lives. The genome, plasmid, and
-// mesh fields are the injected execution ports for their capability families
-// (see genome.go, plasmid.go, and mesh.go).
+// only place session-command business logic lives. The genome, plasmid, mesh,
+// and sequence fields are the injected execution ports for their capability families
+// (see genome.go, plasmid.go, mesh.go, and sequence.go).
 type Service struct {
 	sessions *session.Manager
 	genome   GenomeOps
 	plasmid  PlasmidOps
 	mesh     MeshOps
+	sequence SequenceOps
 }
 
 // NewService builds a Core over the shared SessionManager.
