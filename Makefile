@@ -1,4 +1,4 @@
-.PHONY: sprout sprout-all build up down health test clean
+.PHONY: sprout sprout-all build up down health test clean check-all
 
 # --- Sprout Binaries ---
 SPROUT_VERSION := 0.1.0
@@ -45,6 +45,10 @@ test-sprout: ## Run Go tests in a sterile Docker container
 	docker compose --profile test run --rm test-go
 
 test-all: test-core test-sprout ## Run all tests
+
+check-all: ## Full pre-merge gate: clean build + all tests (see CONTRIBUTING.md / TESTING.md)
+	$(MAKE) sprout
+	$(MAKE) test-all
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST_DIR) cmd/stem/tendril
