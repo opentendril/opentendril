@@ -6,18 +6,18 @@ For decades, the software industry has built deterministic systems—rigid state
 
 Trying to force an organic neural network into rigid, deterministic IT structures leads to fragile execution, context window bloat, and severe security vulnerabilities. 
 
-**OpenTendril abandons traditional software architecture in favor of a Synthetic Biological Taxonomy.** By replicating natural evolutionary processes, we have built a highly robust, secure, and adaptable execution engine.
+**OpenTendril abandons traditional software architecture in favor of a Synthetic Biological Taxonomy.** By replicating natural evolutionary processes, we have built a highly secure, decoupled **microservices architecture** for AI orchestration. The goal of OpenTendril is to completely isolate unverified code execution while maintaining a perfectly lean core orchestrator, utilizing discrete plugins as gateways to remote capabilities.
 
 ---
 
 ### The Taxonomy (Biological to IT Mapping)
 To understand OpenTendril, you must understand its anatomy:
 
-*   **The Genotype (System Prompt / Persona):** The core DNA. We don't use generic system prompts; we inject Genotypes that dictate the fundamental identity and constraints of the AI (e.g. `thinker.json`, `verifier.json`, `debugger.json`).
-*   **The Plasmid (Modular Context / Skills):** Modular blocks of context, rules, or Repo Maps (`repomap.md`) injected into the genome on the fly.
-*   **The Transcript (Task / User Prompt):** We do not issue rigid "Tasks." We provide Transcripts—fuzzy, contextual instructions that the Genotype must dynamically interpret and execute.
-*   **The Sprout (Ephemeral Terrarium):** OpenTendril does not run continuous, stateful background agents. For every step, a new isolated *Sprout* (Docker container) instantly boots, executes local commands, and is destroyed.
-*   **The Stem (Go Orchestrator):** The Go-based CLI and API kernel. Just like a physical stem supporting a plant, the Go Stem handles networking, routes LLM completions, and orchestrates terrarium lifecycles.
+*   **The Stem**: The lean, deterministic Go orchestrator. It handles routing and lifecycle management without any business logic or LLM "smarts".
+*   **The Branches**: Capability groups or security zones initialized by the Stem at boot time to organize integrations and limit access scope.
+*   **The Tendrils**: Lean microservices (ideally written in Go) grafted onto Branches. They act as simple MCP gateways to remote functions and external enterprise systems.
+*   **The Sprouts**: Ephemeral, strictly isolated worker containers that dynamically sprout on a Branch to perform code execution, and are then destroyed.
+*   **(Prompt Elements)**: We use **Genotypes** (personas), **Plasmids** (modular context blocks), and **Transcripts** (user tasks) to dynamically assemble instructions for the LLM.
 
 > 📖 **Read the full philosophy:** Explore the [Synthetic Biological Taxonomy](SYNTHETIC-TAXONOMY.md) to understand the concept design.
 > 🛠️ **Read the engineering guide:** Check the [Material & Architecture Guide](TENDRIL-GUIDE.md) to understand how these concepts are physically built (Go, Docker, and protocols).
@@ -138,7 +138,7 @@ aider --openai-api-base http://localhost:8080/v1 --model openai/tendril
 ### 3. Web Command Center (the visual UI)
 
 The **Command Center** is a desktop-grade web dashboard for watching every
-Tendril the Stem is growing in real time — the visual frontend of the "OS of
+Sprout the Stem is growing in real time — the visual frontend of the "OS of
 OT". It is a strictly decoupled React client that talks to the Stem only over
 the documented REST + WebSocket surface, and renders live orchestration as a
 **living botanical garden**: parallel sprouts emerge and wither, mycelial merges
