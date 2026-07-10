@@ -1,0 +1,22 @@
+# Security-only dependency updates (issue #189).
+#
+# `open-pull-requests-limit: 0` disables the scheduled version-update PR
+# stream for each ecosystem while still allowing Dependabot *security*
+# updates (enabled in the repository security settings) to open PRs when a
+# published advisory affects these manifests. This complements the blocking
+# govulncheck gate in ci.yml: govulncheck covers the Go kernel with
+# reachability analysis; Dependabot covers the npm tree (ui/), which no
+# other scanner in this repo watches.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
