@@ -98,14 +98,23 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          # Must track a currently supported Go line: govulncheck findings in
+          # the standard library are only fixed in supported patch releases,
+          # so scanning with an EOL toolchain can never go green.
+          go-version: '1.26.x'
+          check-latest: true
           cache-dependency-path: go.sum
-          
-      # - name: Vulnerability Scan (govulncheck)
-      #   run: |
-      #     go install golang.org/x/vuln/cmd/govulncheck@latest
-      #     cd cmd/stem
-      #     govulncheck ./... || true
+
+      # Blocking CVE gate for the Go kernel (issue #189). Runs at the module
+      # root so it covers the whole binary: cmd/stem AND roots/. govulncheck
+      # only reports vulnerabilities reachable from this code, which keeps it
+      # quiet enough to gate on. If a reachable CVE ever has to be waived to
+      # unblock urgent work, do it with an explicit, dated continue-on-error
+      # commit — never with `|| true`.
+      - name: Vulnerability Scan (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          govulncheck ./...
 
       - name: gofmt Check
         run: |
