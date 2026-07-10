@@ -17,8 +17,8 @@ import (
 	"unicode"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/roots/llm"
 	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/core/roots/llm"
 	"gopkg.in/yaml.v3"
 )
 
