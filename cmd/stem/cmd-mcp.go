@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
+	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 

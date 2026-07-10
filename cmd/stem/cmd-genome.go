@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/conductor"
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 

@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 	"gopkg.in/yaml.v3"
 )

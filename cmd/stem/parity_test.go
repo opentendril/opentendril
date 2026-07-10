@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
