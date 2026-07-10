@@ -1,270 +1,36 @@
 name: opentendril
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tendril_default_db_secret}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD:-tendril_default_redis_secret}
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-tendril_default_redis_secret}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  tendril:
-    build: sprouts/python
-    user: "${UID:-1000}:${GID:-1000}"
-    # Note: No port mapping — the Go Stem (tendril serve) owns :8080.
-    # The Tendril container is an ephemeral worker spawned by the Go Stem via docker run.
-    extra_hosts:
-      # Allow the Tendril container to reach Ollama running on the Docker host
-      - "host.docker.internal:host-gateway"
-    env_file:
-      - path: .env
-        required: false
-      - path: ./data/.env
-        required: false
-    environment:
-      GROK_API_KEY: ${GROK_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      HF_TOKEN: ${HF_TOKEN:-}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tendril_default_db_secret}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-tendril_default_redis_secret}
-      SECRET_KEY: ${SECRET_KEY:-tendril_default_jwt_secret}
-      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-grok}
-      # For host Ollama: set to http://host.docker.internal:11434/v1 (default for local dev)
-      LOCAL_INFERENCE_URL: ${LOCAL_INFERENCE_URL:-http://host.docker.internal:11434/v1}
-      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-qwen2.5-coder:7b}
-      NANO_MODEL_ENABLED: ${NANO_MODEL_ENABLED:-false}
-      TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
-      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
-      TERRARIUM_ENABLED: ${TERRARIUM_ENABLED:-true}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      terrarium:
-        condition: service_started
-    networks:
-      - default
-      - terrarium-net
-    volumes:
-      # Default: Mount internal source code for the "Root Agent" Moat loop
-      - ./sprouts/python/src:/app/src
-      - ./.git:/app/.git
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./static:/app/static
-      - ./sprouts/python/tests:/app/tests
-
-      - ./docs:/app/docs
-      # External project mode: set TENDRIL_PROJECT_PATH in .env
-      # When set, mounts the external repo at /workspace and Tendril edits that.
-      # When unset, defaults to '.' (opentendril itself, self-building mode).
-      - ${TENDRIL_PROJECT_PATH:-.}:/workspace
-    restart: unless-stopped
-
-
-  # Nano profile: Tendril + CPU nano-model (llama-cpp-python, ~400MB larger image)
-  # Opt-in for users who want zero-API-key operation via a CPU local model.
-  # Usage: docker compose --profile nano up
-  tendril-nano:
-    build:
-      context: sprouts/python
-      dockerfile: Dockerfile.nano
-    profiles: ["nano"]
-    user: "${UID:-1000}:${GID:-1000}"
-    ports:
-      - "8080:8080"
-    env_file:
-      - path: .env
-        required: false
-      - path: ./data/.env
-        required: false
-    environment:
-      GROK_API_KEY: ${GROK_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      HF_TOKEN: ${HF_TOKEN:-}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tendril_default_db_secret}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-tendril_default_redis_secret}
-      SECRET_KEY: ${SECRET_KEY:-tendril_default_jwt_secret}
-      DEFAULT_LLM_PROVIDER: ${DEFAULT_LLM_PROVIDER:-nano}
-      LOCAL_INFERENCE_URL: ${LOCAL_INFERENCE_URL:-http://inference:8000/v1}
-      LOCAL_MODEL_NAME: ${LOCAL_MODEL_NAME:-Qwen/Qwen3-8B-AWQ}
-      NANO_MODEL_ENABLED: "true"
-      NANO_MODEL_NAME: ${NANO_MODEL_NAME:-Qwen/Qwen2.5-0.5B-Instruct-GGUF}
-      NANO_MODEL_FILE: ${NANO_MODEL_FILE:-qwen2.5-0.5b-instruct-q4_k_m.gguf}
-      TENDRIL_WORKSPACE_ROOT: ${TENDRIL_WORKSPACE_ROOT:-/app}
-      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
-      TERRARIUM_ENABLED: ${TERRARIUM_ENABLED:-true}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      terrarium:
-        condition: service_started
-    networks:
-      - default
-      - terrarium-net
-    volumes:
-      - ./sprouts/python/src:/app/src
-      - ./.git:/app/.git
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./static:/app/static
-      - ./sprouts/python/tests:/app/tests
-
-      - ./docs:/app/docs
-      - ${TENDRIL_PROJECT_PATH:-.}:/workspace
-    restart: unless-stopped
-
-  # Secure terrarium for code execution (no secrets, no DB, no internet)
-  terrarium:
-    build:
-      context: sprouts/python
-      dockerfile: Dockerfile.terrarium
-    environment:
-      TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
-    volumes:
-      - ${TENDRIL_PROJECT_PATH:-.}:/workspace:ro
-      - ./data:/terrarium-data
-    networks:
-      - terrarium-net
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '1.0'
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9999/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
-
-  # GPU Inference (opt-in via Docker Profile)
-  inference:
-    image: vllm/vllm-openai:latest
-    profiles: ["gpu"]
-    ports:
-      - "8000:8000"
-    environment:
-      NVIDIA_VISIBLE_DEVICES: "0"
-    command: >
-      --model ${LOCAL_MODEL_NAME:-Qwen/Qwen3-8B-AWQ}
-      --quantization awq
-      --max-model-len 8192
-      --gpu-memory-utilization 0.85
-      --host 0.0.0.0
-      --port 8000
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-
-  # -------------------------------------------------------------------------
-  # OS of OT — Command Center UI front (opt-in via Docker Profile)  [#160]
-  #
-  # Separate, optional, isolated, containerized. Serves the built ui/dist
-  # AND reverse-proxies /v1, /health, and /ws to the HOST Stem, so the
-  # browser sees a single origin (no CORS anywhere, Stem auth preserved).
-  # The Stem stays headless (#158) and on the host; the system is fully
-  # operable without this service. Requires no local Node/npm — the image
-  # builds the bundle itself.
-  #
-  # Usage: docker compose --profile ui up -d
-  #        → http://127.0.0.1:4173  (override with UI_BIND / UI_PORT)
-  # -------------------------------------------------------------------------
   ui:
     build: ui
     profiles: ["ui"]
     ports:
-      # Loopback-only by default (secure by default). Set UI_BIND=0.0.0.0
-      # to expose on the LAN — the Stem's bearer-key auth still gates every
-      # proxied API call.
       - "${UI_BIND:-127.0.0.1}:${UI_PORT:-4173}:8080"
     extra_hosts:
-      # Reach the host Stem from inside the container (same precedent as
-      # the tendril service above).
       - "host.docker.internal:host-gateway"
     environment:
       STEM_HOST: ${STEM_HOST:-host.docker.internal}
       STEM_PORT: ${STEM_PORT:-8080}
       STEM_GATEWAY_PORT: ${STEM_GATEWAY_PORT:-9090}
       UI_BIND: ${UI_BIND:-127.0.0.1}
-    # Hardening: non-root image (nginx-unprivileged), immutable root fs,
-    # no capabilities, no privilege escalation.
     read_only: true
     tmpfs:
       - /tmp
-      # The image entrypoint renders the nginx config template here at
-      # start; uid 101 is the unprivileged nginx user.
       - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      # Checks the UI front itself, not the Stem: the dashboard stays up
-      # (and shows reachability) even while the host Stem is down.
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
     restart: unless-stopped
 
-  # -------------------------------------------------------------------------
-  # Automated Test Suite (Immune System)
-  # Run ephemerally via: docker compose --profile test run --rm test-<suite>
-  # -------------------------------------------------------------------------
   test-go:
     image: golang:1.24
     profiles: ["test"]
-    # Run from the module root (not cmd/stem) so `go test ./...` covers the
-    # whole Go kernel — the Stem (cmd/stem/...) AND the Roots provider layer
-    # (roots/...) that #199 moved out of cmd/stem/internal.
     working_dir: /src
     volumes:
       - .:/src
     command: ["go", "test", "./...", "-v"]
-
-volumes:
-  postgres-data:
-  redis-data:
-
-networks:
-  default:
-    name: opentendril-default
-  terrarium-net:
-    internal: true   # No outbound internet access

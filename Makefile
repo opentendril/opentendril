@@ -27,15 +27,14 @@ stem-all: ## Cross-compile Stem for linux and macOS
 build: ## Build all containers
 	docker compose build
 
-up: ## Start all services
-	docker compose up --build
+up: ## Start the Go Stem orchestrator locally
+	go run ./cmd/stem serve
 
 down: ## Stop all services
 	docker compose down
 
 health: ## Check service health
 	@echo "Stem:" && curl -s http://localhost:8080/health | python3 -m json.tool
-	@echo "\nTendril:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
 test-stem: ## Run Go tests in a sterile Docker container

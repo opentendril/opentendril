@@ -6,12 +6,12 @@ Thank you for your interest in contributing to OpenTendril! We are building a se
 
 ## 🚀 Quick Local Setup
 
-OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terrarium Core**.
+OpenTendril is a Go Stem orchestrator with optional containerized UI and test services.
 
 ### Prerequisites:
 * **Go:** Version 1.23 or newer.
 * **Python:** Version 3.11 or newer.
-* **Docker:** Required for running the terrarium container tests locally.
+* **Docker:** Required only for the optional UI and containerized test targets.
 * **Node.js:** Version 18 or newer — only needed to work on the Command Center UI (`ui/`).
 
 ### Installation Steps:
@@ -35,6 +35,11 @@ OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terr
    ```bash
    make check-all
    ```
+
+To start the local orchestrator during development, run `make up`. This launches
+`go run ./cmd/stem serve` directly on the Stem API port at `http://localhost:8080`;
+it does not start a full Docker Compose stack. The optional UI can be started with
+`docker compose --profile ui up`.
 
 ### Command Center UI (optional):
 If you are working on the visual frontend, install its dependencies and run the
