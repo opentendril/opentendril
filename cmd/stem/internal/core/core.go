@@ -5,12 +5,13 @@
 // translate only"). The litmus test for a capability living here: it must be
 // invokable with zero HTTP, CLI, or MCP types in scope.
 //
-// This is the first slice of Interface Parity (issue #159). It governs the
-// session-lifecycle capability family, which all three surfaces now project
+// This began as the first slice of Interface Parity (issue #159). It governs
+// the session-lifecycle capability family and, since issue #181 slice 1, the
+// genome family (view/reduce/evolve) — all three surfaces project both
 // identically through this one Core. The remaining Stem capabilities
-// (sprout/run, sequence, genome, plasmid, substrate grafting) are NOT yet part
-// of the governed registry — they are tracked as follow-ups, and the parity
-// tests deliberately assert only the governed set so the three surfaces cannot
+// (sprout/run, sequence, plasmid, substrate grafting) are NOT yet part of the
+// governed registry — they are tracked in issue #181, and the parity tests
+// deliberately assert only the governed set so the three surfaces cannot
 // silently diverge on it.
 package core
 
@@ -39,6 +40,12 @@ type Core interface {
 	UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Session, error)
 	DeleteSession(ctx context.Context, in DeleteSessionInput) error
 	SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error)
+
+	// Genome family (issue #181, slice 1). Reading is pure filesystem work;
+	// reduce/evolve run through the injected GenomeOps execution port.
+	GenomeView(ctx context.Context) ([]GenomeSeed, error)
+	GenomeReduce(ctx context.Context) (string, error)
+	GenomeEvolve(ctx context.Context) (string, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
@@ -83,9 +90,11 @@ type SessionHistoryInput struct {
 // --- service implementation -------------------------------------------------
 
 // Service is the concrete Core, backed by the unified SessionManager. It is the
-// only place session-command business logic lives.
+// only place session-command business logic lives. The genome field is the
+// injected execution port for the genome family (see genome.go / WithGenome).
 type Service struct {
 	sessions *session.Manager
+	genome   GenomeOps
 }
 
 // NewService builds a Core over the shared SessionManager.

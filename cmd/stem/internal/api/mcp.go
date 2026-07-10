@@ -392,7 +392,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "viewGenome",
-				"description": "Returns the concatenated contents of all Markdown files in .tendril/genome/ so the agent can read active repository rules and guidelines.",
+				"description": "Deprecated alias of the governed genome.view capability. Returns the concatenated contents of all Markdown files in .tendril/genome/ so the agent can read active repository rules and guidelines.",
 				"inputSchema": map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
@@ -400,7 +400,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "reduceGenome",
-				"description": "Deduplicates, compresses, and merges the epigenetic rules in .tendril/genome/epigenetics.md to prevent context window bloat.",
+				"description": "Deprecated alias of the governed genome.reduce capability. Deduplicates, compresses, and merges the epigenetic rules in .tendril/genome/epigenetics.md to prevent context window bloat.",
 				"inputSchema": map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},
@@ -490,9 +490,15 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
 		}
 
+		// Deprecated aliases of the governed genome capabilities (#181 slice 1):
+		// same Core, legacy tool names and text rendering preserved for
+		// existing MCP clients. Adapter translation only — the business logic
+		// that used to live inline here is now in core / the orchestrator port.
 		if params.Name == "viewGenome" {
-			root := resolveRepoRoot("")
-			body, count, err := readGenomeMarkdown(root)
+			if h.core == nil {
+				return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+			}
+			seeds, err := h.core.GenomeView(context.Background())
 			if err != nil {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
@@ -505,7 +511,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				})
 			}
 
-			if count == 0 {
+			if len(seeds) == 0 {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
 						{
@@ -517,11 +523,15 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				})
 			}
 
+			parts := make([]string, 0, len(seeds))
+			for _, seed := range seeds {
+				parts = append(parts, seed.Content)
+			}
 			return h.formatResult(req.ID, map[string]interface{}{
 				"content": []map[string]interface{}{
 					{
 						"type": "text",
-						"text": body,
+						"text": strings.Join(parts, "\n\n"),
 					},
 				},
 				"isError": false,
@@ -529,9 +539,11 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		if params.Name == "reduceGenome" {
-			root := resolveRepoRoot("")
-			chronicler := orchestrator.NewEpigeneticChronicler(root)
-			if err := chronicler.ReduceGenomeFile(context.Background()); err != nil {
+			if h.core == nil {
+				return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+			}
+			path, err := h.core.GenomeReduce(context.Background())
+			if err != nil {
 				return h.formatResult(req.ID, map[string]interface{}{
 					"content": []map[string]interface{}{
 						{
@@ -547,7 +559,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				"content": []map[string]interface{}{
 					{
 						"type": "text",
-						"text": fmt.Sprintf("Successfully reduced genome at %s.", filepath.ToSlash(filepath.Join(root, ".tendril", "genome", "epigenetics.md"))),
+						"text": fmt.Sprintf("Successfully reduced genome at %s.", filepath.ToSlash(path)),
 					},
 				},
 				"isError": false,
@@ -1100,38 +1112,6 @@ func resolveRepoRoot(path string) string {
 	}
 
 	return root
-}
-
-func readGenomeMarkdown(root string) (string, int, error) {
-	genomeDir := filepath.Join(root, ".tendril", "genome")
-	entries, err := os.ReadDir(genomeDir)
-	if err != nil && !os.IsNotExist(err) {
-		return "", 0, fmt.Errorf("read genome directory: %w", err)
-	}
-
-	var files []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
-			continue
-		}
-		files = append(files, filepath.Join(genomeDir, entry.Name()))
-	}
-
-	sort.Strings(files)
-	if len(files) == 0 {
-		return "", 0, nil
-	}
-
-	var parts []string
-	for _, path := range files {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return "", 0, fmt.Errorf("read genome file %s: %w", path, err)
-		}
-		parts = append(parts, string(content))
-	}
-
-	return strings.Join(parts, "\n\n"), len(files), nil
 }
 
 func summarizeSequenceResult(seq *orchestrator.Sequence) string {

@@ -106,7 +106,7 @@ The CLI, MCP, and OpenAPI/REST surfaces are **projections of one core capability
 * **To add a command capability:** declare it once in the `core` registry (Name, InputSchema, Invoke), then project it onto all three adapters. Adding it to only one surface is a CI failure by design.
 * **Views are exempt.** The `/ws` event stream and `?replay` are *views*, not commands, and are deliberately outside the registry and the parity tests. Do not pull them into the capability registry. See `docs/DESIGN-DYNAMIC-ORCHESTRATION.md` for the commands-vs-views distinction.
 
-> **Current scope:** the governed registry covers the session-lifecycle family (`session.create|list|get|update|delete|history`). The remaining Stem capabilities (sprout/run, sequence, genome, plasmid, substrate grafting) are not yet migrated into the Core and remain out of parity — migrating each into the registry is the follow-up work.
+> **Current scope:** the governed registry covers the session-lifecycle family (`session.create|list|get|update|delete|history`) and the genome family (`genome.view|reduce|evolve`, issue #181 slice 1). The remaining Stem capabilities (sprout/run, sequence, plasmid, substrate grafting) are not yet migrated into the Core and remain out of parity — migrating each into the registry is the follow-up work tracked in issue #181.
 
 ---
 

@@ -16,6 +16,10 @@ const (
 	CapUpdateSession  = "session.update"
 	CapDeleteSession  = "session.delete"
 	CapSessionHistory = "session.history"
+
+	CapGenomeView   = "genome.view"
+	CapGenomeReduce = "genome.reduce"
+	CapGenomeEvolve = "genome.evolve"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -45,6 +49,9 @@ func CapabilityNames() []string {
 		CapUpdateSession,
 		CapDeleteSession,
 		CapSessionHistory,
+		CapGenomeView,
+		CapGenomeReduce,
+		CapGenomeEvolve,
 	}
 	sort.Strings(names)
 	return names
@@ -139,6 +146,7 @@ func (s *Service) Capabilities() []Capability {
 			},
 		},
 	}
+	caps = append(caps, s.genomeCapabilities()...)
 	return caps
 }
 
