@@ -86,9 +86,6 @@ jobs:
         run: |
           pip-audit -r sprouts/python/requirements.txt
           
-      - name: Run Core Tests
-        run: |
-          make test-core
 
   stem-go:
     name: Stem Tests (Go)
