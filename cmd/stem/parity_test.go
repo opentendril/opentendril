@@ -26,21 +26,27 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *api.SessionsHandler, *api.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *api.SessionsHandler, *api.GenomeHandler, *api.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	svc := core.NewService(manager)
+	svc := core.NewService(manager).WithGenome(core.GenomeOps{
+		Root:   t.TempDir(),
+		Reduce: func(context.Context, string) error { return nil },
+		Evolve: func(context.Context, string) error { return nil },
+	})
 	rest := api.NewSessionsHandler(svc, manager, nil)
-	// Register the REST routes so rest.Capabilities() reflects what is actually
-	// mounted on the mux (not the canonical list) — the independence the
-	// coverage test relies on.
+	genomeRest := api.NewGenomeHandler(svc)
+	// Register the REST routes so the handlers' Capabilities() reflect what is
+	// actually mounted on the mux (not the canonical list) — the independence
+	// the coverage test relies on.
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
+	genomeRest.Register(mux, nil)
 	mcp := api.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, mcp, mux
+	return svc, rest, genomeRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -96,24 +102,28 @@ func mcpGovernedToolNames(t *testing.T, mcp *api.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
-	//   REST — capabilities recorded while mounting routes on the mux.
+	//   REST — capabilities recorded while mounting routes on the mux
+	//          (sessions handler + genome handler).
 	//   MCP  — names parsed from the live tools/list response.
-	//   CLI  — capabilities of the subcommands registered on the command tree.
-	equalSets(t, "REST adapter (registered routes) vs canonical", rest.Capabilities(), canonical)
+	//   CLI  — capabilities of the subcommands registered on the command trees
+	//          (`tendril session` + `tendril genome`).
+	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
+	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
+	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
-	equalSets(t, "CLI adapter (registered subcommands) vs canonical", sessionCLICapabilityNames(), canonical)
+	equalSets(t, "CLI adapter (registered subcommands) vs canonical", cliCaps, canonical)
 }
 
 // Behavioral parity: the same input yields the same result via the Core
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, mcp, mux := newParityFixture(t)
+	svc, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -277,6 +287,21 @@ func (m *mockCore) SessionHistory(_ context.Context, in core.SessionHistoryInput
 	return nil, nil
 }
 
+func (m *mockCore) GenomeView(_ context.Context) ([]core.GenomeSeed, error) {
+	m.record("GenomeView", struct{}{})
+	return nil, nil
+}
+
+func (m *mockCore) GenomeReduce(_ context.Context) (string, error) {
+	m.record("GenomeReduce", struct{}{})
+	return ".tendril/genome/epigenetics.md", nil
+}
+
+func (m *mockCore) GenomeEvolve(_ context.Context) (string, error) {
+	m.record("GenomeEvolve", struct{}{})
+	return ".tendril/genome/epigenetics.md", nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -349,6 +374,35 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return m.SessionHistory(ctx, in)
 			},
 		},
+		{
+			Name:        core.CapGenomeView,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				return m.GenomeView(ctx)
+			},
+		},
+		{
+			Name:        core.CapGenomeReduce,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				path, err := m.GenomeReduce(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"path": path, "reduced": true}, nil
+			},
+		},
+		{
+			Name:        core.CapGenomeEvolve,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				path, err := m.GenomeEvolve(ctx)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"path": path, "evolved": true}, nil
+			},
+		},
 	}
 }
 
@@ -394,8 +448,10 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *api.MCPHand
 	}
 
 	rest := api.NewSessionsHandler(mock, manager, nil)
+	genomeRest := api.NewGenomeHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
+	genomeRest.Register(mux, nil)
 
 	mcp := api.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
@@ -578,5 +634,84 @@ func TestBehavioralParity(t *testing.T) {
 					tc.name, restCalls[0], mcpCalls[0], cliCalls[0])
 			}
 		})
+	}
+}
+
+// TestBehavioralParity_GenomeReduce extends the zero-business-logic proof to
+// the genome family (issue #181 slice 1): REST, MCP, and the CLI dispatch path
+// must each invoke Core.GenomeReduce exactly once for an equivalent request.
+func TestBehavioralParity_GenomeReduce(t *testing.T) {
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	// --- REST ---------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/genome/reduce", "application/json", nil)
+	if err != nil {
+		t.Fatalf("REST genome.reduce: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST genome.reduce status = %d, body = %s", resp.StatusCode, body)
+	}
+	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
+		t.Fatalf("REST genome.reduce: Core.GenomeReduce called %d times, want 1", len(calls))
+	}
+
+	// --- MCP (governed name) --------------------------------------------------
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"genome.reduce","arguments":{}}}`))
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP genome.reduce response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP genome.reduce failed: %s", mcpResp)
+	}
+	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
+		t.Fatalf("MCP genome.reduce: Core.GenomeReduce called %d times, want 1", len(calls))
+	}
+
+	// --- MCP (deprecated alias reduceGenome routes through the same Core) ----
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reduceGenome","arguments":{}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
+		t.Fatalf("parse MCP reduceGenome response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP reduceGenome alias failed: %s", aliasResp)
+	}
+	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
+		t.Fatalf("MCP reduceGenome alias: Core.GenomeReduce called %d times, want 1", len(calls))
+	}
+
+	// --- CLI ------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupGenomeCommand("reduce")
+	if !ok {
+		t.Fatal("CLI: no genome subcommand registered for \"reduce\"")
+	}
+	if command.capability != core.CapGenomeReduce {
+		t.Fatalf("CLI subcommand \"reduce\" maps to %q, want %q", command.capability, core.CapGenomeReduce)
+	}
+	input, err := parseGenomeArgs(command.capability, nil)
+	if err != nil {
+		t.Fatalf("CLI parseGenomeArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI genome.reduce: Core.Invoke: %v", err)
+	}
+	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
+		t.Fatalf("CLI genome.reduce: Core.GenomeReduce called %d times, want 1", len(calls))
 	}
 }
