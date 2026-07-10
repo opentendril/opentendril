@@ -23,8 +23,8 @@ jobs:
     name: Path Filter
     runs-on: ubuntu-latest
     outputs:
-      python-core: ${{ steps.filter.outputs['python-core'] }}
-      sprout-go: ${{ steps.filter.outputs['sprout-go'] }}
+      tendril-python: ${{ steps.filter.outputs['tendril-python'] }}
+      stem-go: ${{ steps.filter.outputs['stem-go'] }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,39 +37,39 @@ jobs:
           set -euo pipefail
 
           if [ "${{ github.event_name }}" != "pull_request" ]; then
-            echo "python-core=true" >> "$GITHUB_OUTPUT"
-            echo "sprout-go=true" >> "$GITHUB_OUTPUT"
+            echo "tendril-python=true" >> "$GITHUB_OUTPUT"
+            echo "stem-go=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           changed_files="$(git diff --name-only ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }})"
 
-          python_core=false
-          sprout_go=false
+          tendril_python=false
+          stem_go=false
 
           while IFS= read -r path; do
             case "$path" in
               .github/workflows/ci.yml|Makefile)
-                python_core=true
-                sprout_go=true
+                tendril_python=true
+                stem_go=true
                 ;;
               tendrils/python/src/*|tendrils/python/tests/*|tendrils/python/requirements.txt|tendrils/python/pyproject.toml)
-                python_core=true
+                tendril_python=true
                 ;;
               cmd/stem/*|cmd/stem/**|go.mod|go.sum)
-                sprout_go=true
+                stem_go=true
                 ;;
             esac
           done <<< "$changed_files"
 
-          echo "python-core=$python_core" >> "$GITHUB_OUTPUT"
-          echo "sprout-go=$sprout_go" >> "$GITHUB_OUTPUT"
+          echo "tendril-python=$tendril_python" >> "$GITHUB_OUTPUT"
+          echo "stem-go=$stem_go" >> "$GITHUB_OUTPUT"
 
-  python-core:
-    name: Core Orchestrator Tests (Python)
+  tendril-python:
+    name: Tendril Tests (Python)
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ needs.changes.outputs['python-core'] == 'true' }}
+    if: ${{ needs.changes.outputs['tendril-python'] == 'true' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -90,11 +90,11 @@ jobs:
         run: |
           make test-core
 
-  sprout-go:
-    name: Sprout Tests (Go)
+  stem-go:
+    name: Stem Tests (Go)
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ needs.changes.outputs['sprout-go'] == 'true' }}
+    if: ${{ needs.changes.outputs['stem-go'] == 'true' }}
     steps:
       - uses: actions/checkout@v4
       
@@ -102,7 +102,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24.x'
-          cache-dependency-path: cmd/stem/go.sum
+          cache-dependency-path: go.sum
           
       # - name: Vulnerability Scan (govulncheck)
       #   run: |
@@ -119,17 +119,17 @@ jobs:
             exit 1
           fi
 
-      - name: Run Sprout Tests
+      - name: Run Stem Tests
         run: |
-          make test-sprout
+          make test-stem
 
   pr:
     name: Native PR Gate
     runs-on: ubuntu-latest
     needs:
       - changes
-      - python-core
-      - sprout-go
+      - tendril-python
+      - stem-go
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -141,15 +141,15 @@ jobs:
             failed=true
           fi
 
-          if [ "${{ needs.changes.outputs['python-core'] }}" = "true" ] && \
-             [ "${{ needs.python-core.result }}" != "success" ]; then
-            echo "python-core was required but finished with result: ${{ needs.python-core.result }}"
+          if [ "${{ needs.changes.outputs['tendril-python'] }}" = "true" ] && \
+             [ "${{ needs.tendril-python.result }}" != "success" ]; then
+            echo "tendril-python was required but finished with result: ${{ needs.tendril-python.result }}"
             failed=true
           fi
 
-          if [ "${{ needs.changes.outputs['sprout-go'] }}" = "true" ] && \
-             [ "${{ needs.sprout-go.result }}" != "success" ]; then
-            echo "sprout-go was required but finished with result: ${{ needs.sprout-go.result }}"
+          if [ "${{ needs.changes.outputs['stem-go'] }}" = "true" ] && \
+             [ "${{ needs.stem-go.result }}" != "success" ]; then
+            echo "stem-go was required but finished with result: ${{ needs.stem-go.result }}"
             failed=true
           fi
 
