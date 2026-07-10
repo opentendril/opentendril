@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/roots/llm"
 	"github.com/opentendril/core/data/genotypes"
 )
 

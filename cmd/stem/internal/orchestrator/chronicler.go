@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/roots/llm"
 )
 
 const epigeneticGenomeHeader = "# Epigenetic Learnings"
