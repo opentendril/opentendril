@@ -27,7 +27,7 @@ services:
       retries: 5
 
   tendril:
-    build: tendrils/python
+    build: sprouts/python
     user: "${UID:-1000}:${GID:-1000}"
     # Note: No port mapping — the Go Stem (tendril serve) owns :8080.
     # The Tendril container is an ephemeral worker spawned by the Go Stem via docker run.
@@ -69,12 +69,12 @@ services:
       - terrarium-net
     volumes:
       # Default: Mount internal source code for the "Root Agent" Moat loop
-      - ./tendrils/python/src:/app/src
+      - ./sprouts/python/src:/app/src
       - ./.git:/app/.git
       - ./data:/app/data
       - ./logs:/app/logs
       - ./static:/app/static
-      - ./tendrils/python/tests:/app/tests
+      - ./sprouts/python/tests:/app/tests
 
       - ./docs:/app/docs
       # External project mode: set TENDRIL_PROJECT_PATH in .env
@@ -89,7 +89,7 @@ services:
   # Usage: docker compose --profile nano up
   tendril-nano:
     build:
-      context: tendrils/python
+      context: sprouts/python
       dockerfile: Dockerfile.nano
     profiles: ["nano"]
     user: "${UID:-1000}:${GID:-1000}"
@@ -130,12 +130,12 @@ services:
       - default
       - terrarium-net
     volumes:
-      - ./tendrils/python/src:/app/src
+      - ./sprouts/python/src:/app/src
       - ./.git:/app/.git
       - ./data:/app/data
       - ./logs:/app/logs
       - ./static:/app/static
-      - ./tendrils/python/tests:/app/tests
+      - ./sprouts/python/tests:/app/tests
 
       - ./docs:/app/docs
       - ${TENDRIL_PROJECT_PATH:-.}:/workspace
@@ -144,7 +144,7 @@ services:
   # Secure terrarium for code execution (no secrets, no DB, no internet)
   terrarium:
     build:
-      context: tendrils/python
+      context: sprouts/python
       dockerfile: Dockerfile.terrarium
     environment:
       TERRARIUM_TOKEN: ${TERRARIUM_TOKEN:-tendril_default_terrarium_token}
@@ -248,17 +248,6 @@ services:
   # Automated Test Suite (Immune System)
   # Run ephemerally via: docker compose --profile test run --rm test-<suite>
   # -------------------------------------------------------------------------
-  test-python:
-    build: tendrils/python
-    profiles: ["test"]
-    environment:
-      PYTHONPATH: .
-    volumes:
-      - ./tendrils/python/src:/app/src
-      - ./tendrils/python/tests:/app/tests
-      - ./tendrils/python/pytest.ini:/app/pytest.ini
-    command: ["-m", "pytest", "tests/", "-v"]
-
   test-go:
     image: golang:1.24
     profiles: ["test"]

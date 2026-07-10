@@ -26,7 +26,7 @@ import (
 	"syscall"
 
 	"github.com/joho/godotenv"
-	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/roots/llm"
 )
 
 func main() {

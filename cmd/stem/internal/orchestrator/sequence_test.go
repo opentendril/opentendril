@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/llm"
 	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/core/roots/llm"
 )
 
 func TestSequenceLoadSaveRoundTrip(t *testing.T) {

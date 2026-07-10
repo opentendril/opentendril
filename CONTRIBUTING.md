@@ -28,7 +28,7 @@ OpenTendril is a polyglot project combining a **Go Gateway** and a **Python Terr
    ```bash
    python3 -m venv venv
    source venv/bin/activate
-   pip install -r tendrils/python/requirements.txt
+   pip install -r sprouts/python/requirements.txt
    ```
 4. **Verify Your Environment:**
    Run the full lint and test suites to verify your local configuration:

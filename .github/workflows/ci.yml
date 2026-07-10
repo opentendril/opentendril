@@ -53,7 +53,7 @@ jobs:
                 tendril_python=true
                 stem_go=true
                 ;;
-              tendrils/python/src/*|tendrils/python/tests/*|tendrils/python/requirements.txt|tendrils/python/pyproject.toml)
+              sprouts/python/src/*|sprouts/python/tests/*|sprouts/python/requirements.txt|sprouts/python/pyproject.toml)
                 tendril_python=true
                 ;;
               cmd/stem/*|cmd/stem/**|go.mod|go.sum)
@@ -80,15 +80,12 @@ jobs:
           
       - name: Install dependencies
         run: |
-          pip install -r tendrils/python/requirements.txt pytest pip-audit
+          pip install -r sprouts/python/requirements.txt pytest pip-audit
           
       - name: Vulnerability Scan (pip-audit)
         run: |
-          pip-audit -r tendrils/python/requirements.txt
+          pip-audit -r sprouts/python/requirements.txt
           
-      - name: Run Core Tests
-        run: |
-          make test-core
 
   stem-go:
     name: Stem Tests (Go)

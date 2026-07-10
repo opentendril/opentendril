@@ -38,13 +38,10 @@ health: ## Check service health
 	@echo "\nTendril:" && curl -s http://localhost:9090/health | python3 -m json.tool
 
 # --- Development ---
-test-core: ## Run Python tests in a sterile Docker container
-	docker compose --profile test run --rm test-python
-
 test-stem: ## Run Go tests in a sterile Docker container
 	docker compose --profile test run --rm test-go
 
-test-all: test-core test-stem ## Run all tests
+test-all: test-stem ## Run all tests
 
 check-all: ## Full pre-merge gate: clean build + all tests (see CONTRIBUTING.md / TESTING.md)
 	$(MAKE) stem

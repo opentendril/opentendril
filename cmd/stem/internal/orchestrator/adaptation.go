@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/llm"
+	"github.com/opentendril/core/roots/llm"
 )
 
 // CommitSample is one mined commit from the substrate's git history.

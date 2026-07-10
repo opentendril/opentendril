@@ -1,7 +1,5 @@
 fastapi>=0.116.0
 uvicorn[standard]>=0.32.0
-openai>=1.58.1
-langchain-openai>=1.1.14
 langchain-anthropic>=0.3.0
 langchain-core>=0.3.0
 sqlalchemy==2.0.35
