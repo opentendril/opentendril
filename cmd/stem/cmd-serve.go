@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/api"
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/configurator"
 	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/gateway"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/security"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 	"github.com/opentendril/core/cmd/stem/internal/telemetry"
@@ -170,19 +170,19 @@ func runServeCmd(ctx context.Context, args []string) {
 	coreSvc := core.NewService(sessions).WithGenome(genomeOps(resolveRepoRoot("")))
 
 	// Tendril session REST API (adapter).
-	sessionsHandler := api.NewSessionsHandler(coreSvc, sessions, history)
+	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history)
 	sessionsHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
 	// Genome REST API (adapter, issue #181 slice 1).
-	genomeHandler := api.NewGenomeHandler(coreSvc)
+	genomeHandler := receptors.NewGenomeHandler(coreSvc)
 	genomeHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
 	// Phase 4: Configuration API
-	configHandler := api.NewConfigHandler(tendrilDir)
+	configHandler := receptors.NewConfigHandler(tendrilDir)
 	mux.HandleFunc("/v1/config/triggers", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			configHandler.ListTriggers(w, r)
@@ -208,7 +208,7 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
 	// projects the same Core session capabilities as REST and the CLI)
-	mcpHandler := api.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc)
+	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc)
 	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
@@ -482,7 +482,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			configTendril := configurator.NewConfiguratorTendril(triggersDir)
 			output, err = configTendril.Execute(r.Context(), taskPrompt)
 		} else {
-			orch := orchestrator.NewDockerOrchestrator()
+			orch := conductor.NewDockerOrchestrator()
 			orch.StepID = stepID
 			orch.EventBus = bus
 			orch.Provider = sess.Preferences.Provider

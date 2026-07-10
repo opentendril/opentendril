@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 )
 
 func runPlasmidCmd(args []string) {
@@ -48,16 +48,16 @@ func runPlasmidCmd(args []string) {
 }
 
 func runPlasmidSignCmd(path string) error {
-	key, err := orchestrator.NodeSigningKey()
+	key, err := conductor.NodeSigningKey()
 	if err != nil {
 		return fmt.Errorf("load node signing key: %w", err)
 	}
 
-	sig, err := orchestrator.SignPlasmid(path, key)
+	sig, err := conductor.SignPlasmid(path, key)
 	if err != nil {
 		return fmt.Errorf("sign plasmid: %w", err)
 	}
-	if err := orchestrator.WritePlasmidSignature(path, sig); err != nil {
+	if err := conductor.WritePlasmidSignature(path, sig); err != nil {
 		return fmt.Errorf("write plasmid signature: %w", err)
 	}
 
@@ -92,7 +92,7 @@ func runPlasmidListCmd() {
 
 func runPlasmidInjectCmd(name string) error {
 	root := resolveRepoRoot("")
-	sourcePath, err := orchestrator.FindPlasmidSource(root, name)
+	sourcePath, err := conductor.FindPlasmidSource(root, name)
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,7 @@ func runPlasmidInjectCmd(name string) error {
 		return nil
 	}
 
-	if err := orchestrator.CopyMarkdownFile(sourcePath, destPath); err != nil {
+	if err := conductor.CopyMarkdownFile(sourcePath, destPath); err != nil {
 		return err
 	}
 

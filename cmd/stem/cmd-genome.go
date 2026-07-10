@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
@@ -87,9 +87,9 @@ func genomeOps(root string) core.GenomeOps {
 	return core.GenomeOps{
 		Root: root,
 		Reduce: func(ctx context.Context, root string) error {
-			return orchestrator.NewEpigeneticChronicler(root).ReduceGenomeFile(ctx)
+			return conductor.NewEpigeneticChronicler(root).ReduceGenomeFile(ctx)
 		},
-		Evolve: orchestrator.EvolveGenome,
+		Evolve: conductor.EvolveGenome,
 	}
 }
 

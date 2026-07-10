@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 )
 
 func runSequenceCmd(ctx context.Context, args []string) {
@@ -58,7 +58,7 @@ func runSequenceRunCmd(ctx context.Context, args []string) {
 	}
 
 	interactive := stdinIsTerminal()
-	seq, err := orchestrator.RunSequence(ctx, positional[0], orchestrator.SequenceRunOptions{
+	seq, err := conductor.RunSequence(ctx, positional[0], conductor.SequenceRunOptions{
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		Stdin:       os.Stdin,
@@ -81,7 +81,7 @@ func runSequenceListCmd() {
 		root = "."
 	}
 
-	files, err := orchestrator.ListSequenceFiles(root)
+	files, err := conductor.ListSequenceFiles(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to list sequences: %v\n", err)
 		os.Exit(1)
@@ -138,15 +138,15 @@ func runSequenceDynamicCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	seq := &orchestrator.Sequence{
-		Steps: []orchestrator.SequenceStep{
+	seq := &conductor.Sequence{
+		Steps: []conductor.SequenceStep{
 			{
 				ID:         "meristem",
 				Transcript: prompt,
 			},
 		},
 	}
-	if err := orchestrator.SaveSequence(tempPath, seq); err != nil {
+	if err := conductor.SaveSequence(tempPath, seq); err != nil {
 		_ = os.Remove(tempPath)
 		fmt.Fprintf(os.Stderr, "❌ Failed to save temporary sequence: %v\n", err)
 		os.Exit(1)
@@ -157,7 +157,7 @@ func runSequenceDynamicCmd(ctx context.Context, args []string) {
 		return
 	}
 
-	result, err := orchestrator.RunSequence(ctx, tempPath, orchestrator.SequenceRunOptions{
+	result, err := conductor.RunSequence(ctx, tempPath, conductor.SequenceRunOptions{
 		Stdout:      os.Stdout,
 		Stderr:      os.Stderr,
 		Stdin:       os.Stdin,

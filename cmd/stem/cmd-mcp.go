@@ -6,16 +6,16 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
+	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
 func runMCPCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, "🚀 OpenTendril MCP Stdio Server initializing...")
 
-	handler := api.NewMCPHandler()
+	handler := receptors.NewMCPHandler()
 
 	// Unified Interface Layer: bind this stdio server process to one Tendril
 	// session so MCP interactions share state with the CLI and REST surfaces.

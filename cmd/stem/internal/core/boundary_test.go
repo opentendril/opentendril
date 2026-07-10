@@ -18,8 +18,8 @@ import (
 // enforced structurally.
 var forbiddenCoreImports = []string{
 	"net/http",
-	"github.com/opentendril/core/cmd/stem/internal/api",
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator",
+	"github.com/opentendril/core/cmd/stem/internal/receptors",
+	"github.com/opentendril/core/cmd/stem/internal/conductor",
 	"github.com/opentendril/core/cmd/stem/internal/terrarium",
 	"github.com/opentendril/core/cmd/stem/internal/gateway",
 	"github.com/opentendril/core/cmd/stem/internal/mesh",

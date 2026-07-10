@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/api"
 	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/receptors"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *api.SessionsHandler, *api.GenomeHandler, *api.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -37,15 +37,15 @@ func newParityFixture(t *testing.T) (core.Core, *api.SessionsHandler, *api.Genom
 		Reduce: func(context.Context, string) error { return nil },
 		Evolve: func(context.Context, string) error { return nil },
 	})
-	rest := api.NewSessionsHandler(svc, manager, nil)
-	genomeRest := api.NewGenomeHandler(svc)
+	rest := receptors.NewSessionsHandler(svc, manager, nil)
+	genomeRest := receptors.NewGenomeHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
-	mcp := api.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
+	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
 	return svc, rest, genomeRest, mcp, mux
 }
 
@@ -73,7 +73,7 @@ func equalSets(t *testing.T, label string, got, want []string) {
 
 // mcpGovernedToolNames extracts, from the REAL tools/list response, the names
 // that are governed Core capabilities (ignoring legacy non-core tools).
-func mcpGovernedToolNames(t *testing.T, mcp *api.MCPHandler) []string {
+func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 	t.Helper()
 	resp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 
@@ -435,7 +435,7 @@ func decodeMockInput(input map[string]any, target any) error {
 // instead of a real Service, so assertions are about how each adapter
 // translates a request into a Core call — not about session-manager
 // behavior (already covered above with a real Core).
-func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *api.MCPHandler) {
+func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.MCPHandler) {
 	t.Helper()
 	mock := &mockCore{}
 
@@ -447,13 +447,13 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *api.MCPHand
 		t.Fatalf("new manager: %v", err)
 	}
 
-	rest := api.NewSessionsHandler(mock, manager, nil)
-	genomeRest := api.NewGenomeHandler(mock)
+	rest := receptors.NewSessionsHandler(mock, manager, nil)
+	genomeRest := receptors.NewGenomeHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
 
-	mcp := api.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
+	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
 	return mock, mux, mcp
 }

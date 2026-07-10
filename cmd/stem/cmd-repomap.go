@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 )
 
 func runRepoMapCmd(args []string) {
@@ -17,7 +17,7 @@ func runRepoMapCmd(args []string) {
 		}
 	}
 
-	mapMarkdown, err := orchestrator.GenerateRepoMap(context.Background(), mustGetwd())
+	mapMarkdown, err := conductor.GenerateRepoMap(context.Background(), mustGetwd())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to generate repo map: %v\n", err)
 		os.Exit(1)

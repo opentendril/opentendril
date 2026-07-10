@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/orchestrator"
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
 )
 
 func runAdaptCmd(ctx context.Context, args []string) {
@@ -45,7 +45,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 
 	fmt.Printf("🧬 Mining %d commit(s) from %s for Epigenetic Traits...\n", len(hashes), root)
 
-	samples := make([]orchestrator.CommitSample, 0, len(hashes))
+	samples := make([]conductor.CommitSample, 0, len(hashes))
 	hadError := false
 
 	for index, hash := range hashes {
@@ -70,7 +70,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 			continue
 		}
 
-		samples = append(samples, orchestrator.CommitSample{
+		samples = append(samples, conductor.CommitSample{
 			Hash:    hash,
 			Message: commitMessage,
 			Diff:    diff,
@@ -82,7 +82,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	chronicler := orchestrator.NewEpigeneticChronicler(root)
+	chronicler := conductor.NewEpigeneticChronicler(root)
 	if err := chronicler.AdaptFromHistory(ctx, samples); err != nil {
 		fmt.Printf("⚠️ Extracted %d commit(s); Adaptation was skipped because the Meristem was unreachable: %v\n", len(samples), err)
 		return
