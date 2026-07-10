@@ -100,22 +100,22 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 
 ### Component: Sprout Executors
 
-#### [NEW] [tendrils/go/Dockerfile](file:///home/dr3w/GitHub/opentendril/core/tendrils/go/Dockerfile)
+#### [NEW] [sprouts/go/Dockerfile](file:///home/dr3w/GitHub/opentendril/core/sprouts/go/Dockerfile)
 *   Build a minimal Alpine image containing the Go executor binary. (Target size: < 20MB).
 
-#### [NEW] [tendrils/go/main.go](file:///home/dr3w/GitHub/opentendril/core/tendrils/go/main.go)
+#### [NEW] [sprouts/go/main.go](file:///home/dr3w/GitHub/opentendril/core/sprouts/go/main.go)
 *   Read JSON tool calls from `stdin` in a loop.
 *   Implement native Go file tools (`readFile`, `writeFile`, `listFiles`), git tools (`gitCommit`, `gitDiff`), and command execution (`execCommand`).
 *   Implement `listAvailableTools` returning the supported tools.
 *   Write output as JSON to `stdout`.
 
-#### [NEW] [tendrils/typescript/Dockerfile](file:///home/dr3w/GitHub/opentendril/core/tendrils/typescript/Dockerfile)
+#### [NEW] [sprouts/typescript/Dockerfile](file:///home/dr3w/GitHub/opentendril/core/sprouts/typescript/Dockerfile)
 *   Build a Node-alpine base image (Target size: < 150MB).
 
-#### [NEW] [tendrils/typescript/package.json](file:///home/dr3w/GitHub/opentendril/core/tendrils/typescript/package.json)
+#### [NEW] [sprouts/typescript/package.json](file:///home/dr3w/GitHub/opentendril/core/sprouts/typescript/package.json)
 *   Include dependencies for `simple-git` and `execa`/`zx`.
 
-#### [NEW] [tendrils/typescript/src/main.ts](file:///home/dr3w/GitHub/opentendril/core/tendrils/typescript/src/main.ts)
+#### [NEW] [sprouts/typescript/src/main.ts](file:///home/dr3w/GitHub/opentendril/core/sprouts/typescript/src/main.ts)
 *   Implement TypeScript tool executor reading stdin JSON lines and executing tools (`readFile`, `writeFile`, `execCommand`, `listAvailableTools`).
 
 #### [MODIFY] [tendrils/python/Dockerfile](file:///home/dr3w/GitHub/opentendril/core/tendrils/python/Dockerfile)

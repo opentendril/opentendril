@@ -466,15 +466,15 @@ func sproutBuildSpec(imageName string) (string, string, error) {
 
 	switch imageName {
 	case "opentendril-go:latest":
-		return coreRoot, filepath.Join(coreRoot, "tendrils", "go", "Dockerfile"), nil
+		return coreRoot, filepath.Join(coreRoot, "sprouts", "go", "Dockerfile"), nil
 	case macrophageFuzzImage:
-		return coreRoot, filepath.Join(coreRoot, "tendrils", "go-fuzz", "Dockerfile"), nil
+		return coreRoot, filepath.Join(coreRoot, "sprouts", "go-fuzz", "Dockerfile"), nil
 	case "opentendril-typescript:latest":
-		return coreRoot, filepath.Join(coreRoot, "tendrils", "typescript", "Dockerfile"), nil
+		return coreRoot, filepath.Join(coreRoot, "sprouts", "typescript", "Dockerfile"), nil
 	case "opentendril-node:latest":
-		return coreRoot, filepath.Join(coreRoot, "tendrils", "node", "Dockerfile"), nil
+		return coreRoot, filepath.Join(coreRoot, "sprouts", "node", "Dockerfile"), nil
 	case "opentendril-python:latest":
-		return filepath.Join(coreRoot, "tendrils", "python"), filepath.Join(coreRoot, "tendrils", "python", "Dockerfile"), nil
+		return filepath.Join(coreRoot, "sprouts", "python"), filepath.Join(coreRoot, "sprouts", "python", "Dockerfile"), nil
 	default:
 		return "", "", nil
 	}
@@ -514,6 +514,7 @@ func workspaceHasExtension(workspace string, extensions ...string) bool {
 		".git":         {},
 		".tendril":     {},
 		"tendrils":     {},
+		"sprouts":      {},
 		"static":       {},
 		"scripts":      {},
 		"node_modules": {},

@@ -16,7 +16,7 @@ import (
 // macrophageFuzzImage is the dedicated, Go-toolchain-enabled terrarium image
 // the Macrophage genotype's deterministic fuzz check runs in — never the
 // stripped opentendril-go:latest image every other Go sprout uses (issue
-// #154). See tendrils/go-fuzz/Dockerfile for why this can't be the same
+// #154). See sprouts/go-fuzz/Dockerfile for why this can't be the same
 // image.
 const macrophageFuzzImage = "opentendril-go-fuzz:latest"
 
