@@ -56,7 +56,7 @@ jobs:
               sprouts/python/src/*|sprouts/python/tests/*|sprouts/python/requirements.txt|sprouts/python/pyproject.toml)
                 tendril_python=true
                 ;;
-              cmd/stem/*|cmd/stem/**|go.mod|go.sum)
+              cmd/stem/*|cmd/stem/**|roots/*|roots/**|go.mod|go.sum)
                 stem_go=true
                 ;;
             esac
@@ -109,7 +109,7 @@ jobs:
 
       - name: gofmt Check
         run: |
-          unformatted=$(gofmt -l cmd/stem | grep -v '^cmd/stem/dist' || true)
+          unformatted=$(gofmt -l cmd/stem roots | grep -v '^cmd/stem/dist' || true)
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"

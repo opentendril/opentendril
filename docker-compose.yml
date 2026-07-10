@@ -251,7 +251,10 @@ services:
   test-go:
     image: golang:1.24
     profiles: ["test"]
-    working_dir: /src/cmd/stem
+    # Run from the module root (not cmd/stem) so `go test ./...` covers the
+    # whole Go kernel — the Stem (cmd/stem/...) AND the Roots provider layer
+    # (roots/...) that #199 moved out of cmd/stem/internal.
+    working_dir: /src
     volumes:
       - .:/src
     command: ["go", "test", "./...", "-v"]
