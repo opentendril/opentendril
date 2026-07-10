@@ -52,6 +52,10 @@ cmd/stem/stem
 cmd/stem/tendril
 cmd/stem/tendril-cli
 cmd/stem/server.log
+cmd/stem/dist/
+
+# Release build output (reproducible via `make release` / release.yml)
+dist/
 
 # Generated .tendril runtime files (user-local, not committed)
 .tendril/transduction/hormonal-triggers/block-trigger.sh
