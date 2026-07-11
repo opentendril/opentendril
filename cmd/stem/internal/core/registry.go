@@ -23,8 +23,8 @@ const (
 
 	CapPlasmidList   = "plasmid.list"
 	CapPlasmidInject = "plasmid.inject"
-	CapMeshGraft   = "mesh.graft"
-	CapMeshPromote = "mesh.promote" 
+	CapMeshGraft     = "mesh.graft"
+	CapMeshPromote   = "mesh.promote"
 )
 
 // Capability is one declarative command capability. A single declaration is
