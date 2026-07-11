@@ -28,6 +28,34 @@ substrates:
 *   **Secrets Isolation:** The YAML stores **references to env var names** (e.g. `auth: GITHUB_TOKEN`), never raw tokens. Go Stem resolves the secret value at runtime via `os.Getenv(config.Auth)`. For GitHub PATs, `GITHUB_TOKEN` (canonical) and `GITHUB_PERSONAL_ACCESS_TOKEN` (legacy) are interchangeable — the Stem falls back to the other name when the referenced one is unset.
 *   **Read-Only Locks:** If `readonly: true` is configured, Go Stem blocks all commit/push operations on the substrate, keeping the codebase sterile.
 
+### Extended Credential Schema (Design RFC #222)
+
+`auth` accepts **either** a bare env-var name (`auth: GITHUB_TOKEN`, treated as `method: pat`) **or** a mapping, so a substrate can pick its authentication method, sign its commits, and control where it is checked out. Reusable `credentials:` profiles avoid repeating auth/sign per repo.
+
+```yaml
+credentials:
+  work:
+    auth: { method: pat, env: GITHUB_TOKEN_WORK }   # one token per environment
+    sign: { method: gpg, key: ABCD1234 }
+
+substrates:
+  internal-lib:
+    url: git@github.com:myorg/internal-lib.git
+    auth:     { method: ssh, key: ~/.ssh/id_ot }     # pat | ssh | none
+    sign:     { method: ssh, key: ~/.ssh/id_ot }     # ssh | gpg
+    checkout: { mode: managed }                      # ephemeral | managed | path
+  other:
+    url: https://github.com/myorg/other.git
+    profile: work                                    # reuse the profile above
+```
+
+*   **`auth.method`** — `pat` (env-var PAT, today's behavior), `ssh` (key-based, no PAT injected), or `none` (anonymous).
+*   **`sign`** — optional `ssh`/`gpg` commit signing.
+*   **`checkout.mode`** — `ephemeral` (default `/tmp`), `managed` (persistent OT-owned directory, distinct from human-editable clones), or `path` (explicit).
+*   **`profile`** — references a named `credentials:` entry.
+
+> **Status:** the schema above **parses today** (RFC #222 slice 1). Method-aware clone/push, signing, and managed checkout execute in #225 slices 3–4; the scalar `auth:` form is fully back-compatible.
+
 ---
 
 ## 2. Resolution & Gating Policies (User Feedback Incorporated)
