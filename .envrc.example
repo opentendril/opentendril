@@ -1,0 +1,7 @@
+# Copy to .envrc, then run: direnv allow
+#
+# The Stem needs GITHUB_TOKEN in its process environment so terrariums can
+# push over HTTPS — gh's keyring alone does not expose the token to child
+# processes. This sources it from `gh auth token` when not already set.
+export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
+[ -f .env ] && dotenv .env
