@@ -46,7 +46,7 @@ cd core
 make install
 ```
 
-This compiles the code and installs the `tendril` binary directly to your `$GOPATH/bin` (make sure this is in your system `$PATH`).
+This compiles the code and installs the `tendril` binary to `~/.local/bin` (make sure this is in your system `$PATH`).
 
 Verify installation:
 ```bash
@@ -60,9 +60,15 @@ tendril init
 ```
 
 This will:
-- Auto-detect local [Ollama](https://ollama.ai) models.
-- Configure cloud LLM providers (Anthropic, OpenAI, etc.).
-- Write your config to `.env`.
+- Auto-detect local [Ollama](https://ollama.ai) models — the default, fully local provider.
+- Alternatively configure a cloud LLM provider (Anthropic, OpenAI, etc.).
+- Optionally capture a `GITHUB_TOKEN` and scaffold a `substrates.yaml`.
+- Write your config to `.env` (re-running updates keys in place).
+
+For GitHub pushes from terrariums, load your token with direnv:
+```bash
+cp .envrc.example .envrc && direnv allow
+```
 
 ### Step 3 — Start the Stem server
 
@@ -188,8 +194,8 @@ curl http://localhost:8080/v1/config/personas
 ## 🛠️ Development Commands
 
 ```bash
-make install          # Build + install tendril binary
-make test-sprout      # Run Go unit tests
+make install          # Build + install tendril binary to ~/.local/bin
+make test-stem        # Run Go unit tests
 make test-all         # Run all tests
 
 cd ui && npm install  # Install Command Center UI deps

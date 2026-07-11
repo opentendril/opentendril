@@ -14,18 +14,18 @@ substrates:
     path: /home/dr3w/GitHub/opentendril/core # Optional local directory path
     url: https://github.com/opentendril/core.git
     branch: main
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN       # References env var name
+    auth: GITHUB_TOKEN       # References env var name
     readonly: false                          # Security lock to prevent commits/pushes
   my-api:
     url: https://github.com/myorg/api.git
     branch: develop
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    auth: GITHUB_TOKEN
     readonly: true
 ```
 
 ### Key Schema Characteristics
 *   **Local Paths:** If `path` is specified and exists on disk, it is used as the workspace. If missing/empty, Go Stem will clone the repo dynamically.
-*   **Secrets Isolation:** The YAML stores **references to env var names** (e.g. `auth: GITHUB_PERSONAL_ACCESS_TOKEN`), never raw tokens. Go Stem resolves the secret value at runtime via `os.Getenv(config.Auth)`.
+*   **Secrets Isolation:** The YAML stores **references to env var names** (e.g. `auth: GITHUB_TOKEN`), never raw tokens. Go Stem resolves the secret value at runtime via `os.Getenv(config.Auth)`. For GitHub PATs, `GITHUB_TOKEN` (canonical) and `GITHUB_PERSONAL_ACCESS_TOKEN` (legacy) are interchangeable — the Stem falls back to the other name when the referenced one is unset.
 *   **Read-Only Locks:** If `readonly: true` is configured, Go Stem blocks all commit/push operations on the substrate, keeping the codebase sterile.
 
 ---

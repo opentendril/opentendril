@@ -51,7 +51,31 @@ To prevent accidental corruption of the stable codebase, the `main` branch on Gi
 
 ---
 
-## 4. Conventional Commits Standard
+## 4. GitHub Authentication: `GITHUB_TOKEN`
+
+The single documented environment variable for a GitHub Personal Access Token is **`GITHUB_TOKEN`**. Substrate configs (`substrates.yaml`) reference it by name via the `auth:` key, and the Stem resolves the value from the environment at runtime. (`GITHUB_PERSONAL_ACCESS_TOKEN` is still accepted as a legacy alternate — the Stem checks both names.)
+
+**Why the token must live in the process environment:** Sprouts running inside terrariums clone and push branches over HTTPS. `gh`'s OS keyring authenticates `gh` itself, but does **not** inject a token into the Stem's environment, so HTTPS pushes from terrariums fail silently without `GITHUB_TOKEN` exported.
+
+The recommended workflow uses [direnv](https://direnv.net/) so the token is sourced from `gh` automatically whenever you enter the repo:
+
+```bash
+cp .envrc.example .envrc
+direnv allow
+```
+
+The provided `.envrc.example` does two things:
+
+```bash
+export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
+[ -f .env ] && dotenv .env
+```
+
+Use a **fine-grained PAT** strictly scoped to your repositories with Read/Write on Contents, Pull Requests, and Issues (see QUICKSTART.md Step 0). `.envrc` and `.env` are both gitignored — never commit tokens.
+
+---
+
+## 5. Conventional Commits Standard
 
 All commits (human and AI-generated) must follow the [Conventional Commits](https://www.conventionalcommits.org/) specification. This enables automated version bumping and progress changelog generation.
 
@@ -75,7 +99,7 @@ All commits (human and AI-generated) must follow the [Conventional Commits](http
 
 ---
 
-## 5. AI Agent Artifact Management
+## 6. AI Agent Artifact Management
 
 OpenTendril agents (like Codex, Antigravity, Aider, Cline, or local Planners) generate transient markdown artifacts, logs, and plans to coordinate progress.
 

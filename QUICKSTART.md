@@ -9,10 +9,10 @@ By the end, you will have confirmed the system is live, compiled the Go binary, 
 
 | Requirement | Check |
 |---|---|
-| Go 1.22+ | `go version` |
+| Go 1.24+ | `go version` |
 | Docker | `docker --version` |
 | Git | `git --version` |
-| An LLM API key | Anthropic (Claude) or OpenAI |
+| An LLM | Local [Ollama](https://ollama.ai) (default) — or an Anthropic/OpenAI API key |
 
 ---
 
@@ -25,7 +25,14 @@ OpenTendril operates on a strict **Zero-Trust SDLC architecture**. It must *neve
    - Code/Contents
    - Pull Requests
    - Issues
-3. **Configure the Environment:** Store this token in your `.env` file as `GITHUB_TOKEN=...` (Git handles this token dynamically during sprout execution).
+3. **Configure the Environment:** Export this token as `GITHUB_TOKEN` — it is the single canonical PAT variable across OpenTendril. The recommended way is direnv, which sources it from `gh` automatically:
+
+   ```bash
+   cp .envrc.example .envrc
+   direnv allow
+   ```
+
+   Terrariums push branches over HTTPS, so the token must be present in the Stem's process environment (`gh`'s keyring alone is not enough). Alternatively, set `GITHUB_TOKEN=...` in your `.env` file.
 
 ---
 
@@ -39,7 +46,7 @@ cd core
 make install
 ```
 
-This compiles the code and installs the `tendril` binary directly to your `$GOPATH/bin` (make sure this is in your system `$PATH`).
+This compiles the code and installs the `tendril` binary to `~/.local/bin` (make sure this is in your system `$PATH`).
 
 Verify installation:
 ```bash
@@ -50,13 +57,15 @@ tendril --help
 
 ## Step 2 — Run Onboarding Wizard
 
-Run the interactive setup wizard to configure LLM API keys and model specifications:
+Run the interactive setup wizard:
 
 ```bash
 tendril init
 ```
 
-The wizard will generate a `.env` file containing your configurations in the root directory.
+The wizard is **Ollama-first**: it detects a running Ollama instance at `localhost:11434`, lists your pulled models, and defaults the Stem to fully local, private inference (`DEFAULT_LLM_PROVIDER=local`). If you decline or have no Ollama, it walks you through a cloud provider (Anthropic, OpenAI, xAI, Google) and its API key instead. It also offers to capture a `GITHUB_TOKEN` and scaffold a minimal `substrates.yaml`.
+
+The wizard writes your configuration to a `.env` file in the root directory, updating existing keys in place — re-running it never duplicates keys.
 
 ---
 
@@ -76,7 +85,7 @@ Expected output:
 ```
 🌱 Starting OpenTendril Go Stem Server on :8080...
 ⚙️ Loaded substrates config. Named substrates: core
-🧠 Brain client initialized (provider: anthropic)
+🧠 Brain client initialized (provider: local)
 ```
 
 The orchestrator API is now running locally.
@@ -180,13 +189,13 @@ substrates:
     path: /home/user/dev/opentendril/core
     url: https://github.com/opentendril/core.git
     branch: main
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    auth: GITHUB_TOKEN
     readonly: false
 
   my-api:
     url: https://github.com/myorg/api.git
     branch: develop
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    auth: GITHUB_TOKEN
     readonly: true
 ```
 

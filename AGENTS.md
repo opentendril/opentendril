@@ -79,6 +79,17 @@ Before starting work on ANY task, the builder MUST run this sequence to guarante
 
 Only after the preflight check returns exactly `0 0` on a clean `main` branch may you create a new feature/staging branch.
 
+### GitHub Auth: `GITHUB_TOKEN` via direnv
+
+The canonical GitHub PAT variable is **`GITHUB_TOKEN`** (the Stem also accepts `GITHUB_PERSONAL_ACCESS_TOKEN` as a legacy alternate). The token must be present in the Stem's **process environment** — terrariums push branches over HTTPS, and `gh`'s keyring does not expose its token to child processes. The recommended setup uses [direnv](https://direnv.net/):
+
+```bash
+cp .envrc.example .envrc
+direnv allow
+```
+
+The `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when it is not already set, and loads `.env` on top. `.envrc` is gitignored — never commit it.
+
 ---
 
 ## 5. Casing & Boundary Mapping Rules

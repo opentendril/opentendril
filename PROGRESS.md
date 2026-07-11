@@ -16,7 +16,9 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 
 ---
 
-## 🛠️ Sprint Deliverables (Day 1-2)
+## 🛠️ Sprint Deliverables (Day 1-2) — Historical
+
+> **Historical note:** Entries below from the early sprint describe the original Python prototype (`src/*.py`). Those files no longer exist — OpenTendril has since been rewritten as a pure Go Stem (`cmd/stem/`, `roots/`). The capabilities survived the rewrite in Go form (e.g. provider routing and per-provider model overrides live in `roots/llm/`, persistence in `cmd/stem/internal/historydb/`). Python-era entries are kept for project history only.
 
 - [x] **Dynamic System Prompt**: Tendril now surveys external workspaces instead of assuming it's editing itself.
 - [x] **Zero-Restriction Mode**: `PROTECTED_FILES` and `SDLC` gates are context-aware (disabled for external projects).
@@ -31,16 +33,7 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 
 - **2026-07-07:** 🖥️ **COMMAND CENTER (OS of OT frontend):** Shipped the decoupled visual UI under `ui/` (React 18 + Vite + TypeScript). Multi-session command center, refresh-resilient REST→WebSocket hydration, sprout-run drill-down drawer, no-`.env` onboarding, and a **living botanical garden** that renders EventBus telemetry as growing/mutating/withering tendrils and phenotypic-selection arenas. Talks to the Stem only over the documented REST + `/ws` surface. Shipped with four additive Stem changes (register `phenotypic-selection` as a forwarded EventType, opt-in `/ws?replay=N` history replay, `GATEWAY_PORT`, and graceful gateway-bind degradation). Docs: [`ui/README.md`](ui/README.md), [`docs/COMMAND-CENTER.md`](docs/COMMAND-CENTER.md).
 
-- **2026-04-27 (Session 2):** 🤖 **MULTI-AGENT KERNEL:** Shipped ephemeral sub-agent orchestration:
-  - `src/subagent.py` — 5 expert Worker profiles (security_auditor, code_reviewer, test_writer, documenter, linter). Each worker has a tailored persona and restricted tool whitelist (principle of least privilege). Root Agent delegates via `sproutSubAgent()` tool.
-  - `src/vectorstore.py` — Vector store factory: pgvector (default), Pinecone, Weaviate. Switch with one env var: `VECTOR_STORE_PROVIDER=pinecone`.
-  - `src/kvstore.py` — KV store factory: Redis (default), Upstash (serverless HTTP), InMemory (zero containers). Zero infrastructure mode now available.
-  - `src/assessor.py` — Complexity assessor auto-routes requests to `fast/standard/power` tier. Saves 40-80% on simple queries.
-  - **91/91 unit tests passing.** 6 features shipped, 6 GitHub issues closed in one session.
-  - `src/modeldiscovery.py` — Live model catalogue fetch from OpenRouter API with 24h cache. Auto-selects fast/standard/power tiers by pricing metadata.
-  - `src/promptcache.py` — Anthropic-native `cache_control` blocks split static system prompt (persona, guardrails, tools) from dynamic context (RAG, skills). 50-90% token cost reduction on cached turns.
-  - `src/llmrouter.py` — OpenRouter added as provider #5. Per-provider `.env` model overrides (`ANTHROPIC_POWER_MODEL`, etc.) take precedence over auto-discovery and hardcoded defaults. No code change needed to upgrade model versions.
-  - **12 strategic GitHub issues** created (#7–#18) mapping the full architecture roadmap.
+- **2026-04-27 (Session 2) — Historical (Python prototype):** 🤖 **MULTI-AGENT KERNEL:** Shipped ephemeral sub-worker orchestration, vector/KV store factories, complexity-tier routing, live model discovery, prompt caching, and OpenRouter as provider #5 in the original Python prototype (`src/subagent.py`, `src/vectorstore.py`, `src/kvstore.py`, `src/assessor.py`, `src/modeldiscovery.py`, `src/promptcache.py`, `src/llmrouter.py` — **these files no longer exist**). The surviving pieces were reimplemented in Go: provider routing, tier selection, model auto-discovery, and per-provider `.env` model overrides (`ANTHROPIC_POWER_MODEL`, etc.) now live in `roots/llm/`. Also created 12 strategic GitHub issues (#7–#18) mapping the architecture roadmap.
 
 - **2026-04-11 (Day 2.5):** 🚢 **SHIP-IT:** Tagged `v0.1.0`. README rewritten as a minimal setup guide. Makefile added for CLI builds.
 - **2026-04-10 (Day 1):** 🧪 **PROOF OF LIFE:** Successfully pointed Tendril at `jurnx-med-dev`. Tendril listed 1,354 files, identified the tech stack (Go/React/Firestore), and committed a verified change to `README.md`.
@@ -61,7 +54,7 @@ This file is the "Source of Truth" for the Tendril development sprint. **Stable 
 - [ ] Improved context window management for large codebases.
 - [ ] Human-in-the-loop diff review via CLI.
 
-## 2026-04-22 — Patcher Bug Hunt & External Project Validation
+## 2026-04-22 — Patcher Bug Hunt & External Project Validation — Historical (Python prototype)
 
 ### What happened
 End-to-end tested external project mode (`TENDRIL_PROJECT_PATH` + `TENDRIL_WORKSPACE_ROOT=/workspace`).

@@ -12,13 +12,13 @@ substrates:
     path: /home/user/dev/opentendril/core
     url: https://github.com/opentendril/core.git
     branch: main
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    auth: GITHUB_TOKEN
     readonly: false
 
   api:
     url: https://github.com/myorg/api.git
     branch: develop
-    auth: GITHUB_PERSONAL_ACCESS_TOKEN
+    auth: GITHUB_TOKEN
     readonly: true
 
   docs:
@@ -32,4 +32,6 @@ substrates:
 # - If `path` is missing or does not exist, Tendril clones `url` to a temporary
 #   workspace under /tmp/opentendril-substrate-<name>-<random>.
 # - `auth` must be the name of an environment variable, not the secret value.
+#   GITHUB_TOKEN is the canonical GitHub PAT variable; the Stem also falls
+#   back to GITHUB_PERSONAL_ACCESS_TOKEN when the referenced one is unset.
 # - `readonly: true` keeps the terrarium ephemeral and discards any edits.
