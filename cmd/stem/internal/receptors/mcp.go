@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
@@ -146,25 +145,6 @@ func (h *MCPHandler) callCoreCapability(id interface{}, name string, args map[st
 		"content": []map[string]interface{}{{"type": "text", "text": string(payload)}},
 		"isError": false,
 	})
-}
-
-// resolveSession maps an optional explicit sessionId to a live Tendril
-// session, falling back to the handler's default binding.
-func (h *MCPHandler) resolveSession(ctx context.Context, explicit string) (session.Session, bool) {
-	if h.sessions == nil {
-		return session.Session{}, false
-	}
-
-	id := strings.TrimSpace(explicit)
-	if id == "" {
-		id = h.defaultSessionID
-	}
-	sess, err := h.sessions.GetOrSprout(ctx, id, session.OriginMCP)
-	if err != nil {
-		log.Printf("[MCP] Failed to resolve session %q: %v", id, err)
-		return session.Session{}, false
-	}
-	return sess, true
 }
 
 func (h *MCPHandler) SetupRoutes(mux *http.ServeMux) {
@@ -338,7 +318,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "sproutTendril",
-				"description": "Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
+				"description": "Deprecated alias of the governed sprout.run capability. Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -485,6 +465,20 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// Interface parity (#159): Core session capabilities are dispatched
 		// through the shared service, identically to REST and the CLI.
 		if h.isCoreCapability(params.Name) {
+			if params.Name == core.CapSproutRun {
+				// Origin and the pinned stdio session are MCP-surface metadata
+				// (exactly like the REST adapter stamping its own origin), so
+				// the adapter fills unset values before the Core runs.
+				if params.Arguments == nil {
+					params.Arguments = map[string]interface{}{}
+				}
+				if id, _ := params.Arguments["sessionId"].(string); strings.TrimSpace(id) == "" && h.defaultSessionID != "" {
+					params.Arguments["sessionId"] = h.defaultSessionID
+				}
+				if origin, _ := params.Arguments["origin"].(string); strings.TrimSpace(origin) == "" {
+					params.Arguments["origin"] = session.OriginMCP
+				}
+			}
 			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
 		}
 
@@ -791,6 +785,12 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
+		// Deprecated alias of the governed sprout.run capability (#181, final
+		// family): same Core, legacy tool name, legacy protocol errors, and
+		// text rendering preserved for existing MCP clients. Adapter
+		// translation only — the substrate resolution, terrarium execution,
+		// and run recording that used to live inline here are now behind the
+		// Core's SproutOps port.
 		if params.Name != "sproutTendril" {
 			return h.formatError(req.ID, -32601, "Tool not found", nil)
 		}
@@ -800,94 +800,30 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		if !ok || !subOk || strings.TrimSpace(transcript) == "" || strings.TrimSpace(substrate) == "" {
 			return h.formatError(req.ID, -32602, "Invalid arguments", "The 'transcript' and 'substrate' parameters are required.")
 		}
+		if h.core == nil {
+			return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+		}
 
 		stepID, _ := params.Arguments["stepId"].(string)
-		if strings.TrimSpace(stepID) == "" {
-			stepID = fmt.Sprintf("step-%d", time.Now().UTC().UnixNano())
-		}
-
-		explicitSessionID, _ := params.Arguments["sessionId"].(string)
-		sess, hasSession := h.resolveSession(context.Background(), explicitSessionID)
-
+		sessionID, _ := params.Arguments["sessionId"].(string)
 		substrateURL, _ := params.Arguments["substrateUrl"].(string)
-		explicitSubstrateURL := strings.TrimSpace(substrateURL)
 		substrateBranch, _ := params.Arguments["substrateBranch"].(string)
-		resolvedSubstrate := strings.TrimSpace(substrate)
-		substrateIsNamed := false
-		substrateHasLocalPath := false
-		if substrateSpec, isName := conductor.ResolveSubstrate(substrate, h.substratesConfig); isName && substrateSpec != nil {
-			substrateIsNamed = true
-			if strings.TrimSpace(substrateURL) == "" {
-				substrateURL = strings.TrimSpace(substrateSpec.URL)
-			}
-			if strings.TrimSpace(substrateBranch) == "" {
-				substrateBranch = strings.TrimSpace(substrateSpec.Branch)
-			}
-			if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-				if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
-					resolvedSubstrate = trimmedPath
-					substrateHasLocalPath = true
-				}
-			}
+		if strings.TrimSpace(sessionID) == "" {
+			// The pinned stdio session is MCP-surface metadata (the historic
+			// resolveSession fallback), so the adapter fills it in before the
+			// transport-free Core binds session preferences.
+			sessionID = h.defaultSessionID
 		}
 
-		statusPath := ""
-		if explicitSubstrateURL == "" {
-			if !substrateIsNamed || substrateHasLocalPath {
-				if resolvedSubstrate != "" {
-					statusPath = filepath.Join(resolveRepoRoot(resolvedSubstrate), "tendril-status.json")
-				}
-			}
-		}
-
-		log.Printf("[MCP] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", stepID, transcript, resolvedSubstrate, substrateURL)
-		orch := &conductor.DockerOrchestrator{
-			Substrate:       resolvedSubstrate,
+		result, err := h.core.SproutRun(context.Background(), core.SproutRunInput{
+			Transcript:      transcript,
+			Substrate:       substrate,
+			StepID:          stepID,
+			SessionID:       sessionID,
 			SubstrateURL:    substrateURL,
 			SubstrateBranch: substrateBranch,
-			StepID:          stepID,
-			StatusPath:      statusPath,
-		}
-
-		run := historydb.SproutRun{
-			RunID:      stepID,
-			StepID:     stepID,
-			Origin:     session.OriginMCP,
-			Transcript: transcript,
-			Status:     "running",
-			StartedAt:  time.Now().UTC(),
-		}
-		if hasSession {
-			run.SessionID = sess.ID
-			// Session preferences shape this Tendril's sprout.
-			orch.Provider = sess.Preferences.Provider
-			orch.Model = sess.Preferences.Model
-			orch.Genotype = sess.Preferences.Genotype
-			run.Model = sess.Preferences.Model
-			run.Genotype = sess.Preferences.Genotype
-			h.sessions.Touch(context.Background(), sess.ID)
-		}
-		if h.history != nil {
-			if recordErr := h.history.RecordSproutRun(context.Background(), run); recordErr != nil {
-				log.Printf("[MCP] Failed to record sprout run start: %v", recordErr)
-			}
-		}
-
-		output, err := orch.RunTendril(context.Background(), transcript)
-		run.FinishedAt = time.Now().UTC()
-		if err != nil {
-			run.Status = "withered"
-			run.Error = err.Error()
-		} else {
-			run.Status = "matured"
-			run.Output = output
-		}
-		if h.history != nil {
-			if recordErr := h.history.RecordSproutRun(context.Background(), run); recordErr != nil {
-				log.Printf("[MCP] Failed to record sprout run result: %v", recordErr)
-			}
-		}
-
+			Origin:          session.OriginMCP,
+		})
 		if err != nil {
 			log.Printf("[MCP] Tendril execution failed: %v", err)
 			return h.formatResult(req.ID, map[string]interface{}{
@@ -905,7 +841,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			"content": []map[string]interface{}{
 				{
 					"type": "text",
-					"text": output,
+					"text": result.Output,
 				},
 			},
 			"isError": false,

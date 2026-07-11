@@ -12,6 +12,7 @@
 //   tendril memory - Store, search, and export project memory
 //   tendril repomap - Generate the active repository map
 //   tendril sequence - Run or list YAML task sequences
+//   tendril sprout - Delegate a one-shot task to an autonomous Tendril
 //   tendril terrarium - Manage execution terrarium environments
 //   tendril health - Run infrastructure health diagnostics
 //   tendril llm   - Inspect and test the configured local LLM provider
@@ -71,6 +72,8 @@ func main() {
 		runRepoMapCmd(os.Args[2:])
 	case "sequence":
 		runSequenceCmd(ctx, os.Args[2:])
+	case "sprout":
+		runSproutCmd(ctx, os.Args[2:])
 	case "terrarium":
 		runTerrariumCmd(ctx, os.Args[2:])
 	case "health":
@@ -108,6 +111,7 @@ func printUsage() {
 	fmt.Println("  memory  Store, search, and export project memory")
 	fmt.Println("  repomap Generate the active repository map")
 	fmt.Println("  sequence Run or list YAML task sequences")
+	fmt.Println("  sprout  Delegate a one-shot task to an autonomous Tendril in a terrarium")
 	fmt.Println("  terrarium Manage execution terrarium environments")
 	fmt.Println("  health  Run infrastructure health diagnostics")
 	fmt.Println("  llm     List or test the configured local LLM provider")

@@ -15,6 +15,12 @@
 // governed set so the three surfaces cannot silently diverge on it. plasmid.sign
 // and mesh key-management commands stay deliberately ungoverned (see plasmid.go
 // and mesh.go).
+// slice 1), and the sprout/run family (issue #181, final family) — all three
+// surfaces project each identically through this one Core. The remaining
+// Stem capabilities (sequence, plasmid, substrate grafting) are NOT yet part
+// of the governed registry — they are tracked in issue #181, and the parity
+// tests deliberately assert only the governed set so the three surfaces
+// cannot silently diverge on it.
 package core
 
 import (
@@ -63,6 +69,9 @@ type Core interface {
 	// injected SequenceOps execution port.
 	SequenceList(ctx context.Context) ([]string, error)
 	SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error)
+	// Sprout/run family (issue #181, final family). Runs through the injected
+	// SproutOps execution port.
+	SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
@@ -106,16 +115,16 @@ type SessionHistoryInput struct {
 
 // --- service implementation -------------------------------------------------
 
-// Service is the concrete Core, backed by the unified SessionManager. It is the
 // only place session-command business logic lives. The genome, plasmid, mesh,
-// and sequence fields are the injected execution ports for their capability families
-// (see genome.go, plasmid.go, mesh.go, and sequence.go).
+// sequence, and sprout fields are the injected execution ports for their capability families
+// (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
 	sessions *session.Manager
 	genome   GenomeOps
 	plasmid  PlasmidOps
 	mesh     MeshOps
 	sequence SequenceOps
+	sprout   SproutOps
 }
 
 // NewService builds a Core over the shared SessionManager.

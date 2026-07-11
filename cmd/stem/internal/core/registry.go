@@ -27,6 +27,7 @@ const (
 	CapMeshPromote   = "mesh.promote"
 	CapSequenceList  = "sequence.list"
 	CapSequenceRun   = "sequence.run"
+	CapSproutRun     = "sprout.run"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -65,6 +66,7 @@ func CapabilityNames() []string {
 		CapMeshPromote,
 		CapSequenceList,
 		CapSequenceRun,
+		CapSproutRun,
 	}
 	sort.Strings(names)
 	return names
@@ -163,6 +165,7 @@ func (s *Service) Capabilities() []Capability {
 	caps = append(caps, s.plasmidCapabilities()...)
 	caps = append(caps, s.meshCapabilities()...)
 	caps = append(caps, s.sequenceCapabilities()...)
+	caps = append(caps, s.sproutCapabilities()...)
 	return caps
 }
 
