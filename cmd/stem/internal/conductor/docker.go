@@ -158,10 +158,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if plan.remoteClone {
-		authValue := ""
-		if plan.authRef != "" {
-			authValue = strings.TrimSpace(os.Getenv(plan.authRef))
-		}
+		authValue := resolveAuthTokenValue(plan.authRef)
 
 		clonedPath, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.authRef, authValue)
 		if err != nil {
@@ -673,8 +670,6 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 		"OPENROUTER_API_KEY",
 		"OPENTENDRIL_API_KEY",
 		"NVIDIA_API_KEY",
-		"GITHUB_PERSONAL_ACCESS_TOKEN",
-		"GITHUB_TOKEN",
 		"DEFAULT_LLM_PROVIDER",
 		"LOCAL_INFERENCE_URL",
 		"LOCAL_MODEL_NAME",
@@ -682,6 +677,13 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 			values[key] = value
 		}
+	}
+
+	// GitHub PAT: accept either variable name on the host and expose the
+	// resolved value under both names inside the terrarium.
+	if _, pat := resolveGitHubPAT(); pat != "" {
+		values[gitHubTokenEnv] = pat
+		values[gitHubPATLegacyEnv] = pat
 	}
 
 	for _, entry := range extraEnv {
@@ -1284,11 +1286,11 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 	resolvedAuthRef := strings.TrimSpace(authRef)
 	resolvedAuthValue := strings.TrimSpace(authValue)
 	if resolvedAuthRef != "" && resolvedAuthValue == "" {
-		resolvedAuthValue = strings.TrimSpace(os.Getenv(resolvedAuthRef))
+		resolvedAuthValue = resolveAuthTokenValue(resolvedAuthRef)
 	}
 	if resolvedAuthValue == "" && resolvedAuthRef == "" && strings.Contains(url, "github.com") {
-		if pat := strings.TrimSpace(os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")); pat != "" {
-			resolvedAuthRef = "GITHUB_PERSONAL_ACCESS_TOKEN"
+		if patRef, pat := resolveGitHubPAT(); pat != "" {
+			resolvedAuthRef = patRef
 			resolvedAuthValue = pat
 		}
 	}

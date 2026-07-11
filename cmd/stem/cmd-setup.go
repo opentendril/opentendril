@@ -38,7 +38,7 @@ func runSetupAgentCmd() {
 		os.Exit(1)
 	}
 
-	authEnv, err := promptSetupValue(reader, "PAT environment variable name", "GITHUB_PERSONAL_ACCESS_TOKEN")
+	authEnv, err := promptSetupValue(reader, "PAT environment variable name", "GITHUB_TOKEN")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read PAT environment variable name: %v\n", err)
 		os.Exit(1)

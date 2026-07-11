@@ -216,7 +216,14 @@ func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
 		}
 		if authRef := strings.TrimSpace(spec.Auth); authRef != "" {
 			if _, ok := os.LookupEnv(authRef); !ok {
-				log.Printf("[Substrates] Warning: substrate %q references auth env %q, which is not set", name, authRef)
+				alt := alternateGitHubPATEnvVar(authRef)
+				altSet := false
+				if alt != "" {
+					_, altSet = os.LookupEnv(alt)
+				}
+				if !altSet {
+					log.Printf("[Substrates] Warning: substrate %q references auth env %q, which is not set", name, authRef)
+				}
 			}
 		}
 	}
