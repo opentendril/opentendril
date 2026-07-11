@@ -16,9 +16,20 @@ type Config struct {
 
 // ResinConfig controls local structured logging (Resin sink).
 type ResinConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Format  string `yaml:"format"`
-	Level   string `yaml:"level"`
+	Enabled bool        `yaml:"enabled"`
+	Format  string      `yaml:"format"`
+	Level   string      `yaml:"level"`
+	Amber   AmberConfig `yaml:"amber"`
+}
+
+// AmberConfig controls how Resin hardens into Amber: when the active
+// resin.log grows past MaxSizeKB it is gzip-compressed into the amber/
+// archive directory next to it, keeping at most Keep archives (issue #136).
+type AmberConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// MaxSizeKB uses the same snake_case key style as api_key above.
+	MaxSizeKB int `yaml:"max_size_kb"`
+	Keep      int `yaml:"keep"`
 }
 
 // TransporterConfig describes one external telemetry emitter.
@@ -56,5 +67,11 @@ func normalizeConfig(cfg *Config) {
 	}
 	if cfg.Resin.Level == "" {
 		cfg.Resin.Level = "info"
+	}
+	if cfg.Resin.Amber.MaxSizeKB <= 0 {
+		cfg.Resin.Amber.MaxSizeKB = 1024
+	}
+	if cfg.Resin.Amber.Keep <= 0 {
+		cfg.Resin.Amber.Keep = 5
 	}
 }
