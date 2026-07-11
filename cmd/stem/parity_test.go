@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.SequenceHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.SequenceHandler, *receptors.SproutHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -51,6 +51,7 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	plasmidRest := receptors.NewPlasmidHandler(svc)
 	graftRest := receptors.NewGraftHandler(svc)
 	sequenceRest := receptors.NewSequenceHandler(svc)
+	sproutRest := receptors.NewSproutHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
@@ -60,9 +61,10 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
+	sproutRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, plasmidRest, graftRest, sequenceRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, graftRest, sequenceRest, sproutRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -118,23 +120,25 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, plasmidRest, graftRest, sequenceRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, graftRest, sequenceRest, sproutRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
-	//          (sessions + genome + plasmid + graft + sequence handlers).
+	//          (sessions + genome + plasmid + graft + sequence + sprout handlers).
 	//   MCP  — names parsed from the live tools/list response.
 	//   CLI  — capabilities of the subcommands registered on the command trees
-	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril sequence`).
+	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril sequence` + `tendril sprout`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
 	restCaps = append(restCaps, plasmidRest.Capabilities()...)
 	restCaps = append(restCaps, graftRest.Capabilities()...)
 	restCaps = append(restCaps, sequenceRest.Capabilities()...)
+	restCaps = append(restCaps, sproutRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
 	cliCaps = append(cliCaps, plasmidCLICapabilityNames()...)
 	cliCaps = append(cliCaps, meshCLICapabilityNames()...)
 	cliCaps = append(cliCaps, sequenceCLICapabilityNames()...)
+	cliCaps = append(cliCaps, sproutCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
@@ -145,7 +149,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -360,6 +364,16 @@ func (m *mockCore) SequenceRun(_ context.Context, in core.SequenceRunInput) (cor
 	}, nil
 }
 
+func (m *mockCore) SproutRun(_ context.Context, in core.SproutRunInput) (core.SproutRunResult, error) {
+	m.record("SproutRun", in)
+	return core.SproutRunResult{
+		StepID:    "step-mock",
+		SessionID: in.SessionID,
+		Status:    "matured",
+		Output:    "mock output",
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -519,6 +533,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return m.SequenceRun(ctx, in)
 			},
 		},
+		{
+			Name:        core.CapSproutRun,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.SproutRunInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.SproutRun(ctx, in)
+			},
+		},
 	}
 }
 
@@ -568,12 +593,14 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	plasmidRest := receptors.NewPlasmidHandler(mock)
 	graftRest := receptors.NewGraftHandler(mock)
 	sequenceRest := receptors.NewSequenceHandler(mock)
+	sproutRest := receptors.NewSproutHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
+	sproutRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
@@ -1145,4 +1172,105 @@ func TestBehavioralParity_SequenceRun(t *testing.T) {
 	if calls := mock.inputsFor("SequenceList"); len(calls) != 1 {
 		t.Fatalf("REST sequence.list: Core.SequenceList called %d times, want 1", len(calls))
 	}
+}
+
+// TestBehavioralParity_SproutRun extends the zero-business-logic proof to the
+// sprout/run family (issue #181, final family): REST, MCP (governed name and
+// the deprecated sproutTendril alias), and the CLI dispatch path must each
+// decode an equivalent request into the identical typed input and invoke
+// Core.SproutRun exactly once.
+func TestBehavioralParity_SproutRun(t *testing.T) {
+	want := core.SproutRunInput{
+		Transcript: "fix the flaky test",
+		Substrate:  "/workspaces/core",
+		SessionID:  "parity-session-1",
+		Origin:     "parity-origin",
+	}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOneRunCall := func(t *testing.T, surface string, wantInput core.SproutRunInput) {
+		t.Helper()
+		calls := mock.inputsFor("SproutRun")
+		if len(calls) != 1 {
+			t.Fatalf("%s sprout.run: Core.SproutRun called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], wantInput) {
+			t.Errorf("%s sprout.run: Core.SproutRun received %#v, want %#v", surface, calls[0], wantInput)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/sprouts/run", "application/json",
+		bytes.NewBufferString(`{"transcript":"fix the flaky test","substrate":"/workspaces/core","sessionId":"parity-session-1","origin":"parity-origin"}`))
+	if err != nil {
+		t.Fatalf("REST sprout.run: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST sprout.run status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOneRunCall(t, "REST", want)
+
+	// --- MCP (governed name) ----------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sprout.run","arguments":{"transcript":"fix the flaky test","substrate":"/workspaces/core","sessionId":"parity-session-1","origin":"parity-origin"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP sprout.run response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP sprout.run failed: %s", mcpResp)
+	}
+	assertOneRunCall(t, "MCP", want)
+
+	// --- MCP (deprecated sproutTendril alias) -----------------------------------
+	// The alias always stamps its own surface origin (the historic behavior);
+	// everything else must decode identically.
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sproutTendril","arguments":{"transcript":"fix the flaky test","substrate":"/workspaces/core","sessionId":"parity-session-1"}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
+		t.Fatalf("parse MCP sproutTendril response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP sproutTendril alias failed: %s", aliasResp)
+	}
+	aliasWant := want
+	aliasWant.Origin = session.OriginMCP
+	assertOneRunCall(t, "MCP alias", aliasWant)
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupSproutCommand("run")
+	if !ok {
+		t.Fatal("CLI: no sprout subcommand registered for \"run\"")
+	}
+	if command.capability != core.CapSproutRun {
+		t.Fatalf("CLI subcommand \"run\" maps to %q, want %q", command.capability, core.CapSproutRun)
+	}
+	input, err := parseSproutArgs(command.capability, []string{
+		"--substrate", "/workspaces/core",
+		"--session", "parity-session-1",
+		"--origin", "parity-origin",
+		"fix", "the", "flaky", "test",
+	})
+	if err != nil {
+		t.Fatalf("CLI parseSproutArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI sprout.run: Core.Invoke: %v", err)
+	}
+	assertOneRunCall(t, "CLI", want)
 }

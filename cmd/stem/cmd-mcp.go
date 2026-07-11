@@ -38,7 +38,8 @@ func runMCPCmd(ctx context.Context, args []string) {
 			WithGenome(genomeOps(resolveRepoRoot(""))).
 			WithPlasmid(plasmidOps(resolveRepoRoot(""))).
 			WithMesh(meshOps()).
-			WithSequence(serveSequenceOps(resolveRepoRoot("")))
+			WithSequence(serveSequenceOps(resolveRepoRoot(""))).
+			WithSprout(sproutOps(history))
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
 	}
