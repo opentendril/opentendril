@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 )
@@ -20,8 +21,18 @@ import (
 //
 // Exposed metrics:
 //
-//	opentendril_events_total{type="sprout-emerged"}  counter per event type
-//	opentendril_events_last_timestamp_seconds        unix time of last event
+//	opentendril_events_total{type="sprout-emerged"}   counter per event type
+//	opentendril_events_last_timestamp_seconds         unix time of last event
+//	opentendril_llm_stream_tokens_total               LLM stream token chunks
+//	opentendril_llm_stream_characters_total           characters streamed by LLMs
+//	opentendril_sprouts_active                        sprout workers running now
+//
+// The LLM counters are derived from stream-token events that carry a token
+// payload chunk (the per-token stream the conductor's Agent publishes);
+// stream start/end markers carry no chunk and are excluded. Cumulative
+// per-state sprout worker counts (emerged/matured/withered) are already the
+// opentendril_events_total series for those event types; the active gauge is
+// the live balance of those transitions.
 //
 // Metric names use underscores because the Prometheus data model only permits
 // [a-zA-Z0-9_:] in metric names; the kebab-case biological event types survive
@@ -30,9 +41,12 @@ type PrometheusTransporter struct {
 	server   *http.Server
 	listener net.Listener
 
-	mu        sync.Mutex
-	counts    map[string]uint64
-	lastEvent time.Time
+	mu                  sync.Mutex
+	counts              map[string]uint64
+	lastEvent           time.Time
+	llmStreamTokens     uint64
+	llmStreamCharacters uint64
+	sproutsActive       uint64
 }
 
 // NewPrometheusTransporter starts a /metrics HTTP listener and returns the
@@ -108,6 +122,24 @@ func (t *PrometheusTransporter) Emit(event eventbus.Event) error {
 	if event.Timestamp.After(t.lastEvent) {
 		t.lastEvent = event.Timestamp
 	}
+
+	switch event.Type {
+	case eventbus.EventStreamToken:
+		// Only events carrying an actual token chunk count as LLM output;
+		// stream.start / stream.end markers publish no "token" key.
+		if chunk, ok := event.Data["token"].(string); ok && chunk != "" {
+			t.llmStreamTokens++
+			t.llmStreamCharacters += uint64(utf8.RuneCountInString(chunk))
+		}
+	case eventbus.EventSproutEmerged:
+		t.sproutsActive++
+	case eventbus.EventSproutMatured, eventbus.EventSproutWithered:
+		// Clamp at zero: a matured/withered event for a sprout that emerged
+		// before this transporter attached must not underflow the gauge.
+		if t.sproutsActive > 0 {
+			t.sproutsActive--
+		}
+	}
 	return nil
 }
 
@@ -135,6 +167,15 @@ func (t *PrometheusTransporter) handleMetrics(w http.ResponseWriter, _ *http.Req
 	} else {
 		builder.WriteString(fmt.Sprintf("opentendril_events_last_timestamp_seconds %d\n", t.lastEvent.Unix()))
 	}
+	builder.WriteString("# HELP opentendril_llm_stream_tokens_total Total LLM stream token chunks observed on the EventBus (stream start/end markers excluded).\n")
+	builder.WriteString("# TYPE opentendril_llm_stream_tokens_total counter\n")
+	builder.WriteString(fmt.Sprintf("opentendril_llm_stream_tokens_total %d\n", t.llmStreamTokens))
+	builder.WriteString("# HELP opentendril_llm_stream_characters_total Total characters streamed by LLM providers, summed over stream-token chunks.\n")
+	builder.WriteString("# TYPE opentendril_llm_stream_characters_total counter\n")
+	builder.WriteString(fmt.Sprintf("opentendril_llm_stream_characters_total %d\n", t.llmStreamCharacters))
+	builder.WriteString("# HELP opentendril_sprouts_active Sprout workers currently executing: emerged minus matured/withered, as observed on the EventBus.\n")
+	builder.WriteString("# TYPE opentendril_sprouts_active gauge\n")
+	builder.WriteString(fmt.Sprintf("opentendril_sprouts_active %d\n", t.sproutsActive))
 	t.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

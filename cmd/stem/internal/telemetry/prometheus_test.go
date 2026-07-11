@@ -88,6 +88,98 @@ func TestPrometheusTransporterPreRegistersAllEventTypes(t *testing.T) {
 	}
 }
 
+func TestPrometheusTransporterLLMTokenUsage(t *testing.T) {
+	transporter := newTestPrometheusTransporter(t)
+
+	// Three token chunks stream from the LLM: 5 + 5 + 2 runes. The multibyte
+	// chunk proves characters are counted as runes, not bytes.
+	for _, chunk := range []string{"Hello", ", wor", "ld"} {
+		if err := transporter.Emit(eventbus.Event{
+			Type: eventbus.EventStreamToken,
+			Data: map[string]interface{}{"token": chunk},
+		}); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+	}
+	if err := transporter.Emit(eventbus.Event{
+		Type: eventbus.EventStreamToken,
+		Data: map[string]interface{}{"token": "🌱🌱"},
+	}); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	// Stream lifecycle markers carry no token chunk and must not count.
+	for _, marker := range []string{"stream.start", "stream.end"} {
+		if err := transporter.Emit(eventbus.Event{
+			Type: eventbus.EventStreamToken,
+			Data: map[string]interface{}{"type": marker},
+		}); err != nil {
+			t.Fatalf("Emit: %v", err)
+		}
+	}
+
+	body := scrape(t, transporter)
+
+	if !strings.Contains(body, "opentendril_llm_stream_tokens_total 4") {
+		t.Errorf("expected 4 token chunks (markers excluded) in scrape:\n%s", body)
+	}
+	if !strings.Contains(body, "opentendril_llm_stream_characters_total 14") {
+		t.Errorf("expected 14 streamed runes in scrape:\n%s", body)
+	}
+	// The marker events still count as raw bus events.
+	if !strings.Contains(body, `opentendril_events_total{type="stream-token"} 6`) {
+		t.Errorf("expected 6 raw stream-token events in scrape:\n%s", body)
+	}
+}
+
+func TestPrometheusTransporterSproutsActiveGauge(t *testing.T) {
+	transporter := newTestPrometheusTransporter(t)
+
+	emit := func(eventType eventbus.EventType) {
+		t.Helper()
+		if err := transporter.Emit(eventbus.Event{Type: eventType}); err != nil {
+			t.Fatalf("Emit(%s): %v", eventType, err)
+		}
+	}
+
+	// Two sprouts emerge, one matures: one still active.
+	emit(eventbus.EventSproutEmerged)
+	emit(eventbus.EventSproutEmerged)
+	emit(eventbus.EventSproutMatured)
+	if body := scrape(t, transporter); !strings.Contains(body, "opentendril_sprouts_active 1") {
+		t.Errorf("expected 1 active sprout in scrape:\n%s", body)
+	}
+
+	// The last one withers: none active.
+	emit(eventbus.EventSproutWithered)
+	if body := scrape(t, transporter); !strings.Contains(body, "opentendril_sprouts_active 0") {
+		t.Errorf("expected 0 active sprouts in scrape:\n%s", body)
+	}
+
+	// A withered event for a sprout that emerged before this transporter
+	// attached must clamp at zero, never underflow.
+	emit(eventbus.EventSproutWithered)
+	if body := scrape(t, transporter); !strings.Contains(body, "opentendril_sprouts_active 0") {
+		t.Errorf("expected clamped 0 active sprouts in scrape:\n%s", body)
+	}
+}
+
+func TestPrometheusTransporterNewSeriesPresentAtZero(t *testing.T) {
+	transporter := newTestPrometheusTransporter(t)
+
+	body := scrape(t, transporter)
+
+	for _, series := range []string{
+		"opentendril_llm_stream_tokens_total 0",
+		"opentendril_llm_stream_characters_total 0",
+		"opentendril_sprouts_active 0",
+	} {
+		if !strings.Contains(body, series) {
+			t.Errorf("series %q not present at zero on first scrape:\n%s", series, body)
+		}
+	}
+}
+
 func TestPrometheusTransporterConfigValidation(t *testing.T) {
 	if _, err := NewPrometheusTransporter(TransporterConfig{Type: "prometheus"}); err == nil {
 		t.Fatal("expected error when neither endpoint nor port is set")
