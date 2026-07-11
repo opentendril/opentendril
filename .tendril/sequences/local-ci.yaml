@@ -1,0 +1,39 @@
+# local-ci: a governed local continuous-integration Sequence.
+#
+# Verifies this substrate inside a terrarium: one Sprout compiles the module,
+# a dependent Sprout runs the test suite. Step ids contain "verifier" so the
+# Conductor grows each Sprout from the verifier genotype (stepGenotype in
+# cmd/stem/internal/conductor/sequence.go) and a failed step buds a recursive
+# Debugger Sprout before onFailure applies.
+#
+# Run it with the local Ollama model:
+#   tendril sequence run local-ci \
+#     --provider local --model qwen2.5-coder:7b \
+#     --base-url http://localhost:11434/v1
+#
+# Note: the runner persists step status back into this file as it executes.
+name: local-ci
+substrate: ""
+branch: ""
+concurrencyLimit: 1
+onFailure: halt
+maxRetries: 0
+steps:
+  - id: verifier-build
+    status: pending
+    transcript: >-
+      Use the execCommand plasmid to run exactly one shell command in the
+      workspace root: `go build ./...`. Do not edit any files. Then report the
+      command's exit status and full output, and state clearly whether the
+      build passed or failed.
+    phenotypesCount: 1
+  - id: verifier-test
+    status: pending
+    dependsOn:
+      - verifier-build
+    transcript: >-
+      Use the execCommand plasmid to run exactly one shell command in the
+      workspace root: `go test ./...`. Do not edit any files. Then report the
+      command's exit status and full output, and state clearly whether the
+      test suite passed or failed.
+    phenotypesCount: 1
