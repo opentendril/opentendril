@@ -67,4 +67,45 @@ func TestLoadConfigAppliesDefaults(t *testing.T) {
 	if cfg.Resin.Level != "info" {
 		t.Fatalf("resin.level = %q, want info default", cfg.Resin.Level)
 	}
+	// Amber archiving is opt-in, but its knobs normalize to safe defaults so
+	// an operator can enable it with a single line.
+	if cfg.Resin.Amber.Enabled {
+		t.Fatal("resin.amber.enabled = true, want opt-in false default")
+	}
+	if cfg.Resin.Amber.MaxSizeKB != 1024 {
+		t.Fatalf("resin.amber.max_size_kb = %d, want 1024 default", cfg.Resin.Amber.MaxSizeKB)
+	}
+	if cfg.Resin.Amber.Keep != 5 {
+		t.Fatalf("resin.amber.keep = %d, want 5 default", cfg.Resin.Amber.Keep)
+	}
+}
+
+func TestLoadConfigParsesAmber(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "telemetry.yaml")
+	content := `enabled: true
+resin:
+  enabled: true
+  amber:
+    enabled: true
+    max_size_kb: 64
+    keep: 3
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig() error = %v", err)
+	}
+	if !cfg.Resin.Amber.Enabled {
+		t.Fatal("resin.amber.enabled = false, want true")
+	}
+	if cfg.Resin.Amber.MaxSizeKB != 64 {
+		t.Fatalf("resin.amber.max_size_kb = %d, want 64", cfg.Resin.Amber.MaxSizeKB)
+	}
+	if cfg.Resin.Amber.Keep != 3 {
+		t.Fatalf("resin.amber.keep = %d, want 3", cfg.Resin.Amber.Keep)
+	}
 }
