@@ -106,7 +106,7 @@ The CLI, MCP, and OpenAPI/REST surfaces are **projections of one core capability
 * **To add a command capability:** declare it once in the `core` registry (Name, InputSchema, Invoke), then project it onto all three adapters. Adding it to only one surface is a CI failure by design.
 * **Views are exempt.** The `/ws` event stream and `?replay` are *views*, not commands, and are deliberately outside the registry and the parity tests. Do not pull them into the capability registry. See `docs/DESIGN-DYNAMIC-ORCHESTRATION.md` for the commands-vs-views distinction.
 
-> **Current scope:** the governed registry covers the session-lifecycle family (`session.create|list|get|update|delete|history`), the genome family (`genome.view|reduce|evolve`, issue #181 slice 1), and the plasmid family (`plasmid.list|inject`, issue #181 slice 2; `plasmid sign` stays a deliberately ungoverned CLI-local command because it wields the node's private signing key). The remaining Stem capabilities (sprout/run, sequence, substrate grafting) are not yet migrated into the Core and remain out of parity — migrating each into the registry is the follow-up work tracked in issue #181.
+> **Current scope:** the governed registry covers the session-lifecycle family (`session.create|list|get|update|delete|history`) and the genome family (`genome.view|reduce|evolve`). The remaining Stem capabilities (sprout/run, sequence, plasmid, substrate grafting) are not yet migrated into the Core and remain out of parity — migrating each into the registry is follow-up work.
 
 ---
 
@@ -127,6 +127,6 @@ OpenTendril runs specific background processes restricted to distinct scopes:
 * **Scope:** Ephemeral self-repair. Sprouted dynamically by the Conductor when a Verifier — or a Macrophage (below) — step fails.
 * **Terrarium:** Ingests the failing step's error output and compiler/test/fuzz-crash logs, applies targeted source patches inside the terrarium, and triggers a retry loop (up to 3 times) to establish dynamic self-healing execution.
 
-### D. The Macrophage (Destructive Fuzz Verification, issue #154)
+### D. The Macrophage (Destructive Fuzz Verification)
 * **Scope:** The immune system. A step whose ID contains `macrophage` runs the `macrophage.json` genotype, which reads the recently changed code and writes a native Go fuzz test (`FuzzXxx(f *testing.F)`) targeting the most volatile function it touched — parsers, deserializers, anything shaped by attacker/adversarial input.
 * **Terrarium:** After that agent turn, the Conductor deterministically executes the fuzz test (`go test -fuzz=Fuzz -fuzztime=10s`) itself, inside a dedicated Go-toolchain terrarium (`opentendril-go-fuzz:latest`) — network-isolated exactly like every other terrarium, with the host's read-only Go module cache mounted in since this repo doesn't vendor and the terrarium has no network. This is a deliberate, structural check: a crash is decided by exit code and panic/failure-marker detection in Go code (`macrophageFuzzFailed`), never by asking the LLM whether its own fuzz run "passed." A crash is a hard failure that sprouts a recursive Debugger exactly like a Verifier failure does, blocking a clean merge until the Debugger's patch survives re-fuzzing.
