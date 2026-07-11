@@ -2,15 +2,27 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/opentendril/core/cmd/stem/internal/conductor"
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
+	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
+// runMeshCmd hosts two kinds of subcommands. graft/promote are the CLI
+// adapter for the governed substrate-grafting capability family (issue #181,
+// slice 3): thin projections of the same transport-free core.Core the REST
+// and MCP surfaces use. keygen/issue-token stay deliberately ungoverned,
+// CLI-local key-management commands: they mint the workspace's private mesh
+// keys and signed tokens, an authority that must not be projected onto the
+// network surfaces (see internal/core/mesh.go).
 func runMeshCmd(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		printMeshUsage()
@@ -20,14 +32,217 @@ func runMeshCmd(ctx context.Context, args []string) {
 	switch args[0] {
 	case "keygen":
 		runMeshKeygenCmd(args[1:])
+		return
 	case "issue-token":
 		runMeshIssueTokenCmd(ctx, args[1:])
+		return
 	case "-h", "--help", "help":
 		printMeshUsage()
-	default:
+		return
+	}
+
+	command, ok := lookupMeshCommand(strings.ToLower(strings.TrimSpace(args[0])))
+	if !ok {
 		fmt.Fprintf(os.Stderr, "Unknown mesh command: %s\n", args[0])
 		printMeshUsage()
 		os.Exit(1)
+	}
+
+	input, err := parseMeshArgs(command.capability, args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+
+	svc, err := buildMeshCore(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize core: %v\n", err)
+		os.Exit(1)
+	}
+
+	result, err := svc.Invoke(ctx, command.capability, input)
+	if err != nil {
+		switch command.capability {
+		case core.CapMeshGraft:
+			fmt.Fprintf(os.Stderr, "❌ Mesh graft failed: %v\n", err)
+		case core.CapMeshPromote:
+			fmt.Fprintf(os.Stderr, "❌ PR promotion failed: %v\n", err)
+		default:
+			fmt.Fprintf(os.Stderr, "❌ %s failed: %v\n", command.capability, err)
+		}
+		os.Exit(1)
+	}
+
+	renderMeshResult(command.capability, result)
+}
+
+// buildMeshCore constructs a Core with the substrate-grafting execution port
+// wired. The session manager is an ephemeral in-memory one — graft
+// capabilities touch no session state.
+func buildMeshCore(ctx context.Context) (core.Core, error) {
+	manager, err := session.NewManager(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewService(manager).WithMesh(meshOps()), nil
+}
+
+// meshOps binds the substrate-grafting execution port to the conductor
+// (substrate resolution) and the mesh client (delegated push) — this wiring
+// lives in the adapter layer precisely so the Core never imports either
+// package (see internal/core/boundary_test.go).
+func meshOps() core.MeshOps {
+	return core.MeshOps{
+		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) {
+			return resolveMeshWorkspace(substrate)
+		},
+		DelegatePush: func(ctx context.Context, workspace, branch, commitMessage string) (string, error) {
+			client := mesh.NewClientFromEnv()
+			if client == nil {
+				return "", fmt.Errorf("TENDRIL_GRAFT_URL and TENDRIL_GRAFT_TOKEN must be set to delegate a mesh graft")
+			}
+			return client.DelegatePush(ctx, workspace, branch, commitMessage)
+		},
+	}
+}
+
+// resolveMeshWorkspace maps a substrate path or named substrate key onto a
+// local git workspace root (the same resolution the MCP adapter historically
+// performed inline).
+func resolveMeshWorkspace(substrate string) (string, error) {
+	substrate = strings.TrimSpace(substrate)
+	if substrate == "" {
+		return resolveRepoRoot(""), nil
+	}
+
+	substratesConfig, err := conductor.LoadSubstratesConfig("")
+	if err != nil {
+		substratesConfig = nil
+	}
+	if substrateSpec, isName := conductor.ResolveSubstrate(substrate, substratesConfig); isName && substrateSpec != nil {
+		if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+			if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
+				return resolveRepoRoot(trimmedPath), nil
+			}
+		}
+	}
+
+	if info, err := os.Stat(substrate); err == nil && info.IsDir() {
+		return resolveRepoRoot(substrate), nil
+	}
+
+	return "", fmt.Errorf("substrate %q does not resolve to a local git workspace", substrate)
+}
+
+// meshCommand is one governed subcommand actually registered on the
+// `tendril mesh` command tree.
+type meshCommand struct {
+	name       string // CLI token, e.g. "graft"
+	capability string // the governed Core capability it invokes
+}
+
+// meshCommands is the CLI command tree for the governed half of
+// `tendril mesh` (keygen/issue-token are ungoverned and dispatched
+// separately). Like sessionCommands, this registration — NOT
+// core.CapabilityNames() — is the source of truth the parity coverage test
+// reads for the CLI arm.
+var meshCommands = []meshCommand{
+	{"graft", core.CapMeshGraft},
+	{"promote", core.CapMeshPromote},
+}
+
+// lookupMeshCommand resolves a CLI subcommand token to its registered entry.
+func lookupMeshCommand(sub string) (meshCommand, bool) {
+	for _, command := range meshCommands {
+		if command.name == sub {
+			return command, true
+		}
+	}
+	return meshCommand{}, false
+}
+
+// meshCLICapabilityNames returns the capability names the CLI has actually
+// registered mesh subcommands for, sorted. Read by the parity coverage test.
+func meshCLICapabilityNames() []string {
+	names := make([]string, 0, len(meshCommands))
+	for _, command := range meshCommands {
+		names = append(names, command.capability)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// parseMeshArgs turns CLI args into a capability input map: a positional
+// substrate plus --branch/--commit-message (and --pr-number for promote);
+// `--json '{...}'` is the generic escape hatch, mirroring parseSessionArgs.
+func parseMeshArgs(capName string, args []string) (map[string]any, error) {
+	input := map[string]any{}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --json requires a value")
+			}
+			i++
+			if err := json.Unmarshal([]byte(args[i]), &input); err != nil {
+				return nil, fmt.Errorf("invalid --json input: %w", err)
+			}
+		case "--branch":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --branch requires a value")
+			}
+			i++
+			input["branch"] = args[i]
+		case "--commit-message":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --commit-message requires a value")
+			}
+			i++
+			input["commitMessage"] = args[i]
+		case "--pr-number":
+			if capName != core.CapMeshPromote {
+				return nil, fmt.Errorf("unknown argument %q for mesh graft", args[i])
+			}
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --pr-number requires a value")
+			}
+			i++
+			input["prNumber"] = args[i]
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				return nil, fmt.Errorf("unknown argument %q for mesh %s", args[i], strings.TrimPrefix(capName, "mesh."))
+			}
+			positional = append(positional, args[i])
+		}
+	}
+
+	if len(positional) > 1 {
+		return nil, fmt.Errorf("expected exactly one substrate, got %d", len(positional))
+	}
+	if len(positional) == 1 {
+		input["substrate"] = positional[0]
+	}
+	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
+		return nil, fmt.Errorf("missing substrate. Usage: tendril mesh %s <substrate>", strings.TrimPrefix(capName, "mesh."))
+	}
+	return input, nil
+}
+
+// renderMeshResult presents a capability result on the terminal, mirroring
+// the mesh-graft text the MCP surface has always emitted.
+func renderMeshResult(capability string, result any) {
+	switch capability {
+	case core.CapMeshGraft:
+		delegation, _ := result.(core.MeshDelegation)
+		fmt.Printf("✅ Delegated substrate %s through mesh graft. Commit %s\n", delegation.Workspace, delegation.Commit)
+	case core.CapMeshPromote:
+		promotion, _ := result.(core.MeshPromotion)
+		if promotion.PRNumber != "" {
+			fmt.Printf("✅ Promoted pull request #%s via mesh graft for %s. Commit %s\n", promotion.PRNumber, promotion.Workspace, promotion.Commit)
+			return
+		}
+		fmt.Printf("✅ Promoted pull request via mesh graft for %s. Commit %s\n", promotion.Workspace, promotion.Commit)
 	}
 }
 
@@ -119,6 +334,10 @@ func printMeshUsage() {
 	fmt.Println("tendril mesh - mesh grafting utilities")
 	fmt.Println()
 	fmt.Println("Usage:")
+	fmt.Println("  tendril mesh graft <substrate> [--branch NAME] [--commit-message TEXT]")
+	fmt.Println("  tendril mesh promote <substrate> [--branch NAME] [--pr-number N] [--commit-message TEXT]")
 	fmt.Println("  tendril mesh keygen [--workspace PATH] [--force]")
 	fmt.Println("  tendril mesh issue-token [--workspace PATH] [--subject TEXT] [--audience TEXT] [--scope TEXT] [--ttl DURATION]")
+	fmt.Println()
+	fmt.Println("graft and promote are projections of the shared Core capability registry.")
 }

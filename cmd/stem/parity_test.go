@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -42,10 +42,14 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 		Inject: func(context.Context, string, string) (core.PlasmidInjection, error) {
 			return core.PlasmidInjection{}, nil
 		},
+	}).WithMesh(core.MeshOps{
+		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) { return substrate, nil },
+		DelegatePush:     func(context.Context, string, string, string) (string, error) { return "deadbeef", nil },
 	})
 	rest := receptors.NewSessionsHandler(svc, manager, nil)
 	genomeRest := receptors.NewGenomeHandler(svc)
 	plasmidRest := receptors.NewPlasmidHandler(svc)
+	graftRest := receptors.NewGraftHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
@@ -53,8 +57,9 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
+	graftRest.Register(mux, nil)
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, plasmidRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, graftRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -110,19 +115,21 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, plasmidRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, graftRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
-	//          (sessions + genome + plasmid handlers).
+	//          (sessions + genome + plasmid + graft handlers).
 	//   MCP  — names parsed from the live tools/list response.
 	//   CLI  — capabilities of the subcommands registered on the command trees
-	//          (`tendril session` + `tendril genome` + `tendril plasmid`).
+	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
 	restCaps = append(restCaps, plasmidRest.Capabilities()...)
+	restCaps = append(restCaps, graftRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
 	cliCaps = append(cliCaps, plasmidCLICapabilityNames()...)
+	cliCaps = append(cliCaps, meshCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
@@ -133,7 +140,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -325,6 +332,16 @@ func (m *mockCore) PlasmidInject(_ context.Context, in core.PlasmidInjectInput) 
 	}, nil
 }
 
+func (m *mockCore) MeshGraft(_ context.Context, in core.MeshGraftInput) (core.MeshDelegation, error) {
+	m.record("MeshGraft", in)
+	return core.MeshDelegation{Workspace: "/workspaces/core", Commit: "deadbeef"}, nil
+}
+
+func (m *mockCore) MeshPromote(_ context.Context, in core.MeshPromoteInput) (core.MeshPromotion, error) {
+	m.record("MeshPromote", in)
+	return core.MeshPromotion{Workspace: "/workspaces/core", Commit: "deadbeef", PRNumber: in.PRNumber}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -444,6 +461,28 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return m.PlasmidInject(ctx, in)
 			},
 		},
+		{
+			Name:        core.CapMeshGraft,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.MeshGraftInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.MeshGraft(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapMeshPromote,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.MeshPromoteInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.MeshPromote(ctx, in)
+			},
+		},
 	}
 }
 
@@ -491,10 +530,12 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	rest := receptors.NewSessionsHandler(mock, manager, nil)
 	genomeRest := receptors.NewGenomeHandler(mock)
 	plasmidRest := receptors.NewPlasmidHandler(mock)
+	graftRest := receptors.NewGraftHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
+	graftRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 
@@ -845,4 +886,120 @@ func TestBehavioralParity_PlasmidInject(t *testing.T) {
 		t.Fatalf("CLI plasmid.inject: Core.Invoke: %v", err)
 	}
 	assertOneInjectCall(t, "CLI")
+}
+
+// TestBehavioralParity_MeshPromote extends the zero-business-logic proof to
+// the substrate-grafting family (issue #181 slice 3): REST, MCP (governed
+// name with camelCase keys AND the deprecated promotePR alias with its legacy
+// kebab-case keys), and the CLI dispatch path must each decode an equivalent
+// request into the identical typed input and invoke Core.MeshPromote exactly
+// once.
+func TestBehavioralParity_MeshPromote(t *testing.T) {
+	want := core.MeshPromoteInput{Substrate: "core", Branch: "feat/x", PRNumber: "42"}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOnePromoteCall := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("MeshPromote")
+		if len(calls) != 1 {
+			t.Fatalf("%s mesh.promote: Core.MeshPromote called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s mesh.promote: Core.MeshPromote received %#v, want %#v", surface, calls[0], want)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/mesh/promotions", "application/json",
+		bytes.NewBufferString(`{"substrate":"core","branch":"feat/x","prNumber":"42"}`))
+	if err != nil {
+		t.Fatalf("REST mesh.promote: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST mesh.promote status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOnePromoteCall(t, "REST")
+
+	// --- MCP (governed name, camelCase contract keys) ----------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.promote","arguments":{"substrate":"core","branch":"feat/x","prNumber":"42"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP mesh.promote response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP mesh.promote failed: %s", mcpResp)
+	}
+	assertOnePromoteCall(t, "MCP")
+
+	// --- MCP (deprecated promotePR alias, legacy kebab-case keys) --------------
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"promotePR","arguments":{"substrate":"core","branch":"feat/x","pr-number":"42"}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
+		t.Fatalf("parse MCP promotePR response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP promotePR alias failed: %s", aliasResp)
+	}
+	assertOnePromoteCall(t, "MCP alias")
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupMeshCommand("promote")
+	if !ok {
+		t.Fatal("CLI: no mesh subcommand registered for \"promote\"")
+	}
+	if command.capability != core.CapMeshPromote {
+		t.Fatalf("CLI subcommand \"promote\" maps to %q, want %q", command.capability, core.CapMeshPromote)
+	}
+	input, err := parseMeshArgs(command.capability, []string{"core", "--branch", "feat/x", "--pr-number", "42"})
+	if err != nil {
+		t.Fatalf("CLI parseMeshArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI mesh.promote: Core.Invoke: %v", err)
+	}
+	assertOnePromoteCall(t, "CLI")
+
+	// --- Graft, quickly: same four paths must reach MeshGraft ------------------
+	mock.reset()
+	graftResp, err := http.Post(server.URL+"/v1/mesh/grafts", "application/json",
+		bytes.NewBufferString(`{"substrate":"core"}`))
+	if err != nil {
+		t.Fatalf("REST mesh.graft: %v", err)
+	}
+	defer graftResp.Body.Close()
+	if graftResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(graftResp.Body)
+		t.Fatalf("REST mesh.graft status = %d, body = %s", graftResp.StatusCode, body)
+	}
+	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
+		t.Fatalf("REST mesh.graft: Core.MeshGraft called %d times, want 1", len(calls))
+	}
+
+	mock.reset()
+	graftAlias := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"graftSubstrate","arguments":{"substrate":"core"}}}`))
+	if err := json.Unmarshal(graftAlias, &parsed); err != nil {
+		t.Fatalf("parse MCP graftSubstrate response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP graftSubstrate alias failed: %s", graftAlias)
+	}
+	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
+		t.Fatalf("MCP graftSubstrate alias: Core.MeshGraft called %d times, want 1", len(calls))
+	}
 }

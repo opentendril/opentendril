@@ -23,6 +23,8 @@ const (
 
 	CapPlasmidList   = "plasmid.list"
 	CapPlasmidInject = "plasmid.inject"
+	CapMeshGraft     = "mesh.graft"
+	CapMeshPromote   = "mesh.promote"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -57,6 +59,8 @@ func CapabilityNames() []string {
 		CapGenomeEvolve,
 		CapPlasmidList,
 		CapPlasmidInject,
+		CapMeshGraft,
+		CapMeshPromote,
 	}
 	sort.Strings(names)
 	return names
@@ -153,6 +157,7 @@ func (s *Service) Capabilities() []Capability {
 	}
 	caps = append(caps, s.genomeCapabilities()...)
 	caps = append(caps, s.plasmidCapabilities()...)
+	caps = append(caps, s.meshCapabilities()...)
 	return caps
 }
 
