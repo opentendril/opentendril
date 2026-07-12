@@ -13,8 +13,8 @@ and adaptation, OpenTendril aims for an architecture that *expects* dynamic,
 non-deterministic interpretation rather than rigid mechanical execution.
 
 Every term below names a **real organ, tissue, or process**, and each has exactly
-**one job**. Where a word was historically overloaded (see §9), this document is
-the authority that resolves it.
+**one job**. Where a word could be overloaded, this document is the authority that
+resolves it.
 
 ---
 
@@ -171,8 +171,7 @@ Each force in that loop is a distinct organ. None overloads another.
 
 *   **Sprout** — an **ephemeral, strictly isolated worker** dynamically grown on a
     Branch to perform one unit of work. Leaves/sprouts are short-lived — a Sprout
-    emerges, grows, and either matures or withers, then is shed. *(This is the role
-    once called a "Tendril"; see §9.)*
+    emerges, grows, and either matures or withers, then is shed.
 *   **Terrarium** — the **isolation boundary** (filesystem + network) wrapping a
     Sprout, protecting the host. A sealed Sprout cannot reach out on its own —
     external calls are Stem-mediated (see §6).
@@ -224,7 +223,7 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
     decisions (a Sprout can modify them). *System* Genotypes/Sequences ship with
     OpenTendril, are never mounted into any Terrarium, and carry immutable deny
     lists. *(Trusted-tier location — `~/.tendril` vs a separate `~/.opentendril` /
-    `/etc/opentendril` — is being reconciled; see §9.)*
+    `/etc/opentendril` — is an open reconciliation.)*
 
 ---
 
@@ -263,29 +262,14 @@ transport / a **merge**).
 
 ---
 
-## 9. The Translation Boundary & Corrected Usages
+## 9. The Translation Boundary
 
-**The boundary.** The words *agent*, *task*, and *run* are not purged everywhere —
+The words *agent*, *task*, and *run* are not purged everywhere —
 they survive **only at the deliberate external boundary** where OpenTendril meets
 people who speak IT jargon: the `AGENTS.md` builder-instructions file (a cross-tool
 standard *filename*) and the **Meristem** / intent-translation layer, whose job is
 exactly to translate "run an agent workflow" into botanical instructions. Inside
 the organism — architecture docs and code identifiers — the language is botanical.
-
-**Corrected usages (authoritative):**
-
-*   **"Tendril" is a concept, not a component.** Everywhere it once meant the
-    ephemeral in-Terrarium worker (`RunTendril`, `tendril-go`, "an autonomous
-    Tendril in a terrarium"), read **Sprout**. The persistent external things it
-    once also meant are a **Substrate** (a repo) or a **Symbiotic Nodule** (a
-    service). *(Code identifiers are renamed under a separate manifest; the CLI
-    stays `tendril` as the brand/command.)*
-*   **"Graft" is narrowed** to Stem↔Stem and Genotype only (§8).
-*   **`~/.tendril` is the user-global state dir** (it matches the `tendril`
-    command, the correct convention). Docs still referencing `~/.opentendril` /
-    `/etc/opentendril` for a *trusted system tier* are pending reconciliation:
-    decide whether that tier is a genuinely separate directory (to keep trust
-    domains from impersonating each other) or is drift to fold into `~/.tendril`.
 
 ---
 

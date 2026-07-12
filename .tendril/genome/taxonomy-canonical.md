@@ -1,9 +1,11 @@
 # OpenTendril Canonical Taxonomy (Stem-injected)
 
 You are operating inside **OpenTendril**, an organism modelled on a plant. Use
-these terms exactly — each has ONE meaning. Never substitute IT jargon (agent,
-task, run, sandbox, tool) inside the system. This block is the authority; the full
-docs are `SYNTHETIC-TAXONOMY.md` (concept) and `GLOSSARY.md` (reference).
+exactly the vocabulary below — each term has ONE meaning — for all internal
+architecture and code. (Standard IT phrasing belongs only at the external
+boundary: `AGENTS.md` and the Meristem / intent-translation layer.) This block is
+the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
+`GLOSSARY.md` (reference).
 
 ## Components (nouns)
 - **Stem**: the Go orchestrator/router. Not a brain; no business logic.
@@ -27,12 +29,11 @@ docs are `SYNTHETIC-TAXONOMY.md` (concept) and `GLOSSARY.md` (reference).
 - **Hormonal Trigger** (security gate) · **Abscission** (fault isolation) · **Epigenetics** (fed-forward learnings) · **Resin**→**Amber** (live→archived logs) · **Transporter** (telemetry).
 
 ## Verbs
-germinate (boot) · branch · emerge (create a Sprout) · **grow** (execute; NOT "run") · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule).
-**graft** is RESERVED for fusing two *like* tissues: Stem↔Stem (mesh) or two Genotypes. Never for attaching a Nodule or merging changes.
+germinate (boot) · branch · emerge (create a Sprout) · **grow** (execute) · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule) · merge (return changes home, via the Phloem).
+**graft** = fuse two *like* tissues: Stem↔Stem (mesh) or two Genotypes.
 
-## Hard rules
-1. **"Tendril" is the concept/brand only — never a component.** A worker is a **Sprout**. A persistent integration is a **Substrate** (repo) or **Symbiotic Nodule** (service).
-2. A **Sprout** is sealed in its **Terrarium** and cannot reach out. External calls are **Stem-mediated**: the Mycorrhizae decides intent → the **Stem** invokes the Nodule/Substrate → the Sprout consumes the result (Xylem in, Phloem out).
-3. Use **grow** for execution, not "run". Use **Sprout** for a worker, not "agent". Use **Transcript** for a task.
-4. *agent / task / run* are permitted ONLY at the external boundary (`AGENTS.md`, Meristem/intent translation) — never in internal architecture or code.
-5. The brand is **OpenTendril** (written) / **Tendril** (short). **Never abbreviate to "OT"** — that means Operational Technology in this domain.
+## Rules
+1. **Tendril** names the whole organism and brand. Name the ephemeral worker a **Sprout**; name a persistent integration a **Substrate** (a repo) or a **Symbiotic Nodule** (a service).
+2. A **Sprout** is sealed inside its **Terrarium**; it does not reach the network. External access is **Stem-mediated**: the **Mycorrhizae** decides intent → the **Stem** invokes the Nodule/Substrate → the Sprout consumes the result (Xylem in, Phloem out).
+3. For execution say **grow**; for a worker say **Sprout**; for one instruction say **Transcript**; for a workflow say **Sequence**.
+4. Write the brand as **OpenTendril**; say **Tendril** for short.
