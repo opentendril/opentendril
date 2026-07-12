@@ -25,7 +25,7 @@ Runs on the host machine. Holds the operator's LLM provider keys, the
 bearer API key (`OPENTENDRIL_API_KEY`/`ADMIN_TOKEN`, or the auto-generated
 `.tendril/api-key` — see #171), the mesh `Ed25519` signing key
 (`docs/DESIGN-STEM-GRAFTING.md`), and `history.db`. It is the only zone that
-can mint mesh grafting tokens, spawn terrariums, or make LLM provider calls.
+can mint mesh grafting tokens, grow terrariums, or make LLM provider calls.
 Every other zone reaches capability only by asking the Stem.
 
 ### 2. OS / Command Center (optional, network-facing) — delegated authority

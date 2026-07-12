@@ -7,27 +7,39 @@ boundary: `AGENTS.md` and the Meristem / intent-translation layer.) This block i
 the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 `GLOSSARY.md` (reference).
 
-## Components (nouns)
-- **Stem**: the Go orchestrator/router. Not a brain; no business logic.
-- **Roots**: the LLM provider connectivity layer (`roots/`).
+## Components (nouns, A–Z)
+- **Abscission**: the Stem dropping a withered Sprout to protect the organism.
+- **Amber**: hardened, archived, immutable logs.
+- **Biome**: the normative climate (ISO 27001, ISO 42001, SDLC).
+- **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
+- **Branch**: a capability group / security zone.
+- **Epigenetics**: distilled learnings fed forward into future prompts.
+- **Fruit**: the deliverable a cycle yields (a PR / artifact).
+- **Genotype**: the base persona / system prompt (*who* a Sprout is).
+- **Greenhouse**: the observer UI.
+- **Hormonal Trigger**: a pre-execution security gate.
+- **Meristem**: a planner step; the shoot apical meristem — it initiates Phytomers.
 - **Mycorrhizal Network**: the LLM (external mind; reasons; holds no state).
-- **Rhizosphere**: the existing tech Tendril is based on (providers, Docker, git, MCP).
+- **Phenotype**: speculative parallel variants; the first to pass survives.
+- **Phloem**: vascular channel carrying diffs (outputs) down to the Substrate.
+- **Phytomer**: a session — one persistent interaction thread; the Meristem initiates it and Sprouts emerge from it. (An **axillary bud** on it buds into a new Phytomer chain: a branch, parallel line, or recursion.)
+- **Plasmid**: a modular, injectable block of context or tools (*a skill*).
+- **Resin**: live internal log trace (hardens into Amber).
+- **Rhizome**: the code/AST index of the Substrate.
+- **Rhizosphere**: the *external* ecosystem the Roots tap — the providers, Docker, git, MCP themselves (the outside world).
+- **Roots** (`roots/`): OpenTendril's *own* connectivity organ — provider clients, model discovery, tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae.
+- **Seed**: the originating goal / intent / use-case.
+- **Sequence**: an ordered YAML workflow of steps.
+- **Sprout**: an ephemeral, isolated worker that does one unit of work.
+- **Stem**: the Go orchestrator/router. Not a brain; no business logic.
 - **Substrate**: the repository being cultivated (the soil).
 - **Symbiotic Nodule** (Nodule): an external *service* capability (GCP, GitHub API).
-- **Rhizome**: the code/AST index of the Substrate.
 - **Taproot**: the persistent store of deliberation (conversations, RFCs, decisions+rationale, reviews).
-- **Sprout**: an ephemeral, isolated worker that does one unit of work.
-- **Phytomer**: a session — one persistent interaction thread; the Meristem initiates it and Sprouts emerge from it. (An **axillary bud** on it buds into a new Phytomer chain: a branch, parallel line, or recursion.)
 - **Terrarium**: the isolation boundary (filesystem+network) around a Sprout.
-- **Branch**: a capability group / security zone.
-- **Seed**: the originating goal / intent / use-case.
-- **Fruit**: the deliverable a cycle yields (a PR / artifact).
-- **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
-- **Greenhouse**: the observer UI.
 - **Terroir**: the host OS / machine.
-- **Biome**: the normative climate (ISO 27001, ISO 42001, SDLC).
-- **Genotype** (persona) · **Plasmid** (skill/context) · **Transcript** (one task) · **Sequence** (workflow) · **Meristem** (planner step) · **Phenotype** (parallel variant).
-- **Hormonal Trigger** (security gate) · **Abscission** (fault isolation) · **Epigenetics** (fed-forward learnings) · **Resin**→**Amber** (live→archived logs) · **Transporter** (telemetry).
+- **Transcript**: one instruction for one growth (a single task).
+- **Transporter**: pub-sub telemetry emitter.
+- **Xylem**: vascular channel carrying Transcripts (inputs) up to Sprouts.
 
 ## Verbs
 germinate (boot) · branch · emerge (create a Sprout) · bud (activate an axillary bud into a new Phytomer) · **grow** (execute) · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule) · merge (return changes home, via the Phloem).

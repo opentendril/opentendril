@@ -114,10 +114,12 @@ Each force in that loop is a distinct organ. None overloads another.
     the complete local ground — soil, topography, microclimate — that gives a
     specific site its character; here, the particular machine/OS that shapes what
     can grow. (Formerly referred to plainly as the "Host System".)
-*   **Rhizosphere** — the **ecosystem of existing technologies OpenTendril is
-    based on**: LLM providers, the container runtime, git, MCP — the inherited
-    world the roots tap into. It is what Tendril *stands on*, kept distinct from
-    what Tendril *grows*.
+*   **Rhizosphere** — the **external ecosystem of existing technologies
+    OpenTendril is based on**: the LLM providers, the container runtime, git, MCP
+    — the inherited world the roots tap into. It is what Tendril *stands on*, kept
+    distinct from what Tendril *grows*. **Roots vs Rhizosphere:** the Rhizosphere
+    is the *outside* world (the providers/tools themselves); the **Roots** (below)
+    are OpenTendril's *own* code that reaches into it.
 *   **Botanist** — the **human** who studies and cultivates the organism. The
     Botanist *gardens* it — plants **Seeds** (intent), prunes, reviews **Fruit** —
     and *studies* it, working from outside the plant and observing through the
@@ -128,8 +130,10 @@ Each force in that loop is a distinct organ. None overloads another.
 
 ### The Root System (acquire, symbiose, remember)
 
-*   **Roots** (`roots/`) — the **LLM provider connectivity layer** through which the
-    Stem draws inference: provider clients, model discovery, tier routing.
+*   **Roots** (`roots/`) — OpenTendril's **own connectivity organ**: the provider
+    clients, model discovery, and tier routing (`roots/`) that reach *into* the
+    Rhizosphere to draw inference from the Mycorrhizae. The Roots are part of the
+    plant; the Rhizosphere is the ecosystem they tap.
 *   **Mycorrhizal Network** — **the LLM.** In nature, plant roots join vast fungal
     networks that process signals and feed the plant. In OpenTendril the LLM is the
     Mycorrhizae: it sits *outside* the plant, does all the thinking and predicting,
@@ -258,7 +262,7 @@ survives (natural selection).
 |---|---|---|
 | **germinate** | activate / boot the framework from a Seed | init / start |
 | **branch** | the Stem initialises a capability/security zone | — |
-| **emerge** | a Sprout is created | spawn |
+| **emerge** | a Sprout is created | start / launch |
 | **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
