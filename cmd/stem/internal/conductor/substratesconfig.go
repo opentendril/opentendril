@@ -45,16 +45,21 @@ type SubstrateSpec struct {
 }
 
 // AuthSpec describes a substrate's authentication method. Design RFC #222.
-// Slice 1 parses it; the typed resolver (slice 2) and terrarium (slice 3)
-// consume it. Back-compat: a bare scalar decodes to {Method: "pat", Env: <scalar>}.
+// Back-compat: a bare scalar decodes to {Method: "pat", Env: <scalar>}.
 type AuthSpec struct {
-	// Method is one of "pat", "ssh", or "none". Empty means "unspecified"
-	// (today's behavior — a PAT is resolved from the referenced/ambient env).
+	// Method is one of "pat", "ssh", "none", or "app". Empty means "unspecified"
+	// (a PAT is resolved from the referenced/ambient env).
 	Method string `yaml:"method,omitempty"`
 	// Env names the environment variable holding the PAT (method "pat").
 	Env string `yaml:"env,omitempty"`
 	// Key is a filesystem path to an SSH private key (method "ssh").
 	Key string `yaml:"key,omitempty"`
+	// GitHub App fields (method "app"). The Stem mints short-lived installation
+	// tokens from these instead of holding a long-lived PAT.
+	AppID          string `yaml:"appId,omitempty"`
+	InstallationID int64  `yaml:"installationId,omitempty"` // optional — auto-discovered when 0
+	PrivateKeyPath string `yaml:"privateKeyPath,omitempty"` // path to the App .pem
+	PrivateKeyEnv  string `yaml:"privateKeyEnv,omitempty"`  // or env holding the PEM contents
 }
 
 // UnmarshalYAML accepts either a scalar env-var name (back-compat) or a mapping.
@@ -306,6 +311,9 @@ func trimAuthSpec(auth *AuthSpec) {
 	auth.Method = strings.ToLower(strings.TrimSpace(auth.Method))
 	auth.Env = strings.TrimSpace(auth.Env)
 	auth.Key = strings.TrimSpace(auth.Key)
+	auth.AppID = strings.TrimSpace(auth.AppID)
+	auth.PrivateKeyPath = strings.TrimSpace(auth.PrivateKeyPath)
+	auth.PrivateKeyEnv = strings.TrimSpace(auth.PrivateKeyEnv)
 }
 
 // trimSignSpec normalizes a SignSpec in place.

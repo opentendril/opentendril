@@ -36,4 +36,16 @@ func TestFormatAgentSubstratesYAML(t *testing.T) {
 			t.Fatalf("expected method: none, got:\n%s", out)
 		}
 	})
+
+	t.Run("github app", func(t *testing.T) {
+		out := formatAgentSubstratesYAML(agentSubstrateChoices{
+			remoteURL: "https://github.com/o/r.git", authMethod: "app",
+			appID: "4276558", appKeyPath: "~/.tendril/app.pem",
+		})
+		for _, want := range []string{"method: app", `appId: "4276558"`, `privateKeyPath: "~/.tendril/app.pem"`} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("missing %q in:\n%s", want, out)
+			}
+		}
+	})
 }
