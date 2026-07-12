@@ -99,6 +99,26 @@ it yields.
 
 Each force in that loop is a distinct organ. None overloads another.
 
+### Lifecycle order
+
+The Glossary and canonical block list terms **alphabetically** (for lookup). This
+is the other axis — the primary identifiers in the **order they occur** in one
+growth cycle:
+
+1. **Seed** — the Botanist plants intent.
+2. **germinate** — the framework boots from the Seed.
+3. **Meristem → Phytomer** — the Meristem opens a session (Phytomer).
+4. **emerge** — a **Sprout** emerges into its **Terrarium**.
+5. **grow** — the Sprout executes its **Transcript**, drawing on the **Roots**
+   (Mycorrhizae) and the **Rhizome**; the **Xylem** carries inputs in.
+6. **bud** *(optional)* — an **axillary bud** branches into a new Phytomer
+   (parallel work or recursion).
+7. **mature** / **wither** — success, or failure → **abscise** (the Sprout is dropped).
+8. **merge** — the **Phloem** carries the diff home to the **Substrate**; the
+   rationale is stored in the **Taproot**.
+9. **fruit** — the **Fruit** (PR / artifact) is delivered; the Botanist reviews it
+   through the **Greenhouse**, feeding the next **Seed**.
+
 ---
 
 ## 5. Component Anatomy
@@ -114,10 +134,12 @@ Each force in that loop is a distinct organ. None overloads another.
     the complete local ground — soil, topography, microclimate — that gives a
     specific site its character; here, the particular machine/OS that shapes what
     can grow. (Formerly referred to plainly as the "Host System".)
-*   **Rhizosphere** — the **ecosystem of existing technologies OpenTendril is
-    based on**: LLM providers, the container runtime, git, MCP — the inherited
-    world the roots tap into. It is what Tendril *stands on*, kept distinct from
-    what Tendril *grows*.
+*   **Rhizosphere** — the **external ecosystem of existing technologies
+    OpenTendril is based on**: the LLM providers, the container runtime, git, MCP
+    — the inherited world the roots tap into. It is what Tendril *stands on*, kept
+    distinct from what Tendril *grows*. **Roots vs Rhizosphere:** the Rhizosphere
+    is the *outside* world (the providers/tools themselves); the **Roots** (below)
+    are OpenTendril's *own* code that reaches into it.
 *   **Botanist** — the **human** who studies and cultivates the organism. The
     Botanist *gardens* it — plants **Seeds** (intent), prunes, reviews **Fruit** —
     and *studies* it, working from outside the plant and observing through the
@@ -128,8 +150,10 @@ Each force in that loop is a distinct organ. None overloads another.
 
 ### The Root System (acquire, symbiose, remember)
 
-*   **Roots** (`roots/`) — the **LLM provider connectivity layer** through which the
-    Stem draws inference: provider clients, model discovery, tier routing.
+*   **Roots** (`roots/`) — OpenTendril's **own connectivity organ**: the provider
+    clients, model discovery, and tier routing (`roots/`) that reach *into* the
+    Rhizosphere to draw inference from the Mycorrhizae. The Roots are part of the
+    plant; the Rhizosphere is the ecosystem they tap.
 *   **Mycorrhizal Network** — **the LLM.** In nature, plant roots join vast fungal
     networks that process signals and feed the plant. In OpenTendril the LLM is the
     Mycorrhizae: it sits *outside* the plant, does all the thinking and predicting,
@@ -175,6 +199,18 @@ Each force in that loop is a distinct organ. None overloads another.
 *   **Terrarium** — the **isolation boundary** (filesystem + network) wrapping a
     Sprout, protecting the host. A sealed Sprout cannot reach out on its own —
     external calls are Stem-mediated (see §6).
+*   **Phytomer** — a **Session**: one persistent interaction thread, and the
+    repeating module the organism iterates to build itself (a phytomer = node +
+    internode + leaf + bud). The **Meristem** initiates a Phytomer; **Sprouts
+    emerge** from it over time; at maturity it roots its deliberation into the
+    **Taproot**. *(Two cadences are reserved as telemetry metrics, adopted when the
+    Greenhouse needs them: the **plastochron** — the interval between new Phytomers;
+    and the **phyllochron** — the rate at which Sprouts emerge within one.)*
+*   **Axillary bud** — a **dormant branch point** carried by a Phytomer. It stays
+    dormant, or **buds** — activates into a new Phytomer chain: a branch, a
+    parallel line, or a recursive sub-task (in grasses, a *tiller*). This is how
+    work forks and recurses; the Conductor already does it (e.g. budding a
+    recursive Debugger).
 *   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
     delivered, and its merge returns seeds to the Substrate (soil) for the next
     cycle.
@@ -234,24 +270,28 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
 **Transcript** = one instruction for one growth (*a single task*). **Sequence** = an
 ordered YAML workflow of steps (*a pipeline*), triggered only by the Stem or the
 Botanist — never by a Sprout. **Meristem** = a Sequence step that dynamically plans
-new steps and translates messy human requests into strict botanical instructions.
-**Phenotype** = speculative parallel variants of one Transcript, of which the first
-to pass the fitness test survives (natural selection).
+new steps and translates messy human requests into strict botanical instructions;
+botanically the *shoot apical meristem* is where **Phytomers** (§5, sessions)
+initiate, so the Meristem is what opens a new Phytomer. **Phenotype** = speculative
+parallel variants of one Transcript, of which the first to pass the fitness test
+survives (natural selection).
 
 **Strict botanical verbs** (each has a fixed meaning):
 
 | Verb | Meaning | Replaces |
 |---|---|---|
-| **germinate** | activate / boot the framework from a Seed | init / start |
+| **abscise** | the Stem drops a withered Sprout | fault-isolate |
 | **branch** | the Stem initialises a capability/security zone | — |
-| **emerge** | a Sprout is created | spawn |
+| **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
+| **emerge** | a Sprout is created | start / launch |
+| **fruit** | deliver a PR / artifact | output / deliver |
+| **germinate** | activate / boot the framework from a Seed | init / start |
+| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
-| **wither** | a Sprout fails or crashes | fail |
-| **abscise** | the Stem drops a withered Sprout | fault-isolate |
-| **fruit** | deliver a PR / artifact | output / deliver |
+| **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |
 | **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
-| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
+| **wither** | a Sprout fails or crashes | fail |
 
 **"Graft" is reserved.** Botanically, grafting fuses tissue from **two different
 plants** into one organism. It is therefore correct **only** for **Stem Grafting**
