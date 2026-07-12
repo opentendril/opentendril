@@ -351,6 +351,8 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 		}
 
 		if e.Sequence != "" {
+			// Sequence runs (scheduled or manual) have no per-run history row;
+			// they are observed via the bus's sequence-complete/-failure events.
 			log.Printf("⏰ Schedule %q: growing Sequence %q", name, e.Sequence)
 			result, err := coreSvc.SequenceRun(ctx, core.SequenceRunInput{
 				PathOrName: e.Sequence,

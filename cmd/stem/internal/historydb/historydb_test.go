@@ -134,6 +134,7 @@ func TestSproutRunUpsert(t *testing.T) {
 		RunID:      "step-42",
 		SessionID:  "tendril-test1",
 		StepID:     "step-42",
+		Origin:     "scheduler", // issue #235: scheduled runs stay attributable
 		Transcript: "fix the flaky test",
 		Status:     "running",
 		StartedAt:  time.Now().UTC(),
@@ -158,5 +159,8 @@ func TestSproutRunUpsert(t *testing.T) {
 	}
 	if runs[0].Status != "matured" || runs[0].Output != "done" || runs[0].FinishedAt.IsZero() {
 		t.Fatalf("run did not upsert: %+v", runs[0])
+	}
+	if runs[0].Origin != "scheduler" {
+		t.Fatalf("a scheduler-originated run must read back origin %q, got %q", "scheduler", runs[0].Origin)
 	}
 }

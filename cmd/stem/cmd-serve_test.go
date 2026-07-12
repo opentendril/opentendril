@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/opentendril/core/cmd/stem/internal/core"
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/gateway"
+	"github.com/opentendril/core/cmd/stem/internal/scheduler"
+	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
 // Issue #171 finding 1: the Stem must never serve its API unauthenticated.
@@ -164,5 +168,57 @@ func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 	}
 	if key != "env-key" {
 		t.Fatalf("key = %q, want env-key", key)
+	}
+}
+
+// Issue #235 slice 3: a scheduler-originated sprout run must be attributable
+// in history. The firer stamps origin "scheduler" into the governed sprout.run
+// input; the Core carries it onto the resolved SproutSpec, which is exactly
+// the field the execution port records as historydb.SproutRun.Origin
+// (cmd-sprout.go). Asserting on the spec therefore pins the whole flow this
+// side of the terrarium.
+func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
+	ctx := context.Background()
+	manager, err := session.NewManager(ctx, nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	var got core.SproutSpec
+	svc := core.NewService(manager).WithSprout(core.SproutOps{
+		Run: func(_ context.Context, spec core.SproutSpec) (string, error) {
+			got = spec
+			return "matured", nil
+		},
+	})
+
+	// A nonexistent triggers dir means no Hormonal Triggers are configured,
+	// so the fire proceeds.
+	firer := scheduledRunFirer(svc, manager, filepath.Join(t.TempDir(), "no-triggers"))
+	entry := scheduler.Entry{
+		Cron: "0 3 * * *",
+		Sprout: &scheduler.SproutSpec{
+			Transcript: "nightly upkeep",
+			Substrate:  "/workspaces/core",
+		},
+	}
+	if err := firer(ctx, "nightly", entry); err != nil {
+		t.Fatalf("scheduled fire: %v", err)
+	}
+
+	if got.Origin != "scheduler" {
+		t.Fatalf("scheduled sprout run origin = %q, want %q", got.Origin, "scheduler")
+	}
+	// The dedicated session sprouted for the run carries the same origin, so
+	// the session row and the run row agree on which surface grew it.
+	if got.SessionID == "" {
+		t.Fatal("scheduled sprout run must be bound to a session")
+	}
+	sess, ok := manager.Get(got.SessionID)
+	if !ok {
+		t.Fatalf("session %q not found", got.SessionID)
+	}
+	if sess.Origin != "scheduler" {
+		t.Fatalf("scheduled run session origin = %q, want %q", sess.Origin, "scheduler")
 	}
 }
