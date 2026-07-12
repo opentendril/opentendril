@@ -117,6 +117,49 @@ func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]Credenti
 	return resolved, nil
 }
 
+// gitSSHCommand builds a GIT_SSH_COMMAND that authenticates with only the given
+// key (IdentitiesOnly) and accepts a first-seen host key so a foreign clone
+// isn't blocked on an interactive known_hosts prompt.
+func gitSSHCommand(keyPath string) string {
+	return fmt.Sprintf("ssh -i %q -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new", keyPath)
+}
+
+// credentialGitInvocation returns the (possibly rewritten) URL and any extra
+// environment for a git subprocess, per the credential method. Design RFC #222.
+// Invariant: methods "ssh" and "none" NEVER inject a PAT (neither into the URL
+// nor the environment); only "pat"/unspecified inject the HTTPS token.
+func credentialGitInvocation(url string, cred ResolvedCredential) (string, []string) {
+	switch cred.Method {
+	case CredentialSSH:
+		if cred.SSHKeyPath != "" {
+			return url, []string{"GIT_SSH_COMMAND=" + gitSSHCommand(cred.SSHKeyPath)}
+		}
+		return url, nil
+	case CredentialNone:
+		return url, nil
+	default: // pat or unspecified (legacy)
+		tokenValue := cred.TokenValue
+		tokenEnv := cred.TokenEnv
+		// Preserve the legacy github.com ambient-PAT fallback for unspecified auth.
+		if tokenValue == "" && cred.Method == CredentialUnspecified && strings.Contains(url, "github.com") {
+			if patRef, pat := resolveGitHubPAT(); pat != "" {
+				tokenValue, tokenEnv = pat, patRef
+			}
+		}
+		if tokenValue == "" {
+			return url, nil
+		}
+		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
+			url = strings.Replace(url, "https://", "https://"+tokenValue+"@", 1)
+		}
+		var env []string
+		if tokenEnv != "" {
+			env = append(env, tokenEnv+"="+tokenValue)
+		}
+		return url, env
+	}
+}
+
 // expandHome expands a leading ~ or ~/ to the current user's home directory.
 func expandHome(path string) string {
 	path = strings.TrimSpace(path)

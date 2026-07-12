@@ -158,3 +158,82 @@ func TestExpandHome(t *testing.T) {
 		t.Fatalf("expandHome should leave absolute paths, got %q", got)
 	}
 }
+
+func TestCredentialGitInvocation(t *testing.T) {
+	t.Run("pat injects token into url and env", func(t *testing.T) {
+		url, env := credentialGitInvocation("https://github.com/o/r.git",
+			ResolvedCredential{Method: CredentialPAT, TokenEnv: "MY_PAT", TokenValue: "tok123"})
+		if url != "https://tok123@github.com/o/r.git" {
+			t.Fatalf("url = %q, want token-injected", url)
+		}
+		if len(env) != 1 || env[0] != "MY_PAT=tok123" {
+			t.Fatalf("env = %v, want [MY_PAT=tok123]", env)
+		}
+	})
+
+	t.Run("ssh injects NO token, sets GIT_SSH_COMMAND", func(t *testing.T) {
+		url, env := credentialGitInvocation("git@github.com:o/r.git",
+			ResolvedCredential{Method: CredentialSSH, SSHKeyPath: "/keys/id_ot"})
+		if url != "git@github.com:o/r.git" {
+			t.Fatalf("ssh url must be unchanged, got %q", url)
+		}
+		if strings.Contains(url, "@github.com/") {
+			t.Fatalf("ssh url must not carry an https token: %q", url)
+		}
+		if len(env) != 1 || !strings.HasPrefix(env[0], "GIT_SSH_COMMAND=") || !strings.Contains(env[0], "/keys/id_ot") {
+			t.Fatalf("env = %v, want GIT_SSH_COMMAND with key", env)
+		}
+		for _, e := range env {
+			if strings.Contains(strings.ToUpper(e), "TOKEN") || strings.Contains(strings.ToUpper(e), "PAT") {
+				t.Fatalf("ssh invocation leaked a token-ish env: %q", e)
+			}
+		}
+	})
+
+	t.Run("none is anonymous", func(t *testing.T) {
+		url, env := credentialGitInvocation("https://example.com/pub.git", ResolvedCredential{Method: CredentialNone})
+		if url != "https://example.com/pub.git" || env != nil {
+			t.Fatalf("none should be anonymous, got url=%q env=%v", url, env)
+		}
+	})
+
+	t.Run("unspecified github uses ambient PAT", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "ambient")
+		t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+		url, env := credentialGitInvocation("https://github.com/o/r.git", ResolvedCredential{})
+		if !strings.Contains(url, "ambient@github.com") {
+			t.Fatalf("unspecified github should use ambient PAT, got %q", url)
+		}
+		if len(env) != 1 || env[0] != "GITHUB_TOKEN=ambient" {
+			t.Fatalf("env = %v, want [GITHUB_TOKEN=ambient]", env)
+		}
+	})
+
+	t.Run("unspecified non-github stays anonymous", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "ambient")
+		url, env := credentialGitInvocation("https://gitlab.com/o/r.git", ResolvedCredential{})
+		if url != "https://gitlab.com/o/r.git" || env != nil {
+			t.Fatalf("non-github unspecified should stay anonymous, got url=%q env=%v", url, env)
+		}
+	})
+}
+
+func TestBuildTerrariumEnvironmentSuppressesPAT(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "host-pat")
+	t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+
+	if env := buildTerrariumEnvironment(); env["GITHUB_TOKEN"] != "host-pat" {
+		t.Fatalf("expected PAT injected by default, got %v", env["GITHUB_TOKEN"])
+	}
+
+	env := buildTerrariumEnvironment(suppressGitHubPATEnvSentinel + "=true")
+	if _, ok := env["GITHUB_TOKEN"]; ok {
+		t.Fatalf("PAT must be suppressed for ssh/none substrates")
+	}
+	if _, ok := env["GITHUB_PERSONAL_ACCESS_TOKEN"]; ok {
+		t.Fatalf("legacy PAT must be suppressed too")
+	}
+	if _, ok := env[suppressGitHubPATEnvSentinel]; ok {
+		t.Fatalf("internal sentinel must never surface in the terrarium env")
+	}
+}
