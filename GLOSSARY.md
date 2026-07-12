@@ -1,65 +1,129 @@
 # OpenTendril Glossary
 
-OpenTendril uses biological and botanical metaphors rather than standard IT terminology to emphasize the chaotic, adaptable, and organic nature of LLM orchestration. 
+> **This is the terminology-first reference — *learn or translate a term*.** Look
+> a word up, or map between OpenTendril and standard IT. For the concept-first
+> narrative (*what OpenTendril is* and *why*), see
+> [SYNTHETIC-TAXONOMY.md](SYNTHETIC-TAXONOMY.md). Both are authoritative and kept
+> in sync; the Stem injects a distilled form (`.tendril/genome/taxonomy-canonical.md`).
 
-This glossary provides a quick bidirectional reference between OpenTendril terminology and standard Software Engineering / AI terminology.
-
----
-
-## 🌿 OpenTendril to Standard IT
-
-| OpenTendril Term | Standard IT / AI Equivalent | Description |
-|------------------|-----------------------------|-------------|
-| **Abscission** | Failure Isolation / Fault Tolerance | The act of the Stem dropping a crashed Sprout or failed Tendril to route around failures and protect the core organism. |
-| **Amber** | Persistent Log Storage | Resin that has hardened over time (e.g., archived logs or local SQLite log dumps). |
-| **Branch** | Capability Group / Security Zone | A logical group initialized by the Stem at boot time to organize Tendrils and limit access scope. |
-| **Epigenetics** | Persistent Memory / Self-Correction State | Feedback and learnings appended back to the system after a task completes, ensuring future runs don't make the same mistakes. |
-| **Genotype** | System Prompt / Base Persona | The core foundational prompt that dictates *who* the AI is and how it should behave (e.g. "You are a Python Engineer"). |
-| **Greenhouse** | Command Center UI / Dashboard | The external observer interface where the user watches the headless organism growing via telemetry. |
-| **Hormonal Trigger** | Security Gate / Middleware Guard | Pre-execution checks or policies (like Bash scripts or OPA rules) that can instantly abort an unsafe request. |
-| **Meristem** | Planner Node / Workflow Conductor | A node in a Sequence that dynamically plans or generates new sub-steps during execution. |
-| **Mycorrhizal Network** | Large Language Model (LLM) | The external "brain" (e.g. Claude, GPT, Ollama) that does the actual reasoning and predicting. |
-| **Phenotype** | Speculative Execution / Parallel Trial | Multiple parallel containers running the same prompt with slight variations to see which succeeds first. |
-| **Plasmid** | RAG Context / Tool Definition | Modular, reusable blocks of context or API tool definitions injected into a Genotype on the fly. |
-| **Resin** | Local Log Trace / Debug Log | The internal byproduct of the system's metabolism that flows through the system capturing errors and state. |
-| **Rhizome** | Vector DB / Indexed Knowledge Graph | The local SQLite/Vector index of the Substrate that the AI queries for context. |
-| **Roots** | LLM Provider / Client Layer | The provider-connectivity pillar (`roots/`) through which the Stem draws inference from the Mycorrhizal Network — provider clients, model discovery, and tier routing. |
-| **Sequence** | Agentic Pipeline / CI Workflow | A predefined YAML list of steps that orchestrates multiple Tendrils in a specific order. |
-| **Sprout** | Ephemeral Worker | An ephemeral, strictly isolated worker container that is dynamically sprouted on a Branch to perform a task. |
-| **Stem** | Core Orchestrator | The lean, deterministic Go orchestrator. It manages routing and lifecycle without any business logic. |
-| **Substrate** | Host Repository / Target Codebase | The git repository or codebase that the Tendril is modifying or interacting with. |
-| **Symbiotic Nodule** | Microservice Plugin / Tendril Gateway | An external service (Tendril) that provides a specialized capability (like GCP access) to the Stem without bloating the core DNA. |
-| **Tendril** | External Integration Plugin | A persistent external plugin (e.g., GitHub, GCP) that is grafted onto a specific Branch to provide capabilities. |
-| **Terrarium** | Sandbox / Container Environment | The isolated filesystem and network boundaries (usually within the Sprout) protecting the host machine. |
-| **Transcript** | User Prompt / Single Task | The specific instruction or task fed to the Tendril for one execution loop. |
-| **Transporter** | Telemetry Emitter / Pub-Sub Adapter | Molecular pumps (ABC transporters) that actively push metrics and events across the system boundary to external platforms (Kafka, Datadog). |
+OpenTendril uses biological and botanical metaphors — all **real botany, nothing
+invented** — rather than standard IT terminology, to emphasise the adaptable,
+organic nature of LLM orchestration. Every term has **one job**.
 
 ---
 
-## 💻 Standard IT to OpenTendril
+## 🌿 Canonical Definitions
 
-| Standard IT / AI Term | OpenTendril Equivalent | Context |
-|-----------------------|------------------------|---------|
-| **Agentic Pipeline / Workflow** | **Sequence** | Orchestrates multiple steps and models automatically. |
-| **Archived Logs / Persistent Storage** | **Amber** | Hardened, immutable historical logs. |
-| **Backend Server / Orchestrator** | **Stem** | The lean, central Go process managing everything. |
-| **Capability Group / Security Zone** | **Branch** | A logical grouping for capabilities and access scope. |
-| **Command Center UI / Dashboard** | **Greenhouse** | The external environment observing the organism. |
-| **Docker Container** | **Sprout** | An ephemeral, strictly isolated worker container. |
-| **Failure Isolation / Fault Tolerance** | **Abscission** | Dropping a crashed Sprout or failed Tendril to protect the core. |
-| **Large Language Model (LLM)** | **Mycorrhizal Network** | The remote brain doing the reasoning. |
-| **LLM Provider Client / SDK Layer** | **Roots** | The connectivity layer (`roots/`) resolving providers, models, and routing for the Stem. |
-| **Local Logs / Debug Traces** | **Resin** | Real-time debugging byproducts flowing through the system. |
-| **Memory / Self-Correction** | **Epigenetics** | Learnings passed down to future agent runs. |
-| **Microservice Plugin** | **Symbiotic Nodule** | An external microservice (Tendril) providing specialized capabilities. |
-| **Planner / Conductor** | **Meristem** | A step that dynamically decides the next steps. |
-| **RAG Context / Tool List** | **Plasmid** | Reusable snippets injected into the prompt. |
-| **Repository / Target Codebase** | **Substrate** | The code the AI is modifying. |
-| **Sandbox Environment** | **Terrarium** | The secured boundary wrapping the execution. |
-| **Security Gate / Middleware** | **Hormonal Trigger** | Fast, pre-flight abort mechanisms. |
-| **Speculative Execution** | **Phenotype** | Running multiple variations concurrently. |
-| **System Prompt / Persona** | **Genotype** | The core identity of the worker. |
-| **Task / User Prompt** | **Transcript** | The single instruction given to the AI. |
-| **Telemetry / Pub-Sub Emitter** | **Transporter** | Molecular pumps sending events to external platforms. |
-| **Vector DB / Knowledge Graph** | **Rhizome** | The indexed map of the codebase. |
-| **Worker Script / Agent** | **Tendril** | An external integration plugin providing specific capabilities. |
+The single source of truth for each term, its one job, what it replaces, and its
+lifespan. (This table is the basis for the Stem-injectable canonical block.)
+
+| Term | One-line definition | Standard IT | Lifespan |
+|---|---|---|---|
+| **Biome** | The normative/regulatory climate the organism must adapt to (ISO 27001, ISO 42001, SDLC). | Compliance / governance regime | environment |
+| **Terroir** | The host OS and machine this instance grows on. | Host system / OS | environment |
+| **Rhizosphere** | The ecosystem of existing technologies Tendril is based on (LLM providers, Docker, git, MCP). | Underlying tech stack / dependencies | environment |
+| **Botanist** | The human who studies and cultivates the organism — plants Seeds, prunes, reviews Fruit (the *gardening* activity), and observes through the Greenhouse. | Operator / developer | external |
+| **Greenhouse** | The Command Center UI the Botanist observes through. | Dashboard / observability UI | external |
+| **Mycorrhizal Network** | The LLM — the external mind that reasons; holds no state. | Large Language Model | external |
+| **Roots** | The LLM provider connectivity layer (`roots/`). | Provider client / SDK layer | persistent |
+| **Substrate** | The repository being cultivated (the soil). | Target repo / codebase | persistent |
+| **Symbiotic Nodule** (Nodule) | An external *service* capability the plant partners with (GCP, GitHub API). | Microservice plugin / MCP gateway | persistent |
+| **Rhizome** | The background code/AST index of the Substrate. | Vector DB / code index | persistent |
+| **Taproot** | The deep, persistent store of deliberation: conversations, RFCs, decisions + rationale, reviews. | Decision record / institutional memory | persistent |
+| **Stem** | The lean, deterministic Go orchestrator and vascular router. | Core orchestrator / backend | persistent |
+| **Xylem** | Vascular channel carrying Transcripts (inputs) up to Sprouts. | Input pipe | per-run |
+| **Phloem** | Vascular channel carrying diffs (outputs) down to the Substrate. | Output pipe | per-run |
+| **Vascular Cambium** | Tissue coordinating parallel Xylem/Phloem channels. | Concurrent step runner | per-run |
+| **Branch** | A capability group / security zone the Stem initialises at boot. | Capability group / security zone | persistent |
+| **Sprout** | An ephemeral, strictly isolated worker that does one unit of work. | Worker container (*not* "agent") | ephemeral |
+| **Terrarium** | The isolation boundary (filesystem + network) around a Sprout. | Sandbox / container | ephemeral |
+| **Seed** | The originating goal / intent / use-case; the blueprint work grows from. | Product goal / use-case / intent | definition |
+| **Fruit** | The deliverable a cycle yields (a PR / artifact). | Output / deliverable | per-cycle |
+| **Genotype** | The base persona / system prompt (*who* a Sprout is). | System prompt / persona | definition |
+| **Plasmid** | A modular, injectable block of context or tools (*a skill*). | RAG context / tool definition | definition |
+| **Transcript** | One instruction for one growth (a single task). | User prompt / task | per-run |
+| **Sequence** | An ordered YAML workflow of steps. | Agentic pipeline / workflow | definition |
+| **Meristem** | A Sequence step that dynamically plans steps and translates human intent. | Planner / workflow conductor | per-run |
+| **Phenotype** | Speculative parallel variants of one Transcript; first to pass survives. | Speculative parallel execution | per-run |
+| **Hormonal Trigger** | A pre-execution security gate that can abort before a Sprout emerges. | Security gate / middleware | per-run |
+| **Abscission** | The Stem dropping a withered Sprout to protect the organism. | Fault isolation / fault tolerance | event |
+| **Epigenetics** | Distilled learnings appended after runs and fed forward into prompts. | Persistent memory / self-correction | persistent |
+| **Resin** | Live internal logging trace. | Debug log / trace | transient |
+| **Amber** | Hardened, archived, immutable logs. | Archived log storage | persistent |
+| **Transporter** | Pub-sub emitter pushing metrics/events across the system boundary. | Telemetry / pub-sub adapter | persistent |
+| **Tendril** | **Concept / brand only** — the organism's reaching-out-and-integrating character. Never a component. | *(the project itself)* | — |
+
+---
+
+## 🌿 OpenTendril → Standard IT (with botanical rationale)
+
+| OpenTendril | Standard IT | Why this organ |
+|---|---|---|
+| **Biome** | Compliance/regulatory regime | A biome is defined by *climate* — the conditions you must be adapted to survive. |
+| **Terroir** | Host OS / machine | The complete local ground that gives a specific site its character. |
+| **Rhizosphere** | Underlying tech ecosystem | The active root-zone of existing life the roots tap into. |
+| **Botanist** | The directing human | Studies *and* cultivates (gardens) the organism — an active tender, not passive climate. |
+| **Greenhouse** | Observability UI | The glass the Botanist watches the organism through. |
+| **Mycorrhizal Network** | LLM | A fungal symbiont *outside* the plant that does the thinking. |
+| **Substrate** | Target repo | The soil the plant is rooted in and cultivates. |
+| **Symbiotic Nodule** | Service integration | A root nodule housing a symbiont (Rhizobia) for a capability the core lacks. |
+| **Taproot** | Decision/institutional memory | The deep root that stores energy across seasons. |
+| **Sprout** | Ephemeral worker | A short-lived shoot; emerges, grows, matures or withers, is shed. |
+| **Fruit** | Deliverable / PR | The yield; its merge returns seeds to the soil. |
+| **Seed** | Goal / use-case | The blueprint (plus stored energy) a body of work grows from. |
+
+---
+
+## 💻 Standard IT → OpenTendril
+
+| Standard IT / AI | OpenTendril | Note |
+|---|---|---|
+| Agent / autonomous worker | **Sprout** (body) + **Mycorrhizae** (mind) | Tendril deliberately *decomposes* "agent"; it is not one thing. |
+| Task / user prompt | **Transcript** (single) / **Seed** (product-level intent) | |
+| Run / execute | **grow** (verb) | A Sprout *grows* its Transcript. |
+| Workflow / pipeline | **Sequence** | |
+| Orchestrator / backend | **Stem** | |
+| LLM | **Mycorrhizal Network** | |
+| Provider client layer | **Roots** (`roots/`) | |
+| Target repo | **Substrate** | |
+| Host OS / machine | **Terroir** | |
+| Tech stack / dependencies | **Rhizosphere** | |
+| Compliance regime (ISO 27001/42001) | **Biome** | |
+| Microservice plugin (GCP/Datadog/GitHub API) | **Symbiotic Nodule** | |
+| Code index / vector DB | **Rhizome** | |
+| Decision record / memory of *why* | **Taproot** | |
+| Sandbox / container | **Terrarium** | |
+| System prompt / persona | **Genotype** | |
+| RAG context / tool definition | **Plasmid** | |
+| Speculative parallel execution | **Phenotype** | |
+| Security gate | **Hormonal Trigger** | |
+| Fault isolation | **Abscission** | |
+| Live logs → archived logs | **Resin** → **Amber** | |
+| Telemetry emitter | **Transporter** | |
+
+---
+
+## 🔤 Botanical Verbs
+
+| Verb | Meaning | Replaces |
+|---|---|---|
+| **germinate** | activate / boot the framework from a Seed | init / start |
+| **branch** | the Stem initialises a capability/security zone | — |
+| **emerge** | a Sprout is created | spawn |
+| **grow** | a Sprout executes its Transcript | run / execute |
+| **mature** | a Sprout completes successfully | complete |
+| **wither** | a Sprout fails or crashes | fail |
+| **abscise** | the Stem drops a withered Sprout | fault-isolate |
+| **fruit** | deliver a PR / artifact | output / deliver |
+| **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
+| **graft** | **reserved:** fuse two *like* tissues (Stem↔Stem mesh, or two Genotypes) | — |
+
+---
+
+## 🤖 Interpretation by the Stem
+
+The **Canonical Definitions** table above is the source for
+`.tendril/genome/taxonomy-canonical.md`, a compact block the Stem injects as a
+canonical **Plasmid** into LLM context so every Sprout speaks correct OpenTendril
+and cannot drift back to IT jargon. When this glossary changes, regenerate that
+block from it.

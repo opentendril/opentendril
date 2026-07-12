@@ -1,179 +1,284 @@
 # Synthetic Biological Taxonomy & Systematics
 
-OpenTendril replaces traditional, generic IT terminology with biological and botanical metaphors. By mimicking evolutionary and natural systems—systems that have spent billions of years optimizing for resilience, modularity, and rapid adaptation—OpenTendril achieves a highly robust and dynamic cognitive architecture. 
+> **This is the concept-first document — *what OpenTendril is*.** It explains the
+> organism and *why* it is built this way. For a terminology-first reference (look
+> up a term, translate to/from standard IT), see [GLOSSARY.md](GLOSSARY.md). Both
+> derive from the same canonical vocabulary, distilled for the Stem to inject into
+> LLM context at [`.tendril/genome/taxonomy-canonical.md`](.tendril/genome/taxonomy-canonical.md).
 
-This document serves as the formal **Taxonomy and Systematics** of this synthetic organism. It educates contributors (and non-biologists!) on exactly how these organic concepts map directly to modern LLM engineering paradigms, classifying the nomenclature and explaining *why* we built the system this way.
+OpenTendril replaces generic IT terminology with biological and botanical
+metaphors drawn from **real botany** — nothing here is invented. By mimicking
+systems that have spent billions of years optimising for resilience, modularity,
+and adaptation, OpenTendril aims for an architecture that *expects* dynamic,
+non-deterministic interpretation rather than rigid mechanical execution.
 
-> 🛠️ **Looking for how to build?** This document explains the *what* and *why*. For practical engineering decisions (which language to use where, how to build an executor), read the [Material & Architecture Guide](TENDRIL-GUIDE.md).
-> 📖 **Need a quick translation?** If you are looking for a quick bidirectional mapping of OpenTendril terms to standard IT terms, see the [Glossary](GLOSSARY.md).
----
-
-## 1. The Philosophy: Escaping Determinism
-
-In traditional software engineering, computing is built on state machines. A **Task** implies deterministic, mechanical execution. If you give a computer a task (like a cron job or a build script), you expect it to blindly follow a rigid set of instructions. It either succeeds mathematically, or it throws an error.
-
-However, Large Language Models are not state machines. They don't process binary logic—they process language, context, and probability. They are messy, adaptable, and highly organic. 
-
-For the last few years, the tech industry has been trying to force these organic neural networks into rigid, deterministic IT boxes. Developers attempt to build "Agentic loops" that act like standard `while` loops, leading to fragile systems that break the moment a parameter is slightly unexpected, or suffer from severe context degradation over time. Furthermore, giving a stateful "Agent" continuous access to a host machine introduces catastrophic security risks.
-
-OpenTendril solves this by embracing biological evolution—the exact same chaotic, adaptable, non-deterministic system that neural networks were originally modeled after. 
-
-By modeling the system after a plant (Stems, Sprouts, Tendrils, Genotypes, and Hormones), we are building an architecture that inherently expects, and thrives on, dynamic environmental interpretation. By using biological terminology, we inherently accept that our instructions require contextual interpretation rather than mechanical execution, completely shifting the paradigm of how we orchestrate AI.
+Every term below names a **real organ, tissue, or process**, and each has exactly
+**one job**. Where a word could be overloaded, this document is the authority that
+resolves it.
 
 ---
 
-## 2. The Cognitive Anatomy
+## 1. What OpenTendril *Is*
 
-The core execution environment maps to the structural anatomy of a plant.
+OpenTendril is a **growing organism** that roots itself in a codebase, draws
+intelligence from an external mind, and reaches out to integrate with the systems
+around it — cultivating software under a best-practice, secure SDLC.
 
-*   **Stem**: The Go-based orchestrator (`cmd/stem`). Just like a physical plant stem structurally supports the plant, the Go Stem handles the HTTP networking, routing, and fundamental support structure for the AI. It is explicitly **not** a brain (plants do not have brains). It is a vascular routing highway that blindly receives chemical signals (instructions) from the Mycorrhizae (LLM) and routes them to a Branch, triggering a Sprout to grow there. It is lean, deterministic, and devoid of any business logic.
-*   **Vascular System (Xylem & Phloem)**: The transport mechanisms of the Stem. **Xylem channels** carry transcripts (inputs) from the Roots up to the active Sprouts (leaves). **Phloem channels** carry git diffs and code changes (synthesized sugar/energy) from the Sprouts back down to the Substrate (soil/host repository).
-*   **Vascular Cambium (Vascular Bundles)**: The tissue within the stem that coordinates parallel xylem and phloem transport tubes. This maps to the concurrent step runner managing multiple isolated terrarium channels (parallel execution branches).
-*   **Branch**: A Capability Group or Security Zone initialized by the Stem at boot time (e.g., Core Branch, Enterprise Branch). Branches organize Tendrils and limit access scope for Sprouts.
-*   **Tendril**: A persistent external integration plugin (e.g., GitHub, GCP) that is **grafted** onto a specific Branch. Tendrils reach out and attach to external enterprise systems without bloating the Stem.
-*   **Sprout**: An ephemeral, strictly isolated worker container that is dynamically **sprouted** on a Branch to perform a task.
-*   **Rhizome (The Index Engine)**: A continuous underground stem network that stores nutrients and information, connecting the plant under the soil. In OpenTendril, the Rhizome acts as the foundational map of the entire project. It runs in the background, scanning the entire Substrate, parsing code, and storing a topological map of the repository into a local SQLite database for the AI to draw from.
-*   **Mycorrhizal Network (The LLM)**: In nature, plants connect their roots to vast, subterranean fungal networks (Mycorrhizae) that act like a giant, distributed neural network. The Mycorrhizae process complex environmental data and send chemical instructions back to the plant. In OpenTendril, **the LLM is the Mycorrhizae**. It sits completely outside the physical plant (e.g. running in Claude on the host, or Ollama over the network), doing all the "thinking" and "predicting", and passing command signals into the Sprout.
-*   **The Greenhouse (The Observer)**: The Command Center UI. The Greenhouse is structurally outside the plant. It is the pane of glass through which a botanist (the developer) observes the headless organism growing and functioning via telemetry (REST/WebSockets), without being part of the biological execution itself.
+**"Tendril" is the organising concept, not a component.** A tendril is the organ
+of *reaching out and attaching* (via **thigmotropism** — directional growth toward
+a support). That reaching-out is the whole organism's defining character, which is
+why it is the brand (**OpenTendril**) and not any single instantiable part. Every
+concrete "reaching" job is filled by a more precise organ — Roots draw
+intelligence, a Substrate is cultivated, a Symbiotic Nodule partners with a
+service. If you are naming a *thing*, it is never "a Tendril"; it is one of those.
+
+**Naming.** The canonical, written name is **`OpenTendril`** ("Open" for
+open-source, and it differentiates from other products named "Tendril"). The
+short, spoken name is **`Tendril`** (matching the `tendril` CLI). **Never
+abbreviate to "OT"** — in this domain "OT" already means *Operational Technology*
+(the IT/OT split in security and SDLC), so the abbreviation actively collides with
+a term our users rely on. (Cf. OpenTelemetry, which shortens to "OTel", never "OT".)
+
+---
+
+## 2. Philosophy: Escaping Determinism
+
+Traditional software is built on state machines: a **Task** implies deterministic,
+mechanical execution. But Large Language Models are not state machines — they
+process language, context, and probability. They are messy, adaptable, organic.
+
+For years the industry has tried to force these organic networks into rigid IT
+boxes ("agentic loops" that behave like `while` loops), producing fragile systems
+that break on unexpected input and degrade over long contexts — and handing a
+stateful "agent" continuous host access is a catastrophic security risk.
+
+OpenTendril embraces biological evolution instead: the same chaotic, adaptable
+paradigm neural networks were modelled on. By modelling the system as a plant, we
+*accept* that instructions require contextual interpretation, and we contain each
+unit of growth so a failure is shed, not fatal.
+
+---
+
+## 3. The Spatial Anatomy
+
+The system is a whole plant, read from the environment it lives in, down through
+its roots, up the stem, into the canopy that does the work, and out to the fruit
+it yields.
+
+```
+              Fruit   (PRs / artifacts — this cycle's yield)
+                ▲
+   Canopy:   Sprouts (ephemeral workers) inside Terrariums
+                ▲
+    Trunk:   Stem  +  Xylem / Phloem / Vascular Cambium
+                ▲
+   ── soil surface ──   Substrate  (the repo — cultivated; Fruit merges back in)
+                │  the plant's own root organs tap and store:
+   Root system:   Roots → Mycorrhizae (LLM)   ·   Symbiotic Nodules → services
+                  Rhizome → code index         ·   Taproot → deliberation store
+                │  reaching into …
+   Rhizosphere   (the ecosystem of existing technologies Tendril is based on)
+                │  all within …
+   Terroir  (this machine / OS)      ⊂      Biome  (the ISO / SDLC climate)
+```
+
+**The Botanist** (the human) tends the whole plant from outside it: planting Seeds
+(intent), pruning, and reviewing Fruit through the **Greenhouse** (the observer UI).
+
+---
+
+## 4. The Cultivation Loop
+
+> The **Botanist** plants a **Seed** (a goal / use-case) into the **Substrate**
+> (the repo), within the **Biome** (the ISO 27001 / ISO 42001 / SDLC climate). The
+> organism draws intelligence through its **Roots** from the **Mycorrhizal Network**
+> (the LLM), routes it up the **Stem's** vascular system, and grows **Sprouts**
+> (ephemeral workers) that transform the Substrate. The reasoning behind each
+> decision is stored in the **Taproot**; the yield is **Fruit** (a PR), which the
+> Botanist reviews through the **Greenhouse** — feeding the next Seed.
+
+Each force in that loop is a distinct organ. None overloads another.
+
+---
+
+## 5. Component Anatomy
+
+### The Environment (not part of the plant)
+
+*   **Biome** — the **normative/regulatory climate** the organism must be adapted
+    to: ISO 27001 (infosec), ISO 42001 (AI management), and the SDLC discipline.
+    A biome is defined by its climate; grow out of tolerance and you do not
+    survive (audit/compliance failure). The Biome sets the conditions; the
+    **Immune System** (§7) keeps the organism adapted to them.
+*   **Terroir** — the **host OS and machine** this instance grows on. *Terroir* is
+    the complete local ground — soil, topography, microclimate — that gives a
+    specific site its character; here, the particular machine/OS that shapes what
+    can grow. (Formerly referred to plainly as the "Host System".)
+*   **Rhizosphere** — the **ecosystem of existing technologies OpenTendril is
+    based on**: LLM providers, the container runtime, git, MCP — the inherited
+    world the roots tap into. It is what Tendril *stands on*, kept distinct from
+    what Tendril *grows*.
+*   **Botanist** — the **human** who studies and cultivates the organism. The
+    Botanist *gardens* it — plants **Seeds** (intent), prunes, reviews **Fruit** —
+    and *studies* it, working from outside the plant and observing through the
+    **Greenhouse**. ("Gardener" names the tending activity; the Botanist is the
+    person.)
+*   **Greenhouse** — the **Command Center UI**. The pane of glass through which the
+    Botanist watches the headless organism grow via telemetry (REST/WebSockets).
+
+### The Root System (acquire, symbiose, remember)
+
+*   **Roots** (`roots/`) — the **LLM provider connectivity layer** through which the
+    Stem draws inference: provider clients, model discovery, tier routing.
+*   **Mycorrhizal Network** — **the LLM.** In nature, plant roots join vast fungal
+    networks that process signals and feed the plant. In OpenTendril the LLM is the
+    Mycorrhizae: it sits *outside* the plant, does all the thinking and predicting,
+    and passes command signals in through the Roots. It holds no state of its own.
+*   **Substrate** — the **repository being cultivated** — the soil the plant is
+    rooted in and feeds on. Distinct from the **Terroir** (the OS the soil sits on)
+    and from the **Fruit** (what the plant yields). Changes travel *down* to the
+    Substrate via the Phloem, and merged **Fruit** enriches it for the next cycle.
+*   **Symbiotic Nodule** (everyday: **Nodule**) — an **external *service*
+    capability** the plant partners with (GCP, Datadog, the GitHub *API*), just as
+    legume roots host nitrogen-fixing Rhizobia in root nodules. A Nodule interfaces
+    with the **Stem**, not with a Sprout. (Contrast: a *repo* is a Substrate; the
+    *API* that opens its PRs is a Nodule.)
+*   **Rhizome** — the **code index**. A continuous underground stem that stores and
+    connects; here, a background scanner that parses the Substrate into a
+    topological SQLite/AST map for the organism to draw from.
+*   **Taproot** — the **deep, persistent store of deliberation**: conversations,
+    Design RFCs, decisions *and their rationale*, reviews, and working drafts — the
+    *why and how* a product was built. A taproot stores energy across seasons for
+    the plant to draw on; the Taproot is the organism's memory of its own intent,
+    the highest-value knowledge the Mycorrhizae (LLM) cannot hold between runs.
+    *(New capability — see the Taproot Design RFC.)*
+
+### The Trunk (support & vascular routing)
+
+*   **Stem** — the lean, deterministic **Go orchestrator** (`cmd/stem`). It is
+    explicitly **not** a brain (plants have none); it is a vascular routing highway
+    that receives signals from the Mycorrhizae and routes them to a Branch,
+    triggering a Sprout to grow. It holds no business logic.
+*   **Vascular System (Xylem & Phloem)** — the transport tubes. **Xylem** carries
+    Transcripts (inputs) *up* to the Sprouts; **Phloem** carries git diffs
+    (synthesised energy) *down* from the Sprouts to the Substrate.
+*   **Vascular Cambium** — the tissue coordinating parallel Xylem/Phloem tubes: the
+    concurrent step runner managing multiple isolated Terrarium channels.
+*   **Branch** — a **Capability Group / Security Zone** the Stem initialises at
+    boot to organise capabilities and limit access scope for Sprouts.
+
+### The Canopy (do the work, yield)
+
+*   **Sprout** — an **ephemeral, strictly isolated worker** dynamically grown on a
+    Branch to perform one unit of work. Leaves/sprouts are short-lived — a Sprout
+    emerges, grows, and either matures or withers, then is shed.
+*   **Terrarium** — the **isolation boundary** (filesystem + network) wrapping a
+    Sprout, protecting the host. A sealed Sprout cannot reach out on its own —
+    external calls are Stem-mediated (see §6).
+*   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
+    delivered, and its merge returns seeds to the Substrate (soil) for the next
+    cycle.
+*   **Seed** — the **originating goal / intent / use-case**: the blueprint (plus
+    stored energy) from which a body of work grows. A single task's intent is a
+    **Transcript**; the product-level intent is a **Seed**. Seed (forward intent)
+    and **Taproot** (recorded rationale) are the two ends of the organism's
+    memory of purpose.
 
 ### Microservices & Symbiosis
 
-The OpenTendril architecture natively maps to biological microservices:
-*   **Symbiotic Nodules (Tendrils)**: If a plant needs a highly specialized capability—like fixing nitrogen—it doesn't bloat its own core DNA (a monolith). Instead, it interfaces with external, highly specialized organisms (like Rhizobia bacteria in root nodules). OpenTendril Tendrils are Symbiotic Nodules: external microservices (like a GCP or GitHub Tendril) that interface with the Stem to provide a service the Stem doesn't natively build into its core binary.
-*   **Phytomers & Abscission (Sprouts)**: Plants grow in distinct, semi-independent modules (phytomers). If one leaf or branch gets infected, the plant performs **abscission**—it literally drops the infected leaf to protect the core Stem. This is the biological equivalent of microservice fault tolerance. If a Sprout crashes, the Stem simply drops the connection and routes around it. The core organism survives.
-
-### Strict Botanical Verbs
-
-To maintain clarity, these verbs have specific architectural meanings:
-*   **Branching**: The act of the Stem initializing different Capability Groups/Security Zones at boot time based on configuration.
-*   **Grafting**: The act of installing or attaching a persistent plugin (Tendril) onto a Branch.
-*   **Sprouting**: The dynamic, real-time act of the system spinning up an ephemeral Docker container (Sprout) to execute a task.
+*   **Symbiotic Nodules** are OpenTendril's microservices: rather than bloating its
+    core DNA (a monolith), the organism partners with specialised external
+    organisms for capabilities it does not natively build in.
+*   **Abscission** — biological fault tolerance. If a Sprout withers (crash, panic,
+    LLM timeout), the Stem **abscises** it — drops it and routes around — and the
+    core organism survives.
 
 ---
 
-## 3. The Immune System (Security & Quality Control)
+## 6. Who Reaches Out? (the call path)
 
-Biological organisms must constantly defend against diseases and harmful mutations. OpenTendril models its security and testing pipelines after a biological immune system to ensure the framework stays healthy.
+A sealed Sprout inside a Terrarium is network-isolated and **cannot** call an
+external system itself. The path is:
 
-*   **Hormonal Triggers (The Acute Immune Response):** Pre-execution security gates. Plants use hormones (like auxins) to instantly trigger or halt growth based on environmental stimuli. In OpenTendril, Hormonal Triggers are lightweight bash scripts that intercept requests and can instantly "block growth" (abort execution) before the Tendril even boots if a threat or malformed request is detected.
-*   **Automated Test Suite (The Adaptive Immune System):** Runs in isolated, sterile environments (Docker test containers) to constantly check the organism for sickness (bugs) and reject harmful mutations (failing PRs) before they can integrate into the core DNA.
+> **Mycorrhizae (LLM) decides** an external capability is needed and emits the
+> intent → **the Stem invokes** the Nodule/Substrate (it holds the credentials and
+> network) → **the Sprout consumes** the result (injected via the Xylem) and yields
+> code (returned via the Phloem).
 
----
-
-## 4. The Genetic Prompt Hierarchy
-
-To scale our prompt engineering dynamically, OpenTendril maps prompt layers to genetics.
-
-*   **Genotype (Base Model Identity):** The core DNA of the AI. A Genotype is the foundational system prompt defining the overall identity, behavioral constraints, and role of the Tendril (e.g., "You are a Senior Go Engineer"). It is the fundamental blueprint. Critically, a Genotype defines *who the Tendril is and how it should think* — it does not define *what workflow to run*. *(Common IT term: Persona or System Prompt)*
-*   **Plasmid (Modular Skill Injection):** In microbiology, a plasmid is a small, modular packet of DNA that can be transferred between cells to instantly grant them new traits (like antibiotic resistance). In OpenTendril, a Plasmid is a reusable, modular block of context or tools injected into a Genotype on the fly (e.g., "Here is the syntax documentation for React.js"). *(Common IT term: RAG context block or Tool definition)*
-*   **Transcript (Instruction Execution):** In biology, RNA transcription is the process of copying genetic instructions into a transient format (mRNA) that the cell immediately executes to perform an action. In OpenTendril, the Transcript is the one-off, contextual prompt fed to the Tendril for a single execution run (e.g., "Refactor this file"). *(Common IT term: User Prompt or Task)*
-*   **Sequence (Workflow Automation):** A defined genetic sequence dictating a complex chain of events. In OpenTendril, a Sequence is a predefined YAML workflow that *orchestrates* multiple Tendrils, each running a specific Genotype. A Sequence defines *what steps to run and in what order* — it does not define how to think. A Sequence is initiated by **activating the meristem** (the growth center), and can only be triggered by the Stem or a human operator — never by a Tendril operating inside a Terrarium Sandbox. *(Common IT term: Agentic Pipeline or Workflow)*
-*   **Meristem Step (Dynamic Planning Node & Intent Interpreter):** A sequence step that dynamically plans or generates new steps during execution. It acts as the "Tool Calling LLM", intercepting messy standard user requests (like "run an agent workflow") and translating them into strict botanical instructions for the Stem to execute. Named after **Meristematic tissue** which divides to branch out new shoots. *(Common IT term: Workflow Conductor or Planner)*. 🗣️ **See the [Intent Translation Guide](INTENT-TRANSLATION.md) for use-cases on how it interprets standard jargon.**
-*   **Phenotypes (Speculative Variations):** Multiple speculative shoots or runs executing the same Transcript in parallel. Under **Phenotypic Selection (Natural Selection)**, Go Stem dispatches concurrent Sprouts under different environmental parameters (varying LLM temperatures or Plasmid rules), and merges only the first variant that compiles and passes the fitness test suite, weeding out weaker mutations. *(Common IT term: Speculative Parallel Execution)*
-
-### System Genotypes and System Sequences
-
-A critical distinction exists between *workspace-level* and *system-level* definitions:
-
-*   **Workspace Genotypes/Sequences** live in `.tendril/genotypes/` and `.tendril/sequences/` within the project repository. They are user-customisable but are not trusted for privileged operations — a Tendril inside a Terrarium can read and modify these files, so they cannot be the basis for security decisions.
-
-*   **System Genotypes/Sequences** are shipped with OpenTendril and installed to `~/.opentendril/` or `/etc/opentendril/`. They are **never mounted into any Terrarium container**, making them physically inaccessible to any agent. They carry immutable `deny` lists of blocked Plasmids, ensuring a single-responsibility design that provides both:
-    1. **Security isolation** — a `github-ops` Genotype cannot accidentally (or maliciously) write to the filesystem, even if injected with a crafted Transcript.
-    2. **Reliability** — fewer Plasmids means fewer dependencies and a narrower blast radius when something goes wrong.
-
-> 📐 See [docs/ARCHITECTURE-TAXONOMY.md](docs/ARCHITECTURE-TAXONOMY.md) for visual diagrams of the Genotype hierarchy and trust boundaries.
-> 📋 See [docs/DESIGN-SYSTEM-SEQUENCES.md](docs/DESIGN-SYSTEM-SEQUENCES.md) for the full System Sequences RFC including pre-built Git workflow definitions.
-> 🐙 Tracking Issues: [#115 — System Genotypes](https://github.com/opentendril/core/issues/115) · [#116 — System Sequences & Git Workflows](https://github.com/opentendril/core/issues/116)
-
+So it is neither the LLM nor the Sprout that "calls GitHub" — **the Stem does**, on
+intent the LLM produced. This matches the security model (the Terrarium forbids a
+Sprout from reaching out) and the implementation (clone/push run Stem-side, and in
+enterprise are delegated further via Stem Grafting to a Central Stem).
 
 ---
 
-## 5. The 6-Stage Growth Model (Framework Lifecycle)
+## 7. The Immune System (Security & Quality)
 
-The execution flow of the OpenTendril framework natively maps to the six major growth stages of a climbing vine:
-
-1. **Seed Germination (Activation):** The user installs OpenTendril. Go Stem reads `.env`, `mcp-config.json`, and `substrates.yaml`, absorbing its environment configuration.
-2. **Seedling Emergence (Sprouting):** The Go Stem server boots and binds to local ports, establishing the main API and MCP surface areas.
-3. **Vegetative Growth (Stem Elongation):** The core orchestrator ("The Stem") runs initial diagnostics and builds connections to LLM providers ("The Roots") using the Dual LLM config (Coordinator + Worker).
-4. **Tendril Initiation:** When a specific task Transcript is requested, the Stem initiates a specialized Genotype context, dynamically resolving required Plasmids.
-5. **Thigmotropism (The Search and Touch Response):** The Tendril emerges (a stateless Sprout Docker container is grown) and sweeps the codebase. Under the **Codebase Assessor (Thigmotropism)**, the Stem generates a hierarchical **Repo Map Plasmid** (`repomap.md`) using native AST parsing, giving the sprout a tactile sense of the codebase architecture before coiling around it to execute edits.
-6. **Reproductive Maturity:** With the task completed, Go Stem runs post-flight sanitization, commits the changes, merges the terrarium worktree back to the host, and delivers the final PRs and artifacts.
-
----
-
-## 6. Lamarckian Epigenetics (State Adaptation)
-
-In biology, Lamarckian evolution states that an organism can pass down traits and adaptations acquired during its lifetime to its offspring. 
-
-OpenTendril implements **Lamarckian Epigenetics** via the Go-native **Epigenetic Chronicler**:
-*   After every Sprout execution, Go Stem analyzes the git diff and execution transcript to extract lessons, guardrails, and conventions learned during that specific run.
-*   These learnings are automatically appended back to `.tendril/genome/epigenetics.md`.
-*   During future Sprout runs, these accumulated learnings are compressed and injected into the prompt context.
-*   This ensures future Sprouts (offspring) instantly inherit the acquired knowledge and mistakes of their predecessors, enabling self-improving codebase adaptation.
-
-```mermaid
-graph TD
-    classDef seed fill:#8b5a2b,stroke:#5c3a21,stroke-width:2px,color:white;
-    classDef stem fill:#2e8b57,stroke:#1b4f30,stroke-width:2px,color:white;
-    classDef tendril fill:#98fb98,stroke:#2e8b57,stroke-width:2px,color:black;
-    classDef fruit fill:#ff8c00,stroke:#8b4500,stroke-width:2px,color:white;
-
-    A(1. Seed Germination<br/>Read .env / Config) --> B(2. Seedling Emergence<br/>Go Sprout Binds)
-    B --> C(3. Vegetative Growth<br/>Connect to LLM/DB Roots)
-    
-    C --> D{4. Tendril Initiation<br/>Transcript Requested}
-    D -->|Builds Genotype Context| E[5. Thigmotropism<br/>Boot Container & Execute]
-    
-    E --> F((6. Reproductive Maturity<br/>Deliver Artifacts / PRs))
-    
-    class A seed;
-    class B,C stem;
-    class D,E tendril;
-    class F fruit;
-```
+*   **Hormonal Triggers** — pre-execution security gates (lightweight scripts) that
+    can instantly *block growth* (abort) before a Sprout even emerges.
+*   **Automated Test Suite** — the adaptive immune response, running in sterile
+    Terrariums to reject harmful mutations (failing PRs) before they integrate.
+*   **System vs Workspace definitions** — *Workspace* Genotypes/Sequences live in
+    `.tendril/` and are user-editable, so they are **not trusted** for privileged
+    decisions (a Sprout can modify them). *System* Genotypes/Sequences ship with
+    OpenTendril, are never mounted into any Terrarium, and carry immutable deny
+    lists. *(Trusted-tier location — `~/.tendril` vs a separate `~/.opentendril` /
+    `/etc/opentendril` — is an open reconciliation.)*
 
 ---
 
-## 7. Observability & Telemetry (Metabolism and Excretion)
+## 8. The Genetic Prompt Hierarchy & Verbs
 
-Enterprise systems require robust logging and telemetry. OpenTendril maps these observability concepts to metabolic byproducts and cellular transport:
+**Genetics.** **Genotype** = the base persona/system prompt (*who* a Sprout is).
+**Plasmid** = a modular, injectable block of context or tools (*a skill*).
+**Transcript** = one instruction for one growth (*a single task*). **Sequence** = an
+ordered YAML workflow of steps (*a pipeline*), triggered only by the Stem or the
+Botanist — never by a Sprout. **Meristem** = a Sequence step that dynamically plans
+new steps and translates messy human requests into strict botanical instructions.
+**Phenotype** = speculative parallel variants of one Transcript, of which the first
+to pass the fitness test survives (natural selection).
 
-*   **Resin (Sap):** The internal logging trace. Just as plants exude sap or resin as a byproduct of their metabolism, the Stem produces Resin to trap "bugs" (errors) and record real-time state for debugging.
-*   **Amber:** Persistent log storage. When Resin hardens over time, it becomes Amber—representing archived, immutable historical logs (e.g., local SQLite log dumps or cold storage).
-*   **Transporters (ABC Transporters):** The pub-sub telemetry emitters. In nature, ATP-binding cassette (ABC) transporters are molecular pumps that use energy to move compounds across cellular membranes out of the system. In OpenTendril, Transporters act as active molecular pumps that push metrics and events across the system boundary to external platforms like Kafka, Prometheus, or Datadog.
+**Strict botanical verbs** (each has a fixed meaning):
+
+| Verb | Meaning | Replaces |
+|---|---|---|
+| **germinate** | activate / boot the framework from a Seed | init / start |
+| **branch** | the Stem initialises a capability/security zone | — |
+| **emerge** | a Sprout is created | spawn |
+| **grow** | a Sprout executes its Transcript | **run / execute** |
+| **mature** | a Sprout completes successfully | complete |
+| **wither** | a Sprout fails or crashes | fail |
+| **abscise** | the Stem drops a withered Sprout | fault-isolate |
+| **fruit** | deliver a PR / artifact | output / deliver |
+| **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
+| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
+
+**"Graft" is reserved.** Botanically, grafting fuses tissue from **two different
+plants** into one organism. It is therefore correct **only** for **Stem Grafting**
+(joining a local Stem to a remote Stem — the mesh) and **Genotype Grafting**
+(fusing two personae/plasmids into a hybrid). It is **wrong** for attaching a
+Nodule (that is *symbiosis*) or for merging changes home (that is **Phloem**
+transport / a **merge**).
 
 ---
 
-## Architectural Flow Summary
+## 9. The Translation Boundary
 
-The interaction between the components looks like this in practice:
+The words *agent*, *task*, and *run* are not purged everywhere —
+they survive **only at the deliberate external boundary** where OpenTendril meets
+people who speak IT jargon: the `AGENTS.md` builder-instructions file (a cross-tool
+standard *filename*) and the **Meristem** / intent-translation layer, whose job is
+exactly to translate "run an agent workflow" into botanical instructions. Inside
+the organism — architecture docs and code identifiers — the language is botanical.
 
-```mermaid
-graph TD
-    subgraph GoStem ["GoStem"]
-        API[Incoming Request] --> HT[Hormonal Triggers]
-        HT -- Growth Blocked --> Abort
-        HT -- Growth Allowed --> OS[Sprout Initiator]
-    end
+---
 
-    subgraph EphemeralSproutTerrarium ["Ephemeral Sprout Terrarium"]
-        OS --> T[The Tendril AI]
-        
-        subgraph GeneticInjection ["Genetic Injection"]
-            G[Genotype: Core Persona] --> T
-            P1[Plasmid: Skill A] -.-> T
-            P2[Plasmid: Skill B] -.-> T
-            TR[Transcript: Execution Instructions] --> T
-        end
-        
-        T --> Env[Isolated Workspace]
-    end
+## 10. Interpretation by the Stem (Machine Use)
 
-    classDef biological fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef stem fill:#e0f7fa,stroke:#006064,stroke-width:2px;
-    classDef sprout fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    
-    class G,P1,P2,TR,HT,T biological;
-    class API,OS stem;
-    class Env sprout;
-```
+These two documents are the **human-facing** authority. Their vocabulary is
+distilled into a compact, unambiguous, machine-injectable block at
+[`.tendril/genome/taxonomy-canonical.md`](.tendril/genome/taxonomy-canonical.md),
+which the Stem loads as a canonical **Plasmid** so every Sprout — and the
+Mycorrhizae (LLM) it consults — speaks the correct language and cannot drift back
+to IT jargon. When these documents change, that canonical block is regenerated
+from them; it is the single source the organism reads about itself.
