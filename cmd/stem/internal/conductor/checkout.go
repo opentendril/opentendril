@@ -74,9 +74,11 @@ func ephemeralCheckoutPath(name string) (string, error) {
 // fetch, then hard-reset to the target branch. Because a foreign substrate is
 // edited in place, this guarantees each run starts from a pristine tree —
 // discarding any residue from a prior (e.g. read-only) run.
-func refreshExistingCheckout(dir, branch string, gitEnv []string) error {
+func refreshExistingCheckout(dir, branch string, configArgs, gitEnv []string) error {
 	ctx := context.Background()
-	if _, err := runGitCommandWithEnv(ctx, dir, gitEnv, "fetch", "origin"); err != nil {
+	// Only the network fetch needs auth; checkout/reset are local operations.
+	fetchArgs := append(append([]string{}, configArgs...), "fetch", "origin")
+	if _, err := runGitCommandWithEnv(ctx, dir, gitEnv, fetchArgs...); err != nil {
 		return fmt.Errorf("refresh managed checkout %q: %w", dir, err)
 	}
 	if strings.TrimSpace(branch) != "" {

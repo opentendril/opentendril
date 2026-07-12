@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -183,21 +184,23 @@ func TestPinnedInstallationSkipsDiscovery(t *testing.T) {
 	}
 }
 
-func TestResolveAndInvokeAppCredential(t *testing.T) {
+func TestResolveAppCredential(t *testing.T) {
 	rc, err := resolveSubstrateCredential(SubstrateSpec{Auth: AuthSpec{
 		Method: "app", AppID: "4276558", PrivateKeyPath: "~/x.pem",
 	}}, nil)
 	if err != nil || rc.Method != CredentialApp || rc.App.AppID != "4276558" {
 		t.Fatalf("resolve app: %+v err=%v", rc, err)
 	}
+}
 
-	rc.TokenValue = "ghs_tok"
-	url, env := credentialGitInvocation("https://github.com/o/r.git", rc)
-	if !strings.Contains(url, "x-access-token:ghs_tok@github.com") {
-		t.Fatalf("app url should use x-access-token, got %q", url)
+func TestHTTPAuthHeaderArgs(t *testing.T) {
+	args := httpAuthHeaderArgs("ghs_tok")
+	if len(args) != 2 || args[0] != "-c" {
+		t.Fatalf("want [-c, http.extraHeader=...], got %v", args)
 	}
-	if env != nil {
-		t.Fatalf("app auth must not put a token in the environment, got %v", env)
+	want := "http.extraHeader=Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:ghs_tok"))
+	if args[1] != want {
+		t.Fatalf("header arg = %q, want %q", args[1], want)
 	}
 }
 
@@ -248,4 +251,22 @@ func TestGithubAppLive(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	fmt.Printf("live check OK: token authenticated, installation can see %d repo(s)\n", out.TotalCount)
+
+	// End-to-end: clone via the header-based auth and prove the token never
+	// lands in the persisted .git/config.
+	cred := ResolvedCredential{Method: CredentialApp, App: AppCredential{AppID: appID, PrivateKeyPath: keyPath}}
+	authArgs, _, err := materializeGitAuth(context.Background(), cred, repo)
+	if err != nil {
+		t.Fatalf("materializeGitAuth failed: %v", err)
+	}
+	dest := filepath.Join(t.TempDir(), "clone")
+	gitArgs := append(append([]string{}, authArgs...), "clone", "--depth", "1", "--", repo, dest)
+	if out, err := exec.Command("git", gitArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("header-auth clone failed: %v (%s)", err, out)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(dest, ".git", "config"))
+	if strings.Contains(string(cfg), token) || strings.Contains(string(cfg), "x-access-token") {
+		t.Fatalf(".git/config leaked the token — hardening regressed")
+	}
+	fmt.Println("live check OK: header-auth clone succeeded and .git/config is token-free")
 }

@@ -1,6 +1,8 @@
 package conductor
 
 import (
+	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,49 +149,48 @@ func gitSSHCommand(keyPath string) string {
 	return fmt.Sprintf("ssh -i %q -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new", keyPath)
 }
 
-// credentialGitInvocation returns the (possibly rewritten) URL and any extra
-// environment for a git subprocess, per the credential method. Design RFC #222.
-// Invariant: methods "ssh" and "none" NEVER inject a PAT (neither into the URL
-// nor the environment); only "pat"/unspecified inject the HTTPS token.
-func credentialGitInvocation(url string, cred ResolvedCredential) (string, []string) {
+// httpAuthHeaderArgs returns git `-c` args that authenticate an HTTPS request via
+// an Authorization header. The header is command-scoped — it is NOT written to
+// the repo's .git/config, so the token never reaches the mounted terrarium.
+// x-access-token as the username works for both GitHub App and PAT tokens.
+func httpAuthHeaderArgs(token string) []string {
+	basic := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+	return []string{"-c", "http.extraHeader=Authorization: Basic " + basic}
+}
+
+// materializeGitAuth resolves ready-to-use git authentication for a remote,
+// returning command-scoped `-c` config args (HTTPS Authorization header) and/or
+// process env (GIT_SSH_COMMAND). Design RFC #222.
+//
+// Invariants: no secret is ever embedded in the clone URL or persisted to
+// .git/config; ssh/none never carry a PAT; the GitHub App token is minted fresh
+// here (cached) so both clone and push get a currently-valid token.
+func materializeGitAuth(ctx context.Context, cred ResolvedCredential, repoURL string) (configArgs, env []string, err error) {
 	switch cred.Method {
 	case CredentialSSH:
 		if cred.SSHKeyPath != "" {
-			return url, []string{"GIT_SSH_COMMAND=" + gitSSHCommand(cred.SSHKeyPath)}
+			return nil, []string{"GIT_SSH_COMMAND=" + gitSSHCommand(cred.SSHKeyPath)}, nil
 		}
-		return url, nil
+		return nil, nil, nil
 	case CredentialNone:
-		return url, nil
+		return nil, nil, nil
 	case CredentialApp:
-		// The installation token is minted by the caller into cred.TokenValue and
-		// used as the git HTTPS password with the x-access-token username.
-		if cred.TokenValue == "" {
-			return url, nil
+		token, tokenErr := githubAppInstallationToken(ctx, cred.App, repoURL)
+		if tokenErr != nil {
+			return nil, nil, fmt.Errorf("github app auth: %w", tokenErr)
 		}
-		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
-			url = strings.Replace(url, "https://", "https://x-access-token:"+cred.TokenValue+"@", 1)
-		}
-		return url, nil
+		return httpAuthHeaderArgs(token), nil, nil
 	default: // pat or unspecified (legacy)
-		tokenValue := cred.TokenValue
-		tokenEnv := cred.TokenEnv
-		// Preserve the legacy github.com ambient-PAT fallback for unspecified auth.
-		if tokenValue == "" && cred.Method == CredentialUnspecified && strings.Contains(url, "github.com") {
-			if patRef, pat := resolveGitHubPAT(); pat != "" {
-				tokenValue, tokenEnv = pat, patRef
+		token := cred.TokenValue
+		if token == "" && cred.Method == CredentialUnspecified && strings.Contains(repoURL, "github.com") {
+			if _, pat := resolveGitHubPAT(); pat != "" {
+				token = pat
 			}
 		}
-		if tokenValue == "" {
-			return url, nil
+		if token == "" {
+			return nil, nil, nil
 		}
-		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
-			url = strings.Replace(url, "https://", "https://"+tokenValue+"@", 1)
-		}
-		var env []string
-		if tokenEnv != "" {
-			env = append(env, tokenEnv+"="+tokenValue)
-		}
-		return url, env
+		return httpAuthHeaderArgs(token), nil, nil
 	}
 }
 
