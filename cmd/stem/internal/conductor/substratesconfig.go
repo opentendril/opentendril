@@ -103,6 +103,7 @@ type substrateExecutionPlan struct {
 	cloneURL    string
 	cloneBranch string
 	authRef     string
+	credential  ResolvedCredential
 	readOnly    bool
 	named       bool
 	remoteClone bool
@@ -194,7 +195,18 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		if plan.cloneBranch == "" {
 			plan.cloneBranch = strings.TrimSpace(spec.Branch)
 		}
-		plan.authRef = strings.TrimSpace(spec.Auth.Env)
+		var profiles map[string]CredentialProfile
+		if config != nil {
+			profiles = config.Credentials
+		}
+		credential, err := resolveSubstrateCredential(*spec, profiles)
+		if err != nil {
+			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
+		}
+		plan.credential = credential
+		// Keep authRef populated for the PAT path so the terrarium clone/push
+		// (slice 3) and today's behavior are preserved; ssh/none carry no env.
+		plan.authRef = credential.TokenEnv
 		plan.provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 		plan.command = spec.Command
 	}
@@ -314,17 +326,8 @@ func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
 		if strings.TrimSpace(spec.URL) == "" && strings.TrimSpace(spec.Path) == "" {
 			log.Printf("[Substrates] Warning: substrate %q in %s has neither a path nor a URL", name, sourcePath)
 		}
-		if authRef := strings.TrimSpace(spec.Auth.Env); authRef != "" {
-			if _, ok := os.LookupEnv(authRef); !ok {
-				alt := alternateGitHubPATEnvVar(authRef)
-				altSet := false
-				if alt != "" {
-					_, altSet = os.LookupEnv(alt)
-				}
-				if !altSet {
-					log.Printf("[Substrates] Warning: substrate %q references auth env %q, which is not set", name, authRef)
-				}
-			}
+		if warning := credentialWarning(spec, config.Credentials); warning != "" {
+			log.Printf("[Substrates] Warning: substrate %q %s", name, warning)
 		}
 	}
 }
