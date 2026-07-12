@@ -14,6 +14,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
@@ -236,8 +237,10 @@ func cliSequenceOps(root string) core.SequenceOps {
 // serveSequenceOps binds the sequence execution port for the daemon and MCP
 // surfaces: output is discarded (never written into a protocol stream) and
 // runs are non-interactive — exactly the semantics the MCP runSequence tool
-// has always had.
-func serveSequenceOps(root string) core.SequenceOps {
+// has always had. The daemon threads its EventBus through so every sequence
+// run — manual or scheduled — emits its lifecycle telemetry to the Command
+// Center; surfaces without a bus (the MCP stdio server) pass nil.
+func serveSequenceOps(root string, bus *eventbus.Bus) core.SequenceOps {
 	return core.SequenceOps{
 		Root: root,
 		List: func(_ context.Context, root string) ([]string, error) {
@@ -251,6 +254,7 @@ func serveSequenceOps(root string) core.SequenceOps {
 				Provider:    in.Provider,
 				Model:       in.Model,
 				BaseURL:     in.BaseURL,
+				EventBus:    bus,
 			})
 			return sequenceRunResultFromConductor(seq), err
 		},

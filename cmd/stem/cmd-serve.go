@@ -22,6 +22,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/receptors"
+	"github.com/opentendril/core/cmd/stem/internal/scheduler"
 	"github.com/opentendril/core/cmd/stem/internal/security"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 	"github.com/opentendril/core/cmd/stem/internal/telemetry"
@@ -172,8 +173,21 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithGenome(genomeOps(resolveRepoRoot(""))).
 		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
 		WithMesh(meshOps()).
-		WithSequence(serveSequenceOps(resolveRepoRoot(""))).
+		WithSequence(serveSequenceOps(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOps(history))
+
+	// Native scheduled sequences (issue #235, slice 2): cron entries from
+	// .tendril/schedules.yaml grow Sequences and Sprouts inside this daemon,
+	// through the same governed Core capabilities every other surface uses.
+	// The scheduler stops with the daemon: it runs on the same shutdown ctx.
+	schedulesPath := filepath.Join(tendrilDir, "schedules.yaml")
+	if schedCfg, err := scheduler.LoadConfig(schedulesPath); err != nil {
+		log.Printf("⚠️ Failed to load scheduler config: %v (scheduling disabled)", err)
+	} else if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
+		firer := scheduledRunFirer(coreSvc, sessions, "./.tendril/transduction/hormonal-triggers")
+		scheduler.New(schedCfg, firer, log.Default()).Start(ctx)
+		log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
+	}
 
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history)
@@ -300,6 +314,86 @@ func runServeCmd(ctx context.Context, args []string) {
 	log.Printf("Starting Go Stem API on port %s...", port)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
+	}
+}
+
+// scheduledRunFirer is the concrete firing seam the scheduler grows entries
+// through. Each fire, in order: (1) the run passes Hormonal Triggers exactly
+// like the chat path — a blocked run never grows; (2) the entry grows through
+// the same governed Core capability (sequence.run / sprout.run) as every
+// other surface, so the run's lifecycle telemetry flows to the Command Center
+// via the EventBus-threaded sequence port.
+func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir string) scheduler.FirerFunc {
+	// scheduledOrigin records which surface grew the run, alongside the
+	// session package's cli/mcp/rest/ws origins.
+	const scheduledOrigin = "scheduler"
+
+	firstNonEmpty := func(values ...string) string {
+		for _, v := range values {
+			if strings.TrimSpace(v) != "" {
+				return v
+			}
+		}
+		return ""
+	}
+
+	return func(ctx context.Context, name string, e scheduler.Entry) error {
+		// Hormonal Triggers gate every scheduled run pre-fire (mirroring the
+		// chat path in handleChatCompletions).
+		payload := security.TriggerPayload{Genotype: e.Model, Transcript: e.Sequence}
+		if e.Sprout != nil {
+			payload.Genotype = firstNonEmpty(e.Sprout.Genotype, e.Sprout.Model, e.Model)
+			payload.Transcript = e.Sprout.Transcript
+		}
+		if err := security.EvaluateTriggers(ctx, triggersDir, payload); err != nil {
+			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
+			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
+		}
+
+		if e.Sequence != "" {
+			log.Printf("⏰ Schedule %q: growing Sequence %q", name, e.Sequence)
+			result, err := coreSvc.SequenceRun(ctx, core.SequenceRunInput{
+				PathOrName: e.Sequence,
+				Provider:   e.Provider,
+				Model:      e.Model,
+			})
+			if err != nil {
+				log.Printf("❌ Schedule %q: Sequence %q withered: %v", name, e.Sequence, err)
+				return err
+			}
+			log.Printf("✅ Schedule %q: Sequence %q finished (%d step(s))", name, firstNonEmpty(result.Name, e.Sequence), len(result.Steps))
+			return nil
+		}
+
+		// Sprout entry (LoadConfig guarantees exactly one of sequence/sprout).
+		// Entry-level provider/model/genotype overrides ride a dedicated
+		// session's preferences: the governed sprout.run capability shapes
+		// each run from the preferences of the session it is bound to.
+		input := map[string]any{
+			"transcript": e.Sprout.Transcript,
+			"substrate":  e.Sprout.Substrate,
+			"origin":     scheduledOrigin,
+		}
+		prefs := session.Preferences{
+			Provider: firstNonEmpty(e.Sprout.Provider, e.Provider),
+			Model:    firstNonEmpty(e.Sprout.Model, e.Model),
+			Genotype: e.Sprout.Genotype,
+		}
+		if sess, err := sessions.Sprout(ctx, scheduledOrigin, prefs); err != nil {
+			log.Printf("⚠️ Schedule %q: failed to sprout a session for the run (growing sessionless): %v", name, err)
+		} else {
+			input["sessionId"] = sess.ID
+		}
+
+		log.Printf("⏰ Schedule %q: growing a Sprout: %s", name, e.Sprout.Transcript)
+		result, err := coreSvc.Invoke(ctx, core.CapSproutRun, input)
+		if err != nil {
+			log.Printf("❌ Schedule %q: Sprout withered: %v", name, err)
+			return err
+		}
+		runResult, _ := result.(core.SproutRunResult)
+		log.Printf("✅ Schedule %q: Sprout %s matured (session %s)", name, runResult.StepID, runResult.SessionID)
+		return nil
 	}
 }
 
