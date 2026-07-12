@@ -277,6 +277,20 @@ func (s *dockerTerrarium) CopyIn(ctx context.Context, payloads []FilePayload) er
 	return nil
 }
 
+// containerStartGrace bounds how long an exec retries while the asynchronously
+// started container is still coming up.
+const containerStartGrace = 15 * time.Second
+const containerStartPollInterval = 100 * time.Millisecond
+
+// isContainerNotReady reports whether a docker exec failure means the container
+// has not started yet (as opposed to the command itself failing). Both cases
+// leave the command unrun, so the exec is safe to retry.
+func isContainerNotReady(stderr string) bool {
+	return strings.Contains(stderr, "No such container") ||
+		strings.Contains(stderr, "is not running") ||
+		strings.Contains(stderr, "is restarting")
+}
+
 func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -374,17 +388,34 @@ func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandRes
 	args = append(args, s.id)
 	args = append(args, spec.Command...)
 
-	cmd := exec.CommandContext(runCtx, "docker", args...)
-	if len(spec.Stdin) > 0 {
-		cmd.Stdin = bytes.NewReader(spec.Stdin)
-	}
-
+	// createDockerTerrarium starts `docker run` asynchronously (cmd.Start) and
+	// returns without waiting. The interactive path syncs via the stdin/stdout
+	// handshake, but an exec issued right after Create can race the container
+	// start and fail with "No such container". Retry within a short grace
+	// window — the command has not run in that case, so retrying is safe.
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var runErr error
+	startDeadline := time.Now().Add(containerStartGrace)
+	for {
+		stdout.Reset()
+		stderr.Reset()
+		cmd := exec.CommandContext(runCtx, "docker", args...)
+		if len(spec.Stdin) > 0 {
+			cmd.Stdin = bytes.NewReader(spec.Stdin)
+		}
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
 
-	runErr := cmd.Run()
+		runErr = cmd.Run()
+		if runErr == nil || runCtx.Err() != nil || time.Now().After(startDeadline) || !isContainerNotReady(stderr.String()) {
+			break
+		}
+		select {
+		case <-runCtx.Done():
+		case <-time.After(containerStartPollInterval):
+		}
+	}
 	completedAt := time.Now().UTC()
 	result := CommandResult{
 		Stdout:      stdout.String(),

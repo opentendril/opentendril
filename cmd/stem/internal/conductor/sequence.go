@@ -50,11 +50,15 @@ type Sequence struct {
 
 // SequenceStep describes one executable node in a sequence.
 type SequenceStep struct {
-	ID                string   `yaml:"id"`
-	Status            string   `yaml:"status"`
-	DependsOn         []string `yaml:"dependsOn,omitempty"`
-	DependsOnLegacy   []string `yaml:"depends_on,omitempty"`
-	Transcript        string   `yaml:"transcript"`
+	ID              string   `yaml:"id"`
+	Status          string   `yaml:"status"`
+	DependsOn       []string `yaml:"dependsOn,omitempty"`
+	DependsOnLegacy []string `yaml:"depends_on,omitempty"`
+	Transcript      string   `yaml:"transcript"`
+	// Command, when set, makes this a deterministic verifier/CI step: the
+	// Conductor execs the command directly in the toolchain verifier terrarium
+	// (read-only, no LLM, no merge-back) and the exit code is the verdict.
+	Command           []string `yaml:"command,omitempty"`
 	Parallel          bool     `yaml:"parallel,omitempty"`
 	SproutCount       int      `yaml:"sproutCount,omitempty"`
 	MergeTranscript   string   `yaml:"mergeTranscript,omitempty"`
@@ -901,6 +905,13 @@ func shouldBudRecursiveDebugger(step *SequenceStep) bool {
 		return false
 	}
 
+	// Deterministic verifier/CI steps report pass/fail; they do not bud an LLM
+	// Debugger. A failed build/test is a CI result to surface, not a prompt to
+	// auto-edit the tree.
+	if len(step.Command) > 0 {
+		return false
+	}
+
 	stepID := strings.ToLower(strings.TrimSpace(step.ID))
 	// Verifier: LLM-interpreted compiler/test failures. Macrophage: the
 	// deterministic fuzz-crash failures from runMacrophageFuzzCheck (issue
@@ -1349,6 +1360,13 @@ func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *
 }
 
 func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string, bus *eventbus.Bus, provider, model, baseURL string) (string, error) {
+	// A step carrying an explicit command is a deterministic verifier/CI step:
+	// exec it directly in the toolchain terrarium (read-only, no LLM, no
+	// merge-back). Its exit code is the verdict.
+	if len(step.Command) > 0 {
+		return runVerifierCommandFn(ctx, resolveTerrariumProviderName(nil), repoRoot(substratePath), step.Command)
+	}
+
 	genotype := stepGenotype(step.ID)
 	if step.Parallel {
 		return runParallelSprouting(ctx, seq, step, substratePath, bus)
