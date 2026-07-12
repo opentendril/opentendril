@@ -270,6 +270,72 @@ func TestStagePlasmidsForGenotypeUsesAllowlist(t *testing.T) {
 	}
 }
 
+func TestResolveImageName(t *testing.T) {
+	writeFile := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	tests := []struct {
+		name     string
+		imageSet string
+		files    []string
+		want     string
+	}{
+		{
+			name:     "explicit ImageName override wins",
+			imageSet: "custom:latest",
+			files:    []string{"go.mod"},
+			want:     "custom:latest",
+		},
+		{
+			// Regression: a Go-primary repo carrying a TypeScript ui/ subtree
+			// must resolve to the Go image, not the toolchain-less typescript one.
+			name:  "root go.mod beats a nested typescript subtree",
+			files: []string{"go.mod", "ui/src/main.tsx", "ui/package.json"},
+			want:  "opentendril-go:latest",
+		},
+		{
+			name:  "root package.json without go.mod resolves node",
+			files: []string{"package.json"},
+			want:  "opentendril-node:latest",
+		},
+		{
+			name:  "typescript sources without go.mod resolve typescript",
+			files: []string{"src/main.ts"},
+			want:  "opentendril-typescript:latest",
+		},
+		{
+			name:  "python sources without go.mod resolve python",
+			files: []string{"main.py"},
+			want:  "opentendril-python:latest",
+		},
+		{
+			name:  "empty workspace defaults to go",
+			files: nil,
+			want:  "opentendril-go:latest",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			for _, rel := range tc.files {
+				writeFile(t, filepath.Join(workspace, rel))
+			}
+			d := &DockerOrchestrator{ImageName: tc.imageSet}
+			if got := d.resolveImageName(workspace); got != tc.want {
+				t.Fatalf("resolveImageName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 	t.Helper()
 

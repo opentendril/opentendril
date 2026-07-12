@@ -423,6 +423,15 @@ func (d *DockerOrchestrator) resolveImageName(workspace string) string {
 		return trimmed
 	}
 
+	// A go.mod at the workspace root is the definitive marker of a Go module —
+	// the same role package.json plays for node — so it must win before the
+	// extension heuristics below. Otherwise a Go-primary repo that carries a
+	// TypeScript subtree (e.g. a ui/ front-end) resolves to the toolchain-less
+	// typescript image and every `go build`/`go test` step fails.
+	if _, err := os.Stat(filepath.Join(workspace, "go.mod")); err == nil {
+		return "opentendril-go:latest"
+	}
+
 	if _, err := os.Stat(filepath.Join(workspace, "package.json")); err == nil {
 		return "opentendril-node:latest"
 	}
