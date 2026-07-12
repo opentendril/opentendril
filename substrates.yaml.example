@@ -1,16 +1,23 @@
 # OpenTendril substrate configuration.
 #
-# Place this file at:
-# - ./substrates.yaml
-# - ./.tendril/substrates.yaml
-#
-# Each key under `substrates` is a named repository target that can be passed
-# to `sproutTendril` (or `tendril sprout run --substrate <name>`) as the
-# `substrate` argument.
+# Place this file at ./substrates.yaml or ./.tendril/substrates.yaml.
+# Each key under `substrates` is a named repository target passed to
+# `sproutTendril` (or `tendril sprout run --substrate <name>`).
+
+# Reusable named credential profiles. Reference one from a substrate with
+# `profile: <name>` instead of repeating auth/sign inline.
+credentials:
+  work:
+    auth:
+      method: pat
+      env: GITHUB_TOKEN_WORK        # one token per environment
+    sign:
+      method: gpg
+      key: ABCD1234
 
 substrates:
   # Local substrate: `path` exists, so the Stem operates on the checkout in
-  # place (through a shadow worktree).
+  # place. A bare `auth: ENV_VAR` is shorthand for HTTPS PAT auth.
   core:
     path: /home/user/dev/opentendril/core
     url: https://github.com/opentendril/core.git
@@ -18,63 +25,41 @@ substrates:
     auth: GITHUB_TOKEN
     readonly: false
 
-  # Foreign read-only substrate: no local path, so the Stem clones `url` with
-  # the PAT named by `auth` into a temporary workspace. With `readonly: true`
-  # the terrarium is ephemeral — edits are discarded, nothing is pushed or
-  # merged back to the host or the remote.
+  # Foreign read-only substrate: no local `path`, so the Stem clones `url` with
+  # the PAT named by `auth`. `readonly: true` discards edits — nothing is pushed
+  # or merged back. Naming its own env var scopes one token to this repo.
   api:
     url: https://github.com/myorg/api.git
     branch: develop
     auth: MYORG_API_TOKEN
     readonly: true
 
-  docs:
-    path: /home/user/dev/docs-site
-    url: https://github.com/myorg/docs-site.git
-    branch: trunk
-    readonly: false
+  # SSH auth (no PAT), commit signing, and a persistent OT-managed checkout.
+  internal-lib:
+    url: git@github.com:myorg/internal-lib.git
+    branch: main
+    auth:
+      method: ssh                    # pat | ssh | none
+      key: ~/.ssh/id_ot_internal
+    sign:
+      method: ssh                    # ssh | gpg
+      key: ~/.ssh/id_ot_internal
+    checkout:
+      mode: managed                  # ephemeral (default) | managed | path
 
-  # Extended credential schema (Design RFC #222). `auth` also accepts a mapping
-  # so a substrate can authenticate over SSH, sign its commits, and choose a
-  # persistent OT-managed checkout instead of an ephemeral /tmp clone. Reusable
-  # `credentials:` profiles (below) keep you from repeating auth/sign per repo.
-  # NOTE: the scalar `auth: ENV_VAR` form above keeps working unchanged. The
-  # mapping form parses today; SSH/signing/managed-checkout *execution* lands in
-  # the #225 implementation slices 3–4.
-  # internal-lib:
-  #   url: git@github.com:myorg/internal-lib.git
-  #   branch: main
-  #   auth:
-  #     method: ssh                 # pat | ssh | none
-  #     key: ~/.ssh/id_ot_internal  # SSH private key (method: ssh)
-  #   sign:
-  #     method: ssh                 # ssh | gpg
-  #     key: ~/.ssh/id_ot_internal
-  #   checkout:
-  #     mode: managed               # ephemeral (default) | managed | path
-  #   readonly: false
-  #
-  # profiled-repo:
-  #   url: https://github.com/myorg/other.git
-  #   profile: work                 # reuse the `work` credentials profile below
+  # Inherit auth + signing from the `work` credential profile above.
+  other:
+    url: https://github.com/myorg/other.git
+    branch: main
+    profile: work
 
-# Reusable named credential profiles (Design RFC #222). Reference by `profile:`.
-# credentials:
-#   work:
-#     auth:
-#       method: pat
-#       env: GITHUB_TOKEN_WORK      # one token per environment
-#     sign:
-#       method: gpg
-#       key: ABCD1234
-
-# Notes:
-# - `path` is optional. If it exists, Tendril uses the local checkout.
-# - If `path` is missing or does not exist, Tendril clones `url` to a temporary
-#   workspace under /tmp/opentendril-substrate-<name>-<random>.
-# - `auth` must be the name of an environment variable, not the secret value.
-#   Because each substrate names its own variable, you can scope one token per
-#   repo/environment (e.g. `MYORG_API_TOKEN` above) instead of sharing one PAT.
-#   GITHUB_TOKEN is the canonical GitHub PAT variable; the Stem also falls
-#   back to GITHUB_PERSONAL_ACCESS_TOKEN when the referenced one is unset.
-# - `readonly: true` keeps the terrarium ephemeral and discards any edits.
+# Reference, not secrets:
+# - `auth` (and `credentials.*.auth`) names an ENVIRONMENT VARIABLE, never a raw
+#   token. GITHUB_TOKEN is the canonical GitHub PAT var; GITHUB_PERSONAL_ACCESS_TOKEN
+#   is accepted as a fallback when the referenced one is unset.
+# - `auth.method`: `pat` (env-var PAT), `ssh` (key-based, no PAT), or `none` (anonymous).
+# - `sign`: optional `ssh` or `gpg` commit signing; `key` is a key path or GPG key id.
+# - `checkout.mode`: `ephemeral` (throwaway /tmp clone), `managed` (persistent OT-owned
+#   dir under ~/.opentendril/substrates/<name>), or `path` (explicit `checkout.path`).
+# - `readonly: true` keeps the terrarium's edits discarded — no host or remote writeback.
+# - `path` is optional; if set and present on disk, the local checkout is used in place.

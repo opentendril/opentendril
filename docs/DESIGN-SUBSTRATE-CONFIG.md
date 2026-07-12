@@ -28,7 +28,7 @@ substrates:
 *   **Secrets Isolation:** The YAML stores **references to env var names** (e.g. `auth: GITHUB_TOKEN`), never raw tokens. Go Stem resolves the secret value at runtime via `os.Getenv(config.Auth)`. For GitHub PATs, `GITHUB_TOKEN` (canonical) and `GITHUB_PERSONAL_ACCESS_TOKEN` (legacy) are interchangeable — the Stem falls back to the other name when the referenced one is unset.
 *   **Read-Only Locks:** If `readonly: true` is configured, Go Stem blocks all commit/push operations on the substrate, keeping the codebase sterile.
 
-### Extended Credential Schema (Design RFC #222)
+### Extended Credential Schema
 
 `auth` accepts **either** a bare env-var name (`auth: GITHUB_TOKEN`, treated as `method: pat`) **or** a mapping, so a substrate can pick its authentication method, sign its commits, and control where it is checked out. Reusable `credentials:` profiles avoid repeating auth/sign per repo.
 
@@ -49,12 +49,12 @@ substrates:
     profile: work                                    # reuse the profile above
 ```
 
-*   **`auth.method`** — `pat` (env-var PAT, today's behavior), `ssh` (key-based, no PAT injected), or `none` (anonymous).
-*   **`sign`** — optional `ssh`/`gpg` commit signing.
-*   **`checkout.mode`** — `ephemeral` (default `/tmp`), `managed` (persistent OT-owned directory, distinct from human-editable clones), or `path` (explicit).
-*   **`profile`** — references a named `credentials:` entry.
+*   **`auth.method`** — `pat` (env-var PAT), `ssh` (key-based, no PAT injected), or `none` (anonymous).
+*   **`sign`** — optional `ssh`/`gpg` commit signing; `key` is a key path or GPG key id.
+*   **`checkout.mode`** — `ephemeral` (default, throwaway `/tmp` clone), `managed` (persistent OT-owned directory under `~/.opentendril/substrates/<name>`, distinct from human-editable clones, refreshed to a clean tree on each run), or `path` (explicit `checkout.path`).
+*   **`profile`** — references a named `credentials:` entry (inline values override the profile).
 
-> **Status:** the schema above **parses today** (RFC #222 slice 1). Method-aware clone/push, signing, and managed checkout execute in #225 slices 3–4; the scalar `auth:` form is fully back-compatible.
+The scalar `auth: ENV_VAR` form is fully back-compatible. Secrets are never stored here — only references (env-var names, key paths, profile names) resolved at runtime.
 
 ---
 
