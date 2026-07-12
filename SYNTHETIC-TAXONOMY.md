@@ -175,6 +175,18 @@ Each force in that loop is a distinct organ. None overloads another.
 *   **Terrarium** — the **isolation boundary** (filesystem + network) wrapping a
     Sprout, protecting the host. A sealed Sprout cannot reach out on its own —
     external calls are Stem-mediated (see §6).
+*   **Phytomer** — a **Session**: one persistent interaction thread, and the
+    repeating module the organism iterates to build itself (a phytomer = node +
+    internode + leaf + bud). The **Meristem** initiates a Phytomer; **Sprouts
+    emerge** from it over time; at maturity it roots its deliberation into the
+    **Taproot**. *(Two cadences are reserved as telemetry metrics, adopted when the
+    Greenhouse needs them: the **plastochron** — the interval between new Phytomers;
+    and the **phyllochron** — the rate at which Sprouts emerge within one.)*
+*   **Axillary bud** — a **dormant branch point** carried by a Phytomer. It stays
+    dormant, or **buds** — activates into a new Phytomer chain: a branch, a
+    parallel line, or a recursive sub-task (in grasses, a *tiller*). This is how
+    work forks and recurses; the Conductor already does it (e.g. budding a
+    recursive Debugger).
 *   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
     delivered, and its merge returns seeds to the Substrate (soil) for the next
     cycle.
@@ -234,9 +246,11 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
 **Transcript** = one instruction for one growth (*a single task*). **Sequence** = an
 ordered YAML workflow of steps (*a pipeline*), triggered only by the Stem or the
 Botanist — never by a Sprout. **Meristem** = a Sequence step that dynamically plans
-new steps and translates messy human requests into strict botanical instructions.
-**Phenotype** = speculative parallel variants of one Transcript, of which the first
-to pass the fitness test survives (natural selection).
+new steps and translates messy human requests into strict botanical instructions;
+botanically the *shoot apical meristem* is where **Phytomers** (§5, sessions)
+initiate, so the Meristem is what opens a new Phytomer. **Phenotype** = speculative
+parallel variants of one Transcript, of which the first to pass the fitness test
+survives (natural selection).
 
 **Strict botanical verbs** (each has a fixed meaning):
 
@@ -245,6 +259,7 @@ to pass the fitness test survives (natural selection).
 | **germinate** | activate / boot the framework from a Seed | init / start |
 | **branch** | the Stem initialises a capability/security zone | — |
 | **emerge** | a Sprout is created | spawn |
+| **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
 | **wither** | a Sprout fails or crashes | fail |

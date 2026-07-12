@@ -17,6 +17,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Rhizome**: the code/AST index of the Substrate.
 - **Taproot**: the persistent store of deliberation (conversations, RFCs, decisions+rationale, reviews).
 - **Sprout**: an ephemeral, isolated worker that does one unit of work.
+- **Phytomer**: a session — one persistent interaction thread; the Meristem initiates it and Sprouts emerge from it. (An **axillary bud** on it buds into a new Phytomer chain: a branch, parallel line, or recursion.)
 - **Terrarium**: the isolation boundary (filesystem+network) around a Sprout.
 - **Branch**: a capability group / security zone.
 - **Seed**: the originating goal / intent / use-case.
@@ -29,7 +30,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Hormonal Trigger** (security gate) · **Abscission** (fault isolation) · **Epigenetics** (fed-forward learnings) · **Resin**→**Amber** (live→archived logs) · **Transporter** (telemetry).
 
 ## Verbs
-germinate (boot) · branch · emerge (create a Sprout) · **grow** (execute) · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule) · merge (return changes home, via the Phloem).
+germinate (boot) · branch · emerge (create a Sprout) · bud (activate an axillary bud into a new Phytomer) · **grow** (execute) · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule) · merge (return changes home, via the Phloem).
 **graft** = fuse two *like* tissues: Stem↔Stem (mesh) or two Genotypes.
 
 ## Rules

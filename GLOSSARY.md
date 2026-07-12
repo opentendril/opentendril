@@ -36,6 +36,8 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Vascular Cambium** | Tissue coordinating parallel Xylem/Phloem channels. | Concurrent step runner | per-run |
 | **Branch** | A capability group / security zone the Stem initialises at boot. | Capability group / security zone | persistent |
 | **Sprout** | An ephemeral, strictly isolated worker that does one unit of work. | Worker container (*not* "agent") | ephemeral |
+| **Phytomer** | A session — one persistent interaction thread; the repeating module the Meristem initiates and Sprouts emerge from. | Session / interaction thread | persistent |
+| **Axillary bud** | A dormant branch point on a Phytomer; buds into a new Phytomer chain (branch, parallel, recursion). | Fork / branch point | per-run |
 | **Terrarium** | The isolation boundary (filesystem + network) around a Sprout. | Sandbox / container | ephemeral |
 | **Seed** | The originating goal / intent / use-case; the blueprint work grows from. | Product goal / use-case / intent | definition |
 | **Fruit** | The deliverable a cycle yields (a PR / artifact). | Output / deliverable | per-cycle |
@@ -79,6 +81,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | Standard IT / AI | OpenTendril | Note |
 |---|---|---|
 | Agent / autonomous worker | **Sprout** (body) + **Mycorrhizae** (mind) | Tendril deliberately *decomposes* "agent"; it is not one thing. |
+| Session / interaction thread | **Phytomer** | The Meristem initiates it; Sprouts emerge from it. |
 | Task / user prompt | **Transcript** (single) / **Seed** (product-level intent) | |
 | Run / execute | **grow** (verb) | A Sprout *grows* its Transcript. |
 | Workflow / pipeline | **Sequence** | |
@@ -110,6 +113,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **germinate** | activate / boot the framework from a Seed | init / start |
 | **branch** | the Stem initialises a capability/security zone | — |
 | **emerge** | a Sprout is created | spawn |
+| **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
 | **grow** | a Sprout executes its Transcript | run / execute |
 | **mature** | a Sprout completes successfully | complete |
 | **wither** | a Sprout fails or crashes | fail |
