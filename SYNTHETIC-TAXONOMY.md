@@ -99,6 +99,26 @@ it yields.
 
 Each force in that loop is a distinct organ. None overloads another.
 
+### Lifecycle order
+
+The Glossary and canonical block list terms **alphabetically** (for lookup). This
+is the other axis — the primary identifiers in the **order they occur** in one
+growth cycle:
+
+1. **Seed** — the Botanist plants intent.
+2. **germinate** — the framework boots from the Seed.
+3. **Meristem → Phytomer** — the Meristem opens a session (Phytomer).
+4. **emerge** — a **Sprout** emerges into its **Terrarium**.
+5. **grow** — the Sprout executes its **Transcript**, drawing on the **Roots**
+   (Mycorrhizae) and the **Rhizome**; the **Xylem** carries inputs in.
+6. **bud** *(optional)* — an **axillary bud** branches into a new Phytomer
+   (parallel work or recursion).
+7. **mature** / **wither** — success, or failure → **abscise** (the Sprout is dropped).
+8. **merge** — the **Phloem** carries the diff home to the **Substrate**; the
+   rationale is stored in the **Taproot**.
+9. **fruit** — the **Fruit** (PR / artifact) is delivered; the Botanist reviews it
+   through the **Greenhouse**, feeding the next **Seed**.
+
 ---
 
 ## 5. Component Anatomy
@@ -260,17 +280,18 @@ survives (natural selection).
 
 | Verb | Meaning | Replaces |
 |---|---|---|
-| **germinate** | activate / boot the framework from a Seed | init / start |
+| **abscise** | the Stem drops a withered Sprout | fault-isolate |
 | **branch** | the Stem initialises a capability/security zone | — |
-| **emerge** | a Sprout is created | start / launch |
 | **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
+| **emerge** | a Sprout is created | start / launch |
+| **fruit** | deliver a PR / artifact | output / deliver |
+| **germinate** | activate / boot the framework from a Seed | init / start |
+| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
-| **wither** | a Sprout fails or crashes | fail |
-| **abscise** | the Stem drops a withered Sprout | fault-isolate |
-| **fruit** | deliver a PR / artifact | output / deliver |
+| **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |
 | **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
-| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
+| **wither** | a Sprout fails or crashes | fail |
 
 **"Graft" is reserved.** Botanically, grafting fuses tissue from **two different
 plants** into one organism. It is therefore correct **only** for **Stem Grafting**

@@ -41,9 +41,8 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Transporter**: pub-sub telemetry emitter.
 - **Xylem**: vascular channel carrying Transcripts (inputs) up to Sprouts.
 
-## Verbs
-germinate (boot) · branch · emerge (create a Sprout) · bud (activate an axillary bud into a new Phytomer) · **grow** (execute) · mature (succeed) · wither (fail) · abscise (drop a withered Sprout) · fruit (deliver) · nodulate / form symbiosis (connect a Nodule) · merge (return changes home, via the Phloem).
-**graft** = fuse two *like* tissues: Stem↔Stem (mesh) or two Genotypes.
+## Verbs (A–Z)
+abscise (drop a withered Sprout) · branch · bud (activate an axillary bud into a new Phytomer) · emerge (create a Sprout) · fruit (deliver) · germinate (boot) · **graft** (fuse two *like* tissues: Stem↔Stem mesh, or two Genotypes) · **grow** (execute) · mature (succeed) · merge (return changes home, via the Phloem) · nodulate / form symbiosis (connect a Nodule) · wither (fail).
 
 ## Rules
 1. **Tendril** names the whole organism and brand. Name the ephemeral worker a **Sprout**; name a persistent integration a **Substrate** (a repo) or a **Symbiotic Nodule** (a service).

@@ -110,17 +110,18 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 
 | Verb | Meaning | Replaces |
 |---|---|---|
-| **germinate** | activate / boot the framework from a Seed | init / start |
+| **abscise** | the Stem drops a withered Sprout | fault-isolate |
 | **branch** | the Stem initialises a capability/security zone | — |
-| **emerge** | a Sprout is created | start / launch |
 | **bud** | an axillary bud activates into a new Phytomer chain | fork / branch a session |
+| **emerge** | a Sprout is created | start / launch |
+| **fruit** | deliver a PR / artifact | output / deliver |
+| **germinate** | activate / boot the framework from a Seed | init / start |
+| **graft** | **reserved:** fuse two *like* tissues (Stem↔Stem mesh, or two Genotypes) | — |
 | **grow** | a Sprout executes its Transcript | run / execute |
 | **mature** | a Sprout completes successfully | complete |
-| **wither** | a Sprout fails or crashes | fail |
-| **abscise** | the Stem drops a withered Sprout | fault-isolate |
-| **fruit** | deliver a PR / artifact | output / deliver |
+| **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |
 | **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
-| **graft** | **reserved:** fuse two *like* tissues (Stem↔Stem mesh, or two Genotypes) | — |
+| **wither** | a Sprout fails or crashes | fail |
 
 ---
 
