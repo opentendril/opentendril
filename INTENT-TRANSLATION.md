@@ -14,8 +14,8 @@ This guide explains how the Meristem interprets common industry requests into Op
 
 1. **User Request**: The user sends a standard IT/AI command.
 2. **Meristem Intercept**: The Meristem (Planner Node LLM) reads the prompt. It consults the Glossary and the directory of available capabilities.
-3. **Intent Translation**: The Meristem maps the standard jargon ("Tool", "Context", "Workflow") to the biological equivalent ("Tendril", "Plasmid", "Sequence").
-4. **Biological Execution**: The Meristem outputs a fully structured JSON `Transcript` back to the Go Stem, which blindly executes the biological command (e.g., grafting a Tendril or growing a Sprout).
+3. **Intent Translation**: The Meristem maps the standard jargon ("Tool", "Context", "Workflow") to the biological equivalent ("Symbiotic Nodule", "Plasmid", "Sequence").
+4. **Biological Execution**: The Meristem outputs a fully structured JSON `Transcript` back to the Go Stem, which blindly executes the biological command (e.g., connecting a Symbiotic Nodule or growing a Sprout).
 
 ---
 
@@ -25,8 +25,8 @@ This guide explains how the Meristem interprets common industry requests into Op
 When a user wants the system to interact with an external service (like fetching a GitHub issue or running a database query).
 
 *   **User Intent**: *"Load the GitHub skill and pull issue #123."*
-*   **Meristem Translation**: The Meristem recognizes that acting on an external API requires a **Tendril** (a Microservice Plugin / MCP Gateway).
-*   **Biological Execution**: The Stem is instructed to **Graft** the `github-tendril` onto the current Branch, and the Sprout is given the Transcript to fetch issue #123 using that Tendril.
+*   **Meristem Translation**: The Meristem recognizes that acting on an external API requires a **Symbiotic Nodule** (a Microservice Plugin / MCP Gateway).
+*   **Biological Execution**: The Stem connects the `github` Symbiotic Nodule on the current Branch and — because a sealed Sprout cannot reach the network itself — the Stem fetches issue #123 through that Nodule and injects it into the Sprout (via the Xylem). The Sprout works with that context; it never calls the API directly.
 
 ### Use Case B: Requesting "Context", "Knowledge", or "Skills"
 When a user wants to provide the AI with specific documentation, rules, or text patterns without executing external code.

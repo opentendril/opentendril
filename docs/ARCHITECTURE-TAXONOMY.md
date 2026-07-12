@@ -55,7 +55,7 @@ graph TD
 
     subgraph TerrariumSandbox ["🌱 Terrarium Sandbox  (ephemeral; destroyed after each Sprout)"]
         direction TB
-        Tendril["🌀 Tendril\n(the executing AI worker loop;\nreaches out and touches code)"]
+        Sprout["🌱 Sprout\n(the ephemeral worker;\ngrows, touches code, then is shed)"]
 
         subgraph GeneticInjection ["💉 Genetic Injection"]
             direction LR
@@ -65,10 +65,10 @@ graph TD
             Plasmid3["💊 Plasmid\n(Skill: repomap.md)"]
         end
 
-        Genotype -->|"defines identity & deny-list"| Tendril
-        Plasmid1 -.->|"injected if not in deny-list"| Tendril
-        Plasmid2 -.->|"injected if not in deny-list"| Tendril
-        Plasmid3 -.->|"injected if not in deny-list"| Tendril
+        Genotype -->|"defines identity & deny-list"| Sprout
+        Plasmid1 -.->|"injected if not in deny-list"| Sprout
+        Plasmid2 -.->|"injected if not in deny-list"| Sprout
+        Plasmid3 -.->|"injected if not in deny-list"| Sprout
     end
 
     subgraph SubstrateLayer ["🌍 Substrate  (target codebase)"]
@@ -78,18 +78,18 @@ graph TD
     DockerProvider --> TerrariumSandbox
     GVisor --> TerrariumSandbox
     Firecracker --> TerrariumSandbox
-    HostProvider -->|"Direct host process\n(no container isolation)"| Tendril
+    HostProvider -->|"Direct host process\n(no container isolation)"| Sprout
 
-    Tendril <-->|"LLM completions\n(over network)"| LLM
-    Tendril -->|"File edits / commands"| Repo
-    Tendril -->|"Reads index"| Rhizome
+    Sprout <-->|"LLM completions\n(Stem-mediated)"| LLM
+    Sprout -->|"File edits / commands"| Repo
+    Sprout -->|"Reads index"| Rhizome
     TerrariumSandbox --> MergeBack
 
     SystemConf -.->|"Trusted: provider, command,\nsystem genotypes"| SubstratePlan
     WorkspaceConf -.->|"Untrusted for privileged\nfields (stripped by Stem)"| SubstratePlan
 
     class Stem,HT,Rhizome,MergeBack,SeqRunner,PhenoSelect,SubstratePlan host
-    class DockerProvider,GVisor,Firecracker,TerrariumSandbox,Tendril terrarium
+    class DockerProvider,GVisor,Firecracker,TerrariumSandbox,Sprout terrarium
     class Genotype,Plasmid1,Plasmid2,Plasmid3,GeneticInjection genetics
     class LLM,LLMNetwork external
     class HostProvider,Abort,SystemConf security
@@ -116,7 +116,7 @@ graph LR
     end
 
     subgraph WorkspaceGenotypes ["📁 Workspace Genotypes  (user-defined in .tendril/genotypes/)"]
-        WG1["✏️ code-writer\nPlasmids: bash, filesystem\n→ Default coding Tendril"]
+        WG1["✏️ code-writer\nPlasmids: bash, filesystem\n→ Default coding Sprout"]
         WG2["🔍 debugger\nPlasmids: bash, filesystem\n→ Bug investigation"]
         WG3["✅ verifier\nPlasmids: bash (read-only)\n→ Code review & test runs"]
         WG4["🧠 thinker\nPlasmids: none\n→ Planning & specification only"]
@@ -162,9 +162,8 @@ graph TB
 | **Stem** | Go Orchestrator | Trust anchor. Runs on host. Owns all security decisions. |
 | **Mycorrhizal Network** | LLM (Claude/GPT/Ollama) | External. Never touches the host filesystem. |
 | **Hormonal Trigger** | Security Gate / Hook | Pre-flight bash script. Blocks execution before Terrarium boots. |
-| **Sprout** | One Terrarium execution run | Ephemeral. Created fresh, destroyed on completion. |
+| **Sprout** | One Terrarium execution run — the ephemeral worker | Created fresh, destroyed on completion. The executor: dumb by design, only follows Genotype instructions. *(Formerly split as "Tendril" for the worker loop; now a single organ.)* |
 | **Terrarium** | Docker / gVisor / Firecracker / Host | Isolation layer. Defines the security boundary. |
-| **Tendril** | AI worker loop inside the Terrarium | The executor. Dumb by design. Only follows Genotype instructions. |
 | **Genotype** | System Prompt / Persona | Defines identity, capability scope, and **deny-list** of blocked tools. |
 | **Plasmid** | Tool / RAG context block | Modular capability injected at runtime. Blocked by Genotype deny-list. |
 | **Substrate** | Target Repository | The codebase being operated on. Mounted read-write into the Terrarium. |
