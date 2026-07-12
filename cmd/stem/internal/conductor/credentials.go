@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,49 +148,63 @@ func gitSSHCommand(keyPath string) string {
 	return fmt.Sprintf("ssh -i %q -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new", keyPath)
 }
 
-// credentialGitInvocation returns the (possibly rewritten) URL and any extra
-// environment for a git subprocess, per the credential method. Design RFC #222.
-// Invariant: methods "ssh" and "none" NEVER inject a PAT (neither into the URL
-// nor the environment); only "pat"/unspecified inject the HTTPS token.
-func credentialGitInvocation(url string, cred ResolvedCredential) (string, []string) {
+// gitTokenCredentialEnvVar is the environment variable the inline git credential
+// helper reads the token from. It lives only in the process environment.
+const gitTokenCredentialEnvVar = "OT_GIT_TOKEN"
+
+// gitTokenCredentialEnv returns process env that authenticates git over HTTPS via
+// an inline credential helper reading the token from OT_GIT_TOKEN. The secret
+// lives ONLY in the process environment (owner-readable /proc/<pid>/environ) —
+// never on the command line (world-readable /proc/<pid>/cmdline) or in
+// .git/config. x-access-token as the username works for App and PAT tokens.
+func gitTokenCredentialEnv(token string) []string {
+	// The helper references $OT_GIT_TOKEN by name, so the token never appears in
+	// the helper text either. VALUE_0="" resets any inherited helper so only ours
+	// is consulted; VALUE_1 installs it. Config travels via GIT_CONFIG_* (env),
+	// not `-c` args, keeping it out of argv entirely.
+	const helper = `!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$OT_GIT_TOKEN"; }; f`
+	return []string{
+		gitTokenCredentialEnvVar + "=" + token,
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=credential.helper",
+		"GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=credential.helper",
+		"GIT_CONFIG_VALUE_1=" + helper,
+	}
+}
+
+// materializeGitAuth resolves ready-to-use git authentication for a remote as
+// process environment. Design RFC #222.
+//
+// Invariants: no secret ever appears in the clone URL, the command line, or the
+// persisted .git/config; ssh/none never carry a PAT; the GitHub App token is
+// minted fresh here (cached) so both clone and push get a currently-valid token.
+func materializeGitAuth(ctx context.Context, cred ResolvedCredential, repoURL string) (env []string, err error) {
 	switch cred.Method {
 	case CredentialSSH:
 		if cred.SSHKeyPath != "" {
-			return url, []string{"GIT_SSH_COMMAND=" + gitSSHCommand(cred.SSHKeyPath)}
+			return []string{"GIT_SSH_COMMAND=" + gitSSHCommand(cred.SSHKeyPath)}, nil
 		}
-		return url, nil
+		return nil, nil
 	case CredentialNone:
-		return url, nil
+		return nil, nil
 	case CredentialApp:
-		// The installation token is minted by the caller into cred.TokenValue and
-		// used as the git HTTPS password with the x-access-token username.
-		if cred.TokenValue == "" {
-			return url, nil
+		token, tokenErr := githubAppInstallationToken(ctx, cred.App, repoURL)
+		if tokenErr != nil {
+			return nil, fmt.Errorf("github app auth: %w", tokenErr)
 		}
-		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
-			url = strings.Replace(url, "https://", "https://x-access-token:"+cred.TokenValue+"@", 1)
-		}
-		return url, nil
+		return gitTokenCredentialEnv(token), nil
 	default: // pat or unspecified (legacy)
-		tokenValue := cred.TokenValue
-		tokenEnv := cred.TokenEnv
-		// Preserve the legacy github.com ambient-PAT fallback for unspecified auth.
-		if tokenValue == "" && cred.Method == CredentialUnspecified && strings.Contains(url, "github.com") {
-			if patRef, pat := resolveGitHubPAT(); pat != "" {
-				tokenValue, tokenEnv = pat, patRef
+		token := cred.TokenValue
+		if token == "" && cred.Method == CredentialUnspecified && strings.Contains(repoURL, "github.com") {
+			if _, pat := resolveGitHubPAT(); pat != "" {
+				token = pat
 			}
 		}
-		if tokenValue == "" {
-			return url, nil
+		if token == "" {
+			return nil, nil
 		}
-		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
-			url = strings.Replace(url, "https://", "https://"+tokenValue+"@", 1)
-		}
-		var env []string
-		if tokenEnv != "" {
-			env = append(env, tokenEnv+"="+tokenValue)
-		}
-		return url, env
+		return gitTokenCredentialEnv(token), nil
 	}
 }
 

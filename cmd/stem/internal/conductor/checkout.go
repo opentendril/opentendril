@@ -76,6 +76,7 @@ func ephemeralCheckoutPath(name string) (string, error) {
 // discarding any residue from a prior (e.g. read-only) run.
 func refreshExistingCheckout(dir, branch string, gitEnv []string) error {
 	ctx := context.Background()
+	// Only the network fetch needs auth (gitEnv); checkout/reset are local.
 	if _, err := runGitCommandWithEnv(ctx, dir, gitEnv, "fetch", "origin"); err != nil {
 		return fmt.Errorf("refresh managed checkout %q: %w", dir, err)
 	}

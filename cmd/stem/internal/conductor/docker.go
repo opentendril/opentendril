@@ -1311,20 +1311,14 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		return "", false, err
 	}
 
-	// GitHub App auth mints a short-lived installation token lazily (needs the
-	// repo URL to auto-discover the installation); it becomes the HTTPS bearer.
-	if cred.Method == CredentialApp {
-		token, tokenErr := githubAppInstallationToken(context.Background(), cred.App, url)
-		if tokenErr != nil {
-			return "", false, fmt.Errorf("github app auth: %w", tokenErr)
-		}
-		cred.TokenValue = token
+	// Resolve git auth (mints a fresh GitHub App token when needed). The token
+	// travels only in the process environment via an inline credential helper —
+	// never in the clone URL, the command line, or the persisted .git/config, so
+	// it can't leak into the mounted terrarium.
+	gitEnv, err := materializeGitAuth(context.Background(), cred, url)
+	if err != nil {
+		return "", false, err
 	}
-
-	// credentialGitInvocation decides — by auth method — whether to inject an
-	// HTTPS PAT (pat/unspecified), an SSH key (ssh), an App token (app), or
-	// neither (none).
-	cloneURL, gitEnv := credentialGitInvocation(url, cred)
 
 	dest := checkout.dir
 	if dest == "" {
@@ -1351,7 +1345,7 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, "--", cloneURL, dest)
+	args = append(args, "--", url, dest)
 
 	cmd := exec.Command("git", args...)
 	if len(gitEnv) > 0 {
@@ -1387,11 +1381,13 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred Res
 		return err
 	}
 
-	// SSH substrates push with the configured key and no PAT; pat/unspecified
-	// reuse the credentialed origin URL set at clone time.
-	var pushEnv []string
-	if cred.Method == CredentialSSH && cred.SSHKeyPath != "" {
-		pushEnv = append(pushEnv, "GIT_SSH_COMMAND="+gitSSHCommand(cred.SSHKeyPath))
+	// Re-resolve auth for the push against the (tokenless) origin URL. For a
+	// GitHub App this mints a fresh installation token; the credential travels
+	// only in the process environment, never persisted to .git/config.
+	originURL, _ := runGitCommand(ctx, mountPath, "remote", "get-url", "origin")
+	pushEnv, authErr := materializeGitAuth(ctx, cred, strings.TrimSpace(originURL))
+	if authErr != nil {
+		return authErr
 	}
 	if _, err := runGitCommandWithEnv(ctx, mountPath, pushEnv, "push", "origin", "HEAD:"+targetBranch); err != nil {
 		return err
