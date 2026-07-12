@@ -368,7 +368,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		executionStatus.Status = "complete"
 	}
 
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt)
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential.Sign)
 	if commitErr != nil {
 		if runErr != nil {
 			return "", errors.Join(runErr, commitErr)
@@ -1147,7 +1147,7 @@ func shouldIgnoreStagePath(path string) bool {
 	return false
 }
 
-func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string) (string, error) {
+func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
 	stagePaths := append([]string{}, executionStatus.FilesModified...)
 
 	if strings.TrimSpace(statusPath) != "" {
@@ -1186,9 +1186,11 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 	}
 
 	commitMessage := buildTendrilCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
-	commitArgs := []string{"commit", "-m", commitMessage}
+	// Signing config (`-c ...`) must precede the `commit` subcommand.
+	signArgs := signingGitConfigArgs(sign)
+	commitArgs := append(append([]string{}, signArgs...), "commit", "-m", commitMessage)
 	if len(uniqueStagePaths) == 0 {
-		commitArgs = append([]string{"commit", "--allow-empty"}, "-m", commitMessage)
+		commitArgs = append(append([]string{}, signArgs...), "commit", "--allow-empty", "-m", commitMessage)
 	}
 
 	if _, err := runGitCommand(ctx, mountPath, commitArgs...); err != nil {

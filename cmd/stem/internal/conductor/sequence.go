@@ -1790,7 +1790,11 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		executionStatus.Status = sequenceStatusComplete
 	}
 
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt)
+	var seqSign ResolvedSigning
+	if sequencePlan != nil {
+		seqSign = sequencePlan.credential.Sign
+	}
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt, seqSign)
 	if commitErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, commitErr)
