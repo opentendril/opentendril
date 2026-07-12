@@ -47,7 +47,7 @@ func managedCheckoutRoot() string {
 		return v
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return filepath.Join(home, ".opentendril", "substrates")
+		return filepath.Join(home, ".tendril", "substrates")
 	}
 	return filepath.Join(os.TempDir(), "opentendril-managed-substrates")
 }

@@ -86,3 +86,7 @@ substrates.yaml
 .tendril/dreamer.key
 .tendril/genome/fitness.json
 .tendril/
+
+# Private keys / secrets (e.g. GitHub App .pem) — never commit
+*.pem
+*.private-key.pem

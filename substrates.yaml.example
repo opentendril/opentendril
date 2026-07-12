@@ -60,6 +60,6 @@ substrates:
 # - `auth.method`: `pat` (env-var PAT), `ssh` (key-based, no PAT), or `none` (anonymous).
 # - `sign`: optional `ssh` or `gpg` commit signing; `key` is a key path or GPG key id.
 # - `checkout.mode`: `ephemeral` (throwaway /tmp clone), `managed` (persistent OT-owned
-#   dir under ~/.opentendril/substrates/<name>), or `path` (explicit `checkout.path`).
+#   dir under ~/.tendril/substrates/<name>), or `path` (explicit `checkout.path`).
 # - `readonly: true` keeps the terrarium's edits discarded — no host or remote writeback.
 # - `path` is optional; if set and present on disk, the local checkout is used in place.

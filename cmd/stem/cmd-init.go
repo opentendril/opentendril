@@ -112,9 +112,10 @@ func runInitCmd(args []string) {
 	// Step 3: Write Configuration
 	fmt.Println("\n💾 Saving Configuration...")
 
-	// Determine paths
+	// Determine paths. User-global tendril config lives under ~/.tendril,
+	// consistent with `tendril setup` and the workspace-local .tendril/ dir.
 	homeDir, _ := os.UserHomeDir()
-	configDir := filepath.Join(homeDir, ".config", "opentendril")
+	configDir := filepath.Join(homeDir, ".tendril")
 	os.MkdirAll(configDir, 0755)
 
 	envPath := filepath.Join(configDir, ".env")
