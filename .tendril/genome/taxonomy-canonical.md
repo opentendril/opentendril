@@ -9,7 +9,7 @@ docs are `SYNTHETIC-TAXONOMY.md` (concept) and `GLOSSARY.md` (reference).
 - **Stem**: the Go orchestrator/router. Not a brain; no business logic.
 - **Roots**: the LLM provider connectivity layer (`roots/`).
 - **Mycorrhizal Network**: the LLM (external mind; reasons; holds no state).
-- **Rhizosphere**: the existing tech OT is based on (providers, Docker, git, MCP).
+- **Rhizosphere**: the existing tech Tendril is based on (providers, Docker, git, MCP).
 - **Substrate**: the repository being cultivated (the soil).
 - **Symbiotic Nodule** (Nodule): an external *service* capability (GCP, GitHub API).
 - **Rhizome**: the code/AST index of the Substrate.
@@ -35,3 +35,4 @@ germinate (boot) · branch · emerge (create a Sprout) · **grow** (execute; NOT
 2. A **Sprout** is sealed in its **Terrarium** and cannot reach out. External calls are **Stem-mediated**: the Mycorrhizae decides intent → the **Stem** invokes the Nodule/Substrate → the Sprout consumes the result (Xylem in, Phloem out).
 3. Use **grow** for execution, not "run". Use **Sprout** for a worker, not "agent". Use **Transcript** for a task.
 4. *agent / task / run* are permitted ONLY at the external boundary (`AGENTS.md`, Meristem/intent translation) — never in internal architecture or code.
+5. The brand is **OpenTendril** (written) / **Tendril** (short). **Never abbreviate to "OT"** — that means Operational Technology in this domain.

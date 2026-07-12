@@ -32,6 +32,13 @@ concrete "reaching" job is filled by a more precise organ — Roots draw
 intelligence, a Substrate is cultivated, a Symbiotic Nodule partners with a
 service. If you are naming a *thing*, it is never "a Tendril"; it is one of those.
 
+**Naming.** The canonical, written name is **`OpenTendril`** ("Open" for
+open-source, and it differentiates from other products named "Tendril"). The
+short, spoken name is **`Tendril`** (matching the `tendril` CLI). **Never
+abbreviate to "OT"** — in this domain "OT" already means *Operational Technology*
+(the IT/OT split in security and SDLC), so the abbreviation actively collides with
+a term our users rely on. (Cf. OpenTelemetry, which shortens to "OTel", never "OT".)
+
 ---
 
 ## 2. Philosophy: Escaping Determinism
@@ -70,7 +77,7 @@ it yields.
    Root system:   Roots → Mycorrhizae (LLM)   ·   Symbiotic Nodules → services
                   Rhizome → code index         ·   Taproot → deliberation store
                 │  reaching into …
-   Rhizosphere   (the ecosystem of existing technologies OT is based on)
+   Rhizosphere   (the ecosystem of existing technologies Tendril is based on)
                 │  all within …
    Terroir  (this machine / OS)      ⊂      Biome  (the ISO / SDLC climate)
 ```
@@ -109,8 +116,8 @@ Each force in that loop is a distinct organ. None overloads another.
     can grow. (Formerly referred to plainly as the "Host System".)
 *   **Rhizosphere** — the **ecosystem of existing technologies OpenTendril is
     based on**: LLM providers, the container runtime, git, MCP — the inherited
-    world the roots tap into. It is what OT *stands on*, kept distinct from what OT
-    *grows*.
+    world the roots tap into. It is what Tendril *stands on*, kept distinct from
+    what Tendril *grows*.
 *   **Botanist** — the **human** who studies and cultivates the organism. The
     Botanist *gardens* it — plants **Seeds** (intent), prunes, reviews **Fruit** —
     and *studies* it, working from outside the plant and observing through the

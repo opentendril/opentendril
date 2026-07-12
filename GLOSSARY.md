@@ -22,7 +22,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 |---|---|---|---|
 | **Biome** | The normative/regulatory climate the organism must adapt to (ISO 27001, ISO 42001, SDLC). | Compliance / governance regime | environment |
 | **Terroir** | The host OS and machine this instance grows on. | Host system / OS | environment |
-| **Rhizosphere** | The ecosystem of existing technologies OT is based on (LLM providers, Docker, git, MCP). | Underlying tech stack / dependencies | environment |
+| **Rhizosphere** | The ecosystem of existing technologies Tendril is based on (LLM providers, Docker, git, MCP). | Underlying tech stack / dependencies | environment |
 | **Botanist** | The human who studies and cultivates the organism — plants Seeds, prunes, reviews Fruit (the *gardening* activity), and observes through the Greenhouse. | Operator / developer | external |
 | **Greenhouse** | The Command Center UI the Botanist observes through. | Dashboard / observability UI | external |
 | **Mycorrhizal Network** | The LLM — the external mind that reasons; holds no state. | Large Language Model | external |
@@ -79,7 +79,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 
 | Standard IT / AI | OpenTendril | Note |
 |---|---|---|
-| Agent / autonomous worker | **Sprout** (body) + **Mycorrhizae** (mind) | OT deliberately *decomposes* "agent"; it is not one thing. |
+| Agent / autonomous worker | **Sprout** (body) + **Mycorrhizae** (mind) | Tendril deliberately *decomposes* "agent"; it is not one thing. |
 | Task / user prompt | **Transcript** (single) / **Seed** (product-level intent) | |
 | Run / execute | **grow** (verb) | A Sprout *grows* its Transcript. |
 | Workflow / pipeline | **Sequence** | |
@@ -131,6 +131,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | "graft" for merging changes home | **Phloem transport** / **merge** | Changes flow down the Phloem to the Substrate. |
 | "run/execute" a task (internal) | **grow** | Botanical verb for a Sprout doing its work. |
 | "Host System" | **Terroir** | The machine/OS as the local ground. |
+| "OT" (abbreviation) | **OpenTendril** (written) / **Tendril** (short) | "OT" means *Operational Technology* in security/SDLC — never abbreviate the brand to it. |
 | *agent / task / run* in architecture or code | botanical equivalents | These survive **only** at the external boundary (`AGENTS.md`, Meristem/intent layer). |
 
 ---
