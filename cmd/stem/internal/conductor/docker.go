@@ -163,7 +163,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if plan.remoteClone {
-		clonedPath, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.credential)
+		clonedPath, persistent, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.credential)
 		if err != nil {
 			return "", err
 		}
@@ -172,8 +172,12 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		mountPath = clonedPath
 		statusPath = ""
 		gitRepo = isGitRepo(sourcePath)
-		cleanup = func() {
-			_ = os.RemoveAll(clonedPath)
+		// Ephemeral checkouts are removed after the run; managed/path checkouts
+		// persist (they are OT-owned or user-chosen and refreshed on reuse).
+		if !persistent {
+			cleanup = func() {
+				_ = os.RemoveAll(clonedPath)
+			}
 		}
 		if !gitRepo {
 			if cleanup != nil {
@@ -1294,41 +1298,59 @@ func summarizeTendrilFailureError(failureError string) string {
 
 // cloneForeignSubstrate clones a remote repository into a temporary terrarium.
 func cloneForeignSubstrate(url, branch string) (string, error) {
-	return cloneNamedForeignSubstrate("", url, branch, ResolvedCredential{})
+	path, _, err := cloneNamedForeignSubstrate("", url, branch, ResolvedCredential{})
+	return path, err
 }
 
-func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredential) (string, error) {
-	bytes := make([]byte, 4)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	runID := hex.EncodeToString(bytes)
-
-	prefix := "opentendril-substrate"
-	if trimmed := strings.TrimSpace(name); trimmed != "" {
-		prefix = fmt.Sprintf("%s-%s", prefix, sanitizeTempComponent(trimmed))
-	}
-	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s", prefix, runID))
-
-	args := []string{"-c", "protocol.ext.allow=never", "clone"}
-	if branch != "" {
-		args = append(args, "--branch", branch)
+// cloneNamedForeignSubstrate materializes a foreign substrate and returns its
+// path plus whether that path is persistent (managed/path checkout) — the caller
+// removes only non-persistent (ephemeral) checkouts.
+func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredential) (string, bool, error) {
+	checkout, err := resolveCheckoutPlan(name, cred.Checkout)
+	if err != nil {
+		return "", false, err
 	}
 
 	// credentialGitInvocation decides — by auth method — whether to inject an
 	// HTTPS PAT (pat/unspecified) or an SSH key (ssh), or neither (none).
 	cloneURL, gitEnv := credentialGitInvocation(url, cred)
-	args = append(args, "--", cloneURL, shadowPath)
+
+	dest := checkout.dir
+	if dest == "" {
+		if dest, err = ephemeralCheckoutPath(name); err != nil {
+			return "", false, err
+		}
+	}
+
+	// Reuse a persistent checkout that already exists: refresh it to a clean,
+	// current tree instead of failing to clone into a non-empty directory.
+	if checkout.persistent && isGitRepo(dest) {
+		if err := refreshExistingCheckout(dest, branch, gitEnv); err != nil {
+			return "", false, err
+		}
+		return dest, true, nil
+	}
+	if checkout.persistent {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return "", false, fmt.Errorf("prepare checkout dir: %w", err)
+		}
+	}
+
+	args := []string{"-c", "protocol.ext.allow=never", "clone"}
+	if branch != "" {
+		args = append(args, "--branch", branch)
+	}
+	args = append(args, "--", cloneURL, dest)
 
 	cmd := exec.Command("git", args...)
 	if len(gitEnv) > 0 {
 		cmd.Env = append(os.Environ(), gitEnv...)
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
+		return "", false, fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
 	}
 
-	return shadowPath, nil
+	return dest, checkout.persistent, nil
 }
 
 func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential) error {

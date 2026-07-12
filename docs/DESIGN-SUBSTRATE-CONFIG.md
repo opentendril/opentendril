@@ -54,7 +54,7 @@ substrates:
 *   **`checkout.mode`** — `ephemeral` (default `/tmp`), `managed` (persistent OT-owned directory, distinct from human-editable clones), or `path` (explicit).
 *   **`profile`** — references a named `credentials:` entry.
 
-> **Status:** the schema above **parses today** (RFC #222 slice 1). Method-aware clone/push, signing, and managed checkout execute in #225 slices 3–4; the scalar `auth:` form is fully back-compatible.
+> **Status (RFC #222 / #225):** `auth.method` `pat`/`ssh`/`none` and `checkout.mode` `ephemeral`/`managed`/`path` **execute today** (slices 3a, 4). `method: app` (GitHub App installation tokens) and commit `sign`ing are the remaining work. The scalar `auth:` form is fully back-compatible. Managed checkouts live under `~/.opentendril/substrates/<name>` (override with `OPENTENDRIL_MANAGED_CHECKOUT_ROOT`) and are refreshed to a clean tree on each run.
 
 ---
 
