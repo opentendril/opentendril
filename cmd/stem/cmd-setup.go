@@ -41,7 +41,7 @@ func runSetupAgentCmd() {
 		os.Exit(1)
 	}
 
-	authMethod, err := promptSetupValue(reader, "Auth method (pat/ssh/none)", "pat")
+	authMethod, err := promptSetupValue(reader, "Auth method (pat/ssh/none/app)", "pat")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read auth method: %v\n", err)
 		os.Exit(1)
@@ -52,6 +52,10 @@ func runSetupAgentCmd() {
 		choices.authKey, _ = promptSetupValue(reader, "SSH private key path", "~/.ssh/id_ed25519")
 	case "none":
 		choices.authMethod = "none"
+	case "app":
+		choices.authMethod = "app"
+		choices.appID, _ = promptSetupValue(reader, "GitHub App ID", "")
+		choices.appKeyPath, _ = promptSetupValue(reader, "GitHub App private key path (.pem)", "~/.tendril/app.private-key.pem")
 	default:
 		choices.authMethod = "pat"
 		choices.authEnv, _ = promptSetupValue(reader, "PAT environment variable name", "GITHUB_TOKEN")
@@ -127,9 +131,11 @@ func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string,
 // agentSubstrateChoices holds the answers gathered by `tendril setup agent`.
 type agentSubstrateChoices struct {
 	remoteURL    string
-	authMethod   string // pat | ssh | none
+	authMethod   string // pat | ssh | none | app
 	authEnv      string // pat
 	authKey      string // ssh
+	appID        string // app
+	appKeyPath   string // app
 	checkoutMode string // ephemeral | managed | path
 	checkoutPath string // path mode
 	signMethod   string // "" | ssh | gpg
@@ -149,6 +155,10 @@ func formatAgentSubstratesYAML(c agentSubstrateChoices) string {
 		fmt.Fprintf(&b, "      key: %q\n", strings.TrimSpace(c.authKey))
 	case "none":
 		b.WriteString("    auth:\n      method: none\n")
+	case "app":
+		b.WriteString("    auth:\n      method: app\n")
+		fmt.Fprintf(&b, "      appId: %q\n", strings.TrimSpace(c.appID))
+		fmt.Fprintf(&b, "      privateKeyPath: %q\n", strings.TrimSpace(c.appKeyPath))
 	default:
 		// Scalar form keeps the config compact and back-compatible.
 		fmt.Fprintf(&b, "    auth: %q\n", strings.TrimSpace(c.authEnv))

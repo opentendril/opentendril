@@ -53,11 +53,24 @@ substrates:
     branch: main
     profile: work
 
+  # GitHub App: the Stem mints short-lived installation tokens from the App's
+  # private key — no long-lived PAT. `installationId` is optional (auto-discovered
+  # from the repo). Enterprise-recommended: own bot identity, least privilege.
+  enterprise-repo:
+    url: https://github.com/myorg/service.git
+    branch: main
+    auth:
+      method: app
+      appId: "123456"
+      privateKeyPath: ~/.tendril/my-app.private-key.pem
+
 # Reference, not secrets:
 # - `auth` (and `credentials.*.auth`) names an ENVIRONMENT VARIABLE, never a raw
 #   token. GITHUB_TOKEN is the canonical GitHub PAT var; GITHUB_PERSONAL_ACCESS_TOKEN
 #   is accepted as a fallback when the referenced one is unset.
-# - `auth.method`: `pat` (env-var PAT), `ssh` (key-based, no PAT), or `none` (anonymous).
+# - `auth.method`: `pat` (env-var PAT), `ssh` (key-based, no PAT), `none` (anonymous),
+#   or `app` (GitHub App — short-lived installation tokens via `appId` +
+#   `privateKeyPath`/`privateKeyEnv`, optional `installationId`).
 # - `sign`: optional `ssh` or `gpg` commit signing; `key` is a key path or GPG key id.
 # - `checkout.mode`: `ephemeral` (throwaway /tmp clone), `managed` (persistent OT-owned
 #   dir under ~/.tendril/substrates/<name>), or `path` (explicit `checkout.path`).

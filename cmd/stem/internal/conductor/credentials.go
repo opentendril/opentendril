@@ -19,12 +19,26 @@ const (
 	CredentialPAT         CredentialMethod = "pat"
 	CredentialSSH         CredentialMethod = "ssh"
 	CredentialNone        CredentialMethod = "none"
+	CredentialApp         CredentialMethod = "app"
 )
 
 // ResolvedSigning is the resolved commit-signing configuration.
 type ResolvedSigning struct {
 	Method string // "ssh" | "gpg" | "" (disabled)
 	Key    string
+}
+
+// AppCredential is the resolved GitHub App config (method "app"). The Stem mints
+// short-lived installation tokens from it; it carries no long-lived secret.
+type AppCredential struct {
+	AppID          string
+	InstallationID int64 // 0 => auto-discover from the substrate's repo
+	PrivateKeyPath string
+	PrivateKeyEnv  string
+}
+
+func (a AppCredential) isSet() bool {
+	return strings.TrimSpace(a.AppID) != "" || strings.TrimSpace(a.PrivateKeyPath) != "" || strings.TrimSpace(a.PrivateKeyEnv) != ""
 }
 
 // ResolvedCredential is the typed credential the terrarium (slice 3) consumes.
@@ -34,6 +48,7 @@ type ResolvedCredential struct {
 	TokenEnv   string // env var name the PAT was read from (method pat)
 	TokenValue string // resolved PAT secret (method pat) — never log this
 	SSHKeyPath string // expanded key path (method ssh)
+	App        AppCredential
 	Sign       ResolvedSigning
 	Checkout   CheckoutSpec
 }
@@ -49,7 +64,8 @@ func (c ResolvedCredential) String() string {
 }
 
 func isZeroAuthSpec(a AuthSpec) bool {
-	return strings.TrimSpace(a.Method) == "" && strings.TrimSpace(a.Env) == "" && strings.TrimSpace(a.Key) == ""
+	return strings.TrimSpace(a.Method) == "" && strings.TrimSpace(a.Env) == "" && strings.TrimSpace(a.Key) == "" &&
+		strings.TrimSpace(a.AppID) == "" && strings.TrimSpace(a.PrivateKeyPath) == "" && strings.TrimSpace(a.PrivateKeyEnv) == ""
 }
 
 func isZeroSignSpec(s SignSpec) bool {
@@ -110,6 +126,13 @@ func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]Credenti
 		resolved.TokenValue = resolveAuthTokenValue(resolved.TokenEnv)
 	case CredentialSSH:
 		resolved.SSHKeyPath = expandHome(strings.TrimSpace(auth.Key))
+	case CredentialApp:
+		resolved.App = AppCredential{
+			AppID:          strings.TrimSpace(auth.AppID),
+			InstallationID: auth.InstallationID,
+			PrivateKeyPath: expandHome(strings.TrimSpace(auth.PrivateKeyPath)),
+			PrivateKeyEnv:  strings.TrimSpace(auth.PrivateKeyEnv),
+		}
 	default:
 		return ResolvedCredential{}, fmt.Errorf("unknown auth method %q", auth.Method)
 	}
@@ -136,6 +159,16 @@ func credentialGitInvocation(url string, cred ResolvedCredential) (string, []str
 		}
 		return url, nil
 	case CredentialNone:
+		return url, nil
+	case CredentialApp:
+		// The installation token is minted by the caller into cred.TokenValue and
+		// used as the git HTTPS password with the x-access-token username.
+		if cred.TokenValue == "" {
+			return url, nil
+		}
+		if !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
+			url = strings.Replace(url, "https://", "https://x-access-token:"+cred.TokenValue+"@", 1)
+		}
 		return url, nil
 	default: // pat or unspecified (legacy)
 		tokenValue := cred.TokenValue
@@ -196,6 +229,18 @@ func credentialWarning(spec SubstrateSpec, profiles map[string]CredentialProfile
 		}
 		if info, statErr := os.Stat(resolved.SSHKeyPath); statErr != nil || info.IsDir() {
 			return fmt.Sprintf("auth method ssh key %q is not a readable file", resolved.SSHKeyPath)
+		}
+	case CredentialApp:
+		if resolved.App.AppID == "" {
+			return "auth method app has no appId"
+		}
+		if resolved.App.PrivateKeyPath == "" && resolved.App.PrivateKeyEnv == "" {
+			return "auth method app has no privateKeyPath or privateKeyEnv"
+		}
+		if resolved.App.PrivateKeyEnv == "" && resolved.App.PrivateKeyPath != "" {
+			if info, statErr := os.Stat(resolved.App.PrivateKeyPath); statErr != nil || info.IsDir() {
+				return fmt.Sprintf("auth method app private key %q is not a readable file", resolved.App.PrivateKeyPath)
+			}
 		}
 	}
 	if w := signingWarning(resolved.Sign); w != "" {

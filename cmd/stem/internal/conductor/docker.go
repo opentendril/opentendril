@@ -156,9 +156,9 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	if plan.readOnly {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
-	// SSH/none substrates authenticate without a PAT — keep the ambient GitHub
-	// PAT out of the terrarium so it is never exposed to sprout code (RFC #222).
-	if m := plan.credential.Method; m == CredentialSSH || m == CredentialNone {
+	// ssh/none/app substrates authenticate without the ambient PAT — keep it out
+	// of the terrarium so it is never exposed to sprout code (RFC #222).
+	if m := plan.credential.Method; m == CredentialSSH || m == CredentialNone || m == CredentialApp {
 		extraEnv = append(extraEnv, suppressGitHubPATEnvSentinel+"=true")
 	}
 
@@ -1311,8 +1311,19 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		return "", false, err
 	}
 
+	// GitHub App auth mints a short-lived installation token lazily (needs the
+	// repo URL to auto-discover the installation); it becomes the HTTPS bearer.
+	if cred.Method == CredentialApp {
+		token, tokenErr := githubAppInstallationToken(context.Background(), cred.App, url)
+		if tokenErr != nil {
+			return "", false, fmt.Errorf("github app auth: %w", tokenErr)
+		}
+		cred.TokenValue = token
+	}
+
 	// credentialGitInvocation decides — by auth method — whether to inject an
-	// HTTPS PAT (pat/unspecified) or an SSH key (ssh), or neither (none).
+	// HTTPS PAT (pat/unspecified), an SSH key (ssh), an App token (app), or
+	// neither (none).
 	cloneURL, gitEnv := credentialGitInvocation(url, cred)
 
 	dest := checkout.dir
