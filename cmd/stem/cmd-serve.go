@@ -520,7 +520,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			orch.Provider = sess.Preferences.Provider
 			orch.Model = sess.Preferences.Model
 			orch.Genotype = sess.Preferences.Genotype
-			output, err = orch.RunTendril(r.Context(), taskPrompt)
+			output, err = orch.RunSprout(r.Context(), taskPrompt)
 		}
 
 		// Emit stream end event

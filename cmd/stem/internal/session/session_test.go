@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSproutAssignsUniqueTendrilIDs(t *testing.T) {
+func TestSproutAssignsUniqueSproutIDs(t *testing.T) {
 	m, err := NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

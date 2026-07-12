@@ -11,7 +11,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 )
 
-func TestRunTendrilRestoresHostStashAfterCanceledContext(t *testing.T) {
+func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 	root := t.TempDir()
 	if _, err := runGitCommand(context.Background(), root, "init"); err != nil {
 		t.Fatalf("git init failed: %v", err)
@@ -98,14 +98,14 @@ func TestRunTendrilRestoresHostStashAfterCanceledContext(t *testing.T) {
 		cancel()
 		return nil, errors.New("stop before terrarium starts")
 	}
-	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (tendrilRunner, error) {
+	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
 		return nil, errors.New("agent should not start")
 	}
 
 	orch := &DockerOrchestrator{Substrate: root, DisableMergeBack: false}
-	_, err := orch.RunTendril(ctx, "cleanup test")
+	_, err := orch.RunSprout(ctx, "cleanup test")
 	if err == nil {
-		t.Fatal("RunTendril() error = nil, want failure before terrarium start")
+		t.Fatal("RunSprout() error = nil, want failure before terrarium start")
 	}
 	if !restored {
 		t.Fatal("expected host stash restore during canceled context cleanup")
@@ -120,7 +120,7 @@ func TestRunTendrilRestoresHostStashAfterCanceledContext(t *testing.T) {
 	}
 }
 
-func TestRunTendrilAutoBranchesBeforeStash(t *testing.T) {
+func TestRunSproutAutoBranchesBeforeStash(t *testing.T) {
 	root := t.TempDir()
 	if _, err := runGitCommand(context.Background(), root, "init"); err != nil {
 		t.Fatalf("git init failed: %v", err)
@@ -175,8 +175,8 @@ func TestRunTendrilAutoBranchesBeforeStash(t *testing.T) {
 		if err != nil {
 			return false, err
 		}
-		if branch != "tendril/task-step-1" {
-			t.Fatalf("branch at stash time = %q, want tendril/task-step-1", branch)
+		if branch != "sprout/task-step-1" {
+			t.Fatalf("branch at stash time = %q, want sprout/task-step-1", branch)
 		}
 		return false, errors.New("stop after branch isolation check")
 	}
@@ -184,16 +184,16 @@ func TestRunTendrilAutoBranchesBeforeStash(t *testing.T) {
 	_, err = (&DockerOrchestrator{
 		Substrate: root,
 		StepID:    "step-1",
-	}).RunTendril(context.Background(), "verify auto-branching")
+	}).RunSprout(context.Background(), "verify auto-branching")
 	if err == nil {
-		t.Fatal("RunTendril() error = nil, want stop after branch isolation check")
+		t.Fatal("RunSprout() error = nil, want stop after branch isolation check")
 	}
 
 	finalBranch, err := runGitCommand(context.Background(), root, "branch", "--show-current")
 	if err != nil {
 		t.Fatalf("read final branch: %v", err)
 	}
-	if finalBranch != "tendril/task-step-1" {
-		t.Fatalf("final branch = %q, want tendril/task-step-1", finalBranch)
+	if finalBranch != "sprout/task-step-1" {
+		t.Fatalf("final branch = %q, want sprout/task-step-1", finalBranch)
 	}
 }

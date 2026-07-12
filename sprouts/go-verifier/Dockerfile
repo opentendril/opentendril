@@ -1,6 +1,6 @@
 # Go verifier/CI image.
 #
-# Unlike sprouts/go/Dockerfile — which builds the tendril-go tool harness once
+# Unlike sprouts/go/Dockerfile — which builds the sprout-go tool harness once
 # and then discards the Go toolchain to hit a minimal runtime budget
 # (docs/DESIGN-STATELESS-SPROUT.md) — a deterministic verifier step needs the
 # full Go toolchain available at container *runtime* to run `go build` /

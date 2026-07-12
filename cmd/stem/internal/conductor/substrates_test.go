@@ -220,7 +220,7 @@ substrates:
 	}
 }
 
-func TestRunTendrilReadOnlySkipsHostMutations(t *testing.T) {
+func TestRunSproutReadOnlySkipsHostMutations(t *testing.T) {
 	root := t.TempDir()
 	if _, err := runGitCommand(context.Background(), root, "init"); err != nil {
 		t.Fatalf("git init failed: %v", err)
@@ -290,8 +290,8 @@ substrates:
 		return &stubToolSession{}, nil
 	}
 	origNewAgentFn := newAgentFn
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (tendrilRunner, error) {
-		return &stubTendrilRunner{result: agentResult{Response: "read-only result", Transcript: "transcript"}}, nil
+	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
+		return &stubSproutRunner{result: agentResult{Response: "read-only result", Transcript: "transcript"}}, nil
 	}
 	defer func() {
 		newAgentFn = origNewAgentFn
@@ -323,7 +323,7 @@ substrates:
 		t.Fatalf("collectGitDiff should not run for read-only substrates")
 		return "", nil
 	}
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
 		t.Fatalf("commitTerrariumExecution should not run for read-only substrates")
 		return "", nil
 	}
@@ -339,12 +339,12 @@ substrates:
 	output, err := (&DockerOrchestrator{
 		Substrate: "readonly",
 		StepID:    "step-1",
-	}).RunTendril(context.Background(), "explain the read-only flow")
+	}).RunSprout(context.Background(), "explain the read-only flow")
 	if err != nil {
-		t.Fatalf("RunTendril failed: %v", err)
+		t.Fatalf("RunSprout failed: %v", err)
 	}
 	if output != "read-only result" {
-		t.Fatalf("RunTendril output = %q, want read-only result", output)
+		t.Fatalf("RunSprout output = %q, want read-only result", output)
 	}
 
 	if !containsString(capturedExtraEnv, "TENDRIL_READONLY=true") {
@@ -373,11 +373,11 @@ func (s *stubToolSession) Logs() string {
 	return ""
 }
 
-type stubTendrilRunner struct {
+type stubSproutRunner struct {
 	result agentResult
 }
 
-func (s *stubTendrilRunner) Run(ctx context.Context, taskPrompt string) (agentResult, error) {
+func (s *stubSproutRunner) Run(ctx context.Context, taskPrompt string) (agentResult, error) {
 	return s.result, nil
 }
 
