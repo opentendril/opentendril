@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/opentendril/core/roots/llm"
@@ -46,11 +47,25 @@ func main() {
 
 	go func() {
 		<-c
+		// First signal: cancel the context and let the running command unwind
+		// its deferred cleanup (the conductor restores the host pre-flight stash
+		// through a context.WithoutCancel cleanup context, so it survives this
+		// cancellation). Exiting immediately here would skip those defers and
+		// strand the user's stashed working tree. main() returns normally once
+		// the command finishes, so no os.Exit is needed on the graceful path.
 		cancel()
 		if backendCmd != nil && backendCmd.Process != nil {
 			_ = backendCmd.Process.Kill()
 		}
-		os.Exit(0)
+		// Bound the graceful window: force quit on a second signal or after a
+		// short grace period, so a command that ignores ctx can't hang the
+		// process. On the graceful path main() returns first and the process
+		// exits before this fires.
+		select {
+		case <-c:
+		case <-time.After(10 * time.Second):
+		}
+		os.Exit(130)
 	}()
 
 	switch os.Args[1] {

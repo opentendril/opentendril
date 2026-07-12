@@ -652,6 +652,16 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 
 		select {
 		case <-ctx.Done():
+			// Drain in-flight step workers before returning. Each worker runs
+			// StepRunner's deferred host-stash restore (through a WithoutCancel
+			// cleanup context) and only then sends its result, so waiting for
+			// those sends guarantees a cancelled run never strands the user's
+			// stashed workspace. The docker steps are ctx-bound and unwind
+			// promptly; the CLI's signal handler force-quits as a backstop.
+			for running > 0 {
+				<-resultCh
+				running--
+			}
 			return r.seq, ctx.Err()
 		case result := <-resultCh:
 			running--
