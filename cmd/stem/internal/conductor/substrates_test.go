@@ -331,7 +331,7 @@ substrates:
 		t.Fatalf("mergeTerrariumCommit should not run for read-only substrates")
 		return nil
 	}
-	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string) error {
+	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string, cred ResolvedCredential) error {
 		t.Fatalf("pushTerrariumCommit should not run for read-only substrates")
 		return nil
 	}

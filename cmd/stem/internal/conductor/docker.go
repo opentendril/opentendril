@@ -152,15 +152,18 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			err = errors.Join(err, restoreErr)
 		}
 	}()
-	extraEnv := make([]string, 0, 1)
+	extraEnv := make([]string, 0, 2)
 	if plan.readOnly {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
+	// SSH/none substrates authenticate without a PAT — keep the ambient GitHub
+	// PAT out of the terrarium so it is never exposed to sprout code (RFC #222).
+	if m := plan.credential.Method; m == CredentialSSH || m == CredentialNone {
+		extraEnv = append(extraEnv, suppressGitHubPATEnvSentinel+"=true")
+	}
 
 	if plan.remoteClone {
-		authValue := resolveAuthTokenValue(plan.authRef)
-
-		clonedPath, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.authRef, authValue)
+		clonedPath, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.credential)
 		if err != nil {
 			return "", err
 		}
@@ -381,7 +384,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 	}
 
 	if plan.remoteClone {
-		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch); pushErr != nil {
+		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
 			if runErr != nil {
 				return "", errors.Join(runErr, pushErr)
 			}
@@ -659,6 +662,11 @@ func (s *terrariumToolSession) Logs() string {
 	return logs.Stderr
 }
 
+// suppressGitHubPATEnvSentinel, when passed via extraEnv, keeps the ambient
+// GitHub PAT out of the terrarium (used for ssh/none substrates). It is stripped
+// from the resulting environment and never surfaces in the container.
+const suppressGitHubPATEnvSentinel = "TENDRIL_SUPPRESS_GITHUB_PAT"
+
 func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 	values := make(map[string]string)
 
@@ -679,17 +687,30 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 		}
 	}
 
+	suppressPAT := false
+	for _, entry := range extraEnv {
+		if strings.TrimSpace(entry) == suppressGitHubPATEnvSentinel+"=true" {
+			suppressPAT = true
+		}
+	}
+
 	// GitHub PAT: accept either variable name on the host and expose the
-	// resolved value under both names inside the terrarium.
-	if _, pat := resolveGitHubPAT(); pat != "" {
-		values[gitHubTokenEnv] = pat
-		values[gitHubPATLegacyEnv] = pat
+	// resolved value under both names inside the terrarium — unless suppressed
+	// because the substrate authenticates over SSH or anonymously.
+	if !suppressPAT {
+		if _, pat := resolveGitHubPAT(); pat != "" {
+			values[gitHubTokenEnv] = pat
+			values[gitHubPATLegacyEnv] = pat
+		}
 	}
 
 	for _, entry := range extraEnv {
 		key, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
 		if !ok || strings.TrimSpace(key) == "" {
 			continue
+		}
+		if strings.TrimSpace(key) == suppressGitHubPATEnvSentinel {
+			continue // internal sentinel — never expose it to the terrarium
 		}
 		values[key] = value
 	}
@@ -926,12 +947,21 @@ func newTendrilExecutionID(prefix string) string {
 }
 
 func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitCommandWithEnv(ctx, dir, nil, args...)
+}
+
+// runGitCommandWithEnv runs git with additional environment entries appended to
+// the process environment (e.g. GIT_SSH_COMMAND for SSH-authenticated pushes).
+func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	cmdArgs := append([]string{"-C", dir}, args...)
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
@@ -1262,10 +1292,10 @@ func summarizeTendrilFailureError(failureError string) string {
 
 // cloneForeignSubstrate clones a remote repository into a temporary terrarium.
 func cloneForeignSubstrate(url, branch string) (string, error) {
-	return cloneNamedForeignSubstrate("", url, branch, "", "")
+	return cloneNamedForeignSubstrate("", url, branch, ResolvedCredential{})
 }
 
-func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (string, error) {
+func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredential) (string, error) {
 	bytes := make([]byte, 4)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
@@ -1283,26 +1313,14 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 		args = append(args, "--branch", branch)
 	}
 
-	resolvedAuthRef := strings.TrimSpace(authRef)
-	resolvedAuthValue := strings.TrimSpace(authValue)
-	if resolvedAuthRef != "" && resolvedAuthValue == "" {
-		resolvedAuthValue = resolveAuthTokenValue(resolvedAuthRef)
-	}
-	if resolvedAuthValue == "" && resolvedAuthRef == "" && strings.Contains(url, "github.com") {
-		if patRef, pat := resolveGitHubPAT(); pat != "" {
-			resolvedAuthRef = patRef
-			resolvedAuthValue = pat
-		}
-	}
-	if resolvedAuthValue != "" && !strings.Contains(url, "@") && strings.HasPrefix(url, "https://") {
-		url = strings.Replace(url, "https://", "https://"+resolvedAuthValue+"@", 1)
-	}
-
-	args = append(args, "--", url, shadowPath)
+	// credentialGitInvocation decides — by auth method — whether to inject an
+	// HTTPS PAT (pat/unspecified) or an SSH key (ssh), or neither (none).
+	cloneURL, gitEnv := credentialGitInvocation(url, cred)
+	args = append(args, "--", cloneURL, shadowPath)
 
 	cmd := exec.Command("git", args...)
-	if resolvedAuthRef != "" && resolvedAuthValue != "" {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%s", resolvedAuthRef, resolvedAuthValue))
+	if len(gitEnv) > 0 {
+		cmd.Env = append(os.Environ(), gitEnv...)
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
@@ -1311,7 +1329,7 @@ func cloneNamedForeignSubstrate(name, url, branch, authRef, authValue string) (s
 	return shadowPath, nil
 }
 
-func pushTerrariumCommit(ctx context.Context, mountPath, branch string) error {
+func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential) error {
 	targetBranch := strings.TrimSpace(branch)
 	if targetBranch == "" {
 		currentBranch, err := runGitCommand(ctx, mountPath, "branch", "--show-current")
@@ -1334,7 +1352,13 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string) error {
 		return err
 	}
 
-	if _, err := runGitCommand(ctx, mountPath, "push", "origin", "HEAD:"+targetBranch); err != nil {
+	// SSH substrates push with the configured key and no PAT; pat/unspecified
+	// reuse the credentialed origin URL set at clone time.
+	var pushEnv []string
+	if cred.Method == CredentialSSH && cred.SSHKeyPath != "" {
+		pushEnv = append(pushEnv, "GIT_SSH_COMMAND="+gitSSHCommand(cred.SSHKeyPath))
+	}
+	if _, err := runGitCommandWithEnv(ctx, mountPath, pushEnv, "push", "origin", "HEAD:"+targetBranch); err != nil {
 		return err
 	}
 
