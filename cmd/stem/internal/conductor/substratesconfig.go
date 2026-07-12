@@ -15,20 +15,86 @@ import (
 // SubstratesConfig defines named substrate mappings loaded from YAML.
 type SubstratesConfig struct {
 	Substrates map[string]SubstrateSpec `yaml:"substrates"`
+	// Credentials defines reusable named credential profiles that substrates
+	// reference by name via SubstrateSpec.Profile. Design RFC #222.
+	Credentials map[string]CredentialProfile `yaml:"credentials,omitempty"`
 }
 
 // SubstrateSpec describes one named substrate entry.
 type SubstrateSpec struct {
-	Path     string `yaml:"path,omitempty"`
-	URL      string `yaml:"url"`
-	Branch   string `yaml:"branch,omitempty"`
-	Auth     string `yaml:"auth,omitempty"`
+	Path   string `yaml:"path,omitempty"`
+	URL    string `yaml:"url"`
+	Branch string `yaml:"branch,omitempty"`
+	// Auth describes how the substrate authenticates to its remote. It accepts
+	// either a bare env-var name (e.g. `auth: GITHUB_TOKEN`, which is treated
+	// as method "pat") or a mapping (`auth: {method: ssh, key: ~/.ssh/id_ot}`).
+	Auth AuthSpec `yaml:"auth,omitempty"`
+	// Sign optionally configures commit signing for this substrate.
+	Sign SignSpec `yaml:"sign,omitempty"`
+	// Checkout controls where a foreign substrate is materialized.
+	Checkout CheckoutSpec `yaml:"checkout,omitempty"`
+	// Profile references a named entry under the top-level `credentials:` map,
+	// supplying auth/sign for this substrate without repeating them inline.
+	Profile  string `yaml:"profile,omitempty"`
 	ReadOnly bool   `yaml:"readonly,omitempty"`
 	// Provider selects the terrarium backend ("docker", "host", "gvisor", "firecracker").
 	// Defaults to "docker" when omitted.
 	Provider string `yaml:"provider,omitempty"`
 	// Command overrides the container entrypoint when provider is "host".
 	Command []string `yaml:"command,omitempty"`
+}
+
+// AuthSpec describes a substrate's authentication method. Design RFC #222.
+// Slice 1 parses it; the typed resolver (slice 2) and terrarium (slice 3)
+// consume it. Back-compat: a bare scalar decodes to {Method: "pat", Env: <scalar>}.
+type AuthSpec struct {
+	// Method is one of "pat", "ssh", or "none". Empty means "unspecified"
+	// (today's behavior — a PAT is resolved from the referenced/ambient env).
+	Method string `yaml:"method,omitempty"`
+	// Env names the environment variable holding the PAT (method "pat").
+	Env string `yaml:"env,omitempty"`
+	// Key is a filesystem path to an SSH private key (method "ssh").
+	Key string `yaml:"key,omitempty"`
+}
+
+// UnmarshalYAML accepts either a scalar env-var name (back-compat) or a mapping.
+func (a *AuthSpec) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		a.Method = "pat"
+		a.Env = strings.TrimSpace(value.Value)
+		return nil
+	}
+	// Decode into a type alias to avoid recursing back into this method.
+	type rawAuthSpec AuthSpec
+	var raw rawAuthSpec
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	*a = AuthSpec(raw)
+	return nil
+}
+
+// SignSpec configures optional commit signing. Design RFC #222.
+type SignSpec struct {
+	// Method is "ssh" or "gpg". Empty disables signing.
+	Method string `yaml:"method,omitempty"`
+	// Key is the signing key reference (SSH key path or GPG key id).
+	Key string `yaml:"key,omitempty"`
+}
+
+// CheckoutSpec controls where a foreign substrate is checked out. Design RFC #222.
+type CheckoutSpec struct {
+	// Mode is "ephemeral" (default, /tmp), "managed" (persistent OT-owned dir),
+	// or "path" (explicit Path below).
+	Mode string `yaml:"mode,omitempty"`
+	Path string `yaml:"path,omitempty"`
+}
+
+// CredentialProfile is a reusable named bundle of auth + signing config that
+// substrates reference by name via SubstrateSpec.Profile. Design RFC #222.
+type CredentialProfile struct {
+	Auth AuthSpec `yaml:"auth,omitempty"`
+	Sign SignSpec `yaml:"sign,omitempty"`
 }
 
 type substrateExecutionPlan struct {
@@ -128,7 +194,7 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		if plan.cloneBranch == "" {
 			plan.cloneBranch = strings.TrimSpace(spec.Branch)
 		}
-		plan.authRef = strings.TrimSpace(spec.Auth)
+		plan.authRef = strings.TrimSpace(spec.Auth.Env)
 		plan.provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 		plan.command = spec.Command
 	}
@@ -203,6 +269,40 @@ func normalizeSubstratesConfig(config *SubstratesConfig) {
 	}
 
 	config.Substrates = normalized
+
+	if len(config.Credentials) > 0 {
+		normalizedProfiles := make(map[string]CredentialProfile, len(config.Credentials))
+		for name, profile := range config.Credentials {
+			trimmedName := strings.TrimSpace(name)
+			if trimmedName == "" {
+				log.Printf("[Substrates] Warning: encountered credential profile with an empty name; skipping")
+				continue
+			}
+			trimAuthSpec(&profile.Auth)
+			trimSignSpec(&profile.Sign)
+			normalizedProfiles[trimmedName] = profile
+		}
+		config.Credentials = normalizedProfiles
+	}
+}
+
+// trimAuthSpec normalizes an AuthSpec in place (method lower-cased, fields trimmed).
+func trimAuthSpec(auth *AuthSpec) {
+	if auth == nil {
+		return
+	}
+	auth.Method = strings.ToLower(strings.TrimSpace(auth.Method))
+	auth.Env = strings.TrimSpace(auth.Env)
+	auth.Key = strings.TrimSpace(auth.Key)
+}
+
+// trimSignSpec normalizes a SignSpec in place.
+func trimSignSpec(sign *SignSpec) {
+	if sign == nil {
+		return
+	}
+	sign.Method = strings.ToLower(strings.TrimSpace(sign.Method))
+	sign.Key = strings.TrimSpace(sign.Key)
 }
 
 func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
@@ -214,7 +314,7 @@ func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
 		if strings.TrimSpace(spec.URL) == "" && strings.TrimSpace(spec.Path) == "" {
 			log.Printf("[Substrates] Warning: substrate %q in %s has neither a path nor a URL", name, sourcePath)
 		}
-		if authRef := strings.TrimSpace(spec.Auth); authRef != "" {
+		if authRef := strings.TrimSpace(spec.Auth.Env); authRef != "" {
 			if _, ok := os.LookupEnv(authRef); !ok {
 				alt := alternateGitHubPATEnvVar(authRef)
 				altSet := false
@@ -237,7 +337,11 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	spec.Path = strings.TrimSpace(spec.Path)
 	spec.URL = strings.TrimSpace(spec.URL)
 	spec.Branch = strings.TrimSpace(spec.Branch)
-	spec.Auth = strings.TrimSpace(spec.Auth)
+	trimAuthSpec(&spec.Auth)
+	trimSignSpec(&spec.Sign)
+	spec.Checkout.Mode = strings.ToLower(strings.TrimSpace(spec.Checkout.Mode))
+	spec.Checkout.Path = strings.TrimSpace(spec.Checkout.Path)
+	spec.Profile = strings.TrimSpace(spec.Profile)
 	spec.Provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 }
 

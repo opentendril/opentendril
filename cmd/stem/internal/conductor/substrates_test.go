@@ -136,8 +136,11 @@ substrates:
 	if spec.Branch != "main" {
 		t.Fatalf("resolved branch = %q, want main", spec.Branch)
 	}
-	if spec.Auth != "TOKEN_ENV" {
-		t.Fatalf("resolved auth = %q, want TOKEN_ENV", spec.Auth)
+	if spec.Auth.Env != "TOKEN_ENV" {
+		t.Fatalf("resolved auth env = %q, want TOKEN_ENV", spec.Auth.Env)
+	}
+	if spec.Auth.Method != "pat" {
+		t.Fatalf("scalar auth should decode to method pat, got %q", spec.Auth.Method)
 	}
 	if !spec.ReadOnly {
 		t.Fatalf("expected read-only substrate")
@@ -444,4 +447,85 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// TestSubstrateCredentialSchemaParsing pins the RFC #222 slice-1 schema:
+// back-compatible scalar auth, mapping auth (ssh/none), signing, checkout, and
+// reusable credential profiles.
+func TestSubstrateCredentialSchemaParsing(t *testing.T) {
+	cwd := chdirToTempDir(t)
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), `
+credentials:
+  work:
+    auth:
+      method: pat
+      env: GITHUB_TOKEN_WORK
+    sign:
+      method: ssh
+      key: ~/.ssh/id_work
+
+substrates:
+  legacy:
+    url: https://example.com/legacy.git
+    auth: GITHUB_TOKEN
+  overssh:
+    url: git@example.com:org/overssh.git
+    auth:
+      method: ssh
+      key: ~/.ssh/id_ot
+    sign:
+      method: gpg
+      key: ABCD1234
+    checkout:
+      mode: managed
+  public:
+    url: https://example.com/public.git
+    auth:
+      method: none
+  profiled:
+    url: https://example.com/profiled.git
+    profile: work
+`)
+
+	config, err := LoadSubstratesConfig("")
+	if err != nil {
+		t.Fatalf("LoadSubstratesConfig failed: %v", err)
+	}
+	if config == nil {
+		t.Fatalf("expected config, got nil")
+	}
+
+	// Back-compat: a bare scalar decodes to method "pat" with the env name.
+	legacy := config.Substrates["legacy"]
+	if legacy.Auth.Method != "pat" || legacy.Auth.Env != "GITHUB_TOKEN" {
+		t.Fatalf("legacy scalar auth = %+v, want {pat GITHUB_TOKEN}", legacy.Auth)
+	}
+
+	// Mapping form: ssh method + key, plus signing and checkout.
+	overssh := config.Substrates["overssh"]
+	if overssh.Auth.Method != "ssh" || overssh.Auth.Key != "~/.ssh/id_ot" {
+		t.Fatalf("overssh auth = %+v, want {ssh ~/.ssh/id_ot}", overssh.Auth)
+	}
+	if overssh.Sign.Method != "gpg" || overssh.Sign.Key != "ABCD1234" {
+		t.Fatalf("overssh sign = %+v, want {gpg ABCD1234}", overssh.Sign)
+	}
+	if overssh.Checkout.Mode != "managed" {
+		t.Fatalf("overssh checkout mode = %q, want managed", overssh.Checkout.Mode)
+	}
+
+	if config.Substrates["public"].Auth.Method != "none" {
+		t.Fatalf("public auth method = %q, want none", config.Substrates["public"].Auth.Method)
+	}
+
+	// Profiles parse and normalize.
+	if config.Substrates["profiled"].Profile != "work" {
+		t.Fatalf("profiled.Profile = %q, want work", config.Substrates["profiled"].Profile)
+	}
+	work, ok := config.Credentials["work"]
+	if !ok {
+		t.Fatalf("expected credential profile %q", "work")
+	}
+	if work.Auth.Env != "GITHUB_TOKEN_WORK" || work.Sign.Method != "ssh" {
+		t.Fatalf("work profile = %+v, want auth.env GITHUB_TOKEN_WORK + sign.method ssh", work)
+	}
 }
