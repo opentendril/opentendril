@@ -38,9 +38,9 @@ substrates:
   # so a substrate can authenticate over SSH, sign its commits, and choose a
   # persistent OT-managed checkout instead of an ephemeral /tmp clone. Reusable
   # `credentials:` profiles (below) keep you from repeating auth/sign per repo.
-  # NOTE: the scalar `auth: ENV_VAR` form above keeps working unchanged. The
-  # mapping form parses today; SSH/signing/managed-checkout *execution* lands in
-  # the #225 implementation slices 3–4.
+  # NOTE: the scalar `auth: ENV_VAR` form above keeps working unchanged. SSH
+  # auth (slice 3a) and managed/path checkout (slice 4) execute today. GitHub
+  # App auth (method: app) and commit signing are the remaining #225 work.
   # internal-lib:
   #   url: git@github.com:myorg/internal-lib.git
   #   branch: main
