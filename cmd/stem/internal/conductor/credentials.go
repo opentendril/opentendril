@@ -198,5 +198,50 @@ func credentialWarning(spec SubstrateSpec, profiles map[string]CredentialProfile
 			return fmt.Sprintf("auth method ssh key %q is not a readable file", resolved.SSHKeyPath)
 		}
 	}
+	if w := signingWarning(resolved.Sign); w != "" {
+		return w
+	}
 	return ""
+}
+
+// signingWarning validates a resolved signing config, or returns "" when unset/ok.
+func signingWarning(sign ResolvedSigning) string {
+	method := strings.ToLower(strings.TrimSpace(sign.Method))
+	if method == "" {
+		return ""
+	}
+	switch method {
+	case "ssh", "gpg", "openpgp", "pgp":
+	default:
+		return fmt.Sprintf("sign method %q is not supported (use ssh or gpg)", sign.Method)
+	}
+	if strings.TrimSpace(sign.Key) == "" {
+		return fmt.Sprintf("sign method %q has no key", sign.Method)
+	}
+	return ""
+}
+
+// signingGitConfigArgs returns the `-c ...` git config flags that make a commit
+// signed with the substrate's configured key, or nil when signing is disabled.
+// Supports SSH signing (gpg.format=ssh) and GPG/OpenPGP (gpg.format=openpgp).
+func signingGitConfigArgs(sign ResolvedSigning) []string {
+	method := strings.ToLower(strings.TrimSpace(sign.Method))
+	key := strings.TrimSpace(sign.Key)
+	if method == "" || key == "" {
+		return nil
+	}
+	var format string
+	switch method {
+	case "ssh":
+		format = "ssh"
+	case "gpg", "openpgp", "pgp":
+		format = "openpgp"
+	default:
+		return nil
+	}
+	return []string{
+		"-c", "gpg.format=" + format,
+		"-c", "user.signingkey=" + expandHome(key),
+		"-c", "commit.gpgsign=true",
+	}
 }
