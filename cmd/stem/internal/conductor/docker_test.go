@@ -84,10 +84,10 @@ func TestWorkspaceRelativePath(t *testing.T) {
 	}
 }
 
-func TestTendrilStatusRoundTrip(t *testing.T) {
+func TestSproutStatusRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	statusPath := filepath.Join(root, "tendril-status.json")
-	record := tendrilExecutionStatus{
+	record := sproutExecutionStatus{
 		StepID:        "step-123",
 		Status:        "failed",
 		Error:         "pytest failed",
@@ -95,13 +95,13 @@ func TestTendrilStatusRoundTrip(t *testing.T) {
 		FilesModified: []string{"cmd/main.go", "docs/notes.md"},
 	}
 
-	if err := writeTendrilStatus(statusPath, record); err != nil {
-		t.Fatalf("writeTendrilStatus failed: %v", err)
+	if err := writeSproutStatus(statusPath, record); err != nil {
+		t.Fatalf("writeSproutStatus failed: %v", err)
 	}
 
-	loaded, err := loadTendrilStatus(statusPath)
+	loaded, err := loadSproutStatus(statusPath)
 	if err != nil {
-		t.Fatalf("loadTendrilStatus failed: %v", err)
+		t.Fatalf("loadSproutStatus failed: %v", err)
 	}
 	if loaded == nil {
 		t.Fatalf("expected status record, got nil")
@@ -114,13 +114,13 @@ func TestTendrilStatusRoundTrip(t *testing.T) {
 	}
 }
 
-func TestBuildTendrilCommitMessage(t *testing.T) {
-	success := buildTendrilCommitMessage("step-1", "refactor the cache layer with a cleaner boundary", "complete", "")
+func TestBuildSproutCommitMessage(t *testing.T) {
+	success := buildSproutCommitMessage("step-1", "refactor the cache layer with a cleaner boundary", "complete", "")
 	if !strings.HasPrefix(success, "tendril(step-1): ") {
 		t.Fatalf("unexpected success message: %s", success)
 	}
 
-	failure := buildTendrilCommitMessage("step-2", "ignored", "failed", "pytest: 3 tests failed")
+	failure := buildSproutCommitMessage("step-2", "ignored", "failed", "pytest: 3 tests failed")
 	if !strings.Contains(failure, "[INCOMPLETE]: pytest: 3 tests failed") {
 		t.Fatalf("unexpected failure message: %s", failure)
 	}

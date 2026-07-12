@@ -175,7 +175,7 @@ func sproutOps(history *historydb.Store) core.SproutOps {
 			}
 			recordRun()
 
-			output, err := orch.RunTendril(ctx, spec.Transcript)
+			output, err := orch.RunSprout(ctx, spec.Transcript)
 			run.FinishedAt = time.Now().UTC()
 			if err != nil {
 				run.Status = "withered"

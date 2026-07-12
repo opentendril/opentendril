@@ -48,7 +48,7 @@ func NewDockerOrchestrator() *DockerOrchestrator {
 	return &DockerOrchestrator{}
 }
 
-type tendrilRunner interface {
+type sproutRunner interface {
 	Run(ctx context.Context, taskPrompt string) (agentResult, error)
 }
 
@@ -57,7 +57,7 @@ var (
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv...)
 	}
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (tendrilRunner, error) {
+	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
 		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID)
 	}
 	stashHostWorkspaceFn       = stashHostWorkspace
@@ -107,7 +107,7 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	return client
 }
 
-func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) (result string, err error) {
+func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (result string, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -119,7 +119,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 
 	stepID := strings.TrimSpace(d.StepID)
 	if stepID == "" {
-		stepID = newTendrilExecutionID("step")
+		stepID = newSproutExecutionID("step")
 		d.StepID = stepID
 	}
 
@@ -197,7 +197,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		}
 
 		if gitRepo && statusPath != "" {
-			if existing, err := loadTendrilStatus(statusPath); err != nil {
+			if existing, err := loadSproutStatus(statusPath); err != nil {
 				return "", err
 			} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
 				switch strings.ToLower(strings.TrimSpace(existing.Status)) {
@@ -221,7 +221,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 			if err == nil {
 				currentBranch := strings.TrimSpace(branchOutput)
 				if currentBranch == "main" || currentBranch == "master" {
-					newBranch := fmt.Sprintf("tendril/task-%s", stepID)
+					newBranch := fmt.Sprintf("sprout/task-%s", stepID)
 					fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching from %s to %s\n", currentBranch, newBranch)
 					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {
 						return "", fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
@@ -361,7 +361,7 @@ func (d *DockerOrchestrator) RunTendril(ctx context.Context, taskPrompt string) 
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
 	}
 
-	executionStatus := tendrilExecutionStatus{
+	executionStatus := sproutExecutionStatus{
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
@@ -950,7 +950,7 @@ func collectGitDiff(ctx context.Context, mountPath string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-type tendrilExecutionStatus struct {
+type sproutExecutionStatus struct {
 	StepID        string   `json:"stepId"`
 	Status        string   `json:"status"`
 	Error         string   `json:"error,omitempty"`
@@ -958,7 +958,7 @@ type tendrilExecutionStatus struct {
 	FilesModified []string `json:"filesModified"`
 }
 
-func newTendrilExecutionID(prefix string) string {
+func newSproutExecutionID(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, time.Now().UTC().UnixNano())
 }
 
@@ -1012,7 +1012,7 @@ func restoreHostStash(ctx context.Context, root string) error {
 	return nil
 }
 
-func loadTendrilStatus(path string) (*tendrilExecutionStatus, error) {
+func loadSproutStatus(path string) (*sproutExecutionStatus, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1021,7 +1021,7 @@ func loadTendrilStatus(path string) (*tendrilExecutionStatus, error) {
 		return nil, fmt.Errorf("read tendril status %s: %w", path, err)
 	}
 
-	var status tendrilExecutionStatus
+	var status sproutExecutionStatus
 	if err := json.Unmarshal(content, &status); err != nil {
 		return nil, fmt.Errorf("decode tendril status %s: %w", path, err)
 	}
@@ -1029,7 +1029,7 @@ func loadTendrilStatus(path string) (*tendrilExecutionStatus, error) {
 	return &status, nil
 }
 
-func writeTendrilStatus(path string, status tendrilExecutionStatus) error {
+func writeSproutStatus(path string, status sproutExecutionStatus) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
@@ -1163,7 +1163,7 @@ func shouldIgnoreStagePath(path string) bool {
 	return false
 }
 
-func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus tendrilExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
+func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
 	stagePaths := append([]string{}, executionStatus.FilesModified...)
 
 	if strings.TrimSpace(statusPath) != "" {
@@ -1173,7 +1173,7 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 		}
 
 		statusTerrariumPath := filepath.Join(mountPath, filepath.FromSlash(statusRelPath))
-		if err := writeTendrilStatus(statusTerrariumPath, executionStatus); err != nil {
+		if err := writeSproutStatus(statusTerrariumPath, executionStatus); err != nil {
 			return "", err
 		}
 
@@ -1201,7 +1201,7 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 		}
 	}
 
-	commitMessage := buildTendrilCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
+	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
 	// Signing config (`-c ...`) must precede the `commit` subcommand.
 	signArgs := signingGitConfigArgs(sign)
 	commitArgs := append(append([]string{}, signArgs...), "commit", "-m", commitMessage)
@@ -1260,15 +1260,15 @@ func runContainerFitnessTest(ctx context.Context, imageName, shadowPath, fitness
 	return nil
 }
 
-func buildTendrilCommitMessage(stepID, taskPrompt, status, failureError string) string {
+func buildSproutCommitMessage(stepID, taskPrompt, status, failureError string) string {
 	if strings.ToLower(strings.TrimSpace(status)) == "failed" {
-		return fmt.Sprintf("tendril(%s) [INCOMPLETE]: %s", strings.TrimSpace(stepID), summarizeTendrilFailureError(failureError))
+		return fmt.Sprintf("tendril(%s) [INCOMPLETE]: %s", strings.TrimSpace(stepID), summarizeSproutFailureError(failureError))
 	}
 
-	return fmt.Sprintf("tendril(%s): %s", strings.TrimSpace(stepID), summarizeTendrilPrompt(taskPrompt))
+	return fmt.Sprintf("tendril(%s): %s", strings.TrimSpace(stepID), summarizeSproutPrompt(taskPrompt))
 }
 
-func summarizeTendrilPrompt(taskPrompt string) string {
+func summarizeSproutPrompt(taskPrompt string) string {
 	summary := strings.Join(strings.Fields(strings.TrimSpace(taskPrompt)), " ")
 	if summary == "" {
 		return "tendril task"
@@ -1288,7 +1288,7 @@ func summarizeTendrilPrompt(taskPrompt string) string {
 	return summary + "..."
 }
 
-func summarizeTendrilFailureError(failureError string) string {
+func summarizeSproutFailureError(failureError string) string {
 	summary := strings.Join(strings.Fields(strings.TrimSpace(failureError)), " ")
 	if summary == "" {
 		return "execution failed"

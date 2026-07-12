@@ -1614,7 +1614,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 
 	stepID := strings.TrimSpace(orch.StepID)
 	if stepID == "" {
-		stepID = newTendrilExecutionID("step")
+		stepID = newSproutExecutionID("step")
 		orch.StepID = stepID
 	}
 
@@ -1684,7 +1684,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 	stepID := strings.TrimSpace(orch.StepID)
 	if stepID == "" {
-		stepID = newTendrilExecutionID("step")
+		stepID = newSproutExecutionID("step")
 		orch.StepID = stepID
 	}
 
@@ -1806,7 +1806,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	}
 
-	executionStatus := tendrilExecutionStatus{
+	executionStatus := sproutExecutionStatus{
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
