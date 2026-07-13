@@ -17,6 +17,9 @@ type meshPortCalls struct {
 	pushedWorkspace   string
 	pushedBranch      string
 	pushedMessage     string
+	listCalls         int
+	acceptedTraitID   string
+	rejectedTraitID   string
 }
 
 func newMeshService(t *testing.T, calls *meshPortCalls) *core.Service {
@@ -35,6 +38,18 @@ func newMeshService(t *testing.T, calls *meshPortCalls) *core.Service {
 			calls.pushedBranch = branch
 			calls.pushedMessage = commitMessage
 			return "abc1234", nil
+		},
+		ListPendingTraits: func(context.Context) ([]any, error) {
+			calls.listCalls++
+			return []any{map[string]any{"traitId": "trait-123", "status": "pending"}}, nil
+		},
+		AcceptTrait: func(_ context.Context, traitID string) error {
+			calls.acceptedTraitID = traitID
+			return nil
+		},
+		RejectTrait: func(_ context.Context, traitID string) error {
+			calls.rejectedTraitID = traitID
+			return nil
 		},
 	})
 }
@@ -146,7 +161,7 @@ func TestMeshCapabilitiesInRegistry(t *testing.T) {
 	for _, capability := range svc.Capabilities() {
 		declared[capability.Name] = true
 	}
-	for _, name := range []string{core.CapMeshGraft, core.CapMeshPromote} {
+	for _, name := range []string{core.CapMeshGraft, core.CapMeshPromote, core.CapMeshTraitList, core.CapMeshTraitAccept, core.CapMeshTraitReject} {
 		if !declared[name] {
 			t.Errorf("registry does not declare %s", name)
 		}
@@ -167,5 +182,38 @@ func TestMeshCapabilitiesInRegistry(t *testing.T) {
 	}
 	if promotion.PRNumber != "7" || calls.pushedMessage != "promote PR #7" {
 		t.Fatalf("promotion = %+v, pushed message = %q", promotion, calls.pushedMessage)
+	}
+
+	traits, err := svc.MeshTraitList(context.Background(), core.MeshTraitListInput{})
+	if err != nil {
+		t.Fatalf("MeshTraitList: %v", err)
+	}
+	if calls.listCalls != 1 {
+		t.Fatalf("MeshTraitList called %d times, want 1", calls.listCalls)
+	}
+	if len(traits.Traits) != 1 {
+		t.Fatalf("MeshTraitList returned %d trait(s), want 1", len(traits.Traits))
+	}
+
+	accepted, err := svc.MeshTraitAccept(context.Background(), core.MeshTraitAcceptInput{TraitID: "trait-123"})
+	if err != nil {
+		t.Fatalf("MeshTraitAccept: %v", err)
+	}
+	if calls.acceptedTraitID != "trait-123" {
+		t.Fatalf("accepted trait = %q, want trait-123", calls.acceptedTraitID)
+	}
+	if accepted.Status != "accepted" || accepted.TraitID != "trait-123" {
+		t.Fatalf("accept result = %+v", accepted)
+	}
+
+	rejected, err := svc.MeshTraitReject(context.Background(), core.MeshTraitRejectInput{TraitID: "trait-456"})
+	if err != nil {
+		t.Fatalf("MeshTraitReject: %v", err)
+	}
+	if calls.rejectedTraitID != "trait-456" {
+		t.Fatalf("rejected trait = %q, want trait-456", calls.rejectedTraitID)
+	}
+	if rejected.Status != "rejected" || rejected.TraitID != "trait-456" {
+		t.Fatalf("reject result = %+v", rejected)
 	}
 }

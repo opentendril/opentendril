@@ -64,6 +64,11 @@ type Core interface {
 	// through the injected MeshOps execution port.
 	MeshGraft(ctx context.Context, in MeshGraftInput) (MeshDelegation, error)
 	MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPromotion, error)
+	// Mesh trait governance family (issue #185). Listing and moderation run
+	// through the injected MeshOps execution port.
+	MeshTraitList(ctx context.Context, in MeshTraitListInput) (MeshTraitListOutput, error)
+	MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) (MeshTraitAcceptOutput, error)
+	MeshTraitReject(ctx context.Context, in MeshTraitRejectInput) (MeshTraitRejectOutput, error)
 
 	// Sequence family (issue #181, slice 4). Both operations run through the
 	// injected SequenceOps execution port.
@@ -111,6 +116,36 @@ type UpdateSessionInput struct {
 type SessionHistoryInput struct {
 	SessionID string `json:"sessionId"`
 	Limit     int    `json:"limit,omitempty"`
+}
+
+// MeshTraitListInput asks for the current pending foreign traits.
+type MeshTraitListInput struct{}
+
+// MeshTraitListOutput returns the pending foreign traits.
+type MeshTraitListOutput struct {
+	Traits []any `json:"traits"`
+}
+
+// MeshTraitAcceptInput identifies a pending trait to accept.
+type MeshTraitAcceptInput struct {
+	TraitID string `json:"traitId"`
+}
+
+// MeshTraitAcceptOutput reports the accepted trait identifier.
+type MeshTraitAcceptOutput struct {
+	TraitID string `json:"traitId"`
+	Status  string `json:"status"`
+}
+
+// MeshTraitRejectInput identifies a pending trait to reject.
+type MeshTraitRejectInput struct {
+	TraitID string `json:"traitId"`
+}
+
+// MeshTraitRejectOutput reports the rejected trait identifier.
+type MeshTraitRejectOutput struct {
+	TraitID string `json:"traitId"`
+	Status  string `json:"status"`
 }
 
 // --- service implementation -------------------------------------------------

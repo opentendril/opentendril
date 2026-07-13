@@ -16,10 +16,11 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-// runMeshCmd hosts two kinds of subcommands. graft/promote are the CLI
+// runMeshCmd hosts three kinds of subcommands. graft/promote are the CLI
 // adapter for the governed substrate-grafting capability family (issue #181,
 // slice 3): thin projections of the same transport-free core.Core the REST
-// and MCP surfaces use. keygen/issue-token stay deliberately ungoverned,
+// and MCP surfaces use. trait/list-accept-reject expose the governed mesh
+// trait inbox (issue #185). keygen/issue-token stay deliberately ungoverned,
 // CLI-local key-management commands: they mint the workspace's private mesh
 // keys and signed tokens, an authority that must not be projected onto the
 // network surfaces (see internal/core/mesh.go).
@@ -29,12 +30,15 @@ func runMeshCmd(ctx context.Context, args []string) {
 		return
 	}
 
-	switch args[0] {
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "keygen":
 		runMeshKeygenCmd(args[1:])
 		return
 	case "issue-token":
 		runMeshIssueTokenCmd(ctx, args[1:])
+		return
+	case "trait":
+		runMeshTraitCmd(ctx, args[1:])
 		return
 	case "-h", "--help", "help":
 		printMeshUsage()
@@ -76,9 +80,9 @@ func runMeshCmd(ctx context.Context, args []string) {
 	renderMeshResult(command.capability, result)
 }
 
-// buildMeshCore constructs a Core with the substrate-grafting execution port
-// wired. The session manager is an ephemeral in-memory one — graft
-// capabilities touch no session state.
+// buildMeshCore constructs a Core with the mesh execution port wired. The
+// session manager is an ephemeral in-memory one — mesh capabilities touch no
+// session state.
 func buildMeshCore(ctx context.Context) (core.Core, error) {
 	manager, err := session.NewManager(ctx, nil)
 	if err != nil {
@@ -87,10 +91,10 @@ func buildMeshCore(ctx context.Context) (core.Core, error) {
 	return core.NewService(manager).WithMesh(meshOps()), nil
 }
 
-// meshOps binds the substrate-grafting execution port to the conductor
-// (substrate resolution) and the mesh client (delegated push) — this wiring
-// lives in the adapter layer precisely so the Core never imports either
-// package (see internal/core/boundary_test.go).
+// meshOps binds the mesh execution port to the conductor (substrate
+// resolution), the mesh client (delegated push), and the local trait inbox
+// stub — this wiring lives in the adapter layer precisely so the Core never
+// imports either package (see internal/core/boundary_test.go).
 func meshOps() core.MeshOps {
 	return core.MeshOps{
 		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) {
@@ -102,6 +106,20 @@ func meshOps() core.MeshOps {
 				return "", fmt.Errorf("TENDRIL_GRAFT_URL and TENDRIL_GRAFT_TOKEN must be set to delegate a mesh graft")
 			}
 			return client.DelegatePush(ctx, workspace, branch, commitMessage)
+		},
+		ListPendingTraits: func(context.Context) ([]any, error) {
+			records := meshTraitInbox.ListPending()
+			traits := make([]any, 0, len(records))
+			for _, record := range records {
+				traits = append(traits, record)
+			}
+			return traits, nil
+		},
+		AcceptTrait: func(_ context.Context, traitID string) error {
+			return meshTraitInbox.Accept(traitID)
+		},
+		RejectTrait: func(_ context.Context, traitID string) error {
+			return meshTraitInbox.Reject(traitID)
 		},
 	}
 }
@@ -151,6 +169,22 @@ var meshCommands = []meshCommand{
 	{"promote", core.CapMeshPromote},
 }
 
+// meshTraitCommand is one governed subcommand actually registered under
+// `tendril mesh trait`.
+type meshTraitCommand struct {
+	name       string
+	capability string
+}
+
+// meshTraitCommands is the CLI command tree for the governed mesh trait
+// inbox. Like sessionCommands, this registration — NOT core.CapabilityNames()
+// — is the source of truth the parity coverage test reads for the CLI arm.
+var meshTraitCommands = []meshTraitCommand{
+	{"list", core.CapMeshTraitList},
+	{"accept", core.CapMeshTraitAccept},
+	{"reject", core.CapMeshTraitReject},
+}
+
 // lookupMeshCommand resolves a CLI subcommand token to its registered entry.
 func lookupMeshCommand(sub string) (meshCommand, bool) {
 	for _, command := range meshCommands {
@@ -161,11 +195,24 @@ func lookupMeshCommand(sub string) (meshCommand, bool) {
 	return meshCommand{}, false
 }
 
+// lookupMeshTraitCommand resolves a CLI trait subcommand token to its registered entry.
+func lookupMeshTraitCommand(sub string) (meshTraitCommand, bool) {
+	for _, command := range meshTraitCommands {
+		if command.name == sub {
+			return command, true
+		}
+	}
+	return meshTraitCommand{}, false
+}
+
 // meshCLICapabilityNames returns the capability names the CLI has actually
 // registered mesh subcommands for, sorted. Read by the parity coverage test.
 func meshCLICapabilityNames() []string {
-	names := make([]string, 0, len(meshCommands))
+	names := make([]string, 0, len(meshCommands)+len(meshTraitCommands))
 	for _, command := range meshCommands {
+		names = append(names, command.capability)
+	}
+	for _, command := range meshTraitCommands {
 		names = append(names, command.capability)
 	}
 	sort.Strings(names)
@@ -244,6 +291,112 @@ func renderMeshResult(capability string, result any) {
 		}
 		fmt.Printf("✅ Promoted pull request via mesh graft for %s. Commit %s\n", promotion.Workspace, promotion.Commit)
 	}
+}
+
+func runMeshTraitCmd(ctx context.Context, args []string) {
+	if len(args) == 0 {
+		printMeshTraitUsage()
+		return
+	}
+
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "-h", "--help", "help":
+		printMeshTraitUsage()
+		return
+	}
+
+	command, ok := lookupMeshTraitCommand(strings.ToLower(strings.TrimSpace(args[0])))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "Unknown mesh trait command: %s\n", args[0])
+		printMeshTraitUsage()
+		os.Exit(1)
+	}
+
+	input, err := parseMeshTraitArgs(command.capability, args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+
+	svc, err := buildMeshCore(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize core: %v\n", err)
+		os.Exit(1)
+	}
+
+	result, err := svc.Invoke(ctx, command.capability, input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ mesh trait %s failed: %v\n", command.name, err)
+		os.Exit(1)
+	}
+
+	renderMeshTraitResult(result)
+}
+
+// parseMeshTraitArgs turns CLI args into a mesh trait capability input map.
+func parseMeshTraitArgs(capName string, args []string) (map[string]any, error) {
+	input := map[string]any{}
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag --json requires a value")
+			}
+			i++
+			if err := json.Unmarshal([]byte(args[i]), &input); err != nil {
+				return nil, fmt.Errorf("invalid --json input: %w", err)
+			}
+		case "--id", "--trait-id":
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("flag %s requires a value", args[i])
+			}
+			i++
+			input["traitId"] = args[i]
+		default:
+			if strings.HasPrefix(args[i], "--") {
+				return nil, fmt.Errorf("unknown argument %q for mesh trait %s", args[i], strings.TrimPrefix(capName, "mesh.trait."))
+			}
+			positional = append(positional, args[i])
+		}
+	}
+
+	switch capName {
+	case core.CapMeshTraitList:
+		if len(positional) > 0 {
+			return nil, fmt.Errorf("mesh trait list does not take positional arguments")
+		}
+	case core.CapMeshTraitAccept, core.CapMeshTraitReject:
+		if len(positional) > 1 {
+			return nil, fmt.Errorf("expected exactly one trait id, got %d", len(positional))
+		}
+		if len(positional) == 1 {
+			input["traitId"] = positional[0]
+		}
+		if traitID, _ := input["traitId"].(string); strings.TrimSpace(traitID) == "" {
+			return nil, fmt.Errorf("missing trait id. Usage: tendril mesh trait %s <trait-id>", strings.TrimPrefix(capName, "mesh.trait."))
+		}
+	}
+
+	return input, nil
+}
+
+func renderMeshTraitResult(result any) {
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "encode result: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(payload))
+}
+
+func printMeshTraitUsage() {
+	fmt.Println("Usage: tendril mesh trait <list|accept|reject> [trait-id]")
+	fmt.Println("  list            Show pending foreign traits")
+	fmt.Println("  accept <id>     Accept one pending foreign trait")
+	fmt.Println("  reject <id>     Reject one pending foreign trait")
+	fmt.Println()
+	fmt.Println("Trait commands are projections of the shared Core capability registry.")
 }
 
 func runMeshKeygenCmd(args []string) {
@@ -331,13 +484,14 @@ func runMeshIssueTokenCmd(ctx context.Context, args []string) {
 }
 
 func printMeshUsage() {
-	fmt.Println("tendril mesh - mesh grafting utilities")
+	fmt.Println("tendril mesh - mesh utilities")
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  tendril mesh graft <substrate> [--branch NAME] [--commit-message TEXT]")
 	fmt.Println("  tendril mesh promote <substrate> [--branch NAME] [--pr-number N] [--commit-message TEXT]")
+	fmt.Println("  tendril mesh trait <list|accept|reject> [trait-id]")
 	fmt.Println("  tendril mesh keygen [--workspace PATH] [--force]")
 	fmt.Println("  tendril mesh issue-token [--workspace PATH] [--subject TEXT] [--audience TEXT] [--scope TEXT] [--ttl DURATION]")
 	fmt.Println()
-	fmt.Println("graft and promote are projections of the shared Core capability registry.")
+	fmt.Println("graft, promote, and trait are projections of the shared Core capability registry.")
 }

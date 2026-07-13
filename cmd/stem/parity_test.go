@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.SequenceHandler, *receptors.SproutHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.TraitHandler, *receptors.SequenceHandler, *receptors.SproutHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -43,13 +43,17 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 			return core.PlasmidInjection{}, nil
 		},
 	}).WithMesh(core.MeshOps{
-		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) { return substrate, nil },
-		DelegatePush:     func(context.Context, string, string, string) (string, error) { return "deadbeef", nil },
+		ResolveWorkspace:  func(_ context.Context, substrate string) (string, error) { return substrate, nil },
+		DelegatePush:      func(context.Context, string, string, string) (string, error) { return "deadbeef", nil },
+		ListPendingTraits: func(context.Context) ([]any, error) { return []any{}, nil },
+		AcceptTrait:       func(context.Context, string) error { return nil },
+		RejectTrait:       func(context.Context, string) error { return nil },
 	})
 	rest := receptors.NewSessionsHandler(svc, manager, nil, nil)
 	genomeRest := receptors.NewGenomeHandler(svc)
 	plasmidRest := receptors.NewPlasmidHandler(svc)
 	graftRest := receptors.NewGraftHandler(svc)
+	traitRest := receptors.NewTraitHandler(svc)
 	sequenceRest := receptors.NewSequenceHandler(svc)
 	sproutRest := receptors.NewSproutHandler(svc, nil, nil)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
@@ -60,11 +64,12 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
+	traitRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
 	sproutRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, plasmidRest, graftRest, sequenceRest, sproutRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -120,18 +125,19 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, plasmidRest, graftRest, sequenceRest, sproutRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
-	//          (sessions + genome + plasmid + graft + sequence + sprout handlers).
+	//          (sessions + genome + plasmid + graft + trait + sequence + sprout handlers).
 	//   MCP  — names parsed from the live tools/list response.
 	//   CLI  — capabilities of the subcommands registered on the command trees
-	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril sequence` + `tendril sprout`).
+	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril mesh trait` + `tendril sequence` + `tendril sprout`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
 	restCaps = append(restCaps, plasmidRest.Capabilities()...)
 	restCaps = append(restCaps, graftRest.Capabilities()...)
+	restCaps = append(restCaps, traitRest.Capabilities()...)
 	restCaps = append(restCaps, sequenceRest.Capabilities()...)
 	restCaps = append(restCaps, sproutRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
@@ -149,7 +155,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, _, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, _, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -351,6 +357,26 @@ func (m *mockCore) MeshPromote(_ context.Context, in core.MeshPromoteInput) (cor
 	return core.MeshPromotion{Workspace: "/workspaces/core", Commit: "deadbeef", PRNumber: in.PRNumber}, nil
 }
 
+func (m *mockCore) MeshTraitList(_ context.Context, _ core.MeshTraitListInput) (core.MeshTraitListOutput, error) {
+	m.record("MeshTraitList", struct{}{})
+	return core.MeshTraitListOutput{
+		Traits: []any{map[string]any{
+			"traitId": "trait-123",
+			"status":  "pending",
+		}},
+	}, nil
+}
+
+func (m *mockCore) MeshTraitAccept(_ context.Context, in core.MeshTraitAcceptInput) (core.MeshTraitAcceptOutput, error) {
+	m.record("MeshTraitAccept", in)
+	return core.MeshTraitAcceptOutput{TraitID: in.TraitID, Status: "accepted"}, nil
+}
+
+func (m *mockCore) MeshTraitReject(_ context.Context, in core.MeshTraitRejectInput) (core.MeshTraitRejectOutput, error) {
+	m.record("MeshTraitReject", in)
+	return core.MeshTraitRejectOutput{TraitID: in.TraitID, Status: "rejected"}, nil
+}
+
 func (m *mockCore) SequenceList(_ context.Context) ([]string, error) {
 	m.record("SequenceList", struct{}{})
 	return nil, nil
@@ -516,6 +542,35 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
+			Name:        core.CapMeshTraitList,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
+				return m.MeshTraitList(ctx, core.MeshTraitListInput{})
+			},
+		},
+		{
+			Name:        core.CapMeshTraitAccept,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.MeshTraitAcceptInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.MeshTraitAccept(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapMeshTraitReject,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.MeshTraitRejectInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.MeshTraitReject(ctx, in)
+			},
+		},
+		{
 			Name:        core.CapSequenceList,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
@@ -592,6 +647,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	genomeRest := receptors.NewGenomeHandler(mock)
 	plasmidRest := receptors.NewPlasmidHandler(mock)
 	graftRest := receptors.NewGraftHandler(mock)
+	traitRest := receptors.NewTraitHandler(mock)
 	sequenceRest := receptors.NewSequenceHandler(mock)
 	sproutRest := receptors.NewSproutHandler(mock, nil, nil)
 	mux := http.NewServeMux()
@@ -599,6 +655,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
+	traitRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
 	sproutRest.Register(mux, nil)
 
@@ -1066,6 +1123,229 @@ func TestBehavioralParity_MeshPromote(t *testing.T) {
 	}
 	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
 		t.Fatalf("MCP graftSubstrate alias: Core.MeshGraft called %d times, want 1", len(calls))
+	}
+}
+
+// TestBehavioralParity_MeshTraits extends the zero-business-logic proof to
+// the mesh trait inbox. REST, MCP, and the CLI must all decode the same
+// trait identifiers and invoke the identical Core method exactly once.
+func TestBehavioralParity_MeshTraits(t *testing.T) {
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	// --- LIST -----------------------------------------------------------------
+	mock.reset()
+	listResp, err := http.Get(server.URL + "/v1/mesh/traits")
+	if err != nil {
+		t.Fatalf("REST mesh.trait.list: %v", err)
+	}
+	defer listResp.Body.Close()
+	if listResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(listResp.Body)
+		t.Fatalf("REST mesh.trait.list status = %d, body = %s", listResp.StatusCode, body)
+	}
+	var listOut core.MeshTraitListOutput
+	if err := json.NewDecoder(listResp.Body).Decode(&listOut); err != nil {
+		t.Fatalf("decode REST mesh.trait.list response: %v", err)
+	}
+	if len(listOut.Traits) != 1 {
+		t.Fatalf("REST mesh.trait.list returned %d trait(s), want 1", len(listOut.Traits))
+	}
+	if trait, ok := listOut.Traits[0].(map[string]any); !ok || trait["traitId"] != "trait-123" {
+		t.Fatalf("REST mesh.trait.list payload = %#v, want trait-123", listOut.Traits[0])
+	}
+	if calls := mock.inputsFor("MeshTraitList"); len(calls) != 1 {
+		t.Fatalf("REST mesh.trait.list: Core.MeshTraitList called %d times, want 1", len(calls))
+	}
+
+	mock.reset()
+	listMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.trait.list","arguments":{}}}`))
+	var listParsed struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(listMCP, &listParsed); err != nil {
+		t.Fatalf("parse MCP mesh.trait.list response: %v", err)
+	}
+	if listParsed.Error != nil || listParsed.Result.IsError || len(listParsed.Result.Content) == 0 {
+		t.Fatalf("MCP mesh.trait.list failed: %s", listMCP)
+	}
+	if err := json.Unmarshal([]byte(listParsed.Result.Content[0].Text), &listOut); err != nil {
+		t.Fatalf("decode MCP mesh.trait.list payload: %v", err)
+	}
+	if len(listOut.Traits) != 1 {
+		t.Fatalf("MCP mesh.trait.list returned %d trait(s), want 1", len(listOut.Traits))
+	}
+	if calls := mock.inputsFor("MeshTraitList"); len(calls) != 1 {
+		t.Fatalf("MCP mesh.trait.list: Core.MeshTraitList called %d times, want 1", len(calls))
+	}
+
+	mock.reset()
+	listCommand, ok := lookupMeshTraitCommand("list")
+	if !ok {
+		t.Fatal("CLI: no mesh trait subcommand registered for \"list\"")
+	}
+	if listCommand.capability != core.CapMeshTraitList {
+		t.Fatalf("CLI subcommand \"list\" maps to %q, want %q", listCommand.capability, core.CapMeshTraitList)
+	}
+	listInput, err := parseMeshTraitArgs(listCommand.capability, nil)
+	if err != nil {
+		t.Fatalf("CLI parseMeshTraitArgs(list): %v", err)
+	}
+	listResult, err := mock.Invoke(ctx, listCommand.capability, listInput)
+	if err != nil {
+		t.Fatalf("CLI mesh.trait.list: Core.Invoke: %v", err)
+	}
+	if typed, ok := listResult.(core.MeshTraitListOutput); !ok || len(typed.Traits) != 1 {
+		t.Fatalf("CLI mesh.trait.list result = %#v, want one pending trait", listResult)
+	}
+	if calls := mock.inputsFor("MeshTraitList"); len(calls) != 1 {
+		t.Fatalf("CLI mesh.trait.list: Core.MeshTraitList called %d times, want 1", len(calls))
+	}
+
+	// --- ACCEPT ---------------------------------------------------------------
+	traitID := "trait-123"
+	acceptWant := core.MeshTraitAcceptInput{TraitID: traitID}
+
+	mock.reset()
+	acceptResp, err := http.Post(server.URL+"/v1/mesh/traits/"+traitID+"/accept", "application/json", nil)
+	if err != nil {
+		t.Fatalf("REST mesh.trait.accept: %v", err)
+	}
+	defer acceptResp.Body.Close()
+	if acceptResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(acceptResp.Body)
+		t.Fatalf("REST mesh.trait.accept status = %d, body = %s", acceptResp.StatusCode, body)
+	}
+	var acceptOut core.MeshTraitAcceptOutput
+	if err := json.NewDecoder(acceptResp.Body).Decode(&acceptOut); err != nil {
+		t.Fatalf("decode REST mesh.trait.accept response: %v", err)
+	}
+	if acceptOut.TraitID != traitID || acceptOut.Status != "accepted" {
+		t.Fatalf("REST mesh.trait.accept output = %+v", acceptOut)
+	}
+	if calls := mock.inputsFor("MeshTraitAccept"); len(calls) != 1 || !reflect.DeepEqual(calls[0], acceptWant) {
+		t.Fatalf("REST mesh.trait.accept calls = %#v, want %#v", calls, acceptWant)
+	}
+
+	mock.reset()
+	acceptMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mesh.trait.accept","arguments":{"traitId":"trait-123"}}}`))
+	if err := json.Unmarshal(acceptMCP, &listParsed); err != nil {
+		t.Fatalf("parse MCP mesh.trait.accept response: %v", err)
+	}
+	if listParsed.Error != nil || listParsed.Result.IsError || len(listParsed.Result.Content) == 0 {
+		t.Fatalf("MCP mesh.trait.accept failed: %s", acceptMCP)
+	}
+	if err := json.Unmarshal([]byte(listParsed.Result.Content[0].Text), &acceptOut); err != nil {
+		t.Fatalf("decode MCP mesh.trait.accept payload: %v", err)
+	}
+	if acceptOut.TraitID != traitID || acceptOut.Status != "accepted" {
+		t.Fatalf("MCP mesh.trait.accept output = %+v", acceptOut)
+	}
+	if calls := mock.inputsFor("MeshTraitAccept"); len(calls) != 1 || !reflect.DeepEqual(calls[0], acceptWant) {
+		t.Fatalf("MCP mesh.trait.accept calls = %#v, want %#v", calls, acceptWant)
+	}
+
+	mock.reset()
+	acceptCommand, ok := lookupMeshTraitCommand("accept")
+	if !ok {
+		t.Fatal("CLI: no mesh trait subcommand registered for \"accept\"")
+	}
+	if acceptCommand.capability != core.CapMeshTraitAccept {
+		t.Fatalf("CLI subcommand \"accept\" maps to %q, want %q", acceptCommand.capability, core.CapMeshTraitAccept)
+	}
+	acceptInput, err := parseMeshTraitArgs(acceptCommand.capability, []string{traitID})
+	if err != nil {
+		t.Fatalf("CLI parseMeshTraitArgs(accept): %v", err)
+	}
+	acceptResult, err := mock.Invoke(ctx, acceptCommand.capability, acceptInput)
+	if err != nil {
+		t.Fatalf("CLI mesh.trait.accept: Core.Invoke: %v", err)
+	}
+	if typed, ok := acceptResult.(core.MeshTraitAcceptOutput); !ok || typed.TraitID != traitID || typed.Status != "accepted" {
+		t.Fatalf("CLI mesh.trait.accept result = %#v, want accepted trait", acceptResult)
+	}
+	if calls := mock.inputsFor("MeshTraitAccept"); len(calls) != 1 || !reflect.DeepEqual(calls[0], acceptWant) {
+		t.Fatalf("CLI mesh.trait.accept calls = %#v, want %#v", calls, acceptWant)
+	}
+
+	// --- REJECT ---------------------------------------------------------------
+	rejectID := "trait-456"
+	rejectWant := core.MeshTraitRejectInput{TraitID: rejectID}
+
+	mock.reset()
+	rejectReq, err := http.NewRequest(http.MethodPost, server.URL+"/v1/mesh/traits/"+rejectID+"/reject", nil)
+	if err != nil {
+		t.Fatalf("build REST mesh.trait.reject request: %v", err)
+	}
+	rejectResp, err := http.DefaultClient.Do(rejectReq)
+	if err != nil {
+		t.Fatalf("REST mesh.trait.reject: %v", err)
+	}
+	defer rejectResp.Body.Close()
+	if rejectResp.StatusCode >= 300 {
+		body, _ := io.ReadAll(rejectResp.Body)
+		t.Fatalf("REST mesh.trait.reject status = %d, body = %s", rejectResp.StatusCode, body)
+	}
+	var rejectOut core.MeshTraitRejectOutput
+	if err := json.NewDecoder(rejectResp.Body).Decode(&rejectOut); err != nil {
+		t.Fatalf("decode REST mesh.trait.reject response: %v", err)
+	}
+	if rejectOut.TraitID != rejectID || rejectOut.Status != "rejected" {
+		t.Fatalf("REST mesh.trait.reject output = %+v", rejectOut)
+	}
+	if calls := mock.inputsFor("MeshTraitReject"); len(calls) != 1 || !reflect.DeepEqual(calls[0], rejectWant) {
+		t.Fatalf("REST mesh.trait.reject calls = %#v, want %#v", calls, rejectWant)
+	}
+
+	mock.reset()
+	rejectMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mesh.trait.reject","arguments":{"traitId":"trait-456"}}}`))
+	if err := json.Unmarshal(rejectMCP, &listParsed); err != nil {
+		t.Fatalf("parse MCP mesh.trait.reject response: %v", err)
+	}
+	if listParsed.Error != nil || listParsed.Result.IsError || len(listParsed.Result.Content) == 0 {
+		t.Fatalf("MCP mesh.trait.reject failed: %s", rejectMCP)
+	}
+	if err := json.Unmarshal([]byte(listParsed.Result.Content[0].Text), &rejectOut); err != nil {
+		t.Fatalf("decode MCP mesh.trait.reject payload: %v", err)
+	}
+	if rejectOut.TraitID != rejectID || rejectOut.Status != "rejected" {
+		t.Fatalf("MCP mesh.trait.reject output = %+v", rejectOut)
+	}
+	if calls := mock.inputsFor("MeshTraitReject"); len(calls) != 1 || !reflect.DeepEqual(calls[0], rejectWant) {
+		t.Fatalf("MCP mesh.trait.reject calls = %#v, want %#v", calls, rejectWant)
+	}
+
+	mock.reset()
+	rejectCommand, ok := lookupMeshTraitCommand("reject")
+	if !ok {
+		t.Fatal("CLI: no mesh trait subcommand registered for \"reject\"")
+	}
+	if rejectCommand.capability != core.CapMeshTraitReject {
+		t.Fatalf("CLI subcommand \"reject\" maps to %q, want %q", rejectCommand.capability, core.CapMeshTraitReject)
+	}
+	rejectInput, err := parseMeshTraitArgs(rejectCommand.capability, []string{rejectID})
+	if err != nil {
+		t.Fatalf("CLI parseMeshTraitArgs(reject): %v", err)
+	}
+	rejectResult, err := mock.Invoke(ctx, rejectCommand.capability, rejectInput)
+	if err != nil {
+		t.Fatalf("CLI mesh.trait.reject: Core.Invoke: %v", err)
+	}
+	if typed, ok := rejectResult.(core.MeshTraitRejectOutput); !ok || typed.TraitID != rejectID || typed.Status != "rejected" {
+		t.Fatalf("CLI mesh.trait.reject result = %#v, want rejected trait", rejectResult)
+	}
+	if calls := mock.inputsFor("MeshTraitReject"); len(calls) != 1 || !reflect.DeepEqual(calls[0], rejectWant) {
+		t.Fatalf("CLI mesh.trait.reject calls = %#v, want %#v", calls, rejectWant)
 	}
 }
 

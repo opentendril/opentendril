@@ -166,9 +166,10 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.HandleFunc("GET /health", handleHealth)
 
 	// Unified Interface Layer: the transport-free Core owns the session-
-	// lifecycle, genome, plasmid, substrate-grafting, sequence, and sprout/run
-	// capabilities; the REST, MCP, and CLI surfaces are adapters that route
-	// through this one service (issues #159, #181).
+	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
+	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
+	// are adapters that route through this one service (issues #159, #181,
+	// #185).
 	coreSvc := core.NewService(sessions).
 		WithGenome(genomeOps(resolveRepoRoot(""))).
 		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
@@ -212,6 +213,13 @@ func runServeCmd(ctx context.Context, args []string) {
 	// delegation commands.
 	graftHandler := receptors.NewGraftHandler(coreSvc)
 	graftHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, next)
+	})
+
+	// Mesh trait governance REST API (adapter, issue #185). These routes
+	// expose the pending-trait inbox to the Command Center and CLI.
+	traitHandler := receptors.NewTraitHandler(coreSvc)
+	traitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 

@@ -21,13 +21,16 @@ const (
 	CapGenomeReduce = "genome.reduce"
 	CapGenomeEvolve = "genome.evolve"
 
-	CapPlasmidList   = "plasmid.list"
-	CapPlasmidInject = "plasmid.inject"
-	CapMeshGraft     = "mesh.graft"
-	CapMeshPromote   = "mesh.promote"
-	CapSequenceList  = "sequence.list"
-	CapSequenceRun   = "sequence.run"
-	CapSproutRun     = "sprout.run"
+	CapPlasmidList     = "plasmid.list"
+	CapPlasmidInject   = "plasmid.inject"
+	CapMeshGraft       = "mesh.graft"
+	CapMeshPromote     = "mesh.promote"
+	CapMeshTraitList   = "mesh.trait.list"
+	CapMeshTraitAccept = "mesh.trait.accept"
+	CapMeshTraitReject = "mesh.trait.reject"
+	CapSequenceList    = "sequence.list"
+	CapSequenceRun     = "sequence.run"
+	CapSproutRun       = "sprout.run"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -64,6 +67,9 @@ func CapabilityNames() []string {
 		CapPlasmidInject,
 		CapMeshGraft,
 		CapMeshPromote,
+		CapMeshTraitList,
+		CapMeshTraitAccept,
+		CapMeshTraitReject,
 		CapSequenceList,
 		CapSequenceRun,
 		CapSproutRun,

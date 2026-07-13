@@ -11,6 +11,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
@@ -203,12 +204,13 @@ func renderPlasmidResult(capability, root string, result any) {
 // runPlasmidSignCmd signs a plasmid with the node signing key. Ungoverned by
 // design — see the package comment on runPlasmidCmd.
 func runPlasmidSignCmd(path string) error {
-	key, err := conductor.NodeSigningKey()
+	root := resolveRepoRoot("")
+	privateKey, err := mesh.LoadPrivateKey(root)
 	if err != nil {
-		return fmt.Errorf("load node signing key: %w", err)
+		return fmt.Errorf("load node private signing key: %w", err)
 	}
 
-	sig, err := conductor.SignPlasmid(path, key)
+	sig, err := conductor.SignPlasmid(path, privateKey)
 	if err != nil {
 		return fmt.Errorf("sign plasmid: %w", err)
 	}
