@@ -1,6 +1,8 @@
 package conductor
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,8 +14,12 @@ func TestSignAndVerifyPlasmid(t *testing.T) {
 		t.Fatalf("write plasmid: %v", err)
 	}
 
-	key := []byte("0123456789abcdef0123456789abcdef")
-	sig, err := SignPlasmid(path, key)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+
+	sig, err := SignPlasmid(path, privateKey)
 	if err != nil {
 		t.Fatalf("sign plasmid: %v", err)
 	}
@@ -21,7 +27,7 @@ func TestSignAndVerifyPlasmid(t *testing.T) {
 		t.Fatalf("write plasmid signature: %v", err)
 	}
 
-	if err := VerifyPlasmidSignature(path, key); err != nil {
+	if err := VerifyPlasmidSignature(path, publicKey); err != nil {
 		t.Fatalf("verify plasmid signature: %v", err)
 	}
 }
@@ -32,8 +38,12 @@ func TestVerifyDetectsModifiedContent(t *testing.T) {
 		t.Fatalf("write plasmid: %v", err)
 	}
 
-	key := []byte("0123456789abcdef0123456789abcdef")
-	sig, err := SignPlasmid(path, key)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+
+	sig, err := SignPlasmid(path, privateKey)
 	if err != nil {
 		t.Fatalf("sign plasmid: %v", err)
 	}
@@ -44,7 +54,7 @@ func TestVerifyDetectsModifiedContent(t *testing.T) {
 		t.Fatalf("modify plasmid: %v", err)
 	}
 
-	if err := VerifyPlasmidSignature(path, key); err == nil {
+	if err := VerifyPlasmidSignature(path, publicKey); err == nil {
 		t.Fatal("expected modified plasmid content to fail verification")
 	}
 }
@@ -55,8 +65,12 @@ func TestVerifyDetectsMissingSig(t *testing.T) {
 		t.Fatalf("write plasmid: %v", err)
 	}
 
-	key := []byte("0123456789abcdef0123456789abcdef")
-	if err := VerifyPlasmidSignature(path, key); err == nil {
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+
+	if err := VerifyPlasmidSignature(path, publicKey); err == nil {
 		t.Fatal("expected missing signature to fail verification")
 	}
 }

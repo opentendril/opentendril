@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/core/cmd/stem/internal/mesh"
 	"github.com/opentendril/core/cmd/stem/internal/terrarium"
 	"github.com/opentendril/core/roots/llm"
 )
@@ -1463,13 +1464,13 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) error
 		}
 
 		if genotype.RequirePlasmidSignatures {
-			key, err := NodeSigningKey()
+			publicKey, err := mesh.LoadPublicKey(sourcePath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to load node signing key for plasmid %s: %v\n", name, err)
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to load node public key for plasmid %s: %v\n", name, err)
 				sigVerifyFailed = true
 				continue
 			}
-			if err := VerifyPlasmidSignature(sourceFile, key); err != nil {
+			if err := VerifyPlasmidSignature(sourceFile, publicKey); err != nil {
 				fmt.Fprintf(os.Stderr, "⚠️ Failed to verify plasmid signature for %s: %v\n", name, err)
 				sigVerifyFailed = true
 				continue

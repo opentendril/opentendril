@@ -1,66 +1,24 @@
 package conductor
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
+	"crypto/ed25519"
 	"encoding/hex"
+	"fmt"
 	"os"
-	"path/filepath"
 )
 
-// NodeSigningKey loads or creates the local node key used for plasmid signatures.
-func NodeSigningKey() ([]byte, error) {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return nil, err
+// SignPlasmid returns the Ed25519 signature for a plasmid file.
+func SignPlasmid(sourcePath string, privateKey ed25519.PrivateKey) ([]byte, error) {
+	if len(privateKey) != ed25519.PrivateKeySize {
+		return nil, fmt.Errorf("invalid ed25519 private key length: %d", len(privateKey))
 	}
 
-	keyPath := filepath.Join(configDir, "opentendril", "node.key")
-	if payload, err := os.ReadFile(keyPath); err == nil {
-		if len(payload) != 64 {
-			return nil, os.ErrInvalid
-		}
-		key, err := hex.DecodeString(string(payload))
-		if err != nil {
-			return nil, err
-		}
-		if len(key) != 32 {
-			return nil, os.ErrInvalid
-		}
-		return key, nil
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	}
-
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
-		return nil, err
-	}
-	if err := os.WriteFile(keyPath, []byte(hex.EncodeToString(key)), 0o600); err != nil {
-		return nil, err
-	}
-
-	return key, nil
-}
-
-// SignPlasmid returns the HMAC-SHA256 signature for a plasmid file.
-func SignPlasmid(sourcePath string, key []byte) ([]byte, error) {
 	payload, err := os.ReadFile(sourcePath)
 	if err != nil {
 		return nil, err
 	}
 
-	mac := hmac.New(sha256.New, key)
-	if _, err := mac.Write(payload); err != nil {
-		return nil, err
-	}
-
-	return mac.Sum(nil), nil
+	return ed25519.Sign(privateKey, payload), nil
 }
 
 // WritePlasmidSignature writes the hex-encoded signature next to the plasmid.
@@ -70,25 +28,26 @@ func WritePlasmidSignature(sourcePath string, sig []byte) error {
 }
 
 // VerifyPlasmidSignature validates a plasmid file against its .sig sidecar.
-func VerifyPlasmidSignature(sourcePath string, key []byte) error {
-	payload, err := os.ReadFile(sourcePath + ".sig")
-	if err != nil {
-		return err
-	}
-	if len(payload) > 0 && payload[len(payload)-1] == '\n' {
-		payload = payload[:len(payload)-1]
-	}
-
-	actual, err := hex.DecodeString(string(payload))
+func VerifyPlasmidSignature(sourcePath string, publicKey ed25519.PublicKey) error {
+	payload, err := os.ReadFile(sourcePath)
 	if err != nil {
 		return err
 	}
 
-	expected, err := SignPlasmid(sourcePath, key)
+	sigPayload, err := os.ReadFile(sourcePath + ".sig")
 	if err != nil {
 		return err
 	}
-	if !hmac.Equal(expected, actual) {
+	if len(sigPayload) > 0 && sigPayload[len(sigPayload)-1] == '\n' {
+		sigPayload = sigPayload[:len(sigPayload)-1]
+	}
+
+	actual, err := hex.DecodeString(string(sigPayload))
+	if err != nil {
+		return err
+	}
+
+	if !ed25519.Verify(publicKey, payload, actual) {
 		return os.ErrInvalid
 	}
 

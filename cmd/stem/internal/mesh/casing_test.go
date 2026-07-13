@@ -24,6 +24,20 @@ func TestMeshWireKeysAreCamelCase(t *testing.T) {
 			MeshScope:     "mesh-graft",
 			WorkspacePath: "/tmp/workspace",
 		},
+		"TraitEnvelope": TraitEnvelope{
+			Trait: TraitPayload{
+				Kind:    TraitKindPlasmid,
+				Name:    "test-plasmid",
+				Version: "v1",
+				Content: "content",
+			},
+			Origin: TraitOrigin{
+				NodeID:               "node-123",
+				PublicKeyFingerprint: "fingerprint",
+			},
+			SignedAt:  1234567890,
+			Signature: "signature",
+		},
 		"adminIssueTokenRequest": adminIssueTokenRequest{
 			Issuer:        "issuer",
 			Subject:       "subject",
