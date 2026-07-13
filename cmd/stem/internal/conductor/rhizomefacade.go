@@ -50,7 +50,11 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 		repositoryName = "workspace"
 	}
 
-	if _, err := rhizome.ScanRepository(ctx, mountPath, repositoryName, store, nil); err != nil {
+	// Batch pre-pass: attempt the tree-sitter terrarium for high-fidelity
+	// non-Go symbols; on any failure this degrades to DefaultParsers so a
+	// docker-less `tendril repomap` keeps working.
+	parsers := scanRepositoryParsers(ctx, mountPath)
+	if _, err := rhizome.ScanRepository(ctx, mountPath, repositoryName, store, parsers); err != nil {
 		return "", fmt.Errorf("scan repository: %w", err)
 	}
 
