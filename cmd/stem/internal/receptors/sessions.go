@@ -12,6 +12,7 @@ import (
 
 	"github.com/opentendril/core/cmd/stem/internal/conductor"
 	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 	"github.com/opentendril/core/cmd/stem/internal/historydb"
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
@@ -19,13 +20,14 @@ import (
 // SessionsHandler is the REST adapter for the session-lifecycle capabilities.
 // The six governed capabilities (see core.CapabilityNames) route through the
 // transport-free core.Core; this handler only translates HTTP↔core and holds
-// no business logic for them. The manager/history references remain for the
+// no business logic for them. The manager/history/bus references remain for the
 // ungoverned read routes (events, sprout-runs) and the async sequence trigger,
 // which are follow-up capabilities not yet part of the parity registry.
 type SessionsHandler struct {
 	core    core.Core
 	manager *session.Manager
 	history *historydb.Store
+	bus     *eventbus.Bus
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
 	// list) — the independence the parity coverage test relies on.
@@ -33,10 +35,10 @@ type SessionsHandler struct {
 }
 
 // NewSessionsHandler creates the sessions REST surface. core owns the governed
-// session capabilities; manager/history back the ungoverned routes. history may
-// be nil when SQLite logging is disabled.
-func NewSessionsHandler(coreSvc core.Core, manager *session.Manager, history *historydb.Store) *SessionsHandler {
-	return &SessionsHandler{core: coreSvc, manager: manager, history: history}
+// session capabilities; manager/history/bus back the ungoverned routes.
+// history may be nil when SQLite logging is disabled; bus may be nil in tests.
+func NewSessionsHandler(coreSvc core.Core, manager *session.Manager, history *historydb.Store, bus *eventbus.Bus) *SessionsHandler {
+	return &SessionsHandler{core: coreSvc, manager: manager, history: history, bus: bus}
 }
 
 // governedRoute binds one REST route to the Core capability it projects.
@@ -282,15 +284,57 @@ func (h *SessionsHandler) runSequenceAsync(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Write "running" immediately so observers can see the detached job start.
+	if h.history != nil {
+		_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
+			RunID:      runID,
+			SessionID:  sessionID,
+			StepID:     runID,
+			Origin:     "rest",
+			Transcript: req.PathOrName,
+			Status:     "running",
+			StartedAt:  time.Now().UTC(),
+		})
+	}
+
 	go func() {
-		_, err := conductor.RunSequence(bgCtx, req.PathOrName, conductor.SequenceRunOptions{
+		result, err := conductor.RunSequence(bgCtx, req.PathOrName, conductor.SequenceRunOptions{
 			Provider: req.Provider,
 			Model:    req.Model,
 			BaseURL:  req.BaseURL,
 		})
 		if err != nil {
-			// In a real system, we'd log this to the session history/eventbus.
-			// For now, the orchestrator logs to stdout/stderr.
+			h.bus.Publish(eventbus.Event{
+				Type:      eventbus.EventSequenceFailure,
+				SessionID: sessionID,
+				Source:    "receptors",
+				Timestamp: time.Now().UTC(),
+				Data:      map[string]any{"runId": runID, "error": err.Error()},
+			})
+			if h.history != nil {
+				_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
+					RunID: runID, SessionID: sessionID, StepID: runID,
+					Status: "withered", Error: err.Error(), FinishedAt: time.Now().UTC(),
+				})
+			}
+			return
+		}
+		steps := 0
+		if result != nil {
+			steps = len(result.Steps)
+		}
+		h.bus.Publish(eventbus.Event{
+			Type:      eventbus.EventSequenceComplete,
+			SessionID: sessionID,
+			Source:    "receptors",
+			Timestamp: time.Now().UTC(),
+			Data:      map[string]any{"runId": runID, "steps": steps},
+		})
+		if h.history != nil {
+			_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
+				RunID: runID, SessionID: sessionID, StepID: runID,
+				Status: "matured", FinishedAt: time.Now().UTC(),
+			})
 		}
 	}()
 

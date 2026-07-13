@@ -46,12 +46,12 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) { return substrate, nil },
 		DelegatePush:     func(context.Context, string, string, string) (string, error) { return "deadbeef", nil },
 	})
-	rest := receptors.NewSessionsHandler(svc, manager, nil)
+	rest := receptors.NewSessionsHandler(svc, manager, nil, nil)
 	genomeRest := receptors.NewGenomeHandler(svc)
 	plasmidRest := receptors.NewPlasmidHandler(svc)
 	graftRest := receptors.NewGraftHandler(svc)
 	sequenceRest := receptors.NewSequenceHandler(svc)
-	sproutRest := receptors.NewSproutHandler(svc)
+	sproutRest := receptors.NewSproutHandler(svc, nil, nil)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
@@ -588,12 +588,12 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 		t.Fatalf("new manager: %v", err)
 	}
 
-	rest := receptors.NewSessionsHandler(mock, manager, nil)
+	rest := receptors.NewSessionsHandler(mock, manager, nil, nil)
 	genomeRest := receptors.NewGenomeHandler(mock)
 	plasmidRest := receptors.NewPlasmidHandler(mock)
 	graftRest := receptors.NewGraftHandler(mock)
 	sequenceRest := receptors.NewSequenceHandler(mock)
-	sproutRest := receptors.NewSproutHandler(mock)
+	sproutRest := receptors.NewSproutHandler(mock, nil, nil)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
@@ -1260,7 +1260,7 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 	if command.capability != core.CapSproutRun {
 		t.Fatalf("CLI subcommand \"run\" maps to %q, want %q", command.capability, core.CapSproutRun)
 	}
-	input, err := parseSproutArgs(command.capability, []string{
+	input, detach, err := parseSproutArgs(command.capability, []string{
 		"--substrate", "/workspaces/core",
 		"--session", "parity-session-1",
 		"--origin", "parity-origin",
@@ -1268,6 +1268,9 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("CLI parseSproutArgs: %v", err)
+	}
+	if detach {
+		t.Fatal("CLI parseSproutArgs: unexpected detach=true for sync parity path")
 	}
 	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
 		t.Fatalf("CLI sprout.run: Core.Invoke: %v", err)

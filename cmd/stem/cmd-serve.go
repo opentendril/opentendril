@@ -190,7 +190,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	// Tendril session REST API (adapter).
-	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history)
+	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
 	sessionsHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
@@ -221,8 +221,10 @@ func runServeCmd(ctx context.Context, args []string) {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Sprout REST API (adapter, issue #181 final family).
-	sproutHandler := receptors.NewSproutHandler(coreSvc)
+	// Sprout REST API (adapter, issue #181 final family). Detached
+	// POST /v1/sessions/{sessionId}/sprout/run is registered as an ungoverned
+	// route inside SproutHandler.Register (issue #248).
+	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})

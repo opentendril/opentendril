@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +24,9 @@ import (
 // the REST and MCP surfaces use. `tendril sprout run` delegates a one-shot
 // task to an autonomous Tendril in a secure terrarium and prints its output —
 // the headless CLI equivalent of the MCP sproutTendril tool.
+//
+// `--detach` is adapter-local (issue #248): it hands the run to the Stem
+// daemon's async endpoint instead of executing in-process.
 func runSproutCmd(ctx context.Context, args []string) {
 	if len(args) == 0 {
 		printSproutUsage()
@@ -42,13 +47,18 @@ func runSproutCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	input, err := parseSproutArgs(command.capability, args[1:])
+	input, detach, err := parseSproutArgs(command.capability, args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 	if origin, _ := input["origin"].(string); strings.TrimSpace(origin) == "" {
 		input["origin"] = session.OriginCLI
+	}
+
+	if detach {
+		submitSproutAsync(ctx, input)
+		return
 	}
 
 	svc, cleanup, err := buildSproutCore(ctx)
@@ -226,11 +236,13 @@ func sproutCLICapabilityNames() []string {
 	return names
 }
 
-// parseSproutArgs turns CLI args into a capability input map: the positional
-// args are the transcript (joined), with flags for the rest; `--json '{...}'`
-// is the generic escape hatch, mirroring parseSessionArgs.
-func parseSproutArgs(capName string, args []string) (map[string]any, error) {
+// parseSproutArgs turns CLI args into a capability input map plus the
+// adapter-local detach flag. Positional args are the transcript (joined), with
+// flags for the rest; `--json '{...}'` is the generic escape hatch, mirroring
+// parseSessionArgs / parseSequenceArgs.
+func parseSproutArgs(capName string, args []string) (map[string]any, bool, error) {
 	input := map[string]any{}
+	detach := false
 	var positional []string
 	stringFlag := func(i *int, key string) error {
 		if *i+1 >= len(args) {
@@ -245,11 +257,11 @@ func parseSproutArgs(capName string, args []string) (map[string]any, error) {
 		switch args[i] {
 		case "--json":
 			if i+1 >= len(args) {
-				return nil, fmt.Errorf("flag --json requires a value")
+				return nil, false, fmt.Errorf("flag --json requires a value")
 			}
 			i++
 			if jsonErr := json.Unmarshal([]byte(args[i]), &input); jsonErr != nil {
-				return nil, fmt.Errorf("invalid --json input: %w", jsonErr)
+				return nil, false, fmt.Errorf("invalid --json input: %w", jsonErr)
 			}
 		case "--substrate":
 			err = stringFlag(&i, "substrate")
@@ -263,14 +275,16 @@ func parseSproutArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "substrateBranch")
 		case "--origin":
 			err = stringFlag(&i, "origin")
+		case "--detach", "-d":
+			detach = true
 		default:
 			if strings.HasPrefix(args[i], "--") {
-				return nil, fmt.Errorf("unknown argument %q for sprout %s", args[i], strings.TrimPrefix(capName, "sprout."))
+				return nil, false, fmt.Errorf("unknown argument %q for sprout %s", args[i], strings.TrimPrefix(capName, "sprout."))
 			}
 			positional = append(positional, args[i])
 		}
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 
@@ -278,12 +292,12 @@ func parseSproutArgs(capName string, args []string) (map[string]any, error) {
 		input["transcript"] = strings.Join(positional, " ")
 	}
 	if transcript, _ := input["transcript"].(string); strings.TrimSpace(transcript) == "" {
-		return nil, fmt.Errorf("missing transcript. Usage: tendril sprout run --substrate <path|name> <transcript>")
+		return nil, false, fmt.Errorf("missing transcript. Usage: tendril sprout run --substrate <path|name> <transcript>")
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
-		return nil, fmt.Errorf("missing substrate. Usage: tendril sprout run --substrate <path|name> <transcript>")
+		return nil, false, fmt.Errorf("missing substrate. Usage: tendril sprout run --substrate <path|name> <transcript>")
 	}
-	return input, nil
+	return input, detach, nil
 }
 
 func printSproutUsage() {
@@ -293,6 +307,70 @@ func printSproutUsage() {
 	fmt.Println("  --step ID           Pin a stable step identifier")
 	fmt.Println("  --substrate-url U   Remote repository URL override to clone dynamically")
 	fmt.Println("  --substrate-branch B Branch to clone when --substrate-url is set")
+	fmt.Println("  --detach, -d        Run in background (requires daemon)")
 	fmt.Println()
 	fmt.Println("run is a projection of the shared Core capability registry.")
+}
+
+// submitSproutAsync POSTs a detached sprout run to the Stem daemon (issue #248),
+// mirroring submitSequenceAsync.
+func submitSproutAsync(ctx context.Context, input map[string]any) {
+	// Keep only fields the async REST body accepts; origin is set by the adapter.
+	body := map[string]any{}
+	for _, key := range []string{"transcript", "substrate", "stepId", "sessionId", "substrateUrl", "substrateBranch"} {
+		if v, ok := input[key]; ok {
+			body[key] = v
+		}
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to encode sprout request: %v\n", err)
+		os.Exit(1)
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	url := fmt.Sprintf("http://localhost:%s/v1/sessions/new/sprout/run", port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to build request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	} else if key := strings.TrimSpace(os.Getenv("TENDRIL_API_KEY")); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Please ensure the OpenTendril daemon is running (`tendril serve`) to use --detach.")
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		fmt.Fprintf(os.Stderr, "❌ Stem daemon rejected run request (status %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var result struct {
+		StepID    string `json:"stepId"`
+		SessionID string `json:"sessionId"`
+		Status    string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to decode daemon response: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintln(os.Stdout, "🚀 Sprout submitted for detached execution.")
+	fmt.Fprintf(os.Stdout, "   Step ID:    %s\n", result.StepID)
+	fmt.Fprintf(os.Stdout, "   Session ID: %s\n", result.SessionID)
+	fmt.Fprintf(os.Stdout, "   Watch:      GET /v1/sessions/%s/sprout-runs\n", result.SessionID)
 }
