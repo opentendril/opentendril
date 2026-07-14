@@ -14,7 +14,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/rhizome"
 )
 
-// updateTreeSitterGolden regenerates testdata/treesitter_golden.json from a
+// updateTreeSitterGolden regenerates testdata/treesittergolden.json from a
 // live container run instead of comparing against it:
 //
 //	go test ./cmd/stem/internal/conductor/ -run TestTreeSitterGoldenFidelity -update-treesitter-golden
@@ -100,7 +100,7 @@ func TestTreeSitterGoldenFidelity(t *testing.T) {
 	}
 	got = append(got, '\n')
 
-	goldenPath := filepath.Join("testdata", "treesitter_golden.json")
+	goldenPath := filepath.Join("testdata", "treesittergolden.json")
 	if *updateTreeSitterGolden {
 		if err := os.WriteFile(goldenPath, got, 0o644); err != nil {
 			t.Fatalf("write golden: %v", err)
