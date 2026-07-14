@@ -2,9 +2,12 @@ FROM node:22-alpine AS build
 
 WORKDIR /src/sprouts/node
 
-COPY sprouts/node/package.json sprouts/node/tsconfig.json ./
+COPY sprouts/node/package.json sprouts/node/package-lock.json sprouts/node/tsconfig.json ./
 
-RUN npm install
+# npm ci installs the exact, integrity-checked tree from package-lock.json and
+# fails the build on any hash mismatch — a tampered or re-published registry
+# tarball cannot slip in under a caret range (#257).
+RUN npm ci
 
 COPY sprouts/node/src ./src
 

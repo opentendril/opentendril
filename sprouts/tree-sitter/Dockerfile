@@ -8,7 +8,10 @@
 # keep the native go/ast parser; anything this image cannot cover falls back
 # to the regex parser — so a released binary with no Docker still works.
 #
-# All grammar/runtime versions are pinned exactly for determinism, and every
+# Grammar/runtime versions are integrity-pinned in package-lock.json and
+# installed with `npm ci`, which fails the build if any resolved artifact's
+# hash does not match the lockfile — a re-published or tampered registry
+# tarball can no longer slip in under the same version string (#257). Every
 # dependency is installed at build time: at runtime the container has no
 # network. The npm grammar packages ship prebuilt .wasm files, which we copy
 # to a stable path so parse.js never depends on npm package layout at runtime.
@@ -20,11 +23,9 @@ FROM node:22-alpine
 
 WORKDIR /opt/opentendril
 
-RUN npm install --no-save --no-audit --no-fund \
-      web-tree-sitter@0.25.10 \
-      tree-sitter-python@0.23.6 \
-      tree-sitter-javascript@0.23.1 \
-      tree-sitter-typescript@0.23.2 \
+COPY package.json package-lock.json ./
+
+RUN npm ci --no-audit --no-fund \
  && mkdir -p grammars \
  && cp node_modules/tree-sitter-python/tree-sitter-python.wasm grammars/ \
  && cp node_modules/tree-sitter-javascript/tree-sitter-javascript.wasm grammars/ \
