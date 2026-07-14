@@ -27,10 +27,20 @@ WORKDIR /app
 COPY requirements.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
-# Install llama-cpp-python with OpenBLAS CPU acceleration
-# This compiles from source — adds ~5 minutes to build time
+# Install llama-cpp-python with OpenBLAS CPU acceleration.
+# This compiles from source — adds ~5 minutes to build time.
+#
+# Pinned to exact versions for reproducibility (#257). Not --require-hashes:
+# llama-cpp-python is a compiled sdist whose PEP-517 build backend would then
+# also need its build dependencies hash-locked, which pip-compile cannot
+# capture. huggingface_hub and tqdm are already hash-pinned via
+# requirements.lock installed above; they are re-pinned here to the same
+# versions so this layer can never silently upgrade them.
 RUN CMAKE_ARGS="-DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS" \
-    pip install --no-cache-dir llama-cpp-python huggingface_hub tqdm
+    pip install --no-cache-dir \
+      llama-cpp-python==0.3.34 \
+      huggingface_hub==1.23.0 \
+      tqdm==4.68.4
 
 COPY src/ ./src/
 COPY entrypoint.sh .
