@@ -4,6 +4,9 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+permissions:
+  contents: read
+
 jobs:
   verify-commits:
     runs-on: ubuntu-latest
@@ -36,3 +39,40 @@ jobs:
           fi
           
           echo "✅ All commit authors and trailers verified successfully."
+
+      - name: Verify Commit Signatures
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Report-only until this repo variable is set to 'true' (Settings →
+          # Secrets and variables → Actions → Variables → REQUIRE_SIGNED_COMMITS).
+          # That lets the check land before commit signing is rolled out; flip it
+          # on once maintainers/agents sign, alongside branch protection's
+          # "Require signed commits" (which is the actual push-time gate on main).
+          ENFORCE: ${{ vars.REQUIRE_SIGNED_COMMITS }}
+        run: |
+          echo "Checking commit signatures (GitHub verifies against uploaded keys server-side)..."
+
+          unsigned=0
+          for sha in $(git log origin/${{ github.base_ref }}..HEAD --format=%H); do
+            status=$(gh api "repos/${{ github.repository }}/commits/$sha" \
+              --jq '[.commit.verification.verified, .commit.verification.reason] | @tsv')
+            verified=$(printf '%s' "$status" | cut -f1)
+            reason=$(printf '%s' "$status" | cut -f2)
+            subject=$(git log -1 --format='%h %s' "$sha")
+            if [ "$verified" = "true" ]; then
+              echo "  ✅ $subject — verified"
+            else
+              echo "  ⚠️  $subject — UNVERIFIED ($reason)"
+              unsigned=$((unsigned + 1))
+            fi
+          done
+
+          if [ "$unsigned" -gt 0 ]; then
+            if [ "$ENFORCE" = "true" ]; then
+              echo "::error::$unsigned commit(s) are not signed/verified and REQUIRE_SIGNED_COMMITS is enabled."
+              exit 1
+            fi
+            echo "::warning::$unsigned commit(s) are not signed/verified. Report-only until REQUIRE_SIGNED_COMMITS=true."
+          else
+            echo "✅ All commits are signed and verified."
+          fi
