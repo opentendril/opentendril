@@ -76,7 +76,6 @@ var (
 	generateMemoryMapFn        = GenerateMemoryMap
 	runSproutPreflightChecksFn = runSproutPreflightChecks
 	runVerifierCommandFn       = runVerifierCommand
-	runTreeSitterScanFn        = runTreeSitterScan
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -487,8 +486,6 @@ func sproutBuildSpec(imageName string) (string, string, error) {
 		return coreRoot, filepath.Join(coreRoot, "sprouts", "go-fuzz", "Dockerfile"), nil
 	case verifierImage:
 		return coreRoot, filepath.Join(coreRoot, "sprouts", "go-verifier", "Dockerfile"), nil
-	case treeSitterImage:
-		return filepath.Join(coreRoot, "sprouts", "tree-sitter"), filepath.Join(coreRoot, "sprouts", "tree-sitter", "Dockerfile"), nil
 	case "opentendril-typescript:latest":
 		return coreRoot, filepath.Join(coreRoot, "sprouts", "typescript", "Dockerfile"), nil
 	case "opentendril-node:latest":

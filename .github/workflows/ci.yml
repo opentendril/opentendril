@@ -25,7 +25,6 @@ jobs:
     outputs:
       tendril-python: ${{ steps.filter.outputs['tendril-python'] }}
       stem-go: ${{ steps.filter.outputs['stem-go'] }}
-      tree-sitter: ${{ steps.filter.outputs['tree-sitter'] }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,7 +39,6 @@ jobs:
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "tendril-python=true" >> "$GITHUB_OUTPUT"
             echo "stem-go=true" >> "$GITHUB_OUTPUT"
-            echo "tree-sitter=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -48,14 +46,12 @@ jobs:
 
           tendril_python=false
           stem_go=false
-          tree_sitter=false
 
           while IFS= read -r path; do
             case "$path" in
               .github/workflows/ci.yml|Makefile)
                 tendril_python=true
                 stem_go=true
-                tree_sitter=true
                 ;;
               sprouts/python/src/*|sprouts/python/tests/*|sprouts/python/requirements.txt|sprouts/python/pyproject.toml)
                 tendril_python=true
@@ -64,21 +60,10 @@ jobs:
                 stem_go=true
                 ;;
             esac
-
-            # Independent match so tree-sitter fidelity is checked whenever the
-            # container parser, its fixtures, the golden test, or the golden
-            # file changes. Kept as a second case so a conductor .go change can
-            # set both stem-go (above) and tree-sitter (here).
-            case "$path" in
-              sprouts/tree-sitter/*|sprouts/tree-sitter/**|cmd/stem/internal/conductor/treesitter*.go|cmd/stem/internal/conductor/testdata/*|cmd/stem/internal/conductor/testdata/**)
-                tree_sitter=true
-                ;;
-            esac
           done <<< "$changed_files"
 
           echo "tendril-python=$tendril_python" >> "$GITHUB_OUTPUT"
           echo "stem-go=$stem_go" >> "$GITHUB_OUTPUT"
-          echo "tree-sitter=$tree_sitter" >> "$GITHUB_OUTPUT"
 
   tendril-python:
     name: Tendril Tests (Python)
@@ -144,36 +129,6 @@ jobs:
         run: |
           make test-stem
 
-  tree-sitter:
-    name: Tree-Sitter Fidelity (Golden)
-    runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ needs.changes.outputs['tree-sitter'] == 'true' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.x'
-          check-latest: true
-          cache-dependency-path: go.sum
-
-      # The fidelity logic lives in parse.js inside the container, so the
-      # golden test must run against a freshly built image — never a stale
-      # cached tag. This is the one job that builds a sprout image in CI.
-      - name: Build tree-sitter image
-        run: docker build -t opentendril-tree-sitter:latest sprouts/tree-sitter/
-
-      # OTTS_REQUIRE_GOLDEN=1 makes the test fail (never skip) if docker or the
-      # image is missing, so a green result here always means the fidelity was
-      # actually checked against the golden fixture.
-      - name: Run golden fidelity test
-        env:
-          OTTS_REQUIRE_GOLDEN: '1'
-        run: |
-          go test ./cmd/stem/internal/conductor/ -run TestTreeSitterGoldenFidelity -v
-
   pr:
     name: Native PR Gate
     runs-on: ubuntu-latest
@@ -181,7 +136,6 @@ jobs:
       - changes
       - tendril-python
       - stem-go
-      - tree-sitter
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -202,12 +156,6 @@ jobs:
           if [ "${{ needs.changes.outputs['stem-go'] }}" = "true" ] && \
              [ "${{ needs.stem-go.result }}" != "success" ]; then
             echo "stem-go was required but finished with result: ${{ needs.stem-go.result }}"
-            failed=true
-          fi
-
-          if [ "${{ needs.changes.outputs['tree-sitter'] }}" = "true" ] && \
-             [ "${{ needs.tree-sitter.result }}" != "success" ]; then
-            echo "tree-sitter was required but finished with result: ${{ needs.tree-sitter.result }}"
             failed=true
           fi
 

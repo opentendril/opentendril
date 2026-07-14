@@ -1,23 +1,23 @@
 package rhizome
 
-// In-process tree-sitter engine (#183 slice 4, the Option-2 endgame).
+// In-process tree-sitter engine (#183).
 //
-// TreeSitterParser gives non-Go files the same tree-sitter fidelity as the
-// terrarium batch pre-pass (sprouts/tree-sitter/parse.js) without a container:
-// it drives the gotreesitter pure-Go tree-sitter runtime, so `go build` stays
-// cgo-free and plain GOOS/GOARCH cross-compiles keep working. The extraction
-// walkers below are a line-for-line port of parse.js — the two engines must
-// emit identical symbols, and conductor's native golden test pins that parity
-// against the same testdata/treesittergolden.json fixture the container
-// golden test pins.
+// TreeSitterParser gives non-Go files high-fidelity tree-sitter symbols by
+// driving the gotreesitter pure-Go tree-sitter runtime, so `go build` stays
+// cgo-free and plain GOOS/GOARCH cross-compiles keep working. It is the sole
+// tree-sitter engine: the original terrarium batch pre-pass (a Docker image
+// running `parse.js`) was demoted once this engine proved out — its extraction
+// rules were ported here line-for-line, so the "mirrors parse.js …" notes
+// below name the removed predecessor (see git history) as the origin of each
+// value. The conductor golden test pins this engine's output against
+// testdata/treesittergolden.json.
 //
 // Engine notes:
 //   - Grammars are the gotreesitter registry's embedded blobs (parse tables
 //     extracted from the upstream tree-sitter-python/-javascript/-typescript
 //     grammars pinned in gotreesitter's grammars/languages.lock; external
-//     scanners are hand-written Go). Grammar drift against the container's
-//     pinned npm versions is caught by the shared golden fixture, not by
-//     version-string comparison.
+//     scanners are hand-written Go). Grammar drift is caught by the golden
+//     fixture, not by version-string comparison.
 //   - Per-file error isolation: a file the engine cannot parse falls back to
 //     the regex extraction INSIDE Parse rather than returning an error,
 //     because ScanRepository hard-fails the whole scan on a parser error (the

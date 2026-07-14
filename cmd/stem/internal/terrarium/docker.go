@@ -379,8 +379,7 @@ func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandRes
 	args := []string{"exec"}
 	// Without -i, docker exec never attaches the client's stdin to the
 	// container process, so a CommandSpec.Stdin payload would silently read as
-	// empty inside the terrarium (the tree-sitter incremental pre-pass ships
-	// its changed-file list this way). Attach it only when a payload exists so
+	// empty inside the terrarium. Attach it only when a payload exists so
 	// stdin-less execs keep their exact historical invocation.
 	if len(spec.Stdin) > 0 {
 		args = append(args, "-i")
