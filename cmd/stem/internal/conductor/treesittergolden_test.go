@@ -49,11 +49,26 @@ type goldenSymbol struct {
 // fidelity on any machine that has run the pre-pass. Build the image first to
 // exercise it: `docker build -t opentendril-tree-sitter:latest sprouts/tree-sitter/`.
 func TestTreeSitterGoldenFidelity(t *testing.T) {
+	// OTTS_REQUIRE_GOLDEN=1 turns unmet preconditions into failures instead of
+	// skips. CI sets it so a missing docker binary or an un-built image can
+	// never masquerade as a pass — a green run must mean the fidelity was
+	// actually checked. Locally the test still skips gracefully.
+	requireGolden := os.Getenv("OTTS_REQUIRE_GOLDEN") == "1"
+	skipOrFail := func(format string, args ...any) {
+		t.Helper()
+		if requireGolden {
+			t.Fatalf("OTTS_REQUIRE_GOLDEN=1 but "+format, args...)
+		}
+		t.Skipf(format, args...)
+	}
+
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker not on PATH; skipping tree-sitter golden fidelity test")
+		skipOrFail("docker not on PATH; cannot run tree-sitter golden fidelity test")
+		return
 	}
 	if err := exec.Command("docker", "image", "inspect", treeSitterImage).Run(); err != nil {
-		t.Skipf("%s not built locally; run `docker build -t %s sprouts/tree-sitter/` to exercise this test", treeSitterImage, treeSitterImage)
+		skipOrFail("%s not built; run `docker build -t %s sprouts/tree-sitter/` to exercise this test", treeSitterImage, treeSitterImage)
+		return
 	}
 
 	root, err := repoSourceRoot()
