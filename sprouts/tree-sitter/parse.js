@@ -84,12 +84,17 @@ function firstJoined(raw) {
     .join(' ');
 }
 
-function makeSymbol(name, type, node, stub) {
+// makeSymbolRange records a symbol whose line span starts at startNode and
+// ends at endNode. They differ when a declaration carries decorators or an
+// `export` prefix: the stub and lineStart come from the widened head node so
+// `@Injectable() export class Foo` reads as one unit, while lineEnd still
+// tracks the declaration body.
+function makeSymbolRange(name, type, startNode, endNode, stub) {
   return {
     name,
     type,
-    lineStart: node.startPosition.row + 1,
-    lineEnd: node.endPosition.row + 1,
+    lineStart: startNode.startPosition.row + 1,
+    lineEnd: endNode.endPosition.row + 1,
     stub,
   };
 }
@@ -123,48 +128,59 @@ function walkPython(node, insideClass, source, symbols, imports) {
     case 'import_from_statement':
       imports.push(firstLine(node.text));
       return;
-    case 'class_definition': {
-      const name = fieldText(node, 'name');
-      if (name) {
-        let stub = signatureOf(node, source);
-        const doc = pythonDocstring(node);
-        if (doc) {
-          stub = doc + '\n' + stub;
-        }
-        symbols.push(makeSymbol(name, 'class', node, stub));
-      }
-      const body = node.childForFieldName('body');
-      if (body) {
-        for (const child of body.namedChildren) {
-          walkPython(child, true, source, symbols, imports);
-        }
+    case 'decorated_definition': {
+      // The decorators are siblings of the wrapped definition; fold their
+      // source lines into the stub and let the decorated_definition node own
+      // the line span so lineStart points at the first decorator.
+      const decorators = node.namedChildren
+        .filter((child) => child.type === 'decorator')
+        .map((child) => firstLine(child.text));
+      const definition = node.namedChildren.find(
+        (child) => child.type === 'class_definition' || child.type === 'function_definition',
+      );
+      if (definition) {
+        emitPythonDefinition(definition, node, insideClass, decorators, source, symbols, imports);
       }
       return;
     }
-    case 'function_definition': {
-      const name = fieldText(node, 'name');
-      if (name) {
-        let stub = signatureOf(node, source);
-        const doc = pythonDocstring(node);
-        if (doc) {
-          stub = doc + '\n' + stub;
-        }
-        symbols.push(makeSymbol(name, insideClass ? 'method' : 'function', node, stub));
-      }
-      const body = node.childForFieldName('body');
-      if (body) {
-        for (const child of body.namedChildren) {
-          walkPython(child, false, source, symbols, imports);
-        }
-      }
+    case 'class_definition':
+    case 'function_definition':
+      emitPythonDefinition(node, node, insideClass, [], source, symbols, imports);
       return;
-    }
     default:
-      // decorated_definition and every other container falls through here so
-      // decorated/nested declarations keep their enclosing-class context.
+      // Every other container falls through here so nested declarations keep
+      // their enclosing-class context.
       for (const child of node.namedChildren) {
         walkPython(child, insideClass, source, symbols, imports);
       }
+  }
+}
+
+// emitPythonDefinition records one class/function symbol and then walks its
+// body for nested declarations. rangeNode is the decorated_definition when
+// decorators are present (so the line span covers the decorator lines),
+// otherwise the definition itself. A class body yields methods; a function
+// body yields functions.
+function emitPythonDefinition(definition, rangeNode, insideClass, decorators, source, symbols, imports) {
+  const isClass = definition.type === 'class_definition';
+  const name = fieldText(definition, 'name');
+  if (name) {
+    let stub = signatureOf(definition, source);
+    if (decorators.length > 0) {
+      stub = decorators.join('\n') + '\n' + stub;
+    }
+    const doc = pythonDocstring(definition);
+    if (doc) {
+      stub = doc + '\n' + stub;
+    }
+    const type = isClass ? 'class' : insideClass ? 'method' : 'function';
+    symbols.push(makeSymbolRange(name, type, rangeNode, rangeNode, stub));
+  }
+  const body = definition.childForFieldName('body');
+  if (body) {
+    for (const child of body.namedChildren) {
+      walkPython(child, isClass, source, symbols, imports);
+    }
   }
 }
 
@@ -175,20 +191,80 @@ function scriptDocComment(node) {
   if (anchor.parent && anchor.parent.type === 'export_statement') {
     anchor = anchor.parent;
   }
-  const sibling = anchor.previousNamedSibling;
+  // A JSDoc block sits above any method decorators, so step past them.
+  let sibling = anchor.previousNamedSibling;
+  while (sibling && sibling.type === 'decorator') {
+    sibling = sibling.previousNamedSibling;
+  }
   if (sibling && sibling.type === 'comment' && sibling.text.startsWith('/**')) {
     return capStub(sibling.text);
   }
   return '';
 }
 
+// precedingDecorators returns the contiguous decorator nodes immediately
+// before node. TypeScript/JavaScript attach method decorators as previous
+// siblings; class decorators instead live inside the export_statement and are
+// captured by widening to that parent (see scriptHeadNode).
+function precedingDecorators(node) {
+  const decorators = [];
+  let sibling = node.previousNamedSibling;
+  while (sibling && sibling.type === 'decorator') {
+    decorators.unshift(sibling);
+    sibling = sibling.previousNamedSibling;
+  }
+  return decorators;
+}
+
+// scriptHeadNode widens node to the syntax that should open its stub: an
+// enclosing `export`/`export default` statement (which also encloses class
+// decorators), or the first of any preceding decorator siblings. This is what
+// makes stubs read `export class Foo`, `@Injectable() export class Foo`, or
+// `@log method(...)` instead of dropping the modifier.
+function scriptHeadNode(node) {
+  if (node.parent && node.parent.type === 'export_statement') {
+    return node.parent;
+  }
+  const decorators = precedingDecorators(node);
+  if (decorators.length > 0) {
+    return decorators[0];
+  }
+  return node;
+}
+
+// arrowHeadNode widens an arrow/function-expression variable_declarator to the
+// declaration keyword and any `export` prefix, so its stub carries the same
+// modifiers a function_declaration would. It refuses to widen a multi-binding
+// declaration (`const a = ..., b = ...`), where a shared head would wrongly
+// fold every binding into each symbol's stub.
+function arrowHeadNode(declarator) {
+  const declaration = declarator.parent;
+  if (
+    !declaration ||
+    (declaration.type !== 'lexical_declaration' && declaration.type !== 'variable_declaration')
+  ) {
+    return declarator;
+  }
+  const bindings = declaration.namedChildren.filter((child) => child.type === 'variable_declarator');
+  if (bindings.length !== 1) {
+    return declarator;
+  }
+  if (declaration.parent && declaration.parent.type === 'export_statement') {
+    return declaration.parent;
+  }
+  return declaration;
+}
+
 function pushScriptSymbol(symbols, name, type, node, source) {
-  let stub = signatureOf(node, source);
+  const head = scriptHeadNode(node);
+  const body = node.childForFieldName('body');
+  const end = body ? body.startIndex : node.endIndex;
+  let stub = capStub(firstJoined(source.slice(head.startIndex, end)));
   const doc = scriptDocComment(node);
   if (doc) {
     stub = doc + '\n' + stub;
   }
-  symbols.push(makeSymbol(name, type, node, stub));
+  symbols.push(makeSymbolRange(name, type, head, node, stub));
 }
 
 function walkScript(node, source, symbols, imports) {
@@ -239,12 +315,20 @@ function walkScript(node, source, symbols, imports) {
       const value = node.childForFieldName('value');
       const name = fieldText(node, 'name');
       if (name && value && (value.type === 'arrow_function' || value.type === 'function_expression' || value.type === 'function')) {
-        let stub = capStub(firstJoined(source.slice(node.startIndex, value.childForFieldName('body') ? value.childForFieldName('body').startIndex : value.endIndex)));
+        // Widen to the `const`/`let` (and any `export`) so the stub reads
+        // `export const identity = (value) =>`, matching function-declaration
+        // fidelity. Only widen for a single-declarator statement — a shared
+        // `const a = ..., b = ...` must not fold both arrows into one stub.
+        const head = arrowHeadNode(node);
+        const bodyStart = value.childForFieldName('body')
+          ? value.childForFieldName('body').startIndex
+          : value.endIndex;
+        let stub = capStub(firstJoined(source.slice(head.startIndex, bodyStart)));
         const doc = scriptDocComment(node.parent || node);
         if (doc) {
           stub = doc + '\n' + stub;
         }
-        symbols.push(makeSymbol(name, 'function', node, stub));
+        symbols.push(makeSymbolRange(name, 'function', head, node, stub));
       }
       break;
     }

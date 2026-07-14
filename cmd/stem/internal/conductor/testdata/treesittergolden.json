@@ -1,0 +1,164 @@
+{
+  "models.py": [
+    {
+      "name": "file_context",
+      "type": "file_context",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "stub": "Imports: import os, from dataclasses import dataclass"
+    },
+    {
+      "name": "Point",
+      "type": "class",
+      "lineStart": 6,
+      "lineEnd": 20,
+      "stub": "\"\"\"A 2D point.\"\"\"\n@dataclass\nclass Point:"
+    },
+    {
+      "name": "magnitude",
+      "type": "method",
+      "lineStart": 13,
+      "lineEnd": 16,
+      "stub": "\"\"\"Distance from the origin.\"\"\"\n@property\ndef magnitude(self) -\u003e float:"
+    },
+    {
+      "name": "origin",
+      "type": "method",
+      "lineStart": 18,
+      "lineEnd": 20,
+      "stub": "@staticmethod\ndef origin() -\u003e \"Point\":"
+    },
+    {
+      "name": "load",
+      "type": "function",
+      "lineStart": 23,
+      "lineEnd": 26,
+      "stub": "\"\"\"Load a point from disk.\"\"\"\nasync def load(path: str, *, strict: bool = True) -\u003e Point:"
+    }
+  ],
+  "service.ts": [
+    {
+      "name": "file_context",
+      "type": "file_context",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "stub": "Imports: import { Cache } from './util.js';"
+    },
+    {
+      "name": "User",
+      "type": "interface",
+      "lineStart": 4,
+      "lineEnd": 7,
+      "stub": "/** A user record. */\nexport interface User"
+    },
+    {
+      "name": "UserId",
+      "type": "type",
+      "lineStart": 9,
+      "lineEnd": 9,
+      "stub": "export type UserId = number;"
+    },
+    {
+      "name": "UserService",
+      "type": "class",
+      "lineStart": 11,
+      "lineEnd": 18,
+      "stub": "@Injectable() export class UserService"
+    },
+    {
+      "name": "find",
+      "type": "method",
+      "lineStart": 14,
+      "lineEnd": 17,
+      "stub": "/** Look a user up by id. */\n@traced async find(id: UserId): Promise\u003cUser | null\u003e"
+    },
+    {
+      "name": "Role",
+      "type": "type",
+      "lineStart": 20,
+      "lineEnd": 23,
+      "stub": "export enum Role"
+    }
+  ],
+  "util.js": [
+    {
+      "name": "file_context",
+      "type": "file_context",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "stub": "Imports: import { readFile } from 'node:fs/promises';"
+    },
+    {
+      "name": "Cache",
+      "type": "class",
+      "lineStart": 4,
+      "lineEnd": 8,
+      "stub": "/** An in-memory cache of parsed values. */\nexport class Cache"
+    },
+    {
+      "name": "get",
+      "type": "method",
+      "lineStart": 5,
+      "lineEnd": 7,
+      "stub": "get(key)"
+    },
+    {
+      "name": "slugify",
+      "type": "function",
+      "lineStart": 10,
+      "lineEnd": 12,
+      "stub": "export function slugify(text)"
+    },
+    {
+      "name": "identity",
+      "type": "function",
+      "lineStart": 14,
+      "lineEnd": 14,
+      "stub": "export const identity = (value) =\u003e"
+    },
+    {
+      "name": "first",
+      "type": "function",
+      "lineStart": 18,
+      "lineEnd": 18,
+      "stub": "first = () =\u003e"
+    },
+    {
+      "name": "second",
+      "type": "function",
+      "lineStart": 19,
+      "lineEnd": 19,
+      "stub": "second = () =\u003e"
+    }
+  ],
+  "widget.tsx": [
+    {
+      "name": "file_context",
+      "type": "file_context",
+      "lineStart": 1,
+      "lineEnd": 1,
+      "stub": "Imports: import { useState } from 'react';"
+    },
+    {
+      "name": "Props",
+      "type": "interface",
+      "lineStart": 3,
+      "lineEnd": 5,
+      "stub": "interface Props"
+    },
+    {
+      "name": "Widget",
+      "type": "function",
+      "lineStart": 7,
+      "lineEnd": 10,
+      "stub": "export function Widget({ title }: Props)"
+    },
+    {
+      "name": "Badge",
+      "type": "function",
+      "lineStart": 12,
+      "lineEnd": 12,
+      "stub": "export const Badge = (props: Props) =\u003e"
+    }
+  ]
+}
