@@ -21,9 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install base requirements first (cached layer)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install base requirements first (cached layer). --require-hashes installs the
+# exact hash-locked tree from requirements.lock and fails the build on any
+# artifact whose sha256 does not match (#257).
+COPY requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Install llama-cpp-python with OpenBLAS CPU acceleration
 # This compiles from source — adds ~5 minutes to build time

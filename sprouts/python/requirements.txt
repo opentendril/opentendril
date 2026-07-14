@@ -1,3 +1,13 @@
+# Loose, human-edited dependency declarations (source of truth for WHAT is
+# needed). The exact, hash-pinned versions that actually get installed live in
+# requirements.lock — CI and the container images install from the lock with
+# `pip install --require-hashes`, so a tampered/re-published wheel fails the
+# build (#257). After editing this file, regenerate the lock:
+#
+#   docker run --rm -v "$PWD:/w" -w /w python:3.12 sh -c \
+#     'pip install -q pip-tools && pip-compile --generate-hashes --allow-unsafe \
+#        --output-file requirements.lock requirements.txt'
+#
 fastapi>=0.116.0
 uvicorn[standard]>=0.32.0
 langchain-anthropic>=0.3.0
