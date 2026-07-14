@@ -32,6 +32,9 @@ func TestTreeSitterIncrementalScanEndToEnd(t *testing.T) {
 	if err := exec.Command("docker", "image", "inspect", treeSitterImage).Run(); err != nil {
 		t.Skipf("%s not built; run `docker build -t %s sprouts/tree-sitter/` to exercise this test", treeSitterImage, treeSitterImage)
 	}
+	// This test exists to prove the container plumbing; the in-process engine
+	// (the default since slice 4) would bypass it entirely.
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 
 	workspace := t.TempDir()
 	writeFile := func(name, content string) {

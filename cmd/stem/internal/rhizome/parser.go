@@ -17,9 +17,14 @@ type Parser interface {
 	Supports(path string) bool
 }
 
+// DefaultParsers is the docker-less parser stack: go/ast for Go, the
+// in-process tree-sitter engine for Python/JavaScript/TypeScript/TSX, and the
+// regex parser as the final fallback for anything the engine degrades on.
+// First-match precedence in the scanner does the routing.
 func DefaultParsers() []Parser {
 	return []Parser{
 		GoParser{},
+		NewTreeSitterParser(),
 		NewRegexParser(),
 	}
 }

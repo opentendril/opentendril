@@ -196,7 +196,35 @@ func openScanTestStore(t *testing.T) rhizome.IndexStore {
 	return store
 }
 
+func TestScanRepositoryParsersDefaultsToInProcessEngine(t *testing.T) {
+	original := runTreeSitterScanFn
+	defer func() { runTreeSitterScanFn = original }()
+	called := false
+	runTreeSitterScanFn = func(ctx context.Context, providerName, workspacePath string, changedPaths []string) (terrarium.CommandResult, error) {
+		called = true
+		return terrarium.CommandResult{}, nil
+	}
+
+	parsers := scanRepositoryParsers(context.Background(), polyglotWorkspace(t), "workspace", openScanTestStore(t))
+	if called {
+		t.Fatal("the default engine is in-process: no container may be started")
+	}
+	if len(parsers) != 3 {
+		t.Fatalf("expected DefaultParsers (Go, tree-sitter, regex), got %d parsers", len(parsers))
+	}
+	if _, ok := parsers[0].(rhizome.GoParser); !ok {
+		t.Fatalf("expected GoParser first, got %T", parsers[0])
+	}
+	if _, ok := parsers[1].(*rhizome.TreeSitterParser); !ok {
+		t.Fatalf("expected the in-process TreeSitterParser second, got %T", parsers[1])
+	}
+	if _, ok := parsers[2].(rhizome.RegexParser); !ok {
+		t.Fatalf("expected RegexParser last, got %T", parsers[2])
+	}
+}
+
 func TestScanRepositoryParsersInjectsPrecomputedOnSuccess(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	original := runTreeSitterScanFn
 	defer func() { runTreeSitterScanFn = original }()
 	var capturedPaths []string
@@ -235,6 +263,7 @@ func TestScanRepositoryParsersInjectsPrecomputedOnSuccess(t *testing.T) {
 }
 
 func TestScanRepositoryParsersWarmIndexParsesOnlyDelta(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	root := t.TempDir()
 	writeFixture := func(name, content string) {
 		t.Helper()
@@ -288,6 +317,7 @@ func TestScanRepositoryParsersWarmIndexParsesOnlyDelta(t *testing.T) {
 }
 
 func TestScanRepositoryParsersSkipsContainerWhenNothingChanged(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	root := polyglotWorkspace(t)
 	store := openScanTestStore(t)
 	if _, err := rhizome.ScanRepository(context.Background(), root, "workspace", store, rhizome.DefaultParsers()); err != nil {
@@ -306,12 +336,13 @@ func TestScanRepositoryParsersSkipsContainerWhenNothingChanged(t *testing.T) {
 	if called {
 		t.Fatal("a warm index with no changes must not start the tree-sitter container")
 	}
-	if len(parsers) != 2 {
+	if len(parsers) != 3 {
 		t.Fatalf("expected DefaultParsers when nothing changed, got %d parsers", len(parsers))
 	}
 }
 
 func TestScanRepositoryParsersFallsBackWhenScanFails(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	original := runTreeSitterScanFn
 	defer func() { runTreeSitterScanFn = original }()
 	runTreeSitterScanFn = func(ctx context.Context, providerName, workspacePath string, changedPaths []string) (terrarium.CommandResult, error) {
@@ -319,18 +350,22 @@ func TestScanRepositoryParsersFallsBackWhenScanFails(t *testing.T) {
 	}
 
 	parsers := scanRepositoryParsers(context.Background(), polyglotWorkspace(t), "workspace", openScanTestStore(t))
-	if len(parsers) != 2 {
+	if len(parsers) != 3 {
 		t.Fatalf("expected DefaultParsers on batch failure, got %d parsers", len(parsers))
 	}
 	if _, ok := parsers[0].(rhizome.GoParser); !ok {
 		t.Fatalf("expected GoParser first, got %T", parsers[0])
 	}
-	if _, ok := parsers[1].(rhizome.RegexParser); !ok {
-		t.Fatalf("expected RegexParser second, got %T", parsers[1])
+	if _, ok := parsers[1].(*rhizome.TreeSitterParser); !ok {
+		t.Fatalf("expected the in-process TreeSitterParser second, got %T", parsers[1])
+	}
+	if _, ok := parsers[2].(rhizome.RegexParser); !ok {
+		t.Fatalf("expected RegexParser last, got %T", parsers[2])
 	}
 }
 
 func TestScanRepositoryParsersFallsBackOnBadOutput(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	original := runTreeSitterScanFn
 	defer func() { runTreeSitterScanFn = original }()
 	runTreeSitterScanFn = func(ctx context.Context, providerName, workspacePath string, changedPaths []string) (terrarium.CommandResult, error) {
@@ -338,12 +373,13 @@ func TestScanRepositoryParsersFallsBackOnBadOutput(t *testing.T) {
 	}
 
 	parsers := scanRepositoryParsers(context.Background(), polyglotWorkspace(t), "workspace", openScanTestStore(t))
-	if len(parsers) != 2 {
+	if len(parsers) != 3 {
 		t.Fatalf("expected DefaultParsers on unusable batch output, got %d parsers", len(parsers))
 	}
 }
 
 func TestScanRepositoryParsersSkipsContainerForNonEligibleWorkspace(t *testing.T) {
+	t.Setenv(treeSitterEngineEnv, "terrarium")
 	original := runTreeSitterScanFn
 	defer func() { runTreeSitterScanFn = original }()
 	called := false
@@ -361,7 +397,7 @@ func TestScanRepositoryParsersSkipsContainerForNonEligibleWorkspace(t *testing.T
 	if called {
 		t.Fatal("expected a Go-only workspace to skip the tree-sitter container entirely")
 	}
-	if len(parsers) != 2 {
+	if len(parsers) != 3 {
 		t.Fatalf("expected DefaultParsers for a Go-only workspace, got %d parsers", len(parsers))
 	}
 }

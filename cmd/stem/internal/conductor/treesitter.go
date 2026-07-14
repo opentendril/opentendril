@@ -249,11 +249,25 @@ func (treeSitterBatchParser) ParseBatch(ctx context.Context, root string, paths 
 	return parseTreeSitterOutput(result)
 }
 
-// scanRepositoryParsers assembles the parser slice for a Rhizome scan. It
-// attempts the tree-sitter batch pre-pass and, on success, injects the
-// precomputed symbols between the native Go parser and the regex fallback —
-// first-match precedence keeps Go on go/ast, gives covered non-Go files
-// tree-sitter fidelity, and leaves everything else to the regex parser.
+// treeSitterEngineEnv selects which tree-sitter engine feeds a Rhizome scan.
+// Unset (or any value other than "terrarium") means the in-process pure-Go
+// engine inside rhizome.DefaultParsers — no container at all. "terrarium"
+// restores the container batch pre-pass, kept fully usable until in-process
+// parity has soaked in the wild (the two engines are pinned to the same
+// golden fixture either way).
+const treeSitterEngineEnv = "OTTS_TREESITTER_ENGINE"
+
+// scanRepositoryParsers assembles the parser slice for a Rhizome scan.
+//
+// Default engine (in-process): rhizome.DefaultParsers already carries the
+// pure-Go tree-sitter engine, so covered non-Go files get tree-sitter
+// fidelity with no docker involved and per-file hash-skip incrementality.
+//
+// OTTS_TREESITTER_ENGINE=terrarium: attempts the tree-sitter container batch
+// pre-pass and, on success, injects the precomputed symbols between the
+// native Go parser and the regex fallback — first-match precedence keeps Go
+// on go/ast, gives covered non-Go files the container's symbols, and leaves
+// everything else to the regex parser.
 //
 // The pre-pass is incremental: ChangedPaths replays the scanner's own
 // hash-vs-store comparison, so the container parses only the files
@@ -271,6 +285,11 @@ func (treeSitterBatchParser) ParseBatch(ctx context.Context, root string, paths 
 // existed. Workspaces with no tree-sitter-eligible files skip the container
 // entirely.
 func scanRepositoryParsers(ctx context.Context, mountPath string, repositoryName string, store rhizome.IndexStore) []rhizome.Parser {
+	if os.Getenv(treeSitterEngineEnv) != "terrarium" {
+		// In-process engine (the default): DefaultParsers covers Go,
+		// tree-sitter and regex with no container.
+		return rhizome.DefaultParsers()
+	}
 	if !workspaceHasExtension(mountPath, treeSitterExtensions...) {
 		return rhizome.DefaultParsers()
 	}
