@@ -158,12 +158,39 @@ func runServeCmd(ctx context.Context, args []string) {
 		}
 	}
 
+	// Delegated-execution control plane: capability grants live in
+	// the Stem's own .tendril/grants.yaml — never inside a Substrate checkout,
+	// so repository content can never widen capability. With zero grants (the
+	// default) every delegated invocation is denied and all non-delegated
+	// behavior is untouched; a malformed grants file degrades the same way,
+	// never open.
+	delegationGrants, grantsErr := core.LoadDelegationGrants(tendrilDir)
+	if grantsErr != nil {
+		log.Printf("⚠️ Failed to load delegation grants: %v (delegation disabled — every delegated invocation is denied)", grantsErr)
+		delegationGrants = nil
+	}
+	delegationGate := &receptors.DelegationGate{
+		Authorizer: core.NewDelegationAuthorizer(delegationGrants),
+		Bus:        bus,
+	}
+	if len(delegationGrants) > 0 {
+		log.Printf("Delegation enabled: %d grant(s) loaded from %s", len(delegationGrants), filepath.Join(tendrilDir, core.DelegationGrantsFilename))
+	}
+
+	// guardedAuth authenticates with the bearer key and default-denies
+	// delegated-marked requests: in this slice only the sprout routes consult
+	// the delegation authorizer per-invocation, so every other surface refuses
+	// a delegated invocation rather than silently running it as plain traffic.
+	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, delegationGate.Middleware(next))
+	}
+
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/ws", withWebSocketAuth(apiKey, gateway.HandleWebSocket(bus)))
+	mux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
 
-	mux.HandleFunc("/v1/chat/completions", withAPIKeyAuth(apiKey, handleChatCompletions(bus, sessions, history)))
-	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(bus, sessions, history)))
+	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth))
 
 	// Unified Interface Layer: the transport-free Core owns the session-
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
@@ -191,54 +218,45 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
-	sessionsHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	sessionsHandler.Register(mux, guardedAuth)
 
 	// Genome REST API (adapter, slice 1).
 	genomeHandler := receptors.NewGenomeHandler(coreSvc)
-	genomeHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	genomeHandler.Register(mux, guardedAuth)
 
 	// Plasmid REST API (adapter, slice 2).
 	plasmidHandler := receptors.NewPlasmidHandler(coreSvc)
-	plasmidHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	plasmidHandler.Register(mux, guardedAuth)
 
 	// Substrate-grafting REST API (adapter, slice 3). Distinct from
 	// the mesh *server* endpoints mounted below: these are the client-side
 	// delegation commands.
 	graftHandler := receptors.NewGraftHandler(coreSvc)
-	graftHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	graftHandler.Register(mux, guardedAuth)
 
 	// Mesh trait governance REST API (adapter). These routes
 	// expose the pending-trait inbox to the Command Center and CLI.
 	traitHandler := receptors.NewTraitHandler(coreSvc)
-	traitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	traitHandler.Register(mux, guardedAuth)
 
 	// Sequence REST API (adapter, slice 4).
 	sequenceHandler := receptors.NewSequenceHandler(coreSvc)
-	sequenceHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
-	})
+	sequenceHandler.Register(mux, guardedAuth)
 
 	// Sprout REST API (adapter, final family). Detached
-	// POST /v1/sessions/{sessionId}/sprout/run is registered as an ungoverned
-	// route inside SproutHandler.Register.
-	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus)
+	// POST /v1/sessions/{sessionId}/sprout/run is registered outside the
+	// parity registry inside SproutHandler.Register. Both sprout routes
+	// consult the delegation gate per-invocation (with the decoded substrate
+	// in hand), so they take the bare bearer auth rather than guardedAuth's
+	// blanket delegated-request denial.
+	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus).WithDelegation(delegationGate)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
 	// Phase 4: Configuration API
 	configHandler := receptors.NewConfigHandler(tendrilDir)
-	mux.HandleFunc("/v1/config/triggers", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/config/triggers", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			configHandler.ListTriggers(w, r)
 			return
@@ -249,7 +267,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
-	mux.HandleFunc("/v1/config/genotypes", withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/config/genotypes", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			configHandler.ListGenotypes(w, r)
 			return
@@ -264,7 +282,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
 	// projects the same Core session capabilities as REST and the CLI)
 	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc)
-	mux.HandleFunc("/v1", withAPIKeyAuth(apiKey, mcpHandler.HandleMCP))
+	mux.HandleFunc("/v1", guardedAuth(mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
@@ -274,8 +292,8 @@ func runServeCmd(ctx context.Context, args []string) {
 		// (never-empty) API key rather than fail open on mesh token issuance.
 		adminKey = apiKey
 	}
-	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, meshServer.HandleAdminIssueToken))
-	mux.HandleFunc("/v1/mesh/graft", meshServer.HandleGraftWebSocket)
+	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, delegationGate.Middleware(meshServer.HandleAdminIssueToken)))
+	mux.HandleFunc("/v1/mesh/graft", delegationGate.Middleware(meshServer.HandleGraftWebSocket))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -309,7 +327,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	go func() {
 		gatewayMux := http.NewServeMux()
-		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, gateway.HandleWebSocket(bus)))
+		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
 		gatewayServer := &http.Server{
 			Addr:    ":" + gatewayPort,
 			Handler: gatewayMux,
