@@ -6,7 +6,7 @@ COPY sprouts/typescript/package.json sprouts/typescript/package-lock.json sprout
 
 # npm ci installs the exact, integrity-checked tree from package-lock.json and
 # fails the build on any hash mismatch — a tampered or re-published registry
-# tarball cannot slip in under a caret range (#257).
+# tarball cannot slip in under a caret range.
 RUN npm ci
 
 COPY sprouts/typescript/src ./src
