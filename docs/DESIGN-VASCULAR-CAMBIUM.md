@@ -1,4 +1,4 @@
-# Vascular Cambium: Speculative Multi-Model Orchestration (Issue #11)
+# Vascular Cambium: Speculative Multi-Model Orchestration (Issue)
 
 This document details the design and implementation of **Parallel Sequence Step Execution** (Vascular Cambium mode) inside the Go Stem orchestrator. This allows Go Stem to execute independent steps concurrently in isolated shadow worktrees, preventing shared-state conflicts.
 

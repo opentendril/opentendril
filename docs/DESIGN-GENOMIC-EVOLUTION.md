@@ -1,4 +1,4 @@
-# Genomic Evolution: Automated Reinforcement & Mutation (Issue #78)
+# Genomic Evolution: Automated Reinforcement & Mutation (Issue)
 
 This document details the design and implementation of **Genomic Evolution** inside the Go Stem orchestrator. This allows OpenTendril to track the effectiveness (fitness) of active repository instructions, rules, and plasmids over successive sprout execution runs, dynamically pruning failing rules and mutating successful ones via LLM consolidation.
 

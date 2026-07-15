@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// The sequence capability family (issue #181, slice 4). Listing and running
+// The sequence capability family. Listing and running
 // sequences are conductor-owned execution operations the Core is structurally
 // forbidden from importing (see boundary_test.go), so both are injected as
 // transport-free function ports via WithSequence — the same template as
-// GenomeOps (PR #206).
+// GenomeOps (PR).
 //
 // Execution I/O (streaming a run's output to a terminal, discarding it on a
 // server) is a per-surface concern: each adapter binds the Run port with its

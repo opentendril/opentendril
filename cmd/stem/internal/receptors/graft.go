@@ -10,7 +10,7 @@ import (
 )
 
 // GraftHandler is the REST adapter for the governed substrate-grafting
-// capability family (issue #181, slice 3). Exactly like GenomeHandler, it
+// capability family. Exactly like GenomeHandler, it
 // translates HTTP to and from the transport-free core.Core and holds no
 // business logic. Note the distinction from the mesh *server*: /v1/mesh/graft
 // (WebSocket) is the receiving half of the mesh; these routes are the

@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-// GitHub App authentication (Design RFC #222, method: app). The Stem signs a
+// GitHub App authentication (Design RFC, method: app). The Stem signs a
 // short-lived JWT with the App's private key, exchanges it for an installation
 // access token (≤1h, cached), and uses that token as the git HTTPS bearer.
 

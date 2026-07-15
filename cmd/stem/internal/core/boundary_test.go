@@ -14,7 +14,7 @@ import (
 // on. If the Core reaches for a transport (net/http, MCP, CLI) or an execution
 // internal (orchestrator, terrarium, gateway, mesh), a capability is no longer
 // "invokable with zero HTTP/CLI/MCP types in scope" — the boundary the whole
-// interface-parity design rests on (issue #159). This test is that boundary,
+// interface-parity design rests on. This test is that boundary,
 // enforced structurally.
 var forbiddenCoreImports = []string{
 	"net/http",

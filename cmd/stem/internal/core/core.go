@@ -5,20 +5,19 @@
 // translate only"). The litmus test for a capability living here: it must be
 // invokable with zero HTTP, CLI, or MCP types in scope.
 //
-// This began as the first slice of Interface Parity (issue #159). It governs
-// the session-lifecycle capability family, the genome family (issue #181
-// slice 1), the plasmid family (issue #181 slice 2), the substrate-grafting
-// family (issue #181 slice 3), and the sequence family (issue #181 slice 4) —
+// This began as the first slice of Interface Parity. It governs
+// the session-lifecycle capability family, the genome family (// slice 1), the plasmid family, the substrate-grafting
+// family, and the sequence family —
 // all three surfaces project each identically through this one Core. The remaining
 // Stem capabilities (sprout/run) are NOT yet part of the governed registry — they
-// are tracked in issue #181, and the parity tests deliberately assert only the
+// are tracked in and the parity tests deliberately assert only the
 // governed set so the three surfaces cannot silently diverge on it. plasmid.sign
 // and mesh key-management commands stay deliberately ungoverned (see plasmid.go
 // and mesh.go).
-// slice 1), and the sprout/run family (issue #181, final family) — all three
+// slice 1), and the sprout/run family — all three
 // surfaces project each identically through this one Core. The remaining
 // Stem capabilities (sequence, plasmid, substrate grafting) are NOT yet part
-// of the governed registry — they are tracked in issue #181, and the parity
+// of the governed registry — they are tracked in and the parity
 // tests deliberately assert only the governed set so the three surfaces
 // cannot silently diverge on it.
 package core
@@ -49,32 +48,32 @@ type Core interface {
 	DeleteSession(ctx context.Context, in DeleteSessionInput) error
 	SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error)
 
-	// Genome family (issue #181, slice 1). Reading is pure filesystem work;
+	// Genome family. Reading is pure filesystem work;
 	// reduce/evolve run through the injected GenomeOps execution port.
 	GenomeView(ctx context.Context) ([]GenomeSeed, error)
 	GenomeReduce(ctx context.Context) (string, error)
 	GenomeEvolve(ctx context.Context) (string, error)
 
-	// Plasmid family (issue #181, slice 2). Listing is pure filesystem work;
+	// Plasmid family. Listing is pure filesystem work;
 	// injection runs through the injected PlasmidOps execution port.
 	PlasmidList(ctx context.Context) ([]string, error)
 	PlasmidInject(ctx context.Context, in PlasmidInjectInput) (PlasmidInjection, error)
 
-	// Substrate-grafting family (issue #181, slice 3). Both operations run
+	// Substrate-grafting family. Both operations run
 	// through the injected MeshOps execution port.
 	MeshGraft(ctx context.Context, in MeshGraftInput) (MeshDelegation, error)
 	MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPromotion, error)
-	// Mesh trait governance family (issue #185). Listing and moderation run
+	// Mesh trait governance family. Listing and moderation run
 	// through the injected MeshOps execution port.
 	MeshTraitList(ctx context.Context, in MeshTraitListInput) (MeshTraitListOutput, error)
 	MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) (MeshTraitAcceptOutput, error)
 	MeshTraitReject(ctx context.Context, in MeshTraitRejectInput) (MeshTraitRejectOutput, error)
 
-	// Sequence family (issue #181, slice 4). Both operations run through the
+	// Sequence family. Both operations run through the
 	// injected SequenceOps execution port.
 	SequenceList(ctx context.Context) ([]string, error)
 	SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error)
-	// Sprout/run family (issue #181, final family). Runs through the injected
+	// Sprout/run family. Runs through the injected
 	// SproutOps execution port.
 	SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error)
 

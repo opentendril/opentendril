@@ -12,7 +12,7 @@ Project Tendril began as an attempt to solve the "Agentic Fragility" problem. Ex
 
 **Key Milestones:**
 - **The /edit Endpoint:** The first "primitive" allows the agent to modify its own source code via volume-mounted files.
-- **The Chronicler:** Realizing that our AI conversations were getting scattered across threads, we built the `chronicler.py` to allow the agent to log its own progress in `PROGRESS.md`.
+- **The Chronicler:** Realizing that our AI conversations were getting scattered across threads, we built the `chronicler.py` to allow the agent to log its own progress.
 - **The Unified Credit System:** We established a "Local-First" architecture that allows developers to bring their own keys, but simplifies the scaling path through a unified billing mode for the cloud.
 
 ---
@@ -52,5 +52,4 @@ We are currently in the **"Stable Core"** phase. We aren't just building a produ
 
 **Join the journey.**
 - [View the v0.1.0 Release](https://github.com/opentendril/core/releases)
-- [Watch the Progress](PROGRESS.md)
 - [Check the Genesis](HISTORY.md)

@@ -55,7 +55,7 @@ All endpoints are served by the Go Stem on its API port (default `:8080`) and
 authenticated with the operator bearer key. `OPENTENDRIL_API_KEY` (or
 `ADMIN_TOKEN`) sets it explicitly; if neither is set, the Stem generates one on
 first run and persists it to `.tendril/api-key` (printed once to the log) —
-the API is never served unauthenticated (issue #171). Handlers:
+the API is never served unauthenticated. Handlers:
 `cmd/stem/internal/api/sessions.go`.
 
 | Method & path | Used for |
@@ -77,7 +77,7 @@ The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` wh
 
 ## 3. WebSocket surface — the EventBus gateway (`/ws`)
 
-`/ws` requires the same bearer key as the REST surface (issue #171). Native
+`/ws` requires the same bearer key as the REST surface. Native
 WebSocket clients (e.g. the CLI's gorilla/websocket dialer) send it as an
 `Authorization: Bearer <key>` header on the upgrade request; browsers cannot
 attach custom headers to a WebSocket handshake, so the Command Center instead
@@ -147,7 +147,7 @@ unchanged.
 
 ---
 
-## 5. Deployment — the containerized UI front (#160)
+## 5. Deployment — the containerized UI front
 
 The Command Center ships as a **separate, optional, isolated, containerized
 component**: a hardened nginx container (built by
@@ -155,7 +155,7 @@ component**: a hardened nginx container (built by
 [`ui/nginx/default.conf.template`](../ui/nginx/default.conf.template)) that
 serves the static bundle **and** reverse-proxies the Stem's documented API
 surface, giving the browser a single origin. The Stem itself stays **on the
-host and headless** (#158) — it never serves the UI, and the system is fully
+host and headless** — it never serves the UI, and the system is fully
 operable with this container absent.
 
 ```
@@ -177,7 +177,7 @@ operable with this container absent.
   starts unless `--profile ui` is passed. One command brings it up alongside
   the host Stem: `docker compose --profile ui up -d`.
 - **Single origin, no CORS:** the browser only ever talks to the container, so
-  the Stem needs no CORS headers (adding them was explicitly rejected in #160).
+  the Stem needs no CORS headers (adding them was explicitly rejected).
   In development, Vite's proxy plays the same role via `STEM_TARGET`.
 - **Auth preserved:** the proxy forwards the operator's bearer key untouched;
   the Stem's `withAPIKeyAuth` remains the sole authority. Only `/health`,
@@ -189,15 +189,15 @@ operable with this container absent.
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
   port binding by default. The CSP locks `script-src` to `'self'` (no inline
-  scripts, no `eval`) and, since #171's posture audit, splits `style-src` so
+  scripts, no `eval`) and, since the posture audit, splits `style-src` so
   `<style>` tags/stylesheets are `'self'`-only (`style-src-elem`) while only
   React's inline `style=""` attributes keep `'unsafe-inline'`
   (`style-src-attr`) — an XSS payload can no longer inject an arbitrary
   `<style>` element for CSS-based exfiltration or UI redress.
 - **Growth path:** any future server-side layer — BFF, operator auth/SSO,
-  enterprise integration, the optional concierge mini-model (#164) — grows
+  enterprise integration, the optional concierge mini-model — grows
   **inside this UI component**, never in the Stem. The Stem's surface stays
-  the headless CLI/MCP/OpenAPI capability core (#158, #159).
+  the headless CLI/MCP/OpenAPI capability core.
 
 See [`ui/README.md`](../ui/README.md) for commands, configuration variables,
 and the manual static-build alternative.

@@ -1,4 +1,4 @@
-# Phenotypic Selection: Speculative Parallel Sprouting & Fitness Testing (Issue #77)
+# Phenotypic Selection: Speculative Parallel Sprouting & Fitness Testing (Issue)
 
 This plan details the implementation of **Phenotypic Selection** (Natural Selection) in the Go Stem orchestrator. This allows Go Stem to execute concurrent sprouts (phenotypes) tackling the same task under different parameters, and merge only the first candidate that passes compilation and unit testing.
 

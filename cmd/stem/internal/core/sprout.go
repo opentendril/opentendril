@@ -7,19 +7,19 @@ import (
 	"time"
 )
 
-// The sprout/run capability family (issue #181, final family). sprout.run
+// The sprout/run capability family. sprout.run
 // delegates a one-shot task to an autonomous Tendril inside a network-isolated
 // terrarium — the core execution path of the product. The terrarium
 // orchestration (substrate resolution, container lifecycle, run recording)
 // lives outside the Core in packages it is structurally forbidden from
 // importing (the conductor and historydb — see boundary_test.go), so it is
 // injected as a transport-free function port via WithSprout, the same
-// template as GenomeOps (PR #206).
+// template as GenomeOps (PR).
 //
 // The capability is synchronous: Invoke answers when the Tendril matures or
 // withers, exactly the semantics the MCP sproutTendril tool has always had.
 // Job handles / streaming progress for long runs remain an open design
-// question tracked in issue #181 — the /ws event stream and the sprout-runs
+// question tracked in — the /ws event stream and the sprout-runs
 // history endpoints stay the views for watching a run.
 //
 // What lives HERE (business logic shared by every surface): input validation,

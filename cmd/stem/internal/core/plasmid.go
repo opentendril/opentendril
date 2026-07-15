@@ -9,17 +9,17 @@ import (
 	"strings"
 )
 
-// The plasmid capability family (issue #181, slice 2). Listing plasmids is
+// The plasmid capability family. Listing plasmids is
 // pure filesystem work and lives here directly; injection copies a plasmid
 // into the active genome via the conductor, which the Core is structurally
 // forbidden from importing (see boundary_test.go). Injection is therefore an
 // injected transport-free function port via WithPlasmid — identical in shape
-// to the GenomeOps port that proved this template (PR #206).
+// to the GenomeOps port that proved this template (PR).
 //
 // plasmid.sign is deliberately NOT governed: it signs arbitrary files with
 // the node's private signing key, and projecting it onto the REST/MCP
 // surfaces would hand network callers a signing authority the CLI-local
-// operation never had (issue #162 security posture). It remains a CLI-only,
+// operation never had (security posture). It remains a CLI-only,
 // ungoverned command.
 
 // PlasmidInjection describes the outcome of copying one plasmid into the

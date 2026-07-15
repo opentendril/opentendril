@@ -11,7 +11,7 @@ import (
 )
 
 // checkoutPlan is the resolved destination for a foreign substrate clone.
-// Design RFC #222 / impl plan #225, slice 4.
+// Design RFC / implementation plan, slice 4.
 type checkoutPlan struct {
 	// dir is the target directory. Empty means "generate an ephemeral temp dir".
 	dir string

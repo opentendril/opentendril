@@ -1,4 +1,4 @@
-# Macrophage fuzz-verification image (issue #154).
+# Macrophage fuzz-verification image.
 #
 # Unlike sprouts/go/Dockerfile — which builds the sprout-go tool harness
 # once and then discards the Go toolchain to hit a <20MB runtime budget

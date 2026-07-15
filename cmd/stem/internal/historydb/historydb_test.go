@@ -134,7 +134,7 @@ func TestSproutRunUpsert(t *testing.T) {
 		RunID:      "step-42",
 		SessionID:  "tendril-test1",
 		StepID:     "step-42",
-		Origin:     "scheduler", // issue #235: scheduled runs stay attributable
+		Origin:     "scheduler", // scheduled runs stay attributable
 		Transcript: "fix the flaky test",
 		Status:     "running",
 		StartedAt:  time.Now().UTC(),

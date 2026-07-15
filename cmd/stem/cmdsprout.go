@@ -20,12 +20,12 @@ import (
 )
 
 // runSproutCmd is the CLI adapter for the governed sprout/run capability
-// family (issue #181): a thin projection of the same transport-free core.Core
+// family: a thin projection of the same transport-free core.Core
 // the REST and MCP surfaces use. `tendril sprout run` delegates a one-shot
 // task to an autonomous Tendril in a secure terrarium and prints its output —
 // the headless CLI equivalent of the MCP sproutTendril tool.
 //
-// `--detach` is adapter-local (issue #248): it hands the run to the Stem
+// `--detach` is adapter-local: it hands the run to the Stem
 // daemon's async endpoint instead of executing in-process.
 func runSproutCmd(ctx context.Context, args []string) {
 	if len(args) == 0 {
@@ -312,7 +312,7 @@ func printSproutUsage() {
 	fmt.Println("run is a projection of the shared Core capability registry.")
 }
 
-// submitSproutAsync POSTs a detached sprout run to the Stem daemon (issue #248),
+// submitSproutAsync POSTs a detached sprout run to the Stem daemon,
 // mirroring submitSequenceAsync.
 func submitSproutAsync(ctx context.Context, input map[string]any) {
 	// Keep only fields the async REST body accepts; origin is set by the adapter.

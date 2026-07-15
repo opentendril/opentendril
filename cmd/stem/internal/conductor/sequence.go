@@ -925,7 +925,7 @@ func shouldBudRecursiveDebugger(step *SequenceStep) bool {
 	stepID := strings.ToLower(strings.TrimSpace(step.ID))
 	// Verifier: LLM-interpreted compiler/test failures. Macrophage: the
 	// deterministic fuzz-crash failures from runMacrophageFuzzCheck (issue
-	// #154) — both loop back to the same recursive Debugger.
+	//) — both loop back to the same recursive Debugger.
 	if !strings.Contains(stepID, "verifier") && !strings.Contains(stepID, "macrophage") {
 		return false
 	}
@@ -1775,7 +1775,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	}
 
-	// Symbiotic Immune System (issue #154): once the Macrophage's agent turn
+	// Symbiotic Immune System: once the Macrophage's agent turn
 	// has written its fuzz test, deterministically run it — no LLM judgment
 	// call — and treat a crash exactly like a Verifier compiler/test failure,
 	// so shouldBudRecursiveDebugger sprouts a Debugger to fix it and retries.

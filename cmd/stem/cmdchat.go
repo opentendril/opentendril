@@ -49,7 +49,7 @@ type WSMessage struct {
 
 // connectWS establishes a WebSocket connection to the gateway. The gateway
 // dialer can set real headers (unlike a browser), so the bearer key rides
-// along the way it does for every other Stem call (issue #171 finding 2).
+// along the way it does for every other Stem call.
 func connectWS(base *url.URL) (*websocket.Conn, error) {
 	u := url.URL{Scheme: "ws", Host: base.Host, Path: "/ws"}
 	log.Printf("Connecting to WS: %s", u.String())
@@ -139,8 +139,7 @@ func sproutCLISession(base *url.URL) (string, error) {
 // chatAPIKey resolves the bearer key this CLI sends to the local Stem. It
 // mirrors getOrCreateAPIKey's resolution order (cmdserve.go) without ever
 // generating a key itself: the `serve` command owns key creation, and
-// persists it to the same "./.tendril/api-key" file this reads (issue #171
-// finding 1 — the Stem no longer runs unauthenticated, so this client can no
+// persists it to the same "./.tendril/api-key" file this reads (// finding 1 — the Stem no longer runs unauthenticated, so this client can no
 // longer assume a keyless server).
 func chatAPIKey() string {
 	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
@@ -149,7 +148,7 @@ func chatAPIKey() string {
 	if key := readPersistedAPIKey("./.tendril"); key != "" {
 		return key
 	}
-	return "sk-123" // Only reached against a Stem predating issue #171's auto-generated key
+	return "sk-123" // Only reached against a Stem predating issue the auto-generated key
 }
 
 // sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.

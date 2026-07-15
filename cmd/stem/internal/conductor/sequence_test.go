@@ -496,7 +496,7 @@ func TestRunSequenceBudsRecursiveDebuggerOnVerifierFailure(t *testing.T) {
 }
 
 // TestRunSequenceBudsRecursiveDebuggerOnMacrophageFuzzFailure is the
-// Symbiotic Immune System's (issue #154) end-to-end orchestration proof:
+// Symbiotic Immune System's end-to-end orchestration proof:
 // simulate a Worker having generated a function with a panic condition — the
 // stand-in "macrophage" step here plays the role runMacrophageFuzzCheck
 // would in production, returning a macrophageFuzzError the first time it
@@ -549,7 +549,7 @@ func TestRunSequenceBudsRecursiveDebuggerOnMacrophageFuzzFailure(t *testing.T) {
 			if atomic.AddInt32(&macrophageCalls, 1) == 1 {
 				// Stand-in for runMacrophageFuzzCheck finding a crash: same
 				// hard error type, same failure shape a real fuzz run would
-				// produce (issue #154 task 5's simulated scenario).
+				// produce (task 5's simulated scenario).
 				return "", &macrophageFuzzError{
 					summary: "fuzzer triggered a panic:\npanic: runtime error: division by zero",
 					result:  terrarium.CommandResult{ExitCode: 2},

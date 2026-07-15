@@ -126,7 +126,7 @@ graph LR
     class WG1,WG2,WG3,WG4 ws
 ```
 
-> 📖 **See also:** [Issue #115 — Pre-built System Genotypes](https://github.com/opentendril/core/issues/115)
+> 📖 **See also:** the Pre-built System Genotypes design RFC.
 
 ---
 

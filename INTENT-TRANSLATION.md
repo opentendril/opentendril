@@ -24,9 +24,9 @@ This guide explains how the Meristem interprets common industry requests into Op
 ### Use Case A: Requesting a "Tool" or "API"
 When a user wants the system to interact with an external service (like fetching a GitHub issue or running a database query).
 
-*   **User Intent**: *"Load the GitHub skill and pull issue #123."*
+* **User Intent**: *"Load the GitHub skill and pull."*
 *   **Meristem Translation**: The Meristem recognizes that acting on an external API requires a **Symbiotic Nodule** (a Microservice Plugin / MCP Gateway).
-*   **Biological Execution**: The Stem connects the `github` Symbiotic Nodule on the current Branch and — because a sealed Sprout cannot reach the network itself — the Stem fetches issue #123 through that Nodule and injects it into the Sprout (via the Xylem). The Sprout works with that context; it never calls the API directly.
+* **Biological Execution**: The Stem connects the `github` Symbiotic Nodule on the current Branch and — because a sealed Sprout cannot reach the network itself — the Stem fetches through that Nodule and injects it into the Sprout (via the Xylem). The Sprout works with that context; it never calls the API directly.
 
 ### Use Case B: Requesting "Context", "Knowledge", or "Skills"
 When a user wants to provide the AI with specific documentation, rules, or text patterns without executing external code.

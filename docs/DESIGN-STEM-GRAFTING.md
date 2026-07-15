@@ -1,6 +1,6 @@
 # Design: Mycorrhizal Mesh Network (Stem Grafting)
 
-**Issue**: #76
+**Issue**:
 **Status**: Approved
 
 ## Goal

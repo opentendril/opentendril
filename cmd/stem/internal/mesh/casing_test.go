@@ -9,7 +9,7 @@ import (
 // TestMeshWireKeysAreCamelCase pins the mesh wire contract to the repo-wide
 // JSON casing rule (GUARDRAILS.md §2: all serialized JSON payload keys are
 // camelCase). The mesh originally shipped kebab-case keys by following a
-// since-corrected contradiction in AGENTS.md (#182 / #184); this test makes
+// since-corrected contradiction in AGENTS.md; this test makes
 // any regression — or any new kebab-case key — a hard failure.
 func TestMeshWireKeysAreCamelCase(t *testing.T) {
 	payloads := map[string]any{

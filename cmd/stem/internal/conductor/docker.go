@@ -159,7 +159,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
 	// ssh/none/app substrates authenticate without the ambient PAT — keep it out
-	// of the terrarium so it is never exposed to sprout code (RFC #222).
+	// of the terrarium so it is never exposed to sprout code (RFC).
 	if m := plan.credential.Method; m == CredentialSSH || m == CredentialNone || m == CredentialApp {
 		extraEnv = append(extraEnv, suppressGitHubPATEnvSentinel+"=true")
 	}

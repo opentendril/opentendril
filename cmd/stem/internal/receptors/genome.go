@@ -8,7 +8,7 @@ import (
 )
 
 // GenomeHandler is the REST adapter for the governed genome capability family
-// (issue #181, slice 1). Exactly like SessionsHandler, it translates HTTP to
+// . Exactly like SessionsHandler, it translates HTTP to
 // and from the transport-free core.Core and holds no business logic.
 type GenomeHandler struct {
 	core core.Core

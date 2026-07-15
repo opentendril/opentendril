@@ -15,7 +15,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-// Issue #171 finding 1: the Stem must never serve its API unauthenticated.
+// Issue finding 1: the Stem must never serve its API unauthenticated.
 func TestWithAPIKeyAuthNeverFailsOpen(t *testing.T) {
 	called := false
 	handler := withAPIKeyAuth("", func(w http.ResponseWriter, r *http.Request) { called = true })
@@ -61,7 +61,7 @@ func TestWithAPIKeyAuthRequiresMatchingBearer(t *testing.T) {
 	}
 }
 
-// Issue #171 finding 2: /ws must require the same bearer key, accepting it
+// Issue finding 2: /ws must require the same bearer key, accepting it
 // either via Authorization header (non-browser clients) or a `key` query
 // parameter (the browser cannot set headers on a WebSocket upgrade).
 func TestWithWebSocketAuth(t *testing.T) {
@@ -171,7 +171,7 @@ func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 	}
 }
 
-// Issue #235 slice 3: a scheduler-originated sprout run must be attributable
+// Issue slice 3: a scheduler-originated sprout run must be attributable
 // in history. The firer stamps origin "scheduler" into the governed sprout.run
 // input; the Core carries it onto the resolved SproutSpec, which is exactly
 // the field the execution port records as historydb.SproutRun.Origin
