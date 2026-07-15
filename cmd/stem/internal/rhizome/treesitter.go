@@ -1,6 +1,6 @@
 package rhizome
 
-// In-process tree-sitter engine (#183).
+// In-process tree-sitter engine.
 //
 // TreeSitterParser gives non-Go files high-fidelity tree-sitter symbols by
 // driving the gotreesitter pure-Go tree-sitter runtime, so `go build` stays
