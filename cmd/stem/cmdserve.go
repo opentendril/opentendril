@@ -417,7 +417,7 @@ func resolveServeAPIKey() string {
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
-// mirroring the getOrCreateMemoryKey pattern (cmd-memory.go) used for the
+// mirroring the getOrCreateMemoryKey pattern (cmdmemory.go) used for the
 // rhizome encryption key.
 func apiKeyFilePath(tendrilDir string) string {
 	return filepath.Join(tendrilDir, "api-key")

@@ -49,7 +49,7 @@ OpenTendril operates a self-building pipeline. To protect the orchestrator from 
 ### Protected Files (No AI Edits in Session)
 The following kernel files must **never** be modified directly via the AI orchestrator's `write_file` or `apply_code_patch` tools during active chat execution:
 * `cmd/stem/main.go` — Stem kernel entry point
-* `cmd/stem/cmd-serve.go` — daemon / gateway surface bootstrap
+* `cmd/stem/cmdserve.go` — daemon / gateway surface bootstrap
 * `cmd/stem/internal/core/` — the governed capability registry and its boundary/parity tests
 * `.github/workflows/` — CI pipelines (the Adaptive Immune System)
 * `.github/dependabot.yml` — supply-chain update policy

@@ -17,7 +17,7 @@ Implement the **Mycorrhizal Mesh Network** (Stem Grafting) to allow multiple Ope
 ## Proposed Changes
 
 ### Configuration & CLI
-#### `cmd/stem/cmd-mesh.go`
+#### `cmd/stem/cmdmesh.go`
 - `runMeshKeygenCmd()`: Generates and saves Ed25519 keypairs.
 - `runMeshIssueTokenCmd()`: Issues signed JWT tokens via CLI.
 
@@ -34,7 +34,7 @@ Implement the **Mycorrhizal Mesh Network** (Stem Grafting) to allow multiple Ope
 - `DialGraft()`: Establishes a secure WebSocket connection to the Central Stem.
 - `DelegatePush()`: Transmits local commits to the Central Stem and listens to the streamed validation logs.
 
-#### `cmd/stem/cmd-serve.go`
+#### `cmd/stem/cmdserve.go`
 - Register the Admin API route `mux.HandleFunc("POST /v1/mesh/admin/issue-token", withAdminAuth(meshServer.HandleAdminIssueToken))`.
 - Register the WebSocket route `mux.HandleFunc("/v1/mesh/graft", meshServer.HandleGraftWebSocket)`.
 

@@ -175,7 +175,7 @@ func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 // in history. The firer stamps origin "scheduler" into the governed sprout.run
 // input; the Core carries it onto the resolved SproutSpec, which is exactly
 // the field the execution port records as historydb.SproutRun.Origin
-// (cmd-sprout.go). Asserting on the spec therefore pins the whole flow this
+// (cmdsprout.go). Asserting on the spec therefore pins the whole flow this
 // side of the terrarium.
 func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	ctx := context.Background()

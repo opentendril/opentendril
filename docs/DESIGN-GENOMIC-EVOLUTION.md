@@ -55,7 +55,7 @@ We will add a new CLI command `tendril genome evolve` and support automated exec
 #### [MODIFY] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/sequence.go)
 *   Call `RecordGenomicFitness` at the end of sprout runs.
 
-#### [NEW] [cmd-genome-evolve.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmd-genome-evolve.go)
+#### [NEW] [cmdgenomeevolve.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmdgenomeevolve.go)
 *   Register subcommand `tendril genome evolve`.
 
 ---

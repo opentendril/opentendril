@@ -25,7 +25,7 @@ upstream stem_api {
 
 # /ws prefers the dedicated gateway listener (:9090). The Stem mounts the
 # same /ws handler on the main API mux and degrades gracefully when the
-# gateway port fails to bind (cmd/stem/cmd-serve.go) — mirror that here
+# gateway port fails to bind (cmd/stem/cmdserve.go) — mirror that here
 # with a backup upstream.
 upstream stem_ws {
     server ${STEM_HOST}:${STEM_GATEWAY_PORT};

@@ -113,7 +113,7 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 *   Implement DAG topological traversal and concurrent task scheduler using channels and goroutines.
 *   Implement CLI prompt checking for `onFailure: pause` interaction.
 
-#### [NEW] [cmd-sequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmd-sequence.go)
+#### [NEW] [cmdsequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmdsequence.go)
 *   Implement CLI commands: `tendril sequence run <path>` and `tendril sequence list`.
 *   Support `--provider`, `--model`, and `--base-url` override flags.
 *   Support `--detach` flag for asynchronous execution.

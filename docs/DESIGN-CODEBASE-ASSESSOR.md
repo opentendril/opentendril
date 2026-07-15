@@ -67,7 +67,7 @@ The generated map is formatted as a compact hierarchical list:
     *   Call `GenerateRepoMap(mountPath)`.
     *   Write the output to `mountPath/.tendril/genome/repomap.md` to inject the Thigmotropism Plasmid.
 
-#### [NEW] [cmd-repomap.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmd-repomap.go)
+#### [NEW] [cmdrepomap.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmdrepomap.go)
 *   Implement `tendril repomap` CLI command to print the repository map to stdout.
 
 #### [MODIFY] [main.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/main.go)
