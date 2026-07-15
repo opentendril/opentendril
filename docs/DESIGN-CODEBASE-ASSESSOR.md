@@ -1,4 +1,4 @@
-# Codebase Assessor: Thigmotropism AST Ingestion (Issue #54)
+# Codebase Assessor: Thigmotropism AST Ingestion (Issue)
 
 This plan details the implementation of the **Codebase Assessor**, which parses Abstract Syntax Trees (AST) to generate a compressed **Repo Map** (packages, classes, functions, and signatures) of the workspace. This map is dynamically injected as a Plasmid, giving Sprouts architectural context without bloating their prompts.
 

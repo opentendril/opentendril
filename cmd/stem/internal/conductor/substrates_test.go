@@ -449,7 +449,7 @@ func containsString(values []string, want string) bool {
 	return false
 }
 
-// TestSubstrateCredentialSchemaParsing pins the RFC #222 slice-1 schema:
+// TestSubstrateCredentialSchemaParsing pins the RFC slice-1 schema:
 // back-compatible scalar auth, mapping auth (ssh/none), signing, checkout, and
 // reusable credential profiles.
 func TestSubstrateCredentialSchemaParsing(t *testing.T) {

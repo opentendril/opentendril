@@ -1,4 +1,4 @@
-# Enterprise Telemetry & Structured Logging: Resin, Amber, Transporters (Issue #136)
+# Enterprise Telemetry & Structured Logging: Resin, Amber, Transporters (Issue)
 
 This document specifies the structured-logging contract for the Stem orchestrator: one
 canonical event schema, the surfaces that carry it, and how local Resin logs harden into
@@ -42,9 +42,9 @@ the `/ws` stream are all projections of it; none of them defines its own log for
 
 | Surface | Biology | Mechanism | Status |
 | :--- | :--- | :--- | :--- |
-| Local structured log | **Resin** | `ResinSink` appends one JSON event per line to `.tendril/logs/resin.log` | Shipped (#140) |
+| Local structured log | **Resin** | `ResinSink` appends one JSON event per line to `.tendril/logs/resin.log` | Shipped |
 | Archived logs | **Amber** | Oversized resin.log gzip-hardens into `.tendril/logs/amber/` | Shipped (this slice) |
-| External emitters | **Transporters** | Webhook (#140), Kafka via REST Proxy, Prometheus `/metrics` (#141) | Shipped |
+| External emitters | **Transporters** | Webhook, Kafka via REST Proxy, Prometheus `/metrics` | Shipped |
 | Live view | — | `/ws` EventBus stream (+ `?replay`) | Shipped; a *view*, outside the capability registry by design |
 
 All surfaces attach to the EventBus as subscribers and must obey the telemetry
@@ -104,10 +104,10 @@ stream.
 * **Ad-hoc `log.Printf` output across the orchestrator is not Resin.** Operational
   stderr logging remains unstructured; migrating high-value call sites to publish
   structured events (rather than reformatting stderr) is the correct alignment path and
-  is tracked as follow-up work on #136.
+  is tracked as follow-up work.
 * **Provider token-usage counts:** LLM providers do not currently report
   prompt/completion usage anywhere in the codebase; the Prometheus transporter derives
-  token metrics from `stream-token` chunks (#141). If provider usage stats land in
+  token metrics from `stream-token` chunks. If provider usage stats land in
   `roots/llm`, they should be published as a new kebab-case event type and will flow
   through every surface automatically.
 * **Datadog/OTel emitters** stay out of the core binary; the webhook transporter plus

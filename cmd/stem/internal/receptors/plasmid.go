@@ -10,7 +10,7 @@ import (
 )
 
 // PlasmidHandler is the REST adapter for the governed plasmid capability
-// family (issue #181, slice 2). Exactly like GenomeHandler, it translates
+// family. Exactly like GenomeHandler, it translates
 // HTTP to and from the transport-free core.Core and holds no business logic.
 type PlasmidHandler struct {
 	core core.Core

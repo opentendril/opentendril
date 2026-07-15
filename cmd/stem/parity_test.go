@@ -18,7 +18,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-// Interface-parity coverage test (issue #159). It asserts the governed command
+// Interface-parity coverage test. It asserts the governed command
 // capability set is identical across every surface: the canonical registry, the
 // REST adapter, the MCP adapter (projected from the live tools/list response),
 // and the CLI adapter. It goes red the moment someone adds a capability to one
@@ -231,7 +231,7 @@ func samePreferences(a, b session.Preferences) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Behavioral parity, part two (issue #159): TestInterfaceParityBehavioral_*
+// Behavioral parity, part two: TestInterfaceParityBehavioral_*
 // above proves REST and MCP produce equivalent *outputs* against a real
 // Core. This proves the adapters carry zero business logic of their own —
 // CLI included — by asserting on the *shape of the call itself*. A mock Core
@@ -844,7 +844,7 @@ func TestBehavioralParity(t *testing.T) {
 }
 
 // TestBehavioralParity_GenomeReduce extends the zero-business-logic proof to
-// the genome family (issue #181 slice 1): REST, MCP, and the CLI dispatch path
+// the genome family: REST, MCP, and the CLI dispatch path
 // must each invoke Core.GenomeReduce exactly once for an equivalent request.
 func TestBehavioralParity_GenomeReduce(t *testing.T) {
 	mock, mux, mcp := newMockParityFixture(t)
@@ -923,7 +923,7 @@ func TestBehavioralParity_GenomeReduce(t *testing.T) {
 }
 
 // TestBehavioralParity_PlasmidInject extends the zero-business-logic proof to
-// the plasmid family (issue #181 slice 2): REST, MCP (governed name and the
+// the plasmid family: REST, MCP (governed name and the
 // deprecated injectPlasmid alias), and the CLI dispatch path must each decode
 // an equivalent request into the identical typed input and invoke
 // Core.PlasmidInject exactly once.
@@ -1011,7 +1011,7 @@ func TestBehavioralParity_PlasmidInject(t *testing.T) {
 }
 
 // TestBehavioralParity_MeshPromote extends the zero-business-logic proof to
-// the substrate-grafting family (issue #181 slice 3): REST, MCP (governed
+// the substrate-grafting family: REST, MCP (governed
 // name with camelCase keys AND the deprecated promotePR alias with its legacy
 // kebab-case keys), and the CLI dispatch path must each decode an equivalent
 // request into the identical typed input and invoke Core.MeshPromote exactly
@@ -1350,7 +1350,7 @@ func TestBehavioralParity_MeshTraits(t *testing.T) {
 }
 
 // TestBehavioralParity_SequenceRun extends the zero-business-logic proof to
-// the sequence family (issue #181 slice 4): REST, MCP (governed name and the
+// the sequence family: REST, MCP (governed name and the
 // deprecated runSequence alias, including its legacy `path` argument
 // fallback), and the CLI dispatch path must each decode an equivalent request
 // into the identical typed input and invoke Core.SequenceRun exactly once.
@@ -1455,7 +1455,7 @@ func TestBehavioralParity_SequenceRun(t *testing.T) {
 }
 
 // TestBehavioralParity_SproutRun extends the zero-business-logic proof to the
-// sprout/run family (issue #181, final family): REST, MCP (governed name and
+// sprout/run family: REST, MCP (governed name and
 // the deprecated sproutTendril alias), and the CLI dispatch path must each
 // decode an equivalent request into the identical typed input and invoke
 // Core.SproutRun exactly once.

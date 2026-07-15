@@ -9,13 +9,13 @@ import (
 )
 
 // CredentialMethod enumerates the supported substrate authentication methods.
-// Design RFC #222 / impl plan #225.
+// Design RFC / implementation plan.
 type CredentialMethod string
 
 const (
 	// CredentialUnspecified is the legacy default: no explicit method. A PAT is
 	// resolved from the referenced env var (or the ambient github.com fallback
-	// in the terrarium), preserving pre-RFC-#222 behavior.
+	// in the terrarium), preserving pre-RFC behavior.
 	CredentialUnspecified CredentialMethod = ""
 	CredentialPAT         CredentialMethod = "pat"
 	CredentialSSH         CredentialMethod = "ssh"
@@ -174,7 +174,7 @@ func gitTokenCredentialEnv(token string) []string {
 }
 
 // materializeGitAuth resolves ready-to-use git authentication for a remote as
-// process environment. Design RFC #222.
+// process environment. Design RFC.
 //
 // Invariants: no secret ever appears in the clone URL, the command line, or the
 // persisted .git/config; ssh/none never carry a PAT; the GitHub App token is

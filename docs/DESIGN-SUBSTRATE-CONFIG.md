@@ -1,4 +1,4 @@
-# Substrate Configuration YAML (Issue #56)
+# Substrate Configuration YAML (Issue)
 
 This plan details the design and implementation of the project-level `substrates.yaml` configuration file to resolve named workspaces, target branches, and secure auth credentials.
 

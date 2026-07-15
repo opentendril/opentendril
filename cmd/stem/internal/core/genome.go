@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// The genome capability family (issue #181, slice 1). Reading the genome is
+// The genome capability family. Reading the genome is
 // pure filesystem work and lives here directly; reduce/evolve are *execution*
 // operations owned by the orchestrator, which the Core is structurally
 // forbidden from importing (see boundary_test.go). They are therefore injected

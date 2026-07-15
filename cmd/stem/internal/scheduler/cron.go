@@ -1,7 +1,7 @@
 // Package scheduler models .tendril/schedules.yaml: cron-timed entries that
 // grow a Sequence or a Sprout. This slice provides the stdlib-only cron
 // parser and the config loader; wiring into serve and actual firing land in
-// later slices (issue #235).
+// later slices.
 package scheduler
 
 import (

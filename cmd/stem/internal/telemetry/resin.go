@@ -17,7 +17,7 @@ import (
 const defaultResinLogPath = ".tendril/logs/resin.log"
 
 // amberDirName is the archive directory for hardened Resin, created next to
-// the active resin.log (issue #136: "Resin that has hardened over time").
+// the active resin.log ("Resin that has hardened over time").
 const amberDirName = "amber"
 
 // ResinSink appends structured JSON event logs to the local Resin trace file.

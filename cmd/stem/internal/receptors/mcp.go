@@ -73,7 +73,7 @@ func (h *MCPHandler) WithDefaultSession(sessionID string) *MCPHandler {
 }
 
 // WithCore binds the transport-free Core so this MCP adapter projects the same
-// session-lifecycle capabilities as the REST and CLI surfaces (issue #159).
+// session-lifecycle capabilities as the REST and CLI surfaces.
 func (h *MCPHandler) WithCore(coreSvc core.Core) *MCPHandler {
 	h.core = coreSvc
 	return h
@@ -447,7 +447,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				},
 			},
 		}
-		// Interface parity (#159): project the Core session capabilities as MCP
+		// Interface parity: project the Core session capabilities as MCP
 		// tools so this surface stays in lockstep with REST and the CLI.
 		tools = append(tools, h.coreToolDefs()...)
 		return h.formatResult(req.ID, map[string]interface{}{
@@ -462,7 +462,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.formatError(req.ID, -32602, "Invalid params", err.Error())
 		}
 
-		// Interface parity (#159): Core session capabilities are dispatched
+		// Interface parity: Core session capabilities are dispatched
 		// through the shared service, identically to REST and the CLI.
 		if h.isCoreCapability(params.Name) {
 			if params.Name == core.CapSproutRun {
@@ -482,7 +482,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
 		}
 
-		// Deprecated aliases of the governed genome capabilities (#181 slice 1):
+		// Deprecated aliases of the governed genome capabilities:
 		// same Core, legacy tool names and text rendering preserved for
 		// existing MCP clients. Adapter translation only — the business logic
 		// that used to live inline here is now in core / the orchestrator port.
@@ -558,8 +558,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
-		// Deprecated alias of the governed plasmid.inject capability (#181
-		// slice 2): same Core, legacy tool name and text rendering preserved
+		// Deprecated alias of the governed plasmid.inject capability:
+		// same Core, legacy tool name and text rendering preserved
 		// for existing MCP clients. Adapter translation only — the business
 		// logic that used to live inline here is now behind the Core's
 		// PlasmidOps port.
@@ -602,7 +602,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		// Deprecated aliases of the governed mesh.graft / mesh.promote
-		// capabilities (#181 slice 3): same Core, legacy tool names, legacy
+		// capabilities: same Core, legacy tool names, legacy
 		// kebab-case argument keys, and text rendering preserved for existing
 		// MCP clients. Adapter translation only — the resolution/push logic
 		// that used to live inline here is now behind the Core's MeshOps port.
@@ -736,8 +736,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
-		// Deprecated alias of the governed sequence.run capability (#181
-		// slice 4): same Core, legacy tool name, legacy argument-key fallbacks
+		// Deprecated alias of the governed sequence.run capability:
+		// same Core, legacy tool name, legacy argument-key fallbacks
 		// (path/sequence), and text rendering preserved for existing MCP
 		// clients. Adapter translation only — the execution that used to run
 		// inline here is now behind the Core's SequenceOps port.
@@ -785,8 +785,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			})
 		}
 
-		// Deprecated alias of the governed sprout.run capability (#181, final
-		// family): same Core, legacy tool name, legacy protocol errors, and
+		// Deprecated alias of the governed sprout.run capability:
+		// same Core, legacy tool name, legacy protocol errors, and
 		// text rendering preserved for existing MCP clients. Adapter
 		// translation only — the substrate resolution, terrarium execution,
 		// and run recording that used to live inline here are now behind the

@@ -16,7 +16,7 @@ import (
 type SubstratesConfig struct {
 	Substrates map[string]SubstrateSpec `yaml:"substrates"`
 	// Credentials defines reusable named credential profiles that substrates
-	// reference by name via SubstrateSpec.Profile. Design RFC #222.
+	// reference by name via SubstrateSpec.Profile. Design RFC.
 	Credentials map[string]CredentialProfile `yaml:"credentials,omitempty"`
 }
 
@@ -44,7 +44,7 @@ type SubstrateSpec struct {
 	Command []string `yaml:"command,omitempty"`
 }
 
-// AuthSpec describes a substrate's authentication method. Design RFC #222.
+// AuthSpec describes a substrate's authentication method. Design RFC.
 // Back-compat: a bare scalar decodes to {Method: "pat", Env: <scalar>}.
 type AuthSpec struct {
 	// Method is one of "pat", "ssh", "none", or "app". Empty means "unspecified"
@@ -79,7 +79,7 @@ func (a *AuthSpec) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// SignSpec configures optional commit signing. Design RFC #222.
+// SignSpec configures optional commit signing. Design RFC.
 type SignSpec struct {
 	// Method is "ssh" or "gpg". Empty disables signing.
 	Method string `yaml:"method,omitempty"`
@@ -87,7 +87,7 @@ type SignSpec struct {
 	Key string `yaml:"key,omitempty"`
 }
 
-// CheckoutSpec controls where a foreign substrate is checked out. Design RFC #222.
+// CheckoutSpec controls where a foreign substrate is checked out. Design RFC.
 type CheckoutSpec struct {
 	// Mode is "ephemeral" (default, /tmp), "managed" (persistent OT-owned dir),
 	// or "path" (explicit Path below).
@@ -96,7 +96,7 @@ type CheckoutSpec struct {
 }
 
 // CredentialProfile is a reusable named bundle of auth + signing config that
-// substrates reference by name via SubstrateSpec.Profile. Design RFC #222.
+// substrates reference by name via SubstrateSpec.Profile. Design RFC.
 type CredentialProfile struct {
 	Auth AuthSpec `yaml:"auth,omitempty"`
 	Sign SignSpec `yaml:"sign,omitempty"`

@@ -16,7 +16,7 @@ import (
 )
 
 // runPlasmidCmd is the CLI adapter for the governed plasmid capability family
-// (issue #181, slice 2). The list/inject subcommands are thin projections of
+// . The list/inject subcommands are thin projections of
 // the same transport-free core.Core the REST and MCP surfaces use: they
 // resolve the registered capability, call core.Invoke, and render the result
 // — no business logic lives here.

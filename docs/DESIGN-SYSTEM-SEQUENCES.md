@@ -1,7 +1,7 @@
 # System Sequences: Pre-built Git & SDLC Workflows
 
-> **Status:** Design RFC — tracking [Issue #116](https://github.com/opentendril/core/issues/116)
-> **See also:** [DESIGN-SEQUENCE-RUNNER.md](./DESIGN-SEQUENCE-RUNNER.md) · [Issue #115 — System Genotypes](https://github.com/opentendril/core/issues/115)
+> **Status:** Design RFC
+> **See also:** [DESIGN-SEQUENCE-RUNNER.md](./DESIGN-SEQUENCE-RUNNER.md)
 
 ---
 
@@ -20,7 +20,7 @@ A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. Thi
 
 ## System Sequences
 
-Just as [System Genotypes](https://github.com/opentendril/core/issues/115) ship with OpenTendril as immutable, pre-built AI personas, **System Sequences** are pre-built workflow definitions that ship in `~/.opentendril/sequences/` and cover the standard SDLC lifecycle. They are:
+Just as System Genotypes ship with OpenTendril as immutable, pre-built AI personas, **System Sequences** are pre-built workflow definitions that ship in `~/.opentendril/sequences/` and cover the standard SDLC lifecycle. They are:
 
 - **Immutable from within Terrariums** — agents cannot modify them
 - **Parameterised** — accept user-supplied inputs (branch name, PR number, etc.)

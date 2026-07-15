@@ -1,4 +1,4 @@
-# Vascular Cambium: Parallel Workflows & Failure recovery (Issue #60)
+# Vascular Cambium: Parallel Workflows & Failure recovery (Issue)
 
 This plan details the implementation of the **Vascular Cambium** (Sequence Runner) in the Go Stem orchestrator. This allows developers and IDE agents to write structured, parallel-capable task graphs to `.tendril/sequences/<name>.yaml` and run them concurrently using Go goroutines, with advanced failure recovery options.
 

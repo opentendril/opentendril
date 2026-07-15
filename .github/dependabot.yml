@@ -1,4 +1,4 @@
-# Security-only dependency updates (issue #189).
+# Security-only dependency updates.
 #
 # `open-pull-requests-limit: 0` disables the scheduled version-update PR
 # stream for each ecosystem while still allowing Dependabot *security*

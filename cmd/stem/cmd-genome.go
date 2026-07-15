@@ -15,7 +15,7 @@ import (
 )
 
 // runGenomeCmd is the CLI adapter for the governed genome capability family
-// (issue #181, slice 1). Every subcommand is a thin projection of the same
+// . Every subcommand is a thin projection of the same
 // transport-free core.Core the REST and MCP surfaces use: it resolves the
 // registered capability, calls core.Invoke, and renders the result — no
 // business logic lives here.

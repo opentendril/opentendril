@@ -1,4 +1,4 @@
-# Substrate State Externalization: Resilient Commits & Status Tracking (Issue #62)
+# Substrate State Externalization: Resilient Commits & Status Tracking (Issue)
 
 This plan details the implementation of **Substrate State Externalization** to ensure sprout task progress (success/failure) is committed to git, preventing work loss and enabling task resumption.
 
@@ -41,7 +41,7 @@ To ensure that starting state is clear and no temporary/compiled files are accid
 
 To distinguish between structured sequence tasks and ad-hoc chat sessions:
 
-### A. Structured Sequence Steps (e.g. Issue #60)
+### A. Structured Sequence Steps (e.g. Issue)
 *   Writes a `tendril-status.json` file directly to the Substrate root directory:
     ```json
     {

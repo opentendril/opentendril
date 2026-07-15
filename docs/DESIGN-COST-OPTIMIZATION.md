@@ -1,4 +1,4 @@
-# Cost Optimization & Routing: Prompt Caching & Model Tiering (Issue #22)
+# Cost Optimization & Routing: Prompt Caching & Model Tiering (Issue)
 
 This document details the design and implementation of **Cost Optimization & Routing** inside the Go Stem orchestrator. This optimizes LLM token consumption and reduces operational API expenses during ReAct cycles and speculative sprout runs.
 
