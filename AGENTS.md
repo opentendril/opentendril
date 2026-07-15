@@ -14,12 +14,14 @@ OpenTendril is built on a strict synthetic biological architecture. Any external
 
 **Self-Evolution Rule**: If the AI attempts to self-improve, refactor, or generate new architecture, it is absolutely forbidden from reverting to disorganized industry standards. All new concepts must be mapped to their biological equivalent using `GLOSSARY.md` and `SYNTHETIC-TAXONOMY.md` as the ultimate source of truth.
 
+**Placement, not just naming**: Enforcement extends beyond vocabulary. **Every architectural decision must classify the capability against the taxonomy** — *which organ does it belong to, and why?* — before a design is proposed. Use the decision heuristic in `SYNTHETIC-TAXONOMY.md` §5 ("How to classify a new capability"): local computation on the plant's own code is a **core organ** (the Rhizome parses the Substrate; a parser is never a Nodule), an external network *service* is a **Symbiotic Nodule**, a worked-on repo is a **Substrate**, our own outward connectivity is a **Root**. Every Design RFC must state this in its "Taxonomy placement" section. Misplacing a capability (e.g. bloating the Stem with what should be a Nodule, or exiling a core organ to a service) is as much a violation as using banned jargon.
+
 ---
 
 ## 2. Builder Authority & PR Discipline
 
 Any external builder agent or process must operate under strict boundary constraints:
-* **No Merge Authority:** Builders do not own merge authority. A builder must never merge a PR or enable auto-merge.
+* **No Merge Authority:** Builders do not own merge authority. A builder must never merge a PR or enable auto-merge **on its own initiative**. The sole exception is an **explicit, per-PR human instruction** to merge a specific named PR; a blanket or standing "you may merge" does not qualify, and the builder must never enable auto-merge. Absent such a direct instruction, the human merges at Gate C.
 * **Scope Discipline:** Keep Pull Requests small, isolated, and single-purpose (one task/issue per PR).
 * **Minimal Diffs:** Avoid drive-by or speculative refactors. Stick strictly to the approved plan.
 * **No Direct Push to Main:** Never commit or push directly to the `main` branch. All changes must go through a staging branch.

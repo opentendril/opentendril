@@ -229,6 +229,26 @@ growth cycle:
     LLM timeout), the Stem **abscises** it — drops it and routes around — and the
     core organism survives.
 
+### How to classify a new capability (decision heuristic)
+
+Before proposing *any* new capability, classify **which organ it belongs to**. Placement is a
+taxonomy decision, not just a naming one — getting it wrong bloats the wrong organ.
+
+*   **Local computation on the plant's own code/state → a core organ, in the Stem.** The **Rhizome**
+    *is* the parser ("parses the Substrate into an AST map"), so `go/ast` and the in-process tree-sitter
+    engine live here — **a parser is never a Nodule.**
+*   **An external network *service* the plant partners with → a Symbiotic Nodule.** GCP, Datadog, the
+    GitHub *API*. A Nodule interfaces with the Stem and keeps the core unbloated (does one thing well,
+    off-binary).
+*   **A repository the plant works on → a Substrate.** (Contrast: the *repo* is a Substrate; the *API
+    that opens its PRs* is a Nodule.)
+*   **OpenTendril's own connectivity code reaching into the outside world → a Root** (`roots/`); the
+    outside world it taps is the **Rhizosphere** — never OpenTendril's own code.
+
+**Litmus test:** does it run locally on our own material, or call out to a foreign service? Local ⇒ a
+core organ (Rhizome/Stem); foreign service ⇒ a Nodule/Root. State this classification in every Design
+RFC (the "Taxonomy placement" section).
+
 ---
 
 ## 6. Who Reaches Out? (the call path)
