@@ -41,7 +41,8 @@ func runMCPCmd(ctx context.Context, args []string) {
 			// The stdio server has no event bus: nil keeps its sequence runs
 			// telemetry-silent, exactly as before.
 			WithSequence(serveSequenceOps(resolveRepoRoot(""), nil)).
-			WithSprout(sproutOps(history))
+			WithSprout(sproutOps(history)).
+			WithPassthrough(passthroughOps())
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
 	}

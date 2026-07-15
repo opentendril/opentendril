@@ -66,6 +66,33 @@ Two properties of this posture are mechanically enforced, not merely documented:
   provider tests noted there, so a weakening of container isolation breaks the
   build.
 
+## Delegated passthrough egress — deny-all default, grant-opened mediation
+
+The passthrough operation-class (`passthrough.run`) runs one bounded command
+inside the same sealed Terrarium described above. Its egress model maps the
+delegation grant's `egress` allow-list onto the existing isolation seams:
+
+- **Deny-all is physical, not policy.** The docker provider pins
+  `--network none` for every Terrarium it creates (regression-tested per the
+  Worker section), so the executed command itself can never reach any host —
+  with or without a grant, delegated or not.
+- **The allow-list opens Stem-mediated reach only.** The single egress channel
+  a passthrough execution has is its optional `fetch` list: URLs the **Stem**
+  retrieves on the host, *before* the sealed container runs, delivering the
+  payloads read-only under `/tmp/egress` inside the Terrarium
+  (`cmd/stem/internal/conductor/passthrough.go`). Every fetch URL must name a
+  host on the `EgressPolicy` built from the matching grant's `egress` field —
+  exact host or host:port, no wildcards. An empty list (any non-delegated
+  invocation, or a grant without egress hosts) denies every fetch: deny-all
+  requires zero configuration.
+- **No self-escalation.** The allow-list travels on an input field with no
+  JSON surface (`core.PassthroughRunInput.Egress`, tagged `json:"-"`): only
+  the Stem's own call sites populate it, after the delegation authorizer has
+  matched a grant, so no transport caller can widen its own egress.
+
+This keeps the sealed-Sprout invariant intact for the new operation-class: a
+worker "cannot reach out on its own; external calls are Stem-mediated."
+
 ## Credential model — current state and direction
 
 The Tendril OS today holds the **same long-lived bearer key** the CLI uses
