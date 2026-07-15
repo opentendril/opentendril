@@ -4,6 +4,19 @@ This document defines the high-level architecture and data-flow specifications o
 
 ---
 
+## Guiding Principles
+
+These principles are the acceptance criteria for every architectural decision. A proposed mechanism that violates one is the wrong mechanism.
+
+1.  **Security-first, minimal-config default.** The basic runtime is minimal-config **and** secure by default. Hardening is **opt-out**: the secure posture is what you get with no configuration, and you must actively and knowingly loosen it — never opt in to gain it. Enterprise and scaling options are **opt-in**: added deliberately when needed. Configuration is therefore required to *reduce* security or to *scale up*, never to *become* secure.
+2.  **Best-tool-for-the-job configurability.** Where a genuine choice exists (a signing engine, an egress policy, a transport, a review gate), it must be selectable, so a developer can pick the right tool and flex to the effectively unlimited range of developer and enterprise configurations. Every such choice ships with a sensible default plus an override.
+3.  **Nothing hard-coded; everything questioned.** Treat each mechanism as a hypothesis, not a given. A default may be obvious, but it remains *a default with an override*, not a baked-in assumption. Deployment location, credential type, and transport must never be assumed.
+4.  **Build for the current use-case; architect for the future.** The implementation that lands may cover only today's need. The architecture must not foreclose known future directions (portability, multiple cooperating instances, workload routing). Minimise dependencies so an instance stays cheap to stand up, move, and replicate.
+
+The test for any new mechanism: it must degrade to a simple, secure default **and** be overridable for a use-case not yet imagined. If it can't do both, it is the wrong mechanism.
+
+---
+
 ## 1. The Headless Kernel Split (Brain vs. Hands)
 
 OpenTendril separates high-level cognitive planning (the Brain) from secure file/shell execution (the Hands):
