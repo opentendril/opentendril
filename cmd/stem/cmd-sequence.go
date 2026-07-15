@@ -19,7 +19,7 @@ import (
 )
 
 // runSequenceCmd is the CLI adapter for the governed sequence capability
-// family (issue #181, slice 4). The run/list subcommands are thin projections
+// family. The run/list subcommands are thin projections
 // of the same transport-free core.Core the REST and MCP surfaces use.
 //
 // `dynamic` is CLI-local sugar: it synthesizes a one-step sequence file from

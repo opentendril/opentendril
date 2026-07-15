@@ -17,7 +17,7 @@ import (
 
 // runSessionCmd is the CLI adapter for the governed session-lifecycle
 // capabilities. Every subcommand is a thin projection of the same
-// transport-free core.Core the REST and MCP surfaces use (issue #159): it
+// transport-free core.Core the REST and MCP surfaces use: it
 // decodes flags/JSON into a capability input map and calls core.Invoke — no
 // business logic lives here.
 //

@@ -24,7 +24,7 @@ type ResinConfig struct {
 
 // AmberConfig controls how Resin hardens into Amber: when the active
 // resin.log grows past MaxSizeKB it is gzip-compressed into the amber/
-// archive directory next to it, keeping at most Keep archives (issue #136).
+// archive directory next to it, keeping at most Keep archives.
 type AmberConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// MaxSizeKB uses the same snake_case key style as api_key above.

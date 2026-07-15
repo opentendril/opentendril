@@ -20,7 +20,7 @@ const (
 )
 
 // KafkaTransporter pumps EventBus events into a Kafka topic through a Kafka
-// REST Proxy endpoint (issue #141, first slice).
+// REST Proxy endpoint (first slice).
 //
 // Design constraint: the Stem binary stays free of external dependencies
 // (the same rule that produced the stdlib-only Webhook and Prometheus
@@ -29,7 +29,7 @@ const (
 // REST Proxy protocol is plain HTTP+JSON, so this transporter covers Kafka
 // natively for any deployment running Confluent REST Proxy (or a compatible
 // gateway) with zero new dependencies. Direct broker support, if it is ever
-// wanted, is an opt-in follow-up discussed in #141 (build tags).
+// wanted, is an opt-in follow-up discussed (build tags).
 type KafkaTransporter struct {
 	produceURL string
 	apiKey     string
@@ -54,12 +54,12 @@ type kafkaRecord struct {
 // It requires `endpoint` (the REST Proxy base URL, e.g. http://proxy:8082).
 // A brokers-only configuration is rejected loudly: the native broker wire
 // protocol is not implemented, and silently accepting the config — as the
-// pre-#141 stub did — meant silently discarding telemetry.
+// earlier stub did — meant silently discarding telemetry.
 func NewKafkaTransporter(cfg TransporterConfig) (*KafkaTransporter, error) {
 	endpoint := strings.TrimSpace(cfg.Endpoint)
 	if endpoint == "" {
 		if len(cfg.Brokers) > 0 {
-			return nil, fmt.Errorf("kafka transporter: direct broker connections (brokers: %v) are not supported — the Stem carries no Kafka client dependency (issue #141); set `endpoint` to a Kafka REST Proxy URL, or ship resin.log / the webhook transporter through a log shipper", cfg.Brokers)
+			return nil, fmt.Errorf("kafka transporter: direct broker connections (brokers: %v) are not supported — the Stem carries no Kafka client dependency; set `endpoint` to a Kafka REST Proxy URL, or ship resin.log / the webhook transporter through a log shipper", cfg.Brokers)
 		}
 		return nil, fmt.Errorf("kafka transporter requires endpoint (Kafka REST Proxy base URL)")
 	}

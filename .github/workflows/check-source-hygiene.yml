@@ -1,0 +1,25 @@
+name: Source Hygiene
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-issue-refs:
+    name: No GitHub refs in source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Repo files must be self-contained. This blocks a PR that ADDS a GitHub
+      # issue/PR reference to source (comments, Dockerfiles, requirements, docs);
+      # pre-existing references never fail it (the check is diff-based).
+      - name: No new GitHub issue/PR references
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          bash scripts/check-no-issue-refs.sh "origin/${{ github.base_ref }}"

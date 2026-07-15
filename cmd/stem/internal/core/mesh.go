@@ -6,18 +6,18 @@ import (
 	"strings"
 )
 
-// The substrate-grafting capability family (issue #181, slice 3). Grafting
+// The substrate-grafting capability family. Grafting
 // delegates a local substrate's latest commit through the Mycelial Mesh; both
 // workspace resolution (substrates config) and the push itself live outside
 // the Core in packages it is structurally forbidden from importing (the
 // conductor and the mesh client — see boundary_test.go). They are therefore
 // injected as transport-free function ports via WithMesh — the same template
-// as GenomeOps (PR #206) and PlasmidOps.
+// as GenomeOps (PR) and PlasmidOps.
 //
 // The mesh key-management commands (`tendril mesh keygen|issue-token`) are
 // deliberately NOT governed: they mint the workspace's private mesh keys and
 // signed tokens, a local secret authority that must not be projected onto the
-// network surfaces (issue #162 posture; same rationale as plasmid.sign). The
+// network surfaces (posture; same rationale as plasmid.sign). The
 // server-side graft endpoint (/v1/mesh/graft WebSocket) is the *receiving*
 // half of the mesh and stays outside the registry as infrastructure, not a
 // command.

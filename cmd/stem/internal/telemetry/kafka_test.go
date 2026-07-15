@@ -18,7 +18,7 @@ func TestNewKafkaTransporterRejectsBrokersOnlyConfig(t *testing.T) {
 		Brokers: []string{"broker-1:9092", "broker-2:9092"},
 	})
 	if err == nil {
-		t.Fatal("expected brokers-only config to be rejected (the pre-#141 stub silently discarded events)")
+		t.Fatal("expected brokers-only config to be rejected (the earlier stub silently discarded events)")
 	}
 	if !strings.Contains(err.Error(), "endpoint") {
 		t.Fatalf("error should steer the operator toward the REST Proxy endpoint, got: %v", err)

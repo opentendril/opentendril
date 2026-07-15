@@ -16,7 +16,7 @@ import (
 // PrometheusTransporter exposes EventBus activity as a Prometheus scrape
 // endpoint (text exposition format v0.0.4) using only the standard library —
 // no client dependency, in keeping with the "unbloated core" constraint of
-// issue #141. It attaches to the bus like every other Transporter: Emit only
+// . It attaches to the bus like every other Transporter: Emit only
 // updates in-memory counters, so a scraper outage can never slow the bus.
 //
 // Exposed metrics:

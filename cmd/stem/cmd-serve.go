@@ -80,7 +80,7 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	tendrilDir := "./.tendril"
 
-	// The Stem must never serve its API unauthenticated (issue #171 finding
+	// The Stem must never serve its API unauthenticated (finding
 	// 1): an explicit key wins, otherwise a previously generated key is
 	// reused, otherwise a new one is generated and persisted so the
 	// zero-config CLI/dashboard flow keeps working without a fail-open gap.
@@ -168,8 +168,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// Unified Interface Layer: the transport-free Core owns the session-
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
-	// are adapters that route through this one service (issues #159, #181,
-	// #185).
+	// are adapters that route through this one service.
 	coreSvc := core.NewService(sessions).
 		WithGenome(genomeOps(resolveRepoRoot(""))).
 		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
@@ -177,7 +176,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithSequence(serveSequenceOps(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOps(history))
 
-	// Native scheduled sequences (issue #235, slice 2): cron entries from
+	// Native scheduled sequences: cron entries from
 	// .tendril/schedules.yaml grow Sequences and Sprouts inside this daemon,
 	// through the same governed Core capabilities every other surface uses.
 	// The scheduler stops with the daemon: it runs on the same shutdown ctx.
@@ -196,19 +195,19 @@ func runServeCmd(ctx context.Context, args []string) {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Genome REST API (adapter, issue #181 slice 1).
+	// Genome REST API (adapter, slice 1).
 	genomeHandler := receptors.NewGenomeHandler(coreSvc)
 	genomeHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Plasmid REST API (adapter, issue #181 slice 2).
+	// Plasmid REST API (adapter, slice 2).
 	plasmidHandler := receptors.NewPlasmidHandler(coreSvc)
 	plasmidHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Substrate-grafting REST API (adapter, issue #181 slice 3). Distinct from
+	// Substrate-grafting REST API (adapter, slice 3). Distinct from
 	// the mesh *server* endpoints mounted below: these are the client-side
 	// delegation commands.
 	graftHandler := receptors.NewGraftHandler(coreSvc)
@@ -216,22 +215,22 @@ func runServeCmd(ctx context.Context, args []string) {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Mesh trait governance REST API (adapter, issue #185). These routes
+	// Mesh trait governance REST API (adapter). These routes
 	// expose the pending-trait inbox to the Command Center and CLI.
 	traitHandler := receptors.NewTraitHandler(coreSvc)
 	traitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Sequence REST API (adapter, issue #181 slice 4).
+	// Sequence REST API (adapter, slice 4).
 	sequenceHandler := receptors.NewSequenceHandler(coreSvc)
 	sequenceHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 
-	// Sprout REST API (adapter, issue #181 final family). Detached
+	// Sprout REST API (adapter, final family). Detached
 	// POST /v1/sessions/{sessionId}/sprout/run is registered as an ungoverned
-	// route inside SproutHandler.Register (issue #248).
+	// route inside SproutHandler.Register.
 	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
@@ -434,8 +433,7 @@ func readPersistedAPIKey(tendrilDir string) string {
 // getOrCreateAPIKey resolves the Stem's bearer key: OPENTENDRIL_API_KEY/
 // ADMIN_TOKEN win, then a previously generated key on disk, then a freshly
 // generated one persisted for next time. It never returns an empty key, so
-// the Stem can never come up serving its API unauthenticated (issue #171
-// finding 1).
+// the Stem can never come up serving its API unauthenticated (// finding 1).
 func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
 	if key = resolveServeAPIKey(); key != "" {
 		return key, false, nil
@@ -460,7 +458,7 @@ func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error
 }
 
 // bearerMatches compares an Authorization header against the configured key
-// in constant time (issue #171 finding 4).
+// in constant time.
 func bearerMatches(header, apiKey string) bool {
 	want := "Bearer " + apiKey
 	got := strings.TrimSpace(header)
@@ -470,7 +468,7 @@ func bearerMatches(header, apiKey string) bool {
 func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// An empty apiKey is a caller bug, not an invitation to skip auth:
-		// fail closed rather than repeat issue #171 finding 1.
+		// fail closed rather than repeat finding 1.
 		if strings.TrimSpace(apiKey) == "" || !bearerMatches(r.Header.Get("Authorization"), apiKey) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
@@ -480,7 +478,7 @@ func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 // withWebSocketAuth gates a WebSocket upgrade handler behind the same bearer
-// key as the REST/MCP surface (issue #171 finding 2). Browsers cannot attach
+// key as the REST/MCP surface. Browsers cannot attach
 // custom headers to the native WebSocket handshake, so a `key` query
 // parameter is accepted alongside the Authorization header used by non-browser
 // clients (e.g. the CLI's gorilla/websocket dialer).

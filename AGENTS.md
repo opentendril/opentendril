@@ -26,6 +26,7 @@ Any external builder agent or process must operate under strict boundary constra
 * **Minimal Diffs:** Avoid drive-by or speculative refactors. Stick strictly to the approved plan.
 * **No Direct Push to Main:** Never commit or push directly to the `main` branch. All changes must go through a staging branch.
 * **Branch Cleanup:** Builders must never delete remote branches or close/reopen PRs unless explicitly instructed by the human.
+* **Self-contained source (no GitHub refs in files):** Never write a GitHub issue/PR number into a repo file — no `(#NNN)`, `issue #NNN`, `PR #NNN`, or GitHub issue/pull URLs in code comments, Dockerfiles, requirements, or docs. Put that context in the commit message and PR description instead. See GUARDRAILS.md → Documentation Governance; enforced by CI (`scripts/check-no-issue-refs.sh`).
 
 ---
 

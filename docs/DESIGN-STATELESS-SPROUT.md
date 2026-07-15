@@ -1,4 +1,4 @@
-# Stateless Polyglot Sprouts: Go & TypeScript Executors (Issue #63)
+# Stateless Polyglot Sprouts: Go & TypeScript Executors (Issue)
 
 This plan details the implementation of a stateless, decoupled sprout architecture. 
 

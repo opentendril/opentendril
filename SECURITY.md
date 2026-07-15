@@ -57,7 +57,7 @@ This is defended by the **config-origin trust model**, enforced in the Stem's Su
 
 The same principle applies to **Genotypes**: System Genotypes shipped in the System Config path carry an immutable `deny` list of blocked Plasmids (tools). An agent cannot grant itself additional tool access by modifying its own Genotype, because System Genotypes are never resident in the workspace.
 
-See [Issue #115](https://github.com/opentendril/core/issues/115) for the full System Genotype RFC.
+See [Issue](https://github.com/opentendril/core/issues/115) for the full System Genotype RFC.
 
 ---
 

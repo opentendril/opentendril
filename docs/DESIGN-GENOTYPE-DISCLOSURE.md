@@ -1,4 +1,4 @@
-# Genotype Progressive Disclosure: Metadata Indexing & On-Demand Plasmids (Issue #61)
+# Genotype Progressive Disclosure: Metadata Indexing & On-Demand Plasmids (Issue)
 
 This plan details the implementation of **Genotype Progressive Disclosure** to optimize LLM token usage. Instead of loading the full instructions of all genotypes and plasmids upfront, we will use a two-tier metadata loading pattern.
 

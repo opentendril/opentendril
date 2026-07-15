@@ -16,14 +16,14 @@ import (
 )
 
 // SproutHandler is the REST adapter for the governed sprout/run capability
-// family (issue #181). Exactly like GenomeHandler, it translates HTTP to and
+// family. Exactly like GenomeHandler, it translates HTTP to and
 // from the transport-free core.Core and holds no business logic.
 //
 // POST /v1/sprouts/run executes synchronously and answers when the Tendril
 // matures or withers — the same semantics the MCP sproutTendril tool has
 // always had. POST /v1/sessions/{sessionId}/sprout/run is the ungoverned
 // detached (202 Accepted) path: it returns immediately and surfaces progress
-// via the EventBus, /ws, and the session sprout-runs history view (issue #248).
+// via the EventBus, /ws, and the session sprout-runs history view.
 type SproutHandler struct {
 	core    core.Core
 	history *historydb.Store
@@ -71,7 +71,7 @@ func (h *SproutHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc)
 		h.registered = append(h.registered, route.capability)
 	}
 
-	// Ungoverned detached path (issue #248) — not part of the parity registry.
+	// Ungoverned detached path — not part of the parity registry.
 	mux.HandleFunc("POST /v1/sessions/{sessionId}/sprout/run", auth(h.runSproutAsync))
 }
 
@@ -101,7 +101,7 @@ func (h *SproutHandler) run(w http.ResponseWriter, r *http.Request) {
 
 // runSproutAsync detaches a sprout run onto a background goroutine and returns
 // 202 Accepted immediately. Progress is observed via EventBus/WebSocket and
-// GET /v1/sessions/{sessionId}/sprout-runs (issue #248).
+// GET /v1/sessions/{sessionId}/sprout-runs.
 func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("sessionId")
 	if sessionID == "new" {
