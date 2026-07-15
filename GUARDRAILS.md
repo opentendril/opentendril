@@ -68,4 +68,4 @@ If these protected files must be edited, they must route through the **`staged_e
 ## 📚 Documentation Governance
 * No major design shift, architectural choice, or branding change exists unless recorded where decisions actually live: a Design-RFC issue (label `design-rfc`, per the AGENTS.md 3-gate lifecycle) and/or a `docs/DESIGN-*.md` document.
 * Technical structures are maintained in `ARCHITECTURE.md`.
-* Progress and roadmaps are maintained in `PROGRESS.md` and `ROADMAP.md`.
+* The roadmap is maintained in `ROADMAP.md`. **Shipped progress is not a checked-in file** — it lives in the project's pull-request and release history on GitHub (that is what GitHub is for), and the backlog lives in GitHub Issues, not a checked-in list.
