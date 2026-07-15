@@ -17,7 +17,7 @@ import (
 //
 //	go test ./cmd/stem/internal/conductor/ -run TestTreeSitterGoldenFidelity -update-treesitter-golden
 //
-// The terrarium engine used to own this golden; since it was demoted (#183),
+// The terrarium engine used to own this golden; since it was demoted,
 // the pure-Go rhizome.TreeSitterParser is the sole engine, so it also owns the
 // fixture. Review the diff after regenerating — the golden is the fidelity
 // contract, not a rubber stamp.

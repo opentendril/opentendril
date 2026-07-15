@@ -23,14 +23,14 @@ WORKDIR /app
 
 # Install base requirements first (cached layer). --require-hashes installs the
 # exact hash-locked tree from requirements.lock and fails the build on any
-# artifact whose sha256 does not match (#257).
+# artifact whose sha256 does not match.
 COPY requirements.lock .
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Install llama-cpp-python with OpenBLAS CPU acceleration.
 # This compiles from source — adds ~5 minutes to build time.
 #
-# Pinned to exact versions for reproducibility (#257). Not --require-hashes:
+# Pinned to exact versions for reproducibility. Not --require-hashes:
 # llama-cpp-python is a compiled sdist whose PEP-517 build backend would then
 # also need its build dependencies hash-locked, which pip-compile cannot
 # capture. huggingface_hub and tqdm are already hash-pinned via

@@ -4,7 +4,7 @@ ENV PYTHONUNBUFFERED=1
 
 RUN apk add --no-cache git
 
-# Hash-locked test dependency (#257): --require-hashes fails the build on any
+# Hash-locked test dependency: --require-hashes fails the build on any
 # artifact whose sha256 does not match pytest-requirements.txt, so a tampered
 # or re-published wheel cannot slip in under an unpinned `pip install pytest`.
 COPY pytest-requirements.txt ./pytest-requirements.txt
