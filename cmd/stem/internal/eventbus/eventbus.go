@@ -31,6 +31,13 @@ const (
 	// EventPhenotypicSelection reports Genetic Algorithm progress (start,
 	// generation, evaluated, complete phases) from the selection runner.
 	EventPhenotypicSelection EventType = "phenotypic-selection"
+	// EventDelegationAuthorized audits one delegated capability invocation
+	// permitted by an active grant; EventDelegationDenied audits one refused
+	// because no grant covers it. Both persist to history.db via the
+	// historydb sink — every exercise of (or attempt at) delegation leaves a
+	// durable record.
+	EventDelegationAuthorized EventType = "delegation-authorized"
+	EventDelegationDenied     EventType = "delegation-denied"
 )
 
 // AllEventTypes returns every registered event type for broad telemetry subscriptions.
@@ -55,6 +62,8 @@ func AllEventTypes() []EventType {
 		EventParallelSprouting,
 		EventMycelialMerge,
 		EventPhenotypicSelection,
+		EventDelegationAuthorized,
+		EventDelegationDenied,
 	}
 }
 

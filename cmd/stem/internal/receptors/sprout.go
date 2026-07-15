@@ -28,6 +28,10 @@ type SproutHandler struct {
 	core    core.Core
 	history *historydb.Store
 	bus     *eventbus.Bus
+	// delegation gates *delegated* invocations (DelegationSubjectHeader) of
+	// both sprout routes against the active grants. A nil gate denies every
+	// delegated invocation; requests without the header are untouched.
+	delegation *DelegationGate
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
 	// list) — the independence the parity coverage test relies on.
@@ -38,6 +42,35 @@ type SproutHandler struct {
 // history may be nil when SQLite logging is disabled; bus may be nil in tests.
 func NewSproutHandler(coreSvc core.Core, history *historydb.Store, bus *eventbus.Bus) *SproutHandler {
 	return &SproutHandler{core: coreSvc, history: history, bus: bus}
+}
+
+// WithDelegation wires the delegation gate onto the handler and returns it
+// for chaining.
+func (h *SproutHandler) WithDelegation(gate *DelegationGate) *SproutHandler {
+	h.delegation = gate
+	return h
+}
+
+// authorizeDelegated gates a delegated sprout invocation. It returns true
+// when handling may proceed: either the request is not delegated (no marker
+// header — today's path, untouched) or an active grant covers
+// {subject, operation-class, substrate}. On denial it writes 403 and the gate
+// records the audit event.
+func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Request, substrate string) bool {
+	subject := DelegatedSubject(r)
+	if subject == "" {
+		return true
+	}
+	decision := h.delegation.Authorize(core.DelegationRequest{
+		Subject:        subject,
+		OperationClass: core.CapSproutRun,
+		Substrate:      strings.TrimSpace(substrate),
+	})
+	if !decision.Authorized {
+		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+		return false
+	}
+	return true
 }
 
 // governedRoutes is the single table of sprout-capability routes this adapter
@@ -71,7 +104,9 @@ func (h *SproutHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc)
 		h.registered = append(h.registered, route.capability)
 	}
 
-	// Ungoverned detached path — not part of the parity registry.
+	// Detached path — not part of the parity registry, but delegated
+	// invocations of it pass through the delegation authorizer inside
+	// runSproutAsync like every other governed surface.
 	mux.HandleFunc("POST /v1/sessions/{sessionId}/sprout/run", auth(h.runSproutAsync))
 }
 
@@ -85,6 +120,9 @@ func (h *SproutHandler) run(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Transcript) == "" || strings.TrimSpace(req.Substrate) == "" {
 		http.Error(w, "transcript and substrate are required", http.StatusBadRequest)
+		return
+	}
+	if !h.authorizeDelegated(w, r, req.Substrate) {
 		return
 	}
 	if strings.TrimSpace(req.Origin) == "" {
@@ -117,6 +155,12 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.Transcript) == "" || strings.TrimSpace(req.Substrate) == "" {
 		http.Error(w, "transcript and substrate are required", http.StatusBadRequest)
+		return
+	}
+	// The detached path is excluded from the parity registry but NOT from
+	// delegation governance: a delegated invocation must hold an active grant
+	// before any session is minted or any goroutine detaches.
+	if !h.authorizeDelegated(w, r, req.Substrate) {
 		return
 	}
 

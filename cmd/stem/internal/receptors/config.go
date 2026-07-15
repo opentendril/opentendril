@@ -9,9 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 )
 
-// AuthMiddleware wraps a handler to require an ADMIN_TOKEN.
+// AuthMiddleware wraps a handler to require an ADMIN_TOKEN. Bearer presence
+// authenticates the caller; *delegated* invocations (marked with
+// DelegationSubjectHeader) are additionally gated by the delegation
+// authorizer. These config routes expose no delegable operation-class, so a
+// delegated-marked request is denied outright rather than silently executed
+// as if it were non-delegated.
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := os.Getenv("ADMIN_TOKEN")
@@ -22,8 +31,98 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		if subject := DelegatedSubject(r); subject != "" {
+			log.Printf("🚫 Delegation denied for subject %q: %s exposes no delegable operation-class", subject, r.URL.Path)
+			http.Error(w, "delegation denied: this endpoint exposes no delegable operation-class", http.StatusForbidden)
+			return
+		}
 		next(w, r)
 	}
+}
+
+// DelegationSubjectHeader marks an HTTP request as a *delegated* capability
+// invocation and names the trust-root subject exercising a delegation grant.
+// A request without this header is not delegated: it follows today's
+// bearer-authenticated path untouched, whether or not any grants exist. The
+// subject is a claim scoped by the already-required bearer key — a grant only
+// ever narrows what an authenticated caller may run delegated, never widens
+// what the bearer key already allows (short-lived scoped subject tokens are a
+// later slice).
+const DelegationSubjectHeader = "X-OpenTendril-Delegation-Subject"
+
+// DelegatedSubject returns the delegated subject named by the request, or an
+// empty string when the request is not a delegated invocation.
+func DelegatedSubject(r *http.Request) string {
+	return strings.TrimSpace(r.Header.Get(DelegationSubjectHeader))
+}
+
+// DelegationGate couples the Core's grant authorizer with the audit lane:
+// every delegated invocation it evaluates — authorized or denied — is
+// published to the EventBus (and thereby persisted to history.db by the
+// historydb sink). A nil gate, or a gate with no authorizer, denies every
+// delegated invocation: with no delegation configured, delegation is
+// impossible while non-delegated traffic is untouched.
+type DelegationGate struct {
+	Authorizer *core.DelegationAuthorizer
+	Bus        *eventbus.Bus
+}
+
+// Authorize evaluates one delegated invocation against the active grants and
+// audits the outcome.
+func (g *DelegationGate) Authorize(request core.DelegationRequest) core.DelegationDecision {
+	var decision core.DelegationDecision
+	if g == nil || g.Authorizer == nil {
+		decision = core.DelegationDecision{Reason: "delegation is not configured"}
+	} else {
+		decision = g.Authorizer.Authorize(request)
+	}
+	g.audit(request, decision)
+	return decision
+}
+
+// Middleware gates a route that exposes no delegable operation-class:
+// non-delegated requests pass through untouched, while delegated-marked
+// requests are denied and audited (security-first default — a delegation
+// attempt must never silently run as a plain invocation).
+func (g *DelegationGate) Middleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		subject := DelegatedSubject(r)
+		if subject == "" {
+			next(w, r)
+			return
+		}
+		reason := "this endpoint exposes no delegable operation-class"
+		g.audit(core.DelegationRequest{Subject: subject}, core.DelegationDecision{Reason: reason})
+		http.Error(w, "delegation denied: "+reason, http.StatusForbidden)
+	}
+}
+
+// audit publishes the delegation decision to the EventBus; the historydb sink
+// persists it to history.db. Best-effort: a nil gate or bus only loses the
+// record, never the enforcement.
+func (g *DelegationGate) audit(request core.DelegationRequest, decision core.DelegationDecision) {
+	if g == nil || g.Bus == nil {
+		return
+	}
+	eventType := eventbus.EventDelegationDenied
+	if decision.Authorized {
+		eventType = eventbus.EventDelegationAuthorized
+	}
+	data := map[string]any{
+		"subject":        request.Subject,
+		"operationClass": request.OperationClass,
+		"substrate":      request.Substrate,
+		"authorized":     decision.Authorized,
+	}
+	if decision.Reason != "" {
+		data["reason"] = decision.Reason
+	}
+	g.Bus.Publish(eventbus.Event{
+		Type:      eventType,
+		Source:    "delegation-authorizer",
+		Timestamp: time.Now().UTC(),
+		Data:      data,
+	})
 }
 
 // ConfigHandler provides HTTP endpoints for managing .tendril configs
