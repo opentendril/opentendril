@@ -26,7 +26,12 @@ type Terrarium interface {
 
 // TerrariumCapabilities describes the optional features a provider supports.
 type TerrariumCapabilities struct {
-	SupportsMounts        bool
+	SupportsMounts bool
+	// SupportsImages reports whether the provider boots the image named in
+	// TerrariumSpec.Image. Providers with a fixed execution environment (host,
+	// firecracker's preconfigured rootfs) must leave this false so a requested
+	// image is rejected instead of silently substituted.
+	SupportsImages        bool
 	SupportsCopyIn        bool
 	SupportsCopyOut       bool
 	SupportsInteractiveIO bool

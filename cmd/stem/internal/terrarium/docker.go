@@ -43,6 +43,7 @@ func (p *DockerProvider) Create(ctx context.Context, spec TerrariumSpec) (Terrar
 func defaultTerrariumCapabilities() TerrariumCapabilities {
 	return TerrariumCapabilities{
 		SupportsMounts:        true,
+		SupportsImages:        true,
 		SupportsCopyIn:        true,
 		SupportsCopyOut:       true,
 		SupportsInteractiveIO: true,
