@@ -158,8 +158,13 @@ jobs:
       # container, and nothing inside a container gains host reach. Handing the
       # socket to the compose service would have been the easy fix and is
       # exactly the escalation that is rejected permanently.
+      # -v is not decoration: `go test` exits 0 when tests skip, so without the
+      # per-test lines a skip is invisible here and the job's green says
+      # nothing about whether anything ran. The local verifier parses -json and
+      # treats a skip as not-green; this tier still judges on the exit code, so
+      # the log is the only place a skip can surface. Keep it readable.
       - name: Run Stem Tests
-        run: go test ./...
+        run: go test ./... -v
 
   # This job's NAME is a required status check in the "Protect Default"
   # ruleset. Renaming it makes the required context never report and leaves
