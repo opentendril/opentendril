@@ -87,6 +87,13 @@ type agentResponse struct {
 }
 
 func main() {
+	// The kernel starts /init with only HOME and TERM in its environment.
+	// Without a PATH, exec.Command can never resolve a bare command name,
+	// so every "run" request would fail before reaching the guest userland.
+	if os.Getenv("PATH") == "" {
+		os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+
 	fmt.Fprintf(os.Stderr, "sprout-agent: starting vsock listener on port %d\n", vsockPort)
 	if err := listenAndServe(); err != nil {
 		fmt.Fprintf(os.Stderr, "sprout-agent: fatal: %v\n", err)

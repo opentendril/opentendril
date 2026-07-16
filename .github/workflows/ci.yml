@@ -142,6 +142,66 @@ jobs:
             exit 1
           fi
 
+      # ----- Firecracker terrarium test environment -----------------------
+      #
+      # The Firecracker provider tests gate themselves on
+      # CheckFirecrackerReadiness: a firecracker binary in PATH, a bootstrapped
+      # guest kernel + rootfs, and an accessible /dev/kvm. Without this setup
+      # they skip here AND under the sealed local verifier — verified nowhere.
+      # The steps below satisfy readiness so the tests self-enable and boot
+      # real microVMs on the runner. No Docker is involved anywhere.
+      #
+      # ubuntu-latest exposes /dev/kvm, but the runner user is not in the kvm
+      # group, so the device is unusable until this permissive udev rule
+      # applies. A disposable single-tenant virtual machine has no other users
+      # to protect the device from.
+      - name: Enable KVM access for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      # Pinned release, verified against the sha256 published alongside the
+      # asset; sha256sum -c makes a mismatch fail the job before anything is
+      # installed.
+      - name: Install Firecracker
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="v1.16.1"
+          asset="firecracker-${version}-x86_64.tgz"
+          base="https://github.com/firecracker-microvm/firecracker/releases/download/${version}"
+          cd "$(mktemp -d)"
+          curl -fsSL --retry 3 -O "${base}/${asset}"
+          curl -fsSL --retry 3 -O "${base}/${asset}.sha256.txt"
+          sha256sum -c "${asset}.sha256.txt"
+          tar -xzf "${asset}"
+          sudo install -m 0755 "release-${version}-x86_64/firecracker-${version}-x86_64" /usr/local/bin/firecracker
+          firecracker --version
+
+      # The cache keys ARE the pinned sha256 digests that init-firecracker
+      # enforces, so a cache hit cannot serve different bytes than a fresh
+      # verified download would — and the bootstrap re-hashes whatever it
+      # finds on disk regardless.
+      - name: Cache Firecracker guest artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .tendril/terrarium/vmlinux.bin
+            .tendril/terrarium/busybox
+          key: firecracker-guest-ea5e7d5cf494a8c4ba043259812fc018b44880d70bcbbfc4d57d2760631b1cd6-6e123e7f3202a8c1e9b1f94d8941580a25135382b99e8d3e34fb858bba311348
+
+      # The same bootstrap a developer runs locally — CI is deliberately not
+      # a special path, so both environments produce identical guests.
+      - name: Bootstrap Firecracker kernel and rootfs
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/stem terrarium init-firecracker
+          echo "TENDRIL_FC_KERNEL_PATH=${PWD}/.tendril/terrarium/vmlinux.bin" >> "$GITHUB_ENV"
+          echo "TENDRIL_FC_ROOTFS_PATH=${PWD}/.tendril/terrarium/rootfs.ext4" >> "$GITHUB_ENV"
+
       # Run the suite directly on the runner, NOT through `make test-stem`.
       #
       # That target wraps `go test` in a golang container for sterility, which

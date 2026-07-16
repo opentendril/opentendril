@@ -80,7 +80,10 @@ func (p *FirecrackerProvider) Create(ctx context.Context, spec TerrariumSpec) (T
 	cfg := fcConfig{
 		BootSource: fcBootSource{
 			KernelImagePath: kernelPath,
-			BootArgs:        "console=ttyS0 reboot=k panic=1 pci=off",
+			// init=/init is required: the kernel only searches /init on an
+			// initramfs. On a disk rootfs it tries /sbin/init, /etc/init,
+			// /bin/init, then /bin/sh — sprout-agent would never start.
+			BootArgs: "console=ttyS0 reboot=k panic=1 pci=off init=/init",
 		},
 		Drives: []fcDrive{
 			{
@@ -248,7 +251,7 @@ func (s *firecrackerTerrarium) Run(ctx context.Context, spec CommandSpec) (Comma
 	var resp fcAgentResponse
 	if err := s.callAgent(runCtx, req, &resp); err != nil {
 		completedAt := time.Now().UTC()
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		if runTimedOut(runCtx, err) {
 			s.stopAfterTimeout()
 			return CommandResult{
 				ExitCode:    -1,
@@ -281,6 +284,26 @@ func (s *firecrackerTerrarium) Run(ctx context.Context, spec CommandSpec) (Comma
 	}
 
 	return result, nil
+}
+
+// runTimedOut reports whether a callAgent failure means the command ran out
+// of time. The context check alone is racy: the vsock connection's read
+// deadline is copied from the context, but the two are fired by different
+// timers, so the network poller can report an i/o timeout a moment before the
+// context timer marks itself exceeded. When that happens the wall clock is
+// already at or past the deadline, which the second check observes directly.
+func runTimedOut(runCtx context.Context, err error) bool {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		return true
+	}
+	// errors.Is (not os.IsTimeout, which predates wrapping and cannot see
+	// through the callAgent error chain) so the poller's deadline error is
+	// recognized wherever it sits in the chain.
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		return false
+	}
+	deadline, ok := runCtx.Deadline()
+	return ok && !time.Now().Before(deadline)
 }
 
 func (s *firecrackerTerrarium) CopyOut(ctx context.Context, paths []string) ([]Artifact, error) {
