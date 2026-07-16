@@ -41,3 +41,5 @@ COPY sprouts/node/entrypoint.sh /opt/opentendril-node/entrypoint.sh
 RUN chmod +x /opt/opentendril-node/entrypoint.sh
 
 ENTRYPOINT ["/opt/opentendril-node/entrypoint.sh"]
+
+# probe: verifying the fail-closed path filter. This branch is throwaway.
