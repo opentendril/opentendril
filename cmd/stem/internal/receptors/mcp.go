@@ -27,6 +27,18 @@ type MCPHandler struct {
 	history          *historydb.Store
 	defaultSessionID string
 	core             core.Core
+	// delegation gates delegated-class capability invocations (see
+	// core.DelegatedCapabilityNames) against the active grants. A nil gate
+	// denies every delegated-class invocation: with no delegation configured,
+	// delegated capabilities are unreachable over MCP while every
+	// non-delegated capability dispatches untouched.
+	delegation *DelegationGate
+	// delegationSubject is the delegation subject bound to this MCP
+	// connection at bind-time. The subject is a property of the trusted
+	// connection — never declared per-invocation in tool arguments, so a
+	// caller can never self-declare its own subject. Empty means no subject
+	// is bound and every delegated-class invocation is denied (deny-closed).
+	delegationSubject string
 }
 
 func NewMCPHandler() *MCPHandler {
@@ -79,6 +91,17 @@ func (h *MCPHandler) WithCore(coreSvc core.Core) *MCPHandler {
 	return h
 }
 
+// WithDelegation binds the delegation gate and the bind-time delegation
+// subject onto this MCP adapter and returns it for chaining. Every
+// delegated-class tool invocation on this connection is authorized as that
+// one subject against the active grants — the same per-invocation
+// authorization the REST adapters apply.
+func (h *MCPHandler) WithDelegation(gate *DelegationGate, subject string) *MCPHandler {
+	h.delegation = gate
+	h.delegationSubject = strings.TrimSpace(subject)
+	return h
+}
+
 // CoreCapabilityNames returns the governed capability names this MCP adapter
 // projects as tools. The parity tests assert this equals core.CapabilityNames().
 func (h *MCPHandler) CoreCapabilityNames() []string {
@@ -120,6 +143,41 @@ func (h *MCPHandler) isCoreCapability(name string) bool {
 		}
 	}
 	return false
+}
+
+// authorizeDelegatedTool gates one delegated-class tool invocation against
+// the bind-time subject and the active grants. Deny-closed: with no gate
+// bound or no subject bound the invocation is denied outright, so no MCP path
+// can ever reach a delegated capability ungoverned. The substrate is read
+// from the tool arguments' "substrate" field — the field every delegated
+// capability carries.
+func (h *MCPHandler) authorizeDelegatedTool(operationClass string, args map[string]interface{}) core.DelegationDecision {
+	substrate, _ := args["substrate"].(string)
+	request := core.DelegationRequest{
+		Subject:        h.delegationSubject,
+		OperationClass: operationClass,
+		Substrate:      strings.TrimSpace(substrate),
+	}
+	if h.delegation == nil || h.delegationSubject == "" {
+		decision := core.DelegationDecision{Reason: "delegation is not configured for this MCP session"}
+		// Audit the denial when a gate is wired; a missing gate makes the
+		// audit impossible (best-effort, like every gate decision) but never
+		// weakens the enforcement.
+		h.delegation.audit(request, decision)
+		return decision
+	}
+	return h.delegation.Authorize(request)
+}
+
+// formatDelegationDenied renders a denied delegated-class invocation as an
+// MCP error tool-result — the same envelope shape callCoreCapability uses for
+// a failed capability — so MCP clients see the denial as a tool outcome
+// rather than a protocol error.
+func (h *MCPHandler) formatDelegationDenied(id interface{}, decision core.DelegationDecision) []byte {
+	return h.formatResult(id, map[string]interface{}{
+		"content": []map[string]interface{}{{"type": "text", "text": "delegation denied: " + decision.Reason}},
+		"isError": true,
+	})
 }
 
 // callCoreCapability invokes a Core capability and wraps its JSON result in an
@@ -465,6 +523,16 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// Interface parity: Core session capabilities are dispatched
 		// through the shared service, identically to REST and the CLI.
 		if h.isCoreCapability(params.Name) {
+			// Delegated operation-classes must pass the delegation gate
+			// before the Core is reached — the same per-invocation
+			// authorization the REST adapters apply, keyed by the subject
+			// bound to this MCP connection at bind-time. Non-delegated
+			// capabilities dispatch untouched.
+			if core.IsDelegatedCapability(params.Name) {
+				if decision := h.authorizeDelegatedTool(params.Name, params.Arguments); !decision.Authorized {
+					return h.formatDelegationDenied(req.ID, decision)
+				}
+			}
 			if params.Name == core.CapSproutRun {
 				// Origin and the pinned stdio session are MCP-surface metadata
 				// (exactly like the REST adapter stamping its own origin), so
@@ -802,6 +870,14 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 		if h.core == nil {
 			return h.formatError(req.ID, -32603, "Internal error", "Core capability service is not configured.")
+		}
+
+		// This deprecated alias reaches the delegated sprout.run
+		// operation-class, so it passes the same delegation gate as the
+		// canonical tool — no alias path may reach a delegated capability
+		// ungoverned.
+		if decision := h.authorizeDelegatedTool(core.CapSproutRun, params.Arguments); !decision.Authorized {
+			return h.formatDelegationDenied(req.ID, decision)
 		}
 
 		stepID, _ := params.Arguments["stepId"].(string)

@@ -1523,6 +1523,18 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
+	// sprout.run is a delegated operation-class, and the MCP surface
+	// authorizes those per-invocation against the bind-time subject and the
+	// active grants. Bind a covering grant so this test stays about adapter
+	// translation; the deny-closed governance itself is covered in the
+	// receptors package.
+	gate := &receptors.DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
+		Subject:          "parity-agent",
+		OperationClasses: []string{core.CapSproutRun},
+		Substrates:       []string{"/workspaces/core"},
+	}})}
+	mcp = mcp.WithDelegation(gate, "parity-agent")
+
 	assertOneRunCall := func(t *testing.T, surface string, wantInput core.SproutRunInput) {
 		t.Helper()
 		calls := mock.inputsFor("SproutRun")

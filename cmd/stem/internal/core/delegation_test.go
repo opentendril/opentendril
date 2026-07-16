@@ -277,3 +277,43 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 		}
 	}
 }
+
+// TestDelegatedCapabilityTaxonomy pins the canonical delegated
+// operation-class set: exactly sprout.run, passthrough.run, and git.commit
+// are delegated, every one of them is a canonical capability, and no
+// non-delegated capability is misclassified.
+func TestDelegatedCapabilityTaxonomy(t *testing.T) {
+	delegated := []string{core.CapSproutRun, core.CapPassthroughRun, core.CapGitCommit}
+	for _, name := range delegated {
+		if !core.IsDelegatedCapability(name) {
+			t.Errorf("IsDelegatedCapability(%q) = false, want true", name)
+		}
+	}
+
+	for _, name := range []string{core.CapListSessions, core.CapGenomeView, core.CapSequenceRun, core.CapMeshGraft, "", "made.up"} {
+		if core.IsDelegatedCapability(name) {
+			t.Errorf("IsDelegatedCapability(%q) = true, want false", name)
+		}
+	}
+
+	names := core.DelegatedCapabilityNames()
+	if len(names) != len(delegated) {
+		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want %d: %v", len(names), len(delegated), names)
+	}
+	canonical := core.CapabilityNames()
+	for _, name := range names {
+		if !core.IsDelegatedCapability(name) {
+			t.Errorf("DelegatedCapabilityNames() and IsDelegatedCapability disagree on %q", name)
+		}
+		found := false
+		for _, capability := range canonical {
+			if capability == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("delegated capability %q is not a canonical capability name", name)
+		}
+	}
+}

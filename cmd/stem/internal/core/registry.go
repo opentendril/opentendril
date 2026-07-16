@@ -82,6 +82,34 @@ func CapabilityNames() []string {
 	return names
 }
 
+// DelegatedCapabilityNames returns the canonical delegated operation-classes,
+// sorted: the capabilities that execute work on behalf of an external agent
+// and therefore must pass the delegation control plane (a grant covering
+// {subject, operation-class, substrate}) before they run on an agent-facing
+// surface. This list is the single source of truth for which capabilities are
+// delegated; the surfaces that gate per-invocation consult it.
+func DelegatedCapabilityNames() []string {
+	names := []string{
+		CapSproutRun,
+		CapPassthroughRun,
+		CapGitCommit,
+	}
+	sort.Strings(names)
+	return names
+}
+
+// IsDelegatedCapability reports whether the named capability is a delegated
+// operation-class — one that must be authorized by a delegation grant before
+// it is invoked on behalf of an external agent.
+func IsDelegatedCapability(name string) bool {
+	for _, delegated := range DelegatedCapabilityNames() {
+		if delegated == name {
+			return true
+		}
+	}
+	return false
+}
+
 // Capabilities returns the live registry: one entry per canonical name, each
 // bound to this Service's typed methods.
 func (s *Service) Capabilities() []Capability {
