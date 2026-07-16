@@ -14,15 +14,18 @@ import (
 
 // newMCPDelegationTestHandler builds an MCPHandler over a real Core with
 // stubbed delegated execution ports (sprout, passthrough, git), returning the
-// handler, the bus (for audit assertions), and a counter of executed runs.
-// The delegation gate and subject are left for each test to bind (or not) via
-// WithDelegation, so every posture — unwired, subjectless, granted — is
-// exercised through the same fixture.
-func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *atomic.Int64) {
+// handler, the bus (for audit assertions), a counter of executed runs, and the
+// last PassthroughSpec the stubbed passthrough port received (so tests can
+// assert exactly which egress allow-list reached the run). The delegation gate
+// and subject are left for each test to bind (or not) via WithDelegation, so
+// every posture — unwired, subjectless, granted — is exercised through the
+// same fixture.
+func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *atomic.Int64, *core.PassthroughSpec) {
 	t.Helper()
 	chdirTempDir(t)
 
 	executed := &atomic.Int64{}
+	passthroughSpec := &core.PassthroughSpec{}
 	sessions, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("session manager: %v", err)
@@ -37,6 +40,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 		WithPassthrough(core.PassthroughOperations{
 			Run: func(ctx context.Context, spec core.PassthroughSpec) (core.PassthroughRunResult, error) {
 				executed.Add(1)
+				*passthroughSpec = spec
 				return core.PassthroughRunResult{Status: "completed", ExitCode: 0, Stdout: "ran"}, nil
 			},
 		}).
@@ -49,7 +53,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 
 	bus := eventbus.New()
 	handler := NewMCPHandler().WithSessions(sessions, nil).WithCore(coreSvc)
-	return handler, bus, executed
+	return handler, bus, executed, passthroughSpec
 }
 
 // mcpDelegationGrant covers every delegated operation-class on the "core"
@@ -118,7 +122,7 @@ func delegatedToolCalls() map[string]map[string]any {
 // every delegated-class tool — including the deprecated sproutTendril alias —
 // as an error tool-result, and never invokes the execution ports.
 func TestMCPDelegatedCapabilitiesDeniedWithNilGate(t *testing.T) {
-	handler, _, executed := newMCPDelegationTestHandler(t)
+	handler, _, executed, _ := newMCPDelegationTestHandler(t)
 
 	for name, args := range delegatedToolCalls() {
 		text, isError := mcpCallTool(t, handler, name, args)
@@ -139,7 +143,7 @@ func TestMCPDelegatedCapabilitiesDeniedWithNilGate(t *testing.T) {
 // subject is bound to the connection — every delegated-class tool is still
 // denied and the denial is audited to the bus.
 func TestMCPDelegatedCapabilitiesDeniedWithoutBoundSubject(t *testing.T) {
-	handler, bus, executed := newMCPDelegationTestHandler(t)
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
 	handler = handler.WithDelegation(gate, "")
 
@@ -170,7 +174,7 @@ func TestMCPDelegatedCapabilitiesDeniedWithoutBoundSubject(t *testing.T) {
 // delegated-class tool — including the deprecated sproutTendril alias —
 // dispatches through the Core, and each exercise is audited.
 func TestMCPDelegatedCapabilitiesAuthorizedByMatchingGrant(t *testing.T) {
-	handler, bus, executed := newMCPDelegationTestHandler(t)
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
 	handler = handler.WithDelegation(gate, "mcp-agent")
 
@@ -201,7 +205,7 @@ func TestMCPDelegatedCapabilitiesAuthorizedByMatchingGrant(t *testing.T) {
 // zero grants is denied per-invocation, the execution port is never reached,
 // and the denial is audited.
 func TestMCPDelegatedCapabilityDeniedWithoutCoveringGrant(t *testing.T) {
-	handler, bus, executed := newMCPDelegationTestHandler(t)
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(nil), Bus: bus}
 	handler = handler.WithDelegation(gate, "mcp-agent")
 
@@ -231,7 +235,7 @@ func TestMCPDelegatedCapabilityDeniedWithoutCoveringGrant(t *testing.T) {
 // TestMCPDelegatedCapabilityDeniedOnSubstrateMismatch verifies the grant's
 // substrate scope is enforced on the MCP surface.
 func TestMCPDelegatedCapabilityDeniedOnSubstrateMismatch(t *testing.T) {
-	handler, bus, executed := newMCPDelegationTestHandler(t)
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	grant := mcpDelegationGrant()
 	grant.Substrates = []string{"another-substrate"}
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
@@ -254,7 +258,7 @@ func TestMCPDelegatedCapabilityDeniedOnSubstrateMismatch(t *testing.T) {
 // a gate but no subject, and with both — and produces no delegation audit
 // event.
 func TestMCPNonDelegatedCapabilityUnaffected(t *testing.T) {
-	handler, bus, _ := newMCPDelegationTestHandler(t)
+	handler, bus, _, _ := newMCPDelegationTestHandler(t)
 
 	assertListSessions := func(posture string) {
 		t.Helper()
@@ -275,5 +279,63 @@ func TestMCPNonDelegatedCapabilityUnaffected(t *testing.T) {
 
 	if _, found := lastDelegationEvent(bus); found {
 		t.Fatal("non-delegated invocations produced a delegation audit event")
+	}
+}
+
+// TestMCPPassthroughRunReceivesGrantEgress: an authorized MCP passthrough.run
+// runs with exactly the authorized grant's egress allow-list — the same
+// Stem-mediated egress the REST surface grants — while an "egress" value
+// smuggled into the tool arguments never reaches the run. The allow-list is
+// sourced only from the grant, and the adapter stamps its own origin.
+func TestMCPPassthroughRunReceivesGrantEgress(t *testing.T) {
+	handler, bus, executed, passthroughSpec := newMCPDelegationTestHandler(t)
+	grant := mcpDelegationGrant()
+	grant.Egress = []string{"proxy.golang.org"}
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
+	handler = handler.WithDelegation(gate, "mcp-agent")
+
+	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
+		"substrate": "core",
+		"command":   []string{"go", "mod", "download"},
+		// A caller must never widen its own egress: the allow-list has no
+		// JSON surface on the input type, so this argument must be ignored.
+		"egress": []string{"attacker.example"},
+	})
+	if isError {
+		t.Fatalf("authorized passthrough.run was denied: %q", text)
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("executed %d passthrough run(s), want 1", executed.Load())
+	}
+	if len(passthroughSpec.Egress) != 1 || passthroughSpec.Egress[0] != "proxy.golang.org" {
+		t.Fatalf("run egress = %v, want the grant's allow-list [proxy.golang.org]", passthroughSpec.Egress)
+	}
+	if passthroughSpec.Origin != session.OriginMCP {
+		t.Fatalf("run origin = %q, want %q", passthroughSpec.Origin, session.OriginMCP)
+	}
+}
+
+// TestMCPPassthroughRunIgnoresArgumentEgress is the sharp negative: with a
+// covering grant that allow-lists nothing, an "egress" value in the tool
+// arguments still leaves the run with the empty (deny-all) list — arguments
+// can never widen egress.
+func TestMCPPassthroughRunIgnoresArgumentEgress(t *testing.T) {
+	handler, bus, executed, passthroughSpec := newMCPDelegationTestHandler(t)
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
+	handler = handler.WithDelegation(gate, "mcp-agent")
+
+	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
+		"substrate": "core",
+		"command":   []string{"gofmt", "-l", "."},
+		"egress":    []string{"attacker.example"},
+	})
+	if isError {
+		t.Fatalf("authorized passthrough.run was denied: %q", text)
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("executed %d passthrough run(s), want 1", executed.Load())
+	}
+	if len(passthroughSpec.Egress) != 0 {
+		t.Fatalf("run egress = %v, want empty (deny-all): tool arguments must never widen egress", passthroughSpec.Egress)
 	}
 }
