@@ -180,10 +180,51 @@ func (h *MCPHandler) formatDelegationDenied(id interface{}, decision core.Delega
 	})
 }
 
-// callCoreCapability invokes a Core capability and wraps its JSON result in an
-// MCP tool-result envelope. Adapter translation only — no business logic.
+// callCoreCapability invokes a Core capability through the generic capability
+// registry and wraps its JSON result in an MCP tool-result envelope. Adapter
+// translation only — no business logic.
 func (h *MCPHandler) callCoreCapability(id interface{}, name string, args map[string]interface{}) []byte {
 	result, err := h.core.Invoke(context.Background(), name, args)
+	return h.formatCapabilityResult(id, result, err)
+}
+
+// callPassthroughRun dispatches passthrough.run through the Core's typed
+// method rather than the generic capability registry. The typed path exists
+// for one reason: the egress allow-list is grant material with no JSON surface
+// on the input type, so no argument decode — generic or typed — can ever carry
+// it. Only this adapter places the authorized grant's allow-list onto the run,
+// exactly like the REST passthrough adapter.
+func (h *MCPHandler) callPassthroughRun(id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return h.formatError(id, -32602, "Invalid params", err.Error())
+	}
+	var in core.PassthroughRunInput
+	if err := json.Unmarshal(encoded, &in); err != nil {
+		return h.formatError(id, -32602, "Invalid params", err.Error())
+	}
+
+	// Egress is grant material: it has no JSON surface on the input type, so
+	// the decode above can never have populated it. It is set below — and only
+	// below — from the authorized delegation grant. Without a grant the empty
+	// list stands: deny-all egress with zero configuration.
+	if decision.Grant != nil {
+		in.Egress = decision.Grant.Egress
+	}
+	if strings.TrimSpace(in.Origin) == "" {
+		// Origin is MCP-surface metadata (exactly like the REST adapter
+		// stamping its own origin), so the adapter fills the unset value
+		// before the Core runs.
+		in.Origin = session.OriginMCP
+	}
+
+	result, runErr := h.core.PassthroughRun(context.Background(), in)
+	return h.formatCapabilityResult(id, result, runErr)
+}
+
+// formatCapabilityResult wraps one capability outcome in the MCP tool-result
+// envelope (content plus isError) shared by every capability dispatch path.
+func (h *MCPHandler) formatCapabilityResult(id interface{}, result interface{}, err error) []byte {
 	if err != nil {
 		text := err.Error()
 		if errors.Is(err, core.ErrNotFound) {
@@ -527,9 +568,12 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			// before the Core is reached — the same per-invocation
 			// authorization the REST adapters apply, keyed by the subject
 			// bound to this MCP connection at bind-time. Non-delegated
-			// capabilities dispatch untouched.
+			// capabilities dispatch untouched (their decision stays the zero
+			// value, which carries no grant).
+			var decision core.DelegationDecision
 			if core.IsDelegatedCapability(params.Name) {
-				if decision := h.authorizeDelegatedTool(params.Name, params.Arguments); !decision.Authorized {
+				decision = h.authorizeDelegatedTool(params.Name, params.Arguments)
+				if !decision.Authorized {
 					return h.formatDelegationDenied(req.ID, decision)
 				}
 			}
@@ -546,6 +590,13 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				if origin, _ := params.Arguments["origin"].(string); strings.TrimSpace(origin) == "" {
 					params.Arguments["origin"] = session.OriginMCP
 				}
+			}
+			if params.Name == core.CapPassthroughRun {
+				// passthrough.run alone needs the typed dispatch: its egress
+				// allow-list is grant material with no JSON surface, so the
+				// generic registry decode can never carry it — the adapter
+				// places the authorized grant's allow-list itself.
+				return h.callPassthroughRun(req.ID, params.Arguments, decision)
 			}
 			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
 		}
