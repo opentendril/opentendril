@@ -73,7 +73,7 @@ const gofmtCheckScript = `unformatted="$(gofmt -l .)"; if [ -n "$unformatted" ];
 // SequenceStep.Parallel means parallel LLM sprouting, not command fan-out,
 // and `go test` already parallelizes across packages internally. `-json`
 // opts the step into the skip-aware verdict (see reportGoTestVerifier), and
-// `-short` follows the sealed verifier convention local-ci established:
+// `-short` follows the sealed verifier convention:
 // tests that need the network or a Docker daemon gate on testing.Short(), so
 // under the seal they surface as skips — which the verdict reports as
 // blocked/unverified — instead of failures that blame the code for the seal.

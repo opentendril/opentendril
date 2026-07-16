@@ -21,7 +21,7 @@ func TestLoadConfigParsesSequenceAndSproutEntries(t *testing.T) {
 schedules:
   evening-ci:
     cron: "0 19 * * 1-5"
-    sequence: local-ci
+    sequence: nightly-verification
     provider: local
     model: llama3.2
     overlap: queue
@@ -51,8 +51,8 @@ schedules:
 	if ci.Cron != "0 19 * * 1-5" {
 		t.Fatalf("evening-ci cron = %q", ci.Cron)
 	}
-	if ci.Sequence != "local-ci" {
-		t.Fatalf("evening-ci sequence = %q, want local-ci", ci.Sequence)
+	if ci.Sequence != "nightly-verification" {
+		t.Fatalf("evening-ci sequence = %q, want nightly-verification", ci.Sequence)
 	}
 	if ci.Sprout != nil {
 		t.Fatal("evening-ci sprout != nil, want nil")
@@ -121,7 +121,7 @@ func TestLoadConfigValidation(t *testing.T) {
 schedules:
   broken:
     cron: "61 19 * * *"
-    sequence: local-ci
+    sequence: nightly-verification
 `,
 			wantErr: "broken",
 		},
@@ -130,7 +130,7 @@ schedules:
 			content: `enabled: true
 schedules:
   broken:
-    sequence: local-ci
+    sequence: nightly-verification
 `,
 			wantErr: "missing cron",
 		},
@@ -140,7 +140,7 @@ schedules:
 schedules:
   broken:
     cron: "0 19 * * *"
-    sequence: local-ci
+    sequence: nightly-verification
     sprout:
       transcript: "do things"
 `,
@@ -172,7 +172,7 @@ schedules:
 schedules:
   broken:
     cron: "0 19 * * *"
-    sequence: local-ci
+    sequence: nightly-verification
     overlap: parallel
 `,
 			wantErr: "overlap",
@@ -183,7 +183,7 @@ schedules:
 schedules:
   broken:
     cron: "0 19 * * *"
-    sequence: local-ci
+    sequence: nightly-verification
     retries: -1
 `,
 			wantErr: "retries",
