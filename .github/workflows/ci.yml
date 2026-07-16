@@ -120,9 +120,22 @@ jobs:
       - name: Vulnerability Scan (govulncheck)
         run: go tool govulncheck ./...
 
+      # Ask the module which directories are its own rather than naming them
+      # here. The previous form scanned `cmd/stem roots` and filtered out
+      # `cmd/stem/dist`: it missed cmd/sprout-agent entirely, and the directory
+      # it excluded no longer exists. A declared list is fail-open the moment
+      # the tree moves on without it. This is the same check the local verifier
+      # runs, so both tiers agree on what "formatted" means.
       - name: gofmt Check
+        shell: bash
         run: |
-          unformatted=$(gofmt -l cmd/stem roots | grep -v '^cmd/stem/dist' || true)
+          set -euo pipefail
+          package_dirs="$(go list -f '{{.Dir}}' ./...)"
+          if [ -z "$package_dirs" ]; then
+            echo "go list reported no packages to format."
+            exit 1
+          fi
+          unformatted="$(gofmt -l $package_dirs)"
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"

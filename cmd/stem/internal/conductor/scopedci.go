@@ -52,7 +52,27 @@ func listChangedFiles(ctx context.Context, moduleRoot, baseReference string) ([]
 // the offenders — so a bare exit-code verdict over it would falsely pass.
 // The script captures the listing and exits 1 when it is non-empty, naming
 // the unformatted files in the step output.
-const gofmtCheckScript = `unformatted="$(gofmt -l .)"; if [ -n "$unformatted" ]; then echo "unformatted Go files:"; echo "$unformatted"; exit 1; fi`
+//
+// The file set comes from `go list`, not from walking the mount. gofmt is not
+// module-aware: it recurses whatever directory it is handed, so `gofmt -l .`
+// also reported unformatted files belonging to *other* modules that merely sit
+// inside the workspace — a nested checkout or a tool's scratch directory — and
+// failed the step for code the change never touched. `go build` and `go vet`
+// never had this problem because `./...` already means "this module".
+//
+// Asking the module which directories are its own, and letting gofmt recurse
+// those, keeps the check derived rather than declared: a hand-maintained list
+// of directories to scan (or to exclude) is fail-open the moment the tree
+// moves on without it.
+//
+// Fail closed on an unusable answer: if `go list` fails, `set -e` aborts; if
+// it somehow reports nothing, the step exits non-zero rather than pass a
+// gofmt that examined no files.
+const gofmtCheckScript = `set -e
+packageDirs="$(go list -f '{{.Dir}}' ./...)"
+if [ -z "$packageDirs" ]; then echo "gofmt check: go list reported no packages to format"; exit 1; fi
+unformatted="$(gofmt -l $packageDirs)"
+if [ -n "$unformatted" ]; then echo "unformatted Go files:"; echo "$unformatted"; exit 1; fi`
 
 // GenerateScopedVerificationSequence assembles the scoped-ci sequence for the
 // module rooted at moduleRoot, diffing against baseReference (defaulting to

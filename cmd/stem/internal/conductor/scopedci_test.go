@@ -57,6 +57,21 @@ func assertScopedBaseSteps(t *testing.T, seq *Sequence) {
 	if !strings.Contains(script, "gofmt -l") || !strings.Contains(script, "exit 1") {
 		t.Fatalf("gofmt script does not fail closed on unformatted files: %q", script)
 	}
+	// gofmt is not module-aware: handed a directory it recurses everything
+	// under it, including nested checkouts of other modules that happen to sit
+	// in the workspace. Formatting the module's own packages, as reported by
+	// go list, is what keeps the step reporting on the code under test.
+	if strings.Contains(script, "gofmt -l .") {
+		t.Fatalf("gofmt script walks the workspace instead of the module's packages: %q", script)
+	}
+	if !strings.Contains(script, "go list") {
+		t.Fatalf("gofmt script must derive its file set from go list: %q", script)
+	}
+	// An unusable package list must stop the step rather than let a gofmt that
+	// examined nothing report success.
+	if !strings.Contains(script, "no packages to format") {
+		t.Fatalf("gofmt script does not fail closed on an empty package list: %q", script)
+	}
 }
 
 // A change to a low-level package must generate a single test step covering
