@@ -80,6 +80,10 @@ type Core interface {
 	// minimal delegable operation-class. Runs through the injected
 	// PassthroughOperations execution port.
 	PassthroughRun(ctx context.Context, in PassthroughRunInput) (PassthroughRunResult, error)
+	// Git family: commit a substrate's workspace under its configured commit
+	// identity, the lowest rung of the delegated-execution ladder. Runs
+	// through the injected GitOperations execution port.
+	GitCommit(ctx context.Context, in GitCommitInput) (GitCommitResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
@@ -164,6 +168,7 @@ type Service struct {
 	sequence    SequenceOperations
 	sprout      SproutOperations
 	passthrough PassthroughOperations
+	git         GitOperations
 }
 
 // NewService builds a Core over the shared SessionManager.

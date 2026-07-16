@@ -202,7 +202,8 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithMesh(meshOperations()).
 		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOperations(history)).
-		WithPassthrough(passthroughOperations())
+		WithPassthrough(passthroughOperations()).
+		WithGit(gitOperations())
 
 	// Native scheduled sequences: cron entries from
 	// .tendril/schedules.yaml grow Sequences and Sprouts inside this daemon,
@@ -262,6 +263,16 @@ func runServeCmd(ctx context.Context, args []string) {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	passthroughHandler := receptors.NewPassthroughHandler(coreSvc).WithDelegation(delegationGate)
 	passthroughHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, next)
+	})
+
+	// Git REST API (adapter): commit a substrate's workspace under its
+	// configured commit identity, the lowest rung of the delegated-execution
+	// ladder. Like the passthrough route it consults the delegation gate
+	// per-invocation, so it takes the bare bearer auth rather than
+	// guardedAuth's blanket delegated-request denial.
+	gitHandler := receptors.NewGitHandler(coreSvc).WithDelegation(delegationGate)
+	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 

@@ -42,7 +42,8 @@ func runMCPCmd(ctx context.Context, args []string) {
 			// telemetry-silent, exactly as before.
 			WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
 			WithSprout(sproutOperations(history)).
-			WithPassthrough(passthroughOperations())
+			WithPassthrough(passthroughOperations()).
+			WithGit(gitOperations())
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
 	}

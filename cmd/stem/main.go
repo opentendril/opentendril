@@ -14,6 +14,7 @@
 //   tendril sequence - Run or list YAML task sequences
 //   tendril sprout - Delegate a one-shot task to an autonomous Tendril
 //   tendril passthrough - Run one bounded command in a network-sealed terrarium
+//   tendril git   - Commit a substrate's workspace under its configured identity
 //   tendril terrarium - Manage execution terrarium environments
 //   tendril health - Run infrastructure health diagnostics
 //   tendril llm   - Inspect and test the configured local LLM provider
@@ -92,6 +93,8 @@ func main() {
 		runSproutCmd(ctx, os.Args[2:])
 	case "passthrough":
 		runPassthroughCmd(ctx, os.Args[2:])
+	case "git":
+		runGitCmd(ctx, os.Args[2:])
 	case "terrarium":
 		runTerrariumCmd(ctx, os.Args[2:])
 	case "health":
@@ -131,6 +134,7 @@ func printUsage() {
 	fmt.Println("  sequence Run or list YAML task sequences")
 	fmt.Println("  sprout  Delegate a one-shot task to an autonomous Tendril in a terrarium")
 	fmt.Println("  passthrough Run one bounded command in a network-sealed terrarium")
+	fmt.Println("  git     Commit a substrate's workspace under its configured commit identity")
 	fmt.Println("  terrarium Manage execution terrarium environments")
 	fmt.Println("  health  Run infrastructure health diagnostics")
 	fmt.Println("  llm     List or test the configured local LLM provider")
