@@ -205,16 +205,16 @@ func buildSequenceCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		root = "."
 	}
-	return core.NewService(manager).WithSequence(cliSequenceOps(root)), nil
+	return core.NewService(manager).WithSequence(cliSequenceOperations(root)), nil
 }
 
-// cliSequenceOps binds the sequence execution port to the conductor with
+// cliSequenceOperations binds the sequence execution port to the conductor with
 // terminal I/O — this wiring lives in the adapter layer precisely so the Core
 // never imports the conductor (see internal/core/boundary_test.go). The
 // serve/MCP surfaces bind the same port with server I/O instead (see
-// serveSequenceOps).
-func cliSequenceOps(root string) core.SequenceOps {
-	return core.SequenceOps{
+// serveSequenceOperations).
+func cliSequenceOperations(root string) core.SequenceOperations {
+	return core.SequenceOperations{
 		Root: root,
 		List: func(_ context.Context, root string) ([]string, error) {
 			return conductor.ListSequenceFiles(root)
@@ -234,14 +234,14 @@ func cliSequenceOps(root string) core.SequenceOps {
 	}
 }
 
-// serveSequenceOps binds the sequence execution port for the daemon and MCP
+// serveSequenceOperations binds the sequence execution port for the daemon and MCP
 // surfaces: output is discarded (never written into a protocol stream) and
 // runs are non-interactive — exactly the semantics the MCP runSequence tool
 // has always had. The daemon threads its EventBus through so every sequence
 // run — manual or scheduled — emits its lifecycle telemetry to the Command
 // Center; surfaces without a bus (the MCP stdio server) pass nil.
-func serveSequenceOps(root string, bus *eventbus.Bus) core.SequenceOps {
-	return core.SequenceOps{
+func serveSequenceOperations(root string, bus *eventbus.Bus) core.SequenceOperations {
+	return core.SequenceOperations{
 		Root: root,
 		List: func(_ context.Context, root string) ([]string, error) {
 			return conductor.ListSequenceFiles(root)

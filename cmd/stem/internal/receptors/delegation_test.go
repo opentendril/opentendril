@@ -20,7 +20,7 @@ func newDelegationTestHandler(t *testing.T, grants []core.DelegationGrant) (*htt
 	t.Helper()
 
 	executed := &atomic.Int64{}
-	coreSvc := core.NewService(nil).WithSprout(core.SproutOps{
+	coreSvc := core.NewService(nil).WithSprout(core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (string, error) {
 			executed.Add(1)
 			return "grown", nil
@@ -91,7 +91,7 @@ func TestSproutRoutesUnchangedWithoutDelegationMarker(t *testing.T) {
 // handler constructed without WithDelegation behaves exactly as before for
 // non-delegated traffic and still denies delegated-marked traffic.
 func TestSproutRoutesUnchangedWithNilGate(t *testing.T) {
-	coreSvc := core.NewService(nil).WithSprout(core.SproutOps{
+	coreSvc := core.NewService(nil).WithSprout(core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (string, error) { return "grown", nil },
 	})
 	handler := NewSproutHandler(coreSvc, nil, eventbus.New())

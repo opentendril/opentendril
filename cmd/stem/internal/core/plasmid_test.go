@@ -11,13 +11,13 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-func newPlasmidService(t *testing.T, ops core.PlasmidOps) *core.Service {
+func newPlasmidService(t *testing.T, operations core.PlasmidOperations) *core.Service {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	return core.NewService(manager).WithPlasmid(ops)
+	return core.NewService(manager).WithPlasmid(operations)
 }
 
 func writePlasmidFile(t *testing.T, root string, parts ...string) {
@@ -39,7 +39,7 @@ func TestPlasmidListPrefersPlasmidsDirSorted(t *testing.T) {
 	// A Markdown file outside plasmids/ must NOT appear once plasmids/ has any.
 	writePlasmidFile(t, root, ".tendril", "genotypes", "outside.md")
 
-	svc := newPlasmidService(t, core.PlasmidOps{Root: root})
+	svc := newPlasmidService(t, core.PlasmidOperations{Root: root})
 	paths, err := svc.PlasmidList(context.Background())
 	if err != nil {
 		t.Fatalf("PlasmidList: %v", err)
@@ -62,7 +62,7 @@ func TestPlasmidListFallsBackToGenotypesTree(t *testing.T) {
 	root := t.TempDir()
 	writePlasmidFile(t, root, ".tendril", "genotypes", "go-rules.md")
 
-	svc := newPlasmidService(t, core.PlasmidOps{Root: root})
+	svc := newPlasmidService(t, core.PlasmidOperations{Root: root})
 	paths, err := svc.PlasmidList(context.Background())
 	if err != nil {
 		t.Fatalf("PlasmidList: %v", err)
@@ -73,7 +73,7 @@ func TestPlasmidListFallsBackToGenotypesTree(t *testing.T) {
 }
 
 func TestPlasmidListMissingDirIsEmpty(t *testing.T) {
-	svc := newPlasmidService(t, core.PlasmidOps{Root: t.TempDir()})
+	svc := newPlasmidService(t, core.PlasmidOperations{Root: t.TempDir()})
 	paths, err := svc.PlasmidList(context.Background())
 	if err != nil {
 		t.Fatalf("PlasmidList on missing dir: %v", err)
@@ -86,7 +86,7 @@ func TestPlasmidListMissingDirIsEmpty(t *testing.T) {
 func TestPlasmidInjectRunsPortAndNormalizesPaths(t *testing.T) {
 	root := t.TempDir()
 	var gotRoot, gotName string
-	svc := newPlasmidService(t, core.PlasmidOps{
+	svc := newPlasmidService(t, core.PlasmidOperations{
 		Root: root,
 		Inject: func(_ context.Context, r, name string) (core.PlasmidInjection, error) {
 			gotRoot, gotName = r, name
@@ -116,14 +116,14 @@ func TestPlasmidInjectRunsPortAndNormalizesPaths(t *testing.T) {
 }
 
 func TestPlasmidInjectUnwiredFailsLoudly(t *testing.T) {
-	svc := newPlasmidService(t, core.PlasmidOps{Root: t.TempDir()})
+	svc := newPlasmidService(t, core.PlasmidOperations{Root: t.TempDir()})
 	if _, err := svc.PlasmidInject(context.Background(), core.PlasmidInjectInput{Name: "go-rules"}); err == nil || !strings.Contains(err.Error(), "not wired") {
 		t.Fatalf("expected loud not-wired error, got %v", err)
 	}
 }
 
 func TestPlasmidInjectRequiresName(t *testing.T) {
-	svc := newPlasmidService(t, core.PlasmidOps{
+	svc := newPlasmidService(t, core.PlasmidOperations{
 		Root: t.TempDir(),
 		Inject: func(context.Context, string, string) (core.PlasmidInjection, error) {
 			return core.PlasmidInjection{}, nil
@@ -135,7 +135,7 @@ func TestPlasmidInjectRequiresName(t *testing.T) {
 }
 
 func TestPlasmidCapabilitiesInRegistry(t *testing.T) {
-	svc := newPlasmidService(t, core.PlasmidOps{Root: t.TempDir()})
+	svc := newPlasmidService(t, core.PlasmidOperations{Root: t.TempDir()})
 
 	declared := map[string]bool{}
 	for _, capability := range svc.Capabilities() {

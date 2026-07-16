@@ -49,32 +49,32 @@ type Core interface {
 	SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error)
 
 	// Genome family. Reading is pure filesystem work;
-	// reduce/evolve run through the injected GenomeOps execution port.
+	// reduce/evolve run through the injected GenomeOperations execution port.
 	GenomeView(ctx context.Context) ([]GenomeSeed, error)
 	GenomeReduce(ctx context.Context) (string, error)
 	GenomeEvolve(ctx context.Context) (string, error)
 
 	// Plasmid family. Listing is pure filesystem work;
-	// injection runs through the injected PlasmidOps execution port.
+	// injection runs through the injected PlasmidOperations execution port.
 	PlasmidList(ctx context.Context) ([]string, error)
 	PlasmidInject(ctx context.Context, in PlasmidInjectInput) (PlasmidInjection, error)
 
 	// Substrate-grafting family. Both operations run
-	// through the injected MeshOps execution port.
+	// through the injected MeshOperations execution port.
 	MeshGraft(ctx context.Context, in MeshGraftInput) (MeshDelegation, error)
 	MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPromotion, error)
 	// Mesh trait governance family. Listing and moderation run
-	// through the injected MeshOps execution port.
+	// through the injected MeshOperations execution port.
 	MeshTraitList(ctx context.Context, in MeshTraitListInput) (MeshTraitListOutput, error)
 	MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) (MeshTraitAcceptOutput, error)
 	MeshTraitReject(ctx context.Context, in MeshTraitRejectInput) (MeshTraitRejectOutput, error)
 
 	// Sequence family. Both operations run through the
-	// injected SequenceOps execution port.
+	// injected SequenceOperations execution port.
 	SequenceList(ctx context.Context) ([]string, error)
 	SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error)
 	// Sprout/run family. Runs through the injected
-	// SproutOps execution port.
+	// SproutOperations execution port.
 	SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error)
 	// Passthrough family: one bounded command in a sealed Terrarium, the
 	// minimal delegable operation-class. Runs through the injected
@@ -158,11 +158,11 @@ type MeshTraitRejectOutput struct {
 // (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
 	sessions    *session.Manager
-	genome      GenomeOps
-	plasmid     PlasmidOps
-	mesh        MeshOps
-	sequence    SequenceOps
-	sprout      SproutOps
+	genome      GenomeOperations
+	plasmid     PlasmidOperations
+	mesh        MeshOperations
+	sequence    SequenceOperations
+	sprout      SproutOperations
 	passthrough PassthroughOperations
 }
 

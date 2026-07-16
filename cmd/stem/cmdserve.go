@@ -197,11 +197,11 @@ func runServeCmd(ctx context.Context, args []string) {
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
 	// are adapters that route through this one service.
 	coreSvc := core.NewService(sessions).
-		WithGenome(genomeOps(resolveRepoRoot(""))).
-		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
-		WithMesh(meshOps()).
-		WithSequence(serveSequenceOps(resolveRepoRoot(""), bus)).
-		WithSprout(sproutOps(history)).
+		WithGenome(genomeOperations(resolveRepoRoot(""))).
+		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
+		WithMesh(meshOperations()).
+		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
+		WithSprout(sproutOperations(history)).
 		WithPassthrough(passthroughOperations())
 
 	// Native scheduled sequences: cron entries from

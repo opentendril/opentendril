@@ -77,14 +77,14 @@ func buildGenomeCore(ctx context.Context, root string) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithGenome(genomeOps(root)), nil
+	return core.NewService(manager).WithGenome(genomeOperations(root)), nil
 }
 
-// genomeOps binds the genome execution port to the orchestrator — this wiring
+// genomeOperations binds the genome execution port to the orchestrator — this wiring
 // lives in the adapter layer precisely so the Core never imports the
 // orchestrator (see internal/core/boundary_test.go).
-func genomeOps(root string) core.GenomeOps {
-	return core.GenomeOps{
+func genomeOperations(root string) core.GenomeOperations {
+	return core.GenomeOperations{
 		Root: root,
 		Reduce: func(ctx context.Context, root string) error {
 			return conductor.NewEpigeneticChronicler(root).ReduceGenomeFile(ctx)

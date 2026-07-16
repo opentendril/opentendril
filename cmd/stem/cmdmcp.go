@@ -35,13 +35,13 @@ func runMCPCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to sprout MCP session: %v (continuing without sessions)\n", err)
 	} else {
 		coreSvc := core.NewService(manager).
-			WithGenome(genomeOps(resolveRepoRoot(""))).
-			WithPlasmid(plasmidOps(resolveRepoRoot(""))).
-			WithMesh(meshOps()).
+			WithGenome(genomeOperations(resolveRepoRoot(""))).
+			WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
+			WithMesh(meshOperations()).
 			// The stdio server has no event bus: nil keeps its sequence runs
 			// telemetry-silent, exactly as before.
-			WithSequence(serveSequenceOps(resolveRepoRoot(""), nil)).
-			WithSprout(sproutOps(history)).
+			WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
+			WithSprout(sproutOperations(history)).
 			WithPassthrough(passthroughOperations())
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)

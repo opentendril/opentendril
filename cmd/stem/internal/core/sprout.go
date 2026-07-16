@@ -14,7 +14,7 @@ import (
 // lives outside the Core in packages it is structurally forbidden from
 // importing (the conductor and historydb — see boundary_test.go), so it is
 // injected as a transport-free function port via WithSprout, the same
-// template as GenomeOps (PR).
+// template as GenomeOperations (PR).
 //
 // The capability is synchronous: Invoke answers when the Tendril matures or
 // withers, exactly the semantics the MCP sproutTendril tool has always had.
@@ -51,7 +51,7 @@ type SproutRunInput struct {
 }
 
 // SproutSpec is the fully resolved, transport-free execution request handed
-// to the SproutOps port after the Core has applied session preferences.
+// to the SproutOperations port after the Core has applied session preferences.
 type SproutSpec struct {
 	StepID          string
 	Transcript      string
@@ -73,9 +73,9 @@ type SproutRunResult struct {
 	Output    string `json:"output,omitempty"`
 }
 
-// SproutOps is the injection port for sprout execution. Run may be nil, in
+// SproutOperations is the injection port for sprout execution. Run may be nil, in
 // which case the capability reports that it is not wired rather than acting.
-type SproutOps struct {
+type SproutOperations struct {
 	// Run executes the spec inside a terrarium and returns the Tendril's
 	// output. Implementations own substrate resolution and run recording.
 	Run func(ctx context.Context, spec SproutSpec) (string, error)
@@ -83,8 +83,8 @@ type SproutOps struct {
 
 // WithSprout wires the sprout execution port onto the Service and returns the
 // Service for chaining.
-func (s *Service) WithSprout(ops SproutOps) *Service {
-	s.sprout = ops
+func (s *Service) WithSprout(operations SproutOperations) *Service {
+	s.sprout = operations
 	return s
 }
 
@@ -93,7 +93,7 @@ func (s *Service) WithSprout(ops SproutOps) *Service {
 // it to completion via the injected execution port.
 func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error) {
 	if s.sprout.Run == nil {
-		return SproutRunResult{}, fmt.Errorf("sprout.run is not wired: construct the Core with WithSprout(SproutOps{Run: …})")
+		return SproutRunResult{}, fmt.Errorf("sprout.run is not wired: construct the Core with WithSprout(SproutOperations{Run: …})")
 	}
 	if strings.TrimSpace(in.Transcript) == "" || strings.TrimSpace(in.Substrate) == "" {
 		return SproutRunResult{}, fmt.Errorf("transcript and substrate are required")

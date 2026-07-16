@@ -11,13 +11,13 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-func newGenomeService(t *testing.T, ops core.GenomeOps) *core.Service {
+func newGenomeService(t *testing.T, operations core.GenomeOperations) *core.Service {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	return core.NewService(manager).WithGenome(ops)
+	return core.NewService(manager).WithGenome(operations)
 }
 
 func writeGenomeSeed(t *testing.T, root, name, content string) {
@@ -37,7 +37,7 @@ func TestGenomeViewReadsSeedsSorted(t *testing.T) {
 	writeGenomeSeed(t, root, "alpha.md", "# alpha rules")
 	writeGenomeSeed(t, root, "notes.txt", "not markdown, must be ignored")
 
-	svc := newGenomeService(t, core.GenomeOps{Root: root})
+	svc := newGenomeService(t, core.GenomeOperations{Root: root})
 	seeds, err := svc.GenomeView(context.Background())
 	if err != nil {
 		t.Fatalf("GenomeView: %v", err)
@@ -54,7 +54,7 @@ func TestGenomeViewReadsSeedsSorted(t *testing.T) {
 }
 
 func TestGenomeViewMissingDirIsEmptyGenome(t *testing.T) {
-	svc := newGenomeService(t, core.GenomeOps{Root: t.TempDir()})
+	svc := newGenomeService(t, core.GenomeOperations{Root: t.TempDir()})
 	seeds, err := svc.GenomeView(context.Background())
 	if err != nil {
 		t.Fatalf("GenomeView on missing dir: %v", err)
@@ -67,7 +67,7 @@ func TestGenomeViewMissingDirIsEmptyGenome(t *testing.T) {
 func TestGenomeReduceRunsInjectedPortWithRoot(t *testing.T) {
 	root := t.TempDir()
 	var gotRoot string
-	svc := newGenomeService(t, core.GenomeOps{
+	svc := newGenomeService(t, core.GenomeOperations{
 		Root:   root,
 		Reduce: func(_ context.Context, r string) error { gotRoot = r; return nil },
 	})
@@ -85,7 +85,7 @@ func TestGenomeReduceRunsInjectedPortWithRoot(t *testing.T) {
 }
 
 func TestGenomeReduceUnwiredFailsLoudly(t *testing.T) {
-	svc := newGenomeService(t, core.GenomeOps{Root: t.TempDir()})
+	svc := newGenomeService(t, core.GenomeOperations{Root: t.TempDir()})
 	if _, err := svc.GenomeReduce(context.Background()); err == nil || !strings.Contains(err.Error(), "not wired") {
 		t.Fatalf("expected loud not-wired error, got %v", err)
 	}
@@ -95,7 +95,7 @@ func TestGenomeReduceUnwiredFailsLoudly(t *testing.T) {
 }
 
 func TestGenomeCapabilitiesInRegistry(t *testing.T) {
-	svc := newGenomeService(t, core.GenomeOps{Root: t.TempDir()})
+	svc := newGenomeService(t, core.GenomeOperations{Root: t.TempDir()})
 
 	declared := map[string]bool{}
 	for _, capability := range svc.Capabilities() {

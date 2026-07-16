@@ -98,7 +98,7 @@ func buildSessionCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return core.NewService(manager).WithGenome(genomeOps(resolveRepoRoot(""))), cleanup, nil
+	return core.NewService(manager).WithGenome(genomeOperations(resolveRepoRoot(""))), cleanup, nil
 }
 
 // sessionCommand is one subcommand actually registered on the `tendril session`

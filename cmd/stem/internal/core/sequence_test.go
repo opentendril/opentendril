@@ -10,18 +10,18 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-func newSequenceService(t *testing.T, ops core.SequenceOps) *core.Service {
+func newSequenceService(t *testing.T, operations core.SequenceOperations) *core.Service {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	return core.NewService(manager).WithSequence(ops)
+	return core.NewService(manager).WithSequence(operations)
 }
 
 func TestSequenceListRunsPortWithRoot(t *testing.T) {
 	var gotRoot string
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		Root: "/workspaces/core",
 		List: func(_ context.Context, root string) ([]string, error) {
 			gotRoot = root
@@ -43,7 +43,7 @@ func TestSequenceListRunsPortWithRoot(t *testing.T) {
 
 func TestSequenceListDefaultsRoot(t *testing.T) {
 	var gotRoot string
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		List: func(_ context.Context, root string) ([]string, error) {
 			gotRoot = root
 			return nil, nil
@@ -59,7 +59,7 @@ func TestSequenceListDefaultsRoot(t *testing.T) {
 
 func TestSequenceRunPassesInputThrough(t *testing.T) {
 	var got core.SequenceRunInput
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		Run: func(_ context.Context, in core.SequenceRunInput) (core.SequenceRunResult, error) {
 			got = in
 			return core.SequenceRunResult{
@@ -87,7 +87,7 @@ func TestSequenceRunPassesInputThrough(t *testing.T) {
 }
 
 func TestSequenceRunRequiresPathOrName(t *testing.T) {
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		Run: func(context.Context, core.SequenceRunInput) (core.SequenceRunResult, error) {
 			return core.SequenceRunResult{}, nil
 		},
@@ -98,7 +98,7 @@ func TestSequenceRunRequiresPathOrName(t *testing.T) {
 }
 
 func TestSequenceUnwiredFailsLoudly(t *testing.T) {
-	svc := newSequenceService(t, core.SequenceOps{})
+	svc := newSequenceService(t, core.SequenceOperations{})
 	if _, err := svc.SequenceList(context.Background()); err == nil || !strings.Contains(err.Error(), "not wired") {
 		t.Fatalf("expected loud not-wired error for list, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestSequenceUnwiredFailsLoudly(t *testing.T) {
 }
 
 func TestSequenceRunReturnsPartialResultWithError(t *testing.T) {
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		Run: func(context.Context, core.SequenceRunInput) (core.SequenceRunResult, error) {
 			return core.SequenceRunResult{
 				Name:  "deploy",
@@ -129,7 +129,7 @@ func TestSequenceRunReturnsPartialResultWithError(t *testing.T) {
 }
 
 func TestSequenceCapabilitiesInRegistry(t *testing.T) {
-	svc := newSequenceService(t, core.SequenceOps{
+	svc := newSequenceService(t, core.SequenceOperations{
 		List: func(context.Context, string) ([]string, error) { return nil, nil },
 		Run: func(context.Context, core.SequenceRunInput) (core.SequenceRunResult, error) {
 			return core.SequenceRunResult{}, nil

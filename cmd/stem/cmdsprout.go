@@ -104,22 +104,22 @@ func buildSproutCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return core.NewService(manager).WithSprout(sproutOps(history)), cleanup, nil
+	return core.NewService(manager).WithSprout(sproutOperations(history)), cleanup, nil
 }
 
-// sproutOps binds the sprout execution port to the conductor's terrarium
+// sproutOperations binds the sprout execution port to the conductor's terrarium
 // orchestrator and the history store — this wiring lives in the adapter layer
 // precisely so the Core never imports the conductor or historydb (see
 // internal/core/boundary_test.go). It owns exactly what the MCP adapter used
 // to do inline after translation: named-substrate resolution, status-path
 // computation, the terrarium run, and run recording.
-func sproutOps(history *historydb.Store) core.SproutOps {
+func sproutOperations(history *historydb.Store) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
 		log.Printf("[Sprout] Failed to load substrates config: %v", err)
 	}
 
-	return core.SproutOps{
+	return core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (string, error) {
 			substrateURL := spec.SubstrateURL
 			substrateBranch := spec.SubstrateBranch

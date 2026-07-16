@@ -10,7 +10,7 @@ import (
 // sequences are conductor-owned execution operations the Core is structurally
 // forbidden from importing (see boundary_test.go), so both are injected as
 // transport-free function ports via WithSequence — the same template as
-// GenomeOps (PR).
+// GenomeOperations (PR).
 //
 // Execution I/O (streaming a run's output to a terminal, discarding it on a
 // server) is a per-surface concern: each adapter binds the Run port with its
@@ -50,12 +50,12 @@ type SequenceRunResult struct {
 	Steps     []SequenceStepOutcome `json:"steps"`
 }
 
-// SequenceOps is the injection port for sequence operations whose
+// SequenceOperations is the injection port for sequence operations whose
 // implementation lives outside the Core (the conductor's sequence engine).
 // Root is the workspace root sequences are listed under (defaults to ".").
 // Either func may be nil, in which case the corresponding capability reports
 // that it is not wired rather than acting.
-type SequenceOps struct {
+type SequenceOperations struct {
 	Root string
 	// List returns the available sequence YAML files under root (and the
 	// system sequence directories), sorted.
@@ -68,8 +68,8 @@ type SequenceOps struct {
 
 // WithSequence wires the sequence operation port onto the Service and returns
 // the Service for chaining.
-func (s *Service) WithSequence(ops SequenceOps) *Service {
-	s.sequence = ops
+func (s *Service) WithSequence(operations SequenceOperations) *Service {
+	s.sequence = operations
 	return s
 }
 
@@ -85,7 +85,7 @@ func (s *Service) sequenceRoot() string {
 // injected execution port.
 func (s *Service) SequenceList(ctx context.Context) ([]string, error) {
 	if s.sequence.List == nil {
-		return nil, fmt.Errorf("sequence.list is not wired: construct the Core with WithSequence(SequenceOps{List: …})")
+		return nil, fmt.Errorf("sequence.list is not wired: construct the Core with WithSequence(SequenceOperations{List: …})")
 	}
 	return s.sequence.List(ctx, s.sequenceRoot())
 }
@@ -96,7 +96,7 @@ func (s *Service) SequenceList(ctx context.Context) ([]string, error) {
 // legacy surfaces did.
 func (s *Service) SequenceRun(ctx context.Context, in SequenceRunInput) (SequenceRunResult, error) {
 	if s.sequence.Run == nil {
-		return SequenceRunResult{}, fmt.Errorf("sequence.run is not wired: construct the Core with WithSequence(SequenceOps{Run: …})")
+		return SequenceRunResult{}, fmt.Errorf("sequence.run is not wired: construct the Core with WithSequence(SequenceOperations{Run: …})")
 	}
 	if strings.TrimSpace(in.PathOrName) == "" {
 		return SequenceRunResult{}, fmt.Errorf("pathOrName is required")

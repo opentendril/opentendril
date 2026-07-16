@@ -16,7 +16,7 @@ func newSproutService(t *testing.T, run func(ctx context.Context, spec core.Spro
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	return core.NewService(manager).WithSprout(core.SproutOps{Run: run}), manager
+	return core.NewService(manager).WithSprout(core.SproutOperations{Run: run}), manager
 }
 
 func TestSproutRunRequiresTranscriptAndSubstrate(t *testing.T) {

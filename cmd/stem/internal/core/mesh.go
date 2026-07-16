@@ -12,7 +12,7 @@ import (
 // the Core in packages it is structurally forbidden from importing (the
 // conductor and the mesh client — see boundary_test.go). They are therefore
 // injected as transport-free function ports via WithMesh — the same template
-// as GenomeOps (PR) and PlasmidOps.
+// as GenomeOperations (PR) and PlasmidOperations.
 //
 // The mesh key-management commands (`tendril mesh keygen|issue-token`) are
 // deliberately NOT governed: they mint the workspace's private mesh keys and
@@ -64,12 +64,12 @@ type MeshPromotion struct {
 	PRNumber  string `json:"prNumber,omitempty"`
 }
 
-// MeshOps is the injection port for mesh operations whose implementation lives
+// MeshOperations is the injection port for mesh operations whose implementation lives
 // outside the Core (substrate resolution in the conductor, the push in the
 // mesh client, and the local trait inbox in the transport layer). Either func
 // may be nil, in which case the capabilities report that they are not wired
 // rather than acting.
-type MeshOps struct {
+type MeshOperations struct {
 	// ResolveWorkspace maps a substrate path or named substrate key onto a
 	// local git workspace root.
 	ResolveWorkspace func(ctx context.Context, substrate string) (string, error)
@@ -86,14 +86,14 @@ type MeshOps struct {
 
 // WithMesh wires the mesh operation port onto the Service and returns the
 // Service for chaining.
-func (s *Service) WithMesh(ops MeshOps) *Service {
-	s.mesh = ops
+func (s *Service) WithMesh(operations MeshOperations) *Service {
+	s.mesh = operations
 	return s
 }
 
 func (s *Service) meshDelegate(ctx context.Context, substrate, branch, commitMessage string) (MeshDelegation, error) {
 	if s.mesh.ResolveWorkspace == nil || s.mesh.DelegatePush == nil {
-		return MeshDelegation{}, fmt.Errorf("mesh grafting is not wired: construct the Core with WithMesh(MeshOps{ResolveWorkspace: …, DelegatePush: …})")
+		return MeshDelegation{}, fmt.Errorf("mesh grafting is not wired: construct the Core with WithMesh(MeshOperations{ResolveWorkspace: …, DelegatePush: …})")
 	}
 	if strings.TrimSpace(substrate) == "" {
 		return MeshDelegation{}, fmt.Errorf("substrate is required")
@@ -136,7 +136,7 @@ func (s *Service) MeshPromote(ctx context.Context, in MeshPromoteInput) (MeshPro
 
 func (s *Service) meshTraitList(ctx context.Context) (MeshTraitListOutput, error) {
 	if s.mesh.ListPendingTraits == nil {
-		return MeshTraitListOutput{}, fmt.Errorf("mesh trait listing is not wired: construct the Core with WithMesh(MeshOps{ListPendingTraits: …})")
+		return MeshTraitListOutput{}, fmt.Errorf("mesh trait listing is not wired: construct the Core with WithMesh(MeshOperations{ListPendingTraits: …})")
 	}
 
 	traits, err := s.mesh.ListPendingTraits(ctx)
@@ -157,7 +157,7 @@ func (s *Service) MeshTraitList(ctx context.Context, _ MeshTraitListInput) (Mesh
 // MeshTraitAccept accepts one pending foreign trait via the injected execution port.
 func (s *Service) MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) (MeshTraitAcceptOutput, error) {
 	if s.mesh.AcceptTrait == nil {
-		return MeshTraitAcceptOutput{}, fmt.Errorf("mesh trait acceptance is not wired: construct the Core with WithMesh(MeshOps{AcceptTrait: …})")
+		return MeshTraitAcceptOutput{}, fmt.Errorf("mesh trait acceptance is not wired: construct the Core with WithMesh(MeshOperations{AcceptTrait: …})")
 	}
 	traitID := strings.TrimSpace(in.TraitID)
 	if traitID == "" {
@@ -172,7 +172,7 @@ func (s *Service) MeshTraitAccept(ctx context.Context, in MeshTraitAcceptInput) 
 // MeshTraitReject rejects one pending foreign trait via the injected execution port.
 func (s *Service) MeshTraitReject(ctx context.Context, in MeshTraitRejectInput) (MeshTraitRejectOutput, error) {
 	if s.mesh.RejectTrait == nil {
-		return MeshTraitRejectOutput{}, fmt.Errorf("mesh trait rejection is not wired: construct the Core with WithMesh(MeshOps{RejectTrait: …})")
+		return MeshTraitRejectOutput{}, fmt.Errorf("mesh trait rejection is not wired: construct the Core with WithMesh(MeshOperations{RejectTrait: …})")
 	}
 	traitID := strings.TrimSpace(in.TraitID)
 	if traitID == "" {

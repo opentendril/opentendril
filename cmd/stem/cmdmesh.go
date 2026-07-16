@@ -87,15 +87,15 @@ func buildMeshCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithMesh(meshOps()), nil
+	return core.NewService(manager).WithMesh(meshOperations()), nil
 }
 
-// meshOps binds the mesh execution port to the conductor (substrate
+// meshOperations binds the mesh execution port to the conductor (substrate
 // resolution), the mesh client (delegated push), and the local trait inbox
 // stub — this wiring lives in the adapter layer precisely so the Core never
 // imports either package (see internal/core/boundary_test.go).
-func meshOps() core.MeshOps {
-	return core.MeshOps{
+func meshOperations() core.MeshOperations {
+	return core.MeshOperations{
 		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) {
 			return resolveMeshWorkspace(substrate)
 		},

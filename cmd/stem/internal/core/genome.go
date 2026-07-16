@@ -24,12 +24,12 @@ type GenomeSeed struct {
 	Content string `json:"content"`
 }
 
-// GenomeOps is the injection port for genome operations whose implementation
+// GenomeOperations is the injection port for genome operations whose implementation
 // lives outside the Core (the orchestrator's Epigenetic Chronicler). Root is
 // the workspace root the genome lives under (defaults to "."). Reduce and
 // Evolve may be nil, in which case the corresponding capabilities report that
 // they are not wired rather than acting.
-type GenomeOps struct {
+type GenomeOperations struct {
 	Root   string
 	Reduce func(ctx context.Context, root string) error
 	Evolve func(ctx context.Context, root string) error
@@ -37,8 +37,8 @@ type GenomeOps struct {
 
 // WithGenome wires the genome operation port onto the Service and returns the
 // Service for chaining.
-func (s *Service) WithGenome(ops GenomeOps) *Service {
-	s.genome = ops
+func (s *Service) WithGenome(operations GenomeOperations) *Service {
+	s.genome = operations
 	return s
 }
 
@@ -101,7 +101,7 @@ func (s *Service) GenomeView(_ context.Context) ([]GenomeSeed, error) {
 // injected execution port and returns the file's path.
 func (s *Service) GenomeReduce(ctx context.Context) (string, error) {
 	if s.genome.Reduce == nil {
-		return "", fmt.Errorf("genome.reduce is not wired: construct the Core with WithGenome(GenomeOps{Reduce: …})")
+		return "", fmt.Errorf("genome.reduce is not wired: construct the Core with WithGenome(GenomeOperations{Reduce: …})")
 	}
 	if err := s.genome.Reduce(ctx, s.genomeRoot()); err != nil {
 		return "", err
@@ -113,7 +113,7 @@ func (s *Service) GenomeReduce(ctx context.Context) (string, error) {
 // via the injected execution port, returning the file's path.
 func (s *Service) GenomeEvolve(ctx context.Context) (string, error) {
 	if s.genome.Evolve == nil {
-		return "", fmt.Errorf("genome.evolve is not wired: construct the Core with WithGenome(GenomeOps{Evolve: …})")
+		return "", fmt.Errorf("genome.evolve is not wired: construct the Core with WithGenome(GenomeOperations{Evolve: …})")
 	}
 	if err := s.genome.Evolve(ctx, s.genomeRoot()); err != nil {
 		return "", err

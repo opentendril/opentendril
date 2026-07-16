@@ -85,14 +85,14 @@ func buildPlasmidCore(ctx context.Context, root string) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithPlasmid(plasmidOps(root)), nil
+	return core.NewService(manager).WithPlasmid(plasmidOperations(root)), nil
 }
 
-// plasmidOps binds the plasmid execution port to the conductor — this wiring
+// plasmidOperations binds the plasmid execution port to the conductor — this wiring
 // lives in the adapter layer precisely so the Core never imports the
 // conductor (see internal/core/boundary_test.go).
-func plasmidOps(root string) core.PlasmidOps {
-	return core.PlasmidOps{
+func plasmidOperations(root string) core.PlasmidOperations {
+	return core.PlasmidOperations{
 		Root: root,
 		Inject: func(_ context.Context, root, name string) (core.PlasmidInjection, error) {
 			source, dest, alreadyActive, err := conductor.InjectPlasmidIntoGenome(root, name)

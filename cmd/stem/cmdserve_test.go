@@ -185,7 +185,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	}
 
 	var got core.SproutSpec
-	svc := core.NewService(manager).WithSprout(core.SproutOps{
+	svc := core.NewService(manager).WithSprout(core.SproutOperations{
 		Run: func(_ context.Context, spec core.SproutSpec) (string, error) {
 			got = spec
 			return "matured", nil

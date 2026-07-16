@@ -562,7 +562,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// same Core, legacy tool name and text rendering preserved
 		// for existing MCP clients. Adapter translation only — the business
 		// logic that used to live inline here is now behind the Core's
-		// PlasmidOps port.
+		// PlasmidOperations port.
 		if params.Name == "injectPlasmid" {
 			name, ok := params.Arguments["name"].(string)
 			if !ok || strings.TrimSpace(name) == "" {
@@ -605,7 +605,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// capabilities: same Core, legacy tool names, legacy
 		// kebab-case argument keys, and text rendering preserved for existing
 		// MCP clients. Adapter translation only — the resolution/push logic
-		// that used to live inline here is now behind the Core's MeshOps port.
+		// that used to live inline here is now behind the Core's MeshOperations port.
 		if params.Name == "graftSubstrate" {
 			substrate, ok := params.Arguments["substrate"].(string)
 			if !ok || strings.TrimSpace(substrate) == "" {
@@ -740,7 +740,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// same Core, legacy tool name, legacy argument-key fallbacks
 		// (path/sequence), and text rendering preserved for existing MCP
 		// clients. Adapter translation only — the execution that used to run
-		// inline here is now behind the Core's SequenceOps port.
+		// inline here is now behind the Core's SequenceOperations port.
 		if params.Name == "runSequence" {
 			pathOrName, ok := params.Arguments["pathOrName"].(string)
 			if !ok || strings.TrimSpace(pathOrName) == "" {
@@ -790,7 +790,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		// text rendering preserved for existing MCP clients. Adapter
 		// translation only — the substrate resolution, terrarium execution,
 		// and run recording that used to live inline here are now behind the
-		// Core's SproutOps port.
+		// Core's SproutOperations port.
 		if params.Name != "sproutTendril" {
 			return h.formatError(req.ID, -32601, "Tool not found", nil)
 		}

@@ -10,7 +10,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-// recordingMeshOps builds a MeshOps port that records what it received and
+// recordingMeshOperations builds a MeshOperations port that records what it received and
 // returns canned results.
 type meshPortCalls struct {
 	resolvedSubstrate string
@@ -28,7 +28,7 @@ func newMeshService(t *testing.T, calls *meshPortCalls) *core.Service {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	return core.NewService(manager).WithMesh(core.MeshOps{
+	return core.NewService(manager).WithMesh(core.MeshOperations{
 		ResolveWorkspace: func(_ context.Context, substrate string) (string, error) {
 			calls.resolvedSubstrate = substrate
 			return "/workspaces/" + substrate, nil
@@ -104,7 +104,7 @@ func TestMeshGraftResolveErrorIsWrapped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new manager: %v", err)
 	}
-	svc := core.NewService(manager).WithMesh(core.MeshOps{
+	svc := core.NewService(manager).WithMesh(core.MeshOperations{
 		ResolveWorkspace: func(context.Context, string) (string, error) {
 			return "", fmt.Errorf("no such substrate")
 		},

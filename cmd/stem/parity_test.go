@@ -33,16 +33,16 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 		t.Fatalf("new manager: %v", err)
 	}
 	root := t.TempDir()
-	svc := core.NewService(manager).WithGenome(core.GenomeOps{
+	svc := core.NewService(manager).WithGenome(core.GenomeOperations{
 		Root:   root,
 		Reduce: func(context.Context, string) error { return nil },
 		Evolve: func(context.Context, string) error { return nil },
-	}).WithPlasmid(core.PlasmidOps{
+	}).WithPlasmid(core.PlasmidOperations{
 		Root: root,
 		Inject: func(context.Context, string, string) (core.PlasmidInjection, error) {
 			return core.PlasmidInjection{}, nil
 		},
-	}).WithMesh(core.MeshOps{
+	}).WithMesh(core.MeshOperations{
 		ResolveWorkspace:  func(_ context.Context, substrate string) (string, error) { return substrate, nil },
 		DelegatePush:      func(context.Context, string, string, string) (string, error) { return "deadbeef", nil },
 		ListPendingTraits: func(context.Context) ([]any, error) { return []any{}, nil },

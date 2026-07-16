@@ -16,7 +16,7 @@ import (
 // Terrarium orchestration lives outside the Core in the conductor (which the
 // Core is structurally forbidden from importing — see boundary_test.go), so
 // execution is injected as a transport-free function port via WithPassthrough,
-// the same template as SproutOps.
+// the same template as SproutOperations.
 //
 // Egress model (security-first, minimal-config default):
 //   - The Terrarium is physically network-sealed (--network none, asserted by

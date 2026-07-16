@@ -14,7 +14,7 @@ import (
 // into the active genome via the conductor, which the Core is structurally
 // forbidden from importing (see boundary_test.go). Injection is therefore an
 // injected transport-free function port via WithPlasmid — identical in shape
-// to the GenomeOps port that proved this template (PR).
+// to the GenomeOperations port that proved this template (PR).
 //
 // plasmid.sign is deliberately NOT governed: it signs arbitrary files with
 // the node's private signing key, and projecting it onto the REST/MCP
@@ -40,12 +40,12 @@ type PlasmidInjectInput struct {
 	Name string `json:"name"`
 }
 
-// PlasmidOps is the injection port for plasmid operations whose
+// PlasmidOperations is the injection port for plasmid operations whose
 // implementation lives outside the Core (the conductor's plasmid machinery).
 // Root is the workspace root plasmids live under (defaults to "."). Inject
 // may be nil, in which case the capability reports that it is not wired
 // rather than acting.
-type PlasmidOps struct {
+type PlasmidOperations struct {
 	Root string
 	// Inject copies the named plasmid into root's active genome and returns
 	// the source/destination paths (absolute or root-relative — the Core
@@ -55,8 +55,8 @@ type PlasmidOps struct {
 
 // WithPlasmid wires the plasmid operation port onto the Service and returns
 // the Service for chaining.
-func (s *Service) WithPlasmid(ops PlasmidOps) *Service {
-	s.plasmid = ops
+func (s *Service) WithPlasmid(operations PlasmidOperations) *Service {
+	s.plasmid = operations
 	return s
 }
 
@@ -96,7 +96,7 @@ func (s *Service) PlasmidList(_ context.Context) ([]string, error) {
 // injected execution port, returning the normalized injection outcome.
 func (s *Service) PlasmidInject(ctx context.Context, in PlasmidInjectInput) (PlasmidInjection, error) {
 	if s.plasmid.Inject == nil {
-		return PlasmidInjection{}, fmt.Errorf("plasmid.inject is not wired: construct the Core with WithPlasmid(PlasmidOps{Inject: …})")
+		return PlasmidInjection{}, fmt.Errorf("plasmid.inject is not wired: construct the Core with WithPlasmid(PlasmidOperations{Inject: …})")
 	}
 	if strings.TrimSpace(in.Name) == "" {
 		return PlasmidInjection{}, fmt.Errorf("plasmid name is required")
