@@ -107,10 +107,18 @@ jobs:
       # quiet enough to gate on. If a reachable CVE ever has to be waived to
       # unblock urgent work, do it with an explicit, dated continue-on-error
       # commit — never with `|| true`.
+      #
+      # govulncheck is a tool dependency in go.mod, not a `go install` of a
+      # remote package. Installing it fetched the module on every run and
+      # verified it against the checksum database, because a bare
+      # `pkg@version` is not recorded in go.sum — one TLS timeout against
+      # sum.golang.org and the required gate failed on an error that had
+      # nothing to do with the change. As a tool dependency its hashes live in
+      # go.sum (so no checksum-database round trip), the module cache keyed on
+      # go.sum serves it, and the version is visible to dependency updates.
+      # This mirrors the hash-locked install the Python audit job already uses.
       - name: Vulnerability Scan (govulncheck)
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-          govulncheck ./...
+        run: go tool govulncheck ./...
 
       - name: gofmt Check
         run: |
