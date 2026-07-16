@@ -31,7 +31,7 @@ func TestCommandStepRoutesToVerifier(t *testing.T) {
 		return "", nil
 	}
 
-	seq := &Sequence{Name: "local-ci"}
+	seq := &Sequence{Name: "verifier-test"}
 	step := &SequenceStep{ID: "verifier-build", Command: []string{"go", "build", "./..."}}
 
 	out, err := defaultSequenceStepRunnerWithOpts(context.Background(), seq, step, t.TempDir(), nil, "", "", "")

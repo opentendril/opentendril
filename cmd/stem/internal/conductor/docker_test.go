@@ -12,7 +12,7 @@ import (
 
 func TestCloneForeignSubstrate(t *testing.T) {
 	if testing.Short() {
-		t.Skip("clones a public repo over the network; skipped in -short (e.g. the isolated local-ci verifier)")
+		t.Skip("clones a public repo over the network; skipped in -short, e.g. under the sealed scoped-ci verifier")
 	}
 	// Use a known public repository that is small
 	url := "https://github.com/torvalds/test-tlb.git"
