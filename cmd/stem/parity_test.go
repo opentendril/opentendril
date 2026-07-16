@@ -26,7 +26,7 @@ import (
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
-func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.TraitHandler, *receptors.SequenceHandler, *receptors.SproutHandler, *receptors.MCPHandler, *http.ServeMux) {
+func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *receptors.GenomeHandler, *receptors.PlasmidHandler, *receptors.GraftHandler, *receptors.TraitHandler, *receptors.SequenceHandler, *receptors.SproutHandler, *receptors.PassthroughHandler, *receptors.MCPHandler, *http.ServeMux) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -56,6 +56,7 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	traitRest := receptors.NewTraitHandler(svc)
 	sequenceRest := receptors.NewSequenceHandler(svc)
 	sproutRest := receptors.NewSproutHandler(svc, nil, nil)
+	passthroughRest := receptors.NewPassthroughHandler(svc)
 	// Register the REST routes so the handlers' Capabilities() reflect what is
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
@@ -67,9 +68,10 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	traitRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
 	sproutRest.Register(mux, nil)
+	passthroughRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(svc)
-	return svc, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, mcp, mux
+	return svc, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, passthroughRest, mcp, mux
 }
 
 func sortedCopy(in []string) []string {
@@ -125,7 +127,7 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
-	_, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, mcp, _ := newParityFixture(t)
+	_, rest, genomeRest, plasmidRest, graftRest, traitRest, sequenceRest, sproutRest, passthroughRest, mcp, _ := newParityFixture(t)
 	canonical := core.CapabilityNames()
 
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
@@ -140,11 +142,13 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	restCaps = append(restCaps, traitRest.Capabilities()...)
 	restCaps = append(restCaps, sequenceRest.Capabilities()...)
 	restCaps = append(restCaps, sproutRest.Capabilities()...)
+	restCaps = append(restCaps, passthroughRest.Capabilities()...)
 	cliCaps := append(sessionCLICapabilityNames(), genomeCLICapabilityNames()...)
 	cliCaps = append(cliCaps, plasmidCLICapabilityNames()...)
 	cliCaps = append(cliCaps, meshCLICapabilityNames()...)
 	cliCaps = append(cliCaps, sequenceCLICapabilityNames()...)
 	cliCaps = append(cliCaps, sproutCLICapabilityNames()...)
+	cliCaps = append(cliCaps, passthroughCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
 	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
@@ -155,7 +159,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	ctx := context.Background()
-	svc, _, _, _, _, _, _, _, mcp, mux := newParityFixture(t)
+	svc, _, _, _, _, _, _, _, _, mcp, mux := newParityFixture(t)
 
 	// (a) Core directly.
 	coreSess, err := svc.CreateSession(ctx, core.CreateSessionInput{
@@ -400,6 +404,15 @@ func (m *mockCore) SproutRun(_ context.Context, in core.SproutRunInput) (core.Sp
 	}, nil
 }
 
+func (m *mockCore) PassthroughRun(_ context.Context, in core.PassthroughRunInput) (core.PassthroughRunResult, error) {
+	m.record("PassthroughRun", in)
+	return core.PassthroughRunResult{
+		Status:   "completed",
+		ExitCode: 0,
+		Stdout:   "mock output",
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -599,6 +612,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 				return m.SproutRun(ctx, in)
 			},
 		},
+		{
+			Name:        core.CapPassthroughRun,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.PassthroughRunInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.PassthroughRun(ctx, in)
+			},
+		},
 	}
 }
 
@@ -650,6 +674,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	traitRest := receptors.NewTraitHandler(mock)
 	sequenceRest := receptors.NewSequenceHandler(mock)
 	sproutRest := receptors.NewSproutHandler(mock, nil, nil)
+	passthroughRest := receptors.NewPassthroughHandler(mock)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
@@ -658,6 +683,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	traitRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
 	sproutRest.Register(mux, nil)
+	passthroughRest.Register(mux, nil)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
 

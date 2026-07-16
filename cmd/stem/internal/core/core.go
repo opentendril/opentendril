@@ -76,6 +76,10 @@ type Core interface {
 	// Sprout/run family. Runs through the injected
 	// SproutOps execution port.
 	SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error)
+	// Passthrough family: one bounded command in a sealed Terrarium, the
+	// minimal delegable operation-class. Runs through the injected
+	// PassthroughOperations execution port.
+	PassthroughRun(ctx context.Context, in PassthroughRunInput) (PassthroughRunResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability
@@ -153,12 +157,13 @@ type MeshTraitRejectOutput struct {
 // sequence, and sprout fields are the injected execution ports for their capability families
 // (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
-	sessions *session.Manager
-	genome   GenomeOps
-	plasmid  PlasmidOps
-	mesh     MeshOps
-	sequence SequenceOps
-	sprout   SproutOps
+	sessions    *session.Manager
+	genome      GenomeOps
+	plasmid     PlasmidOps
+	mesh        MeshOps
+	sequence    SequenceOps
+	sprout      SproutOps
+	passthrough PassthroughOperations
 }
 
 // NewService builds a Core over the shared SessionManager.

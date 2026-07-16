@@ -201,7 +201,8 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithPlasmid(plasmidOps(resolveRepoRoot(""))).
 		WithMesh(meshOps()).
 		WithSequence(serveSequenceOps(resolveRepoRoot(""), bus)).
-		WithSprout(sproutOps(history))
+		WithSprout(sproutOps(history)).
+		WithPassthrough(passthroughOperations())
 
 	// Native scheduled sequences: cron entries from
 	// .tendril/schedules.yaml grow Sequences and Sprouts inside this daemon,
@@ -251,6 +252,16 @@ func runServeCmd(ctx context.Context, args []string) {
 	// blanket delegated-request denial.
 	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus).WithDelegation(delegationGate)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(apiKey, next)
+	})
+
+	// Passthrough REST API (adapter): one bounded command in a
+	// network-sealed terrarium, the minimal delegable operation-class. Like
+	// the sprout routes it consults the delegation gate per-invocation (the
+	// matching grant supplies the egress allow-list), so it takes the bare
+	// bearer auth rather than guardedAuth's blanket delegated-request denial.
+	passthroughHandler := receptors.NewPassthroughHandler(coreSvc).WithDelegation(delegationGate)
+	passthroughHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyAuth(apiKey, next)
 	})
 

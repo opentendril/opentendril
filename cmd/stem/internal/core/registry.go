@@ -31,6 +31,7 @@ const (
 	CapSequenceList    = "sequence.list"
 	CapSequenceRun     = "sequence.run"
 	CapSproutRun       = "sprout.run"
+	CapPassthroughRun  = "passthrough.run"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -73,6 +74,7 @@ func CapabilityNames() []string {
 		CapSequenceList,
 		CapSequenceRun,
 		CapSproutRun,
+		CapPassthroughRun,
 	}
 	sort.Strings(names)
 	return names
@@ -172,6 +174,7 @@ func (s *Service) Capabilities() []Capability {
 	caps = append(caps, s.meshCapabilities()...)
 	caps = append(caps, s.sequenceCapabilities()...)
 	caps = append(caps, s.sproutCapabilities()...)
+	caps = append(caps, s.passthroughCapabilities()...)
 	return caps
 }
 

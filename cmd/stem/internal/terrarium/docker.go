@@ -237,7 +237,7 @@ func (s *dockerTerrarium) CopyIn(ctx context.Context, payloads []FilePayload) er
 
 		parent := pathpkg.Dir(containerPath)
 		if parent != "" && parent != "." && parent != "/" {
-			if _, _, err := runDockerCommand(ctx, "exec", s.id, "mkdir", "-p", parent); err != nil {
+			if _, _, err := runDockerCommandWithStartGrace(ctx, "exec", s.id, "mkdir", "-p", parent); err != nil {
 				return fmt.Errorf("create terrarium directory %s: %w", parent, err)
 			}
 		}
@@ -266,7 +266,7 @@ func (s *dockerTerrarium) CopyIn(ctx context.Context, payloads []FilePayload) er
 			return fmt.Errorf("write copy-in payload: %w", err)
 		}
 
-		if _, _, err := runDockerCommand(ctx, "cp", cleanLocalPath, fmt.Sprintf("%s:%s", s.id, containerPath)); err != nil {
+		if _, _, err := runDockerCommandWithStartGrace(ctx, "cp", cleanLocalPath, fmt.Sprintf("%s:%s", s.id, containerPath)); err != nil {
 			_ = os.RemoveAll(shadowRoot)
 			return fmt.Errorf("copy file into terrarium: %w", err)
 		}
@@ -664,6 +664,26 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// runDockerCommandWithStartGrace retries a docker command while the
+// asynchronously started container is still coming up, mirroring Run's exec
+// retry: createDockerTerrarium returns before `docker run` has registered the
+// container, so an immediate exec or cp (CopyIn for spec.Files) can race the
+// start. The command has not run in the not-ready case, so retrying is safe.
+func runDockerCommandWithStartGrace(ctx context.Context, args ...string) (string, string, error) {
+	startDeadline := time.Now().Add(containerStartGrace)
+	for {
+		stdout, stderr, err := runDockerCommand(ctx, args...)
+		if err == nil || ctx.Err() != nil || time.Now().After(startDeadline) || !isContainerNotReady(stderr) {
+			return stdout, stderr, err
+		}
+		select {
+		case <-ctx.Done():
+			return stdout, stderr, err
+		case <-time.After(containerStartPollInterval):
+		}
+	}
 }
 
 func runDockerCommand(ctx context.Context, args ...string) (string, string, error) {
