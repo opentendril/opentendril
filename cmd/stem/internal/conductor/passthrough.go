@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	pathpkg "path"
 	"strings"
 	"time"
@@ -267,6 +268,13 @@ func runPassthroughCommand(ctx context.Context, execution PassthroughExecution, 
 		MemoryLimitMB: 2048,
 		PidsLimit:     512,
 		Timeout:       timeout + time.Minute,
+		// Run as the host uid:gid so files the command writes into the
+		// read-write workspace bind mount are owned by the Stem's user, not
+		// root. A passthrough exists to replace host-side formatters/test runs,
+		// so its edits land back in the operator's checkout; a root-owned tree
+		// would need sudo to clean up. The container user then also matches the
+		// bind mount owner.
+		RunAsUser: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		Mounts: []terrarium.MountSpec{
 			{Source: execution.Workspace, Target: "/app"},
 		},
