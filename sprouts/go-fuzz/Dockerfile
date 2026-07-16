@@ -12,7 +12,7 @@
 # No ENTRYPOINT/tool protocol here: the Conductor starts this container idle
 # (see the CMD below) and execs `go test ...` into it directly via
 # terrarium.Terrarium.Run, exactly like every other terrarium's exec calls.
-FROM golang:1.24-alpine
+FROM golang:1.26-alpine
 
 RUN apk add --no-cache git ca-certificates
 

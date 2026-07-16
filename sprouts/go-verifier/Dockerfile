@@ -12,7 +12,7 @@
 # No ENTRYPOINT / tool protocol here: the Conductor starts this container idle
 # (see the CMD below) and execs the verifier command into it directly via
 # terrarium.Terrarium.Run, exactly like sprouts/go-fuzz does for Macrophage.
-FROM golang:1.24-alpine
+FROM golang:1.26-alpine
 
 # openssh-keygen: the commit-signing tests generate an ephemeral SSH key and
 # verify git signs with it. Without ssh-keygen present they skip, and a skipped
