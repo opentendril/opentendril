@@ -23,6 +23,13 @@ func TestResolveTerrariumProviderName(t *testing.T) {
 		}
 	})
 
+	t.Run("substrate selects firecracker", func(t *testing.T) {
+		got := resolveTerrariumProviderName(&DockerOrchestrator{Substrate: "firecracker"})
+		if got != terrarium.ProviderFirecracker {
+			t.Fatalf("resolveTerrariumProviderName() = %q, want %q", got, terrarium.ProviderFirecracker)
+		}
+	})
+
 	t.Run("defaults to docker", func(t *testing.T) {
 		got := resolveTerrariumProviderName(&DockerOrchestrator{})
 		if got != terrarium.ProviderDocker {

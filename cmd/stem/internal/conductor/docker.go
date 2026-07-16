@@ -612,7 +612,7 @@ func resolveTerrariumProviderName(d *DockerOrchestrator) string {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(d.Substrate)) {
-	case terrarium.ProviderDocker, terrarium.ProviderGVisor, terrarium.ProviderHost:
+	case terrarium.ProviderDocker, terrarium.ProviderGVisor, terrarium.ProviderFirecracker, terrarium.ProviderHost:
 		return strings.ToLower(strings.TrimSpace(d.Substrate))
 	default:
 		return terrarium.ProviderDocker

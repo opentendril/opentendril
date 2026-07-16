@@ -20,8 +20,18 @@ const (
 	EnvAllowHostExecution = "TENDRIL_ALLOW_HOST_EXECUTION"
 )
 
-// NewProvider resolves a terrarium provider from configuration or defaults to Docker.
+// NewProvider resolves a terrarium provider from configuration or defaults to
+// Docker. Every provider is wrapped so Create rejects a TerrariumSpec the
+// provider cannot honor instead of silently dropping the request.
 func NewProvider(ctx context.Context, name string) (TerrariumProvider, error) {
+	provider, err := newBaseProvider(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return newValidatingProvider(provider), nil
+}
+
+func newBaseProvider(ctx context.Context, name string) (TerrariumProvider, error) {
 	switch normalizeProviderName(name) {
 	case "", ProviderDocker:
 		return NewDockerProvider(), nil
