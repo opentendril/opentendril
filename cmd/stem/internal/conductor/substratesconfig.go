@@ -31,6 +31,8 @@ type SubstrateSpec struct {
 	Auth AuthSpec `yaml:"auth,omitempty"`
 	// Sign optionally configures commit signing for this substrate.
 	Sign SignSpec `yaml:"sign,omitempty"`
+	// Identity optionally configures the commit identity for this substrate.
+	Identity IdentitySpec `yaml:"identity,omitempty"`
 	// Checkout controls where a foreign substrate is materialized.
 	Checkout CheckoutSpec `yaml:"checkout,omitempty"`
 	// Profile references a named entry under the top-level `credentials:` map,
@@ -87,6 +89,16 @@ type SignSpec struct {
 	Key string `yaml:"key,omitempty"`
 }
 
+// IdentitySpec configures an optional commit identity (author/committer name
+// and email). Design RFC. When both fields are empty, no identity is applied
+// and the ambient git identity in the terrarium is used.
+type IdentitySpec struct {
+	// Name is the commit author/committer name.
+	Name string `yaml:"name,omitempty"`
+	// Email is the commit author/committer email.
+	Email string `yaml:"email,omitempty"`
+}
+
 // CheckoutSpec controls where a foreign substrate is checked out. Design RFC.
 type CheckoutSpec struct {
 	// Mode is "ephemeral" (default, /tmp), "managed" (persistent OT-owned dir),
@@ -98,8 +110,9 @@ type CheckoutSpec struct {
 // CredentialProfile is a reusable named bundle of auth + signing config that
 // substrates reference by name via SubstrateSpec.Profile. Design RFC.
 type CredentialProfile struct {
-	Auth AuthSpec `yaml:"auth,omitempty"`
-	Sign SignSpec `yaml:"sign,omitempty"`
+	Auth     AuthSpec     `yaml:"auth,omitempty"`
+	Sign     SignSpec     `yaml:"sign,omitempty"`
+	Identity IdentitySpec `yaml:"identity,omitempty"`
 }
 
 type substrateExecutionPlan struct {
@@ -297,6 +310,7 @@ func normalizeSubstratesConfig(config *SubstratesConfig) {
 			}
 			trimAuthSpec(&profile.Auth)
 			trimSignSpec(&profile.Sign)
+			trimIdentitySpec(&profile.Identity)
 			normalizedProfiles[trimmedName] = profile
 		}
 		config.Credentials = normalizedProfiles
@@ -325,6 +339,15 @@ func trimSignSpec(sign *SignSpec) {
 	sign.Key = strings.TrimSpace(sign.Key)
 }
 
+// trimIdentitySpec normalizes an IdentitySpec in place.
+func trimIdentitySpec(identity *IdentitySpec) {
+	if identity == nil {
+		return
+	}
+	identity.Name = strings.TrimSpace(identity.Name)
+	identity.Email = strings.TrimSpace(identity.Email)
+}
+
 func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
 	if config == nil {
 		return
@@ -350,6 +373,7 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	spec.Branch = strings.TrimSpace(spec.Branch)
 	trimAuthSpec(&spec.Auth)
 	trimSignSpec(&spec.Sign)
+	trimIdentitySpec(&spec.Identity)
 	spec.Checkout.Mode = strings.ToLower(strings.TrimSpace(spec.Checkout.Mode))
 	spec.Checkout.Path = strings.TrimSpace(spec.Checkout.Path)
 	spec.Profile = strings.TrimSpace(spec.Profile)

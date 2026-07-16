@@ -76,7 +76,7 @@ func TestCommitTerrariumExecutionSignsCommit(t *testing.T) {
 	}
 
 	status := sproutExecutionStatus{StepID: "s1", Status: "complete", Timestamp: time.Now().UTC().Format(time.RFC3339Nano)}
-	if _, err := commitTerrariumExecution(ctx, repo, repo, "", status, "task", ResolvedSigning{Method: "ssh", Key: keyPath}); err != nil {
+	if _, err := commitTerrariumExecution(ctx, repo, repo, "", status, "task", ResolvedCredential{Sign: ResolvedSigning{Method: "ssh", Key: keyPath}}); err != nil {
 		t.Skipf("signed commit failed (git ssh signing unsupported?): %v", err)
 	}
 

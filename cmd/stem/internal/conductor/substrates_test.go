@@ -323,7 +323,7 @@ substrates:
 		t.Fatalf("collectGitDiff should not run for read-only substrates")
 		return "", nil
 	}
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
 		t.Fatalf("commitTerrariumExecution should not run for read-only substrates")
 		return "", nil
 	}

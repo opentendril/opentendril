@@ -29,6 +29,14 @@ type ResolvedSigning struct {
 	Key    string
 }
 
+// ResolvedIdentity is the resolved commit identity (author/committer name and
+// email). Both fields empty means "unset": no identity config is applied and
+// the ambient git identity in the terrarium attributes the commit.
+type ResolvedIdentity struct {
+	Name  string
+	Email string
+}
+
 // AppCredential is the resolved GitHub App config (method "app"). The Stem mints
 // short-lived installation tokens from it; it carries no long-lived secret.
 type AppCredential struct {
@@ -51,17 +59,19 @@ type ResolvedCredential struct {
 	SSHKeyPath string // expanded key path (method ssh)
 	App        AppCredential
 	Sign       ResolvedSigning
+	Identity   ResolvedIdentity
 	Checkout   CheckoutSpec
 }
 
-// String redacts the token so a credential is safe to log or %v-print.
+// String redacts the token so a credential is safe to log or %v-print. The
+// commit identity is not a secret, so name and email print in full.
 func (c ResolvedCredential) String() string {
 	token := ""
 	if c.TokenValue != "" {
 		token = "***"
 	}
-	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q checkout:%q}",
-		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Checkout.Mode)
+	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q identityName:%q identityEmail:%q checkout:%q}",
+		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Identity.Name, c.Identity.Email, c.Checkout.Mode)
 }
 
 func isZeroAuthSpec(a AuthSpec) bool {
@@ -73,21 +83,26 @@ func isZeroSignSpec(s SignSpec) bool {
 	return strings.TrimSpace(s.Method) == "" && strings.TrimSpace(s.Key) == ""
 }
 
+func isZeroIdentitySpec(i IdentitySpec) bool {
+	return strings.TrimSpace(i.Name) == "" && strings.TrimSpace(i.Email) == ""
+}
+
 // mergeCredentialProfile applies a named credentials profile as the base for a
-// substrate's auth/sign, with any inline (non-zero) spec values taking
+// substrate's auth/sign/identity, with any inline (non-zero) spec values taking
 // precedence. Returns an error if the profile name is unknown.
-func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialProfile) (AuthSpec, SignSpec, error) {
+func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialProfile) (AuthSpec, SignSpec, IdentitySpec, error) {
 	auth := spec.Auth
 	sign := spec.Sign
+	identity := spec.Identity
 
 	profileName := strings.TrimSpace(spec.Profile)
 	if profileName == "" {
-		return auth, sign, nil
+		return auth, sign, identity, nil
 	}
 
 	profile, ok := profiles[profileName]
 	if !ok {
-		return auth, sign, fmt.Errorf("references unknown credentials profile %q", profileName)
+		return auth, sign, identity, fmt.Errorf("references unknown credentials profile %q", profileName)
 	}
 	if isZeroAuthSpec(auth) {
 		auth = profile.Auth
@@ -95,14 +110,17 @@ func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialPr
 	if isZeroSignSpec(sign) {
 		sign = profile.Sign
 	}
-	return auth, sign, nil
+	if isZeroIdentitySpec(identity) {
+		identity = profile.Identity
+	}
+	return auth, sign, identity, nil
 }
 
 // resolveSubstrateCredential turns a substrate spec (+ credential profiles) into
 // a typed, resolved credential. It preserves the GITHUB_TOKEN /
 // GITHUB_PERSONAL_ACCESS_TOKEN fallback for PAT auth (see resolveAuthTokenValue).
 func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]CredentialProfile) (ResolvedCredential, error) {
-	auth, sign, err := mergeCredentialProfile(spec, profiles)
+	auth, sign, identity, err := mergeCredentialProfile(spec, profiles)
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
@@ -117,6 +135,7 @@ func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]Credenti
 		Method:   method,
 		Checkout: spec.Checkout,
 		Sign:     ResolvedSigning{Method: strings.ToLower(strings.TrimSpace(sign.Method)), Key: strings.TrimSpace(sign.Key)},
+		Identity: ResolvedIdentity{Name: strings.TrimSpace(identity.Name), Email: strings.TrimSpace(identity.Email)},
 	}
 
 	switch method {
@@ -304,4 +323,23 @@ func signingGitConfigArgs(sign ResolvedSigning) []string {
 		"-c", "user.signingkey=" + expandHome(key),
 		"-c", "commit.gpgsign=true",
 	}
+}
+
+// identityGitConfigArgs returns the `-c ...` git config flags that attribute a
+// commit (both author and committer) to the substrate's configured identity,
+// or nil when no identity is configured. When only one of name/email is set,
+// only that field is emitted and git falls back to the ambient value for the
+// other; when both are empty, nothing is emitted and the ambient git identity
+// attributes the commit exactly as before.
+func identityGitConfigArgs(identity ResolvedIdentity) []string {
+	name := strings.TrimSpace(identity.Name)
+	email := strings.TrimSpace(identity.Email)
+	var args []string
+	if name != "" {
+		args = append(args, "-c", "user.name="+name)
+	}
+	if email != "" {
+		args = append(args, "-c", "user.email="+email)
+	}
+	return args
 }

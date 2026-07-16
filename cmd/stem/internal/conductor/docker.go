@@ -374,7 +374,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		executionStatus.Status = "complete"
 	}
 
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential.Sign)
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
 	if commitErr != nil {
 		if runErr != nil {
 			return "", errors.Join(runErr, commitErr)
@@ -1164,7 +1164,7 @@ func shouldIgnoreStagePath(path string) bool {
 	return false
 }
 
-func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, sign ResolvedSigning) (string, error) {
+func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
 	stagePaths := append([]string{}, executionStatus.FilesModified...)
 
 	if strings.TrimSpace(statusPath) != "" {
@@ -1203,11 +1203,11 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 	}
 
 	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
-	// Signing config (`-c ...`) must precede the `commit` subcommand.
-	signArgs := signingGitConfigArgs(sign)
-	commitArgs := append(append([]string{}, signArgs...), "commit", "-m", commitMessage)
+	// Signing and identity config (`-c ...`) must precede the `commit` subcommand.
+	configArgs := append(signingGitConfigArgs(credential.Sign), identityGitConfigArgs(credential.Identity)...)
+	commitArgs := append(append([]string{}, configArgs...), "commit", "-m", commitMessage)
 	if len(uniqueStagePaths) == 0 {
-		commitArgs = append(append([]string{}, signArgs...), "commit", "--allow-empty", "-m", commitMessage)
+		commitArgs = append(append([]string{}, configArgs...), "commit", "--allow-empty", "-m", commitMessage)
 	}
 
 	if _, err := runGitCommand(ctx, mountPath, commitArgs...); err != nil {

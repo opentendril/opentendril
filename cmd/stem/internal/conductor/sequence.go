@@ -1818,11 +1818,11 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		executionStatus.Status = sequenceStatusComplete
 	}
 
-	var seqSign ResolvedSigning
+	var sequenceCredential ResolvedCredential
 	if sequencePlan != nil {
-		seqSign = sequencePlan.credential.Sign
+		sequenceCredential = sequencePlan.credential
 	}
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt, seqSign)
+	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
 	if commitErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, commitErr)
