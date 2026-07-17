@@ -1030,3 +1030,40 @@ func testProviderCopyInCopyOutAndStop(t *testing.T, provider TerrariumProvider) 
 		}
 	}
 }
+
+// A Run in flight (or issued) after the instance watchdog has killed the
+// container must report the timeout, not an opaque pipe error: the sprout path
+// classifies its outcome from CommandResult.TimedOut, and before this guard a
+// watchdog-killed sprout could still report success.
+func TestDockerTerrariumInteractiveRunAfterWatchdogReportsTimedOut(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	provider := NewDockerProvider()
+	terrariumInstance, err := provider.Create(context.Background(), TerrariumSpec{
+		Image:     "opentendril-go:latest",
+		Timeout:   50 * time.Millisecond,
+		PidsLimit: 64,
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = terrariumInstance.Stop(context.Background())
+	})
+
+	waitForLogContent(t, fake.logPath, "rm opentendril-terrarium-")
+
+	result, err := terrariumInstance.Run(context.Background(), CommandSpec{
+		Stdin: []byte(`{"tool":"listAvailableTools"}`),
+	})
+	if err != nil {
+		t.Fatalf("Run after watchdog kill returned error: %v (want timed-out result)", err)
+	}
+	if !result.TimedOut {
+		t.Fatalf("TimedOut = false, want true after watchdog kill")
+	}
+	if result.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", result.ExitCode)
+	}
+}

@@ -199,19 +199,17 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
+		// Lifecycle events (sprout-emerged / sprout-matured / sprout-withered)
+		// are published by the conductor, where the run actually happens, and
+		// reach this daemon's bus through the sprout execution port wiring.
+		// Publishing them here as well would emit every terminal outcome
+		// twice, so this adapter only maintains its run records.
 		result, err := h.core.SproutRun(bgCtx, req)
 		sid := result.SessionID
 		if sid == "" {
 			sid = sessionID
 		}
 		if err != nil {
-			h.bus.Publish(eventbus.Event{
-				Type:      eventbus.EventSproutWithered,
-				SessionID: sid,
-				Source:    "receptors",
-				Timestamp: time.Now().UTC(),
-				Data:      map[string]any{"stepId": stepID, "error": err.Error()},
-			})
 			if h.history != nil {
 				_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
 					RunID: stepID, SessionID: sid, StepID: stepID,
@@ -220,13 +218,6 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		h.bus.Publish(eventbus.Event{
-			Type:      eventbus.EventSproutMatured,
-			SessionID: sid,
-			Source:    "receptors",
-			Timestamp: time.Now().UTC(),
-			Data:      map[string]any{"stepId": stepID},
-		})
 		if h.history != nil {
 			_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
 				RunID: stepID, SessionID: sid, StepID: stepID,

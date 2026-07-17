@@ -343,8 +343,11 @@ substrates:
 	if err != nil {
 		t.Fatalf("RunSprout failed: %v", err)
 	}
-	if output != "read-only result" {
-		t.Fatalf("RunSprout output = %q, want read-only result", output)
+	if output.Output != "read-only result" {
+		t.Fatalf("RunSprout output = %q, want read-only result", output.Output)
+	}
+	if output.Outcome != SproutOutcomeComplete {
+		t.Fatalf("RunSprout outcome = %q, want %q (read-only runs cannot measure changes)", output.Outcome, SproutOutcomeComplete)
 	}
 
 	if !containsString(capturedExtraEnv, "TENDRIL_READONLY=true") {

@@ -32,9 +32,9 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 	}
 	coreSvc := core.NewService(sessions).
 		WithSprout(core.SproutOperations{
-			Run: func(ctx context.Context, spec core.SproutSpec) (string, error) {
+			Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 				executed.Add(1)
-				return "grown", nil
+				return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
 			},
 		}).
 		WithPassthrough(core.PassthroughOperations{

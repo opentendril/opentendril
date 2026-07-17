@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -71,7 +72,11 @@ func runSproutCmd(ctx context.Context, args []string) {
 
 	result, err := svc.Invoke(ctx, command.capability, input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Sprout run failed: %v\n", err)
+		if errors.Is(err, conductor.ErrSproutTimedOut) {
+			fmt.Fprintf(os.Stderr, "⏱️ Sprout run timed out before finishing: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Sprout run failed: %v\n", err)
+		}
 		cleanup()
 		os.Exit(1)
 	}
@@ -80,7 +85,29 @@ func runSproutCmd(ctx context.Context, args []string) {
 	if strings.TrimSpace(runResult.Output) != "" {
 		fmt.Fprintln(os.Stdout, runResult.Output)
 	}
-	fmt.Fprintf(os.Stderr, "🌱 Sprout %s matured (session %s)\n", runResult.StepID, runResult.SessionID)
+	fmt.Fprintln(os.Stderr, sproutRunFooter(runResult))
+}
+
+// sproutRunFooter renders the command line's closing verdict for a finished
+// sprout run. It reports the actual outcome — a run that changed nothing must
+// say so instead of being dressed as "matured", which is how a run that never
+// touched its target file once reported success.
+func sproutRunFooter(result core.SproutRunResult) string {
+	switch result.Outcome {
+	case conductor.SproutOutcomeNoChanges:
+		return fmt.Sprintf("🌾 Sprout %s finished without changing any files (session %s). This can be legitimate for investigate-and-report tasks; if files were expected to change, the task did not happen.", result.StepID, result.SessionID)
+	case conductor.SproutOutcomeSkipped:
+		return fmt.Sprintf("⏭️ Sprout %s skipped: this step already completed in a previous run (session %s)", result.StepID, result.SessionID)
+	case conductor.SproutOutcomeComplete:
+		if len(result.FilesModified) > 0 {
+			return fmt.Sprintf("🌱 Sprout %s matured: %d file(s) changed (session %s)", result.StepID, len(result.FilesModified), result.SessionID)
+		}
+		return fmt.Sprintf("🌱 Sprout %s matured (session %s)", result.StepID, result.SessionID)
+	default:
+		// An unknown outcome is reported as-is rather than upgraded to a
+		// success claim.
+		return fmt.Sprintf("🌱 Sprout %s finished with outcome %q (session %s)", result.StepID, result.Outcome, result.SessionID)
+	}
 }
 
 // buildSproutCore constructs a Core with the sprout execution port wired and
@@ -105,11 +132,11 @@ func buildSproutCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return core.NewService(manager).WithSprout(sproutOperations(history)), cleanup, nil
+	return core.NewService(manager).WithSprout(sproutOperations(history, nil)), cleanup, nil
 }
 
 // sproutOperations binds the sprout execution port to the conductor's terrarium
-// orchestrator and the history store — this wiring lives in the adapter layer
+// orchestrator, an event bus, and the history store — this wiring lives in the adapter layer
 // precisely so the Core never imports the conductor or historydb (see
 // internal/core/boundary_test.go). It owns exactly what the MCP adapter used
 // to do inline after translation: named-substrate resolution, status-path
@@ -175,33 +202,36 @@ func resolveSproutSubstrateWiring(spec core.SproutSpec, config *conductor.Substr
 	return wiring
 }
 
-func sproutOperations(history *historydb.Store) core.SproutOperations {
+func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
 		log.Printf("[Sprout] Failed to load substrates config: %v", err)
 	}
 
 	return core.SproutOperations{
-		Run: func(ctx context.Context, spec core.SproutSpec) (string, error) {
+		Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 			wiring := resolveSproutSubstrateWiring(spec, substratesConfig)
 
-			// A command-line sprout gets its own bus. The agent streams only
-			// when it has one to publish to, so without this the run emitted
-			// nothing for its whole duration — no tokens, no reasoning, no
-			// lifecycle — and a wall clock was the only thing left to judge it
-			// by. The daemon has always had a bus; this path never did.
+			// A sprout run always has a bus. The agent streams only when it
+			// has one to publish to, so without it the run emits nothing for
+			// its whole duration — no tokens, no reasoning, no lifecycle — and
+			// a wall clock is the only thing left to judge it by.
 			//
-			// The history store is a sink, so the events outlive the process
-			// exactly as they do under the daemon. Without it the bus keeps its
-			// events in memory and Shutdown throws them away moments later,
-			// which is a run that is observable in principle and unreadable in
-			// practice: the whole point is to be able to ask afterwards why a
-			// run did what it did.
-			bus := eventbus.New()
-			if history != nil {
-				bus.AttachSink(history, 0)
+			// A surface that owns a live bus (the daemon) passes it in, so the
+			// run's events reach live subscribers (/ws, telemetry) as well as
+			// the history sink already attached to it. A one-shot surface (the
+			// command line, the MCP stdio server) passes nil and gets a
+			// per-run bus with the history store attached as a sink, so the
+			// events outlive the process and the run can be explained
+			// afterwards.
+			bus := ambientBus
+			if bus == nil {
+				bus = eventbus.New()
+				if history != nil {
+					bus.AttachSink(history, 0)
+				}
+				defer bus.Shutdown()
 			}
-			defer bus.Shutdown()
 
 			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
 			orch := &conductor.DockerOrchestrator{
@@ -214,6 +244,7 @@ func sproutOperations(history *historydb.Store) core.SproutOperations {
 				Model:           spec.Model,
 				Genotype:        spec.Genotype,
 				EventBus:        bus,
+				SessionID:       spec.SessionID,
 			}
 
 			run := historydb.SproutRun{
@@ -237,18 +268,22 @@ func sproutOperations(history *historydb.Store) core.SproutOperations {
 			}
 			recordRun()
 
-			output, err := orch.RunSprout(ctx, spec.Transcript)
+			sproutReport, err := orch.RunSprout(ctx, spec.Transcript)
 			run.FinishedAt = time.Now().UTC()
 			if err != nil {
 				run.Status = "withered"
 				run.Error = err.Error()
 			} else {
 				run.Status = "matured"
-				run.Output = output
+				run.Output = sproutReport.Output
 			}
 			recordRun()
 
-			return output, err
+			return core.SproutRunReport{
+				Output:        sproutReport.Output,
+				Outcome:       sproutReport.Outcome,
+				FilesModified: sproutReport.FilesModified,
+			}, err
 		},
 	}
 }
