@@ -191,10 +191,16 @@ func sproutOperations(history *historydb.Store) core.SproutOperations {
 			// lifecycle — and a wall clock was the only thing left to judge it
 			// by. The daemon has always had a bus; this path never did.
 			//
-			// Nothing subscribes here, and it is still worth attaching: the bus
-			// retains its own history, so the run becomes observable rather
-			// than merely quiet.
+			// The history store is a sink, so the events outlive the process
+			// exactly as they do under the daemon. Without it the bus keeps its
+			// events in memory and Shutdown throws them away moments later,
+			// which is a run that is observable in principle and unreadable in
+			// practice: the whole point is to be able to ask afterwards why a
+			// run did what it did.
 			bus := eventbus.New()
+			if history != nil {
+				bus.AttachSink(history, 0)
+			}
 			defer bus.Shutdown()
 
 			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
