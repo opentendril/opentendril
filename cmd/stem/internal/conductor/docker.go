@@ -311,7 +311,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, mountPath)
 	if memErr == nil && memoryMapMarkdown != "" {
-		memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", "memorymap.md")
+		memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", memoryMapFile)
 		_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
 	}
 
@@ -1000,6 +1000,9 @@ func runGitCommand(ctx context.Context, dir string, args ...string) (string, err
 
 // runGitCommandWithEnv runs git with additional environment entries appended to
 // the process environment (e.g. GIT_SSH_COMMAND for SSH-authenticated pushes).
+// The output is whitespace-trimmed; parsers that need byte-exact output (for
+// example NUL-separated porcelain, whose first status byte may itself be a
+// space) must use runGitCommandRawOutput instead.
 func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1016,6 +1019,25 @@ func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, ar
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+// runGitCommandRawOutput runs git and returns the output byte-for-byte. Needed
+// wherever the format is positional: trimming a porcelain status listing eats
+// the leading space of an unstaged-modification entry and every fixed-offset
+// slice after it lands one byte into the path.
+func runGitCommandRawOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmdArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return string(output), nil
 }
 
 func stashHostWorkspace(ctx context.Context, root, runID string) (bool, error) {
@@ -1114,7 +1136,13 @@ func collectStageableFiles(ctx context.Context, mountPath string, excludedPaths 
 	// the directory is staged wholesale. That is how OpenTendril's own index
 	// key reached a commit: the filter was asked about a directory it did not
 	// recognise rather than the files inside it.
-	output, err := runGitCommand(ctx, mountPath, "status", "--porcelain", "-uall")
+	// -z separates entries with NUL bytes and never quotes paths. The
+	// line-oriented format cannot be sliced reliably here: an entry for an
+	// unstaged modification starts with a space (" M path"), and the trimmed
+	// command output plus per-line trimming shifted every fixed offset one
+	// byte into the path — staging then failed on names like
+	// "ubstrates.yaml.example".
+	output, err := runGitCommandRawOutput(ctx, mountPath, "status", "--porcelain", "-uall", "-z")
 	if err != nil {
 		return nil, err
 	}
@@ -1129,34 +1157,36 @@ func collectStageableFiles(ctx context.Context, mountPath string, excludedPaths 
 	}
 
 	stageable := make(map[string]struct{})
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || len(line) < 3 {
+	include := func(path string) {
+		normalized := filepath.ToSlash(path)
+		if normalized == "" {
+			return
+		}
+		if _, ok := excluded[normalized]; ok {
+			return
+		}
+		if shouldIgnoreStagePath(normalized) {
+			return
+		}
+		stageable[normalized] = struct{}{}
+	}
+
+	entries := strings.Split(output, "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 4 {
 			continue
 		}
-
-		pathPart := strings.TrimSpace(line[3:])
-		if pathPart == "" {
-			continue
-		}
-
-		paths := []string{pathPart}
-		if strings.Contains(pathPart, " -> ") {
-			paths = strings.Split(pathPart, " -> ")
-		}
-
-		for _, path := range paths {
-			normalized := filepath.ToSlash(strings.TrimSpace(path))
-			if normalized == "" {
-				continue
+		status := entry[:2]
+		include(entry[3:])
+		// A rename or copy carries the original path as its own following
+		// NUL-separated field, without a status prefix. It names a deletion
+		// that must be staged too.
+		if status[0] == 'R' || status[0] == 'C' {
+			i++
+			if i < len(entries) {
+				include(entries[i])
 			}
-			if _, ok := excluded[normalized]; ok {
-				continue
-			}
-			if shouldIgnoreStagePath(normalized) {
-				continue
-			}
-			stageable[normalized] = struct{}{}
 		}
 	}
 

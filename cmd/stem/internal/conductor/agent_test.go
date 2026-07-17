@@ -163,6 +163,40 @@ func TestParseModelResponseFinalText(t *testing.T) {
 	}
 }
 
+func TestParseModelResponseRepairsToolCallMissingClosingBraces(t *testing.T) {
+	// Shape captured from a real run: the model's context window filled while
+	// it was emitting the call, cutting off the final closing brace.
+	truncated := `{"tool":"writeFile","arguments":{"path":"substrates.yaml.example","content":"# identity example\n"}`
+	calls, isToolCall, final, _, err := parseModelResponse(truncated)
+	if err != nil {
+		t.Fatalf("parseModelResponse returned error: %v", err)
+	}
+	if !isToolCall || len(calls) != 1 {
+		t.Fatalf("expected a repaired tool call, got isToolCall=%v final=%q", isToolCall, final)
+	}
+	if calls[0].Tool != "writeFile" {
+		t.Fatalf("expected writeFile, got %q", calls[0].Tool)
+	}
+	if got := calls[0].Arguments["content"]; got != "# identity example\n" {
+		t.Fatalf("repaired arguments must be intact, got %q", got)
+	}
+}
+
+func TestParseModelResponseDoesNotRepairUnterminatedString(t *testing.T) {
+	// A string cut off mid-value cannot be recovered without inventing
+	// content, so it must fall through instead of writing a truncated file.
+	truncated := `{"tool":"writeFile","arguments":{"path":"a.md","content":"partial conte`
+	calls, isToolCall, _, _, err := parseModelResponse(truncated)
+	if err != nil {
+		t.Fatalf("parseModelResponse returned error: %v", err)
+	}
+	if isToolCall && len(calls) > 0 && calls[0].Tool == "writeFile" {
+		if _, ok := calls[0].Arguments["content"]; ok {
+			t.Fatalf("unterminated string must not be repaired into a write, got %+v", calls[0])
+		}
+	}
+}
+
 func TestSystemGenotypePriority(t *testing.T) {
 	workspace := t.TempDir()
 	genotypeName := "test-priority"

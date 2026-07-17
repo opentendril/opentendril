@@ -24,6 +24,7 @@ const (
 	rhizomeIndexKeyFile   = "rhizome.key"
 	rhizomeIndexDatabase  = "rhizome.db"
 	repositoryMapFile     = "repomap.md"
+	memoryMapFile         = "memorymap.md"
 )
 
 // generatedRuntimeArtifacts lists, relative to the substrate root, everything

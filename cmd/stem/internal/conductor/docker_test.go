@@ -126,6 +126,67 @@ func TestBuildSproutCommitMessage(t *testing.T) {
 	}
 }
 
+func TestCollectStageableFilesKeepsFullPathOfUnstagedModification(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v (output: %s)", args, err, strings.TrimSpace(string(output)))
+		}
+	}
+
+	trackedPath := filepath.Join(repo, "substrates.yaml.example")
+	if err := os.WriteFile(trackedPath, []byte("original\n"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	renamedFromPath := filepath.Join(repo, "old-name.txt")
+	if err := os.WriteFile(renamedFromPath, []byte("keep\n"), 0o644); err != nil {
+		t.Fatalf("write rename source: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "add", "-A"); err != nil {
+		t.Fatalf("stage seed: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "commit", "-m", "seed"); err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+
+	// An unstaged modification lists as " M path" — the leading status byte
+	// is a space, which output trimming used to eat before a fixed-offset
+	// slice cut into the path itself.
+	if err := os.WriteFile(trackedPath, []byte("modified\n"), 0o644); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "mv", "old-name.txt", "new-name.txt"); err != nil {
+		t.Fatalf("stage rename: %v", err)
+	}
+
+	files, err := collectStageableFiles(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("collectStageableFiles: %v", err)
+	}
+
+	got := make(map[string]bool, len(files))
+	for _, file := range files {
+		got[file] = true
+	}
+	for _, want := range []string{"substrates.yaml.example", "untracked.txt", "new-name.txt", "old-name.txt"} {
+		if !got[want] {
+			t.Fatalf("expected %q in stageable files, got %v", want, files)
+		}
+	}
+	if got["ubstrates.yaml.example"] {
+		t.Fatalf("stageable files contain a path with its first byte eaten: %v", files)
+	}
+}
+
 func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 	repo := t.TempDir()
 

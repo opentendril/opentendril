@@ -445,12 +445,17 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 	candidate := stripCodeFences(trimmed)
 	var decoded modelResponse
 	if err := json.Unmarshal([]byte(candidate), &decoded); err != nil {
-		// FALLBACK: If JSON parsing fails, attempt to extract markdown code blocks as synthetic ToolCalls.
-		syntheticCalls := extractMarkdownSyntheticCalls(content)
-		if len(syntheticCalls) > 0 {
-			return syntheticCalls, true, "", nil, nil
+		repaired, ok := repairToolCallMissingBraces(candidate)
+		if ok {
+			decoded = repaired
+		} else {
+			// FALLBACK: If JSON parsing fails, attempt to extract markdown code blocks as synthetic ToolCalls.
+			syntheticCalls := extractMarkdownSyntheticCalls(content)
+			if len(syntheticCalls) > 0 {
+				return syntheticCalls, true, "", nil, nil
+			}
+			return nil, false, trimmed, nil, nil
 		}
-		return nil, false, trimmed, nil, nil
 	}
 
 	if strings.TrimSpace(decoded.Tool) != "" {
@@ -491,6 +496,31 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 	}
 
 	return nil, false, trimmed, nil, nil
+}
+
+// repairToolCallMissingBraces recovers a tool call whose trailing closing
+// braces were cut off. A local model whose context window fills mid-generation
+// stops wherever it stands; when everything but the final braces made it out,
+// the call is unambiguous, and dropping it would end the run with a false
+// "nothing changed". Only braces are appended — never a quote — so a string
+// cut off mid-value can never be silently completed with truncated content.
+func repairToolCallMissingBraces(candidate string) (modelResponse, bool) {
+	if !strings.HasPrefix(candidate, "{") {
+		return modelResponse{}, false
+	}
+	repaired := candidate
+	for range 4 {
+		repaired += "}"
+		var decoded modelResponse
+		if err := json.Unmarshal([]byte(repaired), &decoded); err != nil {
+			continue
+		}
+		if strings.TrimSpace(decoded.Tool) != "" {
+			return decoded, true
+		}
+		return modelResponse{}, false
+	}
+	return modelResponse{}, false
 }
 
 var markdownBlockRegex = regexp.MustCompile("(?s)```[a-zA-Z0-9]*\n(.*?)\n```")
@@ -555,6 +585,62 @@ func renderToolObservation(toolName string, response ToolResponse) string {
 	return fmt.Sprintf("Tool result for %s:\n%s", toolName, string(pretty))
 }
 
+// Byte budgets for genome context injected into the system prompt.
+//
+// The genome directory can hold files far larger than a local model's context
+// window — the generated repository map alone reaches hundreds of kilobytes on
+// a real repository, and the epigenetic learnings file grows without bound.
+// Local inference servers silently truncate an oversized prompt from the
+// front, which deletes the agent rules and the tool catalog and leaves only
+// the genome tail: the model then answers in prose instead of calling tools,
+// and the run ends with nothing done. Measured against a 4096-token window
+// (the local serving default), assembled prompts up to roughly eleven
+// kilobytes drive tools correctly on every attempt and prompts past roughly
+// seventeen kilobytes never do. The fixed rules, workspace, and tool catalog
+// cost about two kilobytes, so an eight-kilobyte genome budget keeps the
+// assembled prompt inside the smallest window seen in practice while leaving
+// room for the task and the first tool observations. Files stay complete on
+// disk; each truncation marker tells the agent where to readFile the rest.
+const (
+	genomePerFileByteBudget = 4 * 1024
+	genomeTotalByteBudget   = 8 * 1024
+	// Below this many remaining bytes a fragment carries no signal, so the
+	// file is omitted (with a pointer to its path) rather than truncated.
+	genomeMinimumFragmentBytes = 256
+)
+
+// isGeneratedGenomeFile reports whether a genome file is a machine-generated
+// map OpenTendril writes for itself rather than guidance curated for the
+// agent. Generated maps are never inlined into the system prompt — only named
+// with their on-disk path. Inlining even a small fragment of the repository
+// map measurably degraded tool use on a weaker local model (2 of 3 and then 0
+// of 2 first turns became prose documents instead of tool calls, against 3 of
+// 3 tool calls with curated files alone): a symbol dump right before the
+// model's turn primes document-writing while carrying almost no task signal.
+// The full map stays on disk where the agent can read exactly the part it
+// needs.
+func isGeneratedGenomeFile(name string) bool {
+	switch strings.ToLower(name) {
+	case repositoryMapFile, memoryMapFile:
+		return true
+	}
+	return false
+}
+
+// truncateGenomeContent cuts content to fit budget on a line boundary and
+// points the agent at the on-disk file, which remains complete and readable
+// through the readFile tool.
+func truncateGenomeContent(name string, content string, budget int) string {
+	if len(content) <= budget {
+		return content
+	}
+	cut := content[:budget]
+	if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
+		cut = cut[:idx]
+	}
+	return cut + "\n[truncated — read .tendril/genome/" + name + " for the full content]"
+}
+
 func loadGenomeContext(workspace string) (string, error) {
 	genomeDir := filepath.Join(workspace, ".tendril", "genome")
 	entries, err := os.ReadDir(genomeDir)
@@ -592,15 +678,39 @@ func loadGenomeContext(workspace string) (string, error) {
 	}
 
 	var builder strings.Builder
-	for idx, file := range files {
-		if idx > 0 {
+	remaining := genomeTotalByteBudget
+	var onDiskOnly []string
+	for _, file := range files {
+		if isGeneratedGenomeFile(file.name) {
+			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
+			continue
+		}
+		content := strings.TrimSpace(file.content)
+		if remaining < genomeMinimumFragmentBytes {
+			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
+			continue
+		}
+		budget := genomePerFileByteBudget
+		if remaining < budget {
+			budget = remaining
+		}
+		content = truncateGenomeContent(file.name, content, budget)
+		if builder.Len() > 0 {
 			builder.WriteString("\n\n")
 		}
 		builder.WriteString("### ")
 		builder.WriteString(file.name)
 		builder.WriteString("\n")
-		builder.WriteString(strings.TrimSpace(file.content))
+		builder.WriteString(content)
 		builder.WriteString("\n")
+		remaining -= len(content)
+	}
+	if len(onDiskOnly) > 0 {
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("Additional genome files on disk (use readFile if needed): ")
+		builder.WriteString(strings.Join(onDiskOnly, ", "))
 	}
 
 	return strings.TrimSpace(builder.String()), nil
