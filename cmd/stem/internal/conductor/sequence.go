@@ -1352,6 +1352,11 @@ type sproutExecutionResult struct {
 	Response   string
 	CommitHash string
 	ImageName  string
+	// Outcome is the SproutOutcome* verdict on what the run actually did;
+	// FilesModified is the evidence behind it (nil when unmeasurable, e.g. a
+	// non-git workspace).
+	Outcome       string
+	FilesModified []string
 }
 
 type phenotypeRunResult struct {
@@ -1403,6 +1408,11 @@ func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step 
 		Provider:        provider,
 		Model:           model,
 		BaseURL:         baseURL,
+		// The sequence bus, not nil: the agent streams only when it has a bus
+		// to publish to, and the run's lifecycle events travel the same way. A
+		// nil bus here made every plain sequence sprout step silent for its
+		// whole duration.
+		EventBus: bus,
 	}
 	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
 	if provider != "" {
@@ -1607,7 +1617,7 @@ func isMeristemStep(stepID string) bool {
 	return stepID == "meristem" || strings.HasPrefix(stepID, "meristem-")
 }
 
-func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt string) (string, error) {
+func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt string) (response string, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1617,6 +1627,28 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		stepID = newSproutExecutionID("step")
 		orch.StepID = stepID
 	}
+
+	// One terminal lifecycle event per sequence sprout, published from the
+	// place the run happens — the same contract RunSprout keeps. Parallel
+	// sub-sprouts call runSequenceSproutAtPathFn directly and report through
+	// their own status channel, so publishing here cannot double-emit them.
+	var executionOutcome string
+	var executionFiles []string
+	defer func() {
+		outcome := executionOutcome
+		// A failure anywhere (including commit or merge-back after a clean
+		// agent turn) must reclassify: the run's provisional verdict cannot
+		// stand once its results failed to land.
+		if err != nil || outcome == "" {
+			outcome = classifySproutOutcome(err, executionFiles, false)
+		}
+		reason := ""
+		if err != nil {
+			reason = err.Error()
+		}
+		publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, executionFiles, reason)
+	}()
+	publishSproutEmerged(orch.EventBus, stepID, orch.SessionID, orch.Substrate)
 
 	sourcePath := orch.Substrate
 
@@ -1656,6 +1688,8 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	}
 
 	executionResult, err := runSequenceSproutAtPathFn(ctx, orch, taskPrompt, sourcePath, mountPath)
+	executionOutcome = executionResult.Outcome
+	executionFiles = executionResult.FilesModified
 	if err != nil {
 		if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
 			return executionResult.CommitHash, err
@@ -1814,13 +1848,13 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true),
 	}
 	if runErr != nil {
-		executionStatus.Status = sequenceStatusFailed
 		executionStatus.Error = runErr.Error()
-	} else {
-		executionStatus.Status = sequenceStatusComplete
 	}
+	result.Outcome = executionStatus.Status
+	result.FilesModified = modifiedFiles
 
 	var sequenceCredential ResolvedCredential
 	if sequencePlan != nil {

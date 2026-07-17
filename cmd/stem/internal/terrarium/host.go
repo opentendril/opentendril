@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -141,6 +142,11 @@ type hostTerrarium struct {
 	waitOnce       sync.Once
 	waitErr        error
 	watchdogCancel context.CancelFunc
+
+	// timedOut records that the instance-level watchdog killed the process, so
+	// a Run in flight when the watchdog fires reports the timeout instead of an
+	// opaque pipe error. Mirrors dockerTerrarium.timedOut.
+	timedOut atomic.Bool
 }
 
 func (s *hostTerrarium) ID() string {
@@ -221,6 +227,9 @@ func (s *hostTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandResul
 		}
 
 		if _, err := s.stdin.Write(payload); err != nil {
+			if s.timedOut.Load() {
+				return s.timedOutResult(startedAt), nil
+			}
 			return CommandResult{}, fmt.Errorf("write terrarium stdin: %w", err)
 		}
 
@@ -266,6 +275,11 @@ func (s *hostTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandResul
 			Duration:    completedAt.Sub(startedAt),
 		}
 		if err != nil {
+			// A read failure after the watchdog killed the process is the
+			// timeout, not a protocol error: the EOF is the kill arriving.
+			if s.timedOut.Load() {
+				return s.timedOutResult(startedAt), nil
+			}
 			return result, err
 		}
 
@@ -309,7 +323,7 @@ func (s *hostTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandResul
 	}
 
 	if runErr != nil {
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) || s.timedOut.Load() {
 			result.ExitCode = -1
 			result.TimedOut = true
 			return result, nil
@@ -417,9 +431,25 @@ func (s *hostTerrarium) watchdog(ctx context.Context, timeout time.Duration) {
 }
 
 func (s *hostTerrarium) stopAfterTimeout() {
+	// The flag must be visible before the kill lands, so a blocked interactive
+	// read that observes the resulting EOF can already tell it was a timeout.
+	s.timedOut.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = s.Stop(ctx)
+}
+
+// timedOutResult is the canonical shape of a run cut off by the watchdog,
+// matching what the per-call deadline path reports.
+func (s *hostTerrarium) timedOutResult(startedAt time.Time) CommandResult {
+	completedAt := time.Now().UTC()
+	return CommandResult{
+		ExitCode:    -1,
+		TimedOut:    true,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		Duration:    completedAt.Sub(startedAt),
+	}
 }
 
 func (s *hostTerrarium) readResponseLine() ([]byte, error) {

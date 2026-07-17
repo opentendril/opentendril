@@ -201,7 +201,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
 		WithMesh(meshOperations()).
 		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
-		WithSprout(sproutOperations(history)).
+		WithSprout(sproutOperations(history, bus)).
 		WithPassthrough(passthroughOperations()).
 		WithGit(gitOperations())
 
@@ -661,10 +661,13 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			orch := conductor.NewDockerOrchestrator()
 			orch.StepID = stepID
 			orch.EventBus = bus
+			orch.SessionID = sess.ID
 			orch.Provider = sess.Preferences.Provider
 			orch.Model = sess.Preferences.Model
 			orch.Genotype = sess.Preferences.Genotype
-			output, err = orch.RunSprout(r.Context(), taskPrompt)
+			var sproutReport conductor.SproutRunReport
+			sproutReport, err = orch.RunSprout(r.Context(), taskPrompt)
+			output = sproutReport.Output
 		}
 
 		// Emit stream end event

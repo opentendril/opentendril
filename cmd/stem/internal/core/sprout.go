@@ -69,16 +69,35 @@ type SproutSpec struct {
 type SproutRunResult struct {
 	StepID    string `json:"stepId"`
 	SessionID string `json:"sessionId,omitempty"`
-	Status    string `json:"status"`
-	Output    string `json:"output,omitempty"`
+	// Status is the run lifecycle verdict every surface has always seen:
+	// matured (the run finished) or withered (it errored). Outcome refines it.
+	Status string `json:"status"`
+	Output string `json:"output,omitempty"`
+	// Outcome is the execution port's honest verdict on the work itself:
+	// complete, no-changes, skipped, failed, or timed-out. A matured run that
+	// changed nothing reports no-changes here rather than being dressed as
+	// plain completion.
+	Outcome string `json:"outcome,omitempty"`
+	// FilesModified is the evidence behind Outcome, when the workspace could
+	// measure it.
+	FilesModified []string `json:"filesModified,omitempty"`
+}
+
+// SproutRunReport is what the execution port says a finished run actually
+// did. It mirrors the conductor's report without importing it (the Core is
+// structurally forbidden from importing the conductor — see boundary_test.go).
+type SproutRunReport struct {
+	Output        string
+	Outcome       string
+	FilesModified []string
 }
 
 // SproutOperations is the injection port for sprout execution. Run may be nil, in
 // which case the capability reports that it is not wired rather than acting.
 type SproutOperations struct {
-	// Run executes the spec inside a terrarium and returns the Tendril's
-	// output. Implementations own substrate resolution and run recording.
-	Run func(ctx context.Context, spec SproutSpec) (string, error)
+	// Run executes the spec inside a terrarium and reports what the run
+	// actually did. Implementations own substrate resolution and run recording.
+	Run func(ctx context.Context, spec SproutSpec) (SproutRunReport, error)
 }
 
 // WithSprout wires the sprout execution port onto the Service and returns the
@@ -125,13 +144,15 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 	}
 
 	result := SproutRunResult{StepID: spec.StepID, SessionID: spec.SessionID}
-	output, err := s.sprout.Run(ctx, spec)
+	report, err := s.sprout.Run(ctx, spec)
+	result.Outcome = report.Outcome
+	result.FilesModified = report.FilesModified
 	if err != nil {
 		result.Status = "withered"
 		return result, err
 	}
 	result.Status = "matured"
-	result.Output = output
+	result.Output = report.Output
 	return result, nil
 }
 

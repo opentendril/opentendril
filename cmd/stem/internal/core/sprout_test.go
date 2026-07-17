@@ -10,7 +10,7 @@ import (
 	"github.com/opentendril/core/cmd/stem/internal/session"
 )
 
-func newSproutService(t *testing.T, run func(ctx context.Context, spec core.SproutSpec) (string, error)) (*core.Service, *session.Manager) {
+func newSproutService(t *testing.T, run func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error)) (*core.Service, *session.Manager) {
 	t.Helper()
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -20,7 +20,9 @@ func newSproutService(t *testing.T, run func(ctx context.Context, spec core.Spro
 }
 
 func TestSproutRunRequiresTranscriptAndSubstrate(t *testing.T) {
-	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (string, error) { return "", nil })
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{}, nil
+	})
 	for _, in := range []core.SproutRunInput{
 		{},
 		{Transcript: "fix the bug"},
@@ -45,9 +47,9 @@ func TestSproutRunUnwiredFailsLoudly(t *testing.T) {
 
 func TestSproutRunMintsStepIDAndBindsSession(t *testing.T) {
 	var got core.SproutSpec
-	svc, manager := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (string, error) {
+	svc, manager := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 		got = spec
-		return "done", nil
+		return core.SproutRunReport{Output: "done", Outcome: "complete"}, nil
 	})
 
 	// A pre-existing session's preferences must shape the sprout.
@@ -86,9 +88,9 @@ func TestSproutRunMintsStepIDAndBindsSession(t *testing.T) {
 
 func TestSproutRunKeepsExplicitStepID(t *testing.T) {
 	var got core.SproutSpec
-	svc, _ := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (string, error) {
+	svc, _ := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 		got = spec
-		return "", nil
+		return core.SproutRunReport{}, nil
 	})
 	if _, err := svc.SproutRun(context.Background(), core.SproutRunInput{
 		Transcript: "t",
@@ -104,9 +106,9 @@ func TestSproutRunKeepsExplicitStepID(t *testing.T) {
 
 func TestSproutRunEmptySessionSproutsFresh(t *testing.T) {
 	var got core.SproutSpec
-	svc, manager := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (string, error) {
+	svc, manager := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 		got = spec
-		return "", nil
+		return core.SproutRunReport{}, nil
 	})
 	if _, err := svc.SproutRun(context.Background(), core.SproutRunInput{
 		Transcript: "t",
@@ -124,8 +126,8 @@ func TestSproutRunEmptySessionSproutsFresh(t *testing.T) {
 }
 
 func TestSproutRunWitheredOnError(t *testing.T) {
-	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (string, error) {
-		return "", fmt.Errorf("terrarium exploded")
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{}, fmt.Errorf("terrarium exploded")
 	})
 	result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
 	if err == nil || !strings.Contains(err.Error(), "terrarium exploded") {
@@ -140,7 +142,9 @@ func TestSproutRunWitheredOnError(t *testing.T) {
 }
 
 func TestSproutCapabilityInRegistry(t *testing.T) {
-	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (string, error) { return "ok", nil })
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{Output: "ok", Outcome: "complete"}, nil
+	})
 
 	declared := map[string]bool{}
 	for _, capability := range svc.Capabilities() {
@@ -161,5 +165,31 @@ func TestSproutCapabilityInRegistry(t *testing.T) {
 	}
 	if _, ok := result.(core.SproutRunResult); !ok {
 		t.Fatalf("Invoke(sprout.run) = %T, want core.SproutRunResult", result)
+	}
+}
+
+// TestSproutRunCarriesExecutionOutcome proves the Core relays the execution
+// port's honest verdict — outcome and file evidence — instead of flattening
+// every finished run into "matured".
+func TestSproutRunCarriesExecutionOutcome(t *testing.T) {
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{Output: "report only", Outcome: "no-changes", FilesModified: []string{}}, nil
+	})
+
+	result, err := svc.SproutRun(context.Background(), core.SproutRunInput{
+		Transcript: "investigate and report",
+		Substrate:  "/workspaces/core",
+	})
+	if err != nil {
+		t.Fatalf("SproutRun failed: %v", err)
+	}
+	if result.Status != "matured" {
+		t.Fatalf("Status = %q, want matured (lifecycle verdict is unchanged)", result.Status)
+	}
+	if result.Outcome != "no-changes" {
+		t.Fatalf("Outcome = %q, want no-changes", result.Outcome)
+	}
+	if result.Output != "report only" {
+		t.Fatalf("Output = %q, want report only", result.Output)
 	}
 }

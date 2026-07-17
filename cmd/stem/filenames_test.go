@@ -45,16 +45,20 @@ func TestGoFilenamesFollowConvention(t *testing.T) {
 			return nil
 		}
 		name := strings.TrimSuffix(base, ".go")
-		if strings.HasSuffix(name, "_test") {
-			return nil // the one sanctioned underscore
-		}
-		// Otherwise the only allowed underscore is a platform build-constraint
-		// suffix, where the final token is a GOOS or GOARCH value.
+
+		// Peel the sanctioned suffixes off the end, then judge what is left.
+		// Checking only that a name *ends* in `_test` accepted every underscore
+		// before it, so `a_b_test.go` passed a rule that forbids it; the same
+		// applied to a build-constraint suffix, where only the final token was
+		// examined. Peeling first is what makes the check mean what it says.
+		name = strings.TrimSuffix(name, "_test")
 		parts := strings.Split(name, "_")
-		if isGoBuildToken(parts[len(parts)-1]) {
-			return nil
+		for len(parts) > 1 && isGoBuildToken(parts[len(parts)-1]) {
+			parts = parts[:len(parts)-1]
 		}
-		t.Errorf("Go filename underscore is not `_test.go` or a build-constraint suffix: %s", rel)
+		if len(parts) > 1 {
+			t.Errorf("Go filename must be merged lowercase; underscores are only the `_test` suffix or a build-constraint suffix: %s", rel)
+		}
 		return nil
 	})
 	if err != nil {

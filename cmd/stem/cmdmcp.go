@@ -66,7 +66,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 			// bus), exactly as before; the EventBus above carries only the
 			// delegation audit lane.
 			WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
-			WithSprout(sproutOperations(history)).
+			WithSprout(sproutOperations(history, nil)).
 			WithPassthrough(passthroughOperations()).
 			WithGit(gitOperations())
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)

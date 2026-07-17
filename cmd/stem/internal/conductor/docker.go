@@ -43,6 +43,9 @@ type DockerOrchestrator struct {
 	Temperature      float64
 	DisableMergeBack bool
 	EventBus         *eventbus.Bus
+	// SessionID attributes the run's lifecycle events to the Tendril session
+	// that sprouted it; empty for sessionless runs.
+	SessionID string
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -108,15 +111,11 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	return client
 }
 
-func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (result string, err error) {
+func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (report SproutRunReport, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	cleanupCtx := context.WithoutCancel(ctx)
-
-	if err := runSproutPreflightChecksFn(ctx); err != nil {
-		return "", err
-	}
 
 	stepID := strings.TrimSpace(d.StepID)
 	if stepID == "" {
@@ -124,14 +123,33 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		d.StepID = stepID
 	}
 
+	// Every return path below leaves through this one publisher, so every
+	// surface — command line, sequence, MCP, daemon — sees exactly one terminal
+	// lifecycle event per run, with the honest outcome and the evidence for it.
+	filesKnown := false
+	defer func() {
+		if report.Outcome == "" {
+			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown)
+		}
+		reason := ""
+		if err != nil {
+			reason = err.Error()
+		}
+		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, reason)
+	}()
+
+	if err := runSproutPreflightChecksFn(ctx); err != nil {
+		return report, err
+	}
+
 	substratesConfig, err := LoadSubstratesConfig("")
 	if err != nil {
-		return "", err
+		return report, err
 	}
 
 	plan, err := resolveSubstrateExecutionPlan(d, substratesConfig)
 	if err != nil {
-		return "", err
+		return report, err
 	}
 
 	if plan.readOnly {
@@ -167,7 +185,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if plan.remoteClone {
 		clonedPath, persistent, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.credential)
 		if err != nil {
-			return "", err
+			return report, err
 		}
 
 		sourcePath = clonedPath
@@ -185,7 +203,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			if cleanup != nil {
 				cleanup()
 			}
-			return "", fmt.Errorf("cloned substrate %s is not a git repository", clonedPath)
+			return report, fmt.Errorf("cloned substrate %s is not a git repository", clonedPath)
 		}
 
 		fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", plan.cloneURL)
@@ -199,20 +217,24 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 		if gitRepo && statusPath != "" {
 			if existing, err := loadSproutStatus(statusPath); err != nil {
-				return "", err
+				return report, err
 			} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
+				// A timed-out status deliberately falls through to a fresh run:
+				// the previous attempt was cut off, not judged, so retrying is
+				// the honest resumption. Failed stays a halt — that run was
+				// judged and recorded.
 				switch strings.ToLower(strings.TrimSpace(existing.Status)) {
-				case "complete":
+				case SproutOutcomeComplete, SproutOutcomeNoChanges:
 					message := fmt.Sprintf("Step %s already completed. Skipping.", stepID)
 					fmt.Fprintln(os.Stderr, message)
-					return message, nil
-				case "failed":
+					return SproutRunReport{Output: message, Outcome: SproutOutcomeSkipped}, nil
+				case SproutOutcomeFailed:
 					errText := strings.TrimSpace(existing.Error)
 					if errText == "" {
 						errText = "previous execution failed"
 					}
 					fmt.Fprintf(os.Stderr, "⚠️ Resumption halted for %s: %s\n", stepID, errText)
-					return "", fmt.Errorf("step %s previously failed: %s", stepID, errText)
+					return report, fmt.Errorf("step %s previously failed: %s", stepID, errText)
 				}
 			}
 		}
@@ -225,13 +247,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					newBranch := fmt.Sprintf("sprout/task-%s", stepID)
 					fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching from %s to %s\n", currentBranch, newBranch)
 					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {
-						return "", fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
+						return report, fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
 					}
 				}
 			}
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 			if err != nil {
-				return "", err
+				return report, err
 			}
 			if hostStashed {
 				hostRestorePath = sourcePath
@@ -261,7 +283,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			if cleanup != nil {
 				cleanup()
 			}
-			return "", err
+			return report, err
 		}
 	}
 
@@ -270,7 +292,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", fmt.Errorf("generate repo map: %w", err)
+		return report, fmt.Errorf("generate repo map: %w", err)
 	}
 
 	repoMapPath := filepath.Join(mountPath, tendrilStateDirectory, "genome", repositoryMapFile)
@@ -278,13 +300,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", fmt.Errorf("create repo map directory: %w", err)
+		return report, fmt.Errorf("create repo map directory: %w", err)
 	}
 	if err := os.WriteFile(repoMapPath, []byte(repoMapMarkdown), 0o644); err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", fmt.Errorf("write repo map plasmid: %w", err)
+		return report, fmt.Errorf("write repo map plasmid: %w", err)
 	}
 
 	memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, mountPath)
@@ -298,7 +320,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", err
+		return report, err
 	}
 
 	// Use the substrate-configured provider if set, otherwise fall back to env/default.
@@ -306,12 +328,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if plan.provider != "" {
 		providerName = plan.provider
 	}
+	publishSproutEmerged(d.EventBus, stepID, d.SessionID, d.Substrate)
+
 	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv...)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
 		}
-		return "", err
+		return report, err
 	}
 	if cleanup != nil {
 		defer cleanup()
@@ -320,7 +344,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	agent, err := newAgentFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID)
 	if err != nil {
-		return "", err
+		return report, err
 	}
 
 	agentResult, runErr := agent.Run(ctx, taskPrompt)
@@ -329,18 +353,15 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
 
-	if !gitRepo {
+	// Non-git and readonly substrates cannot measure what changed, so their
+	// successful runs report SproutOutcomeComplete with FilesModified unknown
+	// (nil) rather than claiming a no-changes verdict nothing measured.
+	if !gitRepo || plan.readOnly {
 		if runErr != nil {
-			return "", runErr
+			return report, runErr
 		}
-		return agentResult.Response, nil
-	}
-
-	if plan.readOnly {
-		if runErr != nil {
-			return "", runErr
-		}
-		return agentResult.Response, nil
+		report.Output = agentResult.Response
+		return report, nil
 	}
 
 	var statusRelPath string
@@ -348,14 +369,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		var err error
 		statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
 		if err != nil {
-			return "", err
+			return report, err
 		}
 	}
 
 	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, statusRelPath)
 	if diffErr != nil {
-		return "", diffErr
+		return report, diffErr
 	}
+	report.FilesModified = modifiedFiles
+	filesKnown = true
 
 	gitDiff, diffErr := collectGitDiffFn(ctx, mountPath)
 	if diffErr != nil {
@@ -366,48 +389,48 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true),
 	}
 	if runErr != nil {
-		executionStatus.Status = "failed"
 		executionStatus.Error = runErr.Error()
-	} else {
-		executionStatus.Status = "complete"
 	}
+	report.Outcome = executionStatus.Status
 
 	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
 	if commitErr != nil {
+		report.Outcome = ""
 		if runErr != nil {
-			return "", errors.Join(runErr, commitErr)
+			return report, errors.Join(runErr, commitErr)
 		}
-		return "", commitErr
+		return report, commitErr
 	}
 
 	if d.DisableMergeBack {
-		if runErr != nil {
-			return commitHash, runErr
-		}
-		return commitHash, nil
+		report.Output = commitHash
+		return report, runErr
 	}
 
 	if plan.remoteClone {
 		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
+			report.Outcome = ""
 			if runErr != nil {
-				return "", errors.Join(runErr, pushErr)
+				return report, errors.Join(runErr, pushErr)
 			}
-			return "", pushErr
+			return report, pushErr
 		}
 	} else {
 		mergeErr := mergeTerrariumCommitFn(ctx, sourcePath, commitHash)
 		if mergeErr != nil {
+			report.Outcome = ""
 			if runErr != nil {
-				return "", errors.Join(runErr, mergeErr)
+				return report, errors.Join(runErr, mergeErr)
 			}
-			return "", mergeErr
+			return report, mergeErr
 		}
 	}
 
 	if runErr != nil {
-		return "", runErr
+		return report, runErr
 	}
 
 	if gitDiff != "" {
@@ -417,7 +440,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 	}
 
-	return agentResult.Response, nil
+	report.Output = agentResult.Response
+	return report, nil
 }
 
 func (d *DockerOrchestrator) resolveImageName(workspace string) string {
@@ -648,6 +672,13 @@ func (s *terrariumToolSession) Call(ctx context.Context, call ToolCall) (ToolRes
 	}
 
 	result, err := s.terrarium.Run(ctx, terrarium.CommandSpec{Stdin: payload})
+	if result.TimedOut {
+		return ToolResponse{}, fmt.Errorf("tool call %q was cut off: %w", call.Tool, ErrSproutTimedOut)
+	}
+	// The terrarium reports a watchdog kill as a timed-out result, not an
+	// error. Convert it into the typed sentinel here so the run's outcome can
+	// say "cut off" instead of dressing the kill as a decode failure — the
+	// exact confusion that once sent a diagnosis chasing a healthy model.
 	if err != nil {
 		return ToolResponse{}, err
 	}
@@ -1279,7 +1310,8 @@ func runContainerFitnessTest(ctx context.Context, imageName, shadowPath, fitness
 }
 
 func buildSproutCommitMessage(stepID, taskPrompt, status, failureError string) string {
-	if strings.ToLower(strings.TrimSpace(status)) == "failed" {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case SproutOutcomeFailed, SproutOutcomeTimedOut:
 		return fmt.Sprintf("tendril(%s) [INCOMPLETE]: %s", strings.TrimSpace(stepID), summarizeSproutFailureError(failureError))
 	}
 

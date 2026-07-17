@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -207,6 +208,12 @@ type dockerTerrarium struct {
 	waitOnce       sync.Once
 	waitErr        error
 	watchdogCancel context.CancelFunc
+
+	// timedOut records that the instance-level watchdog killed the container.
+	// Without it, a Run in flight when the watchdog fires surfaces as an opaque
+	// pipe error and the caller cannot tell "the work was cut off" from "the
+	// work broke" — which is exactly how a killed sprout once reported success.
+	timedOut atomic.Bool
 }
 
 func (s *dockerTerrarium) ID() string {
@@ -323,6 +330,9 @@ func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandRes
 		}
 
 		if _, err := s.stdin.Write(payload); err != nil {
+			if s.timedOut.Load() {
+				return s.timedOutResult(startedAt), nil
+			}
 			return CommandResult{}, fmt.Errorf("write terrarium stdin: %w", err)
 		}
 
@@ -368,6 +378,11 @@ func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandRes
 			Duration:    completedAt.Sub(startedAt),
 		}
 		if err != nil {
+			// A read failure after the watchdog killed the container is the
+			// timeout, not a protocol error: the EOF is the kill arriving.
+			if s.timedOut.Load() {
+				return s.timedOutResult(startedAt), nil
+			}
 			return result, err
 		}
 
@@ -434,7 +449,7 @@ func (s *dockerTerrarium) Run(ctx context.Context, spec CommandSpec) (CommandRes
 	}
 
 	if runErr != nil {
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		if errors.Is(runCtx.Err(), context.DeadlineExceeded) || s.timedOut.Load() {
 			result.ExitCode = -1
 			result.TimedOut = true
 			s.stopAfterTimeout()
@@ -599,9 +614,26 @@ func (s *dockerTerrarium) watchdog(ctx context.Context, timeout time.Duration) {
 }
 
 func (s *dockerTerrarium) stopAfterTimeout() {
+	// The flag must be visible before the kill lands: a blocked interactive
+	// read observes the resulting EOF immediately, and must already be able to
+	// see that it was a timeout.
+	s.timedOut.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = s.Stop(ctx)
+}
+
+// timedOutResult is the canonical shape of a run cut off by the watchdog,
+// matching what the per-call deadline path reports.
+func (s *dockerTerrarium) timedOutResult(startedAt time.Time) CommandResult {
+	completedAt := time.Now().UTC()
+	return CommandResult{
+		ExitCode:    -1,
+		TimedOut:    true,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		Duration:    completedAt.Sub(startedAt),
+	}
 }
 
 func (s *dockerTerrarium) readResponseLine() ([]byte, error) {
