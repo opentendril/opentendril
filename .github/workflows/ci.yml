@@ -165,19 +165,56 @@ jobs:
       # Pinned release, verified against the sha256 published alongside the
       # asset; sha256sum -c makes a mismatch fail the job before anything is
       # installed.
+      # Cached because this is a required status check and it was fetching the
+      # binary from GitHub releases on every run: one transient
+      # `curl: (35) Recv failure: Connection reset by peer` failed the gate on
+      # an error that had nothing to do with the change. The kernel beside it
+      # was already cached this way.
+      #
+      # The key is the digest of the binary the cache holds, so asking for
+      # different bytes means asking a different key.
+      - name: Cache Firecracker binary
+        uses: actions/cache@v4
+        with:
+          path: .tendril/bin/firecracker
+          key: firecracker-v1.16.1-2fd0171309af7e24cf8dafc8a6f921c1434c49b5f9349bb996b7ed0a4deb8aa7
+
       - name: Install Firecracker
         shell: bash
         run: |
           set -euo pipefail
+
+          # Pinned in-repo rather than checked against the .sha256.txt served
+          # from the same host as the asset. That file proves the transfer
+          # arrived intact; it cannot say the bytes are the ones anyone vetted,
+          # because whatever replaced the asset would replace its checksum too.
+          # These digests record what was vetted here — same posture as the
+          # pinned kernel, and honestly the same limit: trust-on-first-use.
           version="v1.16.1"
-          asset="firecracker-${version}-x86_64.tgz"
-          base="https://github.com/firecracker-microvm/firecracker/releases/download/${version}"
-          cd "$(mktemp -d)"
-          curl -fsSL --retry 3 -O "${base}/${asset}"
-          curl -fsSL --retry 3 -O "${base}/${asset}.sha256.txt"
-          sha256sum -c "${asset}.sha256.txt"
-          tar -xzf "${asset}"
-          sudo install -m 0755 "release-${version}-x86_64/firecracker-${version}-x86_64" /usr/local/bin/firecracker
+          archive_sha256="382a02a869e4d6d5cb14c40577f9545e8458021ea8b0b2d3fc10ec14d9c242e6"
+          binary_sha256="2fd0171309af7e24cf8dafc8a6f921c1434c49b5f9349bb996b7ed0a4deb8aa7"
+          binary=".tendril/bin/firecracker"
+
+          if [ ! -f "$binary" ]; then
+            asset="firecracker-${version}-x86_64.tgz"
+            base="https://github.com/firecracker-microvm/firecracker/releases/download/${version}"
+            workdir="$(mktemp -d)"
+            # --retry-all-errors because the observed failure was a reset
+            # mid-transfer, which plain --retry does not cover.
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+              -o "${workdir}/${asset}" "${base}/${asset}"
+            echo "${archive_sha256}  ${workdir}/${asset}" | sha256sum -c -
+            tar -xzf "${workdir}/${asset}" -C "${workdir}"
+            mkdir -p "$(dirname "$binary")"
+            cp "${workdir}/release-${version}-x86_64/firecracker-${version}-x86_64" "$binary"
+          fi
+
+          # Verified on every run, cache hit included: the check belongs to the
+          # bytes about to be executed, not to how they arrived. A restored
+          # cache entry is as unverified as a download until this passes.
+          echo "${binary_sha256}  ${binary}" | sha256sum -c -
+
+          sudo install -m 0755 "$binary" /usr/local/bin/firecracker
           firecracker --version
 
       # The cache keys ARE the pinned sha256 digests that init-firecracker
