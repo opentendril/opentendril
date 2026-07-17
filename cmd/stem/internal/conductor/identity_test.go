@@ -150,3 +150,67 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 		}
 	})
 }
+
+// The sprout CLI hands the orchestrator a substrate name; this is what the
+// name has to buy. A named substrate with a LOCAL PATH is the case that
+// regressed: the CLI used to substitute the path, leaving this lookup nothing
+// to match, so the configured identity, signing, auth and readonly were all
+// skipped in silence.
+func TestExecutionPlanResolvesNamedSubstrateIdentityAndPath(t *testing.T) {
+	localPath := t.TempDir()
+	config := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"demo": {
+				Path: localPath,
+				Identity: IdentitySpec{
+					Name:  "OpenTendril Sprout",
+					Email: "sprout@opentendril.local",
+				},
+			},
+		},
+	}
+
+	plan, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{Substrate: "demo"}, config)
+	if err != nil {
+		t.Fatalf("resolveSubstrateExecutionPlan returned error: %v", err)
+	}
+	if !plan.named {
+		t.Fatalf("plan.named = false: the name did not resolve to its spec")
+	}
+	if plan.credential.Identity.Name != "OpenTendril Sprout" {
+		t.Fatalf("identity name = %q, want the configured identity", plan.credential.Identity.Name)
+	}
+	if plan.credential.Identity.Email != "sprout@opentendril.local" {
+		t.Fatalf("identity email = %q, want the configured identity", plan.credential.Identity.Email)
+	}
+	// The plan resolves the local path itself, which is why the CLI does not
+	// need to substitute one.
+	if plan.hostPath != localPath {
+		t.Fatalf("hostPath = %q, want the spec's path %q", plan.hostPath, localPath)
+	}
+}
+
+// Handing the plan the resolved PATH instead of the name is the regression:
+// nothing matches, and the configuration is silently skipped.
+func TestExecutionPlanCannotResolveConfigurationFromAPath(t *testing.T) {
+	localPath := t.TempDir()
+	config := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"demo": {
+				Path:     localPath,
+				Identity: IdentitySpec{Name: "OpenTendril Sprout", Email: "sprout@opentendril.local"},
+			},
+		},
+	}
+
+	plan, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{Substrate: localPath}, config)
+	if err != nil {
+		t.Fatalf("resolveSubstrateExecutionPlan returned error: %v", err)
+	}
+	if plan.named {
+		t.Fatalf("a path resolved as a named substrate; the lookup is by name")
+	}
+	if plan.credential.Identity.Name != "" || plan.credential.Identity.Email != "" {
+		t.Fatalf("identity %+v resolved from a path: unreachable, and this test documents why the CLI must pass the name", plan.credential.Identity)
+	}
+}

@@ -113,6 +113,67 @@ func buildSproutCore(ctx context.Context) (core.Core, func(), error) {
 // internal/core/boundary_test.go). It owns exactly what the MCP adapter used
 // to do inline after translation: named-substrate resolution, status-path
 // computation, the terrarium run, and run recording.
+// sproutSubstrateWiring is what a sprout run derives from its spec and the
+// substrates configuration before the orchestrator is built.
+type sproutSubstrateWiring struct {
+	// Substrate is passed to the orchestrator exactly as the caller wrote it,
+	// name included. See resolveSproutSubstrateWiring for why that matters.
+	Substrate string
+	URL       string
+	Branch    string
+	// StatusPath is the one place the local path is wanted, because a status
+	// file has to be written somewhere real.
+	StatusPath string
+}
+
+// resolveSproutSubstrateWiring fills in a spec's blanks from a named
+// substrate's configuration — its URL and branch — and works out where the
+// status file belongs.
+//
+// It deliberately does NOT replace the substrate with the local path it
+// resolves. resolveSubstrateExecutionPlan looks the spec up by name to apply
+// its identity, signing, auth and readonly settings, and resolves the path
+// itself; handing the orchestrator a path leaves that lookup nothing to match,
+// and every one of those settings is then silently skipped. A substrate marked
+// readonly would be written to and merged back.
+//
+// The local path is still needed for StatusPath, which is why it is resolved
+// here and kept out of the substrate.
+func resolveSproutSubstrateWiring(spec core.SproutSpec, config *conductor.SubstratesConfig) sproutSubstrateWiring {
+	wiring := sproutSubstrateWiring{
+		Substrate: spec.Substrate,
+		URL:       spec.SubstrateURL,
+		Branch:    spec.SubstrateBranch,
+	}
+
+	explicitURL := strings.TrimSpace(spec.SubstrateURL)
+	localPath := strings.TrimSpace(spec.Substrate)
+	isNamed := false
+	hasLocalPath := false
+
+	if substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, config); isName && substrateSpec != nil {
+		isNamed = true
+		if strings.TrimSpace(wiring.URL) == "" {
+			wiring.URL = strings.TrimSpace(substrateSpec.URL)
+		}
+		if strings.TrimSpace(wiring.Branch) == "" {
+			wiring.Branch = strings.TrimSpace(substrateSpec.Branch)
+		}
+		if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+			if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
+				localPath = trimmedPath
+				hasLocalPath = true
+			}
+		}
+	}
+
+	if explicitURL == "" && (!isNamed || hasLocalPath) && localPath != "" {
+		wiring.StatusPath = filepath.Join(resolveRepoRoot(localPath), "tendril-status.json")
+	}
+
+	return wiring
+}
+
 func sproutOperations(history *historydb.Store) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
@@ -121,44 +182,15 @@ func sproutOperations(history *historydb.Store) core.SproutOperations {
 
 	return core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (string, error) {
-			substrateURL := spec.SubstrateURL
-			substrateBranch := spec.SubstrateBranch
-			resolvedSubstrate := spec.Substrate
-			explicitSubstrateURL := strings.TrimSpace(spec.SubstrateURL)
-			substrateIsNamed := false
-			substrateHasLocalPath := false
-			if substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig); isName && substrateSpec != nil {
-				substrateIsNamed = true
-				if strings.TrimSpace(substrateURL) == "" {
-					substrateURL = strings.TrimSpace(substrateSpec.URL)
-				}
-				if strings.TrimSpace(substrateBranch) == "" {
-					substrateBranch = strings.TrimSpace(substrateSpec.Branch)
-				}
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					if info, err := os.Stat(trimmedPath); err == nil && info.IsDir() {
-						resolvedSubstrate = trimmedPath
-						substrateHasLocalPath = true
-					}
-				}
-			}
+			wiring := resolveSproutSubstrateWiring(spec, substratesConfig)
 
-			statusPath := ""
-			if explicitSubstrateURL == "" {
-				if !substrateIsNamed || substrateHasLocalPath {
-					if resolvedSubstrate != "" {
-						statusPath = filepath.Join(resolveRepoRoot(resolvedSubstrate), "tendril-status.json")
-					}
-				}
-			}
-
-			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, resolvedSubstrate, substrateURL)
+			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
 			orch := &conductor.DockerOrchestrator{
-				Substrate:       resolvedSubstrate,
-				SubstrateURL:    substrateURL,
-				SubstrateBranch: substrateBranch,
+				Substrate:       wiring.Substrate,
+				SubstrateURL:    wiring.URL,
+				SubstrateBranch: wiring.Branch,
 				StepID:          spec.StepID,
-				StatusPath:      statusPath,
+				StatusPath:      wiring.StatusPath,
 				Provider:        spec.Provider,
 				Model:           spec.Model,
 				Genotype:        spec.Genotype,
