@@ -273,7 +273,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return "", fmt.Errorf("generate repo map: %w", err)
 	}
 
-	repoMapPath := filepath.Join(mountPath, ".tendril", "genome", "repomap.md")
+	repoMapPath := filepath.Join(mountPath, tendrilStateDirectory, "genome", repositoryMapFile)
 	if err := os.MkdirAll(filepath.Dir(repoMapPath), 0o755); err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -1077,7 +1077,13 @@ func workspaceRelativePath(rootPath, targetPath string) (string, error) {
 }
 
 func collectStageableFiles(ctx context.Context, mountPath string, excludedPaths ...string) ([]string, error) {
-	output, err := runGitCommand(ctx, mountPath, "status", "--porcelain")
+	// -uall lists untracked files individually. Without it git collapses an
+	// untracked directory to a single entry — `?? .tendril/` — and a filter
+	// that reasons about files then has nothing to match, so everything under
+	// the directory is staged wholesale. That is how OpenTendril's own index
+	// key reached a commit: the filter was asked about a directory it did not
+	// recognise rather than the files inside it.
+	output, err := runGitCommand(ctx, mountPath, "status", "--porcelain", "-uall")
 	if err != nil {
 		return nil, err
 	}
@@ -1139,6 +1145,17 @@ func collectStageableFiles(ctx context.Context, mountPath string, excludedPaths 
 func shouldIgnoreStagePath(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
 	if normalized == "" {
+		return true
+	}
+
+	// OpenTendril's own working state, written into the substrate while it
+	// indexes it. The change set comes from `git status --porcelain` in the
+	// mount, which cannot tell the tool's writes from the agent's, so without
+	// this they were committed as the agent's work and merged back — including
+	// the index encryption key, which a push would then publish. This
+	// repository ignores .tendril, which is why the path only ever misbehaved
+	// against other people's repositories.
+	if isGeneratedRuntimeArtifact(normalized) {
 		return true
 	}
 

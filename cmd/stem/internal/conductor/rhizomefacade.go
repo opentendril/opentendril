@@ -6,9 +6,58 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/opentendril/core/cmd/stem/internal/rhizome"
 )
+
+// Runtime state OpenTendril writes into a substrate while working on it. These
+// belong to the tool, not to the repository being worked on.
+//
+// The names live here, next to the code that creates them, because the commit
+// path has to skip exactly these files and a second copy of the list would
+// drift away from this one. Nothing else under .tendril is covered on purpose:
+// a repository may legitimately track its own .tendril files, and an agent
+// asked to edit one must still be able to.
+const (
+	tendrilStateDirectory = ".tendril"
+	rhizomeIndexKeyFile   = "rhizome.key"
+	rhizomeIndexDatabase  = "rhizome.db"
+	repositoryMapFile     = "repomap.md"
+)
+
+// generatedRuntimeArtifacts lists, relative to the substrate root, everything
+// GenerateRepoMap and its callers leave behind.
+func generatedRuntimeArtifacts() []string {
+	return []string{
+		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexKeyFile)),
+		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase)),
+		filepath.ToSlash(filepath.Join(tendrilStateDirectory, "genome", repositoryMapFile)),
+	}
+}
+
+// isGeneratedRuntimeArtifact reports whether a substrate-relative path is
+// something OpenTendril wrote for itself.
+//
+// SQLite keeps its write-ahead log and shared-memory file beside the database
+// under names derived from it, so the database is matched by prefix rather than
+// equality — otherwise `rhizome.db-wal` would be committed as the agent's work.
+func isGeneratedRuntimeArtifact(path string) bool {
+	normalized := filepath.ToSlash(strings.TrimSpace(path))
+	if normalized == "" {
+		return false
+	}
+	databasePath := filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase))
+	if strings.HasPrefix(normalized, databasePath) {
+		return true
+	}
+	for _, artifact := range generatedRuntimeArtifacts() {
+		if normalized == artifact {
+			return true
+		}
+	}
+	return false
+}
 
 // GenerateRepoMap initializes the Rhizome context engine, incrementally scans
 // the provided repository mount path, and returns a markdown-formatted map
@@ -18,12 +67,12 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 		ctx = context.Background()
 	}
 
-	tendrilDir := filepath.Join(mountPath, ".tendril")
+	tendrilDir := filepath.Join(mountPath, tendrilStateDirectory)
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		return "", fmt.Errorf("create .tendril dir: %w", err)
 	}
 
-	keyPath := filepath.Join(tendrilDir, "rhizome.key")
+	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
 	key, err := getOrCreateIndexKey(keyPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve index key: %w", err)
@@ -34,7 +83,7 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 		return "", fmt.Errorf("initialize encryptor: %w", err)
 	}
 
-	dbPath := filepath.Join(tendrilDir, "rhizome.db")
+	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
 	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
 	if err != nil {
 		return "", fmt.Errorf("open index store: %w", err)
@@ -69,12 +118,12 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 		ctx = context.Background()
 	}
 
-	tendrilDir := filepath.Join(mountPath, ".tendril")
+	tendrilDir := filepath.Join(mountPath, tendrilStateDirectory)
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		return "", fmt.Errorf("create .tendril dir: %w", err)
 	}
 
-	keyPath := filepath.Join(tendrilDir, "rhizome.key")
+	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
 	key, err := getOrCreateIndexKey(keyPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve index key: %w", err)
@@ -85,7 +134,7 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 		return "", fmt.Errorf("initialize encryptor: %w", err)
 	}
 
-	dbPath := filepath.Join(tendrilDir, "rhizome.db")
+	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
 	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
 	if err != nil {
 		return "", fmt.Errorf("open index store: %w", err)
