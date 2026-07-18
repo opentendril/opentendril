@@ -835,13 +835,20 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				return h.formatError(req.ID, -32603, "Internal error", err.Error())
 			}
 
-			targetPath := filepath.Join(genotypesDir, name+".json")
-			if info, statErr := os.Lstat(targetPath); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-				return h.formatError(req.ID, -32602, "Invalid name", "Refusing to overwrite a symbolic link.")
-			} else if statErr != nil && !os.IsNotExist(statErr) {
-				return h.formatError(req.ID, -32603, "Internal error", statErr.Error())
+			root, err := os.OpenRoot(genotypesDir)
+			if err != nil {
+				return h.formatError(req.ID, -32603, "Internal error", err.Error())
 			}
-			if err := os.WriteFile(targetPath, fileContent, 0644); err != nil {
+			out, err := root.OpenFile(name+".json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err == nil {
+				_, err = out.Write(fileContent)
+				closeErr := out.Close()
+				if err == nil {
+					err = closeErr
+				}
+			}
+			root.Close()
+			if err != nil {
 				return h.formatError(req.ID, -32603, "Failed to write genotype", err.Error())
 			}
 
