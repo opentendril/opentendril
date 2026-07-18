@@ -108,20 +108,20 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/sequence.go)
+#### [NEW] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
 *   Define `Sequence` and `SequenceStep` Go structs.
 *   Implement DAG topological traversal and concurrent task scheduler using channels and goroutines.
 *   Implement CLI prompt checking for `onFailure: pause` interaction.
 
-#### [NEW] [cmdsequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/cmdsequence.go)
+#### [NEW] [cmdsequence.go](../cmd/stem/cmdsequence.go)
 *   Implement CLI commands: `tendril sequence run <path>` and `tendril sequence list`.
 *   Support `--provider`, `--model`, and `--base-url` override flags.
 *   Support `--detach` flag for asynchronous execution.
 
-#### [NEW] [internal/api/sessions.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/api/sessions.go)
+#### [NEW] [internal/api/sessions.go](../cmd/stem/internal/api/sessions.go)
 *   Implement `POST /v1/sessions/{sessionId}/sequences/run` to support detached background runs.
 
-#### [MODIFY] [internal/api/mcp.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/api/mcp.go)
+#### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/api/mcp.go)
 *   Expose `runSequence` tool in MCP, supporting headless execution of parallel sequence files.
 
 ---

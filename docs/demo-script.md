@@ -4,7 +4,7 @@ This script is designed for a **2-minute terminal recording** (e.g., via `asciin
 
 ## Prerequisites
 - Tendril running in Docker (`docker compose up`)
-- Env vars set up to point to an external project (e.g., `/home/dr3w/GitHub/jurnx`)
+- Env vars set up to point to an external project (e.g., `$HOME/GitHub/jurnx`)
 - the `tendril` CLI built (`make stem`)
 
 ---
@@ -39,7 +39,7 @@ This script is designed for a **2-minute terminal recording** (e.g., via `asciin
 9. **Type:** `commit the change with message "tendril: Day 1 proof of life"`
    - *Observation:* Tendril interacts with git and returns the commit hash.
 10. **Exit CLI** (`Ctrl+C`).
-11. `cd /home/dr3w/GitHub/jurnx && git log -1`
+11. `cd $HOME/GitHub/jurnx && git log -1`
     - *Observation:* Proof of commit.
 12. **End recording.**
 

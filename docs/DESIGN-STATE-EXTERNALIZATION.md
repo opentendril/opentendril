@@ -76,7 +76,7 @@ Before executing a sprout task:
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Implement `runGitCommand(dir string, args ...string)` to handle host/terrarium git calls.
 *   Implement pre-flight host stashing (`git stash -u`) and post-flight stash popping (`git stash pop`).
 *   Implement post-flight status checking (`git status --porcelain`) and file sanitization to exclude log/build/temp files before committing.

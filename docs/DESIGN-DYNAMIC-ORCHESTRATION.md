@@ -6,7 +6,7 @@ This document outlines the target design for introducing dynamic sequence planni
 
 ## 1. Architectural Overview
 
-Currently, OpenTendril sequences are executed using a static, pre-defined Directed Acyclic Graph (DAG) compiled from YAML files (see [DESIGN-SEQUENCE-RUNNER.md](file:///home/dr3w/GitHub/opentendril/opentendril/docs/DESIGN-SEQUENCE-RUNNER.md)). While highly deterministic, static sequences are unable to adapt to complex programming goals that require context-dependent branching or recursive debugging.
+Currently, OpenTendril sequences are executed using a static, pre-defined Directed Acyclic Graph (DAG) compiled from YAML files (see [DESIGN-SEQUENCE-RUNNER.md](../docs/DESIGN-SEQUENCE-RUNNER.md)). While highly deterministic, static sequences are unable to adapt to complex programming goals that require context-dependent branching or recursive debugging.
 
 To solve this, we introduce **Dynamic Orchestration** using a three-tiered model:
 1.  **Dual LLM Client Setup:** Routing lightweight planning and inspection tasks to a fast, cost-efficient Coordinator model, while leaving heavy code-writing tasks to the expert Worker model.
@@ -27,14 +27,14 @@ To reduce execution latency and costs, we split the LLM client into two provider
 *   `COORDINATOR_LOCAL_INFERENCE_URL`: Local endpoint for the coordinator model (falls back to `LOCAL_INFERENCE_URL`).
 
 ### Code Changes
-In [client.go](file:///home/dr3w/GitHub/opentendril/opentendril/roots/llm/client.go), we expose:
+In [client.go](../roots/llm/client.go), we expose:
 ```go
 func NewCoordinatorClientFromEnv() *Client {
 	return NewClient(ResolveCoordinatorProviderSpec())
 }
 ```
 
-In [docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go), the `DockerOrchestrator` struct is updated to track whether the active run is a coordinator-level process:
+In [docker.go](../cmd/stem/internal/orchestrator/docker.go), the `DockerOrchestrator` struct is updated to track whether the active run is a coordinator-level process:
 ```go
 type DockerOrchestrator struct {
 	...
@@ -58,7 +58,7 @@ Dynamic sequences replace static YAML files with planning steps designed at exec
 4.  The sequence runner parses this array on the host side and appends the steps directly to the active sequence.
 
 ### Code Changes
-In [sequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/sequence.go), when a step completes successfully, we check if it generated dynamic steps:
+In [sequence.go](../cmd/stem/internal/orchestrator/sequence.go), when a step completes successfully, we check if it generated dynamic steps:
 ```go
 if isMeristemStep(result.stepID) {
 	newSteps, err := parseDynamicSteps(result.output)
