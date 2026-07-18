@@ -528,6 +528,51 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	}
 }
 
+// A run must be explainable after the fact as one readable transcript, not only
+// as a token stream a reviewer has to stitch back together. This pins that the
+// agent publishes its assembled conversation once, correlated to the session.
+func TestAgentPublishesTranscriptEvent(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		responses: []string{
+			`{"tool":"readFile","arguments":{"path":"README.md"}}`,
+			`{"final":"all done"}`,
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newAgent returned error: %v", err)
+	}
+	if _, err := agent.Run(context.Background(), "read the readme"); err != nil {
+		t.Fatalf("agent.Run returned error: %v", err)
+	}
+
+	var transcripts []eventbus.Event
+	for _, event := range bus.History(100) {
+		if event.Type == eventbus.EventAgentTranscript {
+			transcripts = append(transcripts, event)
+		}
+	}
+	if len(transcripts) != 1 {
+		t.Fatalf("expected exactly one %s event, got %d", eventbus.EventAgentTranscript, len(transcripts))
+	}
+	if transcripts[0].SessionID != "session-1" {
+		t.Errorf("transcript event sessionID = %q, want session-1", transcripts[0].SessionID)
+	}
+	transcript, _ := transcripts[0].Data["transcript"].(string)
+	// The transcript must actually carry the conversation: the task prompt, the
+	// tool the agent called, and its final answer.
+	for _, want := range []string{"read the readme", "readFile", "all done"} {
+		if !strings.Contains(transcript, want) {
+			t.Errorf("transcript missing %q; got:\n%s", want, transcript)
+		}
+	}
+}
+
 // The other half of the contract: without a bus the agent takes the blocking
 // path and publishes nothing. This documents why nil was never a neutral
 // default.

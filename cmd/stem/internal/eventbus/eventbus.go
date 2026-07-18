@@ -27,7 +27,13 @@ const (
 	// only the sprout-emerged/sprout-matured bookends, so an observer cannot
 	// see WHAT the agent did. This is the per-action stream every live surface
 	// (/ws, telemetry) and the history sink need to explain a run.
-	EventToolInvoked       EventType = "tool-invoked"
+	EventToolInvoked EventType = "tool-invoked"
+	// EventAgentTranscript carries the agent's full assembled conversation
+	// (system, user, assistant, and tool turns) once when a run ends. The
+	// stream-token and tool-invoked events explain a run granularly and live;
+	// this is the single readable record for "explain a run" after the fact,
+	// so a reviewer reads one transcript instead of stitching a token stream.
+	EventAgentTranscript   EventType = "agent-transcript"
 	EventSproutEmerged     EventType = "sprout-emerged"
 	EventSproutMatured     EventType = "sprout-matured"
 	EventSproutWithered    EventType = "sprout-withered"
@@ -62,6 +68,7 @@ func AllEventTypes() []EventType {
 		EventStreamToken,
 		EventThoughtBranch,
 		EventToolInvoked,
+		EventAgentTranscript,
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,
