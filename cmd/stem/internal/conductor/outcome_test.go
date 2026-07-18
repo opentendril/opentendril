@@ -130,7 +130,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
+	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return runner, nil
 	}
 	stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
