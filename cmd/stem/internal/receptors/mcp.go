@@ -356,7 +356,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		name := strings.TrimPrefix(params.URI, "genotype://")
-		if strings.Contains(name, "/") || strings.Contains(name, "\\") || name == "" {
+		if !validConfigFileName(name) {
 			return h.formatError(req.ID, -32602, "Invalid genotype name", nil)
 		}
 
@@ -819,8 +819,8 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			if !nameOk || !instOk || name == "" || instructions == "" {
 				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'name' and 'instructions' parameters are required.")
 			}
-			if strings.Contains(name, "/") || strings.Contains(name, "\\") {
-				return h.formatError(req.ID, -32602, "Invalid name", "The 'name' cannot contain slashes.")
+			if !validConfigFileName(name) {
+				return h.formatError(req.ID, -32602, "Invalid name", "The 'name' cannot contain path separators or traversal components.")
 			}
 
 			genotypesDir := "./.tendril/genotypes"
