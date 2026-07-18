@@ -30,7 +30,7 @@ func runGitOutput(ctx context.Context, workspace string, args ...string) (string
 
 	// exec.CommandContext invokes git directly, never through a shell. Dynamic
 	// refs are passed after git's `--` separator or as explicit option values.
-	// lgtm [go/command-injection]
+	// codeql[go/command-injection]
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workspace
 	output, err := cmd.CombinedOutput()
