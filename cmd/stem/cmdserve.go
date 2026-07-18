@@ -89,7 +89,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		log.Fatalf("⚠️ Failed to establish an API key: %v", err)
 	}
 	if generatedKey {
-		log.Printf("🔑 Generated API key (saved to %s): %s", apiKeyFilePath(tendrilDir), apiKey)
+		log.Printf("🔑 Generated API key (saved to %s)", apiKeyFilePath(tendrilDir))
 		log.Println("   Set OPENTENDRIL_API_KEY to use your own instead.")
 	}
 

@@ -135,6 +135,9 @@ func validConfigFileName(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
+	if !filepath.IsLocal(name + ".json") {
+		return false
+	}
 	return !strings.ContainsAny(name, `/\`)
 }
 
@@ -299,8 +302,13 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	genotypesDir := filepath.Join(h.TendrilDir, "genotypes")
 	os.MkdirAll(genotypesDir, 0755)
 
-	targetPath := filepath.Join(genotypesDir, name+".json")
-	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	root, err := os.OpenRoot(genotypesDir)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to open config directory: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer root.Close()
+	out, err := root.OpenFile(name+".json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
 		return

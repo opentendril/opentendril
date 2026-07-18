@@ -158,6 +158,9 @@ type sequenceStepResult struct {
 
 // LoadSequence reads a sequence definition from YAML.
 func LoadSequence(path string) (*Sequence, error) {
+	if err := validateSequenceFilePath(path); err != nil {
+		return nil, err
+	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read sequence %s: %w", path, err)
@@ -179,6 +182,9 @@ func LoadSequence(path string) (*Sequence, error) {
 func SaveSequence(path string, seq *Sequence) error {
 	if seq == nil {
 		return fmt.Errorf("sequence is nil")
+	}
+	if err := validateSequenceFilePath(path); err != nil {
+		return err
 	}
 	if err := normalizeSequence(path, seq); err != nil {
 		return err
@@ -225,6 +231,9 @@ func ResolveSequencePath(input string) (string, error) {
 	if trimmed == "" {
 		return "", fmt.Errorf("sequence path is required")
 	}
+	if !filepath.IsAbs(trimmed) && !filepath.IsLocal(trimmed) {
+		return "", fmt.Errorf("sequence path must not escape its workspace")
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -246,6 +255,19 @@ func ResolveSequencePath(input string) (string, error) {
 	}
 
 	return "", fmt.Errorf("sequence %q not found", trimmed)
+}
+
+// validateSequenceFilePath rejects relative traversal while preserving the
+// CLI's supported absolute paths for explicitly selected local sequence files.
+func validateSequenceFilePath(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return fmt.Errorf("sequence path is required")
+	}
+	if !filepath.IsAbs(trimmed) && !filepath.IsLocal(trimmed) {
+		return fmt.Errorf("sequence path must not escape its workspace")
+	}
+	return nil
 }
 
 // ListSequenceFiles returns available YAML files from system configs and .tendril/sequences.

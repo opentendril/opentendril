@@ -182,6 +182,10 @@ func (s *Server) HandleGraftWebSocket(w http.ResponseWriter, r *http.Request) {
 			branchName = "mesh-graft"
 		}
 	}
+	if err := validateMeshBranchName(branchName); err != nil {
+		_ = send(graftMessage{Type: "graft-result", Status: "error", Error: err.Error()})
+		return
+	}
 
 	sendLog := func(stream, message string) error {
 		return send(graftMessage{
@@ -289,7 +293,7 @@ func resolveSequenceRelativePath(sequencePath string) (string, error) {
 	}
 
 	cleaned := filepath.Clean(trimmed)
-	if cleaned == "." || strings.HasPrefix(cleaned, "..") {
+	if !filepath.IsLocal(cleaned) {
 		return "", fmt.Errorf("invalid sequence path %q", sequencePath)
 	}
 
@@ -472,9 +476,20 @@ func commitAndPushValidatedTerrarium(ctx context.Context, terrariumPath, branchN
 		pushBranch = "mesh-graft-" + shortCommitHash(currentHead)
 	}
 
-	if _, err := runGitOutput(ctx, terrariumPath, "push", "origin", "HEAD:"+pushBranch); err != nil {
+	if _, err := runGitOutput(ctx, terrariumPath, "push", "origin", "HEAD:refs/heads/"+pushBranch); err != nil {
 		return "", err
 	}
 
 	return currentHead, nil
+}
+
+func validateMeshBranchName(branch string) error {
+	if branch == "" || len(branch) > 200 || strings.HasPrefix(branch, "-") ||
+		strings.HasPrefix(branch, "/") || strings.HasSuffix(branch, "/") ||
+		strings.HasSuffix(branch, ".") || strings.Contains(branch, "..") ||
+		strings.Contains(branch, "//") || strings.Contains(branch, "@{") ||
+		strings.ContainsAny(branch, "\\ ~^:?*[\x00\t\n\r") {
+		return fmt.Errorf("invalid mesh branch name")
+	}
+	return nil
 }
