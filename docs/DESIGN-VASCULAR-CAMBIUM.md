@@ -50,7 +50,7 @@ In OpenTendril, when a Sequence specifies a `concurrencyLimit > 1`, the **Vascul
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/sequence.go)
+#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
 *   Add `DependsOnLegacy []string `yaml:"depends_on,omitempty"`` to `SequenceStep` struct to support both `dependsOn` and `depends_on` syntax formats.
 *   In `normalizeSequence`, copy `DependsOnLegacy` to `DependsOn` if the latter is empty.
 *   Rename all Conductor step checks `isConductorStep` to `isMeristemStep`, `EnsureConductorGenotype` to `EnsureMeristemGenotype`, and the genotype name `"conductor"` to `"meristem"`.

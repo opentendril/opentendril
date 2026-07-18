@@ -11,7 +11,7 @@ A `substrates.yaml` file located in the project root or `.tendril/` directory wi
 ```yaml
 substrates:
   core:
-    path: /home/dr3w/GitHub/opentendril/opentendril # Optional local directory path
+    path: /path/to/opentendril # Optional local directory path
     url: https://github.com/opentendril/opentendril.git
     branch: main
     auth: GITHUB_TOKEN       # References env var name
@@ -80,12 +80,12 @@ The scalar `auth: ENV_VAR` form is fully back-compatible. Secrets are never stor
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [orchestrator/substrates_config.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/substrates_config.go)
+#### [NEW] [orchestrator/substrates_config.go](../cmd/stem/internal/orchestrator/substrates_config.go)
 *   Define the Go structs `SubstratesConfig` and `SubstrateSpec`.
 *   Implement `LoadSubstratesConfig(root string) (*SubstratesConfig, error)` searching for `./substrates.yaml`, `./.tendril/substrates.yaml`, and `repoRoot/substrates.yaml`.
 *   Implement a validator that logs warnings if a named substrate has invalid config.
 
-#### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Update `RunTendril` to load the substrates configuration.
 *   Resolve `d.Substrate` by checking if it matches a named configuration key.
 *   If a named configuration matches, override:
@@ -95,14 +95,14 @@ The scalar `auth: ENV_VAR` form is fully back-compatible. Secrets are never stor
     *   Dynamically set the auth environment variable during git clone (e.g. using the token referenced by the config's `auth` env var name).
 *   **Read-Only Gating:** If `readonly: true` is resolved, skip git stashing before boot, and disable post-flight commits and fast-forward merging back to the host, outputting: `"⚠️ Substrate is configured as READONLY. Discarding terrarium modifications."`
 
-#### [MODIFY] [internal/api/mcp.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/api/mcp.go)
+#### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/api/mcp.go)
 *   On startup, load and validate `substrates.yaml`. Log the active named substrates found to `log.Printf`.
 *   Update `sproutTendril` execution flow to resolve the named `substrate` parameter correctly before initializing the orchestrator.
 
-#### [NEW] [substrates.yaml.example](file:///home/dr3w/GitHub/opentendril/opentendril/substrates.yaml.example)
+#### [NEW] [substrates.yaml.example](../substrates.yaml.example)
 *   Add a documented configuration example to the repository.
 
-#### [MODIFY] [QUICKSTART.md](file:///home/dr3w/GitHub/opentendril/opentendril/QUICKSTART.md)
+#### [MODIFY] [QUICKSTART.md](../QUICKSTART.md)
 *   Add a documentation section outlining how developers can configure `substrates.yaml` for multi-repository codebases.
 
 ---

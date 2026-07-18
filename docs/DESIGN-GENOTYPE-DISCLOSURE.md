@@ -78,14 +78,14 @@ To implement progressive disclosure for Plasmids:
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [internal/api/mcp.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/api/mcp.go)
+#### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/api/mcp.go)
 *   **`resources/list`:**
     *   Load `.tendril/genotypes/index.yaml` (automatically generate/sync it from `.json` files if missing or out of date).
     *   Return a list of resource objects populating `uri` (`genotype://<name>`), `name`, and `description`.
 *   **`resources/read`:**
     *   Read the full JSON file `.tendril/genotypes/<name>.json` containing instructions and plasmids, returning it as the resource text.
 
-#### [MODIFY] [internal/orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [internal/orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Parse the Genotype JSON file during sprouting.
 *   If the Genotype contains a `plasmids` array, call the plasmid injection helper to copy those files from `.tendril/genotypes/plasmids/` into the terrarium worktree's `.tendril/genome/` directory before starting the Sprout container.
 

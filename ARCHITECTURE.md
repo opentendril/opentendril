@@ -61,7 +61,7 @@ The single source of truth for execution flow and orchestrator security. It runs
 * **Boundary:** The Stem *consumes* the Roots; it contains no provider code of its own (the layer was ported out of `cmd/stem/internal`). Nothing outside the Roots speaks a provider API directly.
 
 ### C. Ephemeral Sprout Terrariumes
-*   **Role:** Safe, isolated containers running target programming languages (e.g. `opentendril-go`, `opentendril-typescript`). See [Terrarium Terrariuming](file:///home/dr3w/GitHub/opentendril/opentendril/docs/terrarium.md) for details on supported isolation tiers (Docker, gVisor, Firecracker).
+*   **Role:** Safe, isolated containers running target programming languages (e.g. `opentendril-go`, `opentendril-typescript`). See [Terrarium Terrariuming](docs/terrarium.md) for details on supported isolation tiers (Docker, gVisor, Firecracker).
 *   **Responsibilities:**
     *   Boots ephemerally when a Sprout run starts.
     *   Mounts the terrarium Git worktree locally.

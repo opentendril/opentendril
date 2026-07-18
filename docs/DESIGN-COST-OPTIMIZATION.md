@@ -73,18 +73,18 @@ For Anthropic provider queries, Go Stem formats system and user prompts to lever
 
 ### Component: LLM Client (`roots/llm`)
 
-#### [MODIFY] [client.go](file:///home/dr3w/GitHub/opentendril/opentendril/roots/llm/client.go)
+#### [MODIFY] [client.go](../roots/llm/client.go)
 *   Add `ModelTier` constants (`TierPremium`, `TierStandard`, `TierCheapest`).
 *   Implement `ResolveTierProviderSpec(tier ModelTier) ProviderSpec` checking env keys in the format `<PROVIDER>_<TIER>_MODEL` (e.g. `ANTHROPIC_STANDARD_MODEL`) before falling back to 2026 defaults.
 *   Update `callAtBaseURL` to format payloads with prompt caching blocks for `ModeAnthropic` if the header is active.
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Add `Tier llm.ModelTier` to `DockerOrchestrator`.
 *   Update `resolveLLMClient()` to fetch the correct client using the configured `Tier`.
 
-#### [MODIFY] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/sequence.go)
+#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
 *   Assign appropriate model tiers during step and chronicler execution.
 
 ---

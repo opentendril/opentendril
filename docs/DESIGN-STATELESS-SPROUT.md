@@ -79,15 +79,15 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [llm/client.go](file:///home/dr3w/GitHub/opentendril/opentendril/roots/llm/client.go)
+#### [NEW] [llm/client.go](../roots/llm/client.go)
 *   Extract the provider resolution, specification parsing, and HTTP POST chat completions calling code from `chronicler.go`.
 
-#### [NEW] [orchestrator/agent.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/agent.go)
+#### [NEW] [orchestrator/agent.go](../cmd/stem/internal/orchestrator/agent.go)
 *   Implement the Go-native ReAct loop.
 *   Binds tool definitions to the LLM.
 *   Pipes tool arguments to the active Sprout container's stdin.
 
-#### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Update `RunTendril` to launch the Sprout container in interactive mode (`-i`).
 *   Establish persistent stdin/stdout readers.
 *   Query `listAvailableTools` on startup to bind capabilities dynamically.
@@ -100,25 +100,25 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 
 ### Component: Sprout Executors
 
-#### [NEW] [sprouts/go/Dockerfile](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/go/Dockerfile)
+#### [NEW] [sprouts/go/Dockerfile](../sprouts/go/Dockerfile)
 *   Build a minimal Alpine image containing the Go executor binary. (Target size: < 20MB).
 
-#### [NEW] [sprouts/go/main.go](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/go/main.go)
+#### [NEW] [sprouts/go/main.go](../sprouts/go/main.go)
 *   Read JSON tool calls from `stdin` in a loop.
 *   Implement native Go file tools (`readFile`, `writeFile`, `listFiles`), git tools (`gitCommit`, `gitDiff`), and command execution (`execCommand`).
 *   Implement `listAvailableTools` returning the supported tools.
 *   Write output as JSON to `stdout`.
 
-#### [NEW] [sprouts/typescript/Dockerfile](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/typescript/Dockerfile)
+#### [NEW] [sprouts/typescript/Dockerfile](../sprouts/typescript/Dockerfile)
 *   Build a Node-alpine base image (Target size: < 150MB).
 
-#### [NEW] [sprouts/typescript/package.json](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/typescript/package.json)
+#### [NEW] [sprouts/typescript/package.json](../sprouts/typescript/package.json)
 *   Include dependencies for `simple-git` and `execa`/`zx`.
 
-#### [NEW] [sprouts/typescript/src/main.ts](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/typescript/src/main.ts)
+#### [NEW] [sprouts/typescript/src/main.ts](../sprouts/typescript/src/main.ts)
 *   Implement TypeScript tool executor reading stdin JSON lines and executing tools (`readFile`, `writeFile`, `execCommand`, `listAvailableTools`).
 
-#### [MODIFY] [sprouts/python/Dockerfile](file:///home/dr3w/GitHub/opentendril/opentendril/sprouts/python/Dockerfile)
+#### [MODIFY] [sprouts/python/Dockerfile](../sprouts/python/Dockerfile)
 *   Strip out LangChain and LLM-related libraries.
 *   Convert python worker into a dumb executor that only handles Python-specific tooling (`runPytest`, `runPip`) and implements `listAvailableTools`.
 

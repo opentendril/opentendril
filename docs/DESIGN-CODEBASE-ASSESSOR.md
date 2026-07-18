@@ -56,21 +56,21 @@ The generated map is formatted as a compact hierarchical list:
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [orchestrator/repomap.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/repomap.go)
+#### [NEW] [orchestrator/repomap.go](../cmd/stem/internal/orchestrator/repomap.go)
 *   Implement `GenerateRepoMap(dir string) (string, error)`.
 *   Implement `parseGoFile(path string) ([]string, error)` using `go/parser` and `go/ast`.
 *   Implement `parseTypeScriptFile(path string) ([]string, error)` extracting exports and class signatures.
 *   Implement `parsePythonFile(path string) ([]string, error)` extracting classes and defs.
 
-#### [MODIFY] [orchestrator/docker.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
 *   Inside `RunTendril`, after staging Genotype plasmids and before starting Docker:
     *   Call `GenerateRepoMap(mountPath)`.
     *   Write the output to `mountPath/.tendril/genome/repomap.md` to inject the Thigmotropism Plasmid.
 
-#### [NEW] [cmdrepomap.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/cmdrepomap.go)
+#### [NEW] [cmdrepomap.go](../cmd/stem/cmdrepomap.go)
 *   Implement `tendril repomap` CLI command to print the repository map to stdout.
 
-#### [MODIFY] [main.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/main.go)
+#### [MODIFY] [main.go](../cmd/stem/main.go)
 *   Register `repomap` subcommand.
 
 ---
