@@ -573,6 +573,47 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	}
 }
 
+// Committing is the orchestrator's job. The in-terrarium gitCommit tool also
+// cannot work (the mount is a git worktree whose gitdir is outside the
+// container), so a gitCommit call must be answered with the managed-git policy
+// and never forwarded to the tool session to fail.
+func TestAgentInterceptsGitCommit(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		responses: []string{
+			`{"tool":"gitCommit","arguments":{"message":"my work"}}`,
+			`{"final":"done"}`,
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{
+		{Name: "writeFile", Description: "write a file"},
+		{Name: "gitCommit", Description: "Stage files and create a git commit."},
+	}}
+
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newAgent returned error: %v", err)
+	}
+	result, err := agent.Run(context.Background(), "make and commit a change")
+	if err != nil {
+		t.Fatalf("agent.Run returned error: %v", err)
+	}
+	if result.Response != "done" {
+		t.Fatalf("expected final response done, got %q", result.Response)
+	}
+	// The gitCommit call must never reach the tool session.
+	for _, call := range session.calls {
+		if call.Tool == "gitCommit" {
+			t.Fatalf("gitCommit was forwarded to the tool session instead of being intercepted")
+		}
+	}
+	// The agent's transcript must carry the managed-git policy so the model is
+	// told commits are automatic rather than seeing a git error.
+	if !strings.Contains(agent.transcript.String(), "automatically commits") {
+		t.Errorf("expected managed-git policy in the transcript, got:\n%s", agent.transcript.String())
+	}
+}
+
 // The other half of the contract: without a bus the agent takes the blocking
 // path and publishes nothing. This documents why nil was never a neutral
 // default.

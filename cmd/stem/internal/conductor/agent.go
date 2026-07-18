@@ -342,12 +342,45 @@ func (a *Agent) executeTool(ctx context.Context, call ToolCall) (ToolResponse, s
 		}
 	}
 
+	// Committing is the orchestrator's job, not the agent's. Every run's file
+	// changes are committed and merged back after the agent finishes
+	// (commitTerrariumExecution), with the substrate's configured identity and
+	// signing. The in-terrarium gitCommit tool also cannot work: the workspace
+	// is mounted as a git worktree whose .git file points at a host gitdir that
+	// does not exist inside the container, so git reports "not a git
+	// repository". Rather than let the agent hit that cryptic error and burn
+	// turns retrying, answer here with the policy: the commit is handled, keep
+	// editing.
+	if call.Tool == "gitCommit" {
+		response := managedGitCommitResponse()
+		return response, renderToolObservation(call.Tool, response), nil
+	}
+
 	response, err := a.session.Call(ctx, call)
 	if err != nil {
 		return ToolResponse{}, "", err
 	}
 
 	return response, renderToolObservation(call.Tool, response), nil
+}
+
+// managedGitCommitResponse answers a gitCommit tool call with the run's git
+// policy: OpenTendril commits and merges the changes after the run, so the
+// agent neither needs to nor can commit inside the terrarium. It is a success,
+// not an error — the agent's intent (make the changes durable) is satisfied by
+// the orchestrator — so the loop moves on instead of retrying a commit that
+// cannot work.
+func managedGitCommitResponse() ToolResponse {
+	return ToolResponse{
+		Status: "success",
+		Output: map[string]any{
+			"committed": false,
+			"managedBy": "opentendril",
+			"message": "OpenTendril automatically commits and merges this run's changes after it finishes, " +
+				"using the substrate's configured identity and signing. A manual commit inside the terrarium is " +
+				"neither needed nor supported — your edited files are already captured. Keep editing; do not retry committing.",
+		},
+	}
 }
 
 // maxToolObservationEventBytes bounds the observation carried on a
