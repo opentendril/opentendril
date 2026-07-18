@@ -92,7 +92,9 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 		if d != nil && d.Tier != "" {
 			tier = d.Tier
 		}
-		spec = llm.ResolveTierProviderSpec(tier)
+		// An autonomous sprout must drive tools; the tier default must never
+		// fall back to a model that cannot (see ResolveAgentTierProviderSpec).
+		spec = llm.ResolveAgentTierProviderSpec(tier)
 	}
 
 	if d != nil && strings.TrimSpace(d.BaseURL) != "" {

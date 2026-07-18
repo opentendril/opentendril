@@ -215,6 +215,20 @@ func ResolveProviderSpec() ProviderSpec {
 }
 
 func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
+	return resolveTierProviderSpecWithCaps(tier, false)
+}
+
+// ResolveAgentTierProviderSpec resolves the tier default for an autonomous
+// agent run. It behaves like ResolveTierProviderSpec but, when selection falls
+// through to the registry's best model, requires a tool-capable one — so a
+// no-session sprout never silently lands on a model that cannot drive tools
+// (e.g. a 3B local llama that returns an empty completion). Explicit env/config
+// model choices are still honoured, since those are a deliberate override.
+func ResolveAgentTierProviderSpec(tier ModelTier) ProviderSpec {
+	return resolveTierProviderSpecWithCaps(tier, true)
+}
+
+func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) ProviderSpec {
 	tier = canonicalModelTier(tier)
 	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
 	if provider == "" {
@@ -230,9 +244,18 @@ func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
 		return providerSpecForModel(provider, tier, model, "")
 	}
 
-	model, err := SelectBestModel(Capabilities{MaxCostTier: tier})
-	if err == nil {
+	if model, err := SelectBestModel(Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}); err == nil {
 		return providerSpecForModel(model.Provider, tier, model.Name, "")
+	}
+
+	// A tool-capable model was required but none matched (e.g. only small local
+	// models are available). Rather than return an empty spec, fall back to the
+	// unconstrained best model — the run then reports its outcome honestly
+	// instead of silently maturing on nothing.
+	if requireTools {
+		if model, err := SelectBestModel(Capabilities{MaxCostTier: tier}); err == nil {
+			return providerSpecForModel(model.Provider, tier, model.Name, "")
+		}
 	}
 
 	return providerSpecForModel(provider, tier, "", "")

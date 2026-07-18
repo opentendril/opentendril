@@ -15,23 +15,33 @@ type ModelDefinition struct {
 	ContextSize  int
 	HasVision    bool
 	HasReasoning bool
-	CostTier     ModelTier
+	// DrivesTools marks a model that reliably follows the tool-calling
+	// protocol an autonomous sprout depends on. Frontier hosted models and
+	// large instruct models do; small local models (e.g. a 3B llama3.2) and
+	// code-completion-tuned models do not — measured, they return prose or an
+	// empty completion and the sprout matures having done nothing.
+	DrivesTools bool
+	CostTier    ModelTier
 }
 
 // FallbackModels preserves capability metadata for providers that do not expose a models API.
 var FallbackModels = []ModelDefinition{
-	{Provider: "anthropic", Name: "claude-3-5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierPremium},
-	{Provider: "anthropic", Name: "claude-3-5-haiku", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierCheapest},
-	{Provider: "openai", Name: "gpt-4o", Family: ModelFamilyGPT, ContextSize: 128000, HasVision: true, CostTier: TierPremium},
-	{Provider: "openai", Name: "o1-mini", Family: ModelFamilyGPT, ContextSize: 128000, HasReasoning: true, CostTier: TierPremium},
-	{Provider: "openai", Name: "gpt-4o-mini", Family: ModelFamilyGPT, ContextSize: 128000, HasVision: true, CostTier: TierCheapest},
-	{Provider: "google", Name: "gemini-1.5-pro", Family: ModelFamilyGemini, ContextSize: 2000000, HasVision: true, CostTier: TierPremium},
-	{Provider: "google", Name: "gemini-1.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, CostTier: TierCheapest},
-	{Provider: "grok", Name: "grok-beta", Family: ModelFamilyGPT, ContextSize: 128000, CostTier: TierPremium},
-	{Provider: "openrouter", Name: "google/gemini-1.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, CostTier: TierCheapest},
-	{Provider: "opentendril", Name: "anthropic/claude-3.5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, CostTier: TierPremium},
-	{Provider: "nvidia", Name: "meta/llama-3.1-405b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierPremium},
-	{Provider: "nvidia", Name: "meta/llama-3.1-70b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierStandard},
+	{Provider: "anthropic", Name: "claude-3-5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "anthropic", Name: "claude-3-5-haiku", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
+	{Provider: "openai", Name: "gpt-4o", Family: ModelFamilyGPT, ContextSize: 128000, HasVision: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "openai", Name: "o1-mini", Family: ModelFamilyGPT, ContextSize: 128000, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "openai", Name: "gpt-4o-mini", Family: ModelFamilyGPT, ContextSize: 128000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
+	{Provider: "google", Name: "gemini-1.5-pro", Family: ModelFamilyGemini, ContextSize: 2000000, HasVision: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "google", Name: "gemini-1.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
+	{Provider: "grok", Name: "grok-beta", Family: ModelFamilyGPT, ContextSize: 128000, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "openrouter", Name: "google/gemini-1.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
+	{Provider: "opentendril", Name: "anthropic/claude-3.5-sonnet", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "nvidia", Name: "meta/llama-3.1-405b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "nvidia", Name: "meta/llama-3.1-70b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, DrivesTools: true, CostTier: TierStandard},
+	// Local models: only qwen3.5:9b reliably drives tools (measured). A 3B
+	// llama3.2 and the code-completion-tuned qwen2.5-coder models do not, so
+	// they must never be auto-selected for an autonomous sprout.
+	{Provider: "local", Name: "qwen3.5:9b", Family: ModelFamilyQwen, ContextSize: 128000, DrivesTools: true, CostTier: TierStandard},
 	{Provider: "local", Name: "llama3.2", Family: ModelFamilyLlama, ContextSize: 128000, CostTier: TierCheapest},
 	{Provider: "local", Name: "qwen2.5-coder:7b", Family: ModelFamilyQwen, ContextSize: 128000, CostTier: TierStandard},
 	{Provider: "local", Name: "qwen2.5-coder:14b", Family: ModelFamilyQwen, ContextSize: 128000, CostTier: TierPremium},
@@ -88,6 +98,9 @@ func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) 
 			continue
 		}
 		if caps.RequiresReasoning && !model.HasReasoning {
+			continue
+		}
+		if caps.RequiresToolUse && !model.DrivesTools {
 			continue
 		}
 		if caps.MinContextSize > 0 && model.ContextSize < caps.MinContextSize {
