@@ -11,9 +11,9 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 ### 1. Filesystem Naming (The "No Underscore" Rule)
 * **Python Modules:** Must use **merged lowercase** only. No underscores, no hyphens (e.g., `llmrouter.py`, `skillsmanager.py`).
 * **Go Modules & Source Files:** Must use **merged lowercase** only (e.g., `mcpserver.go`, `main.go`).
-* **Go Test Files:** Must use **`*_test.go`** (e.g., `mcp_test.go`). **This is the ONLY exception allowed to have underscores in the filename across the entire repository.**
+* **Go Test Files:** Must use **`*_test.go`** (e.g., `mcp_test.go`).
 * **Directories & Non-Code Files:** Must use **kebab-case** (e.g., `docker-compose.yml`, `dynamic-skills/`, `assets/`).
-* **Zero Underscores elsewhere:** No other files on the filesystem may use `snake_case` or underscores.
+* **Zero Underscores elsewhere:** No other project files may use `snake_case` or underscores, except externally required canonical filenames used for automatic platform discovery, such as GitHub's `CODE_OF_CONDUCT.md`.
 
 > [!NOTE]
 > **Cognitive Load & File Scan Philosophy:**
@@ -21,7 +21,7 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 > OpenTendril eliminates this friction by enforcing a strict filesystem bifurcation:
 > 1. **Code Files are Flat Lowercase:** All source code files are merged lowercase (`llmrouter.py`, `mcpserver.go`), meaning you can scan the explorer tree or fuzzy-find files without thinking about punctuation boundaries.
 > 2. **Config & Folders are Kebab-case:** Non-code files and directories use hyphens (`docker-compose.yml`, `github-actions/`). This creates an instant visual distinction between the active code logic and the surrounding configuration scaffold.
-> 3. **Exceptions:** Go unit tests are named `*_test.go` because the Go build system strictly requires this pattern to discover and execute test suites. No other underscores are allowed.
+> 3. **Exceptions:** Go unit tests are named `*_test.go` because the Go build system strictly requires this pattern to discover and execute test suites. Platform-required canonical files, such as GitHub's `CODE_OF_CONDUCT.md`, are also allowed when their exact names are needed for automatic discovery. No general underscore naming is allowed.
 
 
 ### 2. Code Variables, Properties, and Methods

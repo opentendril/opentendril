@@ -99,13 +99,16 @@ The `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when it is not already 
 
 To eliminate case mismatch bugs across Go, Python, and JSON boundaries:
 
+The detailed filesystem naming policy and its exceptions are maintained in
+[GUARDRAILS.md](GUARDRAILS.md); keep this section aligned with that policy.
+
 * **Internal Python Norms:** Inside Python files, use standard PEP 8 `snake_case` for variables, functions, and methods.
 * **Internal Go/JS Norms:** Inside Go, JS, and TS files, use standard `camelCase` (or `PascalCase` for public Go symbols). **No `snake_case` is permitted.**
 * **External Contracts Boundary:**
   * JSON request/response payload keys must use **`camelCase`** (Go/TS must map internal identifiers to camelCase JSON tags, e.g. `json:"sessionId"`). This matches GUARDRAILS.md and CONTRIBUTING.md.
   * HTTP API endpoint paths must use **kebab-case** (e.g. `/api/mcp-tools`).
   * Stored database keys and domain enums must use **kebab-case** (e.g. the EventBus event types `sprout-emerged`, `phenotypic-selection`).
-* **Filesystem separators:** No underscores are allowed in filenames across the entire filesystem, with the single exception of Go test files (`*_test.go`) and platform build suffixes (e.g. `*_linux.go`).
+* **Filesystem separators:** No underscores are allowed in project filenames across the filesystem, with these narrow exceptions: Go test files (`*_test.go`), platform build suffixes (e.g. `*_linux.go`), and externally required canonical filenames such as GitHub's `CODE_OF_CONDUCT.md`. The canonical-name exception applies only when a platform uses the filename for automatic discovery; it does not authorize general snake_case filenames.
 * **Frontend exception (`ui/`):** The Command Center UI tree follows standard React/TypeScript convention — `PascalCase.tsx` component files, `camelCase.ts` modules, and `PascalCase/` component-family folders. Builders must **not** rewrite these to merged-lowercase; the casing/boundary rules above apply to Go and Python. JSON keys and API paths in `ui/` still follow the external-contract rules (`camelCase` keys, `kebab-case` paths).
 
 ---

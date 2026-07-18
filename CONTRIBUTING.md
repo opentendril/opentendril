@@ -60,7 +60,7 @@ To prevent visual noise and scanning friction, we enforce strict language casing
 
 ### Crucial File Naming Rule:
 * **No underscores or hyphens in code filenames.** All Python modules and Go source files must use **merged lowercase** only (e.g., `llmrouter.py`, `mcpserver.go`).
-* **The Single Exception:** Go test files must end with `_test.go` (e.g., `mcp_test.go`) as required by the Go toolchain. No other underscores are allowed on the filesystem.
+* **Exceptions:** Go test files must end with `_test.go` (e.g., `mcp_test.go`) as required by the Go toolchain. Platform-required canonical files, such as GitHub's `CODE_OF_CONDUCT.md`, may also use underscores when their exact names are required for automatic discovery. No general underscore naming is allowed on the filesystem.
 * **Non-code files** (like `docker-compose.yml`) use `kebab-case`.
 * **The `ui/` frontend follows React/TypeScript convention instead**, scoped to that tree: `PascalCase.tsx` for components (`GardenCanvas.tsx`), `camelCase.ts` for modules (`garden.ts`), and `PascalCase/` folders for component families (`Garden/`). Do **not** rename these to merged-lowercase — it is a deliberate, tooling-idiomatic exception. JSON payload keys stay `camelCase` and API paths stay `kebab-case` as everywhere else.
 
