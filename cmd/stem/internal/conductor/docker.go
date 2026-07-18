@@ -1062,10 +1062,58 @@ func stashHostWorkspace(ctx context.Context, root, runID string) (bool, error) {
 
 func restoreHostStash(ctx context.Context, root string) error {
 	if _, err := runGitCommand(ctx, root, "stash", "pop"); err != nil {
-		return fmt.Errorf("git stash pop failed: %w", err)
+		return recoverFailedStashPop(ctx, root, err)
 	}
 
 	return nil
+}
+
+// recoverFailedStashPop salvages the one stash-pop failure a sprout inflicts on
+// itself. The epigenetic chronicler regenerates an untracked state file on the
+// host during the run (e.g. .tendril/genome/epigenetics.md) that the pre-flight
+// stash also captured, so `git stash pop` cannot lay the stashed copy back down
+// and fails with "could not restore untracked files from stash" — withering an
+// otherwise successful run on self-inflicted state.
+//
+// Git still does everything that matters before it fails: it applies the
+// stash's tracked changes and restores every non-colliding untracked file, then
+// leaves only the redundant stash and the regenerated copy in place (verified).
+// So when the failure is that untracked-restore conflict and there is no genuine
+// tracked merge conflict, drop the stash and let the run finish. A real merge
+// conflict is never papered over — it is returned so the run withers honestly.
+func recoverFailedStashPop(ctx context.Context, root string, popErr error) error {
+	if !strings.Contains(popErr.Error(), "could not restore untracked files") {
+		return fmt.Errorf("git stash pop failed: %w", popErr)
+	}
+	status, statusErr := runGitCommandRawOutput(ctx, root, "status", "--porcelain")
+	if statusErr != nil {
+		return fmt.Errorf("git stash pop failed: %w (status check also failed: %v)", popErr, statusErr)
+	}
+	if porcelainHasUnmergedPaths(status) {
+		return fmt.Errorf("git stash pop failed with merge conflicts: %w", popErr)
+	}
+	if _, err := runGitCommand(ctx, root, "stash", "drop"); err != nil {
+		return fmt.Errorf("git stash pop recovered the workspace but dropping the redundant stash failed: %w", err)
+	}
+	fmt.Fprintln(os.Stderr, "🧺 Restored host workspace; kept OpenTendril's regenerated state and dropped the redundant stash.")
+	return nil
+}
+
+// porcelainHasUnmergedPaths reports whether a `git status --porcelain` listing
+// contains an unmerged (conflicted) path, whose two-letter code is one of the
+// conflict states. Used to tell a self-inflicted untracked conflict from a
+// genuine tracked merge conflict that must not be silently discarded.
+func porcelainHasUnmergedPaths(status string) bool {
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 2 {
+			continue
+		}
+		switch line[:2] {
+		case "DD", "AU", "UD", "UA", "DU", "AA", "UU":
+			return true
+		}
+	}
+	return false
 }
 
 func loadSproutStatus(path string) (*sproutExecutionStatus, error) {

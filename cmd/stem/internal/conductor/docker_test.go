@@ -250,6 +250,110 @@ func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 	}
 }
 
+// A sprout run regenerates its own untracked state on the host after the
+// pre-flight stash captured the prior run's copy (the epigenetic chronicler
+// rewrites .tendril/genome/epigenetics.md). A plain `git stash pop` then fails
+// — "could not restore untracked files from stash" — and the run withers on a
+// self-inflicted conflict. Restore must survive it and still return the user's
+// stashed work.
+func TestRestoreHostStashSurvivesRegeneratedUntrackedFile(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v failed: %v", args, err)
+		}
+	}
+
+	seedPath := filepath.Join(repo, "seed.txt")
+	if err := os.WriteFile(seedPath, []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "seed.txt"); err != nil {
+		t.Fatalf("stage seed: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-m", "seed"); err != nil {
+		t.Fatalf("commit seed: %v", err)
+	}
+
+	// A prior run left OpenTendril's own untracked state behind, and the user
+	// has a tracked change in flight.
+	otState := filepath.Join(repo, ".tendril", "genome", "epigenetics.md")
+	if err := os.MkdirAll(filepath.Dir(otState), 0o755); err != nil {
+		t.Fatalf("mkdir ot state: %v", err)
+	}
+	if err := os.WriteFile(otState, []byte("stale learnings\n"), 0o644); err != nil {
+		t.Fatalf("write ot state: %v", err)
+	}
+	if err := os.WriteFile(seedPath, []byte("user change\n"), 0o644); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+
+	stashed, err := stashHostWorkspace(ctx, repo, "step-1")
+	if err != nil {
+		t.Fatalf("stashHostWorkspace failed: %v", err)
+	}
+	if !stashed {
+		t.Fatalf("expected stash of dirty repo")
+	}
+
+	// The run regenerates the same untracked file the stash captured.
+	if err := os.MkdirAll(filepath.Dir(otState), 0o755); err != nil {
+		t.Fatalf("mkdir ot state (regen): %v", err)
+	}
+	if err := os.WriteFile(otState, []byte("fresh learnings\n"), 0o644); err != nil {
+		t.Fatalf("regenerate ot state: %v", err)
+	}
+
+	if err := restoreHostStash(ctx, repo); err != nil {
+		t.Fatalf("restoreHostStash withered on a regenerated untracked file: %v", err)
+	}
+
+	// The user's tracked change must be restored.
+	content, err := os.ReadFile(seedPath)
+	if err != nil {
+		t.Fatalf("read seed after restore: %v", err)
+	}
+	if string(content) != "user change\n" {
+		t.Fatalf("user's stashed tracked change not restored: seed = %q", string(content))
+	}
+	// The stash must be gone — a leftover stash silently accretes across runs.
+	stashList, err := runGitCommand(ctx, repo, "stash", "list")
+	if err != nil {
+		t.Fatalf("stash list: %v", err)
+	}
+	if strings.TrimSpace(stashList) != "" {
+		t.Fatalf("stash not dropped after restore: %q", stashList)
+	}
+}
+
+func TestPorcelainHasUnmergedPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{"clean", "", false},
+		{"only modified and untracked", " M seed.txt\n?? .tendril/", false},
+		{"added and staged", "A  new.go\nM  edited.go", false},
+		{"both modified conflict", "UU conflict.go", true},
+		{"both added conflict", "AA both.go", true},
+		{"deleted by them", "UD gone.go", true},
+		{"conflict among clean lines", " M ok.go\nUU bad.go\n?? scratch", true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := porcelainHasUnmergedPaths(testCase.status); got != testCase.want {
+				t.Fatalf("porcelainHasUnmergedPaths(%q) = %v, want %v", testCase.status, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestStagePlasmidsForGenotype(t *testing.T) {
 	root := t.TempDir()
 	genotypesDir := filepath.Join(root, ".tendril", "genotypes")
