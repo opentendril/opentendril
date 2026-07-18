@@ -600,13 +600,29 @@ func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []M
 }
 
 func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]string, error) {
-	url := strings.TrimRight(baseURL, "/") + "/models"
+	// Anthropic's Models API lives at /v1/models and authenticates with the
+	// x-api-key + anthropic-version headers — its base URL carries no version
+	// segment and it rejects Bearer auth. The OpenAI-shaped providers bake the
+	// version into their base URL and use a Bearer token. Without this split,
+	// Anthropic discovery hit api.anthropic.com/models (a 404) and silently fell
+	// back to the static registry on every call, making that registry the only
+	// source of Anthropic model selection.
+	modelsPath := "/models"
+	if c.spec.Mode == ModeAnthropic {
+		modelsPath = "/v1/models"
+	}
+	url := strings.TrimRight(baseURL, "/") + modelsPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create models request: %w", err)
 	}
 	if c.spec.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.spec.APIKey)
+		if c.spec.Mode == ModeAnthropic {
+			req.Header.Set("x-api-key", c.spec.APIKey)
+			req.Header.Set("anthropic-version", "2023-06-01")
+		} else {
+			req.Header.Set("Authorization", "Bearer "+c.spec.APIKey)
+		}
 	}
 
 	resp, err := c.httpClient.Do(req)
