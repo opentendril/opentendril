@@ -61,8 +61,8 @@ var (
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv...)
 	}
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
-		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID)
+	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
 	}
 	stashHostWorkspaceFn       = stashHostWorkspace
 	restoreHostStashFn         = restoreHostStash
@@ -342,7 +342,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	defer session.Close()
 
-	agent, err := newAgentFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID)
+	agent, err := newAgentFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
 	if err != nil {
 		return report, err
 	}

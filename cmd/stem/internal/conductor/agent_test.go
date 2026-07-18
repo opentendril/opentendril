@@ -32,11 +32,20 @@ func (f *fakeLLM) Call(ctx context.Context, messages []llm.Message) (string, err
 }
 
 func (f *fakeLLM) CallStream(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (string, error) {
+	callCopy := make([]llm.Message, len(messages))
+	copy(callCopy, messages)
+	f.calls = append(f.calls, callCopy)
+
+	response := f.response
+	if len(f.responses) > 0 {
+		response = f.responses[0]
+		f.responses = f.responses[1:]
+	}
 	if tokenChan != nil {
-		tokenChan <- f.response
+		tokenChan <- response
 		close(tokenChan)
 	}
-	return f.response, nil
+	return response, nil
 }
 
 type fakeSession struct {
@@ -104,7 +113,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 		},
 	}
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "")
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
@@ -293,7 +302,7 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 			{Name: "injectPlasmid"},
 		},
 	}
-	agent, err := newAgent(context.Background(), workspace, workspace, "secure", client, session, nil, "")
+	agent, err := newAgent(context.Background(), workspace, workspace, "secure", client, session, nil, "", "")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
@@ -440,7 +449,7 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1")
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}
@@ -468,6 +477,57 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	}
 }
 
+// A run's actual actions must be observable, not just its bookends. Before
+// tool-invoked events existed, a sprout could read, edit, and run commands and
+// an observer would see only sprout-emerged/sprout-matured — no way to watch
+// WHAT it did. This pins that every tool call the agent makes is published.
+func TestAgentPublishesToolInvokedEvents(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		responses: []string{
+			`{"tool":"readFile","arguments":{"path":"README.md"}}`,
+			`{"final":"done"}`,
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newAgent returned error: %v", err)
+	}
+	if _, err := agent.Run(context.Background(), "read the readme"); err != nil {
+		t.Fatalf("agent.Run returned error: %v", err)
+	}
+
+	var toolEvents []eventbus.Event
+	for _, event := range bus.History(100) {
+		if event.Type == eventbus.EventToolInvoked {
+			toolEvents = append(toolEvents, event)
+		}
+	}
+	if len(toolEvents) != 1 {
+		t.Fatalf("expected exactly one %s event, got %d", eventbus.EventToolInvoked, len(toolEvents))
+	}
+	got := toolEvents[0].Data
+	if got["tool"] != "readFile" {
+		t.Errorf("tool-invoked event tool = %v, want readFile", got["tool"])
+	}
+	if got["status"] != "success" {
+		t.Errorf("tool-invoked event status = %v, want success", got["status"])
+	}
+	if _, ok := got["observation"]; !ok {
+		t.Errorf("tool-invoked event missing observation (got %v)", got)
+	}
+	// The event must be correlated to the run's session, or the per-session
+	// "explain a run" query cannot retrieve it — the exact orphaning that left
+	// agent telemetry present in the table but invisible to the surface.
+	if toolEvents[0].SessionID != "session-1" {
+		t.Errorf("tool-invoked event sessionID = %q, want session-1", toolEvents[0].SessionID)
+	}
+}
+
 // The other half of the contract: without a bus the agent takes the blocking
 // path and publishes nothing. This documents why nil was never a neutral
 // default.
@@ -475,7 +535,7 @@ func TestAgentWithoutABusIsSilent(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{response: "done"}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "")
+	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
 	if err != nil {
 		t.Fatalf("newAgent returned error: %v", err)
 	}

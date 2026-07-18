@@ -290,7 +290,7 @@ substrates:
 		return &stubToolSession{}, nil
 	}
 	origNewAgentFn := newAgentFn
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
+	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return &stubSproutRunner{result: agentResult{Response: "read-only result", Transcript: "transcript"}}, nil
 	}
 	defer func() {

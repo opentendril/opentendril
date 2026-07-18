@@ -68,6 +68,12 @@ type Agent struct {
 	transcript      strings.Builder
 	eventBus        *eventbus.Bus
 	stepID          string
+	// sessionID correlates every published event with the run's session so
+	// the per-session "explain a run" query (historydb.LoadEvents) can retrieve
+	// them. Without it the agent's tokens, thoughts, and tool calls are
+	// persisted with an empty sessionId and orphaned from the run they belong
+	// to — present in the table, invisible to the surface meant to show them.
+	sessionID string
 }
 
 type ActionResult struct {
@@ -85,7 +91,7 @@ type agentResult struct {
 	ActionResult *ActionResult
 }
 
-func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (*Agent, error) {
+func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Agent, error) {
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
 	}
@@ -161,6 +167,7 @@ func newAgent(ctx context.Context, workspace string, genotypeRoot string, genoty
 		denyPlasmids:    denyPlasmids,
 		eventBus:        eventBus,
 		stepID:          stepID,
+		sessionID:       sessionID,
 	}, nil
 }
 
@@ -196,8 +203,9 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 				defer close(tokensPublished)
 				for token := range tokenChan {
 					a.eventBus.Publish(eventbus.Event{
-						Type:   eventbus.EventStreamToken,
-						Source: a.stepID,
+						Type:      eventbus.EventStreamToken,
+						Source:    a.stepID,
+						SessionID: a.sessionID,
 						Data: map[string]interface{}{
 							"token": token,
 						},
@@ -217,8 +225,9 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		thoughtContent := extractThought(response)
 		if thoughtContent != "" && a.eventBus != nil {
 			a.eventBus.Publish(eventbus.Event{
-				Type:   eventbus.EventThoughtBranch,
-				Source: a.stepID,
+				Type:      eventbus.EventThoughtBranch,
+				Source:    a.stepID,
+				SessionID: a.sessionID,
 				Data: map[string]interface{}{
 					"thought": thoughtContent,
 				},
@@ -251,10 +260,11 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 
 		var combinedObservation strings.Builder
 		for _, call := range calls {
-			_, obs, err := a.executeTool(ctx, call)
+			response, obs, err := a.executeTool(ctx, call)
 			if err != nil {
 				return agentResult{}, err
 			}
+			a.publishToolInvoked(call, response, obs)
 			if combinedObservation.Len() > 0 {
 				combinedObservation.WriteString("\n\n")
 			}
@@ -333,6 +343,40 @@ func (a *Agent) executeTool(ctx context.Context, call ToolCall) (ToolResponse, s
 	}
 
 	return response, renderToolObservation(call.Tool, response), nil
+}
+
+// maxToolObservationEventBytes bounds the observation carried on a
+// tool-invoked event so a single large tool result (e.g. a full file read)
+// cannot bloat the event stream or the history row.
+const maxToolObservationEventBytes = 2000
+
+// publishToolInvoked emits one tool-invoked event per action the agent takes,
+// so a run's actual actions are observable live and in history rather than
+// leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
+// no bus is wired (the workspace/test agents), matching the other publishers.
+func (a *Agent) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
+	if a.eventBus == nil {
+		return
+	}
+	status := strings.TrimSpace(response.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	obs := strings.TrimSpace(observation)
+	if len(obs) > maxToolObservationEventBytes {
+		obs = obs[:maxToolObservationEventBytes] + "…"
+	}
+	a.eventBus.Publish(eventbus.Event{
+		Type:      eventbus.EventToolInvoked,
+		Source:    a.stepID,
+		SessionID: a.sessionID,
+		Data: map[string]interface{}{
+			"tool":        call.Tool,
+			"arguments":   call.Arguments,
+			"status":      status,
+			"observation": obs,
+		},
+	})
 }
 
 func (a *Agent) availableToolNames() []string {

@@ -98,7 +98,7 @@ func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 		cancel()
 		return nil, errors.New("stop before terrarium starts")
 	}
-	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string) (sproutRunner, error) {
+	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return nil, errors.New("agent should not start")
 	}
 

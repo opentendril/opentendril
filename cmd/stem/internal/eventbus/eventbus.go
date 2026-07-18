@@ -10,16 +10,24 @@ const maxHistory = 100
 type EventType string
 
 const (
-	EventHealthCheck       EventType = "health-check"
-	EventHealthDegraded    EventType = "health-degraded"
-	EventHealthRecovered   EventType = "health-recovered"
-	EventTerrariumOOM      EventType = "terrarium-oom"
-	EventTerrariumTimeout  EventType = "terrarium-timeout"
-	EventAPIKeyInvalid     EventType = "api-key-invalid"
-	EventSequenceFailure   EventType = "sequence-failure"
-	EventSequenceComplete  EventType = "sequence-complete"
-	EventStreamToken       EventType = "stream-token"
-	EventThoughtBranch     EventType = "thought-branch"
+	EventHealthCheck      EventType = "health-check"
+	EventHealthDegraded   EventType = "health-degraded"
+	EventHealthRecovered  EventType = "health-recovered"
+	EventTerrariumOOM     EventType = "terrarium-oom"
+	EventTerrariumTimeout EventType = "terrarium-timeout"
+	EventAPIKeyInvalid    EventType = "api-key-invalid"
+	EventSequenceFailure  EventType = "sequence-failure"
+	EventSequenceComplete EventType = "sequence-complete"
+	EventStreamToken      EventType = "stream-token"
+	EventThoughtBranch    EventType = "thought-branch"
+	// EventToolInvoked reports one tool call the agent made during a run — the
+	// tool name, its arguments, the resulting status, and a truncated
+	// observation. Without it a run's actual actions are invisible: a
+	// successful sprout that reads, edits, and runs commands otherwise emits
+	// only the sprout-emerged/sprout-matured bookends, so an observer cannot
+	// see WHAT the agent did. This is the per-action stream every live surface
+	// (/ws, telemetry) and the history sink need to explain a run.
+	EventToolInvoked       EventType = "tool-invoked"
 	EventSproutEmerged     EventType = "sprout-emerged"
 	EventSproutMatured     EventType = "sprout-matured"
 	EventSproutWithered    EventType = "sprout-withered"
@@ -53,6 +61,7 @@ func AllEventTypes() []EventType {
 		EventSequenceComplete,
 		EventStreamToken,
 		EventThoughtBranch,
+		EventToolInvoked,
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,
