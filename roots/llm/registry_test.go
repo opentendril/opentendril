@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func clearProviderKeys(t *testing.T) {
 	t.Helper()
@@ -28,8 +31,8 @@ func TestSelectBestModelUsesOnlyAvailableProviders(t *testing.T) {
 	if model.Provider != "openai" {
 		t.Fatalf("model.Provider = %q, want %q", model.Provider, "openai")
 	}
-	if model.Name != "gpt-4o-mini" {
-		t.Fatalf("model.Name = %q, want %q", model.Name, "gpt-4o-mini")
+	if model.Name != "gpt-5-mini" {
+		t.Fatalf("model.Name = %q, want %q", model.Name, "gpt-5-mini")
 	}
 }
 
@@ -44,32 +47,70 @@ func TestSelectBestModelFiltersCapabilities(t *testing.T) {
 	if !model.HasReasoning {
 		t.Fatalf("selected model %#v without reasoning", model)
 	}
-	if model.Name != "o1-mini" {
-		t.Fatalf("model.Name = %q, want %q", model.Name, "o1-mini")
+	if model.Name != "gpt-5-mini" {
+		t.Fatalf("model.Name = %q, want %q", model.Name, "gpt-5-mini")
 	}
 }
 
 func TestSelectBestModelFiltersContextAndCost(t *testing.T) {
 	clearProviderKeys(t)
-	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
+	// A one-million-token context requirement excludes claude-haiku-4-5
+	// (200K); the cheapest remaining match under a premium cap is the
+	// standard-tier claude-sonnet-4-6.
 	model, err := SelectBestModel(Capabilities{
-		MinContextSize: 2000000,
+		MinContextSize: 1000000,
 		MaxCostTier:    TierPremium,
 	})
 	if err != nil {
 		t.Fatalf("SelectBestModel failed: %v", err)
 	}
-	if model.Provider != "google" || model.Name != "gemini-1.5-pro" {
-		t.Fatalf("model = %#v, want google gemini-1.5-pro", model)
+	if model.Provider != "anthropic" || model.Name != "claude-sonnet-4-6" {
+		t.Fatalf("model = %#v, want anthropic claude-sonnet-4-6", model)
 	}
 
 	_, err = SelectBestModel(Capabilities{
-		MinContextSize: 2000000,
+		MinContextSize: 1000000,
 		MaxCostTier:    TierCheapest,
 	})
 	if err == nil {
 		t.Fatalf("SelectBestModel succeeded, want error")
+	}
+}
+
+// The fallback registry must offer current-generation, provider-served model
+// names: a retired name (for example claude-3-5-sonnet) means every
+// auto-selected request fails at the provider with a model-not-found error.
+func TestFallbackRegistryServesCurrentGenerationAnthropic(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+	model, err := SelectBestModel(Capabilities{
+		RequiresToolUse:   true,
+		RequiresVision:    true,
+		RequiresReasoning: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectBestModel failed: %v", err)
+	}
+	if model.Provider != "anthropic" {
+		t.Fatalf("model.Provider = %q, want anthropic", model.Provider)
+	}
+	if model.Name != "claude-sonnet-4-6" {
+		t.Fatalf("model.Name = %q, want claude-sonnet-4-6", model.Name)
+	}
+
+	for _, entry := range FallbackModels {
+		if entry.Provider != "anthropic" {
+			continue
+		}
+		if !entry.DrivesTools {
+			t.Fatalf("anthropic fallback %q must drive tools", entry.Name)
+		}
+		if strings.HasPrefix(entry.Name, "claude-3") {
+			t.Fatalf("anthropic fallback %q is a retired generation", entry.Name)
+		}
 	}
 }
 

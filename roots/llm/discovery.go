@@ -190,10 +190,15 @@ func inferCapabilitiesFromName(definition *ModelDefinition) {
 	}
 
 	if !definition.HasVision {
+		// Every hosted Claude generation since claude-3 is multimodal, so the
+		// bare family marker is the right signal — a version-pinned marker like
+		// "claude-3" silently strips vision from each newer generation.
 		definition.HasVision = strings.Contains(normalized, "vision") ||
 			strings.Contains(normalized, "4o") ||
+			strings.Contains(normalized, "gpt-5") ||
 			strings.Contains(normalized, "gemini") ||
-			strings.Contains(normalized, "claude-3") ||
+			strings.Contains(normalized, "claude") ||
+			strings.Contains(normalized, "grok-4") ||
 			strings.Contains(normalized, "llava") ||
 			strings.Contains(normalized, "pixtral")
 	}
@@ -205,7 +210,14 @@ func inferCapabilitiesFromName(definition *ModelDefinition) {
 			strings.Contains(normalized, "think") ||
 			strings.Contains(normalized, "r1") ||
 			strings.Contains(normalized, "opus") ||
-			strings.Contains(normalized, "grok-3")
+			strings.Contains(normalized, "sonnet-4") ||
+			strings.Contains(normalized, "sonnet-5") ||
+			strings.Contains(normalized, "gpt-5") ||
+			strings.Contains(normalized, "gemini-2.5") ||
+			strings.Contains(normalized, "gemini-3") ||
+			strings.Contains(normalized, "grok-3") ||
+			strings.Contains(normalized, "grok-4") ||
+			strings.Contains(normalized, "qwen3")
 	}
 
 	if definition.CostTier == "" {
