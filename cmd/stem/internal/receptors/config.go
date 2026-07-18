@@ -125,6 +125,19 @@ func (g *DelegationGate) audit(request core.DelegationRequest, decision core.Del
 	})
 }
 
+// validConfigFileName reports whether a caller-supplied name is safe to embed
+// in a filename inside the .tendril configuration tree. Valid names carry no
+// path separators and no traversal component, so a request can never write
+// outside the directory its handler targets. Shared by the REST config
+// uploads and the MCP createGenotype tool so every surface enforces the same
+// boundary.
+func validConfigFileName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`)
+}
+
 // ConfigHandler provides HTTP endpoints for managing .tendril configs
 type ConfigHandler struct {
 	TendrilDir string
@@ -194,8 +207,8 @@ func (h *ConfigHandler) UploadTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	if strings.Contains(header.Filename, "/") || strings.Contains(header.Filename, "\\") {
-		http.Error(w, "Invalid filename", http.StatusBadRequest)
+	if !validConfigFileName(header.Filename) {
+		http.Error(w, "Invalid filename: must not be empty or contain path separators or traversal components", http.StatusBadRequest)
 		return
 	}
 
@@ -272,6 +285,14 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	name, ok := nameObj.(string)
 	if !ok || name == "" {
 		http.Error(w, "Invalid 'name' field", http.StatusBadRequest)
+		return
+	}
+	// The name becomes the on-disk filename: reject path separators and
+	// traversal components so a request can never write outside the
+	// genotypes directory (the same boundary the MCP createGenotype tool
+	// enforces).
+	if !validConfigFileName(name) {
+		http.Error(w, "Invalid 'name' field: must not contain path separators or traversal components", http.StatusBadRequest)
 		return
 	}
 
