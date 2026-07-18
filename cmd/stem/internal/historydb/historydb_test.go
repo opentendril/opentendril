@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 func openTestStore(t *testing.T) *Store {

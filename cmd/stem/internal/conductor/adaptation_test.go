@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 type fakeMeristem struct {

@@ -51,5 +51,5 @@ Tendril is being built in public. Every major strategic decision—from the choi
 We are currently in the **"Stable Core"** phase. We aren't just building a product; we are building the Root Agent that will eventually build the next 100 products.
 
 **Join the journey.**
-- [View the v0.1.0 Release](https://github.com/opentendril/core/releases)
+- [View the v0.1.0 Release](https://github.com/opentendril/opentendril/releases)
 - [Check the Genesis](HISTORY.md)

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func TestResolveLLMClientAppliesTemperatureOverride(t *testing.T) {

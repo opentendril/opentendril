@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // ErrNotFound is the transport-neutral sentinel returned when a capability

@@ -3,7 +3,7 @@ package conductor
 import (
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 func TestResolveTerrariumProviderName(t *testing.T) {

@@ -21,10 +21,10 @@ import (
 
 func TestParseOwnerRepo(t *testing.T) {
 	cases := map[string][2]string{
-		"https://github.com/opentendril/core.git":   {"opentendril", "core"},
-		"https://github.com/opentendril/core":       {"opentendril", "core"},
-		"git@github.com:opentendril/core.git":       {"opentendril", "core"},
-		"ssh://git@github.com/opentendril/core.git": {"opentendril", "core"},
+		"https://github.com/opentendril/opentendril.git":   {"opentendril", "opentendril"},
+		"https://github.com/opentendril/opentendril":       {"opentendril", "opentendril"},
+		"git@github.com:opentendril/opentendril.git":       {"opentendril", "opentendril"},
+		"ssh://git@github.com/opentendril/opentendril.git": {"opentendril", "opentendril"},
 	}
 	for url, want := range cases {
 		owner, repo, err := parseOwnerRepo(url)
@@ -132,7 +132,7 @@ func TestGithubAppInstallationToken(t *testing.T) {
 	appTokenMu.Unlock()
 
 	app := AppCredential{AppID: "4276558", PrivateKeyPath: keyPath}
-	tok, err := githubAppInstallationToken(context.Background(), app, "https://github.com/opentendril/core.git")
+	tok, err := githubAppInstallationToken(context.Background(), app, "https://github.com/opentendril/opentendril.git")
 	if err != nil {
 		t.Fatalf("token mint failed: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestGithubAppInstallationToken(t *testing.T) {
 	}
 
 	// Second call is served from cache — no new API traffic.
-	if _, err := githubAppInstallationToken(context.Background(), app, "https://github.com/opentendril/core.git"); err != nil {
+	if _, err := githubAppInstallationToken(context.Background(), app, "https://github.com/opentendril/opentendril.git"); err != nil {
 		t.Fatalf("cached call failed: %v", err)
 	}
 	if installCalls != 1 || tokenCalls != 1 {

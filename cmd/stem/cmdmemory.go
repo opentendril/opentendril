@@ -13,7 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/rhizome"
+	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
 func runMemoryCmd(ctx context.Context, args []string) {

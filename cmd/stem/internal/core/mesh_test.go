@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // recordingMeshOperations builds a MeshOperations port that records what it received and

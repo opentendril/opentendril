@@ -48,7 +48,7 @@ jobs:
 
             ### Quick Start
             ```bash
-            git clone https://github.com/opentendril/core.git && cd core
+            git clone https://github.com/opentendril/opentendril.git && cd opentendril
             cp .env.example .env  # Add your LLM API key
             # Set TENDRIL_PROJECT_PATH in .env to your project
             docker compose up --build

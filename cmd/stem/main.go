@@ -30,7 +30,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func main() {

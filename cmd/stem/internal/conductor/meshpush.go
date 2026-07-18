@@ -3,7 +3,7 @@ package conductor
 import (
 	"context"
 
-	"github.com/opentendril/core/cmd/stem/internal/mesh"
+	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
 )
 
 func delegateGitPushIfConfigured(ctx context.Context, workspace, branch, commitMessage string) (bool, error) {

@@ -4,5 +4,5 @@ setup(
     version='0.0.1',
     description='The Root Agent. Self-building AI orchestrator.',
     author='OpenTendril',
-    url='https://github.com/opentendril/core',
+    url='https://github.com/opentendril/opentendril',
 )

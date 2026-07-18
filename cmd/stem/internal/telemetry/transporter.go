@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // Transporter pumps events across the system boundary to external telemetry platforms.

@@ -35,7 +35,7 @@ func runSetupAgentCmd() {
 	choices := agentSubstrateChoices{}
 
 	var err error
-	choices.remoteURL, err = promptSetupValue(reader, "Target Git remote URL", "https://github.com/opentendril/core.git")
+	choices.remoteURL, err = promptSetupValue(reader, "Target Git remote URL", "https://github.com/opentendril/opentendril.git")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to read remote URL: %v\n", err)
 		os.Exit(1)

@@ -47,15 +47,15 @@ We will add a new CLI command `tendril genome evolve` and support automated exec
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/chronicler.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/chronicler.go)
+#### [MODIFY] [orchestrator/chronicler.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/chronicler.go)
 *   Define fitness structs.
 *   Implement `RecordGenomicFitness(workspace string, success bool) error` to parse active rules and update scores.
 *   Implement `EvolveGenome(ctx context.Context, workspace string) error` to call the LLM and consolidate `epigenetics.md`.
 
-#### [MODIFY] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/internal/orchestrator/sequence.go)
+#### [MODIFY] [orchestrator/sequence.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/orchestrator/sequence.go)
 *   Call `RecordGenomicFitness` at the end of sprout runs.
 
-#### [NEW] [cmdgenomeevolve.go](file:///home/dr3w/GitHub/opentendril/core/cmd/stem/cmdgenomeevolve.go)
+#### [NEW] [cmdgenomeevolve.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/cmdgenomeevolve.go)
 *   Register subcommand `tendril genome evolve`.
 
 ---

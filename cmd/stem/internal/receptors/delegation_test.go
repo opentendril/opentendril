@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // newDelegationTestHandler builds a SproutHandler over a real Core with a

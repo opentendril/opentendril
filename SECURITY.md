@@ -65,7 +65,7 @@ See the full System Genotype RFC.
 
 To ensure enterprise-grade scaling, portability, and DevOps compatibility, OpenTendril aligns with the **12-Factor App methodology**:
 
-* **I. Codebase:** One codebase tracked in revision control, many deploys. OpenTendril maintains a strict separation between the stateless kernel code (`opentendril/core`) and the deployment state/secrets (`opentendril/tendril`).
+* **I. Codebase:** One codebase tracked in revision control, many deploys. OpenTendril maintains a strict separation between the stateless kernel code (`opentendril/opentendril`) and the deployment state/secrets (`opentendril/tendril`).
 * **III. Config:** Config is stored in the environment. All runtime options, API keys, and database connections are injected via environment variables (e.g., `TENDRIL_SDLC_PROFILE`, `TERRARIUM_PROVIDER`) rather than hardcoded configurations.
 * **IV. Backing Services:** Backing services (Postgres, SQLite, Ollama, cloud LLM providers) are treated as attached resources and can be swapped dynamically via environment URLs with zero code modifications.
 * **VI. Processes:** OpenTendril runtimes are completely stateless. The Go Gateway and Python Core run as isolated, stateless processes, persisting state strictly to attached databases (Postgres/SQLite).

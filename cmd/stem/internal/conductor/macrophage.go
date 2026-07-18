@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // macrophageFuzzImage is the dedicated, Go-toolchain-enabled terrarium image

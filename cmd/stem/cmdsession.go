@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/historydb"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // runSessionCmd is the CLI adapter for the governed session-lifecycle

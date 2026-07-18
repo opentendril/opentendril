@@ -19,8 +19,8 @@ substrates:
   # Local substrate: `path` exists, so the Stem operates on the checkout in
   # place. A bare `auth: ENV_VAR` is shorthand for HTTPS PAT auth.
   core:
-    path: /home/user/dev/opentendril/core
-    url: https://github.com/opentendril/core.git
+    path: /home/user/dev/opentendril/opentendril
+    url: https://github.com/opentendril/opentendril.git
     branch: main
     auth: GITHUB_TOKEN
     readonly: false

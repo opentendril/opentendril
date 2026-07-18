@@ -3,7 +3,7 @@ package conductor
 import (
 	"testing"
 
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func TestParseRouterResponse(t *testing.T) {

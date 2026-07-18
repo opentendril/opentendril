@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // The command line's closing line must report the actual outcome: a run that

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 const (

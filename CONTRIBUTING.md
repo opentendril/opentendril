@@ -17,8 +17,8 @@ OpenTendril is a Go Stem orchestrator with optional containerized UI and test se
 ### Installation Steps:
 1. **Fork and Clone:**
    ```bash
-   git clone https://github.com/your-username/core.git
-   cd core
+   git clone https://github.com/your-username/opentendril.git
+   cd opentendril
    ```
 2. **Build the CLI:**
    ```bash

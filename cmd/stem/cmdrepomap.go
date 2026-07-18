@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 )
 
 func runRepoMapCmd(args []string) {

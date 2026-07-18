@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // Phenotypic Selection: a generational genetic algorithm over LLM-authored code.

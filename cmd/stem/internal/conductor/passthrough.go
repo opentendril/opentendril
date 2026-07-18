@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // Passthrough execution — the minimal delegable operation-class: one bounded

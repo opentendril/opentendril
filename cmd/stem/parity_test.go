@@ -13,9 +13,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/receptors"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // Interface-parity coverage test. It asserts the governed command

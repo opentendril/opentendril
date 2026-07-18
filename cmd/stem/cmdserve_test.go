@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/gateway"
-	"github.com/opentendril/core/cmd/stem/internal/scheduler"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
+	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // Issue finding 1: the Stem must never serve its API unauthenticated.

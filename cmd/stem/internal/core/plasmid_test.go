@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 func newPlasmidService(t *testing.T, operations core.PlasmidOperations) *core.Service {

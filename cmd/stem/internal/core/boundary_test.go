@@ -18,12 +18,12 @@ import (
 // enforced structurally.
 var forbiddenCoreImports = []string{
 	"net/http",
-	"github.com/opentendril/core/cmd/stem/internal/receptors",
-	"github.com/opentendril/core/cmd/stem/internal/conductor",
-	"github.com/opentendril/core/cmd/stem/internal/terrarium",
-	"github.com/opentendril/core/cmd/stem/internal/gateway",
-	"github.com/opentendril/core/cmd/stem/internal/mesh",
-	"github.com/opentendril/core/cmd/stem/internal/historydb",
+	"github.com/opentendril/opentendril/cmd/stem/internal/receptors",
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor",
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium",
+	"github.com/opentendril/opentendril/cmd/stem/internal/gateway",
+	"github.com/opentendril/opentendril/cmd/stem/internal/mesh",
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb",
 }
 
 func TestCoreHasNoTransportOrExecutionImports(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // TestEgressPolicyDenyAllByDefault: with no allow-list (no grant, or a grant

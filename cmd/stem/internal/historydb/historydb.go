@@ -23,8 +23,8 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 const (

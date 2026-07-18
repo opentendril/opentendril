@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
-	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // A named substrate must reach the orchestrator by NAME. The execution plan

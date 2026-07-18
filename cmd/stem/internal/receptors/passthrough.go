@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // PassthroughHandler is the REST adapter for the governed passthrough/run

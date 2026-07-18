@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func runLLMCmd(ctx context.Context, args []string) {

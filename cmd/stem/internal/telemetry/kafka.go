@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // Kafka REST Proxy media types (Confluent REST Proxy v2 embedded-JSON format).

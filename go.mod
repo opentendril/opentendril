@@ -1,4 +1,4 @@
-module github.com/opentendril/core
+module github.com/opentendril/opentendril
 
 go 1.25.0
 

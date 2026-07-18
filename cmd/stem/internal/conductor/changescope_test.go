@@ -233,8 +233,8 @@ func TestScopeAgainstRealModuleGraph(t *testing.T) {
 		t.Fatalf("unexpected whole-module fallback for a single in-package change")
 	}
 	want := map[string]bool{
-		"github.com/opentendril/core/cmd/stem/internal/eventbus":  false,
-		"github.com/opentendril/core/cmd/stem/internal/conductor": false,
+		"github.com/opentendril/opentendril/cmd/stem/internal/eventbus":  false,
+		"github.com/opentendril/opentendril/cmd/stem/internal/conductor": false,
 	}
 	for _, importPath := range packages {
 		if _, tracked := want[importPath]; tracked {

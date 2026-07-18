@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // The sprout outcome vocabulary. A finished agent loop is not a verdict on the

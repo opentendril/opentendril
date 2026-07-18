@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 type fakeLLM struct {
@@ -329,7 +329,7 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 
 func TestParseActionResult(t *testing.T) {
 	// A response that includes an embedded ACTION_RESULT block.
-	responseWithActionResult := `{"final":"I posted the comment. ACTION_RESULT {\"actionType\":\"github_comment\",\"target\":\"https://github.com/opentendril/core/pull/117\",\"summary\":\"Posted changelog comment to PR #117.\",\"success\":true}"}`
+	responseWithActionResult := `{"final":"I posted the comment. ACTION_RESULT {\"actionType\":\"github_comment\",\"target\":\"https://github.com/opentendril/opentendril/pull/117\",\"summary\":\"Posted changelog comment to PR #117.\",\"success\":true}"}`
 
 	_, isToolCall, final, actionResult, err := parseModelResponse(responseWithActionResult)
 	if err != nil {

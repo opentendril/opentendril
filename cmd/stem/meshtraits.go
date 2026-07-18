@@ -1,5 +1,5 @@
 package main
 
-import "github.com/opentendril/core/cmd/stem/internal/mesh"
+import "github.com/opentendril/opentendril/cmd/stem/internal/mesh"
 
 var meshTraitInbox = mesh.NewTraitInbox()

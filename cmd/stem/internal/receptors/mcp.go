@@ -14,10 +14,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/historydb"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"gopkg.in/yaml.v3"
 )
 
@@ -439,7 +439,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 						},
 						"substrateUrl": map[string]interface{}{
 							"type":        "string",
-							"description": "Optional remote repository URL override to clone and operate on dynamically. E.g. https://github.com/opentendril/core.git",
+							"description": "Optional remote repository URL override to clone and operate on dynamically. E.g. https://github.com/opentendril/opentendril.git",
 						},
 						"substrateBranch": map[string]interface{}{
 							"type":        "string",

@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/data/genotypes"
-	"github.com/opentendril/core/roots/llm"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/data/genotypes"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 const (

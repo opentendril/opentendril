@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // GenomeHandler is the REST adapter for the governed genome capability family

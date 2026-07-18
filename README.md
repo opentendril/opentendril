@@ -41,8 +41,8 @@ For high-security and multi-tenant enterprise environments, OpenTendril supports
 ### Step 1 — Clone and install the CLI
 
 ```bash
-git clone https://github.com/opentendril/core.git
-cd core
+git clone https://github.com/opentendril/opentendril.git
+cd opentendril
 make install
 ```
 

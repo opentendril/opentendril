@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // SequenceHandler is the REST adapter for the governed sequence capability

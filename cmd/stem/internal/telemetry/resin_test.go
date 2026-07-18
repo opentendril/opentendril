@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 func TestInitResinSinkWritesStructuredLog(t *testing.T) {

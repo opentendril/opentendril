@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/rhizome"
+	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
 // updateTreeSitterGolden regenerates testdata/treesittergolden.json from the

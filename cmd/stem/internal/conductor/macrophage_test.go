@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opentendril/core/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 func TestMacrophageFuzzFailedPassesOnCleanExit(t *testing.T) {

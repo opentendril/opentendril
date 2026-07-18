@@ -41,8 +41,8 @@ OpenTendril operates on a strict **Zero-Trust SDLC architecture**. It must *neve
 Clone the repository and build the Go Stem orchestrator binary:
 
 ```bash
-git clone https://github.com/opentendril/core.git
-cd core
+git clone https://github.com/opentendril/opentendril.git
+cd opentendril
 make install
 ```
 
@@ -186,8 +186,8 @@ Example:
 ```yaml
 substrates:
   core:
-    path: /home/user/dev/opentendril/core
-    url: https://github.com/opentendril/core.git
+    path: /home/user/dev/opentendril/opentendril
+    url: https://github.com/opentendril/opentendril.git
     branch: main
     auth: GITHUB_TOKEN
     readonly: false

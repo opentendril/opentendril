@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 )
 
 func runAdaptCmd(ctx context.Context, args []string) {

@@ -13,7 +13,7 @@ This script is designed for a **2-minute terminal recording** (e.g., via `asciin
 **Goal:** Show the setup and the "surprising" file listing.
 
 1. **Start recording.**
-2. `ls -F` (Show you are in the `opentendril/core` directory).
+2. `ls -F` (Show you are in the `opentendril/opentendril` directory).
 3. `cat .env | grep TENDRIL_PROJECT_PATH` (Show it's pointing to `jurnx`).
 4. `./cli/tendril-cli` (Launch the client).
 

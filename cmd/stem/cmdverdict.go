@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 )
 
 // runVerdictCmd is the CLI adapter for the shared skip-aware test judgement.

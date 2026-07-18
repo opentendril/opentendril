@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
-	"github.com/opentendril/core/cmd/stem/internal/historydb"
-	"github.com/opentendril/core/cmd/stem/internal/receptors"
-	"github.com/opentendril/core/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
+	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // envDelegationSubject names the environment variable that binds this MCP

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 // AuthMiddleware wraps a handler to require an ADMIN_TOKEN. Bearer presence

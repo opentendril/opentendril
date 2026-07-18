@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/core/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
 type mockCheck struct {

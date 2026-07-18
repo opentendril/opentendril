@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/opentendril/core/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // PlasmidHandler is the REST adapter for the governed plasmid capability
