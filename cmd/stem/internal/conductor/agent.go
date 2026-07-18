@@ -176,6 +176,11 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		ctx = context.Background()
 	}
 
+	// Publish the assembled conversation once on every exit path — a completed
+	// run, an early error, or hitting max iterations — so the run is explainable
+	// after the fact as a single transcript, not only as a token stream.
+	defer a.publishTranscript()
+
 	systemPrompt := buildAgentSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -375,6 +380,28 @@ func (a *Agent) publishToolInvoked(call ToolCall, response ToolResponse, observa
 			"arguments":   call.Arguments,
 			"status":      status,
 			"observation": obs,
+		},
+	})
+}
+
+// publishTranscript emits the agent's assembled conversation once when a run
+// ends, correlated to the run's session so the per-session "explain a run"
+// query can return one readable record. It is a no-op without a bus (the
+// workspace/test agents) or an empty transcript.
+func (a *Agent) publishTranscript() {
+	if a.eventBus == nil {
+		return
+	}
+	transcript := strings.TrimSpace(a.transcript.String())
+	if transcript == "" {
+		return
+	}
+	a.eventBus.Publish(eventbus.Event{
+		Type:      eventbus.EventAgentTranscript,
+		Source:    a.stepID,
+		SessionID: a.sessionID,
+		Data: map[string]interface{}{
+			"transcript": transcript,
 		},
 	})
 }
