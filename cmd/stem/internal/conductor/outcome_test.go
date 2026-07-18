@@ -19,18 +19,23 @@ func TestClassifySproutOutcome(t *testing.T) {
 		runErr     error
 		files      []string
 		filesKnown bool
+		response   string
 		want       string
 	}{
-		{"changed something", nil, []string{"main.go"}, true, SproutOutcomeComplete},
-		{"changed nothing", nil, []string{}, true, SproutOutcomeNoChanges},
-		{"changes unmeasurable", nil, nil, false, SproutOutcomeComplete},
-		{"failed", errors.New("agent exploded"), nil, true, SproutOutcomeFailed},
-		{"timed out", timedOut, nil, true, SproutOutcomeTimedOut},
-		{"timed out beats file evidence", timedOut, []string{"main.go"}, true, SproutOutcomeTimedOut},
+		{"changed something", nil, []string{"main.go"}, true, "done", SproutOutcomeComplete},
+		{"changed nothing but answered", nil, []string{}, true, "here is my report", SproutOutcomeNoChanges},
+		{"changes unmeasurable but answered", nil, nil, false, "report", SproutOutcomeComplete},
+		{"failed", errors.New("agent exploded"), nil, true, "", SproutOutcomeFailed},
+		{"timed out", timedOut, nil, true, "", SproutOutcomeTimedOut},
+		{"timed out beats file evidence", timedOut, []string{"main.go"}, true, "", SproutOutcomeTimedOut},
+		{"empty response, no files, is no-engagement", nil, []string{}, true, "", SproutOutcomeNoEngagement},
+		{"whitespace response, no files, is no-engagement", nil, []string{}, true, "  \n\t ", SproutOutcomeNoEngagement},
+		{"empty response, unmeasurable, is no-engagement", nil, nil, false, "", SproutOutcomeNoEngagement},
+		{"empty response but changed files is complete", nil, []string{"main.go"}, true, "", SproutOutcomeComplete},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifySproutOutcome(testCase.runErr, testCase.files, testCase.filesKnown)
+			got := classifySproutOutcome(testCase.runErr, testCase.files, testCase.filesKnown, testCase.response)
 			if got != testCase.want {
 				t.Fatalf("classifySproutOutcome() = %q, want %q", got, testCase.want)
 			}

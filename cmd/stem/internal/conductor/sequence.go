@@ -1640,7 +1640,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		// agent turn) must reclassify: the run's provisional verdict cannot
 		// stand once its results failed to land.
 		if err != nil || outcome == "" {
-			outcome = classifySproutOutcome(err, executionFiles, false)
+			outcome = classifySproutOutcome(err, executionFiles, false, response)
 		}
 		reason := ""
 		if err != nil {
@@ -1848,7 +1848,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true),
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true, agentResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
