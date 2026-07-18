@@ -203,10 +203,6 @@ func SaveSequence(path string, seq *Sequence) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create sequence directory: %w", err)
-	}
-
 	root, err := os.OpenRoot(filepath.Dir(path))
 	if err != nil {
 		return fmt.Errorf("open sequence root %s: %w", filepath.Dir(path), err)
