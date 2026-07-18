@@ -1010,8 +1010,8 @@ func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, ar
 		ctx = context.Background()
 	}
 
-	cmdArgs := append([]string{"-C", dir}, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
 	if len(extraEnv) > 0 {
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}

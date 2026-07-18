@@ -281,10 +281,10 @@ func TestVascularMergeConflictHandling(t *testing.T) {
 	script := `#!/bin/sh
 printf '%s\n' "$*" >> "$GIT_LOG"
 case "$*" in
-  *" merge --abort"*)
+  *"merge --abort"*)
     exit 0
     ;;
-  *" merge --no-ff "*)
+  *"merge --no-ff "*)
     printf '%s\n' "simulated merge conflict" >&2
     exit 1
     ;;

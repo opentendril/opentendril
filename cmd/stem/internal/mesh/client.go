@@ -227,7 +227,8 @@ func collectLatestCommitPatch(ctx context.Context, workspace string) (string, st
 	}
 
 	args := []string{"diff-tree", "--root", "--binary", "--no-commit-id", "-p", "HEAD"}
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", workspace}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workspace
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
@@ -246,8 +247,8 @@ func runGitOutput(ctx context.Context, workspace string, args ...string) (string
 		ctx = context.Background()
 	}
 
-	cmdArgs := append([]string{"-C", workspace}, args...)
-	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = workspace
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))

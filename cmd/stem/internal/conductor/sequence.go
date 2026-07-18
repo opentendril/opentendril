@@ -161,7 +161,20 @@ func LoadSequence(path string) (*Sequence, error) {
 	if err := validateSequenceFilePath(path); err != nil {
 		return nil, err
 	}
-	content, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return nil, fmt.Errorf("open sequence root %s: %w", filepath.Dir(path), err)
+	}
+	defer root.Close()
+	file, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return nil, fmt.Errorf("open sequence %s: %w", path, err)
+	}
+	content, err := io.ReadAll(file)
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read sequence %s: %w", path, err)
 	}
@@ -194,8 +207,14 @@ func SaveSequence(path string, seq *Sequence) error {
 		return fmt.Errorf("create sequence directory: %w", err)
 	}
 
-	dir := filepath.Dir(path)
-	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("open sequence root %s: %w", filepath.Dir(path), err)
+	}
+	defer root.Close()
+	baseName := filepath.Base(path)
+	tmpName := fmt.Sprintf(".%s.%d.tmp", baseName, time.Now().UnixNano())
+	tmpFile, err := root.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create temp sequence file: %w", err)
 	}
@@ -205,20 +224,20 @@ func SaveSequence(path string, seq *Sequence) error {
 	if err := enc.Encode(seq); err != nil {
 		_ = enc.Close()
 		_ = tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
+		_ = root.Remove(tmpName)
 		return fmt.Errorf("encode sequence %s: %w", path, err)
 	}
 	if err := enc.Close(); err != nil {
 		_ = tmpFile.Close()
-		_ = os.Remove(tmpFile.Name())
+		_ = root.Remove(tmpName)
 		return fmt.Errorf("finalize sequence %s: %w", path, err)
 	}
 	if err := tmpFile.Close(); err != nil {
-		_ = os.Remove(tmpFile.Name())
+		_ = root.Remove(tmpName)
 		return fmt.Errorf("close sequence %s: %w", path, err)
 	}
-	if err := os.Rename(tmpFile.Name(), path); err != nil {
-		_ = os.Remove(tmpFile.Name())
+	if err := root.Rename(tmpName, baseName); err != nil {
+		_ = root.Remove(tmpName)
 		return fmt.Errorf("replace sequence %s: %w", path, err)
 	}
 
@@ -243,7 +262,12 @@ func ResolveSequencePath(input string) (string, error) {
 
 	candidates := sequencePathCandidates(trimmed, cwd, root)
 	for _, candidate := range candidates {
-		info, err := os.Stat(candidate)
+		root, rootErr := os.OpenRoot(filepath.Dir(candidate))
+		if rootErr != nil {
+			continue
+		}
+		info, err := root.Stat(filepath.Base(candidate))
+		root.Close()
 		if err != nil || info.IsDir() {
 			continue
 		}
