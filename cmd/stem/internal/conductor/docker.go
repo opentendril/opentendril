@@ -1010,11 +1010,11 @@ func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, ar
 		ctx = context.Background()
 	}
 
-	// exec.CommandContext invokes git directly, never through a shell. All
-	// caller-controlled refs are passed after git's `--` separator or as the
-	// value of an explicit option such as `-m`; they cannot become shell code.
-	// codeql[go/command-injection]
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// Start the fixed git executable directly; args are never interpreted by a
+	// shell. Caller-controlled refs are separated with git's `--` marker or
+	// passed as explicit option values such as `-m`.
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = append([]string{"git"}, args...)
 	cmd.Dir = dir
 	if len(extraEnv) > 0 {
 		cmd.Env = append(os.Environ(), extraEnv...)

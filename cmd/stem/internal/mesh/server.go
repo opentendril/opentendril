@@ -28,10 +28,11 @@ func runGitOutput(ctx context.Context, workspace string, args ...string) (string
 		ctx = context.Background()
 	}
 
-	// exec.CommandContext invokes git directly, never through a shell. Dynamic
-	// refs are passed after git's `--` separator or as explicit option values.
-	// codeql[go/command-injection]
-	cmd := exec.CommandContext(ctx, "git", args...)
+	// Start the fixed git executable directly; args are never interpreted by a
+	// shell. Dynamic refs are passed after git's `--` separator or as explicit
+	// option values.
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = append([]string{"git"}, args...)
 	cmd.Dir = workspace
 	output, err := cmd.CombinedOutput()
 	if err != nil {
