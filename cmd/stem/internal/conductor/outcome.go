@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/opentendril/core/cmd/stem/internal/eventbus"
 )
@@ -31,6 +32,13 @@ const (
 	// SproutOutcomeSkipped: a resumed step that had already completed; no run
 	// happened.
 	SproutOutcomeSkipped = "skipped"
+	// SproutOutcomeNoEngagement: the run finished without error but the agent
+	// produced no response and changed nothing — it never engaged the task
+	// (e.g. a model that cannot drive the tool protocol returns an empty
+	// completion). Distinct from no-changes, which is a real "investigate and
+	// report" ending with an actual answer. Treated as a withered run, not a
+	// success, so it is never dressed as a legitimate no-op.
+	SproutOutcomeNoEngagement = "no-engagement"
 )
 
 // ErrSproutTimedOut marks a sprout run cut short by the terrarium's run
@@ -56,14 +64,21 @@ type SproutRunReport struct {
 // whether FilesModified was measurable at all — a non-git or readonly
 // substrate cannot distinguish complete from no-changes, and claiming
 // "no-changes" there would be its own kind of lie.
-func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool) string {
+func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, agentResponse string) string {
 	if runErr != nil {
 		if errors.Is(runErr, ErrSproutTimedOut) {
 			return SproutOutcomeTimedOut
 		}
 		return SproutOutcomeFailed
 	}
-	if filesKnown && len(filesModified) == 0 {
+	changedFiles := len(filesModified) > 0
+	// No response and nothing changed is a non-engaging run, not a legitimate
+	// no-op: the agent neither acted nor answered. A run that changed files
+	// engaged regardless of what it said, so file evidence wins.
+	if strings.TrimSpace(agentResponse) == "" && !changedFiles {
+		return SproutOutcomeNoEngagement
+	}
+	if filesKnown && !changedFiles {
 		return SproutOutcomeNoChanges
 	}
 	return SproutOutcomeComplete
@@ -89,7 +104,8 @@ func publishSproutEmerged(bus *eventbus.Bus, stepID, sessionID, substrate string
 
 // publishSproutTerminal publishes the single terminal lifecycle event for a
 // sprout run: matured when the run finished (with or without changes, or was
-// skipped as already complete), withered when it failed or timed out. The
+// skipped as already complete), withered when it failed, timed out, or never
+// engaged the task. The
 // event carries enough for a consumer to act on: the step, the outcome, the
 // files changed, and the failure reason when there is one.
 func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string, filesModified []string, reason string) {
@@ -98,7 +114,7 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string,
 	}
 
 	eventType := eventbus.EventSproutMatured
-	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut {
+	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut || outcome == SproutOutcomeNoEngagement {
 		eventType = eventbus.EventSproutWithered
 	}
 

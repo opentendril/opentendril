@@ -131,7 +131,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	filesKnown := false
 	defer func() {
 		if report.Outcome == "" {
-			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown)
+			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown, report.Output)
 		}
 		reason := ""
 		if err != nil {
@@ -391,7 +391,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true),
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true, agentResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
