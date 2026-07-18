@@ -99,6 +99,11 @@ The `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when it is not already 
 
 To eliminate case mismatch bugs across Go, Python, and JSON boundaries:
 
+Documentation and examples must remain portable: never commit a developer's
+machine-specific absolute path or `file://` link. Use repository-relative
+Markdown links, `/path/to/...` placeholders, or the standard uppercase
+`$HOME` variable in shell examples. `$home` is not a standard Unix variable.
+
 * **Internal Python Norms:** Inside Python files, use standard PEP 8 `snake_case` for variables, functions, and methods.
 * **Internal Go/JS Norms:** Inside Go, JS, and TS files, use standard `camelCase` (or `PascalCase` for public Go symbols). **No `snake_case` is permitted.**
 * **External Contracts Boundary:**

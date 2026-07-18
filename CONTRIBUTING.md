@@ -58,6 +58,10 @@ See [`ui/README.md`](./ui/README.md) for the full UI guide.
 
 To prevent visual noise and scanning friction, we enforce strict language casing boundaries across the filesystem and code. Before writing code, review [GUARDRAILS.md](./GUARDRAILS.md).
 
+Documentation must also be portable: use repository-relative links and generic
+path placeholders. Do not commit personal absolute paths or local `file://`
+links; use `/path/to/...` or uppercase `$HOME` in shell examples instead.
+
 ### Crucial File Naming Rule:
 * **No underscores or hyphens in code filenames.** All Python modules and Go source files must use **merged lowercase** only (e.g., `llmrouter.py`, `mcpserver.go`).
 * **The Single Exception:** Go test files must end with `_test.go` (e.g., `mcp_test.go`) as required by the Go toolchain. No other underscores are allowed on the filesystem.

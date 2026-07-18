@@ -23,6 +23,15 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 > 2. **Config & Folders are Kebab-case:** Non-code files and directories use hyphens (`docker-compose.yml`, `github-actions/`). This creates an instant visual distinction between the active code logic and the surrounding configuration scaffold.
 > 3. **Exceptions:** Go unit tests are named `*_test.go` because the Go build system strictly requires this pattern to discover and execute test suites. No other underscores are allowed.
 
+### 1.1 Documentation Path Portability
+
+Documentation, examples, and design records must not contain paths tied to a
+developer's workstation. Do not commit personal home-directory paths such as
+`/home/name/...`, `/Users/name/...`, `C:\\Users\\name\\...`, or local
+`file://` links. Use repository-relative Markdown links, `/path/to/...`
+placeholders, or the standard uppercase `$HOME` variable in shell examples.
+The lowercase `$home` form is not a portable default.
+
 
 ### 2. Code Variables, Properties, and Methods
 * **Python Code:**
