@@ -836,6 +836,11 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			}
 
 			targetPath := filepath.Join(genotypesDir, name+".json")
+			if info, statErr := os.Lstat(targetPath); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+				return h.formatError(req.ID, -32602, "Invalid name", "Refusing to overwrite a symbolic link.")
+			} else if statErr != nil && !os.IsNotExist(statErr) {
+				return h.formatError(req.ID, -32603, "Internal error", statErr.Error())
+			}
 			if err := os.WriteFile(targetPath, fileContent, 0644); err != nil {
 				return h.formatError(req.ID, -32603, "Failed to write genotype", err.Error())
 			}

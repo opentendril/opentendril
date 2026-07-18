@@ -135,6 +135,9 @@ func validConfigFileName(name string) bool {
 	if name == "" || name == "." || name == ".." {
 		return false
 	}
+	if !filepath.IsLocal(name + ".json") {
+		return false
+	}
 	return !strings.ContainsAny(name, `/\`)
 }
 
@@ -300,6 +303,13 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(genotypesDir, 0755)
 
 	targetPath := filepath.Join(genotypesDir, name+".json")
+	if info, statErr := os.Lstat(targetPath); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+		http.Error(w, "Refusing to overwrite a symbolic link", http.StatusBadRequest)
+		return
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		http.Error(w, fmt.Sprintf("Failed to inspect config file: %v", statErr), http.StatusInternalServerError)
+		return
+	}
 	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)

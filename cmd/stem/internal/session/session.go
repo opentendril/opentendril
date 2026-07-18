@@ -68,7 +68,9 @@ func (p Preferences) Merge(overrides Preferences) Preferences {
 		if merged.Extras == nil {
 			merged.Extras = make(map[string]string, len(overrides.Extras))
 		} else {
-			copied := make(map[string]string, len(merged.Extras)+len(overrides.Extras))
+			// Size from the existing map only; adding both lengths can overflow
+			// an int before the map grows naturally for the override keys.
+			copied := make(map[string]string, len(merged.Extras))
 			for key, value := range merged.Extras {
 				copied[key] = value
 			}
