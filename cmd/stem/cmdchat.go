@@ -246,7 +246,7 @@ func runChatCmd(ctx context.Context, args []string) {
 	// the sessions API still work (messages just run session-less).
 	sessionID, err := sproutCLISession(base)
 	if err != nil {
-		log.Printf("⚠️ Could not sprout a Tendril session (continuing without one): %v", err)
+		log.Printf("⚠️ Could not initiate a session (continuing without one): %v", err)
 	} else {
 		log.Printf("🪴 Chat bound to Tendril session %s", sessionID)
 	}

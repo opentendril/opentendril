@@ -118,10 +118,10 @@ func TestSproutRunEmptySessionSproutsFresh(t *testing.T) {
 		t.Fatalf("SproutRun: %v", err)
 	}
 	if got.SessionID == "" {
-		t.Fatal("expected a fresh session to be sprouted for an unbound run")
+		t.Fatal("expected a fresh session to be initiated for an unbound run")
 	}
 	if _, ok := manager.Get(got.SessionID); !ok {
-		t.Fatalf("sprouted session %q not registered in the manager", got.SessionID)
+		t.Fatalf("initiated session %q not registered in the manager", got.SessionID)
 	}
 }
 

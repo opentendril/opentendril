@@ -209,7 +209,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	if got.Origin != "scheduler" {
 		t.Fatalf("scheduled sprout run origin = %q, want %q", got.Origin, "scheduler")
 	}
-	// The dedicated session sprouted for the run carries the same origin, so
+	// The dedicated session initiated for the run carries the same origin, so
 	// the session row and the run row agree on which surface grew it.
 	if got.SessionID == "" {
 		t.Fatal("scheduled sprout run must be bound to a session")

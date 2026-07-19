@@ -43,8 +43,8 @@ type DockerOrchestrator struct {
 	Temperature      float64
 	DisableMergeBack bool
 	EventBus         *eventbus.Bus
-	// SessionID attributes the run's lifecycle events to the Tendril session
-	// that sprouted it; empty for sessionless runs.
+	// SessionID attributes the run's lifecycle events to the session (Phytomer)
+	// it belongs to; empty for sessionless runs.
 	SessionID string
 }
 
@@ -195,7 +195,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		statusPath = ""
 		gitRepo = isGitRepo(sourcePath)
 		// Ephemeral checkouts are removed after the run; managed/path checkouts
-		// persist (they are OT-owned or user-chosen and refreshed on reuse).
+		// persist (they are Tendril-owned or user-chosen and refreshed on reuse).
 		if !persistent {
 			cleanup = func() {
 				_ = os.RemoveAll(clonedPath)
@@ -817,7 +817,7 @@ func runSproutPreflightChecks(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", "info")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		_ = output
-		return fmt.Errorf("❌ Docker daemon is not responding. OpenTendril requires Docker to spawn secure Sprouts.")
+		return fmt.Errorf("❌ Docker daemon is not responding. OpenTendril requires Docker to run secure Sprouts.")
 	}
 
 	env := buildTerrariumEnvironment()

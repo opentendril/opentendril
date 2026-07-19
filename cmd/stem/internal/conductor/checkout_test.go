@@ -20,7 +20,7 @@ func TestResolveCheckoutPlan(t *testing.T) {
 	}{
 		{name: "empty is ephemeral", spec: CheckoutSpec{}, wantDir: "", persistent: false},
 		{name: "explicit ephemeral", spec: CheckoutSpec{Mode: "ephemeral"}, wantDir: "", persistent: false},
-		{name: "managed under OT root", spec: CheckoutSpec{Mode: "managed"}, wantDir: "/managed-root/sub", persistent: true},
+		{name: "managed under Tendril root", spec: CheckoutSpec{Mode: "managed"}, wantDir: "/managed-root/sub", persistent: true},
 		{name: "path explicit", spec: CheckoutSpec{Mode: "path", Path: "/srv/checkouts/x"}, wantDir: "/srv/checkouts/x", persistent: true},
 		{name: "path requires a path", spec: CheckoutSpec{Mode: "path"}, wantErr: true},
 		{name: "unknown mode errors", spec: CheckoutSpec{Mode: "wormhole"}, wantErr: true},

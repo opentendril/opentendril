@@ -21,7 +21,7 @@ type checkoutPlan struct {
 
 // resolveCheckoutPlan maps a CheckoutSpec to a destination directory + lifetime.
 //   - ""/"ephemeral": a throwaway dir under os.TempDir() (removed after the run).
-//   - "managed":      a persistent, OT-owned dir distinct from human checkouts.
+//   - "managed":      a persistent, Tendril-owned dir distinct from human checkouts.
 //   - "path":         an explicit, persistent user-chosen path.
 func resolveCheckoutPlan(name string, checkout CheckoutSpec) (checkoutPlan, error) {
 	switch strings.ToLower(strings.TrimSpace(checkout.Mode)) {
@@ -40,7 +40,7 @@ func resolveCheckoutPlan(name string, checkout CheckoutSpec) (checkoutPlan, erro
 	}
 }
 
-// managedCheckoutRoot is the OT-owned base for managed checkouts — deliberately
+// managedCheckoutRoot is the Tendril-owned base for managed checkouts — deliberately
 // separate from any human-editable clone. Overridable via env for tests/ops.
 func managedCheckoutRoot() string {
 	if v := strings.TrimSpace(os.Getenv("OPENTENDRIL_MANAGED_CHECKOUT_ROOT")); v != "" {

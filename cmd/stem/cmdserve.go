@@ -431,7 +431,7 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 			Genotype: e.Sprout.Genotype,
 		}
 		if sess, err := sessions.Initiate(ctx, scheduledOrigin, prefs); err != nil {
-			log.Printf("⚠️ Schedule %q: failed to sprout a session for the run (growing sessionless): %v", name, err)
+			log.Printf("⚠️ Schedule %q: failed to initiate a session for the run (growing sessionless): %v", name, err)
 		} else {
 			input["sessionId"] = sess.ID
 		}
@@ -566,7 +566,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 
 		// Bind this interaction to a Tendril session. Clients pass sessionId in
 		// the body or the X-Tendril-Session header; absent both, a fresh
-		// session sprouts so every run is still traceable.
+		// a session is initiated so every run is still traceable.
 		requestedSessionID := strings.TrimSpace(req.SessionID)
 		if requestedSessionID == "" {
 			requestedSessionID = strings.TrimSpace(r.Header.Get("X-Tendril-Session"))
