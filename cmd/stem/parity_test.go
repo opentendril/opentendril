@@ -425,6 +425,14 @@ func (m *mockCore) GitCommit(_ context.Context, in core.GitCommitInput) (core.Gi
 	}, nil
 }
 
+func (m *mockCore) GitPush(_ context.Context, in core.GitPushInput) (core.GitPushResult, error) {
+	m.record("GitPush", in)
+	return core.GitPushResult{
+		Status: "pushed",
+		Branch: "main",
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -644,6 +652,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 					return nil, err
 				}
 				return m.GitCommit(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapGitPush,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitPushInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitPush(ctx, in)
 			},
 		},
 	}

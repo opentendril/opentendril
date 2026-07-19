@@ -48,6 +48,7 @@ func (h *GitHandler) WithDelegation(gate *DelegationGate) *GitHandler {
 func (h *GitHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
+		{"POST /v1/git/push", core.CapGitPush, h.push},
 	}
 }
 
@@ -105,6 +106,45 @@ func (h *GitHandler) commit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.core.GitCommit(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *GitHandler) push(w http.ResponseWriter, r *http.Request) {
+	var req core.GitPushInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Substrate) == "" {
+		http.Error(w, "substrate is required", http.StatusBadRequest)
+		return
+	}
+
+	// A delegated invocation is authorized per-invocation against the active
+	// grants; a non-delegated request follows the plain bearer-authenticated
+	// path untouched.
+	if subject := DelegatedSubject(r); subject != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Subject:        subject,
+			OperationClass: core.CapGitPush,
+			Substrate:      strings.TrimSpace(req.Substrate),
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+
+	result, err := h.core.GitPush(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return

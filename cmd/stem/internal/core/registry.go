@@ -33,6 +33,7 @@ const (
 	CapSproutGrow      = "sprout.grow"
 	CapPassthroughRun  = "passthrough.run"
 	CapGitCommit       = "git.commit"
+	CapGitPush         = "git.push"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -77,6 +78,7 @@ func CapabilityNames() []string {
 		CapSproutGrow,
 		CapPassthroughRun,
 		CapGitCommit,
+		CapGitPush,
 	}
 	sort.Strings(names)
 	return names
@@ -93,6 +95,7 @@ func DelegatedCapabilityNames() []string {
 		CapSproutGrow,
 		CapPassthroughRun,
 		CapGitCommit,
+		CapGitPush,
 	}
 	sort.Strings(names)
 	return names

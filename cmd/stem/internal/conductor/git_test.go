@@ -156,6 +156,101 @@ func TestRunGitCommitNothingToCommit(t *testing.T) {
 	}
 }
 
+// TestRunGitPushValidatesWorkspace covers the plain-input requirement before
+// any git command runs.
+func TestRunGitPushValidatesWorkspace(t *testing.T) {
+	originalRead := runGitCommitCommandFn
+	originalPush := runGitPushCommandFn
+	commands := 0
+	runGitCommitCommandFn = func(ctx context.Context, dir string, args ...string) (string, error) {
+		commands++
+		return "", nil
+	}
+	runGitPushCommandFn = func(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+		commands++
+		return "", nil
+	}
+	defer func() { runGitCommitCommandFn = originalRead; runGitPushCommandFn = originalPush }()
+
+	if _, err := RunGitPush(context.Background(), GitPushExecution{}); err == nil {
+		t.Fatal("missing workspace accepted")
+	}
+	if commands != 0 {
+		t.Fatalf("%d git command(s) ran for an invalid execution, want 0", commands)
+	}
+}
+
+// newGitPushRepoWithRemote builds a working repository on branch main with one
+// commit and a bare origin remote on disk, so RunGitPush exercises a real
+// authenticated-shaped push (no token needed for a local file remote).
+func newGitPushRepoWithRemote(t *testing.T) (workspace, remote string) {
+	t.Helper()
+	ctx := context.Background()
+	remote = t.TempDir()
+	if _, err := runGitCommand(ctx, remote, "init", "--bare"); err != nil {
+		t.Fatalf("git init --bare: %v", err)
+	}
+	workspace = t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "ambient@example.com"},
+		{"config", "user.name", "Ambient Tester"},
+		{"checkout", "-b", "main"},
+		{"commit", "--allow-empty", "-m", "initial"},
+		{"remote", "add", "origin", remote},
+	} {
+		if _, err := runGitCommand(ctx, workspace, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	return workspace, remote
+}
+
+// TestRunGitPushPushesCurrentBranch proves the workspace's current branch lands
+// on the remote when no explicit branch is given.
+func TestRunGitPushPushesCurrentBranch(t *testing.T) {
+	ctx := context.Background()
+	workspace, remote := newGitPushRepoWithRemote(t)
+
+	result, err := RunGitPush(ctx, GitPushExecution{Workspace: workspace})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.Status != "pushed" || result.Branch != "main" {
+		t.Fatalf("result = %+v, want pushed on main", result)
+	}
+
+	local, err := runGitCommand(ctx, workspace, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD: %v", err)
+	}
+	remoteRef, err := runGitCommand(ctx, remote, "rev-parse", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("git rev-parse remote ref: %v", err)
+	}
+	if strings.TrimSpace(local) != strings.TrimSpace(remoteRef) {
+		t.Fatalf("remote ref %q does not match local HEAD %q", remoteRef, local)
+	}
+}
+
+// TestRunGitPushExplicitBranch proves an explicit branch is pushed and the
+// refs/heads/ prefix is tolerated.
+func TestRunGitPushExplicitBranch(t *testing.T) {
+	ctx := context.Background()
+	workspace, remote := newGitPushRepoWithRemote(t)
+
+	result, err := RunGitPush(ctx, GitPushExecution{Workspace: workspace, Branch: "refs/heads/main"})
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.Branch != "main" {
+		t.Fatalf("branch = %q, want the refs/heads/ prefix stripped to main", result.Branch)
+	}
+	if _, err := runGitCommand(ctx, remote, "rev-parse", "refs/heads/main"); err != nil {
+		t.Fatalf("remote did not receive refs/heads/main: %v", err)
+	}
+}
+
 // TestRunGitCommitStagesOnlyGivenPaths proves the optional path list bounds
 // staging: the named file is committed, the unnamed one stays uncommitted.
 func TestRunGitCommitStagesOnlyGivenPaths(t *testing.T) {

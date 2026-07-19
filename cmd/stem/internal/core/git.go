@@ -57,15 +57,52 @@ type GitCommitResult struct {
 	CommitHash string `json:"commitHash,omitempty"`
 }
 
-// GitOperations is the injection port for delegated git execution. Commit may
-// be nil, in which case the capability reports that it is not wired rather
-// than acting.
+// GitPushInput asks the Stem to push the substrate's current branch to its
+// remote using the substrate's configured credential. The push runs on the
+// Stem (the sole secret-holding zone), never inside a sealed Sprout — a
+// delegated push is the Stem's mediated egress with the connection's dedicated
+// Personal Access Token.
+type GitPushInput struct {
+	// Substrate is the absolute path or named substrate key of the target
+	// workspace.
+	Substrate string `json:"substrate"`
+	// Branch optionally names the branch to push; empty pushes the workspace's
+	// current branch.
+	Branch string `json:"branch,omitempty"`
+	// Origin records which surface invoked the push (cli, mcp, rest).
+	Origin string `json:"origin,omitempty"`
+}
+
+// GitPushSpec is the fully resolved, transport-free push request handed to the
+// GitOperations port.
+type GitPushSpec struct {
+	Substrate string
+	Branch    string
+	Origin    string
+}
+
+// GitPushResult is the outcome of a finished delegated push.
+type GitPushResult struct {
+	// Status is always "pushed" when the push command succeeded (git treats an
+	// already-current ref as a successful no-op push).
+	Status string `json:"status"`
+	// Branch is the branch that was pushed.
+	Branch string `json:"branch,omitempty"`
+}
+
+// GitOperations is the injection port for delegated git execution. Each member
+// may be nil, in which case the corresponding capability reports that it is not
+// wired rather than acting.
 type GitOperations struct {
 	// Commit stages and commits the spec against the resolved workspace under
 	// the substrate's configured commit identity. Implementations own
 	// substrate resolution, credential resolution, and the deny-closed
 	// identity requirement.
 	Commit func(ctx context.Context, spec GitCommitSpec) (GitCommitResult, error)
+	// Push pushes the resolved workspace's branch to its remote using the
+	// substrate's resolved credential. Implementations own substrate
+	// resolution, credential resolution, and the Stem-side authenticated push.
+	Push func(ctx context.Context, spec GitPushSpec) (GitPushResult, error)
 }
 
 // WithGit wires the delegated git execution port onto the Service and returns
@@ -108,6 +145,23 @@ func (s *Service) GitCommit(ctx context.Context, in GitCommitInput) (GitCommitRe
 	return s.git.Commit(ctx, spec)
 }
 
+// GitPush validates the request and runs the delegated push to completion via
+// the injected execution port.
+func (s *Service) GitPush(ctx context.Context, in GitPushInput) (GitPushResult, error) {
+	if s.git.Push == nil {
+		return GitPushResult{}, fmt.Errorf("git.push is not wired: construct the Core with WithGit(GitOperations{Push: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitPushResult{}, fmt.Errorf("substrate is required")
+	}
+	spec := GitPushSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Branch:    strings.TrimSpace(in.Branch),
+		Origin:    in.Origin,
+	}
+	return s.git.Push(ctx, spec)
+}
+
 // gitCapabilities declares the git family's registry entry, bound to this
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
@@ -131,6 +185,22 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitCommit(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitPush,
+			Description: "Push a substrate's branch to its remote using the substrate's configured credential; the push runs on the Stem (the secret zone), never inside a sealed Sprout.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"branch":    stringProp("The branch to push; omit to push the workspace's current branch."),
+				"origin":    stringProp("Interaction origin recorded on the push (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitPushInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitPush(ctx, in)
 			},
 		},
 	}
