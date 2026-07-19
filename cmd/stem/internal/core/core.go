@@ -41,10 +41,10 @@ var ErrNotFound = errors.New("session not found")
 // method is expressible with plain domain types only — no net/http, no MCP,
 // no CLI types appear in any signature.
 type Core interface {
-	CreateSession(ctx context.Context, in CreateSessionInput) (session.Session, error)
-	ListSessions(ctx context.Context) ([]session.Session, error)
-	GetSession(ctx context.Context, in GetSessionInput) (session.Session, error)
-	UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Session, error)
+	CreateSession(ctx context.Context, in CreateSessionInput) (session.Phytomer, error)
+	ListSessions(ctx context.Context) ([]session.Phytomer, error)
+	GetSession(ctx context.Context, in GetSessionInput) (session.Phytomer, error)
+	UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Phytomer, error)
 	DeleteSession(ctx context.Context, in DeleteSessionInput) error
 	SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error)
 
@@ -178,26 +178,26 @@ func NewService(sessions *session.Manager) *Service {
 
 var _ Core = (*Service)(nil)
 
-func (s *Service) CreateSession(ctx context.Context, in CreateSessionInput) (session.Session, error) {
-	return s.sessions.Sprout(ctx, in.Origin, in.Preferences)
+func (s *Service) CreateSession(ctx context.Context, in CreateSessionInput) (session.Phytomer, error) {
+	return s.sessions.Initiate(ctx, in.Origin, in.Preferences)
 }
 
-func (s *Service) ListSessions(_ context.Context) ([]session.Session, error) {
+func (s *Service) ListSessions(_ context.Context) ([]session.Phytomer, error) {
 	return s.sessions.List(), nil
 }
 
-func (s *Service) GetSession(_ context.Context, in GetSessionInput) (session.Session, error) {
+func (s *Service) GetSession(_ context.Context, in GetSessionInput) (session.Phytomer, error) {
 	sess, ok := s.sessions.Get(in.SessionID)
 	if !ok {
-		return session.Session{}, ErrNotFound
+		return session.Phytomer{}, ErrNotFound
 	}
 	return sess, nil
 }
 
-func (s *Service) UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Session, error) {
+func (s *Service) UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Phytomer, error) {
 	sess, err := s.sessions.UpdatePreferences(ctx, in.SessionID, in.Preferences)
 	if err != nil {
-		return session.Session{}, mapManagerErr(err)
+		return session.Phytomer{}, mapManagerErr(err)
 	}
 	return sess, nil
 }

@@ -48,7 +48,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	sess := session.Session{
+	sess := session.Phytomer{
 		ID:           "tendril-test1",
 		Origin:       session.OriginCLI,
 		CreatedAt:    now,

@@ -134,7 +134,7 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 	// resolution failure degrades to a sessionless run — the historic
 	// behavior of every surface — rather than refusing to execute.
 	if s.sessions != nil {
-		if sess, err := s.sessions.GetOrSprout(ctx, strings.TrimSpace(in.SessionID), in.Origin); err == nil {
+		if sess, err := s.sessions.GetOrInitiate(ctx, strings.TrimSpace(in.SessionID), in.Origin); err == nil {
 			spec.SessionID = sess.ID
 			spec.Provider = sess.Preferences.Provider
 			spec.Model = sess.Preferences.Model

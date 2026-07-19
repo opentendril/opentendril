@@ -207,7 +207,7 @@ CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedA
 
 // --- session.Store implementation -------------------------------------------
 
-func (s *Store) SaveSession(ctx context.Context, sess session.Session) error {
+func (s *Store) SaveSession(ctx context.Context, sess session.Phytomer) error {
 	prefs, err := json.Marshal(sess.Preferences)
 	if err != nil {
 		return fmt.Errorf("encode session preferences: %w", err)
@@ -244,7 +244,7 @@ func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *Store) LoadSessions(ctx context.Context) ([]session.Session, error) {
+func (s *Store) LoadSessions(ctx context.Context) ([]session.Phytomer, error) {
 	const query = `SELECT sessionId, origin, createdAt, lastActiveAt, preferences FROM sessions ORDER BY lastActiveAt DESC`
 
 	rows, err := s.db.QueryContext(ctx, query)
@@ -253,9 +253,9 @@ func (s *Store) LoadSessions(ctx context.Context) ([]session.Session, error) {
 	}
 	defer rows.Close()
 
-	sessions := make([]session.Session, 0)
+	sessions := make([]session.Phytomer, 0)
 	for rows.Next() {
-		var sess session.Session
+		var sess session.Phytomer
 		var createdAt, lastActiveAt, prefs string
 		if err := rows.Scan(&sess.ID, &sess.Origin, &createdAt, &lastActiveAt, &prefs); err != nil {
 			return nil, fmt.Errorf("scan session: %w", err)

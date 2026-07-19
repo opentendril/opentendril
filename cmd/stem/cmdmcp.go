@@ -55,7 +55,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 	if manager, err := session.NewManager(ctx, sessionStore); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Session manager unavailable: %v (continuing without sessions)\n", err)
-	} else if sess, err := manager.Sprout(ctx, session.OriginMCP, session.Preferences{}); err != nil {
+	} else if sess, err := manager.Initiate(ctx, session.OriginMCP, session.Preferences{}); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to sprout MCP session: %v (continuing without sessions)\n", err)
 	} else {
 		coreSvc := core.NewService(manager).

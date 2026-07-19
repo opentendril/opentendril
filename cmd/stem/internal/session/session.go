@@ -1,11 +1,12 @@
-// Package session implements the unified SessionManager for the OS of OT.
+// Package session implements the unified session manager for Tendril OS.
 //
-// A Session is a "Tendril": one logical interaction thread bound to a unique
-// session ID. Every interface surface — the interactive CLI chat, the MCP
-// stdio/HTTP server, the OpenAPI REST endpoints, and the WebSocket gateway —
-// resolves its traffic through the same Manager, so concurrent conversations
-// coexist without trampling each other's state and each Tendril carries its
-// own preferences (LLM provider/model overrides, Genotype, Epigenetic Genome).
+// A Phytomer is the canonical name for one logical interaction thread — what
+// the external surfaces present as a "session" — bound to a unique session ID.
+// Every interface surface — the interactive CLI chat, the MCP stdio/HTTP
+// server, the OpenAPI REST endpoints, and the WebSocket gateway — resolves its
+// traffic through the same Manager, so concurrent conversations coexist without
+// trampling each other's state and each Phytomer carries its own preferences
+// (LLM provider/model overrides, Genotype, Epigenetic Genome).
 package session
 
 import (
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	// IDPrefix marks every Tendril session identifier.
+	// IDPrefix marks every Phytomer session identifier.
 	IDPrefix = "tendril-"
 
 	// memoryHistoryCap bounds the in-memory per-session message buffer used
@@ -39,7 +40,7 @@ const (
 
 var validIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
-// Preferences hold per-Tendril overrides that shape how sprouts execute for
+// Preferences hold per-Phytomer overrides that shape how sprouts execute for
 // this session only. Zero values mean "inherit the global default".
 type Preferences struct {
 	Provider         string            `json:"provider,omitempty"`
@@ -83,8 +84,8 @@ func (p Preferences) Merge(overrides Preferences) Preferences {
 	return merged
 }
 
-// Session is one Tendril: a stateful interaction thread.
-type Session struct {
+// Phytomer is one stateful interaction thread (surfaced externally as a session).
+type Phytomer struct {
 	ID           string      `json:"sessionId"`
 	Origin       string      `json:"origin"`
 	CreatedAt    time.Time   `json:"createdAt"`
@@ -92,7 +93,7 @@ type Session struct {
 	Preferences  Preferences `json:"preferences"`
 }
 
-// Message is one unified chat-log entry bound to a Tendril.
+// Message is one unified chat-log entry bound to a Phytomer.
 type Message struct {
 	SessionID string    `json:"sessionId"`
 	Role      string    `json:"role"`
@@ -101,23 +102,23 @@ type Message struct {
 	CreatedAt time.Time `json:"createdAt"`
 }
 
-// Store persists Tendril sessions and their unified chat logs. The SQLite
+// Store persists Phytomer sessions and their unified chat logs. The SQLite
 // history database implements this interface; a nil Store keeps the Manager
 // fully in-memory for high-performance headless runs.
 type Store interface {
-	SaveSession(ctx context.Context, s Session) error
+	SaveSession(ctx context.Context, s Phytomer) error
 	DeleteSession(ctx context.Context, sessionID string) error
-	LoadSessions(ctx context.Context) ([]Session, error)
+	LoadSessions(ctx context.Context) ([]Phytomer, error)
 	AppendMessage(ctx context.Context, m Message) error
 	LoadMessages(ctx context.Context, sessionID string, limit int) ([]Message, error)
 }
 
 type sessionState struct {
-	session  Session
+	session  Phytomer
 	messages []Message
 }
 
-// Manager is the single source of truth for live Tendril sessions across the
+// Manager is the single source of truth for live Phytomer sessions across the
 // CLI, MCP, REST, and WebSocket surfaces.
 type Manager struct {
 	mu       sync.RWMutex
@@ -146,7 +147,7 @@ func NewManager(ctx context.Context, store Store) (*Manager, error) {
 	return m, nil
 }
 
-// NewID mints a unique Tendril session identifier.
+// NewID mints a unique Phytomer session identifier.
 func NewID() string {
 	buf := make([]byte, 12)
 	if _, err := rand.Read(buf); err != nil {
@@ -160,15 +161,15 @@ func ValidID(id string) bool {
 	return validIDPattern.MatchString(id)
 }
 
-// Sprout creates a new Tendril session.
-func (m *Manager) Sprout(ctx context.Context, origin string, prefs Preferences) (Session, error) {
+// Initiate creates a new Phytomer session.
+func (m *Manager) Initiate(ctx context.Context, origin string, prefs Preferences) (Phytomer, error) {
 	if m == nil {
-		return Session{}, fmt.Errorf("session manager is nil")
+		return Phytomer{}, fmt.Errorf("session manager is nil")
 	}
 
 	origin = normalizeOrigin(origin)
 	now := time.Now().UTC()
-	s := Session{
+	s := Phytomer{
 		ID:           NewID(),
 		Origin:       origin,
 		CreatedAt:    now,
@@ -189,9 +190,9 @@ func (m *Manager) Sprout(ctx context.Context, origin string, prefs Preferences) 
 }
 
 // Get returns a snapshot of the session with the given ID.
-func (m *Manager) Get(id string) (Session, bool) {
+func (m *Manager) Get(id string) (Phytomer, bool) {
 	if m == nil {
-		return Session{}, false
+		return Phytomer{}, false
 	}
 
 	m.mu.RLock()
@@ -199,25 +200,25 @@ func (m *Manager) Get(id string) (Session, bool) {
 
 	state, ok := m.sessions[id]
 	if !ok {
-		return Session{}, false
+		return Phytomer{}, false
 	}
 	return state.session, true
 }
 
-// GetOrSprout resolves an existing session or creates one. An empty ID always
-// sprouts a fresh Tendril; a well-formed unknown ID is adopted so clients can
+// GetOrInitiate resolves an existing session or creates one. An empty ID always
+// initiates a fresh Phytomer; a well-formed unknown ID is adopted so clients can
 // mint IDs offline (e.g. the CLI when the server rotates underneath it).
-func (m *Manager) GetOrSprout(ctx context.Context, id, origin string) (Session, error) {
+func (m *Manager) GetOrInitiate(ctx context.Context, id, origin string) (Phytomer, error) {
 	if m == nil {
-		return Session{}, fmt.Errorf("session manager is nil")
+		return Phytomer{}, fmt.Errorf("session manager is nil")
 	}
 
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return m.Sprout(ctx, origin, Preferences{})
+		return m.Initiate(ctx, origin, Preferences{})
 	}
 	if !ValidID(id) {
-		return Session{}, fmt.Errorf("invalid session id %q", id)
+		return Phytomer{}, fmt.Errorf("invalid session id %q", id)
 	}
 
 	if s, ok := m.Get(id); ok {
@@ -226,7 +227,7 @@ func (m *Manager) GetOrSprout(ctx context.Context, id, origin string) (Session, 
 
 	origin = normalizeOrigin(origin)
 	now := time.Now().UTC()
-	s := Session{
+	s := Phytomer{
 		ID:           id,
 		Origin:       origin,
 		CreatedAt:    now,
@@ -251,13 +252,13 @@ func (m *Manager) GetOrSprout(ctx context.Context, id, origin string) (Session, 
 }
 
 // List returns all live sessions, most recently active first.
-func (m *Manager) List() []Session {
+func (m *Manager) List() []Phytomer {
 	if m == nil {
 		return nil
 	}
 
 	m.mu.RLock()
-	sessions := make([]Session, 0, len(m.sessions))
+	sessions := make([]Phytomer, 0, len(m.sessions))
 	for _, state := range m.sessions {
 		sessions = append(sessions, state.session)
 	}
@@ -270,16 +271,16 @@ func (m *Manager) List() []Session {
 }
 
 // UpdatePreferences merges preference overrides into a session.
-func (m *Manager) UpdatePreferences(ctx context.Context, id string, overrides Preferences) (Session, error) {
+func (m *Manager) UpdatePreferences(ctx context.Context, id string, overrides Preferences) (Phytomer, error) {
 	if m == nil {
-		return Session{}, fmt.Errorf("session manager is nil")
+		return Phytomer{}, fmt.Errorf("session manager is nil")
 	}
 
 	m.mu.Lock()
 	state, ok := m.sessions[id]
 	if !ok {
 		m.mu.Unlock()
-		return Session{}, fmt.Errorf("session %s not found", id)
+		return Phytomer{}, fmt.Errorf("session %s not found", id)
 	}
 	state.session.Preferences = state.session.Preferences.Merge(overrides)
 	state.session.LastActiveAt = time.Now().UTC()
