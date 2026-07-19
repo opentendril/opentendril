@@ -179,7 +179,7 @@ func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	defer server.Close()
 
 	body := bytes.NewBufferString(`{"preferences":{"model":"claude-sonnet","genotype":"verifier"}}`)
-	httpResp, err := http.Post(server.URL+"/v1/sessions", "application/json", body)
+	httpResp, err := http.Post(server.URL+"/v1/phytomers", "application/json", body)
 	if err != nil {
 		t.Fatalf("REST create: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	}
 
 	// (c) MCP via tools/call.
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"session.create","arguments":{"preferences":{"model":"claude-sonnet","genotype":"verifier"}}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"phytomer.create","arguments":{"preferences":{"model":"claude-sonnet","genotype":"verifier"}}}}`))
 	var parsed struct {
 		Result struct {
 			Content []struct {
@@ -433,7 +433,7 @@ func (m *mockCore) GitCommit(_ context.Context, in core.GitCommitInput) (core.Gi
 func (m *mockCore) Capabilities() []core.Capability {
 	return []core.Capability{
 		{
-			Name:        core.CapCreateSession,
+			Name:        core.CapCreatePhytomer,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in core.CreateSessionInput
@@ -444,14 +444,14 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
-			Name:        core.CapListSessions,
+			Name:        core.CapListPhytomers,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
 				return m.ListSessions(ctx)
 			},
 		},
 		{
-			Name:        core.CapGetSession,
+			Name:        core.CapGetPhytomer,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in core.GetSessionInput
@@ -462,7 +462,7 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
-			Name:        core.CapUpdateSession,
+			Name:        core.CapUpdatePhytomer,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in core.UpdateSessionInput
@@ -473,7 +473,7 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
-			Name:        core.CapDeleteSession,
+			Name:        core.CapDeletePhytomer,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in core.DeleteSessionInput
@@ -487,7 +487,7 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
-			Name:        core.CapSessionHistory,
+			Name:        core.CapPhytomerHistory,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in core.SessionHistoryInput
@@ -738,7 +738,7 @@ func TestBehavioralParity(t *testing.T) {
 		cliArgs       []string // args after the subcommand token, as runSessionCmd passes them to parseSessionArgs
 	}{
 		{
-			name:   core.CapCreateSession,
+			name:   core.CapCreatePhytomer,
 			method: "CreateSession",
 			want: core.CreateSessionInput{
 				Origin:      parityOrigin,
@@ -763,7 +763,7 @@ func TestBehavioralParity(t *testing.T) {
 			cliArgs:       []string{"--origin", parityOrigin, "--model", "claude-sonnet", "--genotype", "verifier"},
 		},
 		{
-			name:   core.CapGetSession,
+			name:   core.CapGetPhytomer,
 			method: "GetSession",
 			want:   core.GetSessionInput{SessionID: sessionID},
 			restRequest: func(t *testing.T, serverURL string) *http.Response {
@@ -778,7 +778,7 @@ func TestBehavioralParity(t *testing.T) {
 			cliArgs:       []string{sessionID},
 		},
 		{
-			name:   core.CapDeleteSession,
+			name:   core.CapDeletePhytomer,
 			method: "DeleteSession",
 			want:   core.DeleteSessionInput{SessionID: sessionID},
 			restRequest: func(t *testing.T, serverURL string) *http.Response {

@@ -177,7 +177,7 @@ func sendHTTP(base *url.URL, msg, sessionID string) (string, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
 	if sessionID != "" {
-		req.Header.Set("X-Tendril-Session", sessionID)
+		req.Header.Set("X-Phytomer", sessionID)
 	}
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)

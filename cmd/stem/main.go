@@ -73,7 +73,7 @@ func main() {
 	switch os.Args[1] {
 	case "chat":
 		runChatCmd(ctx, os.Args[2:])
-	case "session":
+	case "phytomer", "session": // "session" is the legacy alias for "phytomer"
 		runSessionCmd(ctx, os.Args[2:])
 	case "setup":
 		runSetupCmd(os.Args[2:])
@@ -126,7 +126,7 @@ func printUsage() {
 	fmt.Println("  tendril <command> [arguments]")
 	fmt.Println("\nCommands:")
 	fmt.Println("  chat    Start the interactive chat interface")
-	fmt.Println("  session Manage Tendril sessions (create/list/get/update/delete/history)")
+	fmt.Println("  phytomer Manage Phytomers (create/list/get/update/delete/history); alias: session")
 	fmt.Println("  setup   Bootstrap agent workspace configuration")
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Println("  genome  Inspect, reduce, or evolve the active genome seeds")

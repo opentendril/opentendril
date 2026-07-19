@@ -39,7 +39,7 @@ UI to ship, version, and deploy independently of the Stem binary.
 
 It leans on three Phase 1 backend capabilities:
 
-1. **Unified `SessionManager`** — `GET /v1/sessions` lists every live Tendril
+1. **Unified `SessionManager`** — `GET /v1/phytomers` lists every live Tendril
    regardless of which surface (CLI, MCP, REST, WS) sprouted it, so the operator
    sees the whole fleet in one rail.
 2. **`history.db` persistence** — the per-session history endpoints let the UI
@@ -58,16 +58,20 @@ first run and persists it to `.tendril/api-key` (printed once to the log) —
 the API is never served unauthenticated. Handlers:
 `cmd/stem/internal/api/sessions.go`.
 
+The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
+`/v1/sessions` path is still mounted as an alias for existing clients; the
+`sessionId` field and path parameter are unchanged.
+
 | Method & path | Used for |
 | --- | --- |
 | `GET /health` | Onboarding reachability check. |
-| `GET /v1/sessions` | The session rail; also the onboarding key-validation call. |
-| `POST /v1/sessions` | "+ Sprout" — create a new Tendril session. |
-| `PATCH /v1/sessions/{id}` | Update a session's preferences (model, genotype, …). |
-| `DELETE /v1/sessions/{id}` | Prune a session. |
-| `GET /v1/sessions/{id}/history` | Chat log hydration. |
-| `GET /v1/sessions/{id}/sprout-runs` | The per-session execution list (drilldown source). |
-| `GET /v1/sessions/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
+| `GET /v1/phytomers` | The session rail; also the onboarding key-validation call. |
+| `POST /v1/phytomers` | "+ Sprout" — create a new Tendril session. |
+| `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, …). |
+| `DELETE /v1/phytomers/{id}` | Prune a session. |
+| `GET /v1/phytomers/{id}/history` | Chat log hydration. |
+| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). |
+| `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). |
 
 The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` when

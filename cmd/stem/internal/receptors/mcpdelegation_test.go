@@ -262,7 +262,7 @@ func TestMCPNonDelegatedCapabilityUnaffected(t *testing.T) {
 
 	assertListSessions := func(posture string) {
 		t.Helper()
-		text, isError := mcpCallTool(t, handler, core.CapListSessions, map[string]any{})
+		text, isError := mcpCallTool(t, handler, core.CapListPhytomers, map[string]any{})
 		if isError {
 			t.Fatalf("session.list failed (%s): %q", posture, text)
 		}

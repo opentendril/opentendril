@@ -106,7 +106,9 @@ func (h *SproutHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc)
 
 	// Detached path — not part of the parity registry, but delegated
 	// invocations of it pass through the delegation authorizer inside
-	// runSproutAsync like every other governed surface.
+	// runSproutAsync like every other governed surface. Canonical
+	// /v1/phytomers path plus the legacy /v1/sessions alias.
+	mux.HandleFunc("POST /v1/phytomers/{sessionId}/sprout/grow", auth(h.runSproutAsync))
 	mux.HandleFunc("POST /v1/sessions/{sessionId}/sprout/grow", auth(h.runSproutAsync))
 }
 

@@ -427,7 +427,7 @@ func submitSproutAsync(ctx context.Context, input map[string]any) {
 		port = "8080"
 	}
 
-	url := fmt.Sprintf("http://localhost:%s/v1/sessions/new/sprout/grow", port)
+	url := fmt.Sprintf("http://localhost:%s/v1/phytomers/new/sprout/grow", port)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to build request: %v\n", err)

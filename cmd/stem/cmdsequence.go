@@ -528,7 +528,7 @@ func submitSequenceAsync(ctx context.Context, pathOrName, provider, model, baseU
 		port = "8080"
 	}
 
-	resp, err := http.Post(fmt.Sprintf("http://localhost:%s/v1/sessions/new/sequences/grow", port), "application/json", bytes.NewReader(payload))
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%s/v1/phytomers/new/sequences/grow", port), "application/json", bytes.NewReader(payload))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Please ensure the OpenTendril daemon is running (`tendril serve`) to use --detach.")

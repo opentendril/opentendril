@@ -290,7 +290,7 @@ func TestDelegatedCapabilityTaxonomy(t *testing.T) {
 		}
 	}
 
-	for _, name := range []string{core.CapListSessions, core.CapGenomeView, core.CapSequenceGrow, core.CapMeshGraft, "", "made.up"} {
+	for _, name := range []string{core.CapListPhytomers, core.CapGenomeView, core.CapSequenceGrow, core.CapMeshGraft, "", "made.up"} {
 		if core.IsDelegatedCapability(name) {
 			t.Errorf("IsDelegatedCapability(%q) = true, want false", name)
 		}

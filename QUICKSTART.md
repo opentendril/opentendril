@@ -159,16 +159,16 @@ Manage Tendril sessions directly from the terminal. These commands project the s
 
 ```bash
 # Create a new session
-tendril session create --provider anthropic --model claude-sonnet-4-20250514
+tendril phytomer create --provider anthropic --model claude-sonnet-4-20250514
 
 # List active sessions
-tendril session list
+tendril phytomer list
 
 # View session history
-tendril session history <session-id> --limit 20
+tendril phytomer history <session-id> --limit 20
 
 # Delete a session
-tendril session delete <session-id>
+tendril phytomer delete <session-id>
 ```
 
 ---

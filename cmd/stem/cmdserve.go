@@ -564,10 +564,14 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			return
 		}
 
-		// Bind this interaction to a Tendril session. Clients pass sessionId in
-		// the body or the X-Tendril-Session header; absent both, a fresh
-		// a session is initiated so every run is still traceable.
+		// Bind this interaction to a Phytomer. Clients pass sessionId in the
+		// body or the canonical X-Phytomer header (the legacy X-Tendril-Session
+		// header is still honored); absent all, a fresh Phytomer is initiated so
+		// every run is still traceable.
 		requestedSessionID := strings.TrimSpace(req.SessionID)
+		if requestedSessionID == "" {
+			requestedSessionID = strings.TrimSpace(r.Header.Get("X-Phytomer"))
+		}
 		if requestedSessionID == "" {
 			requestedSessionID = strings.TrimSpace(r.Header.Get("X-Tendril-Session"))
 		}
