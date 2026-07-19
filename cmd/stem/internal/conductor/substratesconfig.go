@@ -101,7 +101,7 @@ type IdentitySpec struct {
 
 // CheckoutSpec controls where a foreign substrate is checked out. Design RFC.
 type CheckoutSpec struct {
-	// Mode is "ephemeral" (default, /tmp), "managed" (persistent OT-owned dir),
+	// Mode is "ephemeral" (default, /tmp), "managed" (persistent Tendril-owned dir),
 	// or "path" (explicit Path below).
 	Mode string `yaml:"mode,omitempty"`
 	Path string `yaml:"path,omitempty"`

@@ -97,7 +97,7 @@ type Core interface {
 // --- capability input types (plain domain structs) --------------------------
 
 // CreateSessionInput asks for a new Tendril session. Origin records which
-// surface sprouted it; empty defers to the session manager's default.
+// surface initiated it; empty defers to the session manager's default.
 type CreateSessionInput struct {
 	Origin      string              `json:"origin,omitempty"`
 	Preferences session.Preferences `json:"preferences,omitempty"`

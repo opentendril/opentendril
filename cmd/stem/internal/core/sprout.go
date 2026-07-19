@@ -39,7 +39,7 @@ type SproutRunInput struct {
 	// empty.
 	StepID string `json:"stepId,omitempty"`
 	// SessionID optionally binds the run to an existing Tendril session. When
-	// empty, a fresh session is sprouted (adapters may fill in their own
+	// empty, a fresh session is initiated (adapters may fill in their own
 	// default binding first, e.g. the MCP stdio server's pinned session).
 	SessionID string `json:"sessionId,omitempty"`
 	// SubstrateURL optionally overrides the remote repository URL to clone.

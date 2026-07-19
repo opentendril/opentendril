@@ -1,6 +1,6 @@
 # OpenTendril Command Center (`ui/`)
 
-The **Command Center** is the visual operator UI for the OS of OT — a
+The **Command Center** is the visual operator UI for the Tendril OS — a
 single, desktop-grade dashboard an operator leaves open all day to watch every
 Tendril the Go Stem is growing. It replaces the fragmented "one CLI terminal
 per run" workflow with one living view where live orchestration activity is
