@@ -60,6 +60,7 @@ type assessGPU struct {
 type assessHardware struct {
 	GPUs              []assessGPU `json:"gpus"`
 	VRAMTotalBytes    uint64      `json:"vramTotalBytes"`
+	VRAMFreeBytes     uint64      `json:"vramFreeBytes"`
 	CPUCores          int         `json:"cpuCores"`
 	RAMAvailableBytes uint64      `json:"ramAvailableBytes"`
 	RAMAvailableKnown bool        `json:"ramAvailableKnown"`
@@ -143,6 +144,9 @@ func buildAssessReport(hw assessHardware, models []assessModel, contextTokens in
 
 // assessUsableVRAM pools VRAM across all GPUs (llama.cpp-style tensor split)
 // and subtracts the fixed OS/driver reserve once from the pooled total.
+//
+// The fit estimate is based on TOTAL VRAM and therefore assumes a largely
+// idle GPU; free VRAM is reported separately for the operator's awareness.
 func assessUsableVRAM(vramTotal uint64) uint64 {
 	if vramTotal <= assessVRAMReserveBytes {
 		return 0
@@ -205,6 +209,7 @@ func probeAssessHardware(ctx context.Context) assessHardware {
 		hw.GPUs = gpus
 		for _, gpu := range gpus {
 			hw.VRAMTotalBytes += gpu.TotalBytes
+			hw.VRAMFreeBytes += gpu.FreeBytes
 		}
 	}
 	if ram, err := assessMemAvailable(); err == nil {
@@ -353,8 +358,9 @@ func parseOllamaTags(body []byte) ([]assessModel, error) {
 
 func printAssessReport(report assessReport) {
 	hw := report.Hardware
-	fmt.Printf("Hardware: %d GPU(s), %s VRAM (%s usable), %d CPU cores, %s RAM available\n\n",
+	fmt.Printf("Hardware: %d GPU(s), %s VRAM (%s free, %s usable), %d CPU cores, %s RAM available\n\n",
 		len(hw.GPUs), assessHumanBytes(hw.VRAMTotalBytes),
+		assessHumanBytes(hw.VRAMFreeBytes),
 		assessHumanBytes(assessUsableVRAM(hw.VRAMTotalBytes)),
 		hw.CPUCores, assessHumanBytes(hw.RAMAvailableBytes))
 
