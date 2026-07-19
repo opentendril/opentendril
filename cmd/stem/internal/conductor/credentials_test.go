@@ -9,7 +9,7 @@ import (
 )
 
 // authTokenFromEnv returns the token the credential helper will serve (from the
-// OT_GIT_TOKEN entry) and asserts the token appears nowhere else in the env —
+// TENDRIL_GIT_TOKEN entry) and asserts the token appears nowhere else in the env —
 // notably not in any GIT_CONFIG_* value, which would put it in reach of argv.
 func authTokenFromEnv(t *testing.T, env []string) string {
 	t.Helper()
@@ -188,7 +188,7 @@ func TestExpandHome(t *testing.T) {
 func TestMaterializeGitAuth(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("pat -> credential-helper env, token only in OT_GIT_TOKEN", func(t *testing.T) {
+	t.Run("pat -> credential-helper env, token only in TENDRIL_GIT_TOKEN", func(t *testing.T) {
 		env, err := materializeGitAuth(ctx,
 			ResolvedCredential{Method: CredentialPAT, TokenEnv: "MY_PAT", TokenValue: "tok123"}, "https://github.com/o/r.git")
 		if err != nil {

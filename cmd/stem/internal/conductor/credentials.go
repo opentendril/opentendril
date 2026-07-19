@@ -169,19 +169,19 @@ func gitSSHCommand(keyPath string) string {
 
 // gitTokenCredentialEnvVar is the environment variable the inline git credential
 // helper reads the token from. It lives only in the process environment.
-const gitTokenCredentialEnvVar = "OT_GIT_TOKEN"
+const gitTokenCredentialEnvVar = "TENDRIL_GIT_TOKEN"
 
 // gitTokenCredentialEnv returns process env that authenticates git over HTTPS via
-// an inline credential helper reading the token from OT_GIT_TOKEN. The secret
+// an inline credential helper reading the token from TENDRIL_GIT_TOKEN. The secret
 // lives ONLY in the process environment (owner-readable /proc/<pid>/environ) —
 // never on the command line (world-readable /proc/<pid>/cmdline) or in
 // .git/config. x-access-token as the username works for App and PAT tokens.
 func gitTokenCredentialEnv(token string) []string {
-	// The helper references $OT_GIT_TOKEN by name, so the token never appears in
+	// The helper references $TENDRIL_GIT_TOKEN by name, so the token never appears in
 	// the helper text either. VALUE_0="" resets any inherited helper so only ours
 	// is consulted; VALUE_1 installs it. Config travels via GIT_CONFIG_* (env),
 	// not `-c` args, keeping it out of argv entirely.
-	const helper = `!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$OT_GIT_TOKEN"; }; f`
+	const helper = `!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$TENDRIL_GIT_TOKEN"; }; f`
 	return []string{
 		gitTokenCredentialEnvVar + "=" + token,
 		"GIT_CONFIG_COUNT=2",

@@ -1,7 +1,7 @@
-# OS of OT — Visual Command Center
+# Tendril OS — Visual Command Center
 
-The **Command Center** is the operator-facing frontend of the "OS of OT"
-(Operating System of OpenTendril). Where [ARCHITECTURE.md §5](../ARCHITECTURE.md)
+The **Command Center** is the operator-facing frontend of Tendril OS
+(the Operating System of OpenTendril). Where [ARCHITECTURE.md §5](../ARCHITECTURE.md)
 describes the persistent, multi-session Go Stem *daemon* (the unified
 `SessionManager`, the `.tendril/history.db` state layer, and the pluggable
 EventBus), this document describes the **decoupled web client** that turns that
@@ -18,7 +18,7 @@ client depends on.
 
 ---
 
-## 1. How it fits the OS-of-OT picture
+## 1. How it fits the Tendril OS picture
 
 ```
    Operator's browser
