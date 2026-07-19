@@ -270,7 +270,7 @@ func (h *SessionsHandler) runSequenceAsync(w http.ResponseWriter, r *http.Reques
 	bgCtx := context.WithoutCancel(r.Context())
 
 	if sessionID == "new" {
-		sess, err := h.manager.Sprout(bgCtx, session.OriginREST, session.Preferences{
+		sess, err := h.manager.Initiate(bgCtx, session.OriginREST, session.Preferences{
 			Provider: req.Provider,
 			Model:    req.Model,
 		})

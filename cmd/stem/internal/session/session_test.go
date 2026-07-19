@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSproutAssignsUniqueSproutIDs(t *testing.T) {
+func TestInitiateAssignsUniqueInitiateIDs(t *testing.T) {
 	m, err := NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
@@ -13,12 +13,12 @@ func TestSproutAssignsUniqueSproutIDs(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for i := 0; i < 50; i++ {
-		s, err := m.Sprout(context.Background(), OriginCLI, Preferences{})
+		s, err := m.Initiate(context.Background(), OriginCLI, Preferences{})
 		if err != nil {
-			t.Fatalf("Sprout: %v", err)
+			t.Fatalf("Initiate: %v", err)
 		}
 		if !ValidID(s.ID) {
-			t.Fatalf("Sprout produced invalid ID %q", s.ID)
+			t.Fatalf("Initiate produced invalid ID %q", s.ID)
 		}
 		if seen[s.ID] {
 			t.Fatalf("duplicate session ID %q", s.ID)
@@ -27,29 +27,29 @@ func TestSproutAssignsUniqueSproutIDs(t *testing.T) {
 	}
 }
 
-func TestGetOrSproutAdoptsWellFormedIDs(t *testing.T) {
+func TestGetOrInitiateAdoptsWellFormedIDs(t *testing.T) {
 	m, err := NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	s, err := m.GetOrSprout(context.Background(), "tendril-abc123", OriginREST)
+	s, err := m.GetOrInitiate(context.Background(), "tendril-abc123", OriginREST)
 	if err != nil {
-		t.Fatalf("GetOrSprout: %v", err)
+		t.Fatalf("GetOrInitiate: %v", err)
 	}
 	if s.ID != "tendril-abc123" {
 		t.Fatalf("expected adopted ID, got %q", s.ID)
 	}
 
-	again, err := m.GetOrSprout(context.Background(), "tendril-abc123", OriginMCP)
+	again, err := m.GetOrInitiate(context.Background(), "tendril-abc123", OriginMCP)
 	if err != nil {
-		t.Fatalf("GetOrSprout second call: %v", err)
+		t.Fatalf("GetOrInitiate second call: %v", err)
 	}
 	if again.Origin != OriginREST {
 		t.Fatalf("expected original origin to be preserved, got %q", again.Origin)
 	}
 
-	if _, err := m.GetOrSprout(context.Background(), "../etc/passwd", OriginREST); err == nil {
+	if _, err := m.GetOrInitiate(context.Background(), "../etc/passwd", OriginREST); err == nil {
 		t.Fatal("expected malformed ID to be rejected")
 	}
 }
@@ -60,8 +60,8 @@ func TestPreferencesMergeAndIsolationBetweenSessions(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	first, _ := m.Sprout(context.Background(), OriginCLI, Preferences{Model: "claude-fable-5"})
-	second, _ := m.Sprout(context.Background(), OriginCLI, Preferences{})
+	first, _ := m.Initiate(context.Background(), OriginCLI, Preferences{Model: "claude-fable-5"})
+	second, _ := m.Initiate(context.Background(), OriginCLI, Preferences{})
 
 	updated, err := m.UpdatePreferences(context.Background(), first.ID, Preferences{Genotype: "go-dev"})
 	if err != nil {
@@ -83,7 +83,7 @@ func TestRecordMessageAndInMemoryHistory(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	s, _ := m.Sprout(context.Background(), OriginREST, Preferences{})
+	s, _ := m.Initiate(context.Background(), OriginREST, Preferences{})
 	for _, content := range []string{"hello", "world"} {
 		if err := m.RecordMessage(context.Background(), Message{
 			SessionID: s.ID,

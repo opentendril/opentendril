@@ -53,7 +53,7 @@ func TestSproutRunMintsStepIDAndBindsSession(t *testing.T) {
 	})
 
 	// A pre-existing session's preferences must shape the sprout.
-	sess, err := manager.Sprout(context.Background(), session.OriginCLI, session.Preferences{
+	sess, err := manager.Initiate(context.Background(), session.OriginCLI, session.Preferences{
 		Provider: "local",
 		Model:    "llama3.2",
 		Genotype: "verifier",

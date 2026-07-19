@@ -136,9 +136,9 @@ func TestInvokeByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invoke create: %v", err)
 	}
-	sess, ok := result.(session.Session)
+	sess, ok := result.(session.Phytomer)
 	if !ok {
-		t.Fatalf("invoke create returned %T, want session.Session", result)
+		t.Fatalf("invoke create returned %T, want session.Phytomer", result)
 	}
 	if sess.Preferences.Model != "gpt-4o" {
 		t.Fatalf("invoke create ignored preferences: %+v", sess.Preferences)

@@ -187,7 +187,7 @@ func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	if httpResp.StatusCode != http.StatusCreated {
 		t.Fatalf("REST create status = %d, want 201", httpResp.StatusCode)
 	}
-	var restSess session.Session
+	var restSess session.Phytomer
 	if err := json.NewDecoder(httpResp.Body).Decode(&restSess); err != nil {
 		t.Fatalf("decode REST session: %v", err)
 	}
@@ -208,13 +208,13 @@ func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	if parsed.Result.IsError || len(parsed.Result.Content) == 0 {
 		t.Fatalf("MCP create returned error/empty: %s", string(mcpResp))
 	}
-	var mcpSess session.Session
+	var mcpSess session.Phytomer
 	if err := json.Unmarshal([]byte(parsed.Result.Content[0].Text), &mcpSess); err != nil {
 		t.Fatalf("decode MCP session: %v", err)
 	}
 
 	// All three surfaces produced an equivalent session for identical input.
-	for label, sess := range map[string]session.Session{"core": coreSess, "rest": restSess, "mcp": mcpSess} {
+	for label, sess := range map[string]session.Phytomer{"core": coreSess, "rest": restSess, "mcp": mcpSess} {
 		if sess.ID == "" {
 			t.Errorf("%s: empty session id", label)
 		}
@@ -267,8 +267,8 @@ type mockCore struct {
 	mu    sync.Mutex
 	calls []mockCoreCall
 
-	createSessionResult session.Session
-	getSessionResult    session.Session
+	createSessionResult session.Phytomer
+	getSessionResult    session.Phytomer
 }
 
 func (m *mockCore) record(method string, input any) {
@@ -297,24 +297,24 @@ func (m *mockCore) inputsFor(method string) []any {
 	return out
 }
 
-func (m *mockCore) CreateSession(_ context.Context, in core.CreateSessionInput) (session.Session, error) {
+func (m *mockCore) CreateSession(_ context.Context, in core.CreateSessionInput) (session.Phytomer, error) {
 	m.record("CreateSession", in)
 	return m.createSessionResult, nil
 }
 
-func (m *mockCore) ListSessions(_ context.Context) ([]session.Session, error) {
+func (m *mockCore) ListSessions(_ context.Context) ([]session.Phytomer, error) {
 	m.record("ListSessions", struct{}{})
 	return nil, nil
 }
 
-func (m *mockCore) GetSession(_ context.Context, in core.GetSessionInput) (session.Session, error) {
+func (m *mockCore) GetSession(_ context.Context, in core.GetSessionInput) (session.Phytomer, error) {
 	m.record("GetSession", in)
 	return m.getSessionResult, nil
 }
 
-func (m *mockCore) UpdateSessionPreferences(_ context.Context, in core.UpdateSessionInput) (session.Session, error) {
+func (m *mockCore) UpdateSessionPreferences(_ context.Context, in core.UpdateSessionInput) (session.Phytomer, error) {
 	m.record("UpdateSessionPreferences", in)
-	return session.Session{}, nil
+	return session.Phytomer{}, nil
 }
 
 func (m *mockCore) DeleteSession(_ context.Context, in core.DeleteSessionInput) error {

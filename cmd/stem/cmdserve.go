@@ -430,7 +430,7 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 			Model:    firstNonEmpty(e.Sprout.Model, e.Model),
 			Genotype: e.Sprout.Genotype,
 		}
-		if sess, err := sessions.Sprout(ctx, scheduledOrigin, prefs); err != nil {
+		if sess, err := sessions.Initiate(ctx, scheduledOrigin, prefs); err != nil {
 			log.Printf("⚠️ Schedule %q: failed to sprout a session for the run (growing sessionless): %v", name, err)
 		} else {
 			input["sessionId"] = sess.ID
@@ -571,7 +571,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		if requestedSessionID == "" {
 			requestedSessionID = strings.TrimSpace(r.Header.Get("X-Tendril-Session"))
 		}
-		sess, err := sessions.GetOrSprout(r.Context(), requestedSessionID, session.OriginREST)
+		sess, err := sessions.GetOrInitiate(r.Context(), requestedSessionID, session.OriginREST)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
