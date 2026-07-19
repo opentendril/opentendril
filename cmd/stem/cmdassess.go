@@ -80,6 +80,7 @@ type assessModelFit struct {
 type assessReport struct {
 	Hardware assessHardware   `json:"hardware"`
 	Models   []assessModelFit `json:"models"`
+	Warnings []string         `json:"warnings,omitempty"`
 }
 
 // Probing seams, overridable in tests so nothing shells out or dials a server.
@@ -110,6 +111,9 @@ func runAssessCmd(ctx context.Context, args []string) {
 	}
 
 	report := buildAssessReport(hw, models, *ctxTokens)
+	if err != nil {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("could not list local models: %v", err))
+	}
 	if *jsonOut {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
