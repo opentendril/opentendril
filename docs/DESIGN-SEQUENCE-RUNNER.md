@@ -86,7 +86,7 @@ steps:
 
 ### C. Detached Asynchronous Execution
 To support long-running, overnight workloads using slow local LLMs, sequences can be executed asynchronously.
-* Using the CLI flag `--detach` (or `-d`), the sequence is handed off to the Stem daemon via the `POST /v1/sessions/{sessionId}/sequences/grow` REST endpoint.
+* Using the CLI flag `--detach` (or `-d`), the sequence is handed off to the Stem daemon via the `POST /v1/phytomers/{sessionId}/sequences/grow` REST endpoint.
 * The daemon runs the sequence in the background, freeing up the user's terminal. Logs and status can be tracked via existing session event APIs.
 
 ---
@@ -119,7 +119,7 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 *   Support `--detach` flag for asynchronous execution.
 
 #### [NEW] [internal/api/sessions.go](../cmd/stem/internal/api/sessions.go)
-*   Implement `POST /v1/sessions/{sessionId}/sequences/grow` to support detached background runs.
+*   Implement `POST /v1/phytomers/{sessionId}/sequences/grow` to support detached background runs.
 
 #### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/api/mcp.go)
 *   Expose `runSequence` tool in MCP, supporting headless execution of parallel sequence files.

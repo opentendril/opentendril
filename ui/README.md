@@ -102,7 +102,7 @@ only; `ui/Dockerfile`'s production stage copies just `dist/`, never
 
 On first load a welcome screen asks a non-technical operator for the Stem
 address and the operator API key (`OPENTENDRIL_API_KEY`). The key is validated
-live — `/health` confirms the Stem is reachable, `/v1/sessions` confirms the
+live — `/health` confirms the Stem is reachable, `/v1/phytomers` confirms the
 key is accepted — then persisted to `localStorage`. No `.env` editing, and the
 key never leaves the browser. "Uproot" (top-right) clears it and returns to
 onboarding. Provider LLM keys remain server-side by design; the UI does not
@@ -125,9 +125,9 @@ manage them.
 
 ```
 App                         gates on stored connection settings
-├─ Onboarding               welcome screen; validates /health + /v1/sessions, persists to localStorage
+├─ Onboarding               welcome screen; validates /health + /v1/phytomers, persists to localStorage
 └─ CommandCenter            app shell; boots the store (WS + hydration), renders the grid
-   ├─ SessionRail           left: session list from GET /v1/sessions; switch/create Tendrils
+   ├─ SessionRail           left: session list from GET /v1/phytomers; switch/create Tendrils
    ├─ GardenCanvas          center: the living visualization (the centerpiece)
    │  └─ PlantFigure        one orchestration = one plant (stem, branches, tendril tips)
    │     └─ SelectionArena  a phenotypic-selection step = an arena of competing phenotype pods
@@ -183,7 +183,7 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
    immediately. While hydration is in flight, incoming live events are pushed
    into an in-memory `liveBuffer` instead of being applied — so nothing that
    arrives mid-hydration is dropped.
-2. **Hydrate cold state from REST underneath.** `GET /v1/sessions`, then for the
+2. **Hydrate cold state from REST underneath.** `GET /v1/phytomers`, then for the
    active session `…/history` (chat), `…/sprout-runs` (executions), and
    `…/events` (persisted telemetry). Previously rendered state is never cleared
    while this runs.

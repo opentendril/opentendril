@@ -129,7 +129,7 @@ func TestInvokeByName(t *testing.T) {
 	svc := newTestCore(t)
 
 	// Invoke create through the generic registry path (the MCP/CLI projection).
-	result, err := svc.Invoke(ctx, core.CapCreateSession, map[string]any{
+	result, err := svc.Invoke(ctx, core.CapCreatePhytomer, map[string]any{
 		"origin":      session.OriginMCP,
 		"preferences": map[string]any{"model": "gpt-4o"},
 	})

@@ -142,7 +142,7 @@ Add the following configuration:
 
 Once connected, the client can drive the Stem's governed capabilities directly.
 A JSON-RPC `tools/list` on `tendril mcp` advertises the full set — session
-lifecycle (`session.create|list|get|update|delete|history`), `sproutTendril`,
+lifecycle (`phytomer.create|list|get|update|delete|history`), `sproutTendril`,
 `runSequence`, genome/plasmid/graft tools — the same registry projected onto the
 CLI and REST surfaces (interface parity is enforced in CI).
 

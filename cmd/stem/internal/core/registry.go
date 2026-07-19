@@ -10,12 +10,12 @@ import (
 // under cmd/stem). Adding a name here without wiring every surface, or wiring a
 // surface without a name here, fails CI.
 const (
-	CapCreateSession  = "session.create"
-	CapListSessions   = "session.list"
-	CapGetSession     = "session.get"
-	CapUpdateSession  = "session.update"
-	CapDeleteSession  = "session.delete"
-	CapSessionHistory = "session.history"
+	CapCreatePhytomer  = "phytomer.create"
+	CapListPhytomers   = "phytomer.list"
+	CapGetPhytomer     = "phytomer.get"
+	CapUpdatePhytomer  = "phytomer.update"
+	CapDeletePhytomer  = "phytomer.delete"
+	CapPhytomerHistory = "phytomer.history"
 
 	CapGenomeView   = "genome.view"
 	CapGenomeReduce = "genome.reduce"
@@ -56,12 +56,12 @@ type Capability struct {
 // is the single source of truth the parity tests compare every surface against.
 func CapabilityNames() []string {
 	names := []string{
-		CapCreateSession,
-		CapListSessions,
-		CapGetSession,
-		CapUpdateSession,
-		CapDeleteSession,
-		CapSessionHistory,
+		CapCreatePhytomer,
+		CapListPhytomers,
+		CapGetPhytomer,
+		CapUpdatePhytomer,
+		CapDeletePhytomer,
+		CapPhytomerHistory,
 		CapGenomeView,
 		CapGenomeReduce,
 		CapGenomeEvolve,
@@ -115,10 +115,10 @@ func IsDelegatedCapability(name string) bool {
 func (s *Service) Capabilities() []Capability {
 	caps := []Capability{
 		{
-			Name:        CapCreateSession,
-			Description: "Create a new Tendril session with optional LLM/genotype preferences.",
+			Name:        CapCreatePhytomer,
+			Description: "Create a new Phytomer with optional LLM/genotype preferences.",
 			InputSchema: schemaObject(map[string]any{
-				"origin":      stringProp("Interaction origin recorded on the session (cli, mcp, rest)."),
+				"origin":      stringProp("Interaction origin recorded on the Phytomer (cli, mcp, rest)."),
 				"preferences": preferencesSchema(),
 			}, nil),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
@@ -130,18 +130,18 @@ func (s *Service) Capabilities() []Capability {
 			},
 		},
 		{
-			Name:        CapListSessions,
-			Description: "List all live Tendril sessions, most recently active first.",
+			Name:        CapListPhytomers,
+			Description: "List all live Phytomers, most recently active first.",
 			InputSchema: schemaObject(map[string]any{}, nil),
 			Invoke: func(ctx context.Context, _ map[string]any) (any, error) {
 				return s.ListSessions(ctx)
 			},
 		},
 		{
-			Name:        CapGetSession,
-			Description: "Fetch a single Tendril session by id.",
+			Name:        CapGetPhytomer,
+			Description: "Fetch a single Phytomer by id.",
 			InputSchema: schemaObject(map[string]any{
-				"sessionId": stringProp("The Tendril session id."),
+				"sessionId": stringProp("The Phytomer id."),
 			}, []string{"sessionId"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in GetSessionInput
@@ -152,10 +152,10 @@ func (s *Service) Capabilities() []Capability {
 			},
 		},
 		{
-			Name:        CapUpdateSession,
-			Description: "Merge preference overrides (provider, model, genotype, …) into a session.",
+			Name:        CapUpdatePhytomer,
+			Description: "Merge preference overrides (provider, model, genotype, …) into a Phytomer.",
 			InputSchema: schemaObject(map[string]any{
-				"sessionId":   stringProp("The Tendril session id."),
+				"sessionId":   stringProp("The Phytomer id."),
 				"preferences": preferencesSchema(),
 			}, []string{"sessionId"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
@@ -167,10 +167,10 @@ func (s *Service) Capabilities() []Capability {
 			},
 		},
 		{
-			Name:        CapDeleteSession,
-			Description: "Prune a Tendril session and its persisted state.",
+			Name:        CapDeletePhytomer,
+			Description: "Prune a Phytomer and its persisted state.",
 			InputSchema: schemaObject(map[string]any{
-				"sessionId": stringProp("The Tendril session id."),
+				"sessionId": stringProp("The Phytomer id."),
 			}, []string{"sessionId"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in DeleteSessionInput
@@ -184,10 +184,10 @@ func (s *Service) Capabilities() []Capability {
 			},
 		},
 		{
-			Name:        CapSessionHistory,
+			Name:        CapPhytomerHistory,
 			Description: "Return a session's recent unified chat log.",
 			InputSchema: schemaObject(map[string]any{
-				"sessionId": stringProp("The Tendril session id."),
+				"sessionId": stringProp("The Phytomer id."),
 				"limit":     map[string]any{"type": "integer", "description": "Max messages to return (default 50)."},
 			}, []string{"sessionId"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {

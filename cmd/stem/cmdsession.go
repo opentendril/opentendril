@@ -22,7 +22,7 @@ import (
 // business logic lives here.
 //
 // Subcommand names are the capability names with the "session." prefix
-// stripped (e.g. capability "session.list" → `tendril session list`). The
+// stripped (e.g. capability "phytomer.list" → `tendril session list`). The
 // mapping is derived from core.CapabilityNames() so the CLI can never advertise
 // a subcommand the registry does not declare.
 func runSessionCmd(ctx context.Context, args []string) {
@@ -114,12 +114,12 @@ type sessionCommand struct {
 // dropping an entry here both removes the subcommand and makes the CLI arm
 // diverge from the canonical registry.
 var sessionCommands = []sessionCommand{
-	{"create", core.CapCreateSession},
-	{"list", core.CapListSessions},
-	{"get", core.CapGetSession},
-	{"update", core.CapUpdateSession},
-	{"delete", core.CapDeleteSession},
-	{"history", core.CapSessionHistory},
+	{"create", core.CapCreatePhytomer},
+	{"list", core.CapListPhytomers},
+	{"get", core.CapGetPhytomer},
+	{"update", core.CapUpdatePhytomer},
+	{"delete", core.CapDeletePhytomer},
+	{"history", core.CapPhytomerHistory},
 }
 
 // lookupSessionCommand resolves a CLI subcommand token to its registered entry.
@@ -223,23 +223,23 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 	if len(prefs) > 0 {
 		input["preferences"] = prefs
 	}
-	if input["origin"] == nil && capName == core.CapCreateSession {
+	if input["origin"] == nil && capName == core.CapCreatePhytomer {
 		input["origin"] = session.OriginCLI
 	}
 	return input, nil
 }
 
 var sessionCommandHelp = map[string]string{
-	core.CapCreateSession:  "create a new session   (--provider --model --genotype --origin)",
-	core.CapListSessions:   "list live sessions",
-	core.CapGetSession:     "get one session        (<id> | --id <id>)",
-	core.CapUpdateSession:  "update preferences     (<id> --provider --model --genotype)",
-	core.CapDeleteSession:  "delete a session       (<id>)",
-	core.CapSessionHistory: "show chat history      (<id> --limit N)",
+	core.CapCreatePhytomer:  "create a new session   (--provider --model --genotype --origin)",
+	core.CapListPhytomers:   "list live sessions",
+	core.CapGetPhytomer:     "get one session        (<id> | --id <id>)",
+	core.CapUpdatePhytomer:  "update preferences     (<id> --provider --model --genotype)",
+	core.CapDeletePhytomer:  "delete a session       (<id>)",
+	core.CapPhytomerHistory: "show chat history      (<id> --limit N)",
 }
 
 func printSessionUsage() {
-	fmt.Println("Usage: tendril session <subcommand> [flags]")
+	fmt.Println("Usage: tendril phytomer <subcommand> [flags]   (alias: tendril session)")
 	fmt.Println()
 	fmt.Println("Subcommands (projections of the shared Core capability registry):")
 	for _, command := range sessionCommands {

@@ -55,12 +55,12 @@ type governedRoute struct {
 // test's REST arm diverge from the canonical registry.
 func (h *SessionsHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
-		{"POST /v1/sessions", core.CapCreateSession, h.create},
-		{"GET /v1/sessions", core.CapListSessions, h.list},
-		{"GET /v1/sessions/{sessionId}", core.CapGetSession, h.get},
-		{"PATCH /v1/sessions/{sessionId}", core.CapUpdateSession, h.updatePreferences},
-		{"DELETE /v1/sessions/{sessionId}", core.CapDeleteSession, h.remove},
-		{"GET /v1/sessions/{sessionId}/history", core.CapSessionHistory, h.messages},
+		{"POST /v1/phytomers", core.CapCreatePhytomer, h.create},
+		{"GET /v1/phytomers", core.CapListPhytomers, h.list},
+		{"GET /v1/phytomers/{sessionId}", core.CapGetPhytomer, h.get},
+		{"PATCH /v1/phytomers/{sessionId}", core.CapUpdatePhytomer, h.updatePreferences},
+		{"DELETE /v1/phytomers/{sessionId}", core.CapDeletePhytomer, h.remove},
+		{"GET /v1/phytomers/{sessionId}/history", core.CapPhytomerHistory, h.messages},
 	}
 }
 
@@ -90,12 +90,17 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth func(http.HandlerFun
 		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
 	}
 
-	// Governed session capabilities: mount each route and record the capability
-	// it projects, so Capabilities() reflects the routes truly registered.
+	// Governed phytomer capabilities: mount each canonical /v1/phytomers route
+	// and record the capability it projects, so Capabilities() reflects the
+	// routes truly registered. Each route is also mounted under the legacy
+	// /v1/sessions alias (same handler, same {sessionId} param) so existing
+	// clients keep working through the botanisation; the alias is not recorded
+	// in the parity set — the canonical /v1/phytomers surface is the contract.
 	h.registered = h.registered[:0]
 	seen := make(map[string]bool)
 	for _, route := range h.governedRoutes() {
 		mux.HandleFunc(route.pattern, auth(route.handler))
+		mux.HandleFunc(sessionAlias(route.pattern), auth(route.handler))
 		if !seen[route.capability] {
 			seen[route.capability] = true
 			h.registered = append(h.registered, route.capability)
@@ -103,10 +108,30 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth func(http.HandlerFun
 	}
 
 	// Ungoverned routes (views / follow-up capabilities) — not part of the
-	// parity registry.
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/events", auth(h.events))
-	mux.HandleFunc("GET /v1/sessions/{sessionId}/sprout-runs", auth(h.sproutRuns))
-	mux.HandleFunc("POST /v1/sessions/{sessionId}/sequences/grow", auth(h.runSequenceAsync))
+	// parity registry. Canonical + legacy alias, as above.
+	for _, pattern := range []string{
+		"GET /v1/phytomers/{sessionId}/events",
+		"GET /v1/phytomers/{sessionId}/sprout-runs",
+		"POST /v1/phytomers/{sessionId}/sequences/grow",
+	} {
+		var handler http.HandlerFunc
+		switch {
+		case strings.HasSuffix(pattern, "/events"):
+			handler = h.events
+		case strings.HasSuffix(pattern, "/sprout-runs"):
+			handler = h.sproutRuns
+		default:
+			handler = h.runSequenceAsync
+		}
+		mux.HandleFunc(pattern, auth(handler))
+		mux.HandleFunc(sessionAlias(pattern), auth(handler))
+	}
+}
+
+// sessionAlias maps a canonical "/v1/phytomers…" route pattern to its legacy
+// "/v1/sessions…" alias, preserving method and path parameters.
+func sessionAlias(pattern string) string {
+	return strings.Replace(pattern, "/v1/phytomers", "/v1/sessions", 1)
 }
 
 type createSessionRequest struct {
