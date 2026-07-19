@@ -1450,7 +1450,7 @@ func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step 
 		Provider:        provider,
 		Model:           model,
 		BaseURL:         baseURL,
-		// The sequence bus, not nil: the agent streams only when it has a bus
+		// The sequence bus, not nil: the Sprout streams only when it has a bus
 		// to publish to, and the run's lifecycle events travel the same way. A
 		// nil bus here made every plain sequence sprout step silent for its
 		// whole duration.
@@ -1679,7 +1679,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	defer func() {
 		outcome := executionOutcome
 		// A failure anywhere (including commit or merge-back after a clean
-		// agent turn) must reclassify: the run's provisional verdict cannot
+		// Sprout turn) must reclassify: the run's provisional verdict cannot
 		// stand once its results failed to land.
 		if err != nil || outcome == "" {
 			outcome = classifySproutOutcome(err, executionFiles, false, response)
@@ -1792,10 +1792,10 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	}
 
-	// Note: even for a "macrophage" step, the agent's own session below still
+	// Note: even for a "macrophage" step, the Sprout's own session below still
 	// uses the ordinary per-language image (opentendril-go:latest for a Go
 	// workspace) to write the fuzz test file via the normal tool-call
-	// protocol. The deterministic fuzz-*execution* half after the agent turn
+	// protocol. The deterministic fuzz-*execution* half after the Sprout turn
 	// runs in a separate, Go-toolchain-enabled terrarium (macrophageFuzzImage,
 	// sprouts/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
 	imageName := orch.resolveImageName(mountPath)
@@ -1823,43 +1823,43 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 	defer session.Close()
 
-	// The orchestrator's bus, not nil: the agent streams only when it has one
+	// The orchestrator's bus, not nil: the Sprout streams only when it has one
 	// to publish to, so passing nil made every sequence sprout step — a
 	// delegated Codex run among them — silent for its whole duration, leaving a
 	// wall clock as the only way to judge it.
-	agent, err := newAgentFn(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session, orch.EventBus, orch.StepID, orch.SessionID)
+	sprout, err := newSproutFn(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session, orch.EventBus, orch.StepID, orch.SessionID)
 	if err != nil {
 		return result, err
 	}
 
-	agentResult, runErr := agent.Run(ctx, taskPrompt)
+	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
 
-	result.Response = agentResult.Response
-	if agentResult.ActionResult != nil {
-		verdict := strings.ToUpper(strings.TrimSpace(agentResult.ActionResult.Verdict))
+	result.Response = sproutResult.Response
+	if sproutResult.ActionResult != nil {
+		verdict := strings.ToUpper(strings.TrimSpace(sproutResult.ActionResult.Verdict))
 		switch verdict {
 		case "DANGEROUS":
 			if quarantineErr := quarantineScriptPrompt(stepID, taskPrompt); quarantineErr != nil {
-				return result, errors.Join(fmt.Errorf("script quarantined: %v", agentResult.ActionResult.Risks), quarantineErr)
+				return result, errors.Join(fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks), quarantineErr)
 			}
-			return result, fmt.Errorf("script quarantined: %v", agentResult.ActionResult.Risks)
+			return result, fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks)
 		case "REVIEW":
 			return result, ErrRequiresReview
 		case "SAFE":
 		case "":
 		default:
-			return result, fmt.Errorf("unknown script review verdict %q", agentResult.ActionResult.Verdict)
+			return result, fmt.Errorf("unknown script review verdict %q", sproutResult.ActionResult.Verdict)
 		}
 	}
 
-	// Symbiotic Immune System: once the Macrophage's agent turn
+	// Symbiotic Immune System: once the Macrophage's Sprout turn
 	// has written its fuzz test, deterministically run it — no LLM judgment
 	// call — and treat a crash exactly like a Verifier compiler/test failure,
 	// so shouldBudRecursiveDebugger sprouts a Debugger to fix it and retries.
-	// Skipped if the agent turn itself already failed; nothing to fuzz.
+	// Skipped if the Sprout turn itself already failed; nothing to fuzz.
 	if runErr == nil && orch.Genotype == "macrophage" {
 		if fuzzErr := runMacrophageFuzzCheckFn(ctx, providerName, mountPath); fuzzErr != nil {
 			runErr = fuzzErr
@@ -1890,7 +1890,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true, agentResult.Response),
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true, sproutResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
@@ -1926,7 +1926,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 	if gitDiff != "" && runErr == nil {
 		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-		if err := chronicler.TranscribeLearnings(ctx, agentResult.Transcript, gitDiff, session.Logs()); err != nil {
+		if err := chronicler.TranscribeLearnings(ctx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}
 	}

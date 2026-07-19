@@ -10,7 +10,7 @@ import (
 
 // The index key is the sharp case: committed into a substrate and merged back,
 // a push publishes it. The change set is derived from `git status --porcelain`
-// in the mount, which cannot distinguish OpenTendril's writes from the agent's.
+// in the mount, which cannot distinguish OpenTendril's writes from the Sprout's.
 func TestGeneratedRuntimeArtifactsAreNeverStaged(t *testing.T) {
 	for _, path := range []string{
 		".tendril/rhizome.key",
@@ -30,7 +30,7 @@ func TestGeneratedRuntimeArtifactsAreNeverStaged(t *testing.T) {
 	}
 }
 
-// The filter must not swallow the agent's work. A repository may track its own
+// The filter must not swallow the Sprout's work. A repository may track its own
 // .tendril files, and a task asking to edit one has to survive.
 func TestTrackedSubstrateFilesUnderTendrilAreStillStaged(t *testing.T) {
 	for _, path := range []string{
@@ -44,7 +44,7 @@ func TestTrackedSubstrateFilesUnderTendrilAreStillStaged(t *testing.T) {
 			t.Errorf("isGeneratedRuntimeArtifact(%q) = true; only OpenTendril's generated state is excluded", path)
 		}
 		if shouldIgnoreStagePath(path) {
-			t.Errorf("shouldIgnoreStagePath(%q) = true; the agent's work would be silently dropped", path)
+			t.Errorf("shouldIgnoreStagePath(%q) = true; the Sprout's work would be silently dropped", path)
 		}
 	}
 }
@@ -71,7 +71,7 @@ func TestCollectStageableFilesExcludesGeneratedArtifactsInARealRepository(t *tes
 	run("commit", "-q", "-m", "initial")
 
 	// Exactly what a sprout leaves behind: OpenTendril's state beside the
-	// agent's work, in a repository with no .gitignore.
+	// Sprout's work, in a repository with no .gitignore.
 	if err := os.MkdirAll(filepath.Join(repo, ".tendril", "genome"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -97,13 +97,13 @@ func TestCollectStageableFilesExcludesGeneratedArtifactsInARealRepository(t *tes
 		}
 	}
 
-	var sawAgentWork bool
+	var sawSproutWork bool
 	for _, file := range files {
 		if file == "agentwork.go" {
-			sawAgentWork = true
+			sawSproutWork = true
 		}
 	}
-	if !sawAgentWork {
-		t.Fatalf("the agent's file was not staged; got %v", files)
+	if !sawSproutWork {
+		t.Fatalf("the Sprout's file was not staged; got %v", files)
 	}
 }

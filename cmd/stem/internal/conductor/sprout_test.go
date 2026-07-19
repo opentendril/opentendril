@@ -91,7 +91,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if err := os.MkdirAll(genotypeDir, 0o755); err != nil {
 		t.Fatalf("mkdir genotype dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(genotypeDir, "workspace-agent.json"), []byte(`{"name":"workspace-agent","instructions":"You are the workspace agent."}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(genotypeDir, "workspace-Sprout.json"), []byte(`{"name":"workspace-Sprout","instructions":"You are the workspace Sprout."}`), 0o644); err != nil {
 		t.Fatalf("write genotype file: %v", err)
 	}
 
@@ -113,14 +113,14 @@ func TestAgentRunsToolLoop(t *testing.T) {
 		},
 	}
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
 
-	result, err := agent.Run(context.Background(), "read the README")
+	result, err := sprout.Run(context.Background(), "read the README")
 	if err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 
 	if result.Response != "done" {
@@ -148,7 +148,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 	if !strings.Contains(client.calls[0][0].Content, "Genome note") {
 		t.Fatalf("system prompt missing genome context: %s", client.calls[0][0].Content)
 	}
-	if !strings.Contains(client.calls[0][0].Content, "You are the workspace agent.") {
+	if !strings.Contains(client.calls[0][0].Content, "You are the workspace Sprout.") {
 		t.Fatalf("system prompt missing genotype context: %s", client.calls[0][0].Content)
 	}
 }
@@ -302,21 +302,21 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 			{Name: "injectPlasmid"},
 		},
 	}
-	agent, err := newAgent(context.Background(), workspace, workspace, "secure", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "secure", client, session, nil, "", "")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
 
-	if _, hasEvil := agent.toolIndex["evilTool"]; hasEvil {
+	if _, hasEvil := sprout.toolIndex["evilTool"]; hasEvil {
 		t.Errorf("evilTool was not filtered out of toolIndex")
 	}
-	if _, hasSafe := agent.toolIndex["safeTool"]; !hasSafe {
+	if _, hasSafe := sprout.toolIndex["safeTool"]; !hasSafe {
 		t.Errorf("safeTool was incorrectly filtered out")
 	}
 
-	result, err := agent.Run(context.Background(), "do it")
+	result, err := sprout.Run(context.Background(), "do it")
 	if err != nil {
-		t.Fatalf("agent.Run failed: %v", err)
+		t.Fatalf("Sprout.Run failed: %v", err)
 	}
 
 	if !strings.Contains(result.Transcript, "unsupported tool") || !strings.Contains(result.Transcript, "evilTool") {
@@ -438,7 +438,7 @@ steps:
 	}
 }
 
-// A bus is not decoration: the agent streams only when it has one, so a nil bus
+// A bus is not decoration: the Sprout streams only when it has one, so a nil bus
 // makes a run emit nothing at all — no tokens, no reasoning, no way to tell a
 // working sprout from a stuck one except a wall clock. Both sprout execution
 // paths passed nil, so this pins the behaviour the wiring depends on.
@@ -449,12 +449,12 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "do the thing"); err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+	if _, err := sprout.Run(context.Background(), "do the thing"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 
 	// No sleep: the turn waits for its tokens to be published before it
@@ -470,7 +470,7 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 		published[event.Type]++
 	}
 	if published[eventbus.EventStreamToken] == 0 {
-		t.Errorf("no %s events: the agent did not stream, so liveness is unobservable (got %v)", eventbus.EventStreamToken, published)
+		t.Errorf("no %s events: the Sprout did not stream, so liveness is unobservable (got %v)", eventbus.EventStreamToken, published)
 	}
 	if published[eventbus.EventThoughtBranch] == 0 {
 		t.Errorf("no %s events: reasoning is unobservable (got %v)", eventbus.EventThoughtBranch, published)
@@ -480,7 +480,7 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 // A run's actual actions must be observable, not just its bookends. Before
 // tool-invoked events existed, a sprout could read, edit, and run commands and
 // an observer would see only sprout-emerged/sprout-matured — no way to watch
-// WHAT it did. This pins that every tool call the agent makes is published.
+// WHAT it did. This pins that every tool call the Sprout makes is published.
 func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{
@@ -493,12 +493,12 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "read the readme"); err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+	if _, err := sprout.Run(context.Background(), "read the readme"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 
 	var toolEvents []eventbus.Event
@@ -522,7 +522,7 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	}
 	// The event must be correlated to the run's session, or the per-session
 	// "explain a run" query cannot retrieve it — the exact orphaning that left
-	// agent telemetry present in the table but invisible to the surface.
+	// Sprout telemetry present in the table but invisible to the surface.
 	if toolEvents[0].SessionID != "session-1" {
 		t.Errorf("tool-invoked event sessionID = %q, want session-1", toolEvents[0].SessionID)
 	}
@@ -530,7 +530,7 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 
 // A run must be explainable after the fact as one readable transcript, not only
 // as a token stream a reviewer has to stitch back together. This pins that the
-// agent publishes its assembled conversation once, correlated to the session.
+// Sprout publishes its assembled conversation once, correlated to the session.
 func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{
@@ -543,12 +543,12 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "read the readme"); err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+	if _, err := sprout.Run(context.Background(), "read the readme"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 
 	var transcripts []eventbus.Event
@@ -565,7 +565,7 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	}
 	transcript, _ := transcripts[0].Data["transcript"].(string)
 	// The transcript must actually carry the conversation: the task prompt, the
-	// tool the agent called, and its final answer.
+	// tool the Sprout called, and its final answer.
 	for _, want := range []string{"read the readme", "readFile", "all done"} {
 		if !strings.Contains(transcript, want) {
 			t.Errorf("transcript missing %q; got:\n%s", want, transcript)
@@ -590,13 +590,13 @@ func TestAgentInterceptsGitCommit(t *testing.T) {
 		{Name: "gitCommit", Description: "Stage files and create a git commit."},
 	}}
 
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
-	result, err := agent.Run(context.Background(), "make and commit a change")
+	result, err := sprout.Run(context.Background(), "make and commit a change")
 	if err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 	if result.Response != "done" {
 		t.Fatalf("expected final response done, got %q", result.Response)
@@ -607,25 +607,25 @@ func TestAgentInterceptsGitCommit(t *testing.T) {
 			t.Fatalf("gitCommit was forwarded to the tool session instead of being intercepted")
 		}
 	}
-	// The agent's transcript must carry the managed-git policy so the model is
+	// The Sprout's transcript must carry the managed-git policy so the model is
 	// told commits are automatic rather than seeing a git error.
-	if !strings.Contains(agent.transcript.String(), "automatically commits") {
-		t.Errorf("expected managed-git policy in the transcript, got:\n%s", agent.transcript.String())
+	if !strings.Contains(sprout.transcript.String(), "automatically commits") {
+		t.Errorf("expected managed-git policy in the transcript, got:\n%s", sprout.transcript.String())
 	}
 }
 
-// The other half of the contract: without a bus the agent takes the blocking
+// The other half of the contract: without a bus the Sprout takes the blocking
 // path and publishes nothing. This documents why nil was never a neutral
 // default.
 func TestAgentWithoutABusIsSilent(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{response: "done"}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
-	agent, err := newAgent(context.Background(), workspace, workspace, "workspace-agent", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
 	if err != nil {
-		t.Fatalf("newAgent returned error: %v", err)
+		t.Fatalf("newSprout returned error: %v", err)
 	}
-	if _, err := agent.Run(context.Background(), "do the thing"); err != nil {
-		t.Fatalf("agent.Run returned error: %v", err)
+	if _, err := sprout.Run(context.Background(), "do the thing"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
 	}
 }

@@ -43,7 +43,7 @@ func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 	originalPreflight := runSproutPreflightChecksFn
 	originalEnsureImage := ensureSproutImageFn
 	originalStartSession := startTerrariumSessionFn
-	originalNewAgent := newAgentFn
+	originalNewSprout := newSproutFn
 	originalRepoMap := generateRepoMapFn
 	originalMemoryMap := generateMemoryMapFn
 	originalCreateShadow := createShadowWorktreeFn
@@ -55,7 +55,7 @@ func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 		runSproutPreflightChecksFn = originalPreflight
 		ensureSproutImageFn = originalEnsureImage
 		startTerrariumSessionFn = originalStartSession
-		newAgentFn = originalNewAgent
+		newSproutFn = originalNewSprout
 		generateRepoMapFn = originalRepoMap
 		generateMemoryMapFn = originalMemoryMap
 		createShadowWorktreeFn = originalCreateShadow
@@ -98,8 +98,8 @@ func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 		cancel()
 		return nil, errors.New("stop before terrarium starts")
 	}
-	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
-		return nil, errors.New("agent should not start")
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+		return nil, errors.New("Sprout should not start")
 	}
 
 	orch := &DockerOrchestrator{Substrate: root, DisableMergeBack: false}

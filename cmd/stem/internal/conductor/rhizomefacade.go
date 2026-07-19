@@ -17,7 +17,7 @@ import (
 // The names live here, next to the code that creates them, because the commit
 // path has to skip exactly these files and a second copy of the list would
 // drift away from this one. Nothing else under .tendril is covered on purpose:
-// a repository may legitimately track its own .tendril files, and an agent
+// a repository may legitimately track its own .tendril files, and an Sprout
 // asked to edit one must still be able to.
 const (
 	tendrilStateDirectory = ".tendril"
@@ -42,7 +42,7 @@ func generatedRuntimeArtifacts() []string {
 //
 // SQLite keeps its write-ahead log and shared-memory file beside the database
 // under names derived from it, so the database is matched by prefix rather than
-// equality — otherwise `rhizome.db-wal` would be committed as the agent's work.
+// equality — otherwise `rhizome.db-wal` would be committed as the Sprout's work.
 func isGeneratedRuntimeArtifact(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
 	if normalized == "" {

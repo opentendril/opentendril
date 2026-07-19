@@ -243,7 +243,7 @@ substrates:
 	originalPreflight := runSproutPreflightChecksFn
 	originalEnsure := ensureSproutImageFn
 	originalStart := startTerrariumSessionFn
-	originalNewAgent := newAgentFn
+	originalNewSprout := newSproutFn
 	originalStash := stashHostWorkspaceFn
 	originalRestore := restoreHostStashFn
 	originalCreateShadow := createShadowWorktreeFn
@@ -259,7 +259,7 @@ substrates:
 		runSproutPreflightChecksFn = originalPreflight
 		ensureSproutImageFn = originalEnsure
 		startTerrariumSessionFn = originalStart
-		newAgentFn = originalNewAgent
+		newSproutFn = originalNewSprout
 		stashHostWorkspaceFn = originalStash
 		restoreHostStashFn = originalRestore
 		createShadowWorktreeFn = originalCreateShadow
@@ -289,12 +289,12 @@ substrates:
 		capturedRepoMap = string(content)
 		return &stubToolSession{}, nil
 	}
-	origNewAgentFn := newAgentFn
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
-		return &stubSproutRunner{result: agentResult{Response: "read-only result", Transcript: "transcript"}}, nil
+	origNewSproutFn := newSproutFn
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+		return &stubSproutRunner{result: sproutResult{Response: "read-only result", Transcript: "transcript"}}, nil
 	}
 	defer func() {
-		newAgentFn = origNewAgentFn
+		newSproutFn = origNewSproutFn
 	}()
 	stashHostWorkspaceFn = func(ctx context.Context, root, runID string) (bool, error) {
 		t.Fatalf("stashHostWorkspace should not run for read-only substrates")
@@ -377,10 +377,10 @@ func (s *stubToolSession) Logs() string {
 }
 
 type stubSproutRunner struct {
-	result agentResult
+	result sproutResult
 }
 
-func (s *stubSproutRunner) Run(ctx context.Context, taskPrompt string) (agentResult, error) {
+func (s *stubSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	return s.result, nil
 }
 

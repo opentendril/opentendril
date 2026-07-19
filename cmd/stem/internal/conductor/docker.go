@@ -53,7 +53,7 @@ func NewDockerOrchestrator() *DockerOrchestrator {
 }
 
 type sproutRunner interface {
-	Run(ctx context.Context, taskPrompt string) (agentResult, error)
+	Run(ctx context.Context, taskPrompt string) (sproutResult, error)
 }
 
 var (
@@ -61,8 +61,8 @@ var (
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv...)
 	}
-	newAgentFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
-		return newAgent(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
 	}
 	stashHostWorkspaceFn       = stashHostWorkspace
 	restoreHostStashFn         = restoreHostStash
@@ -344,12 +344,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	defer session.Close()
 
-	agent, err := newAgentFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
+	sprout, err := newSproutFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
 	if err != nil {
 		return report, err
 	}
 
-	agentResult, runErr := agent.Run(ctx, taskPrompt)
+	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
 
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
@@ -362,7 +362,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if runErr != nil {
 			return report, runErr
 		}
-		report.Output = agentResult.Response
+		report.Output = sproutResult.Response
 		return report, nil
 	}
 
@@ -391,7 +391,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		StepID:        stepID,
 		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
 		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true, agentResult.Response),
+		Status:        classifySproutOutcome(runErr, modifiedFiles, true, sproutResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
@@ -437,12 +437,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	if gitDiff != "" {
 		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-		if err := chronicler.TranscribeLearnings(ctx, agentResult.Transcript, gitDiff, session.Logs()); err != nil {
+		if err := chronicler.TranscribeLearnings(ctx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 		}
 	}
 
-	report.Output = agentResult.Response
+	report.Output = sproutResult.Response
 	return report, nil
 }
 
@@ -1265,8 +1265,8 @@ func shouldIgnoreStagePath(path string) bool {
 
 	// OpenTendril's own working state, written into the substrate while it
 	// indexes it. The change set comes from `git status --porcelain` in the
-	// mount, which cannot tell the tool's writes from the agent's, so without
-	// this they were committed as the agent's work and merged back — including
+	// mount, which cannot tell the tool's writes from the Sprout's, so without
+	// this they were committed as the Sprout's work and merged back — including
 	// the index encryption key, which a push would then publish. This
 	// repository ignores .tendril, which is why the path only ever misbehaved
 	// against other people's repositories.

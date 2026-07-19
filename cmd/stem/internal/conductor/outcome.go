@@ -7,7 +7,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
-// The sprout outcome vocabulary. A finished agent loop is not a verdict on the
+// The sprout outcome vocabulary. A finished Sprout loop is not a verdict on the
 // work, so the old complete/failed binary dressed two very different endings
 // as success: a run that changed nothing, and a run the terrarium watchdog
 // killed. Each ending gets its own name; consumers decide what to do with it.
@@ -32,7 +32,7 @@ const (
 	// SproutOutcomeSkipped: a resumed step that had already completed; no run
 	// happened.
 	SproutOutcomeSkipped = "skipped"
-	// SproutOutcomeNoEngagement: the run finished without error but the agent
+	// SproutOutcomeNoEngagement: the run finished without error but the Sprout
 	// produced no response and changed nothing — it never engaged the task
 	// (e.g. a model that cannot drive the tool protocol returns an empty
 	// completion). Distinct from no-changes, which is a real "investigate and
@@ -42,7 +42,7 @@ const (
 )
 
 // ErrSproutTimedOut marks a sprout run cut short by the terrarium's run
-// watchdog. It wraps the tool-call error the agent observes when the container
+// watchdog. It wraps the tool-call error the Sprout observes when the container
 // is killed under it, so every layer up to the surface can tell a timeout from
 // a failure with errors.Is.
 var ErrSproutTimedOut = errors.New("sprout terrarium timed out before the run could finish")
@@ -64,7 +64,7 @@ type SproutRunReport struct {
 // whether FilesModified was measurable at all — a non-git or readonly
 // substrate cannot distinguish complete from no-changes, and claiming
 // "no-changes" there would be its own kind of lie.
-func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, agentResponse string) string {
+func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string) string {
 	if runErr != nil {
 		if errors.Is(runErr, ErrSproutTimedOut) {
 			return SproutOutcomeTimedOut
@@ -73,9 +73,9 @@ func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool
 	}
 	changedFiles := len(filesModified) > 0
 	// No response and nothing changed is a non-engaging run, not a legitimate
-	// no-op: the agent neither acted nor answered. A run that changed files
+	// no-op: the Sprout neither acted nor answered. A run that changed files
 	// engaged regardless of what it said, so file evidence wins.
-	if strings.TrimSpace(agentResponse) == "" && !changedFiles {
+	if strings.TrimSpace(sproutResponse) == "" && !changedFiles {
 		return SproutOutcomeNoEngagement
 	}
 	if filesKnown && !changedFiles {

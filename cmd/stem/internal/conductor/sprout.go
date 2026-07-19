@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	agentMaxIterations = 20
+	sproutMaxIterations = 20
 )
 
 type ToolArgument struct {
@@ -55,7 +55,7 @@ type llmCaller interface {
 	CallStream(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (string, error)
 }
 
-type Agent struct {
+type Sprout struct {
 	workspace       string
 	genotypeContext string
 	genomeContext   string
@@ -70,7 +70,7 @@ type Agent struct {
 	stepID          string
 	// sessionID correlates every published event with the run's session so
 	// the per-session "explain a run" query (historydb.LoadEvents) can retrieve
-	// them. Without it the agent's tokens, thoughts, and tool calls are
+	// them. Without it the Sprout's tokens, thoughts, and tool calls are
 	// persisted with an empty sessionId and orphaned from the run they belong
 	// to — present in the table, invisible to the surface meant to show them.
 	sessionID string
@@ -85,13 +85,13 @@ type ActionResult struct {
 	Risks      []string `json:"risks,omitempty"`
 }
 
-type agentResult struct {
+type sproutResult struct {
 	Response     string
 	Transcript   string
 	ActionResult *ActionResult
 }
 
-func newAgent(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Agent, error) {
+func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
 	}
@@ -156,7 +156,7 @@ func newAgent(ctx context.Context, workspace string, genotypeRoot string, genoty
 		return nil, fmt.Errorf("sprout tool discovery returned only empty or denied tool names")
 	}
 
-	return &Agent{
+	return &Sprout{
 		workspace:       workspace,
 		genotypeContext: instructions,
 		genomeContext:   genomeContext,
@@ -171,7 +171,7 @@ func newAgent(ctx context.Context, workspace string, genotypeRoot string, genoty
 	}, nil
 }
 
-func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error) {
+func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -181,7 +181,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 	// after the fact as a single transcript, not only as a token stream.
 	defer a.publishTranscript()
 
-	systemPrompt := buildAgentSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
+	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: strings.TrimSpace(taskPrompt)},
@@ -190,7 +190,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 	a.appendTranscript("system", systemPrompt)
 	a.appendTranscript("user", taskPrompt)
 
-	for iteration := 0; iteration < agentMaxIterations; iteration++ {
+	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
 		var tokenChan chan string
 		var response string
 		var err error
@@ -224,7 +224,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		}
 
 		if err != nil {
-			return agentResult{}, err
+			return sproutResult{}, err
 		}
 
 		thoughtContent := extractThought(response)
@@ -244,11 +244,11 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 
 		calls, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
 		if err != nil {
-			return agentResult{}, err
+			return sproutResult{}, err
 		}
 
 		if strings.TrimSpace(finalResponse) != "" {
-			return agentResult{
+			return sproutResult{
 				Response:     strings.TrimSpace(finalResponse),
 				Transcript:   a.transcript.String(),
 				ActionResult: actionResult,
@@ -256,7 +256,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		}
 
 		if !isToolCall {
-			return agentResult{
+			return sproutResult{
 				Response:     strings.TrimSpace(response),
 				Transcript:   a.transcript.String(),
 				ActionResult: actionResult,
@@ -267,7 +267,7 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		for _, call := range calls {
 			response, obs, err := a.executeTool(ctx, call)
 			if err != nil {
-				return agentResult{}, err
+				return sproutResult{}, err
 			}
 			a.publishToolInvoked(call, response, obs)
 			if combinedObservation.Len() > 0 {
@@ -283,10 +283,10 @@ func (a *Agent) Run(ctx context.Context, taskPrompt string) (agentResult, error)
 		// iteration lets the model decide whether the task is complete.
 	}
 
-	return agentResult{}, fmt.Errorf("agent reached max iterations (%d)", agentMaxIterations)
+	return sproutResult{}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
 }
 
-func (a *Agent) appendTranscript(role string, content string) {
+func (a *Sprout) appendTranscript(role string, content string) {
 	role = strings.TrimSpace(role)
 	content = strings.TrimSpace(content)
 	if role == "" && content == "" {
@@ -314,7 +314,7 @@ func extractThought(response string) string {
 	return strings.TrimSpace(response[start+9 : end])
 }
 
-func (a *Agent) executeTool(ctx context.Context, call ToolCall) (ToolResponse, string, error) {
+func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, string, error) {
 	if strings.TrimSpace(call.Tool) == "" {
 		return ToolResponse{}, "", fmt.Errorf("empty tool call received from model")
 	}
@@ -342,13 +342,13 @@ func (a *Agent) executeTool(ctx context.Context, call ToolCall) (ToolResponse, s
 		}
 	}
 
-	// Committing is the orchestrator's job, not the agent's. Every run's file
-	// changes are committed and merged back after the agent finishes
+	// Committing is the orchestrator's job, not the Sprout's. Every run's file
+	// changes are committed and merged back after the Sprout finishes
 	// (commitTerrariumExecution), with the substrate's configured identity and
 	// signing. The in-terrarium gitCommit tool also cannot work: the workspace
 	// is mounted as a git worktree whose .git file points at a host gitdir that
 	// does not exist inside the container, so git reports "not a git
-	// repository". Rather than let the agent hit that cryptic error and burn
+	// repository". Rather than let the Sprout hit that cryptic error and burn
 	// turns retrying, answer here with the policy: the commit is handled, keep
 	// editing.
 	if call.Tool == "gitCommit" {
@@ -366,8 +366,8 @@ func (a *Agent) executeTool(ctx context.Context, call ToolCall) (ToolResponse, s
 
 // managedGitCommitResponse answers a gitCommit tool call with the run's git
 // policy: OpenTendril commits and merges the changes after the run, so the
-// agent neither needs to nor can commit inside the terrarium. It is a success,
-// not an error — the agent's intent (make the changes durable) is satisfied by
+// Sprout neither needs to nor can commit inside the terrarium. It is a success,
+// not an error — the Sprout's intent (make the changes durable) is satisfied by
 // the orchestrator — so the loop moves on instead of retrying a commit that
 // cannot work.
 func managedGitCommitResponse() ToolResponse {
@@ -388,11 +388,11 @@ func managedGitCommitResponse() ToolResponse {
 // cannot bloat the event stream or the history row.
 const maxToolObservationEventBytes = 2000
 
-// publishToolInvoked emits one tool-invoked event per action the agent takes,
+// publishToolInvoked emits one tool-invoked event per action the Sprout takes,
 // so a run's actual actions are observable live and in history rather than
 // leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
 // no bus is wired (the workspace/test agents), matching the other publishers.
-func (a *Agent) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
+func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
 	if a.eventBus == nil {
 		return
 	}
@@ -417,11 +417,11 @@ func (a *Agent) publishToolInvoked(call ToolCall, response ToolResponse, observa
 	})
 }
 
-// publishTranscript emits the agent's assembled conversation once when a run
+// publishTranscript emits the Sprout's assembled conversation once when a run
 // ends, correlated to the run's session so the per-session "explain a run"
 // query can return one readable record. It is a no-op without a bus (the
 // workspace/test agents) or an empty transcript.
-func (a *Agent) publishTranscript() {
+func (a *Sprout) publishTranscript() {
 	if a.eventBus == nil {
 		return
 	}
@@ -439,7 +439,7 @@ func (a *Agent) publishTranscript() {
 	})
 }
 
-func (a *Agent) availableToolNames() []string {
+func (a *Sprout) availableToolNames() []string {
 	names := make([]string, 0, len(a.toolIndex))
 	for name := range a.toolIndex {
 		names = append(names, name)
@@ -448,7 +448,7 @@ func (a *Agent) availableToolNames() []string {
 	return names
 }
 
-func buildAgentSystemPrompt(workspace string, genotypeContext string, genomeContext string, tools []ToolDefinition) string {
+func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string, tools []ToolDefinition) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(`
 You are the OpenTendril host-side ReAct loop.
@@ -695,7 +695,7 @@ func renderToolObservation(toolName string, response ToolResponse) string {
 // window — the generated repository map alone reaches hundreds of kilobytes on
 // a real repository, and the epigenetic learnings file grows without bound.
 // Local inference servers silently truncate an oversized prompt from the
-// front, which deletes the agent rules and the tool catalog and leaves only
+// front, which deletes the Sprout rules and the tool catalog and leaves only
 // the genome tail: the model then answers in prose instead of calling tools,
 // and the run ends with nothing done. Measured against a 4096-token window
 // (the local serving default), assembled prompts up to roughly eleven
@@ -704,7 +704,7 @@ func renderToolObservation(toolName string, response ToolResponse) string {
 // cost about two kilobytes, so an eight-kilobyte genome budget keeps the
 // assembled prompt inside the smallest window seen in practice while leaving
 // room for the task and the first tool observations. Files stay complete on
-// disk; each truncation marker tells the agent where to readFile the rest.
+// disk; each truncation marker tells the Sprout where to readFile the rest.
 const (
 	genomePerFileByteBudget = 4 * 1024
 	genomeTotalByteBudget   = 8 * 1024
@@ -715,13 +715,13 @@ const (
 
 // isGeneratedGenomeFile reports whether a genome file is a machine-generated
 // map OpenTendril writes for itself rather than guidance curated for the
-// agent. Generated maps are never inlined into the system prompt — only named
+// Sprout. Generated maps are never inlined into the system prompt — only named
 // with their on-disk path. Inlining even a small fragment of the repository
 // map measurably degraded tool use on a weaker local model (2 of 3 and then 0
 // of 2 first turns became prose documents instead of tool calls, against 3 of
 // 3 tool calls with curated files alone): a symbol dump right before the
 // model's turn primes document-writing while carrying almost no task signal.
-// The full map stays on disk where the agent can read exactly the part it
+// The full map stays on disk where the Sprout can read exactly the part it
 // needs.
 func isGeneratedGenomeFile(name string) bool {
 	switch strings.ToLower(name) {
@@ -732,7 +732,7 @@ func isGeneratedGenomeFile(name string) bool {
 }
 
 // truncateGenomeContent cuts content to fit budget on a line boundary and
-// points the agent at the on-disk file, which remains complete and readable
+// points the Sprout at the on-disk file, which remains complete and readable
 // through the readFile tool.
 func truncateGenomeContent(name string, content string, budget int) string {
 	if len(content) <= budget {

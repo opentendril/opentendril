@@ -25,7 +25,7 @@ func TestClassifySproutOutcome(t *testing.T) {
 		{"changed something", nil, []string{"main.go"}, true, "done", SproutOutcomeComplete},
 		{"changed nothing but answered", nil, []string{}, true, "here is my report", SproutOutcomeNoChanges},
 		{"changes unmeasurable but answered", nil, nil, false, "report", SproutOutcomeComplete},
-		{"failed", errors.New("agent exploded"), nil, true, "", SproutOutcomeFailed},
+		{"failed", errors.New("Sprout exploded"), nil, true, "", SproutOutcomeFailed},
 		{"timed out", timedOut, nil, true, "", SproutOutcomeTimedOut},
 		{"timed out beats file evidence", timedOut, []string{"main.go"}, true, "", SproutOutcomeTimedOut},
 		{"empty response, no files, is no-engagement", nil, []string{}, true, "", SproutOutcomeNoEngagement},
@@ -43,15 +43,15 @@ func TestClassifySproutOutcome(t *testing.T) {
 	}
 }
 
-// failingSproutRunner is an agent whose loop errors, standing in for both a
+// failingSproutRunner is an Sprout whose loop errors, standing in for both a
 // broken run and a watchdog-killed run (via an error wrapping
 // ErrSproutTimedOut, exactly what terrariumToolSession.Call produces).
 type failingSproutRunner struct {
 	err error
 }
 
-func (f *failingSproutRunner) Run(ctx context.Context, taskPrompt string) (agentResult, error) {
-	return agentResult{}, f.err
+func (f *failingSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
+	return sproutResult{}, f.err
 }
 
 // newOutcomeTestRepo builds a committed git repository on a non-default branch
@@ -82,7 +82,7 @@ func newOutcomeTestRepo(t *testing.T) string {
 	return root
 }
 
-// stubRunSproutCollaborators fakes every collaborator around the agent run so
+// stubRunSproutCollaborators fakes every collaborator around the Sprout run so
 // the outcome pipeline can be driven deterministically. It returns a pointer
 // to the execution status captured from the commit step.
 func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, modifiedFiles []string) *sproutExecutionStatus {
@@ -96,7 +96,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	originalRemoveShadow := removeShadowWorktreeFn
 	originalInjectCache := injectMycorrhizalCacheFn
 	originalStartSession := startTerrariumSessionFn
-	originalNewAgent := newAgentFn
+	originalNewSprout := newSproutFn
 	originalStash := stashHostWorkspaceFn
 	originalCollect := collectStageableFilesFn
 	originalDiff := collectGitDiffFn
@@ -111,7 +111,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 		removeShadowWorktreeFn = originalRemoveShadow
 		injectMycorrhizalCacheFn = originalInjectCache
 		startTerrariumSessionFn = originalStartSession
-		newAgentFn = originalNewAgent
+		newSproutFn = originalNewSprout
 		stashHostWorkspaceFn = originalStash
 		collectStageableFilesFn = originalCollect
 		collectGitDiffFn = originalDiff
@@ -135,7 +135,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newAgentFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return runner, nil
 	}
 	stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
@@ -191,8 +191,8 @@ func filterEvents(events []eventbus.Event, eventType eventbus.EventType) []event
 // agree: the returned report, the status written to the commit step, and the
 // single lifecycle event published on the bus.
 func TestRunSproutOutcomes(t *testing.T) {
-	agentFailure := errors.New("agent exploded")
-	agentTimeout := fmt.Errorf("tool call %q was cut off: %w", "runCommand", ErrSproutTimedOut)
+	sproutFailure := errors.New("Sprout exploded")
+	sproutTimeout := fmt.Errorf("tool call %q was cut off: %w", "runCommand", ErrSproutTimedOut)
 
 	cases := []struct {
 		name          string
@@ -204,29 +204,29 @@ func TestRunSproutOutcomes(t *testing.T) {
 	}{
 		{
 			name:          "changed something",
-			runner:        &stubSproutRunner{result: agentResult{Response: "did the work"}},
+			runner:        &stubSproutRunner{result: sproutResult{Response: "did the work"}},
 			modifiedFiles: []string{"pkg/thing.go"},
 			wantOutcome:   SproutOutcomeComplete,
 			wantTerminal:  eventbus.EventSproutMatured,
 		},
 		{
 			name:          "changed nothing",
-			runner:        &stubSproutRunner{result: agentResult{Response: "answered without acting"}},
+			runner:        &stubSproutRunner{result: sproutResult{Response: "answered without acting"}},
 			modifiedFiles: []string{},
 			wantOutcome:   SproutOutcomeNoChanges,
 			wantTerminal:  eventbus.EventSproutMatured,
 		},
 		{
 			name:          "failed",
-			runner:        &failingSproutRunner{err: agentFailure},
+			runner:        &failingSproutRunner{err: sproutFailure},
 			modifiedFiles: []string{},
 			wantOutcome:   SproutOutcomeFailed,
-			wantErrIs:     agentFailure,
+			wantErrIs:     sproutFailure,
 			wantTerminal:  eventbus.EventSproutWithered,
 		},
 		{
 			name:          "timed out",
-			runner:        &failingSproutRunner{err: agentTimeout},
+			runner:        &failingSproutRunner{err: sproutTimeout},
 			modifiedFiles: []string{},
 			wantOutcome:   SproutOutcomeTimedOut,
 			wantErrIs:     ErrSproutTimedOut,
@@ -351,7 +351,7 @@ func TestRunSproutResumptionHonorsOutcomeVocabulary(t *testing.T) {
 		}
 
 		captured := stubRunSproutCollaborators(t, root,
-			&stubSproutRunner{result: agentResult{Response: "second attempt"}}, []string{"pkg/thing.go"})
+			&stubSproutRunner{result: sproutResult{Response: "second attempt"}}, []string{"pkg/thing.go"})
 
 		report, err := (&DockerOrchestrator{
 			Substrate:  root,
@@ -404,7 +404,7 @@ func TestTerrariumToolSessionSurfacesTimeout(t *testing.T) {
 // the same single emerged/terminal pair the direct sprout path does, with the
 // outcome the execution actually produced.
 func TestRunSequenceSproutPublishesLifecycleOnce(t *testing.T) {
-	agentTimeout := fmt.Errorf("tool call cut off: %w", ErrSproutTimedOut)
+	sproutTimeout := fmt.Errorf("tool call cut off: %w", ErrSproutTimedOut)
 	cases := []struct {
 		name         string
 		result       sproutExecutionResult
@@ -426,13 +426,13 @@ func TestRunSequenceSproutPublishesLifecycleOnce(t *testing.T) {
 		},
 		{
 			name:         "failed",
-			err:          errors.New("agent exploded"),
+			err:          errors.New("Sprout exploded"),
 			wantOutcome:  SproutOutcomeFailed,
 			wantTerminal: eventbus.EventSproutWithered,
 		},
 		{
 			name:         "timed out",
-			err:          agentTimeout,
+			err:          sproutTimeout,
 			wantOutcome:  SproutOutcomeTimedOut,
 			wantTerminal: eventbus.EventSproutWithered,
 		},

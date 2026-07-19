@@ -28,7 +28,7 @@ import (
 //	opentendril_sprouts_active                        sprout workers running now
 //
 // The LLM counters are derived from stream-token events that carry a token
-// payload chunk (the per-token stream the conductor's Agent publishes);
+// payload chunk (the per-token stream the conductor's Sprout publishes);
 // stream start/end markers carry no chunk and are excluded. Cumulative
 // per-state sprout worker counts (emerged/matured/withered) are already the
 // opentendril_events_total series for those event types; the active gauge is

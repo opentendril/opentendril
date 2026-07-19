@@ -55,13 +55,13 @@ func (e *macrophageFuzzError) CommandResult() terrarium.CommandResult {
 }
 
 // runMacrophageFuzzCheck is the deterministic half of the Macrophage role:
-// after the agent turn (running the macrophage genotype) writes a Go native
+// after the Sprout turn (running the macrophage genotype) writes a Go native
 // fuzz test into the mounted worktree, this executes `go test -fuzz` inside
 // a dedicated, network-isolated terrarium and converts a crash, compile
 // error, or infrastructure timeout into a hard error — no LLM judgment call
-// in the loop. mountPath is the same host worktree path the agent's own
+// in the loop. mountPath is the same host worktree path the Sprout's own
 // terrarium session already mounted, so this sees exactly the files the
-// agent wrote.
+// Sprout wrote.
 func runMacrophageFuzzCheck(ctx context.Context, providerName, mountPath string) error {
 	if ctx == nil {
 		ctx = context.Background()
