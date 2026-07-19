@@ -52,26 +52,26 @@ const (
 )
 
 type assessGPU struct {
-	TotalBytes uint64 `json:"total_bytes"`
-	FreeBytes  uint64 `json:"free_bytes"`
+	TotalBytes uint64 `json:"totalBytes"`
+	FreeBytes  uint64 `json:"freeBytes"`
 }
 
 type assessHardware struct {
 	GPUs              []assessGPU `json:"gpus"`
-	VRAMTotalBytes    uint64      `json:"vram_total_bytes"`
-	CPUCores          int         `json:"cpu_cores"`
-	RAMAvailableBytes uint64      `json:"ram_available_bytes"`
+	VRAMTotalBytes    uint64      `json:"vramTotalBytes"`
+	CPUCores          int         `json:"cpuCores"`
+	RAMAvailableBytes uint64      `json:"ramAvailableBytes"`
 }
 
 type assessModel struct {
 	Name      string `json:"name"`
-	SizeBytes uint64 `json:"size_bytes"`
+	SizeBytes uint64 `json:"sizeBytes"`
 }
 
 type assessModelFit struct {
 	assessModel
-	ContextTokens int    `json:"context_tokens"`
-	RequiredBytes uint64 `json:"required_bytes"`
+	ContextTokens int    `json:"contextTokens"`
+	RequiredBytes uint64 `json:"requiredBytes"`
 	Verdict       string `json:"verdict"`
 }
 
