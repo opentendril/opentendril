@@ -201,6 +201,8 @@ func probeAssessHardware(ctx context.Context) assessHardware {
 }
 
 func queryNvidiaSMIGPUs(ctx context.Context) ([]assessGPU, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	out, err := exec.CommandContext(ctx, "nvidia-smi",
 		"--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits").Output()
 	if err != nil {
