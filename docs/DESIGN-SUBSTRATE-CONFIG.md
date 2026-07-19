@@ -51,7 +51,7 @@ substrates:
 
 *   **`auth.method`** — `pat` (env-var PAT), `ssh` (key-based, no PAT injected), `none` (anonymous), or `app` (GitHub App: the Stem mints short-lived installation tokens from `appId` + `privateKeyPath`/`privateKeyEnv`; `installationId` is optional and auto-discovered from the repo — recommended for enterprise, as it's a least-privilege bot identity with no long-lived secret).
 *   **`sign`** — optional `ssh`/`gpg` commit signing; `key` is a key path or GPG key id.
-*   **`checkout.mode`** — `ephemeral` (default, throwaway `/tmp` clone), `managed` (persistent OT-owned directory under `~/.tendril/substrates/<name>`, distinct from human-editable clones, refreshed to a clean tree on each run), or `path` (explicit `checkout.path`).
+*   **`checkout.mode`** — `ephemeral` (default, throwaway `/tmp` clone), `managed` (persistent Tendril-owned directory under `~/.tendril/substrates/<name>`, distinct from human-editable clones, refreshed to a clean tree on each run), or `path` (explicit `checkout.path`).
 *   **`profile`** — references a named `credentials:` entry (inline values override the profile).
 
 The scalar `auth: ENV_VAR` form is fully back-compatible. Secrets are never stored here — only references (env-var names, key paths, profile names) resolved at runtime.
