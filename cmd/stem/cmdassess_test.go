@@ -10,25 +10,29 @@ func TestAssessFitVerdict(t *testing.T) {
 		usableVRAM uint64
 		required   uint64
 		ram        uint64
+		ramKnown   bool
 		want       string
 	}{
-		{"comfortable fit in vram", 23 * testGiB, 10 * testGiB, 32 * testGiB, verdictFitsFully},
-		{"exactly at headroom boundary", 10 * testGiB, 9 * testGiB, 32 * testGiB, verdictFitsFully},
-		{"just past headroom boundary", 10 * testGiB, 9*testGiB + 1, 32 * testGiB, verdictFitsTight},
-		{"exactly fills usable vram", 10 * testGiB, 10 * testGiB, 32 * testGiB, verdictFitsTight},
-		{"spills into ram", 10 * testGiB, 20 * testGiB, 32 * testGiB, verdictGPUCPUSplit},
-		{"exactly fills vram plus ram", 10 * testGiB, 42 * testGiB, 32 * testGiB, verdictGPUCPUSplit},
-		{"too big even with ram", 10 * testGiB, 42*testGiB + 1, 32 * testGiB, verdictExceedsMachine},
-		{"no gpu fits in ram", 0, 8 * testGiB, 32 * testGiB, verdictCPUOnly},
-		{"no gpu exactly fills ram", 0, 32 * testGiB, 32 * testGiB, verdictCPUOnly},
-		{"no gpu too big for ram", 0, 33 * testGiB, 32 * testGiB, verdictExceedsMachine},
+		{"comfortable fit in vram", 23 * testGiB, 10 * testGiB, 32 * testGiB, true, verdictFitsFully},
+		{"exactly at headroom boundary", 10 * testGiB, 9 * testGiB, 32 * testGiB, true, verdictFitsFully},
+		{"just past headroom boundary", 10 * testGiB, 9*testGiB + 1, 32 * testGiB, true, verdictFitsTight},
+		{"exactly fills usable vram", 10 * testGiB, 10 * testGiB, 32 * testGiB, true, verdictFitsTight},
+		{"spills into ram", 10 * testGiB, 20 * testGiB, 32 * testGiB, true, verdictGPUCPUSplit},
+		{"exactly fills vram plus ram", 10 * testGiB, 42 * testGiB, 32 * testGiB, true, verdictGPUCPUSplit},
+		{"too big even with ram", 10 * testGiB, 42*testGiB + 1, 32 * testGiB, true, verdictExceedsMachine},
+		{"no gpu fits in ram", 0, 8 * testGiB, 32 * testGiB, true, verdictCPUOnly},
+		{"no gpu exactly fills ram", 0, 32 * testGiB, 32 * testGiB, true, verdictCPUOnly},
+		{"no gpu too big for ram", 0, 33 * testGiB, 32 * testGiB, true, verdictExceedsMachine},
+		{"no gpu, ram unknown", 0, 8 * testGiB, 0, false, verdictUnknown},
+		{"vram overflow, ram unknown", 10 * testGiB, 20 * testGiB, 0, false, verdictUnknown},
+		{"fits vram, ram unknown", 23 * testGiB, 10 * testGiB, 0, false, verdictFitsFully},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := assessFitVerdict(tc.usableVRAM, tc.required, tc.ram)
+			got := assessFitVerdict(tc.usableVRAM, tc.required, tc.ram, tc.ramKnown)
 			if got != tc.want {
-				t.Errorf("assessFitVerdict(%d, %d, %d) = %q, want %q",
-					tc.usableVRAM, tc.required, tc.ram, got, tc.want)
+				t.Errorf("assessFitVerdict(%d, %d, %d, %v) = %q, want %q",
+					tc.usableVRAM, tc.required, tc.ram, tc.ramKnown, got, tc.want)
 			}
 		})
 	}
@@ -168,6 +172,7 @@ func TestBuildAssessReport(t *testing.T) {
 		VRAMTotalBytes:    24 * testGiB,
 		CPUCores:          16,
 		RAMAvailableBytes: 32 * testGiB,
+		RAMAvailableKnown: true,
 	}
 	models := []assessModel{
 		{Name: "small", SizeBytes: 2 * testGiB},

@@ -27,6 +27,7 @@ const (
 	verdictGPUCPUSplit    = "gpu-cpu-split"   // partial CPU offload needed
 	verdictCPUOnly        = "cpu-only"        // no usable GPU, runs from system RAM
 	verdictExceedsMachine = "exceeds-machine" // does not fit VRAM plus RAM
+	verdictUnknown        = "unknown"         // hardware probe incomplete; fit cannot be judged
 )
 
 const (
@@ -61,6 +62,7 @@ type assessHardware struct {
 	VRAMTotalBytes    uint64      `json:"vramTotalBytes"`
 	CPUCores          int         `json:"cpuCores"`
 	RAMAvailableBytes uint64      `json:"ramAvailableBytes"`
+	RAMAvailableKnown bool        `json:"ramAvailableKnown"`
 }
 
 type assessModel struct {
@@ -129,7 +131,7 @@ func buildAssessReport(hw assessHardware, models []assessModel, contextTokens in
 			assessModel:   model,
 			ContextTokens: contextTokens,
 			RequiredBytes: required,
-			Verdict:       assessFitVerdict(usable, required, hw.RAMAvailableBytes),
+			Verdict:       assessFitVerdict(usable, required, hw.RAMAvailableBytes, hw.RAMAvailableKnown),
 		})
 	}
 	return report
@@ -164,8 +166,12 @@ func assessRequiredBytes(modelSizeBytes uint64, contextTokens int) uint64 {
 //     the total still fits usable VRAM + available RAM
 //   - cpu-only:        no usable GPU, model fits in available RAM
 //   - exceeds-machine: nothing above holds
-func assessFitVerdict(usableVRAM uint64, requiredBytes uint64, ramAvailable uint64) string {
+//   - unknown:         the RAM probe failed and the decision would depend on RAM
+func assessFitVerdict(usableVRAM uint64, requiredBytes uint64, ramAvailable uint64, ramKnown bool) string {
 	if usableVRAM == 0 {
+		if !ramKnown {
+			return verdictUnknown
+		}
 		if requiredBytes <= ramAvailable {
 			return verdictCPUOnly
 		}
@@ -176,6 +182,9 @@ func assessFitVerdict(usableVRAM uint64, requiredBytes uint64, ramAvailable uint
 	}
 	if requiredBytes <= usableVRAM {
 		return verdictFitsTight
+	}
+	if !ramKnown {
+		return verdictUnknown
 	}
 	if requiredBytes <= usableVRAM+ramAvailable {
 		return verdictGPUCPUSplit
@@ -196,6 +205,9 @@ func probeAssessHardware(ctx context.Context) assessHardware {
 	}
 	if ram, err := assessMemAvailable(); err == nil {
 		hw.RAMAvailableBytes = ram
+		hw.RAMAvailableKnown = true
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: could not read available RAM: %v\n", err)
 	}
 	return hw
 }
