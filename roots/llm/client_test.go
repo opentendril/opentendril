@@ -108,6 +108,64 @@ func TestListModelsUsesOpenAICompatibleEndpointWithoutAPIKey(t *testing.T) {
 	}
 }
 
+// TestListModelsUsesAnthropicVersionedEndpoint proves discovery reaches the
+// Anthropic Models API at /v1/models with the x-api-key + anthropic-version
+// headers. The base URL carries no version segment (unlike the OpenAI-shaped
+// providers), so before the mode split this request hit /models — a 404 — and
+// Anthropic always fell back to the static registry.
+func TestListModelsUsesAnthropicVersionedEndpoint(t *testing.T) {
+	var (
+		path             string
+		apiKeyHeader     string
+		versionHeader    string
+		authBearerHeader string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s, want GET", r.Method)
+		}
+		path = r.URL.Path
+		apiKeyHeader = r.Header.Get("x-api-key")
+		versionHeader = r.Header.Get("anthropic-version")
+		authBearerHeader = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "claude-opus-4-8"},
+				{"id": "claude-sonnet-5"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "anthropic",
+		BaseURL:  server.URL, // no /v1 segment, matching the real Anthropic base URL
+		Endpoint: "/v1/messages",
+		Mode:     ModeAnthropic,
+		APIKey:   "anthropic-key",
+	})
+
+	models, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+	if path != "/v1/models" {
+		t.Fatalf("path = %s, want /v1/models", path)
+	}
+	if apiKeyHeader != "anthropic-key" {
+		t.Fatalf("x-api-key = %q, want anthropic-key", apiKeyHeader)
+	}
+	if versionHeader != "2023-06-01" {
+		t.Fatalf("anthropic-version = %q, want 2023-06-01", versionHeader)
+	}
+	if authBearerHeader != "" {
+		t.Fatalf("Authorization = %q, want empty (Anthropic rejects Bearer auth)", authBearerHeader)
+	}
+	if len(models) != 2 || models[0] != "claude-opus-4-8" || models[1] != "claude-sonnet-5" {
+		t.Fatalf("models = %#v, want claude-opus-4-8 and claude-sonnet-5", models)
+	}
+}
+
 func TestResolveLocalProviderSpecUsesTendrilConfig(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "")
