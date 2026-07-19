@@ -76,8 +76,9 @@ implementation_plan.md
 .tendril/terrarium/
 substrates.yaml
 
-# Compiled stem binary in root (use cmd/stem/stem path)
+# Compiled stem binary + stray `go test -c` binary in root (build artifacts)
 /stem
+/stem.test
 
 # Runtime tendril data (cryptographic keys, DBs, runtime scoring)
 .tendril/rhizome.db
