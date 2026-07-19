@@ -18,6 +18,7 @@
 //   tendril terrarium - Manage execution terrarium environments
 //   tendril health - Run infrastructure health diagnostics
 //   tendril llm   - Inspect and test the configured local LLM provider
+//   tendril assess - Probe local hardware and judge which local models fit
 
 package main
 
@@ -103,6 +104,8 @@ func main() {
 		runHealthCmd(ctx, os.Args[2:])
 	case "llm":
 		runLLMCmd(ctx, os.Args[2:])
+	case "assess":
+		runAssessCmd(ctx, os.Args[2:])
 	case "mesh":
 		runMeshCmd(ctx, os.Args[2:])
 	case "mcp":
@@ -141,6 +144,7 @@ func printUsage() {
 	fmt.Println("  terrarium Manage execution terrarium environments")
 	fmt.Println("  health  Run infrastructure health diagnostics")
 	fmt.Println("  llm     List or test the configured local LLM provider")
+	fmt.Println("  assess  Probe local hardware and judge which local models fit")
 	fmt.Println("  mesh    Manage mesh grafting keys and tokens")
 	fmt.Println("  mcp     Start the MCP JSON-RPC stdio server")
 	fmt.Println("  init    Run the Developer Onboarding Wizard")
