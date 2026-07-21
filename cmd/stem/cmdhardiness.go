@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
@@ -123,7 +125,13 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 		findings = append(findings, hardinessFinding{Severity: "ok", Title: "No credential files are readable by this user"})
 	}
 
-	// 3. Can callers prove an identity, or must they declare one?
+	// 3. Escalation paths that defeat a separate principal before it starts.
+	//    File ownership is necessary and nowhere near sufficient: a caller that
+	//    can reach a rootful container daemon, or sudo to the Stem's user, does
+	//    not need to read a file it is not permitted to read.
+	findings = append(findings, escalationFindings()...)
+
+	// 4. Can callers prove an identity, or must they declare one?
 	credentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
 	switch {
 	case credentialsErr != nil:
@@ -164,7 +172,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 		})
 	}
 
-	// 4. Is anything granted at all? No grants is the secure default, and
+	// 5. Is anything granted at all? No grants is the secure default, and
 	//    saying so avoids an operator wondering why everything is denied.
 	grants, grantsErr := core.LoadDelegationGrants(tendrilDir)
 	switch {
@@ -228,4 +236,90 @@ func readableSecrets(tendrilDir string) []string {
 		readable = append(readable, candidate)
 	}
 	return readable
+}
+
+// escalationFindings reports the ways this user can become another user, which
+// is the question file permissions cannot answer.
+//
+// A separate operating-system principal for the Stem is defeated — completely,
+// not partially — by either of these, so reporting ownership without reporting
+// these would describe a boundary that is not there.
+func escalationFindings() []hardinessFinding {
+	findings := []hardinessFinding{}
+
+	// Membership of the container-daemon group is equivalent to root: a member
+	// can bind-mount the whole filesystem into a container and read or write
+	// anything as root, whatever a file's owner and mode say.
+	if inGroup("docker") && !dockerIsRootless() {
+		findings = append(findings, hardinessFinding{
+			Severity: "weak",
+			Title:    "This user is in the \"docker\" group with a rootful daemon — that is root",
+			Detail: "A member can run a container that bind-mounts the whole filesystem and read\n" +
+				"or write anything as root, so no file ownership protects the Stem's credentials\n" +
+				"from this user. Use rootless Docker (set DOCKER_HOST to the Stem user's own\n" +
+				"socket) or the Firecracker provider, which needs only /dev/kvm.",
+		})
+	} else if inGroup("docker") {
+		findings = append(findings, hardinessFinding{
+			Severity: "ok",
+			Title:    "Container access is rootless — group membership is not root here",
+		})
+	}
+
+	// A cached or passwordless sudo ticket lets a caller simply become the
+	// Stem's user, which makes the separation cosmetic.
+	if canSudoWithoutPassword() {
+		findings = append(findings, hardinessFinding{
+			Severity: "weak",
+			Title:    "This user can sudo without being asked for a password",
+			Detail: "Anything running as this user can become another user — including the Stem's —\n" +
+				"without a human present. Note that sudo also CACHES credentials for several\n" +
+				"minutes by default, so a recent authentication counts as passwordless.\n" +
+				"Require a password and set timestamp_timeout=0 for the rule that reaches the\n" +
+				"Stem's user, or administer that account from a different session entirely.",
+		})
+	}
+
+	return findings
+}
+
+// inGroup reports whether the current user belongs to a named group.
+func inGroup(name string) bool {
+	current, err := user.Current()
+	if err != nil {
+		return false
+	}
+	ids, err := current.GroupIds()
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		if group, err := user.LookupGroupId(id); err == nil && group.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// dockerIsRootless asks the daemon whether it is running rootless. A rootless
+// daemon cannot grant root on the host, so group membership stops being an
+// escalation path.
+func dockerIsRootless() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.SecurityOptions}}").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(output), "rootless")
+}
+
+// canSudoWithoutPassword reports whether sudo would run right now with no
+// prompt — either because it is configured NOPASSWD or because a cached
+// timestamp is still valid. Both mean an unattended caller can escalate.
+func canSudoWithoutPassword() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	// -n never prompts: it fails instead, which is the answer we want.
+	return exec.CommandContext(ctx, "sudo", "-n", "true").Run() == nil
 }
