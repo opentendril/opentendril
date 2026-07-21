@@ -26,10 +26,12 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Plasmid**: a modular, injectable block of context or tools (*a skill*).
 - **Pollen**: the identity a Pollinator presents and a grant names — the trust-root a delegated invocation is authorised as. Never the actor itself: Pollen is *what is presented*, a Pollinator is *who presents it*.
 - **Pollinator**: an *external* requester that reaches IN and asks for governed work — a Botanist, or an external Mycorrhizal mind over a governed interface. Identified by a **Pollen**; granted operation-classes; no grant, no access. The mirror of a Symbiotic Nodule (which the organism reaches OUT to). Never call it an "agent": it is neither a Sprout (sealed internal worker) nor the Mycorrhizal Network itself.
+- **Ramet**: one running Tendril instance — a single individual on one Terroir. Many Ramets of the same Genome form a **Genet**. Never call an instance an "agent".
 - **Resin**: live internal log trace (hardens into Amber).
 - **Rhizome**: the code/AST index of the Substrate.
 - **Rhizosphere**: the *external* ecosystem the Roots tap — the providers, Docker, git, MCP themselves (the outside world).
 - **Roots** (`roots/`): OpenTendril's *own* connectivity organ — provider clients, model discovery, tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae.
+- **Genet**: all Ramets grown from the same Genome — the genetic individual they are copies of.
 - **Seed**: the originating goal / intent / use-case.
 - **Sequence**: an ordered YAML workflow of steps.
 - **Sprout**: an ephemeral, isolated worker that does one unit of work.

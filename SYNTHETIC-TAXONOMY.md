@@ -171,6 +171,16 @@ growth cycle:
     word is exactly the imprecision the taxonomy exists to prevent — a Sprout is
     sealed off from the network, a Pollinator is the thing being granted mediated
     access to it.
+*   **Ramet** — one **running Tendril instance**: a single individual growing on
+    one **Terroir**. In botany a ramet is one member of a clonal colony — a
+    physically separate plant that is genetically identical to its siblings —
+    while the **Genet** is the genetic individual they all are. That is exactly
+    the mesh: many Ramets on many machines, one Genome between them, each able to
+    live or die independently.
+
+    It replaces "node", "deployment", "instance" and — the reason it was needed —
+    "OpenTendril Agent". An instance is not an agent: it has no single body or
+    mind, it *contains* Sprouts and reaches the Mycorrhizal Network.
 *   **Stoma** — the **single controlled aperture** in a **Terrarium** wall. In
     botany a stoma is the pore through which everything passes between a plant's
     sealed interior and the outside, opened and closed by guard cells. Here it is

@@ -38,10 +38,12 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Plasmid** | A modular, injectable block of context or tools (*a skill*). | RAG context / tool definition | definition |
 | **Pollen** | The identity a **Pollinator** presents and a grant names — the trust-root a delegated invocation is authorised as. Plants accept or reject pollen by identity (self-incompatibility); the grant is that recognition. | Subject / principal (access control) | per-connection |
 | **Pollinator** | An **external** requester that reaches *in* and asks the organism for governed work — a Botanist at a terminal, or an external Mycorrhizal mind connected over a governed interface. Carries a **Pollen** (its bound identity) and is granted operation-classes; no grant, no access. | External API caller / client (*not* "agent") | external |
+| **Ramet** | One running **Tendril instance** — a single individual on one Terroir. In botany a ramet is one member of a clonal colony; many ramets share one **Genet**. | Node / deployment / instance (*not* "agent") | persistent |
 | **Resin** | Live internal logging trace. | Debug log / trace | transient |
 | **Rhizome** | The background code/AST index of the Substrate. | Vector DB / code index | persistent |
 | **Rhizosphere** | The **external** ecosystem the Roots tap — the LLM providers, Docker, git, MCP themselves. *(The outside world; contrast **Roots**, which is OpenTendril's own code that reaches into it.)* | Underlying tech stack / dependencies | environment |
 | **Roots** | OpenTendril's **own** connectivity organ (`roots/`) — provider clients, model discovery, and tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae. | Provider client / SDK layer | persistent |
+| **Genet** | All **Ramets** grown from the same Genome — the genetic individual they are copies of. What a mesh of instances collectively is. | Fleet / cluster of instances | persistent |
 | **Seed** | The originating goal / intent / use-case; the blueprint work grows from. | Product goal / use-case / intent | definition |
 | **Sequence** | An ordered YAML workflow of steps. | Agentic pipeline / workflow | definition |
 | **Sprout** | An ephemeral, strictly isolated worker that does one unit of work. | Worker container (*not* "agent") | ephemeral |
@@ -98,6 +100,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | Tech stack / dependencies | **Rhizosphere** | |
 | Compliance regime (ISO 27001/42001) | **Biome** | |
 | Microservice plugin (GCP/Datadog/GitHub API) | **Symbiotic Nodule** | |
+| Node / deployment / running instance | **Ramet** | One individual; the **Genet** is all ramets of the same Genome. |
 | Guest agent / in-VM command listener | **Stoma** | The one pore in the Terrarium wall; guard cells are the isolation policy. |
 | Code index / vector DB | **Rhizome** | |
 | Decision record / memory of *why* | **Taproot** | |

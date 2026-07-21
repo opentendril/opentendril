@@ -1,5 +1,12 @@
 {
   "mcpServers": {
+    "opentendril": {
+      "command": "tendril",
+      "args": ["serve", "mcp", "stdio"],
+      "env": {
+        "OPENTENDRIL_POLLEN": "claude"
+      }
+    },
     "github": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-github"],
