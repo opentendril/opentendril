@@ -6,14 +6,14 @@ import (
 	"strings"
 )
 
-// The git capability family. git.commit is the first (and for this slice the
-// only) member: the lowest rung of the delegated-execution ladder from the
-// Design RFC. It lets an external agent ask the Stem to commit the current
-// state of a substrate's workspace — under that substrate's configured commit
-// identity — instead of the agent shelling out git on the host itself. The
-// family name deliberately leaves room to grow (git.push and friends are
-// later slices); only the commit operation-class exists today, and it is
-// commit-only by design: no push, no branch, no checkout, no merge.
+// The git capability family: the delegated-execution ladder from the Design
+// RFC. It lets an external agent ask the Stem to do git work — under the
+// substrate's configured connection — instead of shelling out git on the host
+// itself and guessing at credentials. Three operation-classes exist today:
+// git.commit (commit the workspace under the configured identity), git.push
+// (Stem-mediated authenticated push) and git.pr (open a pull request through
+// the GitHub API). Each is separately grantable, and the family stays
+// deliberately narrow: no branch, no checkout, no merge.
 //
 // Attribution model (security-first): a delegated commit exists to be
 // *attributable*, so the execution refuses to commit when the resolved
@@ -90,6 +90,63 @@ type GitPushResult struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// GitPRInput asks the Stem to open a pull request for a branch that has
+// already been published. Opening a pull request is a separate operation-class
+// from pushing on purpose: operation-classes are separately grantable, so a
+// subject granted only git.pr must never be able to publish a branch as a side
+// effect. The agent's loop is git.commit → git.push → git.pr.
+type GitPRInput struct {
+	// Substrate is the absolute path or named substrate key of the target
+	// workspace.
+	Substrate string `json:"substrate"`
+	// Title is the pull request title.
+	Title string `json:"title"`
+	// Body is the optional pull request description.
+	Body string `json:"body,omitempty"`
+	// Head optionally names the branch to open the pull request from; empty
+	// uses the workspace's current branch (a read of actual state, never an
+	// assumed name).
+	Head string `json:"head,omitempty"`
+	// Base optionally names the branch to merge into; empty resolves the
+	// repository's real default branch from the GitHub API. A default branch
+	// is never assumed to be "main" — assuming it is the failure this
+	// capability exists to design out.
+	Base string `json:"base,omitempty"`
+	// Draft opens the pull request as a draft.
+	Draft bool `json:"draft,omitempty"`
+	// Origin records which surface invoked the pull request (cli, mcp, rest).
+	Origin string `json:"origin,omitempty"`
+}
+
+// GitPRSpec is the fully resolved, transport-free pull-request request handed
+// to the GitOperations port.
+type GitPRSpec struct {
+	Substrate string
+	Title     string
+	Body      string
+	Head      string
+	Base      string
+	Draft     bool
+	Origin    string
+}
+
+// GitPRResult is the outcome of a finished delegated pull-request operation.
+type GitPRResult struct {
+	// Status is "created" when a new pull request was opened, or "exists" when
+	// an open pull request for the same head branch was already there (the
+	// existing one is returned untouched — a repeat call never duplicates and
+	// never rewrites a description a human may have edited).
+	Status string `json:"status"`
+	// Number is the pull request number.
+	Number int `json:"number"`
+	// URL is the pull request's web address.
+	URL string `json:"url,omitempty"`
+	// Head is the branch the pull request was opened from.
+	Head string `json:"head,omitempty"`
+	// Base is the branch the pull request merges into, as actually resolved.
+	Base string `json:"base,omitempty"`
+}
+
 // GitOperations is the injection port for delegated git execution. Each member
 // may be nil, in which case the corresponding capability reports that it is not
 // wired rather than acting.
@@ -103,6 +160,11 @@ type GitOperations struct {
 	// substrate's resolved credential. Implementations own substrate
 	// resolution, credential resolution, and the Stem-side authenticated push.
 	Push func(ctx context.Context, spec GitPushSpec) (GitPushResult, error)
+	// PullRequest opens a pull request for the resolved workspace's branch via
+	// the GitHub API using the substrate's resolved credential. Implementations
+	// own substrate resolution, credential resolution, base-branch resolution,
+	// and the duplicate/default-branch guards.
+	PullRequest func(ctx context.Context, spec GitPRSpec) (GitPRResult, error)
 }
 
 // WithGit wires the delegated git execution port onto the Service and returns
@@ -162,6 +224,30 @@ func (s *Service) GitPush(ctx context.Context, in GitPushInput) (GitPushResult, 
 	return s.git.Push(ctx, spec)
 }
 
+// GitPR validates the request and opens the pull request to completion via the
+// injected execution port.
+func (s *Service) GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error) {
+	if s.git.PullRequest == nil {
+		return GitPRResult{}, fmt.Errorf("git.pr is not wired: construct the Core with WithGit(GitOperations{PullRequest: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitPRResult{}, fmt.Errorf("substrate is required")
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return GitPRResult{}, fmt.Errorf("title is required")
+	}
+	spec := GitPRSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Title:     strings.TrimSpace(in.Title),
+		Body:      in.Body,
+		Head:      strings.TrimSpace(in.Head),
+		Base:      strings.TrimSpace(in.Base),
+		Draft:     in.Draft,
+		Origin:    in.Origin,
+	}
+	return s.git.PullRequest(ctx, spec)
+}
+
 // gitCapabilities declares the git family's registry entry, bound to this
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
@@ -201,6 +287,26 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitPush(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitPR,
+			Description: "Open a pull request for a substrate's already-pushed branch using the substrate's configured credential. The base branch is read from the repository (never assumed); an existing open pull request for the same head branch is returned instead of duplicated; a head branch that IS the default branch is refused.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"title":     stringProp("The pull request title."),
+				"body":      stringProp("The pull request description."),
+				"head":      stringProp("The branch to open the pull request from; omit to use the workspace's current branch."),
+				"base":      stringProp("The branch to merge into; omit to use the repository's actual default branch."),
+				"draft":     map[string]any{"type": "boolean", "description": "Open the pull request as a draft."},
+				"origin":    stringProp("Interaction origin recorded on the pull request (cli, mcp, rest)."),
+			}, []string{"substrate", "title"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitPRInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitPR(ctx, in)
 			},
 		},
 	}

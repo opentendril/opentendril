@@ -15,10 +15,11 @@ import (
 // transport-free core.Core and holds no business logic.
 //
 // POST /v1/git/commit commits the current state of a substrate's workspace
-// under the substrate's configured commit identity. Delegated invocations
-// (marked with DelegationSubjectHeader) are gated per-invocation by the
-// delegation authorizer; a request without the marker follows the plain
-// bearer-authenticated path.
+// under the substrate's configured commit identity; /v1/git/push publishes the
+// branch; /v1/git/pr opens the pull request. Delegated invocations (marked with
+// DelegationSubjectHeader) are gated per-invocation by the delegation
+// authorizer, each against its own operation-class; a request without the
+// marker follows the plain bearer-authenticated path.
 type GitHandler struct {
 	core core.Core
 	// delegation gates *delegated* invocations against the active grants. A
@@ -49,6 +50,7 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
 		{"POST /v1/git/push", core.CapGitPush, h.push},
+		{"POST /v1/git/pr", core.CapGitPR, h.pullRequest},
 	}
 }
 
@@ -145,6 +147,46 @@ func (h *GitHandler) push(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.core.GitPush(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
+	var req core.GitPRInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Substrate) == "" || strings.TrimSpace(req.Title) == "" {
+		http.Error(w, "substrate and title are required", http.StatusBadRequest)
+		return
+	}
+
+	// A delegated invocation is authorized per-invocation against the active
+	// grants; a non-delegated request follows the plain bearer-authenticated
+	// path untouched. git.pr is its own operation-class, so a grant covering
+	// commit and push does not confer it.
+	if subject := DelegatedSubject(r); subject != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Subject:        subject,
+			OperationClass: core.CapGitPR,
+			Substrate:      strings.TrimSpace(req.Substrate),
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+
+	result, err := h.core.GitPR(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return

@@ -15,10 +15,10 @@ import (
 
 // runGitCmd is the CLI adapter for the governed git capability family: a thin
 // projection of the same transport-free core.Core the REST and MCP surfaces
-// use. `tendril git commit` commits the current state of a substrate's
-// workspace under the substrate's configured commit identity — the lowest
-// rung of the delegated-execution ladder, deliberately commit-only for this
-// slice (no push, no branch, no checkout, no merge).
+// use. `tendril git commit` commits a substrate's workspace under its
+// configured commit identity, `tendril git push` publishes the branch from the
+// Stem, and `tendril git pr` opens the pull request — the full delegated
+// ladder, deliberately narrow beyond it (no branch, no checkout, no merge).
 //
 // A CLI invocation is never delegated (there is no delegation subject); the
 // deny-closed attribution rule applies either way — a substrate without a
@@ -76,6 +76,12 @@ func runGitCmd(ctx context.Context, args []string) {
 		}
 	case core.GitPushResult:
 		fmt.Fprintf(os.Stderr, "🌱 Pushed %s\n", typed.Branch)
+	case core.GitPRResult:
+		verb := "Opened"
+		if typed.Status == "exists" {
+			verb = "Already open"
+		}
+		fmt.Fprintf(os.Stderr, "🌱 %s pull request #%d (%s → %s) %s\n", verb, typed.Number, typed.Head, typed.Base, typed.URL)
 	}
 }
 
@@ -181,6 +187,53 @@ func gitOperations() core.GitOperations {
 
 			return core.GitPushResult{Status: result.Status, Branch: result.Branch}, nil
 		},
+		PullRequest: func(ctx context.Context, spec core.GitPRSpec) (core.GitPRResult, error) {
+			workspace := spec.Substrate
+			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			if isName && substrateSpec != nil {
+				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+					workspace = trimmedPath
+				}
+			}
+			info, statErr := os.Stat(workspace)
+			if statErr != nil || !info.IsDir() {
+				return core.GitPRResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated pull request reads the workspace's origin remote and current branch)", spec.Substrate)
+			}
+
+			// Resolve the substrate's credential so the connection's GitHub API
+			// token reaches the conductor. A bare path input resolves to an
+			// empty credential, which the conductor's deny-closed posture check
+			// then refuses with an error naming the postures that work.
+			credential := conductor.ResolvedCredential{}
+			if substrateSpec != nil {
+				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
+				if credentialErr != nil {
+					return core.GitPRResult{}, credentialErr
+				}
+				credential = resolved
+			}
+
+			result, err := conductor.RunGitPullRequest(ctx, conductor.GitPRExecution{
+				Workspace:  workspace,
+				Title:      spec.Title,
+				Body:       spec.Body,
+				Head:       spec.Head,
+				Base:       spec.Base,
+				Draft:      spec.Draft,
+				Credential: credential,
+			})
+			if err != nil {
+				return core.GitPRResult{}, err
+			}
+
+			return core.GitPRResult{
+				Status: result.Status,
+				Number: result.Number,
+				URL:    result.URL,
+				Head:   result.Head,
+				Base:   result.Base,
+			}, nil
+		},
 	}
 }
 
@@ -197,6 +250,7 @@ type gitCommand struct {
 var gitCommands = []gitCommand{
 	{"commit", core.CapGitCommit},
 	{"push", core.CapGitPush},
+	{"pr", core.CapGitPR},
 }
 
 // lookupGitCommand resolves a CLI subcommand token to its registered entry.
@@ -251,6 +305,16 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "message")
 		case "--branch":
 			err = stringFlag(&i, "branch")
+		case "--title":
+			err = stringFlag(&i, "title")
+		case "--body":
+			err = stringFlag(&i, "body")
+		case "--head":
+			err = stringFlag(&i, "head")
+		case "--base":
+			err = stringFlag(&i, "base")
+		case "--draft":
+			input["draft"] = true
 		case "--path":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("flag --path requires a value")
@@ -279,20 +343,30 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			return nil, fmt.Errorf("missing message. Usage: tendril git commit --substrate <path|name> --message <message>")
 		}
 	}
+	// A pull request needs a title; head and base are resolved (never assumed)
+	// when omitted.
+	if capName == core.CapGitPR {
+		if title, _ := input["title"].(string); strings.TrimSpace(title) == "" {
+			return nil, fmt.Errorf("missing title. Usage: tendril git pr --substrate <path|name> --title <title> [--body B] [--head H] [--base B] [--draft]")
+		}
+	}
 	return input, nil
 }
 
 // gitUsageSuffix returns the capability-specific flag hint appended to a
 // missing-substrate error so each git subcommand shows its own required flags.
 func gitUsageSuffix(capName string) string {
-	if capName == core.CapGitCommit {
+	switch capName {
+	case core.CapGitCommit:
 		return " --message <message>"
+	case core.CapGitPR:
+		return " --title <title>"
 	}
 	return ""
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|commit|push> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|commit|push|pr> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
@@ -308,7 +382,14 @@ func printGitUsage() {
 	fmt.Println("  remote using the substrate's configured credential. The push runs on the Stem,")
 	fmt.Println("  never inside a sealed Sprout; the token travels only in the process environment.")
 	fmt.Println()
+	fmt.Println("pr --substrate <path|name> --title <title> [--body B] [--head H] [--base B] [--draft]")
+	fmt.Println("  Opens a pull request for an already-pushed branch (it never pushes — push and")
+	fmt.Println("  pr are separately grantable). The base branch is READ from the repository when")
+	fmt.Println("  --base is omitted, never assumed to be \"main\"; the head branch defaults to the")
+	fmt.Println("  workspace's current branch. Opening from the default branch is refused, and an")
+	fmt.Println("  existing open pull request for the same head is returned instead of duplicated.")
+	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("commit and push are projections of the shared Core capability registry.")
+	fmt.Println("commit, push and pr are projections of the shared Core capability registry.")
 }
