@@ -54,3 +54,16 @@ jobs:
       # review and silently reintroduces two agents sharing one working tree.
       - name: Delegated git operations use the resolved workspace
         run: bash scripts/check-delegated-workspace-isolation.sh
+
+  branch-deletion-guard:
+    name: Branch deletion stays gated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deleting a branch is the only thing the ladder does that destroys work,
+      # and the obvious ways to decide "is this merged" (git branch --merged, a
+      # diff comparison) both miss squash merges. This keeps deletion in one
+      # place, gated on forge evidence.
+      - name: Branch deletion is gated on merge evidence
+        run: bash scripts/check-branch-deletion-guard.sh
