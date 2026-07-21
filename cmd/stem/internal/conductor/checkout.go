@@ -17,6 +17,11 @@ type checkoutPlan struct {
 	dir string
 	// persistent is true for managed/path checkouts (not removed after the run).
 	persistent bool
+	// tendrilOwned distinguishes a directory Tendril created and maintains
+	// (managed mode) from one the operator chose and edits themselves (path
+	// mode). The refresh discards local state, which is correct for the
+	// former and destructive for the latter.
+	tendrilOwned bool
 }
 
 // resolveCheckoutPlan maps a CheckoutSpec to a destination directory + lifetime.
@@ -28,7 +33,7 @@ func resolveCheckoutPlan(name string, checkout CheckoutSpec) (checkoutPlan, erro
 	case "", "ephemeral":
 		return checkoutPlan{dir: "", persistent: false}, nil
 	case "managed":
-		return checkoutPlan{dir: managedCheckoutDir(name), persistent: true}, nil
+		return checkoutPlan{dir: managedCheckoutDir(name), persistent: true, tendrilOwned: true}, nil
 	case "path":
 		p := expandHome(strings.TrimSpace(checkout.Path))
 		if p == "" {
@@ -74,8 +79,26 @@ func ephemeralCheckoutPath(name string) (string, error) {
 // fetch, then hard-reset to the target branch. Because a foreign substrate is
 // edited in place, this guarantees each run starts from a pristine tree —
 // discarding any residue from a prior (e.g. read-only) run.
-func refreshExistingCheckout(dir, branch string, gitEnv []string) error {
+//
+// That discarding is correct for a directory Tendril owns and maintains
+// (managed mode), and destructive for one the operator chose and edits
+// themselves (path mode): a hard reset there silently deletes a human's
+// uncommitted work. So when the checkout is NOT Tendril-owned and has local
+// changes, the refresh refuses instead, and says what it found. Losing an
+// operator's work to make room for a run is never the right trade — the run
+// can wait, the work cannot be recovered.
+func refreshExistingCheckout(dir, branch string, gitEnv []string, tendrilOwned bool) error {
 	ctx := context.Background()
+
+	if !tendrilOwned {
+		status, err := runGitCommandRawOutput(ctx, dir, "status", "--porcelain", "-uall", "-z")
+		if err != nil {
+			return fmt.Errorf("refresh checkout %q: %w", dir, err)
+		}
+		if strings.TrimSpace(strings.ReplaceAll(status, "\x00", "")) != "" {
+			return fmt.Errorf("refusing to refresh %q: it is your own checkout (checkout mode \"path\") and it has uncommitted changes, which this refresh would discard — commit or set those changes aside, or point the substrate at checkout mode \"managed\" so Tendril works in its own clone", dir)
+		}
+	}
 	// Only the network fetch needs auth (gitEnv); checkout/reset are local.
 	if _, err := runGitCommandWithEnv(ctx, dir, gitEnv, "fetch", "origin"); err != nil {
 		return fmt.Errorf("refresh managed checkout %q: %w", dir, err)

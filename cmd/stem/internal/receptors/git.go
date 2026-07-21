@@ -104,6 +104,11 @@ func (h *GitHandler) commit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
 			return
 		}
+		// The authorized subject travels onward in the context, never in the
+		// request body: it selects the isolated workspace this operation runs
+		// in, so a body-supplied subject would let a caller claim another
+		// subject's workspace.
+		r = r.WithContext(core.WithDelegationSubject(r.Context(), subject))
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
@@ -143,6 +148,11 @@ func (h *GitHandler) push(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
 			return
 		}
+		// The authorized subject travels onward in the context, never in the
+		// request body: it selects the isolated workspace this operation runs
+		// in, so a body-supplied subject would let a caller claim another
+		// subject's workspace.
+		r = r.WithContext(core.WithDelegationSubject(r.Context(), subject))
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
@@ -183,6 +193,11 @@ func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
 			return
 		}
+		// The authorized subject travels onward in the context, never in the
+		// request body: it selects the isolated workspace this operation runs
+		// in, so a body-supplied subject would let a caller claim another
+		// subject's workspace.
+		r = r.WithContext(core.WithDelegationSubject(r.Context(), subject))
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
@@ -222,6 +237,11 @@ func (h *GitHandler) branch(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
 			return
 		}
+		// The authorized subject travels onward in the context, never in the
+		// request body: it selects the isolated workspace this operation runs
+		// in, so a body-supplied subject would let a caller claim another
+		// subject's workspace.
+		r = r.WithContext(core.WithDelegationSubject(r.Context(), subject))
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
@@ -262,6 +282,11 @@ func (h *GitHandler) status(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
 			return
 		}
+		// The authorized subject travels onward in the context, never in the
+		// request body: it selects the isolated workspace this operation runs
+		// in, so a body-supplied subject would let a caller claim another
+		// subject's workspace.
+		r = r.WithContext(core.WithDelegationSubject(r.Context(), subject))
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST

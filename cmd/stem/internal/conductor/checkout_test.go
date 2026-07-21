@@ -117,3 +117,67 @@ func TestCloneNamedForeignSubstrateCheckoutModes(t *testing.T) {
 		}
 	})
 }
+
+// TestRefreshRefusesToDiscardOperatorWork: a path-mode checkout is the
+// operator's own working copy. Refreshing it hard-resets, which would silently
+// delete uncommitted work — so it is refused, while a Tendril-owned managed
+// checkout still refreshes as documented.
+func TestRefreshRefusesToDiscardOperatorWork(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "ambient@example.com"},
+		{"config", "user.name", "Ambient Tester"},
+		{"checkout", "-b", "trunk"},
+		{"commit", "--allow-empty", "-m", "initial"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "precious.txt"), []byte("hours of work\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// Not Tendril-owned (checkout mode "path"): refused, and the file survives.
+	err := refreshExistingCheckout(repo, "trunk", nil, false)
+	if err == nil {
+		t.Fatal("a dirty operator checkout was refreshed — this discards their uncommitted work")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("error = %v, want it to name the uncommitted changes", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "precious.txt")); statErr != nil {
+		t.Fatalf("the operator's work was destroyed despite the refusal: %v", statErr)
+	}
+
+	// A clean operator checkout is not blocked by this guard (it fails later
+	// for want of a remote, which is a different, honest failure).
+	if err := os.Remove(filepath.Join(repo, "precious.txt")); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if err := refreshExistingCheckout(repo, "trunk", nil, false); err != nil && strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("a clean checkout was refused as dirty: %v", err)
+	}
+}
+
+// TestManagedCheckoutIsTendrilOwned pins the distinction the refusal depends
+// on: managed directories are Tendril's, path directories are the operator's.
+func TestManagedCheckoutIsTendrilOwned(t *testing.T) {
+	managed, err := resolveCheckoutPlan("substrate", CheckoutSpec{Mode: "managed"})
+	if err != nil {
+		t.Fatalf("managed: %v", err)
+	}
+	if !managed.tendrilOwned {
+		t.Error("managed checkout not marked Tendril-owned — it would then refuse to self-heal")
+	}
+
+	pathMode, err := resolveCheckoutPlan("substrate", CheckoutSpec{Mode: "path", Path: t.TempDir()})
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if pathMode.tendrilOwned {
+		t.Error("path checkout marked Tendril-owned — a hard reset would then discard the operator's work")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -80,6 +81,21 @@ func TestStatusPredictionMatchesCommitOutcome(t *testing.T) {
 				// the default is trunk — but configuration names release/2026,
 				// so THAT is the protected branch.
 				return dirtyRepo(t, "release/2026", "trunk"), "release/2026", false
+			},
+			wantCommitAllowed: false,
+		},
+		{
+			name: "detached head is refused by both paths",
+			build: func(t *testing.T) (string, string, bool) {
+				repo := dirtyRepo(t, "feat/x", "trunk")
+				head, err := runGitCommand(context.Background(), repo, "rev-parse", "HEAD")
+				if err != nil {
+					t.Fatalf("rev-parse: %v", err)
+				}
+				if _, err := runGitCommand(context.Background(), repo, "checkout", strings.TrimSpace(head)); err != nil {
+					t.Fatalf("detach: %v", err)
+				}
+				return repo, "", false
 			},
 			wantCommitAllowed: false,
 		},

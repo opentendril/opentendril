@@ -42,3 +42,15 @@ jobs:
         run: |
           git fetch --no-tags origin "${{ github.base_ref }}"
           bash scripts/check-default-branch-assumptions.sh "origin/${{ github.base_ref }}"
+
+  delegated-workspace-isolation:
+    name: Delegated ops stay isolated
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every delegated git operation must run in a per-subject workspace. A new
+      # operation that resolves the substrate's path itself looks reasonable in
+      # review and silently reintroduces two agents sharing one working tree.
+      - name: Delegated git operations use the resolved workspace
+        run: bash scripts/check-delegated-workspace-isolation.sh

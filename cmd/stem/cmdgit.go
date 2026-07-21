@@ -118,44 +118,22 @@ func gitOperations() core.GitOperations {
 
 	return core.GitOperations{
 		Commit: func(ctx context.Context, spec core.GitCommitSpec) (core.GitCommitResult, error) {
-			workspace := spec.Substrate
-			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
-			if isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitCommitResult{}, err
 			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.GitCommitResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated git commit runs against a local checkout)", spec.Substrate)
-			}
+			defer conductor.LockWorkspace(workspace.Path)()
 
-			// Resolve the substrate's credential so the configured commit
-			// identity (and signing configuration) reaches the conductor. A
+			// The credential carries the commit identity and signing config; a
 			// bare path input resolves to an empty credential, which the
 			// conductor's deny-closed identity requirement then refuses.
-			credential := conductor.ResolvedCredential{}
-			if substrateSpec != nil {
-				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
-				if credentialErr != nil {
-					return core.GitCommitResult{}, credentialErr
-				}
-				credential = resolved
-			}
-
-			// Default-branch protection is on unless the substrate explicitly
-			// opts out; an unconfigured or bare-path substrate is protected.
-			allowDefaultBranchCommit := false
-			configuredBranch := ""
-			if substrateSpec != nil {
-				configuredBranch = substrateSpec.Branch
-				if substrateSpec.ProtectDefaultBranch != nil && !*substrateSpec.ProtectDefaultBranch {
-					allowDefaultBranchCommit = true
-				}
+			credential, configuredBranch, allowDefaultBranchCommit, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitCommitResult{}, err
 			}
 
 			result, err := conductor.RunGitCommit(ctx, conductor.GitCommitExecution{
-				Workspace:                workspace,
+				Workspace:                workspace.Path,
 				Message:                  spec.Message,
 				Paths:                    spec.Paths,
 				Credential:               credential,
@@ -172,34 +150,19 @@ func gitOperations() core.GitOperations {
 			}, nil
 		},
 		Push: func(ctx context.Context, spec core.GitPushSpec) (core.GitPushResult, error) {
-			workspace := spec.Substrate
-			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
-			if isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitPushResult{}, err
 			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.GitPushResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated git push runs against a local checkout)", spec.Substrate)
-			}
+			defer conductor.LockWorkspace(workspace.Path)()
 
-			// Resolve the substrate's credential so the configured
-			// authentication material reaches the conductor's authenticated
-			// push. A bare path input resolves to an empty credential; the push
-			// then relies on whatever ambient auth the remote accepts (and fails
-			// clearly if none does).
-			credential := conductor.ResolvedCredential{}
-			if substrateSpec != nil {
-				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
-				if credentialErr != nil {
-					return core.GitPushResult{}, credentialErr
-				}
-				credential = resolved
+			credential, _, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitPushResult{}, err
 			}
 
 			result, err := conductor.RunGitPush(ctx, conductor.GitPushExecution{
-				Workspace:  workspace,
+				Workspace:  workspace.Path,
 				Branch:     spec.Branch,
 				Credential: credential,
 			})
@@ -210,33 +173,19 @@ func gitOperations() core.GitOperations {
 			return core.GitPushResult{Status: result.Status, Branch: result.Branch}, nil
 		},
 		PullRequest: func(ctx context.Context, spec core.GitPRSpec) (core.GitPRResult, error) {
-			workspace := spec.Substrate
-			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
-			if isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitPRResult{}, err
 			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.GitPRResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated pull request reads the workspace's origin remote and current branch)", spec.Substrate)
-			}
+			defer conductor.LockWorkspace(workspace.Path)()
 
-			// Resolve the substrate's credential so the connection's GitHub API
-			// token reaches the conductor. A bare path input resolves to an
-			// empty credential, which the conductor's deny-closed posture check
-			// then refuses with an error naming the postures that work.
-			credential := conductor.ResolvedCredential{}
-			if substrateSpec != nil {
-				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
-				if credentialErr != nil {
-					return core.GitPRResult{}, credentialErr
-				}
-				credential = resolved
+			credential, _, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitPRResult{}, err
 			}
 
 			result, err := conductor.RunGitPullRequest(ctx, conductor.GitPRExecution{
-				Workspace:  workspace,
+				Workspace:  workspace.Path,
 				Title:      spec.Title,
 				Body:       spec.Body,
 				Head:       spec.Head,
@@ -257,31 +206,19 @@ func gitOperations() core.GitOperations {
 			}, nil
 		},
 		Status: func(ctx context.Context, spec core.GitStatusSpec) (core.GitStatusResult, error) {
-			workspace := spec.Substrate
-			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
-			if isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitStatusResult{}, err
 			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.GitStatusResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (git status inspects a local checkout)", spec.Substrate)
-			}
+			defer conductor.LockWorkspace(workspace.Path)()
 
-			// The opt-out and configured branch are read exactly as the commit
-			// path reads them, so the predicted answer matches the real one.
-			allowDefaultBranchCommit := false
-			configuredBranch := ""
-			if substrateSpec != nil {
-				configuredBranch = substrateSpec.Branch
-				if substrateSpec.ProtectDefaultBranch != nil && !*substrateSpec.ProtectDefaultBranch {
-					allowDefaultBranchCommit = true
-				}
+			_, configuredBranch, allowDefaultBranchCommit, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitStatusResult{}, err
 			}
 
 			result, err := conductor.RunGitStatus(ctx, conductor.GitStatusExecution{
-				Workspace:                workspace,
+				Workspace:                workspace.Path,
 				ConfiguredBranch:         configuredBranch,
 				AllowDefaultBranchCommit: allowDefaultBranchCommit,
 			})
@@ -316,34 +253,25 @@ func gitOperations() core.GitOperations {
 				OnDefaultBranch:     result.OnDefaultBranch,
 				CommitAllowed:       result.CommitAllowed,
 				BlockedReason:       result.BlockedReason,
+				Workspace:           workspace.Path,
+				Isolated:            workspace.Isolated,
+				Subject:             workspace.Subject,
 			}, nil
 		},
 		Branch: func(ctx context.Context, spec core.GitBranchSpec) (core.GitBranchResult, error) {
-			workspace := spec.Substrate
-			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
-			if isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitBranchResult{}, err
 			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.GitBranchResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated branch runs against a local checkout)", spec.Substrate)
-			}
+			defer conductor.LockWorkspace(workspace.Path)()
 
-			credential := conductor.ResolvedCredential{}
-			configuredBranch := ""
-			if substrateSpec != nil {
-				configuredBranch = substrateSpec.Branch
-				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
-				if credentialErr != nil {
-					return core.GitBranchResult{}, credentialErr
-				}
-				credential = resolved
+			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitBranchResult{}, err
 			}
 
 			result, err := conductor.RunGitBranch(ctx, conductor.GitBranchExecution{
-				Workspace:        workspace,
+				Workspace:        workspace.Path,
 				Branch:           spec.Branch,
 				ConfiguredBranch: configuredBranch,
 				Credential:       credential,
@@ -359,6 +287,53 @@ func gitOperations() core.GitOperations {
 			}, nil
 		},
 	}
+}
+
+// resolveGitWorkspace turns a substrate reference into the directory an
+// operation actually runs in, and is the single place the delegated ladder
+// decides that. A delegated invocation (one carrying an authorized subject in
+// its context) runs in that subject's own worktree; a direct command line run
+// carries no subject and uses the substrate's own checkout, so an operator at a
+// terminal still sees their working copy.
+//
+// Every git operation goes through here. Resolving a substrate's raw path for a
+// delegated call is exactly the bug this exists to prevent — two agents sharing
+// one tree, staging each other's files — so the isolation cannot be bypassed by
+// one operation quietly doing its own resolution. TestDelegatedOperationsAreIsolated
+// pins that.
+func resolveGitWorkspace(ctx context.Context, substrate string, substratesConfig *conductor.SubstratesConfig) (conductor.DelegatedWorkspace, *conductor.SubstrateSpec, error) {
+	workspace := substrate
+	substrateSpec, isName := conductor.ResolveSubstrate(substrate, substratesConfig)
+	if isName && substrateSpec != nil {
+		if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+			workspace = trimmedPath
+		}
+	}
+	info, statErr := os.Stat(workspace)
+	if statErr != nil || !info.IsDir() {
+		return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("substrate %q does not resolve to a local workspace directory (the delegated git ladder runs against a local checkout)", substrate)
+	}
+
+	resolved, err := conductor.ResolveDelegatedWorkspace(ctx, substrate, workspace, core.DelegationSubjectFromContext(ctx))
+	if err != nil {
+		return conductor.DelegatedWorkspace{}, nil, err
+	}
+	return resolved, substrateSpec, nil
+}
+
+// gitSubstrateSettings reads the substrate settings every git operation needs:
+// the credential, the configured branch, and whether default-branch protection
+// has been knowingly loosened.
+func gitSubstrateSettings(spec *conductor.SubstrateSpec, substratesConfig *conductor.SubstratesConfig) (conductor.ResolvedCredential, string, bool, error) {
+	if spec == nil {
+		return conductor.ResolvedCredential{}, "", false, nil
+	}
+	credential, err := conductor.ResolveSubstrateCredential(*spec, substratesConfig)
+	if err != nil {
+		return conductor.ResolvedCredential{}, "", false, err
+	}
+	allowDefaultBranchCommit := spec.ProtectDefaultBranch != nil && !*spec.ProtectDefaultBranch
+	return credential, spec.Branch, allowDefaultBranchCommit, nil
 }
 
 // gitCommand is one subcommand actually registered on the `tendril git`
@@ -562,6 +537,9 @@ func printGitStatus(status core.GitStatusResult) {
 		fmt.Fprintf(os.Stderr, " · %s", status.Repository)
 	}
 	fmt.Fprintf(os.Stderr, " · default: %s (%s)\n", defaultBranch, status.DefaultBranchSource)
+	if status.Isolated {
+		fmt.Fprintf(os.Stderr, "   workspace: isolated for subject %q at %s\n", status.Subject, status.Workspace)
+	}
 
 	if status.Upstream == "" {
 		fmt.Fprintln(os.Stderr, "   upstream: none (branch not pushed yet)")
