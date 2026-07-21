@@ -29,7 +29,7 @@ This guide is deliberately linear: follow it top to bottom.
 | Auth | fine-grained Personal Access Token | GitHub App installation token (short-lived, auto-expiring, not tied to a person) |
 | Signing | your **dedicated GPG key**, signed locally | **GitHub signs server-side** (verified) — no key material anywhere |
 | Setup cost | ~5 minutes, works **today** | create an App once, then drop in one `.pem` |
-| Status | fully working | auth works today; **API-signed commit creation is being built** (follow-up to PR #346) |
+| Status | fully working | auth works today; **API-signed commit creation is a separate, in-progress capability** |
 
 > **Recommendation:** the GitHub App is the gold standard (highest security,
 > survives staff turnover, no local key material) and is the documented default.
