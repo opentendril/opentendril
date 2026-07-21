@@ -268,6 +268,90 @@ type GitStatusResult struct {
 	Subject string `json:"subject,omitempty"`
 }
 
+// GitBranchListInput asks the Stem to classify a substrate's local branches.
+// Read-only, and separate from git.prune on purpose: seeing what is stale must
+// not require the ability to remove it.
+type GitBranchListInput struct {
+	Substrate string `json:"substrate"`
+	Origin    string `json:"origin,omitempty"`
+}
+
+// GitBranchListSpec is the transport-free branch-listing request.
+type GitBranchListSpec struct {
+	Substrate string
+	Origin    string
+}
+
+// GitBranchInfo is one local branch and the evidence for its state.
+type GitBranchInfo struct {
+	Name string `json:"name"`
+	Head string `json:"head"`
+	// Upstream is its tracking ref ("" when it has none).
+	Upstream string `json:"upstream,omitempty"`
+	// Classification is merged, current, default, pull-request-open,
+	// pull-request-closed, unpushed, no-pull-request, unverified, or
+	// checked-out-elsewhere.
+	Classification string `json:"classification"`
+	// PullRequest is the pull request the tip belongs to (0 when none).
+	PullRequest int `json:"pullRequest,omitempty"`
+	// Deletable is true only for a merged branch.
+	Deletable bool `json:"deletable"`
+	// Reason explains the classification in one line.
+	Reason string `json:"reason"`
+}
+
+// GitBranchListResult reports every local branch with its evidence.
+type GitBranchListResult struct {
+	Branches []GitBranchInfo `json:"branches"`
+	// Verified reports whether merge state could be established at all; false
+	// means nothing is deletable regardless of how it looks locally.
+	Verified bool `json:"verified"`
+	// DefaultBranch is the resolved default branch, for context.
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+}
+
+// GitPruneInput asks the Stem to delete local branches whose pull request
+// merged. It reports by default; Confirm actually deletes.
+type GitPruneInput struct {
+	Substrate string `json:"substrate"`
+	// Confirm performs the deletion. Omitted or false reports what would be
+	// deleted and changes nothing — the safe path is the one taken by
+	// accident, which matters most for the ladder operation that can destroy
+	// work.
+	Confirm bool   `json:"confirm,omitempty"`
+	Origin  string `json:"origin,omitempty"`
+}
+
+// GitPruneSpec is the transport-free prune request.
+type GitPruneSpec struct {
+	Substrate string
+	Confirm   bool
+	Origin    string
+}
+
+// GitPrunedBranch records a deleted branch and how to restore it.
+type GitPrunedBranch struct {
+	Name string `json:"name"`
+	// Head is the tip the branch pointed at, so an unwanted prune is a
+	// one-line recovery.
+	Head        string `json:"head"`
+	PullRequest int    `json:"pullRequest,omitempty"`
+}
+
+// GitPruneResult reports what was (or would be) removed, and why the rest was
+// kept.
+type GitPruneResult struct {
+	// Confirmed reports whether this run actually deleted anything.
+	Confirmed bool `json:"confirmed"`
+	// Deleted lists branches removed, or — when not confirmed — the branches
+	// that would be.
+	Deleted []GitPrunedBranch `json:"deleted"`
+	// Kept lists every branch not removed, with the reason.
+	Kept []GitBranchInfo `json:"kept"`
+	// Verified reports whether merge state could be established at all.
+	Verified bool `json:"verified"`
+}
+
 // GitOperations is the injection port for delegated git execution. Each member
 // may be nil, in which case the corresponding capability reports that it is not
 // wired rather than acting.
@@ -294,6 +378,12 @@ type GitOperations struct {
 	// substrate resolution and must compute the predictive fields from the
 	// same predicate the write-side guards use.
 	Status func(ctx context.Context, spec GitStatusSpec) (GitStatusResult, error)
+	// BranchList classifies the workspace's local branches.
+	BranchList func(ctx context.Context, spec GitBranchListSpec) (GitBranchListResult, error)
+	// Prune deletes merged branches. Implementations must never delete on
+	// anything weaker than forge evidence that the branch's pull request
+	// merged.
+	Prune func(ctx context.Context, spec GitPruneSpec) (GitPruneResult, error)
 }
 
 // WithGit wires the delegated git execution port onto the Service and returns
@@ -412,6 +502,38 @@ func (s *Service) GitStatus(ctx context.Context, in GitStatusInput) (GitStatusRe
 	})
 }
 
+// GitBranchList validates the request and classifies the substrate's branches
+// via the injected execution port.
+func (s *Service) GitBranchList(ctx context.Context, in GitBranchListInput) (GitBranchListResult, error) {
+	if s.git.BranchList == nil {
+		return GitBranchListResult{}, fmt.Errorf("git.branch.list is not wired: construct the Core with WithGit(GitOperations{BranchList: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitBranchListResult{}, fmt.Errorf("substrate is required")
+	}
+	return s.git.BranchList(ctx, GitBranchListSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Origin:    in.Origin,
+	})
+}
+
+// GitPrune validates the request and runs the prune via the injected execution
+// port. Confirm is passed through untouched: the Core must not "helpfully"
+// default a destructive flag on.
+func (s *Service) GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResult, error) {
+	if s.git.Prune == nil {
+		return GitPruneResult{}, fmt.Errorf("git.prune is not wired: construct the Core with WithGit(GitOperations{Prune: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitPruneResult{}, fmt.Errorf("substrate is required")
+	}
+	return s.git.Prune(ctx, GitPruneSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Confirm:   in.Confirm,
+		Origin:    in.Origin,
+	})
+}
+
 // gitCapabilities declares the git family's registry entry, bound to this
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
@@ -502,6 +624,37 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitStatus(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitBranchList,
+			Description: "Classify a substrate's local branches against evidence from GitHub: which are merged, which have an open or closed-without-merging pull request, which were never pushed, and which are held by another agent's workspace. Read-only. Merge state comes from the forge because a squash-merged branch looks unmerged to git itself.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitBranchListInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitBranchList(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitPrune,
+			Description: "Delete local branches whose pull request merged, and nothing else. Reports what it WOULD delete unless confirm is true. Never deletes the current or default branch, a branch with an open or closed-unmerged pull request, one the remote has never seen, or one held by another agent's workspace.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"confirm":   map[string]any{"type": "boolean", "description": "Actually delete. Omit to report what would be deleted and change nothing."},
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitPruneInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitPrune(ctx, in)
 			},
 		},
 	}

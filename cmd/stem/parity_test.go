@@ -464,6 +464,21 @@ func (m *mockCore) GitStatus(_ context.Context, in core.GitStatusInput) (core.Gi
 	}, nil
 }
 
+func (m *mockCore) GitBranchList(_ context.Context, in core.GitBranchListInput) (core.GitBranchListResult, error) {
+	m.record("GitBranchList", in)
+	return core.GitBranchListResult{Branches: []core.GitBranchInfo{}, Verified: true, DefaultBranch: "main"}, nil
+}
+
+func (m *mockCore) GitPrune(_ context.Context, in core.GitPruneInput) (core.GitPruneResult, error) {
+	m.record("GitPrune", in)
+	return core.GitPruneResult{
+		Confirmed: in.Confirm,
+		Deleted:   []core.GitPrunedBranch{},
+		Kept:      []core.GitBranchInfo{},
+		Verified:  true,
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -727,6 +742,28 @@ func (m *mockCore) Capabilities() []core.Capability {
 					return nil, err
 				}
 				return m.GitStatus(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapGitBranchList,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitBranchListInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitBranchList(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapGitPrune,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitPruneInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitPrune(ctx, in)
 			},
 		},
 	}

@@ -102,6 +102,13 @@ type Core interface {
 	// guardrails by being refused. Runs through the injected GitOperations
 	// execution port.
 	GitStatus(ctx context.Context, in GitStatusInput) (GitStatusResult, error)
+	// GitBranchList classifies a substrate's local branches against evidence
+	// from the forge — the only signal that survives squash merges. Read-only.
+	GitBranchList(ctx context.Context, in GitBranchListInput) (GitBranchListResult, error)
+	// GitPrune deletes local branches whose pull request merged, and nothing
+	// else. The ladder's only destructive operation: it reports by default and
+	// deletes only when explicitly confirmed.
+	GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability

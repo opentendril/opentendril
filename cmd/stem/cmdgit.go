@@ -79,6 +79,10 @@ func runGitCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "🌱 Pushed %s\n", typed.Branch)
 	case core.GitStatusResult:
 		printGitStatus(typed)
+	case core.GitBranchListResult:
+		printGitBranchList(typed)
+	case core.GitPruneResult:
+		printGitPrune(typed)
 	case core.GitBranchResult:
 		if typed.Status == "created" {
 			fmt.Fprintf(os.Stderr, "🌱 Created branch %s (from %s)\n", typed.Branch, typed.PreviousBranch)
@@ -258,6 +262,64 @@ func gitOperations() core.GitOperations {
 				Subject:             workspace.Subject,
 			}, nil
 		},
+		BranchList: func(ctx context.Context, spec core.GitBranchListSpec) (core.GitBranchListResult, error) {
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitBranchListResult{}, err
+			}
+			defer conductor.LockWorkspace(workspace.Path)()
+
+			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitBranchListResult{}, err
+			}
+
+			result, err := conductor.RunGitBranchList(ctx, conductor.GitBranchListExecution{
+				Workspace:        workspace.Path,
+				ConfiguredBranch: configuredBranch,
+				Credential:       credential,
+			})
+			if err != nil {
+				return core.GitBranchListResult{}, err
+			}
+			return core.GitBranchListResult{
+				Branches:      toCoreBranchInfos(result.Branches),
+				Verified:      result.Verified,
+				DefaultBranch: result.DefaultBranch,
+			}, nil
+		},
+		Prune: func(ctx context.Context, spec core.GitPruneSpec) (core.GitPruneResult, error) {
+			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitPruneResult{}, err
+			}
+			defer conductor.LockWorkspace(workspace.Path)()
+
+			credential, configuredBranch, _, err := gitSubstrateSettings(substrateSpec, substratesConfig)
+			if err != nil {
+				return core.GitPruneResult{}, err
+			}
+
+			result, err := conductor.RunGitPrune(ctx, conductor.GitPruneExecution{
+				Workspace:        workspace.Path,
+				ConfiguredBranch: configuredBranch,
+				Credential:       credential,
+				Confirm:          spec.Confirm,
+			})
+			if err != nil {
+				return core.GitPruneResult{}, err
+			}
+			deleted := make([]core.GitPrunedBranch, 0, len(result.Deleted))
+			for _, branch := range result.Deleted {
+				deleted = append(deleted, core.GitPrunedBranch{Name: branch.Name, Head: branch.Head, PullRequest: branch.PullRequest})
+			}
+			return core.GitPruneResult{
+				Confirmed: result.Confirmed,
+				Deleted:   deleted,
+				Kept:      toCoreBranchInfos(result.Kept),
+				Verified:  result.Verified,
+			}, nil
+		},
 		Branch: func(ctx context.Context, spec core.GitBranchSpec) (core.GitBranchResult, error) {
 			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
 			if err != nil {
@@ -352,6 +414,8 @@ var gitCommands = []gitCommand{
 	{"pr", core.CapGitPR},
 	{"branch", core.CapGitBranch},
 	{"status", core.CapGitStatus},
+	{"branches", core.CapGitBranchList},
+	{"prune", core.CapGitPrune},
 }
 
 // lookupGitCommand resolves a CLI subcommand token to its registered entry.
@@ -416,6 +480,8 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "base")
 		case "--draft":
 			input["draft"] = true
+		case "--confirm":
+			input["confirm"] = true
 		case "--path":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("flag --path requires a value")
@@ -474,7 +540,7 @@ func gitUsageSuffix(capName string) string {
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|status|branch|commit|push|pr> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|status|branches|branch|commit|push|pr|prune> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
@@ -484,6 +550,15 @@ func printGitUsage() {
 	fmt.Println("  Reports the workspace's branch, the resolved default branch, uncommitted")
 	fmt.Println("  changes, ahead/behind, and whether a commit would be allowed right now.")
 	fmt.Println("  Read-only and offline. Call it before committing to predict a refusal.")
+	fmt.Println()
+	fmt.Println("branches --substrate <path|name>")
+	fmt.Println("  Classifies local branches against GitHub: merged, pull request open or")
+	fmt.Println("  closed-without-merging, never pushed, or held by another agent. Read-only.")
+	fmt.Println()
+	fmt.Println("prune --substrate <path|name> [--confirm]")
+	fmt.Println("  Deletes local branches whose pull request MERGED, and nothing else. Without")
+	fmt.Println("  --confirm it only reports what it would delete. A squash-merged branch looks")
+	fmt.Println("  unmerged to git, so merge state comes from GitHub — never from a branch name.")
 	fmt.Println()
 	fmt.Println("branch --substrate <path|name> --branch <feature-branch>")
 	fmt.Println("  Creates the branch and switches to it — the governed way off the default")
@@ -509,7 +584,7 @@ func printGitUsage() {
 	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("status, branch, commit, push and pr are projections of the shared Core registry.")
+	fmt.Println("Every subcommand is a projection of the shared Core capability registry.")
 }
 
 // printGitStatus renders a status result for a human at a terminal. The
@@ -558,5 +633,72 @@ func printGitStatus(status core.GitStatusResult) {
 	}
 	if status.Truncated {
 		fmt.Fprintf(os.Stderr, "     … %d more not shown\n", status.ChangeCount-len(status.Changes))
+	}
+}
+
+// toCoreBranchInfos translates the conductor's branch classification into the
+// Core's transport-free shape.
+func toCoreBranchInfos(branches []conductor.GitBranchInfo) []core.GitBranchInfo {
+	out := make([]core.GitBranchInfo, 0, len(branches))
+	for _, branch := range branches {
+		out = append(out, core.GitBranchInfo{
+			Name:           branch.Name,
+			Head:           branch.Head,
+			Upstream:       branch.Upstream,
+			Classification: branch.Classification,
+			PullRequest:    branch.PullRequest,
+			Deletable:      branch.Deletable,
+			Reason:         branch.Reason,
+		})
+	}
+	return out
+}
+
+// printGitBranchList renders the classification, deletable branches first —
+// that is what the reader is deciding about.
+func printGitBranchList(result core.GitBranchListResult) {
+	if !result.Verified {
+		fmt.Fprintln(os.Stderr, "⚠️  Merge state could not be established (no GitHub API credential on this connection).")
+		fmt.Fprintln(os.Stderr, "   Nothing is deletable without evidence — a squash-merged branch looks unmerged to git.")
+	}
+	deletable := 0
+	for _, branch := range result.Branches {
+		if branch.Deletable {
+			deletable++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "🌱 %d branch(es), %d safe to prune\n", len(result.Branches), deletable)
+	for _, branch := range result.Branches {
+		marker := " "
+		if branch.Deletable {
+			marker = "✓"
+		}
+		fmt.Fprintf(os.Stderr, " %s %-40s %-22s %s\n", marker, branch.Name, branch.Classification, branch.Reason)
+	}
+}
+
+// printGitPrune leads with whether anything was actually deleted, because that
+// is the difference between a report and a destructive act.
+func printGitPrune(result core.GitPruneResult) {
+	if !result.Confirmed {
+		fmt.Fprintf(os.Stderr, "🔍 Report only — nothing was deleted. %d branch(es) would be removed; re-run with --confirm.\n", len(result.Deleted))
+	} else {
+		fmt.Fprintf(os.Stderr, "🌱 Deleted %d branch(es).\n", len(result.Deleted))
+	}
+	for _, branch := range result.Deleted {
+		fmt.Fprintf(os.Stderr, "   %-40s %s", branch.Name, branch.Head)
+		if branch.PullRequest > 0 {
+			fmt.Fprintf(os.Stderr, "  (pull request %d)", branch.PullRequest)
+		}
+		fmt.Fprintln(os.Stderr)
+	}
+	if result.Confirmed && len(result.Deleted) > 0 {
+		fmt.Fprintln(os.Stderr, "   Restore any of them with: git branch <name> <head>")
+	}
+	if len(result.Kept) > 0 {
+		fmt.Fprintf(os.Stderr, "   Kept %d branch(es):\n", len(result.Kept))
+		for _, branch := range result.Kept {
+			fmt.Fprintf(os.Stderr, "     %-40s %s\n", branch.Name, branch.Reason)
+		}
 	}
 }

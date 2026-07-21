@@ -37,6 +37,8 @@ const (
 	CapGitPR           = "git.pr"
 	CapGitBranch       = "git.branch"
 	CapGitStatus       = "git.status"
+	CapGitBranchList   = "git.branch.list"
+	CapGitPrune        = "git.prune"
 )
 
 // Capability is one declarative command capability. A single declaration is
@@ -85,6 +87,8 @@ func CapabilityNames() []string {
 		CapGitPR,
 		CapGitBranch,
 		CapGitStatus,
+		CapGitBranchList,
+		CapGitPrune,
 	}
 	sort.Strings(names)
 	return names
@@ -105,6 +109,8 @@ func DelegatedCapabilityNames() []string {
 		CapGitPR,
 		CapGitBranch,
 		CapGitStatus,
+		CapGitBranchList,
+		CapGitPrune,
 	}
 	sort.Strings(names)
 	return names
