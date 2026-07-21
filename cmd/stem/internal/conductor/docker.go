@@ -256,9 +256,37 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				if defaultBranch.IsProtected(currentBranch) {
 					newBranch := fmt.Sprintf("sprout/task-%s", stepID)
 					fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching from %s to %s\n", currentBranch, newBranch)
+					baseCommit := ""
+					if out, revErr := runGitCommand(ctx, sourcePath, "rev-parse", "HEAD"); revErr == nil {
+						baseCommit = strings.TrimSpace(out)
+					}
 					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {
 						return report, fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
 					}
+					// Registered at creation, so this branch has a moment at
+					// which it can be declared finished. Without that, a run
+					// that produces nothing leaves a branch behind forever —
+					// and one that was never pushed can never be cleaned up
+					// afterwards, because no remote can vouch for it.
+					if registerErr := RegisterOwnedRef(OwnedRef{
+						Repository: sourcePath,
+						Branch:     newBranch,
+						Purpose:    PurposeSproutIsolation,
+						Base:       baseCommit,
+					}); registerErr != nil {
+						fmt.Fprintf(os.Stderr, "⚠️ Could not record ownership of %s: %v\n", newBranch, registerErr)
+					}
+					// The branch gets the reclamation its worktree already has:
+					// a run that produced no commits takes its protective
+					// branch with it when it leaves, returning the workspace
+					// to the branch it started on. A run that produced commits
+					// keeps both — that branch is the work.
+					returnTo := currentBranch
+					defer func() {
+						if ReclaimUnusedIsolationBranch(cleanupCtx, sourcePath, newBranch, returnTo, plan.credential) {
+							fmt.Fprintf(os.Stderr, "🧹 Reclaimed empty isolation branch %s; back on %s\n", newBranch, returnTo)
+						}
+					}()
 				}
 			}
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)

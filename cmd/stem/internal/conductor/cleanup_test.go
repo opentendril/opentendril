@@ -189,11 +189,27 @@ func TestRunSproutAutoBranchesBeforeStash(t *testing.T) {
 		t.Fatal("RunSprout() error = nil, want stop after branch isolation check")
 	}
 
+	// The run produced no commits, so its protective branch was pure residue.
+	// It is reclaimed by the run that created it, and the workspace returns to
+	// the branch it started on. Previously the branch was left behind forever
+	// — and, never having been pushed, nothing that requires remote evidence
+	// could ever clean it up.
 	finalBranch, err := runGitCommand(context.Background(), root, "branch", "--show-current")
 	if err != nil {
 		t.Fatalf("read final branch: %v", err)
 	}
-	if finalBranch != "sprout/task-step-1" {
-		t.Fatalf("final branch = %q, want sprout/task-step-1", finalBranch)
+	if finalBranch != currentBranch {
+		t.Fatalf("final branch = %q, want the run to return to %q it started on", finalBranch, currentBranch)
+	}
+
+	branches, err := runGitCommand(context.Background(), root, "branch", "--list")
+	if err != nil {
+		t.Fatalf("list branches: %v", err)
+	}
+	if strings.Contains(branches, "sprout/task-step-1") {
+		t.Fatalf("the empty isolation branch was left behind:\n%s", branches)
+	}
+	if owned := OwnedRefsFor(root); len(owned) != 0 {
+		t.Fatalf("owned references left registered after reclamation: %+v", owned)
 	}
 }

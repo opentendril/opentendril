@@ -95,6 +95,9 @@ type DelegatedWorkspace struct {
 	// Isolated reports whether Path is a per-subject worktree rather than the
 	// substrate's own checkout.
 	Isolated bool
+	// Branch is the owned branch the workspace was placed on ("" for a
+	// non-delegated operation, which uses the operator's own checkout).
+	Branch string
 }
 
 // ResolveDelegatedWorkspace returns the workspace an operation should run in.
@@ -104,10 +107,19 @@ type DelegatedWorkspace struct {
 // copy must see their working copy.
 //
 // With a subject, it returns that subject's private worktree of the substrate,
-// creating it on first use. The worktree starts detached at the substrate's
-// current head, so the subject has no branch until it asks for one; the commit
-// guard refuses a commit on a detached head, and git.status says so, which
-// makes "create a branch first" the read-side's advice rather than a surprise.
+// creating it on first use ON AN OWNED BRANCH cut from the repository's
+// resolved default branch.
+//
+// That branch is the point. Every branch guardrail on the ladder — the
+// default-branch commit refusal, the detached-head refusal, the pull-request
+// head check — exists to catch an agent choosing a branch badly. Handing the
+// agent a workspace that is already on a correct branch removes the choice, so
+// there is nothing left to choose badly: a delegated workspace is never on the
+// default branch at any point in its life, and never on no branch at all. The
+// guards remain as a backstop; they simply stop being the mechanism.
+//
+// The branch is registered as an owned reference at creation, which is what
+// later makes it reclaimable rather than litter.
 func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, subject string) (DelegatedWorkspace, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -129,16 +141,72 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 
 	workspace := DelegatedWorkspace{Path: path, Subject: trimmedSubject, Isolated: true}
 	if isGitRepo(path) {
+		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
+			workspace.Branch = strings.TrimSpace(current)
+		}
 		return workspace, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return DelegatedWorkspace{}, fmt.Errorf("create delegated workspace root: %w", err)
 	}
-	// --detach: the subject gets the substrate's current state with no branch
-	// of its own yet, and cannot collide with a branch another worktree holds.
-	if _, err := runGitCommitCommandFn(ctx, base, "worktree", "add", "--detach", path, "HEAD"); err != nil {
+
+	// Cut from the repository's resolved default branch, never from whatever
+	// the substrate checkout happens to be on — the workspace's starting point
+	// is as much a thing that must not be assumed as the default branch's name.
+	startPoint, err := workspaceStartPoint(ctx, base)
+	if err != nil {
+		return DelegatedWorkspace{}, err
+	}
+
+	branch := ownedWorkspaceBranchName(trimmedSubject)
+	if _, err := runGitCommitCommandFn(ctx, base, "worktree", "add", "-b", branch, path, startPoint); err != nil {
 		return DelegatedWorkspace{}, fmt.Errorf("create isolated workspace for subject %q on substrate %q: %w", trimmedSubject, substrateName, err)
 	}
+	workspace.Branch = branch
+
+	baseCommit := ""
+	if out, revErr := runGitCommitCommandFn(ctx, path, "rev-parse", "HEAD"); revErr == nil {
+		baseCommit = strings.TrimSpace(out)
+	}
+	// Registered at creation: a reference nobody recorded is a reference
+	// nobody can ever decide is finished.
+	if registerErr := RegisterOwnedRef(OwnedRef{
+		Repository: base,
+		Branch:     branch,
+		Purpose:    PurposeDelegatedWorkspace,
+		Subject:    trimmedSubject,
+		Base:       baseCommit,
+	}); registerErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Could not record ownership of %s: %v\n", branch, registerErr)
+	}
+
 	return workspace, nil
+}
+
+// workspaceStartPoint resolves what a new delegated workspace should be cut
+// from: the remote-tracking default branch when there is one (so a subject
+// starts from what the remote actually has), then the local default branch,
+// then the substrate's head as a last resort.
+func workspaceStartPoint(ctx context.Context, base string) (string, error) {
+	resolution := ResolveDefaultBranchLocal(ctx, base, "")
+	if resolution.Known() {
+		for _, candidate := range []string{"origin/" + resolution.Branch, resolution.Branch} {
+			if _, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", candidate); err == nil {
+				return candidate, nil
+			}
+		}
+	}
+	if _, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
+		return "", fmt.Errorf("substrate %q has no commits to start a workspace from", base)
+	}
+	return "HEAD", nil
+}
+
+// ownedWorkspaceBranchName builds the branch a subject works on. The shape is
+// uniform and machine-generated on purpose: consistent names are what make the
+// lifecycle trackable, and they carry the subject so a branch is attributable
+// at a glance in any repository listing.
+func ownedWorkspaceBranchName(subject string) string {
+	return fmt.Sprintf("tendril/%s/work", sanitizeWorkspaceComponent(subject))
 }

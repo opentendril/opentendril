@@ -211,15 +211,26 @@ func TestConcurrentSubjectsDoNotCorruptEachOther(t *testing.T) {
 	}
 }
 
-// TestIsolatedWorkspaceStartsDetachedAndBlocksCommit pins the deliberate
-// starting state: a fresh isolated workspace is on no branch, so a commit is
-// refused until the subject creates one — and the read-side says so rather
-// than leaving the agent to discover it.
-func TestIsolatedWorkspaceStartsDetachedAndBlocksCommit(t *testing.T) {
+// TestIsolatedWorkspaceArrivesReadyToWork is the cause-removal this slice is
+// for. A delegated workspace used to arrive detached, so the agent had to
+// choose and create a branch — a decision that existed only so that a later
+// guard could catch it being made badly.
+//
+// Now the workspace arrives ON an owned branch, cut from the resolved default
+// branch. The agent never chooses, so it cannot choose wrongly: committing
+// onto the default branch is not refused here, it is unreachable, because no
+// delegated workspace is ever on it.
+func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
+	}
+	if workspace.Branch == "" {
+		t.Fatal("workspace arrived with no branch — the agent is being asked to choose one again")
+	}
+	if workspace.Branch == "trunk" {
+		t.Fatal("workspace arrived on the default branch, which is exactly what must be impossible")
 	}
 
 	status, err := conductor.RunGitStatus(context.Background(), conductor.GitStatusExecution{
@@ -228,25 +239,57 @@ func TestIsolatedWorkspaceStartsDetachedAndBlocksCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
-	if !status.DetachedHead {
-		t.Fatalf("status = %+v, want a fresh isolated workspace to start detached", status)
+	if status.DetachedHead {
+		t.Fatal("workspace arrived detached — the detached-head guard should be unreachable through the normal path")
 	}
-	if status.CommitAllowed {
-		t.Fatal("a commit was predicted allowed on a detached head")
+	if status.OnDefaultBranch {
+		t.Fatal("workspace arrived on the default branch")
 	}
-	if !strings.Contains(status.BlockedReason, "detached head") {
-		t.Fatalf("blocked reason = %q, want it to name the detached head", status.BlockedReason)
+	if !status.CommitAllowed {
+		t.Fatalf("a freshly created workspace cannot commit: %s", status.BlockedReason)
 	}
 
+	// The agent can work immediately, with no branch step of its own.
 	if err := os.WriteFile(filepath.Join(workspace.Path, "work.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_, commitErr := conductor.RunGitCommit(context.Background(), conductor.GitCommitExecution{
-		Workspace:  workspace.Path,
-		Message:    "chore: should be refused",
-		Credential: conductor.ResolvedCredential{Identity: conductor.ResolvedIdentity{Name: "Bot", Email: "bot@example.com"}},
+	result, err := conductor.RunGitCommit(context.Background(), conductor.GitCommitExecution{
+		Workspace:        workspace.Path,
+		Message:          "feat: work with no branch step",
+		Credential:       conductor.ResolvedCredential{Identity: conductor.ResolvedIdentity{Name: "Bot", Email: "bot@example.com"}},
+		ConfiguredBranch: "trunk",
 	})
-	if commitErr == nil {
-		t.Fatal("a commit on a detached head was accepted")
+	if err != nil {
+		t.Fatalf("commit in a ready workspace: %v", err)
+	}
+	if result.Status != "committed" {
+		t.Fatalf("result = %+v, want a commit", result)
+	}
+}
+
+// TestOwnedWorkspaceBranchIsRegistered: a branch nobody recorded is a branch
+// nobody can ever decide is finished, which is how the system came to litter.
+func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
+	name, path := newIsolationSubstrate(t)
+	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	owned := conductor.OwnedRefsFor(path)
+	found := false
+	for _, ref := range owned {
+		if ref.Branch == workspace.Branch {
+			found = true
+			if ref.Subject != "agent-a" || ref.Purpose != conductor.PurposeDelegatedWorkspace {
+				t.Errorf("owned reference = %+v, want it attributed to agent-a's workspace", ref)
+			}
+			if ref.Base == "" {
+				t.Error("owned reference has no recorded base — 'has this produced anything' becomes unanswerable")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("workspace branch %q was not registered as owned; owned = %+v", workspace.Branch, owned)
 	}
 }
