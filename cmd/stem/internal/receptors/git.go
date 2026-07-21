@@ -96,7 +96,12 @@ func (h *GitHandler) commit(w http.ResponseWriter, r *http.Request) {
 	// A delegated invocation is authorized per-invocation against the active
 	// grants; a non-delegated request follows the plain bearer-authenticated
 	// path untouched.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitCommit,
@@ -140,7 +145,12 @@ func (h *GitHandler) push(w http.ResponseWriter, r *http.Request) {
 	// A delegated invocation is authorized per-invocation against the active
 	// grants; a non-delegated request follows the plain bearer-authenticated
 	// path untouched.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitPush,
@@ -185,7 +195,12 @@ func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
 	// grants; a non-delegated request follows the plain bearer-authenticated
 	// path untouched. git.pr is its own operation-class, so a grant covering
 	// commit and push does not confer it.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitPR,
@@ -229,7 +244,12 @@ func (h *GitHandler) branch(w http.ResponseWriter, r *http.Request) {
 	// A delegated invocation is authorized per-invocation against the active
 	// grants; git.branch is its own operation-class, so a grant covering the
 	// commit/push/pull-request loop does not confer it.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitBranch,
@@ -274,7 +294,12 @@ func (h *GitHandler) status(w http.ResponseWriter, r *http.Request) {
 	// changed file paths, which is repository content. The deny-closed default
 	// applies to disclosure as much as to mutation, so git.status is its own
 	// operation-class and is conferred by nothing else.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitStatus,
@@ -315,7 +340,12 @@ func (h *GitHandler) branchList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitBranchList,
@@ -355,7 +385,12 @@ func (h *GitHandler) prune(w http.ResponseWriter, r *http.Request) {
 	// git.prune is the ladder's only destructive operation and is its own
 	// operation-class: no other grant confers it, notably not git.branch,
 	// whose name would otherwise imply it.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapGitPrune,

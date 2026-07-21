@@ -91,7 +91,12 @@ func (h *PassthroughHandler) run(w http.ResponseWriter, r *http.Request) {
 	// the decode above can never have populated it. It is set below — and only
 	// below — from an authorized delegation grant. A non-delegated invocation
 	// keeps the empty list: deny-all egress with zero configuration.
-	if pollen := DelegatedPollen(r); pollen != "" {
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
 			OperationClass: core.CapPassthroughRun,

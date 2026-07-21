@@ -17,6 +17,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Fruit**: the deliverable a cycle yields (a PR / artifact).
 - **Genotype**: the base persona / system prompt (*who* a Sprout is).
 - **Greenhouse**: the observer UI.
+- **Hardiness**: what a Terroir can withstand — whether its conditions permit the delegation boundary to be enforced rather than merely recorded. A property of the site, not of the running organism (that is health).
 - **Hormonal Trigger**: a pre-execution security gate.
 - **Meristem**: a planner step; the shoot apical meristem — it initiates Phytomers.
 - **Mycorrhizal Network**: the LLM (external mind; reasons; holds no state).

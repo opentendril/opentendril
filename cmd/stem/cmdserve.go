@@ -169,9 +169,27 @@ func runServeCmd(ctx context.Context, args []string) {
 		log.Printf("⚠️ Failed to load delegation grants: %v (delegation disabled — every delegated invocation is denied)", grantsErr)
 		delegationGrants = nil
 	}
+	// Issued credentials are what let a caller PROVE a Pollen rather than
+	// declare one. A malformed store is fatal rather than empty: degrading to
+	// "no credentials" would silently return every caller to the declared-Pollen
+	// path, which is the weaker tier.
+	pollinatorCredentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
+	if credentialsErr != nil {
+		log.Fatalf("❌ Pollinator credentials could not be read: %v", credentialsErr)
+	}
 	delegationGate := &receptors.DelegationGate{
-		Authorizer: core.NewDelegationAuthorizer(delegationGrants),
-		Bus:        bus,
+		Pollinators: pollinatorCredentials,
+		Authorizer:  core.NewDelegationAuthorizer(delegationGrants),
+		Bus:         bus,
+	}
+	if len(pollinatorCredentials) > 0 {
+		active := 0
+		for _, credential := range pollinatorCredentials {
+			if credential.Active() {
+				active++
+			}
+		}
+		fmt.Fprintf(os.Stderr, "🔏 %d Pollinator credential(s) loaded (%d active): a presented credential DERIVES its Pollen; the header claim is ignored for those callers\n", len(pollinatorCredentials), active)
 	}
 	if len(delegationGrants) > 0 {
 		log.Printf("Delegation enabled: %d grant(s) loaded from %s", len(delegationGrants), filepath.Join(tendrilDir, core.DelegationGrantsFilename))
@@ -182,7 +200,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// the delegation authorizer per-invocation, so every other surface refuses
 	// a delegated invocation rather than silently running it as plain traffic.
 	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, delegationGate.Middleware(next))
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, delegationGate.Middleware(next))
 	}
 
 	mux := http.NewServeMux()
@@ -253,7 +271,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// blanket delegated-request denial.
 	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus).WithDelegation(delegationGate)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
 	})
 
 	// Passthrough REST API (adapter): one bounded command in a
@@ -263,7 +281,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	passthroughHandler := receptors.NewPassthroughHandler(coreSvc).WithDelegation(delegationGate)
 	passthroughHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
 	})
 
 	// Git REST API (adapter): commit a substrate's workspace under its
@@ -273,7 +291,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// guardedAuth's blanket delegated-request denial.
 	gitHandler := receptors.NewGitHandler(coreSvc).WithDelegation(delegationGate)
 	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(apiKey, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
 	})
 
 	// Phase 4: Configuration API
@@ -506,7 +524,36 @@ func bearerMatches(header, apiKey string) bool {
 }
 
 func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+	return withAPIKeyOrPollinatorAuth(apiKey, nil, next)
+}
+
+// withAPIKeyOrPollinatorAuth authenticates a caller as EITHER the Botanist
+// (the Stem's own bearer key) or a Pollinator (an issued credential).
+//
+// A Pollinator credential has to authenticate the transport as well as carry
+// the identity, otherwise a Pollinator would still need the Botanist's key to
+// get through the door — and a Pollinator holding that key could reach every
+// route, including those with no delegable operation-class. One credential,
+// one identity, one level of access.
+//
+// The credential is only accepted here; what it may then DO is decided by the
+// grant model downstream, which derives the Pollen from this same credential.
+func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorCredentials, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		presented := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
+
+		if core.LooksLikePollinatorCredential(presented) {
+			// A credential-shaped bearer is resolved or refused. It never falls
+			// back to the Botanist key comparison, so a revoked credential
+			// cannot be retried as anything else.
+			if core.ResolvePollenFromCredential(credentials, presented) == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next(w, r)
+			return
+		}
+
 		// An empty apiKey is a caller bug, not an invitation to skip auth:
 		// fail closed rather than repeat finding 1.
 		if strings.TrimSpace(apiKey) == "" || !bearerMatches(r.Header.Get("Authorization"), apiKey) {

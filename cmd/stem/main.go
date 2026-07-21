@@ -98,6 +98,10 @@ func main() {
 		runPassthroughCmd(ctx, os.Args[2:])
 	case "git":
 		runGitCmd(ctx, os.Args[2:])
+	case "pollinator":
+		runPollinatorCmd(ctx, os.Args[2:])
+	case "hardiness":
+		runHardinessCmd(ctx, os.Args[2:])
 	case "terrarium":
 		runTerrariumCmd(ctx, os.Args[2:])
 	case "health":
@@ -131,6 +135,8 @@ func printUsage() {
 	fmt.Println("  chat    Start the interactive chat interface")
 	fmt.Println("  phytomer Manage Phytomers (create/list/get/update/delete/history); alias: session")
 	fmt.Println("  setup   Bootstrap Substrate workspace configuration")
+	fmt.Println("  pollinator  Issue, list and revoke Pollinator credentials")
+	fmt.Println("  hardiness   Report what this Terroir can withstand (boundary strength)")
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Println("  genome  Inspect, reduce, or evolve the active genome seeds")
 	fmt.Println("  plasmid   Sign and verify Plasmid integrity")

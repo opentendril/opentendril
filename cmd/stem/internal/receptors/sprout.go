@@ -57,7 +57,11 @@ func (h *SproutHandler) WithDelegation(gate *DelegationGate) *SproutHandler {
 // {pollen, operation-class, substrate}. On denial it writes 403 and the gate
 // records the audit event.
 func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Request, substrate string) bool {
-	pollen := DelegatedPollen(r)
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return false
+	}
 	if pollen == "" {
 		return true
 	}

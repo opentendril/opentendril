@@ -29,6 +29,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Fruit** | The deliverable a cycle yields (a PR / artifact). | Output / deliverable | per-cycle |
 | **Genotype** | The base persona / system prompt (*who* a Sprout is). | System prompt / persona | definition |
 | **Greenhouse** | The Command Center UI the Botanist observes through. | Dashboard / observability UI | external |
+| **Hardiness** | What a **Terroir** can withstand — whether its conditions permit the delegation boundary to be *enforced* rather than merely recorded. A site property, not a runtime one. | Deployment security posture | environment |
 | **Hormonal Trigger** | A pre-execution security gate that can abort before a Sprout emerges. | Security gate / middleware | per-run |
 | **Meristem** | A Sequence step that dynamically plans steps and translates human intent. | Planner / workflow conductor | per-run |
 | **Mycorrhizal Network** | The LLM — the external mind that reasons; holds no state. | Large Language Model | external |
@@ -108,7 +109,8 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | System prompt / persona | **Genotype** | |
 | RAG context / tool definition | **Plasmid** | |
 | Speculative parallel execution | **Phenotype** | |
-| Security gate | **Hormonal Trigger** | |
+| Security gate | **Hardiness** | What a **Terroir** can withstand — whether its conditions permit the delegation boundary to be *enforced* rather than merely recorded. A site property, not a runtime one. | Deployment security posture | environment |
+| **Hormonal Trigger** | |
 | Fault isolation | **Abscission** | |
 | Live logs → archived logs | **Resin** → **Amber** | |
 | Telemetry emitter | **Transporter** | |

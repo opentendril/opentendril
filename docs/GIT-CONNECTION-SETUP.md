@@ -262,6 +262,57 @@ grants:
 
 ---
 
+## Credentials: proving a Pollen instead of declaring one
+
+A **Pollen** names which grants apply. How a Pollinator *establishes* that Pollen
+decides whether the grant model is a boundary or a record.
+
+```bash
+tendril pollinator issue --pollen claude --note "laptop"
+tendril pollinator list
+tendril pollinator revoke --pollen claude
+```
+
+The secret prints **once** and is never stored — only its digest is kept, so a
+leaked store cannot be replayed. Give it to that Pollinator, which presents it as
+its bearer token:
+
+```bash
+curl -X POST localhost:8080/v1/git/status \
+  -H "Authorization: Bearer otp_..." -d '{"substrate":"myrepo"}'
+```
+
+The Stem **derives** the Pollen from the credential. The `X-OpenTendril-Pollen`
+header is ignored entirely for such callers, so holding a credential cannot be
+used to act as somebody else. An unknown or revoked credential is refused
+outright and never falls back to being treated as an ordinary request.
+
+A grant is still required. A credential says *who you are*; the grant says *what
+that identity may do*.
+
+| How the Pollen is established | What it is |
+|---|---|
+| Issued credential (`otp_...`) | **proven** — the caller cannot influence it |
+| `X-OpenTendril-Pollen` header, or `OPENTENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
+
+## Is the boundary actually real here?
+
+```bash
+tendril hardiness
+```
+
+It reports what is true on *this* machine: whether the Stem has its own
+operating-system user, whether its credentials are readable by the Pollinators it
+serves, whether credentials have been issued, and whether any grants exist.
+
+This matters because the strongest credential model is still walkable if the Stem
+and its callers are the same user — that user can read the private key, rewrite
+`grants.yaml`, or ignore `tendril` entirely. On such a Terroir `hardiness` says so,
+in those words. Run the Stem as its own user to make the boundary enforced rather
+than advisory.
+
+---
+
 ## Working from a terminal as a Pollinator
 
 A Pollinator that drives a terminal — rather than connecting over the Model

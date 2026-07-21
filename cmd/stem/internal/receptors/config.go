@@ -31,8 +31,12 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		if pollen := DelegatedPollen(r); pollen != "" {
-			log.Printf("🚫 Delegation denied for pollen %q: %s exposes no delegable operation-class", pollen, r.URL.Path)
+		// No gate is in scope here, so a delegation marker of any kind is
+		// refused rather than interpreted. This path exposes no delegable
+		// operation-class, so there is nothing a Pollen could legitimately ask
+		// for.
+		if pollen, _ := DelegatedPollen(r, nil); pollen != "" || core.LooksLikePollinatorCredential(bearerToken(r)) {
+			log.Printf("🚫 Delegation denied for Pollen %q: %s exposes no delegable operation-class", pollen, r.URL.Path)
 			http.Error(w, "delegation denied: this endpoint exposes no delegable operation-class", http.StatusForbidden)
 			return
 		}
@@ -41,19 +45,71 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // PollenHeader marks an HTTP request as a *delegated* capability
-// invocation and names the trust-root pollen exercising a delegation grant.
-// A request without this header is not delegated: it follows today's
-// bearer-authenticated path untouched, whether or not any grants exist. The
-// pollen is a claim scoped by the already-required bearer key — a grant only
-// ever narrows what an authenticated caller may run delegated, never widens
-// what the bearer key already allows (short-lived scoped pollen tokens are a
-// later slice).
+// invocation and names the trust-root Pollen exercising a delegation grant.
+//
+// It is a CLAIM, and it is only honoured when the caller presents no Pollinator
+// credential. When a credential is presented the Pollen is DERIVED from it and
+// this header is ignored entirely — a caller that could both authenticate and
+// name itself could name any identity, which is the gap Tier 2 closes.
 const PollenHeader = "X-OpenTendril-Pollen"
 
-// DelegatedPollen returns the delegated pollen named by the request, or an
-// empty string when the request is not a delegated invocation.
-func DelegatedPollen(r *http.Request) string {
-	return strings.TrimSpace(r.Header.Get(PollenHeader))
+// bearerToken extracts the presented bearer value, or "" when absent.
+func bearerToken(r *http.Request) string {
+	header := strings.TrimSpace(r.Header.Get("Authorization"))
+	if !strings.HasPrefix(header, "Bearer ") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+}
+
+// PollinatorCredentials is the set a surface resolves presented credentials
+// against. Empty means none have been issued, so no caller can authenticate as
+// a Pollen by credential — the secure default.
+type PollinatorCredentials []core.PollinatorCredential
+
+// DelegatedPollen returns the Pollen this request acts as, and whether it was
+// PROVEN by a credential rather than merely claimed.
+//
+// Two paths, and the difference between them is the whole of Tier 2:
+//
+//   - A Pollinator credential resolves to the Pollen it was issued for. The
+//     caller cannot influence the result; an unknown or revoked credential
+//     resolves to nothing and is denied. This is a boundary.
+//   - No credential presented: the header claim is returned, as before. This is
+//     an audit control, and it is what a Botanist's own key plus a header has
+//     always been.
+//
+// A caller presenting a credential can never fall back to the claim, so
+// possessing a credential cannot be used to assert a different identity.
+func DelegatedPollen(r *http.Request, credentials PollinatorCredentials) (pollen string, proven bool) {
+	presented := bearerToken(r)
+	if core.LooksLikePollinatorCredential(presented) {
+		// Deliberately terminal: a credential-shaped bearer is resolved or
+		// denied. It never degrades into the header claim.
+		return core.ResolvePollenFromCredential(credentials, presented), true
+	}
+	return strings.TrimSpace(r.Header.Get(PollenHeader)), false
+}
+
+// PollenFor resolves the Pollen a request acts as, and reports whether the
+// request may proceed at all.
+//
+// ok is false in exactly one case: the caller presented a Pollinator
+// credential that did not resolve — unknown, malformed or revoked. That must
+// DENY rather than fall through to the plain bearer-authenticated path, which
+// would let a revoked credential quietly become an ungoverned request. Every
+// unresolvable credential fails the same way, so nothing distinguishes "never
+// existed" from "revoked yesterday".
+func (g *DelegationGate) PollenFor(r *http.Request) (pollen string, ok bool) {
+	var credentials PollinatorCredentials
+	if g != nil {
+		credentials = g.Pollinators
+	}
+	resolved, proven := DelegatedPollen(r, credentials)
+	if proven && resolved == "" {
+		return "", false
+	}
+	return resolved, true
 }
 
 // DelegationGate couples the Core's grant authorizer with the audit lane:
@@ -63,8 +119,12 @@ func DelegatedPollen(r *http.Request) string {
 // delegated invocation: with no delegation configured, delegation is
 // impossible while non-delegated traffic is untouched.
 type DelegationGate struct {
-	Authorizer *core.DelegationAuthorizer
-	Bus        *eventbus.Bus
+	// Pollinators is the set of issued credentials this surface resolves
+	// presented bearers against. Empty means none were issued, so no caller can
+	// authenticate as a Pollen by credential.
+	Pollinators PollinatorCredentials
+	Authorizer  *core.DelegationAuthorizer
+	Bus         *eventbus.Bus
 }
 
 // Authorize evaluates one delegated invocation against the active grants and
@@ -86,7 +146,13 @@ func (g *DelegationGate) Authorize(request core.DelegationRequest) core.Delegati
 // attempt must never silently run as a plain invocation).
 func (g *DelegationGate) Middleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		pollen := DelegatedPollen(r)
+		pollen, credentialOK := g.PollenFor(r)
+		if !credentialOK {
+			reason := "unknown or revoked Pollinator credential"
+			g.audit(core.DelegationRequest{}, core.DelegationDecision{Reason: reason})
+			http.Error(w, "delegation denied: "+reason, http.StatusForbidden)
+			return
+		}
 		if pollen == "" {
 			next(w, r)
 			return

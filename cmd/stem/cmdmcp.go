@@ -88,9 +88,28 @@ func runMCPCmd(ctx context.Context, args []string) {
 	} else {
 		fmt.Fprintln(os.Stderr, "🔏 No delegation grants configured: every delegated invocation is denied (secure default)")
 	}
+	// Issued credentials are what let a caller PROVE a Pollen rather than
+	// declare one. A malformed store is fatal rather than empty: degrading to
+	// "no credentials" would silently return every caller to the declared-Pollen
+	// path, which is the weaker tier.
+	pollinatorCredentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
+	if credentialsErr != nil {
+		fmt.Fprintf(os.Stderr, "❌ Pollinator credentials could not be read: %v\n", credentialsErr)
+		os.Exit(1)
+	}
 	delegationGate := &receptors.DelegationGate{
-		Authorizer: core.NewDelegationAuthorizer(delegationGrants),
-		Bus:        bus,
+		Pollinators: pollinatorCredentials,
+		Authorizer:  core.NewDelegationAuthorizer(delegationGrants),
+		Bus:         bus,
+	}
+	if len(pollinatorCredentials) > 0 {
+		active := 0
+		for _, credential := range pollinatorCredentials {
+			if credential.Active() {
+				active++
+			}
+		}
+		fmt.Fprintf(os.Stderr, "🔏 %d Pollinator credential(s) loaded (%d active): a presented credential DERIVES its Pollen; the header claim is ignored for those callers\n", len(pollinatorCredentials), active)
 	}
 
 	// The Pollen is bound once, at startup, as a property of this
