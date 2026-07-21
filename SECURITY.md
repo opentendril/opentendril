@@ -61,6 +61,65 @@ See the full System Genotype RFC.
 
 ---
 
+## 6. Running the Stem as its own principal
+
+The delegation model — Pollen, grants, isolated workspaces, audit — decides what
+a Pollinator *may* ask for. It cannot decide what a Pollinator *can reach* if the
+Stem and its callers are the same operating-system user. That user can read the
+credentials, rewrite `grants.yaml`, and ignore `tendril` altogether, so on a
+shared-principal Terroir delegation is **advisory**: it records intent and stops
+accidents, and it does not constrain a caller that chooses otherwise.
+
+`tendril hardiness` reports which of those two situations a machine is in.
+
+### The Stem's user must not be root
+
+The Stem runs model-driven work and holds the connection's credentials. Root has
+neither property that matters here: it does not make credentials unreadable to
+anyone, and it removes every bound on a compromise. Use a dedicated,
+unprivileged user that owns `~/.tendril` and nothing else of consequence.
+
+### Container access is where this usually goes wrong
+
+**Membership of the `docker` group is equivalent to root.** A member can start a
+container that bind-mounts the host filesystem and read or write anything as
+root — including the Stem's private key — no matter who owns the file. A
+"restricted user that is also in the docker group" is therefore a root-equivalent
+account with extra steps, and it gives back precisely what a separate principal
+was meant to take away.
+
+Three ways out, in order of preference:
+
+| Approach | What it needs | Why it holds |
+|---|---|---|
+| **Rootless Docker** | `dockerd-rootless-setuptool.sh` as the Stem's user; `DOCKER_HOST` pointing at its own socket; `loginctl enable-linger` | the daemon runs as that user, so a container cannot become root on the host |
+| **Firecracker provider** | the binary, a kernel and rootfs, and `/dev/kvm` (group `kvm`) | `kvm` is not root-equivalent, and a microVM is a stronger boundary than a container |
+| **Docker socket proxy** | a filtering proxy in front of the socket | narrows the API surface; partial, and easy to get subtly wrong |
+
+The Stem invokes the `docker` client and inherits its environment, so pointing
+`DOCKER_HOST` at a rootless socket needs no change to Tendril itself.
+
+### Administering the Stem's account
+
+`sudo -u tendril -i` is the natural way to edit its files or run it by hand, with
+one condition that decides whether the separation means anything:
+
+**If the account that hosts Pollinators can `sudo` to the Stem's user, there is
+no boundary.** A Pollinator running as that account can simply become the Stem
+and read what it holds. Two details make this sharper than it first looks:
+
+* `NOPASSWD` for that rule hands the Stem's identity to anything running as you.
+* Even with a password required, **sudo caches credentials** (about fifteen
+  minutes by default). A Pollinator running as you during that window escalates
+  with no prompt at all.
+
+So: require a password, set `timestamp_timeout=0` on the rule that reaches the
+Stem's user, and prefer administering that account from a session that does not
+host Pollinators. `tendril hardiness` reports when the current user can sudo
+without being asked.
+
+---
+
 ## 🏗️ 12-Factor App Compliance
 
 To ensure enterprise-grade scaling, portability, and DevOps compatibility, OpenTendril aligns with the **12-Factor App methodology**:

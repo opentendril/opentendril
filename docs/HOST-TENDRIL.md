@@ -73,3 +73,67 @@ The Stem enforces this with a two-layer gate:
 3. **Runtime environment gate:** Even if both conditions above are met, the Stem refuses to start a host Terrarium unless `TENDRIL_ALLOW_HOST_EXECUTION=true` is present in the Stem's runtime environment — a decision that must be made by a human operator.
 
 This means the attack chain `a Sprout writes substrates.yaml → poisons provider: host → escalates to host execution` is blocked at every layer.
+
+
+---
+
+## Running the Stem as its own principal (a worked setup)
+
+The reasoning is in `SECURITY.md`; this is the shape of it on a Linux Terroir.
+Check the result with `tendril hardiness`, which is the point of that command.
+
+```bash
+# 1. An unprivileged user that owns nothing but its own control plane.
+sudo useradd --system --create-home --shell /usr/sbin/nologin tendril
+sudo install -d -o tendril -g tendril -m 700 /home/tendril/.tendril
+
+# 2. Rootless container access FOR THAT USER — not the docker group.
+sudo loginctl enable-linger tendril
+sudo -u tendril -H dockerd-rootless-setuptool.sh install
+# DOCKER_HOST then points at that user's own socket:
+#   unix:///run/user/$(id -u tendril)/docker.sock
+```
+
+A service unit, with the credential path and the rootless socket in its
+environment rather than in a shell profile:
+
+```ini
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/998/docker.sock
+Environment=OPENTENDRIL_API_KEY_FILE=/home/tendril/.tendril/api-key
+ExecStart=/usr/local/bin/tendril serve
+Restart=on-failure
+
+# The Stem should not be able to reach what it does not need.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/home/tendril
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Two things this does **not** do, stated so they are not assumed:
+
+* **It does not stop you.** The Botanist administering the machine can always
+  become the Stem's user. The boundary is against the accounts that host
+  Pollinators, so keep those separate from the one you administer with — and do
+  not grant that account passwordless `sudo` to the Stem's user, remembering that
+  a cached `sudo` timestamp counts as passwordless for anything running as you in
+  that window.
+* **It does not narrow the network surface.** The Representational State Transfer
+  surface binds all interfaces. On a Ramet reachable from a network, put it behind
+  something that terminates and restricts, and issue a Pollinator credential per
+  caller so revocation is per-caller rather than a shared secret rotation.
