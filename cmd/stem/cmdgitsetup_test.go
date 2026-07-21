@@ -118,7 +118,7 @@ func resolveGenerated(t *testing.T, opts gitSetupOptions) conductor.ResolvedCred
 func TestRenderGrantsYAMLParses(t *testing.T) {
 	opts := gitSetupOptions{substrate: "r", grantSubject: "claude"}
 	out := renderGrantsYAML(opts)
-	for _, want := range []string{"grants:", "claude:", "operationClasses: [git.status, git.branch, git.commit, git.push, git.pr]", "substrates: [r]"} {
+	for _, want := range []string{"grants:", "claude:", "operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]", "substrates: [r]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated grants missing %q:\n%s", want, out)
 		}
@@ -199,10 +199,18 @@ func TestUpsertGrantUnionsSubstrates(t *testing.T) {
 	// pull request that finishes it — so an authorised agent never has to
 	// leave Tendril for the last mile. Unioning must not duplicate them.
 	for subject, classes := range classesBySubject {
-		if len(classes) != 5 {
-			t.Errorf("%s operation-classes = %v, want exactly the five git classes unioned once", subject, classes)
+		if len(classes) != 6 {
+			t.Errorf("%s operation-classes = %v, want exactly the six granted git classes unioned once", subject, classes)
 		}
-		for _, want := range []string{core.CapGitStatus, core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
+		// git.prune is deliberately absent: every other operation on the
+		// ladder is recoverable, deletion is not, so the destructive class is
+		// opt-in rather than handed to every agent by default.
+		for _, unwanted := range classes {
+			if unwanted == core.CapGitPrune {
+				t.Errorf("%s was granted %s by default — the destructive class must be opt-in", subject, core.CapGitPrune)
+			}
+		}
+		for _, want := range []string{core.CapGitStatus, core.CapGitBranchList, core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
 			if !contains(classes, want) {
 				t.Errorf("%s operation-classes = %v, want %s included", subject, classes, want)
 			}

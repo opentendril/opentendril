@@ -3,7 +3,8 @@
 **The problem this solves:** every LLM wastes time and tokens guessing how to
 authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
 Tendril gives an agent **one pre-configured, correct git method**. The agent
-calls `git.status` / `git.branch` / `git.commit` / `git.push` / `git.pr`; it never touches
+calls `git.status` / `git.branch` / `git.commit` / `git.push` / `git.pr`, and can
+tidy up afterwards with `git.branch.list` / `git.prune`; it never touches
 credentials. You
 configure the connection **once**, on any machine, and every agent you authorise
 inherits it.
@@ -208,6 +209,54 @@ matching grant.
 - **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
+
+---
+
+## Cleaning up after merges
+
+Merged branches pile up. Tendril classifies them against **evidence from
+GitHub**, then deletes only the ones proven merged.
+
+```bash
+tendril git branches --substrate myrepo          # classify, change nothing
+tendril git prune    --substrate myrepo          # report what WOULD go
+tendril git prune    --substrate myrepo --confirm  # actually delete
+```
+
+**Why evidence, and not `git branch --merged`:** a branch merged through a
+squashing pull request still looks *unmerged* to git, because its commits never
+enter the target's history. The same goes for diffing against the base. Both
+look authoritative and both are wrong. Tendril asks GitHub which pull request a
+branch's tip belongs to and whether that pull request merged — the only answer
+that survives a squash merge.
+
+A branch is deleted only when **all** of these hold:
+
+| Classification | Deleted? |
+|---|---|
+| pull request **merged** | ✅ the only deletable state |
+| pull request still **open** | ❌ work in flight |
+| pull request **closed without merging** | ❌ rejected work; its commits may exist nowhere else |
+| tip **never pushed** | ❌ local-only work no remote check can vouch for |
+| tip pushed, **no pull request** | ❌ no evidence either way |
+| the **default** or **current** branch | ❌ never |
+| **checked out by another agent** | ❌ someone is working on it |
+| no GitHub credential on the connection | ❌ nothing is deletable without evidence |
+
+`prune` **reports by default** and deletes only with `--confirm`. That is the
+opposite of the usual convention, deliberately: for an operation an agent might
+invoke after misreading its instructions, the safe path should be the one taken
+by accident. Every deletion prints the branch's tip commit, so an unwanted prune
+is a one-line `git branch <name> <head>` away.
+
+**`git.prune` is not in the default grant.** Every other operation on the ladder
+can be undone; deleting a branch cannot. Add it per agent, knowingly:
+
+```yaml
+grants:
+  claude:
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, git.prune]
+```
 
 ---
 

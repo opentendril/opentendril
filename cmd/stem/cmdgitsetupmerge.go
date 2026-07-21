@@ -221,6 +221,7 @@ func mergeGrant(path string, o gitSetupOptions) error {
 	}
 	classes := getOrCreateSequence(subject, "operationClasses")
 	ensureSequenceContains(classes, "git.status")
+	ensureSequenceContains(classes, "git.branch.list")
 	ensureSequenceContains(classes, "git.branch")
 	ensureSequenceContains(classes, "git.commit")
 	ensureSequenceContains(classes, "git.push")

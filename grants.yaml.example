@@ -5,7 +5,10 @@
 
 grants:
   claude:                                  # the agent's delegation subject
-    operationClasses: [git.status, git.branch, git.commit, git.push, git.pr]
+    # git.prune is deliberately NOT here: it deletes branches, and every other
+    # operation is recoverable. Add it knowingly, per agent, if you want one
+    # cleaning up after merges.
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
     substrates: [myrepo]
     # egress: [github.com]                 # optional: hosts the Stem may fetch for this subject
     # expires: 2027-01-01                  # optional: RFC 3339 timestamp or YYYY-MM-DD
