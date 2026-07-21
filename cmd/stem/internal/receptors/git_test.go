@@ -516,3 +516,120 @@ func TestGitPRRequiresTitle(t *testing.T) {
 		t.Fatal("a titleless pull request reached the execution port")
 	}
 }
+
+// newGitBranchTestHandler builds a GitHandler over a real Core with a stubbed
+// branch port.
+func newGitBranchTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64) {
+	t.Helper()
+
+	executed := &atomic.Int64{}
+	coreSvc := core.NewService(nil).WithGit(core.GitOperations{
+		Branch: func(ctx context.Context, spec core.GitBranchSpec) (core.GitBranchResult, error) {
+			executed.Add(1)
+			return core.GitBranchResult{Status: "created", Branch: spec.Branch, PreviousBranch: "trunk"}, nil
+		},
+	})
+
+	bus := eventbus.New()
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: bus}
+	handler := NewGitHandler(coreSvc).WithDelegation(gate)
+
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+	return mux, bus, executed
+}
+
+const gitBranchBody = `{"substrate":"core","branch":"feat/new-leaf"}`
+
+// TestDelegatedGitBranchDeniedAndAuditedWithoutGrant is the deny-closed
+// regression for the new operation-class.
+func TestDelegatedGitBranchDeniedAndAuditedWithoutGrant(t *testing.T) {
+	mux, bus, executed := newGitBranchTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/branch", strings.NewReader(gitBranchBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a denied delegated invocation still created a branch")
+	}
+	event, found := lastDelegationEvent(bus)
+	if !found {
+		t.Fatal("denied delegated invocation left no audit event")
+	}
+	if event.Data["operationClass"] != core.CapGitBranch {
+		t.Fatalf("audit event data = %v, want the git.branch operation-class", event.Data)
+	}
+}
+
+// TestDelegatedGitBranchNotConferredByOtherGitGrants proves git.branch is its
+// own class: a subject granted the entire commit → push → pull request loop
+// still cannot create a branch.
+func TestDelegatedGitBranchNotConferredByOtherGitGrants(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitCommit, core.CapGitPush, core.CapGitPR},
+		Substrates:       []string{"core"},
+	}}
+	mux, _, executed := newGitBranchTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/branch", strings.NewReader(gitBranchBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (commit/push/pr must not confer git.branch): %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("another git grant authorized a branch operation")
+	}
+}
+
+// TestDelegatedGitBranchPermittedByMatchingGrant: the matching grant lets it
+// through and audits the exercise.
+func TestDelegatedGitBranchPermittedByMatchingGrant(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitBranch},
+		Substrates:       []string{"core"},
+	}}
+	mux, bus, executed := newGitBranchTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/branch", strings.NewReader(gitBranchBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("executed %d branch operation(s), want 1", executed.Load())
+	}
+	event, found := lastDelegationEvent(bus)
+	if !found || event.Type != eventbus.EventDelegationAuthorized {
+		t.Fatalf("audit event = %v found=%v, want an authorization record", event, found)
+	}
+}
+
+// TestGitBranchRequiresBranch: the adapter rejects a request with no branch
+// before the Core is reached.
+func TestGitBranchRequiresBranch(t *testing.T) {
+	mux, _, executed := newGitBranchTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/branch", strings.NewReader(`{"substrate":"core"}`))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a branchless request reached the execution port")
+	}
+}

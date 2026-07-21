@@ -3,7 +3,8 @@
 **The problem this solves:** every LLM wastes time and tokens guessing how to
 authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
 Tendril gives an agent **one pre-configured, correct git method**. The agent
-calls `git.commit` / `git.push` / `git.pr`; it never touches credentials. You
+calls `git.branch` / `git.commit` / `git.push` / `git.pr`; it never touches
+credentials. You
 configure the connection **once**, on any machine, and every agent you authorise
 inherits it.
 
@@ -117,6 +118,7 @@ substrates:
 ### 4. Verify
 
 ```bash
+tendril git branch --substrate opentendril --branch chore/verify-connection
 tendril git commit --substrate opentendril --message "chore: verify connection"
 tendril git push   --substrate opentendril
 tendril git pr     --substrate opentendril --title "chore: verify connection"
@@ -172,15 +174,15 @@ have a *grant*. Missing either → denied.
 ```yaml
 grants:
   claude:                                             # the agent's subject identity
-    operationClasses: [git.commit, git.push, git.pr]  # commit-only? drop the rest
+    operationClasses: [git.branch, git.commit, git.push, git.pr]  # commit-only? drop the rest
     substrates: [opentendril]
     expires: 2027-01-01
 ```
 
 No grant → every delegated call from that subject is denied and audited. Each
 operation is its own class and confers nothing else: a subject granted
-`git.commit` and `git.push` still cannot open a pull request, and `git.pr` never
-pushes on your behalf.
+`git.commit` and `git.push` still cannot open a pull request or create a
+branch, `git.pr` never pushes on your behalf, and `git.branch` never commits.
 
 ### 2. Configure the agent's MCP connection
 
@@ -204,6 +206,56 @@ matching grant.
 - **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
+
+---
+
+## The default branch is protected, everywhere
+
+The most expensive git mistakes are branch mistakes found late: work committed
+straight onto the default branch, then unpicked with a rebase or reversed onto
+a feature branch after the fact. Tendril treats that as a safety property, not
+a convention.
+
+**Tendril never assumes which branch is the default.** It resolves it — from the
+substrate's configured `branch:`, from the repository itself, or from your
+clone's record of the remote's head — and if it genuinely cannot tell, it
+protects the well-known names anyway. Protection widens when Tendril is
+uncertain; it never quietly switches off. A repository whose default branch is
+`trunk` or `develop` is protected exactly as one on `main`.
+
+What that means in practice:
+
+- `git.commit` **refuses to commit onto the default branch** — before staging
+  anything, so nothing has to be undone.
+- `git.branch` is the way forward, and it is why the refusal is not a dead end.
+- `git.pr` refuses a pull request opened *from* the default branch.
+- Sprout runs auto-branch off the default branch before making changes.
+
+```bash
+# The loop, in the order the guardrails expect:
+tendril git branch --substrate myrepo --branch feat/new-leaf
+tendril git commit --substrate myrepo --message "feat: grow a new leaf"
+tendril git push   --substrate myrepo
+tendril git pr     --substrate myrepo --title "feat: grow a new leaf"
+```
+
+If a repository legitimately commits straight to its default branch (a docs
+site, a notes repository), opt out once, in the connection:
+
+```yaml
+substrates:
+  mynotes:
+    url: https://github.com/owner/notes
+    profile: tendril-dedicated
+    protectDefaultBranch: false     # knowingly loosened; absent means protected
+```
+
+`git.branch` itself is deliberately narrow — create a branch and switch to it.
+No delete, no rename, no reset. An existing branch is switched to, never
+force-moved; switching to an existing branch with uncommitted changes is
+refused so work is never carried somewhere you did not expect (starting a *new*
+branch with uncommitted work is fine — that is the usual "I started editing
+before branching" recovery).
 
 ---
 

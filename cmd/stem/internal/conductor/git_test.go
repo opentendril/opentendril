@@ -82,6 +82,9 @@ func newGitCommitRepo(t *testing.T) string {
 		{"config", "user.email", "ambient@example.com"},
 		{"config", "user.name", "Ambient Tester"},
 		{"commit", "--allow-empty", "-m", "initial"},
+		// Commit fixtures work on a feature branch: committing onto the
+		// default branch is refused by design, and has its own tests.
+		{"checkout", "-b", "feat/fixture"},
 	} {
 		if _, err := runGitCommand(ctx, repo, args...); err != nil {
 			t.Fatalf("git %v: %v", args, err)
@@ -339,7 +342,7 @@ func newAPICommitWorkspace(t *testing.T) (workspace, headBeforeChanges string) {
 		{"init"},
 		{"config", "user.email", "ambient@example.com"},
 		{"config", "user.name", "Ambient Tester"},
-		{"checkout", "-b", "main"},
+		{"checkout", "-b", "feat/api-fixture"},
 		{"remote", "add", "origin", "https://github.com/opentendril/opentendril.git"},
 	} {
 		if _, err := runGitCommand(ctx, workspace, args...); err != nil {
@@ -465,7 +468,7 @@ func TestRunAPICommitSendsGraphQLMutation(t *testing.T) {
 	for _, want := range []string{
 		"createCommitOnBranch",
 		`"expectedHeadOid":"` + headBeforeChanges + `"`,
-		`"branchName":"main"`,
+		`"branchName":"feat/api-fixture"`,
 		`"repositoryNameWithOwner":"opentendril/opentendril"`,
 		`"headline":"feat: grow a new leaf"`,
 		`"body":"Detailed body line."`,

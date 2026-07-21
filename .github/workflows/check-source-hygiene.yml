@@ -26,3 +26,19 @@ jobs:
           # pre-existing lines as added.
           git fetch --no-tags origin "${{ github.base_ref }}"
           bash scripts/check-no-issue-refs.sh "origin/${{ github.base_ref }}"
+
+  no-default-branch-assumptions:
+    name: No hard-coded default branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A git execution path must RESOLVE the repository's default branch, never
+      # assume its name. The rule was decided, documented, and then silently
+      # violated anyway — so it is enforced here rather than remembered.
+      - name: No new default-branch assumptions
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/check-default-branch-assumptions.sh "origin/${{ github.base_ref }}"

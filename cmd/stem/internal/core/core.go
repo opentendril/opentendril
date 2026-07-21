@@ -93,6 +93,10 @@ type Core interface {
 	// push, it runs on the Stem, never inside a sealed Sprout. Runs through
 	// the injected GitOperations execution port.
 	GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error)
+	// GitBranch creates or switches to a feature branch in a substrate's
+	// workspace, so default-branch protection has a governed next move. Runs
+	// through the injected GitOperations execution port.
+	GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability

@@ -5,7 +5,7 @@
 
 grants:
   claude:                                  # the agent's delegation subject
-    operationClasses: [git.commit, git.push, git.pr]
+    operationClasses: [git.branch, git.commit, git.push, git.pr]
     substrates: [myrepo]
     # egress: [github.com]                 # optional: hosts the Stem may fetch for this subject
     # expires: 2027-01-01                  # optional: RFC 3339 timestamp or YYYY-MM-DD
