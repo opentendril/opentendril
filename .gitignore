@@ -61,7 +61,7 @@ dist/
 .tendril/transduction/hormonal-triggers/block-trigger.sh
 .tendril/transduction/hormonal-triggers/*-generated.sh
 
-# Transient AI Agent Artifacts & Workspaces (Never commit these)
+# Transient Pollinator Artifacts & Workspaces (Never commit these)
 .ai/
 .scratch/
 scratch/

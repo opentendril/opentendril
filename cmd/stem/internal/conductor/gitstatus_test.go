@@ -122,7 +122,7 @@ func TestRunGitStatusClassifiesChanges(t *testing.T) {
 }
 
 // TestRunGitStatusBoundsChangeList proves a large change cannot flood an
-// agent's context, and that the total is still reported honestly.
+// Pollinator's context, and that the total is still reported honestly.
 func TestRunGitStatusBoundsChangeList(t *testing.T) {
 	repo := newBranchRepo(t, "feat/x", "trunk")
 	total := gitStatusFileLimit + 17
@@ -149,7 +149,7 @@ func TestRunGitStatusBoundsChangeList(t *testing.T) {
 
 // TestRunGitStatusDescribesUnusualStates: a repository with no commits and a
 // detached head are described precisely rather than refused — those are the
-// states an agent most needs explained.
+// states a Pollinator most needs explained.
 func TestRunGitStatusDescribesUnusualStates(t *testing.T) {
 	ctx := context.Background()
 
@@ -193,7 +193,7 @@ func TestRunGitStatusDescribesUnusualStates(t *testing.T) {
 }
 
 // TestRunGitStatusReportsUpstreamDivergence covers the ahead/behind counts an
-// agent needs before deciding whether to push.
+// Pollinator needs before deciding whether to push.
 func TestRunGitStatusReportsUpstreamDivergence(t *testing.T) {
 	ctx := context.Background()
 	remote := t.TempDir()

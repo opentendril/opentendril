@@ -97,7 +97,7 @@ func sproutRunFooter(result core.SproutRunResult) string {
 	case conductor.SproutOutcomeNoChanges:
 		return fmt.Sprintf("🌾 Sprout %s finished without changing any files (session %s). This can be legitimate for investigate-and-report tasks; if files were expected to change, the task did not happen.", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeNoEngagement:
-		return fmt.Sprintf("🥀 Sprout %s withered: the agent produced no response and changed nothing — the model never engaged the task (session %s). This is not a successful run; verify the configured model can drive tools.", result.StepID, result.SessionID)
+		return fmt.Sprintf("🥀 Sprout %s withered: the Sprout produced no response and changed nothing — the Mycorrhizal Network never engaged the task (session %s). This is not a successful run; verify the configured model can drive tools.", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeSkipped:
 		return fmt.Sprintf("⏭️ Sprout %s skipped: this step already completed in a previous run (session %s)", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeComplete:
@@ -214,7 +214,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 		Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
 			wiring := resolveSproutSubstrateWiring(spec, substratesConfig)
 
-			// A sprout run always has a bus. The agent streams only when it
+			// A Sprout run always has a bus. The Sprout streams only when it
 			// has one to publish to, so without it the run emits nothing for
 			// its whole duration — no tokens, no reasoning, no lifecycle — and
 			// a wall clock is the only thing left to judge it by.
@@ -278,7 +278,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			} else {
 				run.Status = "matured"
 				// A run that never engaged the task is not a success, even
-				// though the agent loop returned no error.
+				// though the Sprout's loop returned no error.
 				if sproutReport.Outcome == conductor.SproutOutcomeNoEngagement {
 					run.Status = "withered"
 				}

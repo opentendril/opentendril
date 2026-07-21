@@ -107,7 +107,7 @@ function plantKeyFor(event: StemEvent): { key: string; kind: Plant["kind"] } | n
   const seq = str(event.data?.["sequence"]);
   if (seq) return { key: `seq:${seq}`, kind: "sequence" };
   if (event.sessionId) return { key: `ses:${event.sessionId}`, kind: "session" };
-  // Direct chat runs: agent stream tokens carry only source=stepId. Group them
+  // Direct chat runs: Sprout stream tokens carry only source=stepId. Group them
   // under a shared ambient plant so live activity is never invisible.
   if (event.source && event.type !== "connected") {
     return { key: "ambient", kind: "sequence" };
@@ -171,7 +171,7 @@ function ensureBranch(plant: Plant, stepId: string, at: number): Branch {
   return branch;
 }
 
-/** stepId for events that only carry source (stream tokens from agents use
+/** stepId for events that only carry source (stream tokens from Sprouts use
  *  source = stepId; sequence events put stepId in data). */
 function stepIdOf(event: StemEvent): string {
   return str(event.data?.["stepId"]) ?? str(event.source) ?? "stem";

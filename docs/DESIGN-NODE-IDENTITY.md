@@ -7,12 +7,12 @@
 
 ## Why Node Identity Matters
 
-Every Tendril agent that commits code, opens a PR, or emits a Sequence event does so
+Every Ramet that commits code, opens a PR, or emits a Sequence event does so
 autonomously — without a human hand on the keyboard. Without cryptographic identity,
 there is no way to distinguish:
 
 - A legitimate, authorised Tendril commit from a compromised one
-- A trusted node from an injected agent
+- A trusted Ramet from an injected impostor
 - An auditable action from a spoofed one
 
 Node Identity gives every Tendril deployment a unique GPG key pair. All commits,
@@ -54,7 +54,7 @@ Subkey-Type: eddsa
 Subkey-Curve: ed25519
 Name-Real: ${TENDRIL_NODE_NAME:-Tendril Node}
 Name-Email: ${TENDRIL_NODE_EMAIL:-tendril@opentendril.dev}
-Name-Comment: OpenTendril Autonomous Agent — $(hostname)
+Name-Comment: OpenTendril Ramet — $(hostname)
 Expire-Date: 2y
 %commit
 EOF
@@ -81,7 +81,7 @@ git config user.name        <TENDRIL_NODE_NAME>
 git config user.email       <TENDRIL_NODE_EMAIL>
 ```
 
-All commits from OpenTendril agents will appear as **Verified** on GitHub
+All commits from OpenTendril Ramets will appear as **Verified** on GitHub
 once the public key is uploaded to `https://github.com/settings/keys`.
 
 ---

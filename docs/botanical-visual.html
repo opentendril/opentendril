@@ -258,7 +258,7 @@
 
     <header>
         <h1>Architectural Nomenclature</h1>
-        <p class="subtitle">OpenTendril models autonomous AI execution through a strict botanical metaphor. Click the events below to visualize the lifecycle of an agent.</p>
+        <p class="subtitle">OpenTendril models autonomous execution through a strict botanical metaphor. Click the events below to visualize the lifecycle of a Sprout.</p>
     </header>
 
     <div class="container">
@@ -267,37 +267,37 @@
             <div class="card" onclick="triggerSequence('initiate')">
                 <span class="badge">Boot</span>
                 <h3>1. initiate()</h3>
-                <p>The main orchestrator boots up. The core structural stem grows and establishes the environment, preparing nodes for agents.</p>
+                <p>The main orchestrator boots up. The core structural stem grows and establishes the environment, preparing Branches for Sprouts.</p>
             </div>
 
             <div class="card" onclick="triggerSequence('circumnutate')">
                 <span class="badge">Idle</span>
                 <h3>2. circumnutate()</h3>
-                <p>An agent is in queue or polling for a trigger. In nature, a tendril physically swings in circles through the air waiting for contact.</p>
+                <p>A Sprout is in queue or polling for a trigger. In nature, a tendril physically swings in circles through the air waiting for contact.</p>
             </div>
 
             <div class="card" onclick="triggerSequence('sprout')">
                 <span class="badge">Spawn</span>
                 <h3>3. sprout() / emerge()</h3>
-                <p>A task is received. A short-lived, ephemeral worker agent rapidly breaks through the surface to handle the specific task.</p>
+                <p>A task is received. A short-lived, ephemeral Sprout rapidly breaks through the surface to handle the specific task.</p>
             </div>
 
             <div class="card" onclick="triggerSequence('extend')">
                 <span class="badge">Execute</span>
                 <h3>4. extend() & elongation()</h3>
-                <p>The agent executes the ReAct loop (elongation), reaching out across the network to hook into an API, database, or tool.</p>
+                <p>The Sprout executes the ReAct loop (elongation), reaching out across the network to hook into an API, database, or tool.</p>
             </div>
 
             <div class="card" onclick="triggerSequence('latch')">
                 <span class="badge">Resolution A</span>
                 <h3>5a. anchor() / latch()</h3>
-                <p>For pinned agents (like an active MCP server connection), the tendril wraps securely around the target and becomes a permanent structural tether.</p>
+                <p>For pinned Sprouts (like an active Model Context Protocol connection), the tendril wraps securely around the target and becomes a permanent structural tether.</p>
             </div>
 
             <div class="card" onclick="triggerSequence('senesce')">
                 <span class="badge">Resolution B</span>
                 <h3>5b. senesce() / drop()</h3>
-                <p>For ephemeral run-once agents, the task completes. The tendril drops its context, dries up, and terminates cleanly to free memory.</p>
+                <p>For ephemeral run-once Sprouts, the task completes. The tendril drops its context, dries up, and terminates cleanly to free memory.</p>
             </div>
         </div>
 
@@ -387,7 +387,7 @@
             else if (action === 'circumnutate') {
                 stem.classList.add('stem-active');
                 node2.classList.add('active');
-                updateStatus('Agent allocated. Polling for trigger...', 'var(--accent-cyan)');
+                updateStatus('Sprout allocated. Polling for trigger...', 'var(--accent-cyan)');
                 
                 // Small emerging bud that spins
                 tendril1.style.strokeDashoffset = '950'; // Just a tiny nub
@@ -397,7 +397,7 @@
             else if (action === 'sprout') {
                 stem.classList.add('stem-active');
                 node2.classList.add('active');
-                updateStatus('Task received! Ephemeral agent emerging.');
+                updateStatus('Task received! Ephemeral Sprout emerging.');
                 
                 tendrilGroup.style.animation = 'none';
                 tendril1.style.animation = 'grow-tendril 1s ease forwards';
@@ -425,7 +425,7 @@
                 targetLabel.style.opacity = '1';
                 tendril1.style.strokeDashoffset = '0';
                 
-                updateStatus('Pinned Agent Latched to target. Thigmomorphogenesis active.', '#ff00ff');
+                updateStatus('Pinned Sprout latched to target. Thigmomorphogenesis active.', '#ff00ff');
                 
                 setTimeout(() => {
                     coilGroup.style.opacity = '1';
@@ -440,7 +440,7 @@
                 targetLabel.style.opacity = '1';
                 tendril1.style.strokeDashoffset = '0';
                 
-                updateStatus('Task Complete. Agent senescing (dropping context).', '#ff4444');
+                updateStatus('Task Complete. Sprout senescing (dropping context).', '#ff4444');
                 
                 setTimeout(() => {
                     tendril1.style.animation = 'shrink-away 1.5s ease forwards';

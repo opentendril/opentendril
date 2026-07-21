@@ -1,14 +1,14 @@
 # 🧬 Tendril Genome (Context Seeds)
 
-This directory forms the genetic blueprint of your OpenTendril agents. 
+This directory forms the genetic blueprint of your OpenTendril Sprouts. 
 
-Just as DNA dictates what a cell can do, the **Genome** dictates the autonomous agent's capabilities, coding standards, and architectural rules.
+Just as DNA dictates what a cell can do, the **Genome** dictates a Sprout's capabilities, coding standards, and architectural rules.
 
 ## How It Works
 
-Before an agent (`Tendril`) sprouts to execute a task, the core orchestrator concatenates every Markdown (`.md`) file in this directory and automatically injects them into the agent's system prompt.
+Before a Sprout emerges to execute a Transcript, the core orchestrator concatenates every Markdown (`.md`) file in this directory and automatically injects them into the Sprout's system prompt.
 
-This allows you to permanently steer the agent's behavior for this specific repository without needing to repeat instructions in every prompt.
+This allows you to permanently steer a Sprout's behaviour for this specific repository without needing to repeat instructions in every prompt.
 
 ## Usage
 

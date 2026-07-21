@@ -60,7 +60,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 // substrate for the bind-time pollen the tests use.
 func mcpDelegationGrant() core.DelegationGrant {
 	return core.DelegationGrant{
-		Pollen:           "mcp-agent",
+		Pollen:           "mcp-Pollinator",
 		OperationClasses: []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit},
 		Substrates:       []string{"core"},
 	}
@@ -176,7 +176,7 @@ func TestMCPDelegatedCapabilitiesDeniedWithoutBoundSubject(t *testing.T) {
 func TestMCPDelegatedCapabilitiesAuthorizedByMatchingGrant(t *testing.T) {
 	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
 	calls := delegatedToolCalls()
 	for name, args := range calls {
@@ -196,8 +196,8 @@ func TestMCPDelegatedCapabilitiesAuthorizedByMatchingGrant(t *testing.T) {
 	if event.Type != eventbus.EventDelegationAuthorized {
 		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationAuthorized)
 	}
-	if event.Data["pollen"] != "mcp-agent" {
-		t.Fatalf("audit event pollen = %v, want mcp-agent", event.Data["pollen"])
+	if event.Data["pollen"] != "mcp-Pollinator" {
+		t.Fatalf("audit event pollen = %v, want mcp-Pollinator", event.Data["pollen"])
 	}
 }
 
@@ -207,7 +207,7 @@ func TestMCPDelegatedCapabilitiesAuthorizedByMatchingGrant(t *testing.T) {
 func TestMCPDelegatedCapabilityDeniedWithoutCoveringGrant(t *testing.T) {
 	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(nil), Bus: bus}
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
 	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
 		"substrate": "core",
@@ -239,7 +239,7 @@ func TestMCPDelegatedCapabilityDeniedOnSubstrateMismatch(t *testing.T) {
 	grant := mcpDelegationGrant()
 	grant.Substrates = []string{"another-substrate"}
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
 	text, isError := mcpCallTool(t, handler, core.CapGitCommit, map[string]any{
 		"substrate": "core",
@@ -274,7 +274,7 @@ func TestMCPNonDelegatedCapabilityUnaffected(t *testing.T) {
 	handler = handler.WithDelegation(gate, "")
 	assertListSessions("gate without pollen")
 
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 	assertListSessions("gate with pollen")
 
 	if _, found := lastDelegationEvent(bus); found {
@@ -292,7 +292,7 @@ func TestMCPPassthroughRunReceivesGrantEgress(t *testing.T) {
 	grant := mcpDelegationGrant()
 	grant.Egress = []string{"proxy.golang.org"}
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
 	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
 		"substrate": "core",
@@ -322,7 +322,7 @@ func TestMCPPassthroughRunReceivesGrantEgress(t *testing.T) {
 func TestMCPPassthroughRunIgnoresArgumentEgress(t *testing.T) {
 	handler, bus, executed, passthroughSpec := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
-	handler = handler.WithDelegation(gate, "mcp-agent")
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
 	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
 		"substrate": "core",

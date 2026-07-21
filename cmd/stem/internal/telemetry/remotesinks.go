@@ -28,7 +28,7 @@ const (
 )
 
 // RedisTransporter PUBLISHes JSON event payloads to a Redis channel so a
-// centralized OS can monitor fleets of distributed OpenTendril agents. It
+// centralized OS can monitor a Genet of distributed Ramets. It
 // speaks raw RESP over a persistent connection — no client dependency — and
 // redials lazily after a failure.
 type RedisTransporter struct {

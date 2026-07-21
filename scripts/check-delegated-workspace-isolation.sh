@@ -3,9 +3,9 @@
 # instead of the resolved, per-Pollinator workspace.
 #
 # Why this exists: before workspace isolation, every delegated operation ran in
-# one shared directory per substrate. Two agents granted the same substrate
+# one shared directory per substrate. Two Pollinators granted the same substrate
 # corrupted each other silently — the delegated commit stages the whole tree, so
-# one agent's uncommitted files were committed by the other, onto the other's
+# one Pollinator's uncommitted files were committed by the other, onto the other's
 # branch, under the other's identity. That destroyed the attribution the
 # delegated commit exists to provide, produced no error, and was reachable with
 # the documented setup.
@@ -36,7 +36,7 @@ offenders="$(grep -nE '^[[:space:]]*Workspace:' "${adapter}" \
 
 if [ -n "${offenders}" ]; then
   echo "::error::A delegated git operation is not using the resolved per-Pollinator workspace."
-  echo "Route it through resolveGitWorkspace(...) and pass workspace.Path, so two agents on"
+  echo "Route it through resolveGitWorkspace(...) and pass workspace.Path, so two Pollinators on"
   echo "one substrate cannot share a working tree and commit each other's changes."
   echo "Offending lines in ${adapter}:"
   echo "${offenders}"

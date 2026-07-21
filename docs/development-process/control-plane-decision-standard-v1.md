@@ -38,7 +38,7 @@ If no current source-of-truth document exists for a risky area, the Control Plan
 ## Lane Definitions
 These lane definitions follow `AGENTS.md` and are repeated here so Control Plane decisions can be read without guessing the stream labels:
 * **`L1`:** CLI & Gateway (Go / MCP)
-* **`L2`:** Agent Orchestration & Tools (Python)
+* **`L2`:** Sprout Orchestration & Tools (Python)
 * **`L3`:** Terrarium & Execution (Docker / gVisor / Firecracker)
 * **`L4`:** System Storage & Config (SQLite / Memory / env)
 * **`Cross-lane`:** Work that spans more than one stream lane and therefore requires explicit Control Plane coordination before build work starts.

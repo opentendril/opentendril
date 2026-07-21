@@ -24,12 +24,12 @@
 # A convention that depends on somebody remembering is a guard. This makes the
 # repository reject the drift instead.
 #
-# Like scripts/check-no-issue-refs.sh, this lints only ADDED lines against a base
-# ref. Pre-existing drift never blocks a pull request — clearing it is a separate,
-# deliberate decision for the Botanist, not something a hygiene check should force
-# through in an unrelated change (it reaches into published documentation and at
-# least one user-facing command name). This stops new drift; it does not rewrite
-# history.
+# This scans the WHOLE TREE, not just a diff. It began diff-based, because a
+# backlog of pre-existing drift should not block unrelated work. That backlog has
+# since been cleared, so the check was tightened: the vocabulary cannot return to
+# a file that was never touched by the change being reviewed, and a rename that
+# reintroduces the word anywhere fails immediately rather than at some later
+# review.
 #
 # Discussing a banned term is not using it. Write it in code formatting — `agent`
 # — when the term itself is the subject of the sentence; inline code and fenced
@@ -62,15 +62,9 @@ declare -A replacements=(
   ["worker container"]="Sprout"
 )
 
-# Where the taxonomy is binding: internal code and architecture documentation.
-targets=(
-  'cmd'
-  'roots'
-  'docs'
-  'ARCHITECTURE.md'
-  'CAPABILITIES.md'
-  'GUARDRAILS.md'
-)
+# Where the taxonomy is binding: everything except the sanctioned boundary and
+# the documents whose job is to define or translate the words being ruled out.
+targets=('.')
 
 # The sanctioned boundary and unavoidable literals:
 #   AGENTS.md            - cross-tool standard filename, named in the taxonomy
@@ -78,12 +72,29 @@ targets=(
 #   INTENT-TRANSLATION   - the Meristem layer, whose job IS the translation
 #   *_test.go            - fixtures reproduce real payloads and branch names
 #   this script          - it necessarily names the banned terms
+#   AGENTS.md            - cross-tool standard filename, named in the taxonomy
+#   GLOSSARY / SYNTHETIC-TAXONOMY / taxonomy-canonical
+#                        - they must name a term in order to define it
+#   INTENT-TRANSLATION   - the Meristem layer, whose job IS the translation
+#   HISTORY.md           - a record of what the project was called at the time;
+#                          rewriting it would falsify the record, the same
+#                          reasoning that left the closed issues alone
+#   .mailmap             - must contain the historical author name verbatim in
+#                          order to map it away
+#   this script          - it necessarily names the terms it rules out
+#
+# Tests are deliberately NOT excluded: fixture names are where vocabulary
+# quietly returns.
 exclude_paths=(
   ':!**/AGENTS.md'
-  ':!cmd/stoma/**'
-  ':!**/*_test.go'
-  ':!scripts/check-taxonomy.sh'
+  ':!GLOSSARY.md'
+  ':!SYNTHETIC-TAXONOMY.md'
+  ':!**/taxonomy-canonical.md'
   ':!INTENT-TRANSLATION.md'
+  ':!HISTORY.md'
+  ':!.mailmap'
+  ':!scripts/check-taxonomy.sh'
+  ':!.claude/**'
 )
 
 if [ "${mode}" = "text" ]; then
@@ -92,8 +103,8 @@ if [ "${mode}" = "text" ]; then
   # the record rather than correcting terminology.
   added="$(sed '/^```/,/^```/d' "${text_file}" | sed 's/`[^`]*`//g')"
 else
-  added="$(git diff "${base}...HEAD" -- "${targets[@]}" "${exclude_paths[@]}" \
-      | grep -E '^\+' | grep -Ev '^\+\+\+' || true)"
+  added="$(git grep -nIiE "$(IFS='|'; echo "\\b(${!replacements[*]})s?\\b")" \
+      -- "${targets[@]}" "${exclude_paths[@]}" 2>/dev/null || true)"
 fi
 
 status=0
@@ -101,7 +112,7 @@ for term in "${!replacements[@]}"; do
   # Word-boundary match, case-insensitive, plural tolerated. Lines naming the
   # boundary file itself, or the stoma path, are not drift.
   hits="$(printf '%s\n' "${added}" | grep -IiE "\\b${term}s?\\b" \
-      | grep -viE 'AGENTS\.md|stoma' || true)"
+      | grep -viE 'AGENTS\.md|AGENTS casing|Agent Development Kit|SequentialAgent|ParallelAgent|multi-agent (graph|reasoning)|workflow agents|Open Policy Agent|"Agents" blindly|run an agent tool' || true)"
   if [ -n "${hits}" ]; then
     status=1
     echo "::error::Standard IT term \"${term}\" added inside the organism."

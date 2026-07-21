@@ -10,7 +10,7 @@
 # resolves toward more verification, never less. An earlier version of this
 # filter had no default case, so an unrecognized path selected no jobs at all
 # and the gate reported green having run nothing; the paths it silently
-# ignored included every sprout Dockerfile and the whole guest agent.
+# ignored included every sprout Dockerfile and the whole Stoma.
 #
 # Documentation is the one allowlisted exception, because it carries no
 # executable surface. It is an explicit allowlist rather than a fallthrough
@@ -44,7 +44,7 @@ while IFS= read -r path; do
             ;;
 
         # The Go kernel. `cmd/*` (not `cmd/stem/*`) so cmd/stoma — the
-        # microVM guest agent — is covered rather than silently unbuilt.
+        # microVM Stoma — is covered rather than silently unbuilt.
         cmd/*|roots/*|go.mod|go.sum)
             stem_go=true
             ;;

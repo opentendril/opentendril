@@ -12,7 +12,7 @@ import (
 
 func activeGrant() core.DelegationGrant {
 	return core.DelegationGrant{
-		Pollen:           "local-agent",
+		Pollen:           "local-pollinator",
 		OperationClasses: []string{core.CapSproutGrow},
 		Substrates:       []string{"core"},
 		Egress:           []string{"github.com"},
@@ -21,7 +21,7 @@ func activeGrant() core.DelegationGrant {
 
 func sproutDelegationRequest() core.DelegationRequest {
 	return core.DelegationRequest{
-		Pollen:         "local-agent",
+		Pollen:         "local-pollinator",
 		OperationClass: core.CapSproutGrow,
 		Substrate:      "core",
 	}
@@ -61,12 +61,12 @@ func TestDelegationAuthorizerDeniesNonMatchingRequests(t *testing.T) {
 	authorizer := core.NewDelegationAuthorizer([]core.DelegationGrant{activeGrant()})
 
 	cases := map[string]core.DelegationRequest{
-		"wrong pollen":          {Pollen: "other-agent", OperationClass: core.CapSproutGrow, Substrate: "core"},
-		"wrong operation-class": {Pollen: "local-agent", OperationClass: core.CapSequenceGrow, Substrate: "core"},
-		"wrong substrate":       {Pollen: "local-agent", OperationClass: core.CapSproutGrow, Substrate: "other-repo"},
+		"wrong pollen":          {Pollen: "other-Pollinator", OperationClass: core.CapSproutGrow, Substrate: "core"},
+		"wrong operation-class": {Pollen: "local-pollinator", OperationClass: core.CapSequenceGrow, Substrate: "core"},
+		"wrong substrate":       {Pollen: "local-pollinator", OperationClass: core.CapSproutGrow, Substrate: "other-repo"},
 		"empty pollen":          {Pollen: "", OperationClass: core.CapSproutGrow, Substrate: "core"},
-		"empty operation-class": {Pollen: "local-agent", OperationClass: "", Substrate: "core"},
-		"empty substrate":       {Pollen: "local-agent", OperationClass: core.CapSproutGrow, Substrate: ""},
+		"empty operation-class": {Pollen: "local-pollinator", OperationClass: "", Substrate: "core"},
+		"empty substrate":       {Pollen: "local-pollinator", OperationClass: core.CapSproutGrow, Substrate: ""},
 	}
 
 	for name, request := range cases {
@@ -131,12 +131,12 @@ func TestDelegationAuthorizerCannotBeWidenedAfterConstruction(t *testing.T) {
 	authorizer := core.NewDelegationAuthorizer(grants)
 
 	// Attempt to widen the grant in place after construction.
-	grants[0].Pollen = "escalated-agent"
+	grants[0].Pollen = "escalated-pollinator"
 	grants[0].OperationClasses[0] = core.CapSequenceGrow
 	grants[0].Substrates[0] = "other-repo"
 
 	widened := core.DelegationRequest{
-		Pollen:         "escalated-agent",
+		Pollen:         "escalated-pollinator",
 		OperationClass: core.CapSequenceGrow,
 		Substrate:      "other-repo",
 	}
@@ -151,7 +151,7 @@ func TestDelegationAuthorizerCannotBeWidenedAfterConstruction(t *testing.T) {
 func TestLoadDelegationGrantsParsesControlPlaneFile(t *testing.T) {
 	tendrilDir := t.TempDir()
 	content := `grants:
-  local-agent:
+  local-pollinator:
     substrates: [core]
     operationClasses:
       - sprout.grow
@@ -172,8 +172,8 @@ func TestLoadDelegationGrantsParsesControlPlaneFile(t *testing.T) {
 	}
 
 	grant := grants[0]
-	if grant.Pollen != "local-agent" {
-		t.Errorf("pollen = %q, want local-agent", grant.Pollen)
+	if grant.Pollen != "local-pollinator" {
+		t.Errorf("pollen = %q, want local-pollinator", grant.Pollen)
 	}
 	if len(grant.OperationClasses) != 1 || grant.OperationClasses[0] != core.CapSproutGrow {
 		t.Errorf("operationClasses = %v, want [sprout.grow]", grant.OperationClasses)
@@ -216,7 +216,7 @@ func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 		t.Fatalf("mkdir substrate .tendril: %v", err)
 	}
 	hostile := `grants:
-  hostile-agent:
+  hostile-Pollinator:
     substrates: [core]
     operationClasses: [sprout.grow]
 `
@@ -234,7 +234,7 @@ func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 
 	authorizer := core.NewDelegationAuthorizer(grants)
 	hostileRequest := core.DelegationRequest{
-		Pollen:         "hostile-agent",
+		Pollen:         "hostile-Pollinator",
 		OperationClass: core.CapSproutGrow,
 		Substrate:      "core",
 	}
@@ -246,21 +246,21 @@ func TestLoadDelegationGrantsNeverReadsSubstrateCarriedFile(t *testing.T) {
 func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 	cases := map[string]string{
 		"no operationClasses": `grants:
-  local-agent:
+  local-pollinator:
     substrates: [core]
 `,
 		"no substrates": `grants:
-  local-agent:
+  local-pollinator:
     operationClasses: [sprout.grow]
 `,
 		"bad expires": `grants:
-  local-agent:
+  local-pollinator:
     substrates: [core]
     operationClasses: [sprout.grow]
     expires: someday
 `,
 		"bad confirmAbove impact": `grants:
-  local-agent:
+  local-pollinator:
     substrates: [core]
     operationClasses: [sprout.grow]
     confirmAbove: { impact: catastrophic }

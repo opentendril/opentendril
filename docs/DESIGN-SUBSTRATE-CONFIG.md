@@ -64,7 +64,7 @@ The scalar `auth: ENV_VAR` form is fully back-compatible. Secrets are never stor
 *   If a substrate is marked `readonly: true`:
     *   The Sprout terrarium **is allowed to modify files locally** (to enable compiler checks, test executions, and validation suites inside the container).
     *   Go Stem **strictly blocks** git stashing on the host, git commits in the terrarium, and fast-forward merging back to the host workspace. All edits are safely discarded when the terrarium is torn down.
-    *   Go Stem passes the environment variable `TENDRIL_READONLY=true` to the Sprout container. The Sprout's internal executor can read this env var to warn the reasoning agent that its edits are ephemeral.
+    *   Go Stem passes the environment variable `TENDRIL_READONLY=true` to the Sprout container. The Sprout's internal executor can read this env var to warn the reasoning Sprout that its edits are ephemeral.
 
 ### B. On-Demand Remote Clones
 *   If a named substrate declares a `url` but no local `path` exists:

@@ -10,7 +10,7 @@ import (
 // The passthrough/run capability family. passthrough.run is the minimal
 // delegable operation-class from the delegated-execution Design RFC: it runs
 // ONE bounded command (an argv vector, never a shell string) inside the same
-// network-sealed Terrarium every Sprout gets, so an external agent can hand
+// network-sealed Terrarium every Sprout gets, so an external Pollinator can hand
 // the Stem the commands it would otherwise execute on the host — formatters,
 // linters, test runs, codegen — without holding host access itself. The
 // Terrarium orchestration lives outside the Core in the conductor (which the

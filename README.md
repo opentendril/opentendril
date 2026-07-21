@@ -16,7 +16,7 @@ To understand OpenTendril, you must understand its anatomy:
 *   **The Stem**: The lean, deterministic Go orchestrator. It handles routing and lifecycle management without any business logic or LLM "smarts".
 *   **The Branches**: Capability groups or security zones initialized by the Stem at boot time to organize integrations and limit access scope.
 *   **The Symbiotic Nodules**: Lean microservices (ideally written in Go) that form symbioses on Branches. They act as simple MCP gateways to remote functions and external enterprise systems (e.g. GCP, Datadog). *(Formerly called "Tendrils" — see [SYNTHETIC-TAXONOMY.md](SYNTHETIC-TAXONOMY.md); "Tendril" is now the concept/brand, not a component.)*
-*   **The Sprouts**: Ephemeral, strictly isolated worker containers that dynamically sprout on a Branch to perform code execution, and are then destroyed.
+*   **The Sprouts**: Ephemeral, strictly isolated Sprouts that dynamically emerge on a Branch to perform code execution, and are then destroyed.
 *   **The Greenhouse (UI)**: The external observer dashboard. It sits completely outside the biological entity to observe telemetry.
 *   **(Prompt Elements)**: We use **Genotypes** (personas), **Plasmids** (modular context blocks), and **Transcripts** (user tasks) to dynamically assemble instructions for the LLM.
 

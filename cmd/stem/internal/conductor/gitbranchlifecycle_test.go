@@ -343,11 +343,11 @@ func TestBranchListFindsClosedPullRequestTheCommitLookupMisses(t *testing.T) {
 	repo := newBranchRepo(t, "trunk", "trunk")
 	forge := &fakeForge{byCommit: map[string][]map[string]any{}, byHead: map[string][]map[string]any{}}
 
-	sha := branchAt(t, repo, "agent/rejected-work", "work that was turned down")
+	sha := branchAt(t, repo, "Pollinator/rejected-work", "work that was turned down")
 	// The commit lookup knows the commit but reports no pull request…
 	forge.byCommit[sha] = []map[string]any{}
 	// …while the head query reveals it was closed without merging.
-	forge.byHead["agent/rejected-work"] = []map[string]any{{"number": 333, "state": "closed", "merged_at": nil}}
+	forge.byHead["Pollinator/rejected-work"] = []map[string]any{{"number": 333, "state": "closed", "merged_at": nil}}
 
 	if _, err := runGitCommand(context.Background(), repo, "checkout", "trunk"); err != nil {
 		t.Fatalf("checkout trunk: %v", err)
@@ -360,7 +360,7 @@ func TestBranchListFindsClosedPullRequestTheCommitLookupMisses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branch list: %v", err)
 	}
-	branch := classificationOf(result, "agent/rejected-work")
+	branch := classificationOf(result, "Pollinator/rejected-work")
 	if branch.Classification != BranchPullRequestClosed {
 		t.Fatalf("classified as %q, want %q — a closed-unmerged pull request must not look like no pull request at all", branch.Classification, BranchPullRequestClosed)
 	}

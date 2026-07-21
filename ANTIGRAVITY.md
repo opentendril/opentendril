@@ -2,7 +2,7 @@
 
 > **Note:** Antigravity is an ephemeral, external pair-programming assistant used to bootstrap OpenTendril. It is **not** the parent, nor is it the "Architect." OpenTendril is being built to become a fully autonomous, native agentic platform that will eventually supersede Antigravity entirely.
 
-This document sets strict operational boundaries for Antigravity (or any similar external agent) interacting with this repository.
+This document sets strict operational boundaries for Antigravity (or any similar Pollinator) interacting with this repository.
 
 ## 1. Subordination to OpenTendril
 * OpenTendril's native taxonomy (e.g., *Stem, Terrarium, Thinker, Worker, Rhizome*) is canonical. Antigravity must adopt this terminology and never attempt to insert its own external architecture or naming conventions into the codebase.

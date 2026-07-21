@@ -1,6 +1,6 @@
 # Contributing to OpenTendril Core
 
-Thank you for your interest in contributing to OpenTendril! We are building a secure, zero-friction, terrariumed execution kernel for AI coding agents, and we welcome contributions from human developers.
+Thank you for your interest in contributing to OpenTendril! We are building a secure, zero-friction, terrariumed execution kernel for Pollinators, and we welcome contributions from human developers.
 
 ---
 
@@ -74,7 +74,7 @@ To prevent visual noise and scanning friction, we enforce strict language casing
 
 ## 🔀 Workflow & Pull Requests
 
-OpenTendril is an **AI-SDLC** workspace, meaning you will see issues and draft PRs generated automatically by AI agents (like Antigravity). 
+OpenTendril is an **AI-SDLC** workspace, meaning you will see issues and draft Pull Requests generated automatically by Pollinators (like Antigravity). 
 
 As a human contributor, your workflow is simple and respects the same quality gates:
 1. **Create a Branch:** Create a branch from `main` prefixed with `feat/` or `fix/` (e.g., `feat/add-github-provider`).

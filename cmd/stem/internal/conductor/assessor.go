@@ -47,7 +47,7 @@ func AssessTaskComplexity(ctx context.Context, transcript string) (llm.ModelTier
 	return tier, nil
 }
 
-// RouteTask selects the best provider/model pair for a task using the dynamic router agent.
+// RouteTask selects the best provider/model pair for a task using the dynamic router.
 func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, registry []llm.ModelDefinition) (llm.RouteSelection, error) {
 	if llm.ShouldBypassInternalRouter() {
 		return llm.DefaultRouteSelection(), nil

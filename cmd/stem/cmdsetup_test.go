@@ -7,7 +7,7 @@ import (
 
 func TestFormatAgentSubstratesYAML(t *testing.T) {
 	t.Run("pat uses compact scalar form", func(t *testing.T) {
-		out := formatAgentSubstratesYAML(agentSubstrateChoices{
+		out := formatSubstratesYAML(substrateChoices{
 			remoteURL: "https://github.com/o/r.git", authMethod: "pat", authEnv: "GITHUB_TOKEN",
 		})
 		if !strings.Contains(out, `auth: "GITHUB_TOKEN"`) {
@@ -19,7 +19,7 @@ func TestFormatAgentSubstratesYAML(t *testing.T) {
 	})
 
 	t.Run("ssh + managed + signing", func(t *testing.T) {
-		out := formatAgentSubstratesYAML(agentSubstrateChoices{
+		out := formatSubstratesYAML(substrateChoices{
 			remoteURL: "git@github.com:o/r.git", authMethod: "ssh", authKey: "~/.ssh/id_ot",
 			checkoutMode: "managed", signMethod: "ssh", signKey: "~/.ssh/id_ot",
 		})
@@ -31,14 +31,14 @@ func TestFormatAgentSubstratesYAML(t *testing.T) {
 	})
 
 	t.Run("none auth", func(t *testing.T) {
-		out := formatAgentSubstratesYAML(agentSubstrateChoices{remoteURL: "https://x/r.git", authMethod: "none"})
+		out := formatSubstratesYAML(substrateChoices{remoteURL: "https://x/r.git", authMethod: "none"})
 		if !strings.Contains(out, "method: none") {
 			t.Fatalf("expected method: none, got:\n%s", out)
 		}
 	})
 
 	t.Run("github app", func(t *testing.T) {
-		out := formatAgentSubstratesYAML(agentSubstrateChoices{
+		out := formatSubstratesYAML(substrateChoices{
 			remoteURL: "https://github.com/o/r.git", authMethod: "app",
 			appID: "4276558", appKeyPath: "~/.tendril/app.pem",
 		})

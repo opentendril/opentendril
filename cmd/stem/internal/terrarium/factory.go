@@ -56,7 +56,7 @@ func newBaseProvider(ctx context.Context, name string) (TerrariumProvider, error
 }
 
 // checkHostExecutionAllowed enforces the default-deny policy for the host
-// terrarium provider. The host provider bypasses all sandbox isolation and runs
+// terrarium provider. The host provider bypasses all Terrarium isolation and runs
 // with full host-user permissions, so it must be explicitly opted into by
 // setting TENDRIL_ALLOW_HOST_EXECUTION=true in the environment.
 func checkHostExecutionAllowed() error {

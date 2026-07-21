@@ -391,7 +391,7 @@ const maxToolObservationEventBytes = 2000
 // publishToolInvoked emits one tool-invoked event per action the Sprout takes,
 // so a run's actual actions are observable live and in history rather than
 // leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
-// no bus is wired (the workspace/test agents), matching the other publishers.
+// no bus is wired (workspace and test callers), matching the other publishers.
 func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
 	if a.eventBus == nil {
 		return
@@ -420,7 +420,7 @@ func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observ
 // publishTranscript emits the Sprout's assembled conversation once when a run
 // ends, correlated to the run's session so the per-session "explain a run"
 // query can return one readable record. It is a no-op without a bus (the
-// workspace/test agents) or an empty transcript.
+// workspace and test callers) or an empty transcript.
 func (a *Sprout) publishTranscript() {
 	if a.eventBus == nil {
 		return
@@ -430,7 +430,7 @@ func (a *Sprout) publishTranscript() {
 		return
 	}
 	a.eventBus.Publish(eventbus.Event{
-		Type:      eventbus.EventAgentTranscript,
+		Type:      eventbus.EventSproutTranscript,
 		Source:    a.stepID,
 		SessionID: a.sessionID,
 		Data: map[string]interface{}{

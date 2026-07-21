@@ -219,7 +219,7 @@ func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
 }
 
 // ResolveAgentTierProviderSpec resolves the tier default for an autonomous
-// agent run. It behaves like ResolveTierProviderSpec but, when selection falls
+// Sprout run. It behaves like ResolveTierProviderSpec but, when selection falls
 // through to the registry's best model, requires a tool-capable one — so a
 // no-session sprout never silently lands on a model that cannot drive tools
 // (e.g. a 3B local llama that returns an empty completion). Explicit env/config

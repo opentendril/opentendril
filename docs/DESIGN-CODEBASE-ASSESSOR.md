@@ -8,7 +8,7 @@ This plan details the implementation of the **Codebase Assessor**, which parses 
 
 In botany, **Thigmotropism** is a plant's sense of touch, allowing tendrils to feel the shape of physical structures (like a trellis) before wrapping around them.
 
-The **Codebase Assessor** provides this tactile sense. Before a Sprout executes code changes on a large repository, it is injected with a **Repo Map Plasmid** (`repomap.md`), allowing the agent to "feel" the architecture of the codebase and locate functions without reading entire files upfront.
+The **Codebase Assessor** provides this tactile sense. Before a Sprout executes code changes on a large repository, it is injected with a **Repo Map Plasmid** (`repomap.md`), allowing the Sprout to "feel" the architecture of the codebase and locate functions without reading entire files upfront.
 
 ---
 
@@ -47,7 +47,7 @@ The generated map is formatted as a compact hierarchical list:
     *   Go Stem runs the AST parser over the resolved workspace (`mountPath`), ignoring `.git`, `node_modules`, `vendor`, and `.venv` directories.
     *   Generates the compressed `repomap.md` text.
 2.  Go Stem writes `repomap.md` to `mountPath/.tendril/genome/repomap.md`.
-3.  Since it is staged under `.tendril/genome/`, when the Sprout boots, the host agent automatically reads it as part of the active genome prompts.
+3.  Since it is staged under `.tendril/genome/`, when the Sprout boots, the Stem automatically reads it as part of the active genome prompts.
 4.  Once the Sprout finishes execution, the terrarium worktree is cleaned up, safely discarding the temporary repo map from disk.
 
 ---

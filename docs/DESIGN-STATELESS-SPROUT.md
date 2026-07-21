@@ -58,9 +58,9 @@ All Sprout executors will adhere to a strict universal interface using **camelCa
 
 ## 2. Go Stem Host-Side ReAct Loop
 
-We will move the LLM agent loop from `tendrilloop.py` onto the host Go Stem orchestrator:
+We will move the LLM Sprout loop from `tendrilloop.py` onto the host Go Stem orchestrator:
 1.  **Shared LLM Client:** Extract the `callLLM` HTTP client logic from `chronicler.go` into a reusable internal package `github.com/opentendril/opentendril/roots/llm`.
-2.  **Agent Loop:** Implement a Go-native agent loop in `internal/orchestrator/agent.go`. The loop binds tools (like `readFile`, `writeFile`, `gitCommit`, `execCommand`), formats tool definitions for the LLM, and processes LLM responses.
+2.  **Sprout Loop:** Implement a Go-native Sprout loop in `internal/orchestrator/sprout.go`. The loop binds tools (like `readFile`, `writeFile`, `gitCommit`, `execCommand`), formats tool definitions for the LLM, and processes LLM responses.
 3.  **Interactive Session Containers:** Instead of sprouting a Docker container for every single tool call (which adds cold start latency), the Go Stem will sprout **one container per task session** using interactive pipes (`docker run -i --rm`). It will keep the container alive, sending JSON lines on `stdin` and reading JSON lines from `stdout` sequentially until the task is done.
 4.  **Dynamic Tool Discovery:** At startup, the Go Stem will write a `listAvailableTools` command to the Sprout container. The container will return a list of JSON-defined tool schemas it supports. This allows the host to dynamically bind custom tools depending on the language/framework of the Sprout container.
 
@@ -82,7 +82,7 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 #### [NEW] [llm/client.go](../roots/llm/client.go)
 *   Extract the provider resolution, specification parsing, and HTTP POST chat completions calling code from `chronicler.go`.
 
-#### [NEW] [orchestrator/agent.go](../cmd/stem/internal/orchestrator/agent.go)
+#### [NEW] [orchestrator/sprout.go](../cmd/stem/internal/orchestrator/sprout.go)
 *   Implement the Go-native ReAct loop.
 *   Binds tool definitions to the LLM.
 *   Pipes tool arguments to the active Sprout container's stdin.
@@ -127,7 +127,7 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 ## 5. Verification Plan
 
 ### Automated Tests
-*   **Go Orchestration Tests:** Run `go test ./...` in the Go stem directory to verify agent loop parsing and HTTP LLM mocking.
+*   **Go Orchestration Tests:** Run `go test ./...` in the Go stem directory to verify Sprout loop parsing and HTTP LLM mocking.
 *   **Docker Integration Tests:** Run integration scripts to sprout `opentendril-go` and `opentendril-typescript` containers, feed mock JSON tool calls to stdin, and assert correct stdout JSON responses.
 
 ### Manual Verification

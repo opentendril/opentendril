@@ -14,7 +14,7 @@ When you want OpenTendril to perform a repeated, structured task, there are two 
 | **1. The instructions** | **Genotype** | *Who* the Tendril is and *how it should think* | `~/.opentendril/genotypes/` (System) or `.tendril/genotypes/` (Workspace) |
 | **2. The workflow** | **Sequence** | *What steps* to run, in what order, with what Genotype | `~/.opentendril/sequences/` (System) or `.tendril/sequences/` (Workspace) |
 
-A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. This separation is fundamental to security: a Genotype operating inside a Terrarium Sandbox cannot trigger new Sequences or elevate its own scope — only the Stem can initiate Sequences, and only a human (or a trusted host-level trigger) can call `stem sequence grow`.
+A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. This separation is fundamental to security: a Genotype operating inside a Terrarium cannot trigger new Sequences or elevate its own scope — only the Stem can initiate Sequences, and only a human (or a trusted host-level trigger) can call `stem sequence grow`.
 
 ---
 
@@ -22,7 +22,7 @@ A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. Thi
 
 Just as System Genotypes ship with OpenTendril as immutable, pre-built AI personas, **System Sequences** are pre-built workflow definitions that ship in `~/.opentendril/sequences/` and cover the standard SDLC lifecycle. They are:
 
-- **Immutable from within Terrariums** — agents cannot modify them
+- **Immutable from within Terrariums** — Sprouts cannot modify them
 - **Parameterised** — accept user-supplied inputs (branch name, PR number, etc.)
 - **Composable** — each step delegates to a specific System Genotype with a constrained Plasmid set
 

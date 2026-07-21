@@ -39,7 +39,7 @@ check() {
 #                                                      python  go
 check "Go kernel change runs the Go job"                false  true   cmd/stem/internal/conductor/docker.go
 check "nested Go path is covered by cmd/*"              false  true   cmd/stem/internal/terrarium/firecracker.go
-check "guest agent runs the Go job"                     false  true   cmd/stoma/main.go
+check "Stoma runs the Go job"                         false  true   cmd/stoma/main.go
 check "roots change runs the Go job"                    false  true   roots/example/root.go
 check "go.mod runs the Go job"                          false  true   go.mod
 check "Python sprout source runs the audit"             true   false  sprouts/python/src/main.py

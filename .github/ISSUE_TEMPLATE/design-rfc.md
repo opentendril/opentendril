@@ -1,6 +1,6 @@
 ---
 name: Design RFC (Gate A)
-about: Utopian target model for medium/high-risk work. Defines what, not how. Output from Architect Agent. Does NOT contain implementation steps.
+about: Utopian target model for medium/high-risk work. Defines what, not how. Output from the Architect. Does NOT contain implementation steps.
 title: '[DESIGN RFC] '
 labels: control-plane, needs-human-review
 assignees: ''
@@ -8,7 +8,7 @@ assignees: ''
 
 <!--
   Gate A artifact. Governing standard: docs/development-process/control-plane-decision-standard-v1.md
-  ARCHITECT AGENT: Fill all sections. Do NOT include implementation steps or slice breakdown.
+  ARCHITECT: Fill all sections. Do NOT include implementation steps or slice breakdown.
   HUMAN: Review design intent. If approved, comment exactly: approved
   That comment triggers Gate B — Architect will generate the Implementation Plan.
   Lanes: L1=CLI & Gateway  L2=Orchestration & Tools  L3=Terrarium  L4=Storage & Config
@@ -53,7 +53,7 @@ Human Control Plane
 
 ## Lane impact
 - [ ] L1 — CLI & Gateway (Go / MCP)
-- [ ] L2 — Agent Orchestration & Tools (Python)
+- [ ] L2 — Sprout Orchestration & Tools (Python)
 - [ ] L3 — Terrarium & Execution (Docker / gVisor / Firecracker)
 - [ ] L4 — System Storage & Config (SQLite / Memory / env)
 - [ ] Cross-lane (requires Control Plane approval before build starts)

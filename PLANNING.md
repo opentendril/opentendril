@@ -12,26 +12,26 @@ The active workflow profile is set in the kernel configuration (e.g., `TENDRIL_S
 * **Best for:** Prototyping, hobby projects, solo developers, and low-risk bug fixes or documentation updates.
 * **Friction Level:** Zero-friction.
 * **Process:**
-  1. **Direct Edit:** The agent analyzes requirements and edits the files directly in the workspace without drafting plans.
-  2. **Verification:** The agent compiles files and runs local tests (`make check-all`).
-  3. **Auto-Commit:** The agent commits the changes directly to the current active branch and pushes to the remote repository.
+  1. **Direct Edit:** The Pollinator analyzes requirements and edits the files directly in the workspace without drafting plans.
+  2. **Verification:** The Pollinator compiles files and runs local tests (`make check-all`).
+  3. **Auto-Commit:** The Pollinator commits the changes directly to the current active branch and pushes to the remote repository.
 
 ### 2. Collaborative Mode (`collaborative` / Standard OS)
 * **Best for:** Open-source contributions, shared repositories, and standard feature development.
 * **Friction Level:** Balanced (staged reviews).
 * **Process:**
-  1. **Implementation Plan:** The agent drafts a lightweight implementation plan and waits for a single user approval.
-  2. **Branch Isolation:** The agent checks out a `staging/ai-*` branch to do the work.
-  3. **Draft PR:** The agent opens a Pull Request on GitHub and waits for the human to review and merge it.
+  1. **Implementation Plan:** The Pollinator drafts a lightweight implementation plan and waits for a single user approval.
+  2. **Branch Isolation:** The Pollinator checks out a `staging/ai-*` branch to do the work.
+  3. **Draft PR:** The Pollinator opens a Pull Request on GitHub and waits for the human to review and merge it.
 
 ### 3. Enterprise Mode (`enterprise` / Compliance)
 * **Best for:** Production codebases, security-critical paths, corporate systems, and audited workflows.
 * **Friction Level:** High (strict safety first).
 * **Process:**
-  1. **Gate A (Design RFC):** The agent drafts a formal Design RFC to align on architecture and data models before any code is written.
-  2. **Gate B (Detailed Plan):** The agent drafts a comprehensive Implementation Plan citing line ranges of files to be changed. The user must approve each task slice before execution.
+  1. **Gate A (Design RFC):** The Pollinator drafts a formal Design RFC to align on architecture and data models before any code is written.
+  2. **Gate B (Detailed Plan):** The Pollinator drafts a comprehensive Implementation Plan citing line ranges of files to be changed. The user must approve each task slice before execution.
   3. **Terrariumed Staging:** Code is modified inside isolated terrariumes, running automated pre-commit hook checks and linting pipelines.
-  4. **Gate C (Drift Review & PR):** The agent generates a Draft PR and runs an automated Drift Review to classify any deviations from the plan before human merge.
+  4. **Gate C (Drift Review & PR):** The Pollinator generates a Draft PR and runs an automated Drift Review to classify any deviations from the plan before human merge.
 
 ---
 

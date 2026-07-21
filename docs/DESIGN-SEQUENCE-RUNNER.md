@@ -1,6 +1,6 @@
 # Vascular Cambium: Parallel Workflows & Failure recovery (Issue)
 
-This plan details the implementation of the **Vascular Cambium** (Sequence Runner) in the Go Stem orchestrator. This allows developers and IDE agents to write structured, parallel-capable task graphs to `.tendril/sequences/<name>.yaml` and run them concurrently using Go goroutines, with advanced failure recovery options.
+This plan details the implementation of the **Vascular Cambium** (Sequence Runner) in the Go Stem orchestrator. This allows developers and IDE Sprouts to write structured, parallel-capable task graphs to `.tendril/sequences/<name>.yaml` and run them concurrently using Go goroutines, with advanced failure recovery options.
 
 ---
 
@@ -95,7 +95,7 @@ To support long-running, overnight workloads using slow local LLMs, sequences ca
 
 ### 1. Can CodexCLI call OpenTendril?
 **Yes!** OpenTendril is built specifically as a headless backend. We can connect CodexCLI to OpenTendril in two ways:
-1.  **Via OpenAI API:** Point CodexCLI's LLM completion URL to the local OpenTendril API port (e.g., `LOCAL_INFERENCE_URL=http://localhost:8080/v1`) using the Bearer Auth we just implemented. CodexCLI's terminal agent will then use OpenTendril to solve coding subtasks.
+1.  **Via OpenAI API:** Point CodexCLI's LLM completion URL to the local OpenTendril API port (e.g., `LOCAL_INFERENCE_URL=http://localhost:8080/v1`) using the Bearer Auth we just implemented. CodexCLI's terminal Sprout will then use OpenTendril to solve coding subtasks.
 2.  **Via MCP:** Add OpenTendril's stdio or HTTP MCP server to CodexCLI's config, allowing it to call the `sproutTendril` and `viewGenome` tools natively.
 
 ### 2. Can I (Antigravity) call OpenTendril?

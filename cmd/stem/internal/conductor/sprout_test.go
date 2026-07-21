@@ -553,12 +553,12 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 
 	var transcripts []eventbus.Event
 	for _, event := range bus.History(100) {
-		if event.Type == eventbus.EventAgentTranscript {
+		if event.Type == eventbus.EventSproutTranscript {
 			transcripts = append(transcripts, event)
 		}
 	}
 	if len(transcripts) != 1 {
-		t.Fatalf("expected exactly one %s event, got %d", eventbus.EventAgentTranscript, len(transcripts))
+		t.Fatalf("expected exactly one %s event, got %d", eventbus.EventSproutTranscript, len(transcripts))
 	}
 	if transcripts[0].SessionID != "session-1" {
 		t.Errorf("transcript event sessionID = %q, want session-1", transcripts[0].SessionID)

@@ -34,7 +34,7 @@ OpenTendril segregates human development, automated AI edits, and production-sta
 ```
 
 1. **`main`:** The default branch. It must remain stable, compile successfully, and pass all tests at all times. Direct pushes to `main` are strictly disabled.
-2. **`staging/ai-[patch-description]-[timestamp]`:** Automatically created by AI builders (like Antigravity or OpenTendril's Root Agent) when performing workspace edits. Edits are tested inside the terrarium and committed here.
+2. **`staging/ai-[patch-description]-[timestamp]`:** Automatically created by AI builders (like Antigravity or this Ramet) when performing workspace edits. Edits are tested inside the terrarium and committed here.
 3. **`feat/[feature-name]` or `fix/[bug-name]`:** Used by human developers when implementing manual changes or architectural migrations.
 
 ---
@@ -99,12 +99,12 @@ All commits (human and AI-generated) must follow the [Conventional Commits](http
 
 ---
 
-## 6. AI Agent Artifact Management
+## 6. Pollinator Artifact Management
 
-OpenTendril agents (like Codex, Antigravity, Aider, Cline, or local Planners) generate transient markdown artifacts, logs, and plans to coordinate progress.
+Pollinators (like Codex, Antigravity, Aider, Cline, or local Planners) generate transient markdown artifacts, logs, and plans to coordinate progress.
 
 **CRITICAL RULE:** Transient artifacts must **NEVER** be committed to the repository. 
-* All AI tools and agents MUST create and store their workspace files inside a dedicated `.ai/`, `.scratch/`, or `.tendril/scratch/` directory.
+* All Pollinators MUST create and store their workspace files inside a dedicated `.ai/`, `.scratch/`, or `.tendril/scratch/` directory.
 * These directories and common artifact names (e.g. `task.md`, `walkthrough.md`, `.aider*`) are ignored in `.gitignore`.
-* Instead of committing these files, agents MUST extract their valuable contents and inject them directly into **GitHub Pull Request Descriptions** or **Issue Comments** using MCP GitHub tools.
+* Instead of committing these files, Pollinators MUST extract their valuable contents and inject them directly into **GitHub Pull Request Descriptions** or **Issue Comments** using MCP GitHub tools.
 * This ensures rich historical context remains on GitHub where it belongs, rather than cluttering the git tree.

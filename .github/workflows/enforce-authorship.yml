@@ -18,7 +18,7 @@ jobs:
       
       - name: Verify Commit Authors
         run: |
-          echo "Checking commit authors for unauthorized AI agents..."
+          echo "Checking commit authors for unauthorized identities..."
           
           # Check author emails
           INVALID_COMMITS=$(git log origin/${{ github.base_ref }}..HEAD --format="%h - %an <%ae>" | grep -i -E "@anthropic\.com|@jurnx\.com|claude" || true)
@@ -46,7 +46,7 @@ jobs:
           # Report-only until this repo variable is set to 'true' (Settings →
           # Secrets and variables → Actions → Variables → REQUIRE_SIGNED_COMMITS).
           # That lets the check land before commit signing is rolled out; flip it
-          # on once maintainers/agents sign, alongside branch protection's
+          # on once maintainers and Pollinators sign, alongside branch protection's
           # "Require signed commits" (which is the actual push-time gate on main).
           ENFORCE: ${{ vars.REQUIRE_SIGNED_COMMITS }}
         run: |

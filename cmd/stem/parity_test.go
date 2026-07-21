@@ -1649,11 +1649,11 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 	// translation; the deny-closed governance itself is covered in the
 	// receptors package.
 	gate := &receptors.DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
-		Pollen:           "parity-agent",
+		Pollen:           "parity-Pollinator",
 		OperationClasses: []string{core.CapSproutGrow},
 		Substrates:       []string{"/workspaces/core"},
 	}})}
-	mcp = mcp.WithDelegation(gate, "parity-agent")
+	mcp = mcp.WithDelegation(gate, "parity-Pollinator")
 
 	assertOneRunCall := func(t *testing.T, surface string, wantInput core.SproutRunInput) {
 		t.Helper()

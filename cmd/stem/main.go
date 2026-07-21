@@ -1,7 +1,7 @@
 // Package main implements the Unified Tendril CLI client.
 // Commands:
 //   tendril chat  - Start the interactive chat interface
-//   tendril setup - Bootstrap configuration for a new agent workspace
+//   tendril setup - Bootstrap configuration for a new Substrate workspace
 //   tendril mesh  - Manage mesh grafting keys and tokens
 //   tendril mcp   - Start the MCP JSON-RPC stdio server
 //   tendril init  - Run the Developer Onboarding Wizard
@@ -130,7 +130,7 @@ func printUsage() {
 	fmt.Println("\nCommands:")
 	fmt.Println("  chat    Start the interactive chat interface")
 	fmt.Println("  phytomer Manage Phytomers (create/list/get/update/delete/history); alias: session")
-	fmt.Println("  setup   Bootstrap agent workspace configuration")
+	fmt.Println("  setup   Bootstrap Substrate workspace configuration")
 	fmt.Println("  adapt   Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Println("  genome  Inspect, reduce, or evolve the active genome seeds")
 	fmt.Println("  plasmid   Sign and verify Plasmid integrity")

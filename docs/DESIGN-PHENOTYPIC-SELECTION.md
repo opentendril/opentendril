@@ -46,10 +46,10 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
         `temp := 0.1 + float64(i)*0.3` (providing a spread from `0.1` to `0.7`).
 
 ### B. Environment Fitness Test
-*   After the Sprout agent run completes, if a `fitnessTest` command (e.g. `go test ./...` or `npm run lint`) is defined:
+*   After the Sprout run completes, if a `fitnessTest` command (e.g. `go test ./...` or `npm run lint`) is defined:
     *   Go Stem executes this command inside a sterile container mounting the phenotype's terrarium directory:
         `docker run --rm -v terrarium:/app -w /app imageName sh -c "fitnessTest"`
-    *   A phenotype is declared **fit** if and only if both the agent edit loop and the fitness test command exit with code `0`.
+    *   A phenotype is declared **fit** if and only if both the Sprout edit loop and the fitness test command exit with code `0`.
 
 ### C. Selection & Merge
 *   Go Stem runs the parallel sprouts concurrently using a Go goroutine runner.

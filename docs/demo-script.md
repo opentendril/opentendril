@@ -18,7 +18,7 @@ This script is designed for a **2-minute terminal recording** (e.g., via `asciin
 4. `./cli/tendril-cli` (Launch the client).
 
 ## The Request (0:30 - 1:00)
-**Goal:** Ask for something that only a project-aware agent can do.
+**Goal:** Ask for something that only a project-aware Sprout can do.
 
 5. **Type:** `list all files in the project`
    - *Observation:* Tendril returns the `jurnx` file tree (1,300+ files), not its own source. This proves it successfully mounted and surveyed the external workspace.

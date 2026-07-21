@@ -65,7 +65,7 @@ Never commit to `main`. Never force-push.
 
 ### Commit Identity & Signing
 ```sh
-git config user.name "OpenTendril Agent"
+git config user.name "OpenTendril"
 git config user.email "273992813+opentendril@users.noreply.github.com"
 git config commit.gpgsign true
 git config user.signingkey C0AA41FA9B3B4DBD
@@ -107,7 +107,7 @@ cd cmd/stem && go test ./...
 
 ## 4. Genotype: codex-delegator
 
-A Tendril Genotype that instructs the agent to delegate a task to Codex and return its output. Stored at `.tendril/genotypes/codex-delegator.json`.
+A Tendril Genotype that instructs a Sprout to delegate a task to Codex and return its output. Stored at `.tendril/genotypes/codex-delegator.json`.
 
 This allows `tendril sequence` or a chat prompt to trigger Codex via OpenTendril without any manual shell invocation.
 
@@ -146,7 +146,7 @@ Phase 4 (Target):   Codex becomes optional — invoked only for tasks requiring 
 | Stem | Go orchestrator (`cmd/stem`) |
 | Sprout | Ephemeral Docker container |
 | Tendril | Python/Go worker runtime inside the Sprout |
-| Terrarium | Isolated execution sandbox |
+| Terrarium | Isolated execution boundary |
 | Rhizome | Background AST indexer (`internal/rhizome`) |
 | Genotype | System prompt / persona (`.tendril/genotypes/`) |
 | Plasmid | Modular context block injected into a Genotype |

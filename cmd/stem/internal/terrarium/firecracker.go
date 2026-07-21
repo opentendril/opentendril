@@ -69,7 +69,7 @@ func (p *FirecrackerProvider) Create(ctx context.Context, spec TerrariumSpec) (T
 		return nil, fmt.Errorf("create firecracker work dir: %w", err)
 	}
 
-	vsockPath := filepath.Join(workDir, "agent.vsock")
+	vsockPath := filepath.Join(workDir, "stoma.vsock")
 	configPath := filepath.Join(workDir, "config.json")
 
 	memMiB := 256
@@ -215,7 +215,7 @@ func (s *firecrackerTerrarium) CopyIn(ctx context.Context, payloads []FilePayloa
 		return fmt.Errorf("copyin: %w", err)
 	}
 	if !resp.OK {
-		return fmt.Errorf("copyin agent error: %s", resp.Error)
+		return fmt.Errorf("copyin stoma error: %s", resp.Error)
 	}
 	return nil
 }
@@ -264,7 +264,7 @@ func (s *firecrackerTerrarium) Run(ctx context.Context, spec CommandSpec) (Comma
 		return CommandResult{}, fmt.Errorf("run: %w", err)
 	}
 	if !resp.OK {
-		return CommandResult{}, fmt.Errorf("run agent error: %s", resp.Error)
+		return CommandResult{}, fmt.Errorf("run stoma error: %s", resp.Error)
 	}
 
 	completedAt := time.Now().UTC()
@@ -325,7 +325,7 @@ func (s *firecrackerTerrarium) CopyOut(ctx context.Context, paths []string) ([]A
 		return nil, fmt.Errorf("copyout: %w", err)
 	}
 	if !resp.OK {
-		return nil, fmt.Errorf("copyout agent error: %s", resp.Error)
+		return nil, fmt.Errorf("copyout stoma error: %s", resp.Error)
 	}
 
 	artifacts := make([]Artifact, len(resp.Files))
@@ -350,7 +350,7 @@ func (s *firecrackerTerrarium) Stop(ctx context.Context) error {
 			s.watchdogCancel()
 		}
 
-		// Attempt graceful shutdown via the agent; ignore errors (VM may already be down).
+		// Attempt graceful shutdown via the Stoma; ignore errors (VM may already be down).
 		shutCtx, shutCancel := context.WithTimeout(ctx, 2*time.Second)
 		var shutResp fcAgentResponse
 		_ = s.callAgent(shutCtx, fcAgentRequest{Type: "shutdown"}, &shutResp)
@@ -390,7 +390,7 @@ func (s *firecrackerTerrarium) waitForAgent(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.processDone:
-			return fmt.Errorf("firecracker process exited before agent became ready")
+			return fmt.Errorf("firecracker process exited before Stoma became ready")
 		case <-time.After(fcDialRetryDelay):
 		}
 	}
@@ -410,10 +410,10 @@ func (s *firecrackerTerrarium) callAgent(ctx context.Context, req fcAgentRequest
 	}
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return fmt.Errorf("encode agent request: %w", err)
+		return fmt.Errorf("encode Stoma request: %w", err)
 	}
 	if err := json.NewDecoder(conn).Decode(resp); err != nil {
-		return fmt.Errorf("decode agent response: %w", err)
+		return fmt.Errorf("decode Stoma response: %w", err)
 	}
 	return nil
 }
@@ -524,7 +524,7 @@ type fcVsock struct {
 	UDSPath  string `json:"uds_path"`
 }
 
-// Agent wire protocol types (mirrored in cmd/stoma/main.go).
+// Stoma wire protocol types (mirrored in cmd/stoma/main.go).
 
 type fcAgentRequest struct {
 	Type  string        `json:"type"`

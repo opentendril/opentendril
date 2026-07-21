@@ -426,7 +426,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "sproutTendril",
-				"description": "Deprecated alias of the governed sprout.grow capability. Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need an agent to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
+				"description": "Deprecated alias of the governed sprout.grow capability. Delegates a complex coding task to the autonomous OpenTendril brain. Use this tool when you need a Pollinator to run terminal commands, debug complex errors, search the web, or execute multi-step engineering tasks inside a secure terrarium.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -478,7 +478,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "viewGenome",
-				"description": "Deprecated alias of the governed genome.view capability. Returns the concatenated contents of all Markdown files in .tendril/genome/ so the agent can read active repository rules and guidelines.",
+				"description": "Deprecated alias of the governed genome.view capability. Returns the concatenated contents of all Markdown files in .tendril/genome/ so the Pollinator can read active repository rules and guidelines.",
 				"inputSchema": map[string]interface{}{
 					"type":       "object",
 					"properties": map[string]interface{}{},

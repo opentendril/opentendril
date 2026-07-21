@@ -1,6 +1,6 @@
 # OpenTendril Capabilities & Security Model (CAPABILITIES)
 
-OpenTendril is designed to be fully extensible. Developers and AI agents can extend the kernel's capabilities using Tools, Skills, Subagents, and Plugins. This document defines what these components are, why they exist, and how they are dynamically allowed, executed, and terrariumed.
+OpenTendril is designed to be fully extensible. Botanists and Pollinators can extend the kernel's capabilities using Tools, Skills, Subagents, and Plugins. This document defines what these components are, why they exist, and how they are dynamically allowed, executed, and terrariumed.
 
 ---
 
@@ -8,10 +8,10 @@ OpenTendril is designed to be fully extensible. Developers and AI agents can ext
 
 If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plugins" can sound confusing. Here is a simple analogy comparing OpenTendril to a human developer working at a desk:
 
-* **The Agent (The Programmer):** The AI brain itself (the LLM). It doesn't have a body; it can only think, plan, and draft text based on instructions.
+* **The Mycorrhizal Network (The Programmer):** The external mind itself (the LLM). It has no body; it can only think, plan, and draft text based on instructions. A **Sprout** is the body that acts on that thinking.
 * **The Desk (The Context Window):** What the programmer can see at any given moment. To work on your codebase, the programmer needs you to place relevant source files on their desk.
 * **The Tools (The Keyboard & Terminal):** The programmer cannot directly modify your host system. Instead, we give them a keyboard with a few specific buttons: `read_file`, `write_file`, and `run_command`. Every action they take must use one of these tools.
-* **The Skills (The Reference Manuals):** Prompts or markdown files (like `SKILL.md`) that teach the programmer how to work with a specific framework or tool (e.g., "How to write Firestore database rules"). When you ask the agent to work on a specialized task, the system automatically pulls the matching "Reference Manual" and puts it on their desk.
+* **The Skills (The Reference Manuals):** Prompts or markdown files (like `SKILL.md`) that teach the programmer how to work with a specific framework or tool (e.g., "How to write Firestore database rules"). When a Sprout is grown for a specialized task, the system automatically pulls the matching "Reference Manual" and puts it on their desk.
 * **The Plugins (The Toolboxes):** A pre-packaged kit containing both reference manuals (Skills) and specialized tools (like a browser inspector or database connector) that you can hand to the programmer to expand their capabilities.
 * **The SDLC Process (The Manager's Sign-off):** The governance rules (defined in `AGENTS.md`) that prevent the programmer from pushing code directly to production. They must write a design draft (Design RFC), get your signature (Gate A), show you exactly what lines of code they will modify (Implementation Plan), get your signature (Gate B), and then open a draft pull request for you to merge (Gate C).
 
@@ -41,12 +41,12 @@ If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plug
 
 ### B. Skills (Targeted Context Domains)
 * **What:** Directories containing standard instruction manuals (`SKILL.md`), structural schema definitions, and helper script workflows.
-* **Why:** Avoids polluting the agent's system prompt with domain-specific knowledge (e.g., Xcode configuration, Firebase rules). Skills are injected into the agent's context *only* when the task requires them.
+* **Why:** Avoids polluting the Genotype's system prompt with domain-specific knowledge (e.g., Xcode configuration, Firebase rules). Skills are injected into the Sprout's context *only* when the task requires them.
 * **How They are Allowed:** Located in `skills/` directories. Scanned automatically by the RAG indexer and activated conditionally based on user intent.
 
 ### C. Subagents (Concurrent Delegation)
 * **What:** Isolated LLM processes sprouted dynamically to solve specific, granular subtasks (e.g., deep research, diff reviews).
-* **Why:** Prevents prompt dilution and context pollution in the main orchestrator. Specialized agents perform better than generalists on complex, multi-step code operations.
+* **Why:** Prevents prompt dilution and context pollution in the main orchestrator. Specialized Genotypes perform better than generalists on complex, multi-step code operations.
 * **How They are Allowed:** Invoked strictly via the `invoke_subagent` tool. Subagents communicate asynchronously using JSON-RPC messaging and operate on git staging worktrees.
 
 ### D. Plugins & Extensions (Modular Integrations)
@@ -127,7 +127,7 @@ opentendril/
     │   └── firebase/           # The firebase plugin bundle
     │       ├── plugin.json     # Plugin metadata, config, and dependency specifications
     │       ├── skills/         # Prompt instructions for firebase
-    │       └── agents/         # Subagent definitions
+    │       └── genotypes/      # Genotype definitions
     └── skills/                 # Custom local user skills (not tied to a plugin)
         └── build-ios/
             └── SKILL.md        # Specialized local prompt instructions

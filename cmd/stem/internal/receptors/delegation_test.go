@@ -108,7 +108,7 @@ func TestSproutRoutesUnchangedWithNilGate(t *testing.T) {
 	}
 
 	delegated := httptest.NewRequest(http.MethodPost, "/v1/sprouts/grow", strings.NewReader(sproutRunBody))
-	delegated.Header.Set(PollenHeader, "local-agent")
+	delegated.Header.Set(PollenHeader, "local-pollinator")
 	delegatedRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(delegatedRecorder, delegated)
 	if delegatedRecorder.Code != http.StatusForbidden {
@@ -123,7 +123,7 @@ func TestDelegatedAsyncRunDeniedAndAuditedWithoutGrant(t *testing.T) {
 	mux, bus, executed := newDelegationTestHandler(t, nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/sessions/sess-1/sprout/grow", strings.NewReader(sproutRunBody))
-	request.Header.Set(PollenHeader, "local-agent")
+	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
 
@@ -141,7 +141,7 @@ func TestDelegatedAsyncRunDeniedAndAuditedWithoutGrant(t *testing.T) {
 	if event.Type != eventbus.EventDelegationDenied {
 		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationDenied)
 	}
-	if event.Data["pollen"] != "local-agent" || event.Data["operationClass"] != core.CapSproutGrow {
+	if event.Data["pollen"] != "local-pollinator" || event.Data["operationClass"] != core.CapSproutGrow {
 		t.Fatalf("audit event data = %v, want the denied request's pollen and operation-class", event.Data)
 	}
 }
@@ -152,14 +152,14 @@ func TestDelegatedAsyncRunDeniedAndAuditedWithoutGrant(t *testing.T) {
 // exercise is audited.
 func TestDelegatedAsyncRunPermittedByMatchingGrant(t *testing.T) {
 	grants := []core.DelegationGrant{{
-		Pollen:           "local-agent",
+		Pollen:           "local-pollinator",
 		OperationClasses: []string{core.CapSproutGrow},
 		Substrates:       []string{"core"},
 	}}
 	mux, bus, executed := newDelegationTestHandler(t, grants)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/sessions/sess-1/sprout/grow", strings.NewReader(sproutRunBody))
-	request.Header.Set(PollenHeader, "local-agent")
+	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
 
@@ -181,14 +181,14 @@ func TestDelegatedAsyncRunPermittedByMatchingGrant(t *testing.T) {
 // synchronous route enforces the grant's substrate scope.
 func TestDelegatedGovernedRunDeniedOnSubstrateMismatch(t *testing.T) {
 	grants := []core.DelegationGrant{{
-		Pollen:           "local-agent",
+		Pollen:           "local-pollinator",
 		OperationClasses: []string{core.CapSproutGrow},
 		Substrates:       []string{"another-substrate"},
 	}}
 	mux, _, executed := newDelegationTestHandler(t, grants)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/sprouts/grow", strings.NewReader(sproutRunBody))
-	request.Header.Set(PollenHeader, "local-agent")
+	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
 
@@ -209,7 +209,7 @@ func TestDelegationGateMiddlewareDefaultDeny(t *testing.T) {
 	bus := eventbus.New()
 	gate := &DelegationGate{
 		Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
-			Pollen:           "local-agent",
+			Pollen:           "local-pollinator",
 			OperationClasses: []string{core.CapSproutGrow},
 			Substrates:       []string{"core"},
 		}}),
@@ -227,7 +227,7 @@ func TestDelegationGateMiddlewareDefaultDeny(t *testing.T) {
 	}
 
 	delegated := httptest.NewRequest(http.MethodGet, "/v1/sessions", nil)
-	delegated.Header.Set(PollenHeader, "local-agent")
+	delegated.Header.Set(PollenHeader, "local-pollinator")
 	delegatedRecorder := httptest.NewRecorder()
 	wrapped(delegatedRecorder, delegated)
 	if nextCalled != 1 {
@@ -267,7 +267,7 @@ func TestAuthMiddlewareDeniesDelegatedRequests(t *testing.T) {
 	}
 
 	delegated := httptest.NewRequest(http.MethodGet, "/v1/config/triggers", nil)
-	delegated.Header.Set(PollenHeader, "local-agent")
+	delegated.Header.Set(PollenHeader, "local-pollinator")
 	delegatedRecorder := httptest.NewRecorder()
 	wrapped(delegatedRecorder, delegated)
 	if nextCalled != 1 {

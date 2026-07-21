@@ -38,13 +38,13 @@ func branchExists(t *testing.T, repo, branch string) bool {
 // network call.
 func TestReclaimRemovesEmptyOwnedBranch(t *testing.T) {
 	repo := newBranchRepo(t, "trunk", "trunk")
-	ownedBranch(t, repo, "tendril/agent-a/work", PurposeDelegatedWorkspace)
+	ownedBranch(t, repo, "tendril/claude/work", PurposeDelegatedWorkspace)
 
 	outcomes := ReclaimOwnedRefs(context.Background(), repo, ResolvedCredential{})
 	if len(outcomes) != 1 || !outcomes[0].Reclaimed {
 		t.Fatalf("outcomes = %+v, want the empty branch reclaimed", outcomes)
 	}
-	if branchExists(t, repo, "tendril/agent-a/work") {
+	if branchExists(t, repo, "tendril/claude/work") {
 		t.Fatal("the empty owned branch survived reclamation")
 	}
 	if refs := OwnedRefsFor(repo); len(refs) != 0 {
@@ -59,10 +59,10 @@ func TestReclaimRemovesEmptyOwnedBranch(t *testing.T) {
 func TestReclaimKeepsUnpublishedWork(t *testing.T) {
 	ctx := context.Background()
 	repo := newBranchRepo(t, "trunk", "trunk")
-	ownedBranch(t, repo, "tendril/agent-a/work", PurposeDelegatedWorkspace)
+	ownedBranch(t, repo, "tendril/claude/work", PurposeDelegatedWorkspace)
 
 	// Put a commit on the owned branch.
-	if _, err := runGitCommand(ctx, repo, "checkout", "tendril/agent-a/work"); err != nil {
+	if _, err := runGitCommand(ctx, repo, "checkout", "tendril/claude/work"); err != nil {
 		t.Fatalf("checkout: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "work.txt"), []byte("real work\n"), 0o644); err != nil {
@@ -84,18 +84,18 @@ func TestReclaimKeepsUnpublishedWork(t *testing.T) {
 	if !strings.Contains(outcomes[0].Reason, "commits") {
 		t.Fatalf("reason = %q, want it to explain that commits are present", outcomes[0].Reason)
 	}
-	if !branchExists(t, repo, "tendril/agent-a/work") {
+	if !branchExists(t, repo, "tendril/claude/work") {
 		t.Fatal("automatic reclamation destroyed unpublished work")
 	}
 }
 
 // TestReclaimKeepsCheckedOutBranches: a branch someone is standing on belongs
-// to work in progress, whether that is here or in another agent's workspace.
+// to work in progress, whether that is here or in another Pollinator's workspace.
 func TestReclaimKeepsCheckedOutBranches(t *testing.T) {
 	ctx := context.Background()
 	repo := newBranchRepo(t, "trunk", "trunk")
-	ownedBranch(t, repo, "tendril/agent-a/work", PurposeDelegatedWorkspace)
-	if _, err := runGitCommand(ctx, repo, "checkout", "tendril/agent-a/work"); err != nil {
+	ownedBranch(t, repo, "tendril/claude/work", PurposeDelegatedWorkspace)
+	if _, err := runGitCommand(ctx, repo, "checkout", "tendril/claude/work"); err != nil {
 		t.Fatalf("checkout: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestReclaimKeepsCheckedOutBranches(t *testing.T) {
 	if len(outcomes) != 1 || outcomes[0].Reclaimed {
 		t.Fatalf("outcomes = %+v, want the checked-out branch kept", outcomes)
 	}
-	if !branchExists(t, repo, "tendril/agent-a/work") {
+	if !branchExists(t, repo, "tendril/claude/work") {
 		t.Fatal("the checked-out branch was reclaimed")
 	}
 }
@@ -113,8 +113,8 @@ func TestReclaimKeepsCheckedOutBranches(t *testing.T) {
 func TestReclaimForgetsVanishedReferences(t *testing.T) {
 	ctx := context.Background()
 	repo := newBranchRepo(t, "trunk", "trunk")
-	ownedBranch(t, repo, "tendril/agent-a/work", PurposeDelegatedWorkspace)
-	if _, err := runGitCommand(ctx, repo, "branch", "-D", "tendril/agent-a/work"); err != nil {
+	ownedBranch(t, repo, "tendril/claude/work", PurposeDelegatedWorkspace)
+	if _, err := runGitCommand(ctx, repo, "branch", "-D", "tendril/claude/work"); err != nil {
 		t.Fatalf("manual delete: %v", err)
 	}
 
@@ -188,10 +188,10 @@ func TestReclaimUnusedIsolationBranchKeepsProducedWork(t *testing.T) {
 // re-registering the same reference updates rather than duplicating it.
 func TestOwnedRefRegistryRoundTrip(t *testing.T) {
 	repo := t.TempDir()
-	if err := RegisterOwnedRef(OwnedRef{Repository: repo, Branch: "a", Purpose: PurposeDelegatedWorkspace, Pollen: "agent-a"}); err != nil {
+	if err := RegisterOwnedRef(OwnedRef{Repository: repo, Branch: "a", Purpose: PurposeDelegatedWorkspace, Pollen: "claude"}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if err := RegisterOwnedRef(OwnedRef{Repository: repo, Branch: "a", Purpose: PurposeDelegatedWorkspace, Pollen: "agent-a", Base: "abc"}); err != nil {
+	if err := RegisterOwnedRef(OwnedRef{Repository: repo, Branch: "a", Purpose: PurposeDelegatedWorkspace, Pollen: "claude", Base: "abc"}); err != nil {
 		t.Fatalf("re-register: %v", err)
 	}
 	refs := OwnedRefsFor(repo)

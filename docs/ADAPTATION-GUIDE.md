@@ -1,6 +1,6 @@
 # Adaptation Guide
 
-OpenTendril’s adaptation loop is intentionally biological: the worker container is the **sprout**, the repository rules are the **genome**, and the learned, durable lessons that survive one run become **epigenetic** context for the next run.
+OpenTendril’s adaptation loop is intentionally biological: the isolated worker is the **Sprout**, the repository rules are the **genome**, and the learned, durable lessons that survive one run become **epigenetic** context for the next run.
 
 This guide explains how the Lamarckian-style loop works in practice and how to manage it from the `tendril` CLI.
 

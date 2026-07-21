@@ -2,14 +2,14 @@
 
 In botany, **Signal Transduction** is the sensory system that detects a touch and triggers a biological response. 
 
-In OpenTendril, this directory serves as your **Local Continuous Integration (CI)** pipeline. It acts as an absolute gatekeeper for any code an autonomous agent tries to commit.
+In OpenTendril, this directory serves as your **Local Continuous Integration (CI)** pipeline. It acts as an absolute gatekeeper for any code an autonomous Sprout tries to commit.
 
 ## How It Works
 
-When an agent finishes its work and attempts to execute the `git_commit` tool, the orchestrator physically pauses the execution and runs every executable script inside this directory against the Git repository.
+When a Sprout finishes its work and attempts to execute the `git_commit` tool, the orchestrator physically pauses the execution and runs every executable script inside this directory against the Git repository.
 
 - If all scripts exit with `0` (Success): The commit goes through.
-- If any script exits with `>0` (Failure): The commit is **blocked**. The agent's growth is inhibited, and the `stderr` output of the script is fed directly back into the agent's LLM context window so it can fix the code and try again.
+- If any script exits with `>0` (Failure): The commit is **blocked**. The Sprout's growth is inhibited, and the `stderr` output of the script is fed directly back into the Sprout's context window so it can fix the code and try again.
 
 ## Usage
 

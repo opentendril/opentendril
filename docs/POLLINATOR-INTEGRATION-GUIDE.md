@@ -1,28 +1,30 @@
-# Agent Integration Guide
+# Pollinator Integration Guide
 
-OpenTendril is a secure Git proxy and sandbox for coding agents. The agent does
-not receive a raw Git token. Instead, it talks to the OpenTendril MCP server,
-and the Stem resolves the repository, authenticates with the host PAT, and runs
-work inside an isolated Sprout container.
+OpenTendril is a governed git path and isolation boundary for **Pollinators** —
+external requesters, human or Mycorrhizal, that reach in and ask the organism
+for work. A Pollinator never receives a raw git token. It talks to this Ramet's
+Model Context Protocol server, and the Stem resolves the Substrate,
+authenticates with the credential it holds, and runs the work inside an isolated
+Sprout within a Terrarium.
 
 ## Architecture
 
-1. The agent connects to OpenTendril over MCP.
-2. OpenTendril loads `~/.tendril/substrates.yaml`.
-3. The substrate entry names the target repo and the environment variable that
-   contains the PAT value.
-4. OpenTendril clones, runs, and pushes on the host side while the agent stays
-   inside the sandbox boundary.
+1. The Pollinator connects to the Ramet over the Model Context Protocol.
+2. The Stem loads `~/.tendril/substrates.yaml`.
+3. The Substrate entry names the target repository and the environment variable
+   holding the Personal Access Token value.
+4. The Stem clones, runs and pushes on its own side, while the Sprout doing the
+   work stays sealed inside its Terrarium.
 
-The generated substrate is named `default-agent-workspace`. Use that substrate
-when calling `sproutTendril` or `runSequence` for code changes.
+The generated Substrate is named `default-workspace`. Use it when calling
+`sproutTendril` or `runSequence` for code changes.
 
 ## Bootstrap the config
 
 Run:
 
 ```bash
-tendril setup agent
+tendril setup substrate
 ```
 
 The command prompts for:
@@ -75,14 +77,14 @@ setup path is `~/.gemini/config/mcp_config.json`.
 
 ## Using the tools
 
-Once connected, send work to the `default-agent-workspace` substrate.
+Once connected, send work to the `default-workspace` Substrate.
 
 Example `sproutTendril` call:
 
 ```json
 {
   "transcript": "Update the parser to handle the new field.",
-  "substrate": "default-agent-workspace"
+  "substrate": "default-workspace"
 }
 ```
 
@@ -91,10 +93,10 @@ Example `runSequence` call:
 ```json
 {
   "sequence": "sequences/code-change.yaml",
-  "substrate": "default-agent-workspace"
+  "substrate": "default-workspace"
 }
 ```
 
-The substrate entry keeps auth on the host and lets OpenTendril manage the Git
-clone, execution container, and push flow without exposing the secret to the
-agent.
+The Substrate entry keeps the credential with the Stem and lets the Ramet manage
+the clone, the Terrarium and the push, without ever exposing the secret to the
+Pollinator.

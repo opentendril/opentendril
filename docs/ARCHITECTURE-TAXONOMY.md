@@ -53,7 +53,7 @@ graph TD
         HostProvider["⚠️ Host Terrarium\n(direct os/exec on host;\nrequires explicit operator opt-in)"]
     end
 
-    subgraph TerrariumSandbox ["🌱 Terrarium Sandbox  (ephemeral; destroyed after each Sprout)"]
+    subgraph TerrariumSandbox ["🌱 Terrarium  (ephemeral; destroyed after each Sprout)"]
         direction TB
         Sprout["🌱 Sprout\n(the ephemeral worker;\ngrows, touches code, then is shed)"]
 
@@ -100,7 +100,7 @@ graph TD
 
 ## 2. System Genotype Hierarchy
 
-System Genotypes ship with OpenTendril and cannot be modified by agents operating within a Terrarium Sandbox. Workspace Genotypes are user-defined and can be customised per project.
+System Genotypes ship with OpenTendril and cannot be modified by Sprouts operating within a Terrarium. Workspace Genotypes are user-defined and can be customised per project.
 
 ```mermaid
 graph LR
@@ -132,7 +132,7 @@ graph LR
 
 ## 3. Security Trust Boundaries
 
-This diagram shows what each layer can and cannot access. A Terrarium Sandbox can **never** read System Config or modify Genotype definitions — these are host-level files that are never mounted into containers.
+This diagram shows what each layer can and cannot access. A Terrarium can **never** read System Config or modify Genotype definitions — these are host-level files that are never mounted into containers.
 
 ```mermaid
 graph TB
@@ -142,7 +142,7 @@ graph TB
 
     A["🔒 System Config\n(~/.opentendril/ or /etc/opentendril/)\n\n✅ Trusted for: provider, command,\n   system genotypes, host execution\n❌ Never mounted into Terrariums"]
     B["📁 Workspace Config\n(./.tendril/ · substrates.yaml)\n\n⚠️ Untrusted for: provider, command\n   (these fields are stripped by the Stem\n   before any Terrarium launch)"]
-    C["🌱 Terrarium Sandbox\n(Docker / gVisor / Firecracker)\n\n❌ Cannot read System Config\n❌ Cannot modify Genotypes\n❌ Cannot escalate to Host provider\n✅ Can only modify its mounted workspace"]
+    C["🌱 Terrarium\n(Docker / gVisor / Firecracker)\n\n❌ Cannot read System Config\n❌ Cannot modify Genotypes\n❌ Cannot escalate to Host provider\n✅ Can only modify its mounted workspace"]
 
     A -->|"Stem reads on boot\n(not mounted into containers)"| StemCore["🌿 Stem\n(host process — the trust anchor)"]
     B -->|"Stem reads from workspace\n(privileged fields stripped at parse time)"| StemCore

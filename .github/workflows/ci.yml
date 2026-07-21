@@ -122,7 +122,7 @@ jobs:
 
       # Ask the module which directories are its own rather than naming them
       # here. The previous form scanned `cmd/stem roots` and filtered out
-      # `cmd/stem/dist`: it missed cmd/sprout-agent entirely, and the directory
+      # `cmd/stem/dist`: it missed cmd/stoma entirely, and the directory
       # it excluded no longer exists. A declared list is fail-open the moment
       # the tree moves on without it. This is the same check the local verifier
       # runs, so both tiers agree on what "formatted" means.

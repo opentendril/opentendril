@@ -6,7 +6,7 @@
 # full Go toolchain available at container *runtime* to run `go build` /
 # `go test`, so this image keeps it. It is only ever used for the Conductor's
 # deterministic command steps (SequenceStep.Command); every LLM-driven Go
-# sprout (Worker, Verifier-as-agent, Debugger) still runs the minimal
+# sprout (Worker, Verifier, Debugger) still runs the minimal
 # opentendril-go:latest image unchanged.
 #
 # No ENTRYPOINT / tool protocol here: the Conductor starts this container idle

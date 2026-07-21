@@ -1,6 +1,6 @@
 ---
 name: Implementation Plan (Gate B)
-about: Code-grounded build plan derived from an approved Design RFC. Defines how, not what. Output from Architect Agent after Gate A approval.
+about: Code-grounded build plan derived from an approved Design RFC. Defines how, not what. Output from the Architect after Gate A approval.
 title: '[IMPL PLAN] '
 labels: control-plane, needs-human-review
 assignees: ''
@@ -8,7 +8,7 @@ assignees: ''
 
 <!--
   Gate B artifact. Governing standard: docs/development-process/control-plane-decision-standard-v1.md
-  ARCHITECT AGENT: Every current-behavior claim MUST cite file:line.
+  ARCHITECT: Every current-behavior claim MUST cite file:line.
                    Do NOT reopen design questions — design is locked at Gate A.
   HUMAN: To approve a specific slice, comment exactly:
          approved, build slice 1

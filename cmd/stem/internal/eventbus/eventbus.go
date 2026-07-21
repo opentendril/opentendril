@@ -20,20 +20,23 @@ const (
 	EventSequenceComplete EventType = "sequence-complete"
 	EventStreamToken      EventType = "stream-token"
 	EventThoughtBranch    EventType = "thought-branch"
-	// EventToolInvoked reports one tool call the agent made during a run — the
+	// EventToolInvoked reports one tool call the Pollinator made during a run — the
 	// tool name, its arguments, the resulting status, and a truncated
 	// observation. Without it a run's actual actions are invisible: a
 	// successful sprout that reads, edits, and runs commands otherwise emits
 	// only the sprout-emerged/sprout-matured bookends, so an observer cannot
-	// see WHAT the agent did. This is the per-action stream every live surface
+	// see WHAT the Sprout did. This is the per-action stream every live surface
 	// (/ws, telemetry) and the history sink need to explain a run.
 	EventToolInvoked EventType = "tool-invoked"
-	// EventAgentTranscript carries the agent's full assembled conversation
+	// EventSproutTranscript carries the Sprout's full assembled conversation
 	// (system, user, assistant, and tool turns) once when a run ends. The
 	// stream-token and tool-invoked events explain a run granularly and live;
 	// this is the single readable record for "explain a run" after the fact,
 	// so a reviewer reads one transcript instead of stitching a token stream.
-	EventAgentTranscript   EventType = "agent-transcript"
+	// NOTE: renaming this value renames a PERSISTED event type. Rows written
+	// before the rename keep "Pollinator-transcript", so a reader that must span both
+	// eras should accept either.
+	EventSproutTranscript  EventType = "sprout-transcript"
 	EventSproutEmerged     EventType = "sprout-emerged"
 	EventSproutMatured     EventType = "sprout-matured"
 	EventSproutWithered    EventType = "sprout-withered"
@@ -68,7 +71,7 @@ func AllEventTypes() []EventType {
 		EventStreamToken,
 		EventThoughtBranch,
 		EventToolInvoked,
-		EventAgentTranscript,
+		EventSproutTranscript,
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,

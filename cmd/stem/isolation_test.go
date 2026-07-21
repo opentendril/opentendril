@@ -63,13 +63,13 @@ func pollenContext(pollen string) context.Context {
 func TestDelegatedPollensGetSeparateWorkspaces(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 
-	first, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
+	first, err := conductor.ResolveDelegatedWorkspace(pollenContext("claude"), name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("resolve for agent-a: %v", err)
+		t.Fatalf("resolve for claude: %v", err)
 	}
-	second, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-b"), name, path, "agent-b", conductor.ResolvedCredential{})
+	second, err := conductor.ResolveDelegatedWorkspace(pollenContext("codex"), name, path, "codex", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("resolve for agent-b: %v", err)
+		t.Fatalf("resolve for codex: %v", err)
 	}
 
 	if first.Path == second.Path {
@@ -82,14 +82,14 @@ func TestDelegatedPollensGetSeparateWorkspaces(t *testing.T) {
 		t.Fatalf("workspaces not reported as isolated: %+v %+v", first, second)
 	}
 	// Reuse is stable: the same pollen always returns to its own tree, which
-	// is what lets an agent's sequence of calls stay consistent without the
-	// agent tracking anything.
-	again, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
+	// is what lets a Pollinator's sequence of calls stay consistent without the
+	// Pollinator tracking anything.
+	again, err := conductor.ResolveDelegatedWorkspace(pollenContext("claude"), name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("re-resolve for agent-a: %v", err)
+		t.Fatalf("re-resolve for claude: %v", err)
 	}
 	if again.Path != first.Path {
-		t.Fatalf("agent-a got %s then %s — a subject's workspace must be stable", first.Path, again.Path)
+		t.Fatalf("claude got %s then %s — a subject's workspace must be stable", first.Path, again.Path)
 	}
 }
 
@@ -120,91 +120,91 @@ func TestConcurrentPollenDoNotCorruptEachOther(t *testing.T) {
 		Identity: conductor.ResolvedIdentity{Name: "Bot", Email: "bot@example.com"},
 	}
 
-	agentA, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
+	PollinatorA, err := conductor.ResolveDelegatedWorkspace(pollenContext("claude"), name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("workspace for agent-a: %v", err)
+		t.Fatalf("workspace for claude: %v", err)
 	}
-	agentB, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-b"), name, path, "agent-b", conductor.ResolvedCredential{})
+	PollinatorB, err := conductor.ResolveDelegatedWorkspace(pollenContext("codex"), name, path, "codex", conductor.ResolvedCredential{})
 	if err != nil {
-		t.Fatalf("workspace for agent-b: %v", err)
+		t.Fatalf("workspace for codex: %v", err)
 	}
 
 	// A creates its branch and starts work (uncommitted).
 	if _, err := conductor.RunGitBranch(context.Background(), conductor.GitBranchExecution{
-		Workspace: agentA.Path, Branch: "feat/agent-a", ConfiguredBranch: "trunk",
+		Workspace: PollinatorA.Path, Branch: "feat/claude", ConfiguredBranch: "trunk",
 	}); err != nil {
-		t.Fatalf("agent-a branch: %v", err)
+		t.Fatalf("claude branch: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(agentA.Path, "agent-a-work.txt"), []byte("SECRET-A\n"), 0o644); err != nil {
-		t.Fatalf("agent-a write: %v", err)
+	if err := os.WriteFile(filepath.Join(PollinatorA.Path, "claude-work.txt"), []byte("SECRET-A\n"), 0o644); err != nil {
+		t.Fatalf("claude write: %v", err)
 	}
 
 	// B creates its branch and commits its own work, concurrently.
 	if _, err := conductor.RunGitBranch(context.Background(), conductor.GitBranchExecution{
-		Workspace: agentB.Path, Branch: "feat/agent-b", ConfiguredBranch: "trunk",
+		Workspace: PollinatorB.Path, Branch: "feat/codex", ConfiguredBranch: "trunk",
 	}); err != nil {
-		t.Fatalf("agent-b branch: %v", err)
+		t.Fatalf("codex branch: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(agentB.Path, "agent-b-work.txt"), []byte("work-b\n"), 0o644); err != nil {
-		t.Fatalf("agent-b write: %v", err)
+	if err := os.WriteFile(filepath.Join(PollinatorB.Path, "codex-work.txt"), []byte("work-b\n"), 0o644); err != nil {
+		t.Fatalf("codex write: %v", err)
 	}
 	result, err := conductor.RunGitCommit(context.Background(), conductor.GitCommitExecution{
-		Workspace: agentB.Path, Message: "feat: agent B's change", Credential: credential, ConfiguredBranch: "trunk",
+		Workspace: PollinatorB.Path, Message: "feat: Pollinator B's change", Credential: credential, ConfiguredBranch: "trunk",
 	})
 	if err != nil {
-		t.Fatalf("agent-b commit: %v", err)
+		t.Fatalf("codex commit: %v", err)
 	}
 	if result.Status != "committed" {
-		t.Fatalf("agent-b commit status = %q, want committed", result.Status)
+		t.Fatalf("codex commit status = %q, want committed", result.Status)
 	}
 
 	// B's commit must contain ONLY B's file.
-	files := gitRun(t, agentB.Path, "show", "--name-only", "--pretty=format:", "HEAD")
-	if strings.Contains(files, "agent-a-work.txt") {
-		t.Fatalf("agent B's commit contains agent A's work:\n%s", files)
+	files := gitRun(t, PollinatorB.Path, "show", "--name-only", "--pretty=format:", "HEAD")
+	if strings.Contains(files, "claude-work.txt") {
+		t.Fatalf("Pollinator B's commit contains Pollinator A's work:\n%s", files)
 	}
-	if !strings.Contains(files, "agent-b-work.txt") {
-		t.Fatalf("agent B's commit is missing its own work:\n%s", files)
+	if !strings.Contains(files, "codex-work.txt") {
+		t.Fatalf("Pollinator B's commit is missing its own work:\n%s", files)
 	}
 
 	// B must have branched from the substrate's branch, not from A's branch.
-	base := gitRun(t, agentB.Path, "log", "--oneline", "trunk..HEAD")
+	base := gitRun(t, PollinatorB.Path, "log", "--oneline", "trunk..HEAD")
 	if strings.Count(base, "\n") > 0 {
-		t.Fatalf("agent B's branch carries more than its own commit:\n%s", base)
+		t.Fatalf("Pollinator B's branch carries more than its own commit:\n%s", base)
 	}
 
 	// A's uncommitted work must still be A's, and still uncommitted.
-	if _, err := os.Stat(filepath.Join(agentA.Path, "agent-a-work.txt")); err != nil {
-		t.Fatalf("agent A's work vanished from its own workspace: %v", err)
+	if _, err := os.Stat(filepath.Join(PollinatorA.Path, "claude-work.txt")); err != nil {
+		t.Fatalf("Pollinator A's work vanished from its own workspace: %v", err)
 	}
 	aStatus, err := conductor.RunGitStatus(context.Background(), conductor.GitStatusExecution{
-		Workspace: agentA.Path, ConfiguredBranch: "trunk",
+		Workspace: PollinatorA.Path, ConfiguredBranch: "trunk",
 	})
 	if err != nil {
-		t.Fatalf("agent-a status: %v", err)
+		t.Fatalf("claude status: %v", err)
 	}
 	if aStatus.Clean {
-		t.Fatal("agent A's uncommitted work was absorbed by agent B's commit")
+		t.Fatal("Pollinator A's uncommitted work was absorbed by Pollinator B's commit")
 	}
-	if aStatus.Branch != "feat/agent-a" {
-		t.Fatalf("agent A is on %q, want to still be on its own branch", aStatus.Branch)
+	if aStatus.Branch != "feat/claude" {
+		t.Fatalf("Pollinator A is on %q, want to still be on its own branch", aStatus.Branch)
 	}
 
 	// A can now commit its own work, attributably.
 	if _, err := conductor.RunGitCommit(context.Background(), conductor.GitCommitExecution{
-		Workspace: agentA.Path, Message: "feat: agent A's change", Credential: credential, ConfiguredBranch: "trunk",
+		Workspace: PollinatorA.Path, Message: "feat: Pollinator A's change", Credential: credential, ConfiguredBranch: "trunk",
 	}); err != nil {
-		t.Fatalf("agent-a commit: %v", err)
+		t.Fatalf("claude commit: %v", err)
 	}
-	aFiles := gitRun(t, agentA.Path, "show", "--name-only", "--pretty=format:", "HEAD")
-	if strings.Contains(aFiles, "agent-b-work.txt") {
-		t.Fatalf("agent A's commit contains agent B's work:\n%s", aFiles)
+	aFiles := gitRun(t, PollinatorA.Path, "show", "--name-only", "--pretty=format:", "HEAD")
+	if strings.Contains(aFiles, "codex-work.txt") {
+		t.Fatalf("Pollinator A's commit contains Pollinator B's work:\n%s", aFiles)
 	}
 
 	// Both branches are visible in the substrate: a worktree shares the object
 	// store, which is what keeps push, pull requests and human review working.
 	branches := gitRun(t, path, "branch", "--list")
-	for _, want := range []string{"feat/agent-a", "feat/agent-b"} {
+	for _, want := range []string{"feat/claude", "feat/codex"} {
 		if !strings.Contains(branches, want) {
 			t.Fatalf("substrate does not see %s:\n%s", want, branches)
 		}
@@ -212,22 +212,22 @@ func TestConcurrentPollenDoNotCorruptEachOther(t *testing.T) {
 }
 
 // TestIsolatedWorkspaceArrivesReadyToWork is the cause-removal this slice is
-// for. A delegated workspace used to arrive detached, so the agent had to
+// for. A delegated workspace used to arrive detached, so the Pollinator had to
 // choose and create a branch — a decision that existed only so that a later
 // guard could catch it being made badly.
 //
 // Now the workspace arrives ON an owned branch, cut from the resolved default
-// branch. The agent never chooses, so it cannot choose wrongly: committing
+// branch. The Pollinator never chooses, so it cannot choose wrongly: committing
 // onto the default branch is not refused here, it is unreachable, because no
 // delegated workspace is ever on it.
 func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
-	workspace, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
+	workspace, err := conductor.ResolveDelegatedWorkspace(pollenContext("claude"), name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if workspace.Branch == "" {
-		t.Fatal("workspace arrived with no branch — the agent is being asked to choose one again")
+		t.Fatal("workspace arrived with no branch — the Pollinator is being asked to choose one again")
 	}
 	if workspace.Branch == "trunk" {
 		t.Fatal("workspace arrived on the default branch, which is exactly what must be impossible")
@@ -249,7 +249,7 @@ func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 		t.Fatalf("a freshly created workspace cannot commit: %s", status.BlockedReason)
 	}
 
-	// The agent can work immediately, with no branch step of its own.
+	// The Pollinator can work immediately, with no branch step of its own.
 	if err := os.WriteFile(filepath.Join(workspace.Path, "work.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 // nobody can ever decide is finished, which is how the system came to litter.
 func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
-	workspace, err := conductor.ResolveDelegatedWorkspace(pollenContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
+	workspace, err := conductor.ResolveDelegatedWorkspace(pollenContext("claude"), name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -281,8 +281,8 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	for _, ref := range owned {
 		if ref.Branch == workspace.Branch {
 			found = true
-			if ref.Pollen != "agent-a" || ref.Purpose != conductor.PurposeDelegatedWorkspace {
-				t.Errorf("owned reference = %+v, want it attributed to agent-a's workspace", ref)
+			if ref.Pollen != "claude" || ref.Purpose != conductor.PurposeDelegatedWorkspace {
+				t.Errorf("owned reference = %+v, want it attributed to claude's workspace", ref)
 			}
 			if ref.Base == "" {
 				t.Error("owned reference has no recorded base — 'has this produced anything' becomes unanswerable")
@@ -301,9 +301,9 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 // progress, and resetting it would destroy exactly what this design protects.
 func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
-	ctx := pollenContext("agent-a")
+	ctx := pollenContext("claude")
 
-	workspace, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	workspace, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 	}
 
 	// Returning to an EMPTY workspace rotates it onto the new default state.
-	again, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	again, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("re-resolve: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
 
 	gitRun(t, path, "commit", "--allow-empty", "-m", "default moves again")
 
-	third, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	third, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "claude", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("third resolve: %v", err)
 	}

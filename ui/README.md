@@ -209,7 +209,7 @@ recovered.
 
 Each orchestration renders as one **plant**. A plant is keyed by sequence name
 (`seq:<name>`) when the event carries one, else by session (`ses:<id>`), else by
-its source step for agent-only streams (an ambient plant). Each step id is a
+its source step for Sprout-only streams (an ambient plant). Each step id is a
 **branch** off the stem; each parallel sprout is a **tendril tip** on that
 branch; a phenotypic-selection step grows a **selection arena** of competing
 pods. Payload field names below match the Go publishers exactly.

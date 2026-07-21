@@ -16,8 +16,8 @@ func runSetupCmd(args []string) {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
-	case "agent":
-		runSetupAgentCmd()
+	case "substrate":
+		runSetupSubstrateCmd()
 	case "-h", "--help", "help":
 		printSetupUsage()
 	default:
@@ -27,12 +27,12 @@ func runSetupCmd(args []string) {
 	}
 }
 
-func runSetupAgentCmd() {
+func runSetupSubstrateCmd() {
 	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Fprintln(os.Stderr, "OpenTendril agent bootstrap")
+	fmt.Fprintln(os.Stderr, "OpenTendril Substrate bootstrap")
 
-	choices := agentSubstrateChoices{}
+	choices := substrateChoices{}
 
 	var err error
 	choices.remoteURL, err = promptSetupValue(reader, "Target Git remote URL", "https://github.com/opentendril/opentendril.git")
@@ -67,7 +67,7 @@ func runSetupAgentCmd() {
 		choices.checkoutMode = "managed"
 	case "path":
 		choices.checkoutMode = "path"
-		choices.checkoutPath, _ = promptSetupValue(reader, "Checkout directory", "~/ot-workspaces/agent")
+		choices.checkoutPath, _ = promptSetupValue(reader, "Checkout directory", "~/ot-workspaces/substrate")
 	default:
 		choices.checkoutMode = "ephemeral"
 	}
@@ -95,7 +95,7 @@ func runSetupAgentCmd() {
 	}
 
 	substratesPath := filepath.Join(tendrilDir, "substrates.yaml")
-	if err := os.WriteFile(substratesPath, []byte(formatAgentSubstratesYAML(choices)), 0o644); err != nil {
+	if err := os.WriteFile(substratesPath, []byte(formatSubstratesYAML(choices)), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write %s: %v\n", substratesPath, err)
 		os.Exit(1)
 	}
@@ -103,7 +103,7 @@ func runSetupAgentCmd() {
 	fmt.Fprintf(os.Stderr, "Wrote substrate config to %s\n", substratesPath)
 	fmt.Fprintln(os.Stderr, "MCP configuration snippet:")
 
-	snippet := agentMCPConfigSnippet()
+	snippet := substrateMCPConfigSnippet()
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(snippet); err != nil {
@@ -111,7 +111,7 @@ func runSetupAgentCmd() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintln(os.Stderr, "Use the default-agent-workspace substrate when calling sproutTendril or runSequence.")
+	fmt.Fprintln(os.Stderr, "Use the default-workspace Substrate when calling sproutTendril or runSequence.")
 }
 
 func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string, error) {
@@ -128,8 +128,8 @@ func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string,
 	return value, nil
 }
 
-// agentSubstrateChoices holds the answers gathered by `tendril setup agent`.
-type agentSubstrateChoices struct {
+// substrateChoices holds the answers gathered by `tendril setup substrate`.
+type substrateChoices struct {
 	remoteURL    string
 	authMethod   string // pat | ssh | none | app
 	authEnv      string // pat
@@ -142,10 +142,10 @@ type agentSubstrateChoices struct {
 	signKey      string
 }
 
-func formatAgentSubstratesYAML(c agentSubstrateChoices) string {
+func formatSubstratesYAML(c substrateChoices) string {
 	var b strings.Builder
 	b.WriteString("substrates:\n")
-	b.WriteString("  default-agent-workspace:\n")
+	b.WriteString("  default-workspace:\n")
 	fmt.Fprintf(&b, "    url: %q\n", strings.TrimSpace(c.remoteURL))
 	b.WriteString("    branch: \"main\"\n")
 
@@ -191,7 +191,7 @@ type setupMCPServer struct {
 	Args    []string `json:"args"`
 }
 
-func agentMCPConfigSnippet() setupMCPConfigSnippet {
+func substrateMCPConfigSnippet() setupMCPConfigSnippet {
 	return setupMCPConfigSnippet{
 		MCPServers: map[string]setupMCPServer{
 			"opentendril": {
@@ -203,6 +203,6 @@ func agentMCPConfigSnippet() setupMCPConfigSnippet {
 }
 
 func printSetupUsage() {
-	fmt.Println("Usage: tendril setup agent")
-	fmt.Println("  agent  Bootstrap ~/.tendril/substrates.yaml for a sandboxed agent workspace")
+	fmt.Println("Usage: tendril setup substrate")
+	fmt.Println("  substrate  Bootstrap ~/.tendril/substrates.yaml for an isolated Substrate workspace")
 }
