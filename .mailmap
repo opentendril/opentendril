@@ -1,0 +1,32 @@
+# Canonical author identity for this Substrate.
+#
+# The repository's history carries eight spellings of one person: names that
+# drifted as different tooling committed on the Botanist's behalf (the early
+# Antigravity / Codex / Claude era), plus the original personal commit. They are
+# one identity, and this file says so for `git log`, `git shortlog` and
+# `git blame`.
+#
+# WHAT THIS FIXES AND WHAT IT DOES NOT.
+#
+# A .mailmap normalises how git DISPLAYS an author. GitHub does not read it:
+# GitHub attributes a commit by matching the author email to a verified email on
+# an account. So the 44 commits authored as opentendril@noreply.github.com or
+# bot@opentendril.com — neither of which is linked to the account — remain
+# unattributed on GitHub no matter what this file says. Only rewriting history
+# changes that, and the earliest of them is the ROOT COMMIT, so the rewrite would
+# be the whole repository.
+#
+# Attribution (which account owns a commit) is decided by the EMAIL.
+# Verification (the green badge) is decided by the SIGNING KEY. Two separate
+# mechanisms; 273992813+opentendril@users.noreply.github.com is the account's
+# GitHub noreply address, not a key.
+
+OpenTendril <273992813+opentendril@users.noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> Tendril <273992813+opentendril@users.noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> OpenTendril Agent <273992813+opentendril@users.noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> opentendril <273992813+opentendril@users.noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> dr3w <273992813+opentendril@users.noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> OpenTendril Agent <opentendril@noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> OpenTendril <opentendril@noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> opentendril <opentendril@noreply.github.com>
+OpenTendril <273992813+opentendril@users.noreply.github.com> OpenTendril <bot@opentendril.com>
