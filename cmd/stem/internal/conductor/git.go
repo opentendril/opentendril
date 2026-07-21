@@ -42,6 +42,15 @@ type GitCommitExecution struct {
 	// fully configured (deny-closed) and its Sign configuration is applied
 	// when present.
 	Credential ResolvedCredential
+	// ConfiguredBranch is the substrate's explicitly configured branch, which
+	// is the most authoritative answer to "what is the default branch here".
+	ConfiguredBranch string
+	// AllowDefaultBranchCommit opts OUT of default-branch protection for this
+	// substrate. The field is deliberately phrased as the permission rather
+	// than the protection, so the zero value is the protected state: a caller
+	// that forgets to populate it gets the safe behaviour, and loosening is
+	// always an explicit act.
+	AllowDefaultBranchCommit bool
 }
 
 // GitCommitResult reports a finished delegated commit.
@@ -94,17 +103,38 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 		return GitCommitResult{}, fmt.Errorf("git commit message is required")
 	}
 
-	if execution.Credential.CommitMode == CommitModeAPI {
-		return runAPICommit(ctx, execution)
-	}
-
 	// Deny-closed attribution: an unattributable delegated commit must never
 	// be created, so both identity fields are required before anything runs.
 	// This requirement is local-mode only: in api mode the GitHub App is the
-	// identity (GitHub sets author and committer server-side), so runAPICommit
-	// never reaches here.
-	if strings.TrimSpace(execution.Credential.Identity.Name) == "" || strings.TrimSpace(execution.Credential.Identity.Email) == "" {
-		return GitCommitResult{}, fmt.Errorf("delegated git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) — an unattributable delegated commit is never created")
+	// identity (GitHub sets author and committer server-side).
+	//
+	// It is checked first because it costs nothing — no git invocation, no
+	// network — so a refusal on these grounds still runs zero commands.
+	localMode := execution.Credential.CommitMode != CommitModeAPI
+	if localMode {
+		if strings.TrimSpace(execution.Credential.Identity.Name) == "" || strings.TrimSpace(execution.Credential.Identity.Email) == "" {
+			return GitCommitResult{}, fmt.Errorf("delegated git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) — an unattributable delegated commit is never created")
+		}
+	} else if execution.Credential.Method != CredentialApp {
+		// Api mode has no meaning against a Personal Access Token, Secure
+		// Shell key, or ambient credential — and this is a pure inspection of
+		// the credential, so it belongs in the same zero-cost phase.
+		return GitCommitResult{}, fmt.Errorf("commit mode %q requires a GitHub App connection (auth.method: app)", CommitModeAPI)
+	}
+
+	// Default-branch protection, applied before staging and before any mode
+	// routing, and therefore before anything that has to be unwound. This is
+	// the earliest point at which the expensive failure (work committed onto
+	// the default branch, then reversed off it) can be prevented, so it is
+	// where the check belongs. It covers api mode too: that mode commits
+	// straight onto the remote branch, where landing on the default branch is
+	// worse, not better.
+	if err := guardDefaultBranchCommit(ctx, execution); err != nil {
+		return GitCommitResult{}, err
+	}
+
+	if !localMode {
+		return runAPICommit(ctx, execution)
 	}
 
 	// Stage: everything when no paths are given, else exactly the given paths.
@@ -140,6 +170,37 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 	}
 
 	return GitCommitResult{Status: "committed", CommitHash: commitHash}, nil
+}
+
+// guardDefaultBranchCommit refuses a delegated commit whose target branch is
+// the repository's default branch, unless the substrate has explicitly opted
+// out. The refusal names the branch, says how Tendril determined it, and
+// points at the operation that resolves the situation — a guardrail with no
+// stated next move just pushes the caller off the governed path.
+func guardDefaultBranchCommit(ctx context.Context, execution GitCommitExecution) error {
+	if execution.AllowDefaultBranchCommit {
+		return nil
+	}
+
+	current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+	if err != nil {
+		// A workspace whose branch cannot be read (a fresh repository with no
+		// commits, or a detached HEAD) is not on the default branch by
+		// definition, and the downstream commands report their own failures
+		// more precisely than a guess here would.
+		return nil
+	}
+	branch := strings.TrimSpace(current)
+	if branch == "" {
+		return nil
+	}
+
+	resolution := ResolveDefaultBranchLocal(ctx, execution.Workspace, execution.ConfiguredBranch)
+	if !resolution.IsProtected(branch) {
+		return nil
+	}
+
+	return fmt.Errorf("delegated git commit refused: the workspace is on %q, the repository's default branch — default branch %s. Create a feature branch first (tendril git branch --substrate <name> --branch <feature-branch>), then commit; committing here is what later costs a rebase or a commit reversed off the default branch. To allow it for this repository, set protectDefaultBranch: false on the substrate", branch, resolution.Describe())
 }
 
 // API-mode delegated commit (commit: api) — the recommended default git
@@ -649,26 +710,23 @@ func RunGitPullRequest(ctx context.Context, execution GitPRExecution) (GitPRResu
 		return GitPRResult{}, err
 	}
 
-	// Base is READ from the repository when unnamed. This extra call is the
-	// deliberate price of never hard-coding "main".
+	// Base is READ, never assumed — through the shared resolver, so this path
+	// and the Sprout path agree on what the default branch is.
 	base := strings.TrimPrefix(strings.TrimSpace(execution.Base), "refs/heads/")
+	resolution := ResolveDefaultBranch(ctx, execution.Workspace, execution.Base, execution.Credential)
 	if base == "" {
-		var repository struct {
-			DefaultBranch string `json:"default_branch"`
+		if !resolution.Known() {
+			return GitPRResult{}, fmt.Errorf("pull request: could not determine the default branch for %s/%s (%s) — pass an explicit base", owner, repo, resolution.Describe())
 		}
-		if err := githubRESTRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", owner, repo), token, nil, &repository); err != nil {
-			return GitPRResult{}, fmt.Errorf("pull request: resolve the repository's default branch: %w", err)
-		}
-		base = strings.TrimSpace(repository.DefaultBranch)
-		if base == "" {
-			return GitPRResult{}, fmt.Errorf("pull request: github reported no default branch for %s/%s (pass an explicit base)", owner, repo)
-		}
+		base = resolution.Branch
 	}
 
 	// Deny-closed guard: opening a pull request FROM the default branch means
 	// the work was committed to the wrong branch. Refuse while it is still
-	// cheap to fix, instead of after a merge that must be unpicked.
-	if head == base {
+	// cheap to fix, instead of after a merge that must be unpicked. The floor
+	// applies when the default branch could not be determined, so an unknown
+	// answer hardens rather than disables the guard.
+	if head == base || resolution.IsProtected(head) {
 		return GitPRResult{}, fmt.Errorf("delegated pull request refused: the head branch %q is the repository's default branch — commit the work on a feature branch and open the pull request from that (a pull request from the default branch into itself is the shape that later costs a rebase or a reversed commit)", head)
 	}
 
@@ -716,4 +774,129 @@ func RunGitPullRequest(ctx context.Context, execution GitPRExecution) (GitPRResu
 		Head:   head,
 		Base:   base,
 	}, nil
+}
+
+// Delegated branch creation — the operation that makes default-branch
+// protection actionable. Without it, refusing a commit on the default branch
+// tells an agent what it may not do and offers nothing it may do, which sends
+// it back to running git on the host: the exact behaviour the governed path
+// exists to replace.
+//
+// It is deliberately the narrowest useful operation: create a branch from the
+// current state and switch to it. No delete, no rename, no reset, no upstream
+// tracking changes — a branch operation that can destroy work would need a far
+// stronger authorization story than "the agent asked".
+
+// GitBranchExecution is a fully resolved delegated branch request.
+type GitBranchExecution struct {
+	// Workspace is the resolved local workspace directory.
+	Workspace string
+	// Branch is the branch to create and switch to.
+	Branch string
+	// ConfiguredBranch is the substrate's explicitly configured branch, fed to
+	// the default-branch resolver.
+	ConfiguredBranch string
+	// Credential is the substrate's resolved credential, used only to let the
+	// resolver ask the interface which branch is the default.
+	Credential ResolvedCredential
+}
+
+// GitBranchResult reports a finished branch operation.
+type GitBranchResult struct {
+	// Status is "created" for a new branch, or "switched" when it already
+	// existed.
+	Status string
+	// Branch is the branch now checked out.
+	Branch string
+	// PreviousBranch is the branch the workspace was on beforehand.
+	PreviousBranch string
+}
+
+// invalidBranchNameChars are shell/ref characters refused outright, so a
+// branch name can never be a vector for argument or path injection even
+// though every git invocation here is already argument-safe.
+const invalidBranchNameChars = " \t\n\\:?*[]~^\"'`$;|&<>()"
+
+// validateBranchName refuses names git would reject, plus a conservative
+// superset that keeps a delegated caller from constructing anything exotic.
+func validateBranchName(branch string) error {
+	name := strings.TrimSpace(branch)
+	switch {
+	case name == "":
+		return fmt.Errorf("branch name is required")
+	case strings.HasPrefix(name, "-"):
+		return fmt.Errorf("branch name %q may not start with a dash (it would be read as a flag)", name)
+	case strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/"):
+		return fmt.Errorf("branch name %q may not start or end with a slash", name)
+	case strings.Contains(name, ".."):
+		return fmt.Errorf("branch name %q may not contain %q", name, "..")
+	case strings.HasSuffix(name, ".lock"):
+		return fmt.Errorf("branch name %q may not end with .lock", name)
+	case strings.ContainsAny(name, invalidBranchNameChars):
+		return fmt.Errorf("branch name %q contains a character that is not allowed", name)
+	}
+	return nil
+}
+
+// RunGitBranch creates the branch and switches to it, or switches to it when
+// it already exists. An existing branch is never reset or force-moved: the
+// look-before-acting rule that returns an existing pull request untouched
+// applies here too, and the cost of getting it wrong is higher — a force-move
+// discards commits.
+func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(execution.Workspace) == "" {
+		return GitBranchResult{}, fmt.Errorf("git branch workspace is required")
+	}
+	branch := strings.TrimPrefix(strings.TrimSpace(execution.Branch), "refs/heads/")
+	if err := validateBranchName(branch); err != nil {
+		return GitBranchResult{}, err
+	}
+
+	// Refuse to create a branch named as the repository's default branch. The
+	// same reasoning as the pull-request guard: a second branch by that name
+	// is never what the caller meant, and the confusion it creates is paid
+	// for later.
+	resolution := ResolveDefaultBranchLocal(ctx, execution.Workspace, execution.ConfiguredBranch)
+	if resolution.IsProtected(branch) {
+		return GitBranchResult{}, fmt.Errorf("delegated branch refused: %q is the repository's default branch (default branch %s) — choose a feature branch name", branch, resolution.Describe())
+	}
+
+	previous := ""
+	if current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current"); err == nil {
+		previous = strings.TrimSpace(current)
+	}
+	if previous == branch {
+		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
+	}
+
+	// Look before acting: does the branch already exist?
+	_, existsErr := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	exists := existsErr == nil
+
+	// Uncommitted work is carried onto a NEW branch (that is the normal
+	// "I started editing before branching" recovery, and it loses nothing).
+	// Switching to an EXISTING branch with a dirty workspace is refused: git
+	// would either fail on conflicting files or silently carry the changes
+	// somewhere the caller did not intend.
+	if exists {
+		status, err := runGitCommandRawOutput(ctx, execution.Workspace, "status", "--porcelain", "-uall", "-z")
+		if err != nil {
+			return GitBranchResult{}, err
+		}
+		if strings.TrimSpace(strings.ReplaceAll(status, "\x00", "")) != "" {
+			return GitBranchResult{}, fmt.Errorf("delegated branch refused: the workspace has uncommitted changes and %q already exists — commit or set those changes aside before switching, so work is never carried onto a branch you did not expect", branch)
+		}
+		if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", branch); err != nil {
+			return GitBranchResult{}, err
+		}
+		return GitBranchResult{Status: "switched", Branch: branch, PreviousBranch: previous}, nil
+	}
+
+	if _, err := runGitCommitCommandFn(ctx, execution.Workspace, "checkout", "-b", branch); err != nil {
+		return GitBranchResult{}, err
+	}
+	return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
 }

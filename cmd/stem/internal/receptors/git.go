@@ -51,6 +51,7 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
 		{"POST /v1/git/push", core.CapGitPush, h.push},
 		{"POST /v1/git/pr", core.CapGitPR, h.pullRequest},
+		{"POST /v1/git/branch", core.CapGitBranch, h.branch},
 	}
 }
 
@@ -187,6 +188,45 @@ func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.core.GitPR(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *GitHandler) branch(w http.ResponseWriter, r *http.Request) {
+	var req core.GitBranchInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Substrate) == "" || strings.TrimSpace(req.Branch) == "" {
+		http.Error(w, "substrate and branch are required", http.StatusBadRequest)
+		return
+	}
+
+	// A delegated invocation is authorized per-invocation against the active
+	// grants; git.branch is its own operation-class, so a grant covering the
+	// commit/push/pull-request loop does not confer it.
+	if subject := DelegatedSubject(r); subject != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Subject:        subject,
+			OperationClass: core.CapGitBranch,
+			Substrate:      strings.TrimSpace(req.Substrate),
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+
+	result, err := h.core.GitBranch(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return

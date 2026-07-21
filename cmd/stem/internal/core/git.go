@@ -147,6 +147,41 @@ type GitPRResult struct {
 	Base string `json:"base,omitempty"`
 }
 
+// GitBranchInput asks the Stem to create (or switch to) a feature branch in a
+// substrate's workspace. It exists so that default-branch protection has a
+// correct next move: an agent told "commit on a feature branch" must be able
+// to make one through Tendril, or the guardrail simply pushes it off the
+// governed path.
+type GitBranchInput struct {
+	// Substrate is the absolute path or named substrate key of the target
+	// workspace.
+	Substrate string `json:"substrate"`
+	// Branch is the branch to create and switch to.
+	Branch string `json:"branch"`
+	// Origin records which surface invoked the operation (cli, mcp, rest).
+	Origin string `json:"origin,omitempty"`
+}
+
+// GitBranchSpec is the fully resolved, transport-free branch request handed to
+// the GitOperations port.
+type GitBranchSpec struct {
+	Substrate string
+	Branch    string
+	Origin    string
+}
+
+// GitBranchResult is the outcome of a finished branch operation.
+type GitBranchResult struct {
+	// Status is "created" for a new branch, or "switched" when the branch
+	// already existed and the workspace moved onto it (an existing branch is
+	// never reset — that would discard work).
+	Status string `json:"status"`
+	// Branch is the branch now checked out.
+	Branch string `json:"branch"`
+	// PreviousBranch is the branch the workspace was on beforehand.
+	PreviousBranch string `json:"previousBranch,omitempty"`
+}
+
 // GitOperations is the injection port for delegated git execution. Each member
 // may be nil, in which case the corresponding capability reports that it is not
 // wired rather than acting.
@@ -165,6 +200,10 @@ type GitOperations struct {
 	// own substrate resolution, credential resolution, base-branch resolution,
 	// and the duplicate/default-branch guards.
 	PullRequest func(ctx context.Context, spec GitPRSpec) (GitPRResult, error)
+	// Branch creates or switches to a branch in the resolved workspace.
+	// Implementations own substrate resolution and the protected-name and
+	// dirty-workspace guards.
+	Branch func(ctx context.Context, spec GitBranchSpec) (GitBranchResult, error)
 }
 
 // WithGit wires the delegated git execution port onto the Service and returns
@@ -248,6 +287,26 @@ func (s *Service) GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error)
 	return s.git.PullRequest(ctx, spec)
 }
 
+// GitBranch validates the request and runs the branch operation to completion
+// via the injected execution port.
+func (s *Service) GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error) {
+	if s.git.Branch == nil {
+		return GitBranchResult{}, fmt.Errorf("git.branch is not wired: construct the Core with WithGit(GitOperations{Branch: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitBranchResult{}, fmt.Errorf("substrate is required")
+	}
+	if strings.TrimSpace(in.Branch) == "" {
+		return GitBranchResult{}, fmt.Errorf("branch is required")
+	}
+	spec := GitBranchSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Branch:    strings.TrimSpace(in.Branch),
+		Origin:    in.Origin,
+	}
+	return s.git.Branch(ctx, spec)
+}
+
 // gitCapabilities declares the git family's registry entry, bound to this
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
@@ -307,6 +366,22 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitPR(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitBranch,
+			Description: "Create (or switch to) a feature branch in a substrate's workspace — the governed way to get off the default branch before committing. An existing branch is switched to, never reset; a branch named as the repository's default branch is refused.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"branch":    stringProp("The feature branch to create and switch to."),
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate", "branch"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitBranchInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitBranch(ctx, in)
 			},
 		},
 	}

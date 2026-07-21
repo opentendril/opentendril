@@ -15,10 +15,11 @@ import (
 
 // runGitCmd is the CLI adapter for the governed git capability family: a thin
 // projection of the same transport-free core.Core the REST and MCP surfaces
-// use. `tendril git commit` commits a substrate's workspace under its
-// configured commit identity, `tendril git push` publishes the branch from the
-// Stem, and `tendril git pr` opens the pull request — the full delegated
-// ladder, deliberately narrow beyond it (no branch, no checkout, no merge).
+// use. `tendril git branch` gets the workspace onto a feature branch,
+// `tendril git commit` commits under the substrate's configured identity,
+// `tendril git push` publishes from the Stem, and `tendril git pr` opens the
+// pull request — the full delegated ladder, deliberately narrow beyond it (no
+// delete, no rename, no merge, no arbitrary checkout).
 //
 // A CLI invocation is never delegated (there is no delegation subject); the
 // deny-closed attribution rule applies either way — a substrate without a
@@ -76,6 +77,12 @@ func runGitCmd(ctx context.Context, args []string) {
 		}
 	case core.GitPushResult:
 		fmt.Fprintf(os.Stderr, "🌱 Pushed %s\n", typed.Branch)
+	case core.GitBranchResult:
+		if typed.Status == "created" {
+			fmt.Fprintf(os.Stderr, "🌱 Created branch %s (from %s)\n", typed.Branch, typed.PreviousBranch)
+		} else {
+			fmt.Fprintf(os.Stderr, "🌱 Switched to branch %s\n", typed.Branch)
+		}
 	case core.GitPRResult:
 		verb := "Opened"
 		if typed.Status == "exists" {
@@ -134,11 +141,24 @@ func gitOperations() core.GitOperations {
 				credential = resolved
 			}
 
+			// Default-branch protection is on unless the substrate explicitly
+			// opts out; an unconfigured or bare-path substrate is protected.
+			allowDefaultBranchCommit := false
+			configuredBranch := ""
+			if substrateSpec != nil {
+				configuredBranch = substrateSpec.Branch
+				if substrateSpec.ProtectDefaultBranch != nil && !*substrateSpec.ProtectDefaultBranch {
+					allowDefaultBranchCommit = true
+				}
+			}
+
 			result, err := conductor.RunGitCommit(ctx, conductor.GitCommitExecution{
-				Workspace:  workspace,
-				Message:    spec.Message,
-				Paths:      spec.Paths,
-				Credential: credential,
+				Workspace:                workspace,
+				Message:                  spec.Message,
+				Paths:                    spec.Paths,
+				Credential:               credential,
+				ConfiguredBranch:         configuredBranch,
+				AllowDefaultBranchCommit: allowDefaultBranchCommit,
 			})
 			if err != nil {
 				return core.GitCommitResult{}, err
@@ -234,6 +254,46 @@ func gitOperations() core.GitOperations {
 				Base:   result.Base,
 			}, nil
 		},
+		Branch: func(ctx context.Context, spec core.GitBranchSpec) (core.GitBranchResult, error) {
+			workspace := spec.Substrate
+			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			if isName && substrateSpec != nil {
+				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+					workspace = trimmedPath
+				}
+			}
+			info, statErr := os.Stat(workspace)
+			if statErr != nil || !info.IsDir() {
+				return core.GitBranchResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated branch runs against a local checkout)", spec.Substrate)
+			}
+
+			credential := conductor.ResolvedCredential{}
+			configuredBranch := ""
+			if substrateSpec != nil {
+				configuredBranch = substrateSpec.Branch
+				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
+				if credentialErr != nil {
+					return core.GitBranchResult{}, credentialErr
+				}
+				credential = resolved
+			}
+
+			result, err := conductor.RunGitBranch(ctx, conductor.GitBranchExecution{
+				Workspace:        workspace,
+				Branch:           spec.Branch,
+				ConfiguredBranch: configuredBranch,
+				Credential:       credential,
+			})
+			if err != nil {
+				return core.GitBranchResult{}, err
+			}
+
+			return core.GitBranchResult{
+				Status:         result.Status,
+				Branch:         result.Branch,
+				PreviousBranch: result.PreviousBranch,
+			}, nil
+		},
 	}
 }
 
@@ -251,6 +311,7 @@ var gitCommands = []gitCommand{
 	{"commit", core.CapGitCommit},
 	{"push", core.CapGitPush},
 	{"pr", core.CapGitPR},
+	{"branch", core.CapGitBranch},
 }
 
 // lookupGitCommand resolves a CLI subcommand token to its registered entry.
@@ -345,6 +406,11 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 	}
 	// A pull request needs a title; head and base are resolved (never assumed)
 	// when omitted.
+	if capName == core.CapGitBranch {
+		if branch, _ := input["branch"].(string); strings.TrimSpace(branch) == "" {
+			return nil, fmt.Errorf("missing branch. Usage: tendril git branch --substrate <path|name> --branch <feature-branch>")
+		}
+	}
 	if capName == core.CapGitPR {
 		if title, _ := input["title"].(string); strings.TrimSpace(title) == "" {
 			return nil, fmt.Errorf("missing title. Usage: tendril git pr --substrate <path|name> --title <title> [--body B] [--head H] [--base B] [--draft]")
@@ -361,16 +427,23 @@ func gitUsageSuffix(capName string) string {
 		return " --message <message>"
 	case core.CapGitPR:
 		return " --title <title>"
+	case core.CapGitBranch:
+		return " --branch <feature-branch>"
 	}
 	return ""
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|commit|push|pr> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|branch|commit|push|pr> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
 	fmt.Println("  agent MCP config. Run `tendril git setup --help` for the full flag list.")
+	fmt.Println()
+	fmt.Println("branch --substrate <path|name> --branch <feature-branch>")
+	fmt.Println("  Creates the branch and switches to it — the governed way off the default")
+	fmt.Println("  branch before committing. An existing branch is switched to, never reset;")
+	fmt.Println("  a branch named as the repository's default branch is refused.")
 	fmt.Println()
 	fmt.Println("commit --substrate <path|name> --message <message> [--path P ...]")
 	fmt.Println("  Commits the current state of a substrate's workspace under the substrate's")
@@ -391,5 +464,5 @@ func printGitUsage() {
 	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("commit, push and pr are projections of the shared Core capability registry.")
+	fmt.Println("branch, commit, push and pr are projections of the shared Core capability registry.")
 }

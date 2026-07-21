@@ -245,7 +245,15 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			branchOutput, err := runGitCommand(ctx, sourcePath, "rev-parse", "--abbrev-ref", "HEAD")
 			if err == nil {
 				currentBranch := strings.TrimSpace(branchOutput)
-				if currentBranch == "main" || currentBranch == "master" {
+				// The protected branch is RESOLVED, never assumed. This check
+				// previously compared against two hard-coded names, so a
+				// repository whose default branch was anything else silently
+				// received no protection at all. No credential is required:
+				// the resolver falls back to the local record of the remote's
+				// head, and to the protected-name floor if even that is
+				// missing — so protection can widen here, never narrow.
+				defaultBranch := ResolveDefaultBranchLocal(ctx, sourcePath, "")
+				if defaultBranch.IsProtected(currentBranch) {
 					newBranch := fmt.Sprintf("sprout/task-%s", stepID)
 					fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching from %s to %s\n", currentBranch, newBranch)
 					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {

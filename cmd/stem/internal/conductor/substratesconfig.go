@@ -40,6 +40,13 @@ type SubstrateSpec struct {
 	// commit remotely via the GitHub GraphQL createCommitOnBranch mutation,
 	// signed server-side by GitHub (requires auth method "app"). Design RFC.
 	Commit string `yaml:"commit,omitempty"`
+	// ProtectDefaultBranch refuses a delegated commit whose target branch is
+	// this repository's default branch. It defaults to TRUE when unset (hence
+	// the pointer: an absent value must mean protected, not permitted), and is
+	// set false only for a repository where committing straight to the default
+	// branch is legitimate. Hardening is opt-out; loosening is a knowing act,
+	// recorded once in configuration rather than decided per invocation.
+	ProtectDefaultBranch *bool `yaml:"protectDefaultBranch,omitempty"`
 	// Profile references a named entry under the top-level `credentials:` map,
 	// supplying auth/sign for this substrate without repeating them inline.
 	Profile  string `yaml:"profile,omitempty"`
