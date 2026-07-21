@@ -63,6 +63,8 @@ substrates:
       method: app
       appId: "123456"
       privateKeyPath: ~/.tendril/my-app.private-key.pem
+    commit: api                      # GitHub creates and signs the commit server-side
+                                     # (verified, no key material). GitHub App only.
 
 # Reference, not secrets:
 # - `auth` (and `credentials.*.auth`) names an ENVIRONMENT VARIABLE, never a raw
@@ -72,6 +74,9 @@ substrates:
 #   or `app` (GitHub App — short-lived installation tokens via `appId` +
 #   `privateKeyPath`/`privateKeyEnv`, optional `installationId`).
 # - `sign`: optional `ssh` or `gpg` commit signing; `key` is a key path or GPG key id.
+# - `commit`: `local` (default — the Stem runs git commit, signed by `sign`) or `api`
+#   (GitHub App only — GitHub creates and signs the commit via the API, verified, no key).
+
 # - `checkout.mode`: `ephemeral` (throwaway /tmp clone), `managed` (persistent OT-owned
 #   dir under ~/.tendril/substrates/<name>), or `path` (explicit `checkout.path`).
 # - `readonly: true` keeps the terrarium's edits discarded — no host or remote writeback.

@@ -1,0 +1,12 @@
+# Example control-plane grants. Copy to .tendril/grants.yaml (the Stem's own
+# directory — never inside a cloned repository, so a repo cannot widen its own
+# access). A grant authorises one agent subject to run specific git operations
+# on specific substrates. No grant = denied (secure default).
+
+grants:
+  claude:                                  # the agent's delegation subject
+    operationClasses: [git.commit, git.push]
+    substrates: [myrepo]
+    # egress: [github.com]                 # optional: hosts the Stem may fetch for this subject
+    # expires: 2027-01-01                  # optional: RFC 3339 timestamp or YYYY-MM-DD
+    # confirmAbove: { impact: high }       # optional: escalate high-impact operations back to a human

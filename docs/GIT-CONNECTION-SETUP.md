@@ -10,6 +10,32 @@ This guide is deliberately linear: follow it top to bottom.
 
 ---
 
+## Quick start — one command
+
+The fastest path is the built-in setup command. It writes the connection config
+and the grant, and prints the agent's MCP block:
+
+```bash
+# GitHub App (recommended — commits signed by GitHub, no key material):
+tendril git setup --substrate myrepo --repo owner/repo \
+  --app-id 123456 --key ~/.tendril/app.pem --grant-subject claude
+
+# Fine-grained token + dedicated GPG key:
+tendril git setup --posture pat --substrate myrepo --repo owner/repo \
+  --token-env TENDRIL_GITHUB_PAT --sign-key <gpg-key-id> \
+  --identity-name "Tendril Bot" --identity-email bot@your-domain \
+  --grant-subject claude
+
+# Check a connection's credentials are in place (makes no commit):
+tendril git setup --verify --substrate myrepo
+```
+
+Prefer to write the files by hand? The rest of this guide is the manual
+reference, and the repository ships `substrates.yaml.example` /
+`grants.yaml.example` as templates to copy.
+
+---
+
 ## The model in one picture
 
 - A **Substrate** is a repository.
