@@ -60,11 +60,10 @@ func runGitSetup(ctx context.Context, args []string) {
 	}
 
 	substratesPath := filepath.Join(opts.dir, "substrates.yaml")
-	if err := writeConfigFile(substratesPath, renderSubstratesYAML(opts), opts.force); err != nil {
+	if err := upsertSubstrates(substratesPath, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "🌱 Wrote %s\n", substratesPath)
 
 	if opts.grantSubject != "" {
 		grantsDir := filepath.Join(opts.dir, ".tendril")
@@ -72,12 +71,10 @@ func runGitSetup(ctx context.Context, args []string) {
 			fmt.Fprintf(os.Stderr, "❌ create %s: %v\n", grantsDir, err)
 			os.Exit(1)
 		}
-		grantsPath := filepath.Join(grantsDir, "grants.yaml")
-		if err := writeConfigFile(grantsPath, renderGrantsYAML(opts), opts.force); err != nil {
+		if err := upsertGrants(filepath.Join(grantsDir, "grants.yaml"), opts); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "🌱 Wrote %s\n", grantsPath)
 	}
 
 	printGitSetupNextSteps(opts)
@@ -217,15 +214,30 @@ func renderGrantsYAML(o gitSetupOptions) string {
 	return b.String()
 }
 
-// writeConfigFile writes content, refusing to clobber an existing file unless
-// force is set — setup must never silently overwrite hand-edited config.
-func writeConfigFile(path, content string, force bool) error {
-	if !force {
-		if _, err := os.Stat(path); err == nil {
-			return fmt.Errorf("%s already exists (pass --force to overwrite)", path)
-		}
+// renderProfileValueYAML renders just the value block of a credentials profile
+// (the mapping under `<name>-connection:`), so the merge path can parse it into
+// a node and upsert it into an existing file.
+func renderProfileValueYAML(o gitSetupOptions) string {
+	var b strings.Builder
+	if o.posture == "app" {
+		fmt.Fprintf(&b, "auth: { method: app, appId: %q, privateKeyPath: %q }\n", o.appID, o.keyPath)
+		b.WriteString("commit: api\n")
+	} else {
+		fmt.Fprintf(&b, "auth: { method: pat, env: %s }\n", o.tokenEnv)
+		fmt.Fprintf(&b, "sign: { method: gpg, key: %q }\n", o.signKey)
+		fmt.Fprintf(&b, "identity: { name: %q, email: %q }\n", o.identityName, o.identityEmail)
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	return b.String()
+}
+
+// renderSubstrateValueYAML renders just the value block of a substrate (the
+// mapping under `<name>:`).
+func renderSubstrateValueYAML(o gitSetupOptions) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "url: https://github.com/%s\n", o.repo)
+	fmt.Fprintf(&b, "profile: %s-connection\n", o.substrate)
+	fmt.Fprintf(&b, "checkout: { mode: %s }\n", o.checkout)
+	return b.String()
 }
 
 // printGitSetupNextSteps prints the per-agent MCP block and the follow-up
