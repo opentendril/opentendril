@@ -2,7 +2,11 @@ package conductor
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -71,6 +75,12 @@ var runGitCommitCommandFn = runGitCommand
 // configured commit identity. Enforcement order is deliberate: the identity
 // requirement is checked first, so a refused execution aborts before any git
 // command (or any other side effect) runs.
+//
+// Mode routing: when the resolved credential's CommitMode is CommitModeAPI,
+// the commit is delegated to runAPICommit — the GitHub GraphQL
+// createCommitOnBranch mutation, server-signed by GitHub — instead of the
+// local git path below. Local-mode behavior (the default, empty
+// CommitMode, or CommitModeLocal) is unchanged.
 func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -81,8 +91,16 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 	if strings.TrimSpace(execution.Message) == "" {
 		return GitCommitResult{}, fmt.Errorf("git commit message is required")
 	}
+
+	if execution.Credential.CommitMode == CommitModeAPI {
+		return runAPICommit(ctx, execution)
+	}
+
 	// Deny-closed attribution: an unattributable delegated commit must never
 	// be created, so both identity fields are required before anything runs.
+	// This requirement is local-mode only: in api mode the GitHub App is the
+	// identity (GitHub sets author and committer server-side), so runAPICommit
+	// never reaches here.
 	if strings.TrimSpace(execution.Credential.Identity.Name) == "" || strings.TrimSpace(execution.Credential.Identity.Email) == "" {
 		return GitCommitResult{}, fmt.Errorf("delegated git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) — an unattributable delegated commit is never created")
 	}
@@ -120,6 +138,285 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 	}
 
 	return GitCommitResult{Status: "committed", CommitHash: commitHash}, nil
+}
+
+// API-mode delegated commit (commit: api) — the recommended default git
+// connection posture: a GitHub App connection creates the commit server-side
+// via the GraphQL createCommitOnBranch mutation, so GitHub itself signs it
+// (a verified commit with no local key material) rather than the Stem
+// running local git and an optional GPG/SSH signature.
+//
+// IMPORTANT semantic difference from local mode: createCommitOnBranch creates
+// the commit directly ON THE REMOTE BRANCH and advances the remote ref — it
+// does not touch the local workspace at all. Api-mode commit therefore also
+// PUBLISHES the change; a subsequent push is unnecessary (and would be a
+// no-op once the local workspace is later synced, e.g. via `git fetch` +
+// reset, since the remote already carries the new commit).
+
+// createCommitOnBranchMutation is the GraphQL document RunGitCommit's api
+// mode sends. Its shape follows GitHub's CreateCommitOnBranchInput schema:
+// https://docs.github.com/en/graphql/reference/mutations#createcommitonbranch
+const createCommitOnBranchMutation = `mutation($input: CreateCommitOnBranchInput!) {
+  createCommitOnBranch(input: $input) {
+    commit {
+      oid
+    }
+  }
+}`
+
+// apiCommitFileAddition is one GraphQL FileAddition: a path plus its full
+// current contents, base64-encoded (the mutation always sends whole-file
+// contents, never a diff/patch).
+type apiCommitFileAddition struct {
+	Path     string `json:"path"`
+	Contents string `json:"contents"`
+}
+
+// apiCommitFileDeletion is one GraphQL FileDeletion: just the path.
+type apiCommitFileDeletion struct {
+	Path string `json:"path"`
+}
+
+// apiCommitFileChanges is the GraphQL FileChanges input: every file this
+// commit adds/modifies (Additions) or removes (Deletions).
+type apiCommitFileChanges struct {
+	Additions []apiCommitFileAddition `json:"additions"`
+	Deletions []apiCommitFileDeletion `json:"deletions"`
+}
+
+// apiCommitBranch is the GraphQL CommittableBranch input identifying the
+// target branch by "owner/repo" and branch name.
+type apiCommitBranch struct {
+	RepositoryNameWithOwner string `json:"repositoryNameWithOwner"`
+	BranchName              string `json:"branchName"`
+}
+
+// apiCommitMessage is the GraphQL CommitMessage input: the headline (commit
+// subject, i.e. the message's first line) and the optional body (everything
+// after the first blank line — conventional commit-message shape).
+type apiCommitMessage struct {
+	Headline string `json:"headline"`
+	Body     string `json:"body,omitempty"`
+}
+
+// createCommitOnBranchInput is the GraphQL CreateCommitOnBranchInput.
+// ExpectedHeadOid is the safety check GitHub performs server-side: the
+// mutation is refused (not silently rebased) if the branch has moved since
+// the workspace's HEAD was read, avoiding a lost-update race.
+type createCommitOnBranchInput struct {
+	Branch          apiCommitBranch      `json:"branch"`
+	Message         apiCommitMessage     `json:"message"`
+	ExpectedHeadOid string               `json:"expectedHeadOid"`
+	FileChanges     apiCommitFileChanges `json:"fileChanges"`
+}
+
+// createCommitOnBranchResponse decodes the mutation's "data" object.
+type createCommitOnBranchResponse struct {
+	CreateCommitOnBranch struct {
+		Commit struct {
+			Oid string `json:"oid"`
+		} `json:"commit"`
+	} `json:"createCommitOnBranch"`
+}
+
+// runAPICommit implements the commit: api execution mode. It never touches
+// the local git index or working tree state (no staging, no local commit) —
+// it reads the workspace's current file contents and the remote's expected
+// head, and asks GitHub to create the commit remotely.
+func runAPICommit(ctx context.Context, execution GitCommitExecution) (GitCommitResult, error) {
+	cred := execution.Credential
+
+	// Identity for an api-mode commit is the GitHub App itself (GitHub sets
+	// author and committer server-side), so — unlike local mode — no local
+	// identity check runs here. What IS required, deny-closed, is that the
+	// connection actually is a GitHub App: api mode has no meaning (and no
+	// way to authenticate the mutation) against a PAT, SSH key, or ambient
+	// credential.
+	if cred.Method != CredentialApp {
+		return GitCommitResult{}, fmt.Errorf("commit mode %q requires a GitHub App connection (auth.method: app)", CommitModeAPI)
+	}
+
+	originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin")
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: resolve origin remote: %w", err)
+	}
+	originURL = strings.TrimSpace(originURL)
+	owner, repo, err := parseOwnerRepo(originURL)
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: %w", err)
+	}
+
+	branch, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: determine current branch: %w", err)
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: unable to determine the workspace's current branch (detached HEAD is not supported)")
+	}
+
+	headOid, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "HEAD")
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: resolve HEAD: %w", err)
+	}
+	headOid = strings.TrimSpace(headOid)
+
+	additions, deletions, err := apiCommitFileChangesFromWorkspace(ctx, execution.Workspace, execution.Paths)
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: enumerate changes: %w", err)
+	}
+	// No changes means nothing to commit: report it cleanly instead of
+	// asking GitHub to create an empty commit, mirroring the local path.
+	if len(additions) == 0 && len(deletions) == 0 {
+		return GitCommitResult{Status: "nothing-to-commit"}, nil
+	}
+
+	token, err := githubAppInstallationToken(ctx, cred.App, originURL)
+	if err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: github app auth: %w", err)
+	}
+
+	headline, body := splitCommitMessage(execution.Message)
+	input := createCommitOnBranchInput{
+		Branch: apiCommitBranch{
+			RepositoryNameWithOwner: owner + "/" + repo,
+			BranchName:              branch,
+		},
+		Message:         apiCommitMessage{Headline: headline, Body: body},
+		ExpectedHeadOid: headOid,
+		FileChanges: apiCommitFileChanges{
+			Additions: additions,
+			Deletions: deletions,
+		},
+	}
+
+	var response createCommitOnBranchResponse
+	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: %w", err)
+	}
+	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
+	if oid == "" {
+		return GitCommitResult{}, fmt.Errorf("api-mode commit: github returned no commit oid")
+	}
+
+	return GitCommitResult{Status: "committed", CommitHash: oid}, nil
+}
+
+// splitCommitMessage splits a commit message into its headline (first line)
+// and body (everything after, trimmed), matching conventional git-commit
+// message shape.
+func splitCommitMessage(message string) (headline, body string) {
+	parts := strings.SplitN(message, "\n", 2)
+	headline = strings.TrimSpace(parts[0])
+	if len(parts) > 1 {
+		body = strings.TrimSpace(parts[1])
+	}
+	return headline, body
+}
+
+// apiCommitFileChangesFromWorkspace enumerates the workspace's current
+// changes (tracked modifications, deletions, and untracked files — the same
+// scope `git add -A` would stage) via `git status --porcelain`, and reads
+// each surviving addition's current file contents. When paths is non-empty,
+// only entries whose path is in that list are included, matching the local
+// path's optional Paths staging filter.
+func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, paths []string) ([]apiCommitFileAddition, []apiCommitFileDeletion, error) {
+	// -uall recurses into untracked directories instead of reporting the
+	// directory itself; -z NUL-separates entries so a path is never
+	// corrupted by trimming (the leading space of a worktree-only status
+	// code, e.g. " M path", is otherwise indistinguishable from padding —
+	// see the identical rationale at docker.go's own -z status read).
+	status, err := runGitCommandRawOutput(ctx, workspace, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	filter := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		if normalized := filepath.ToSlash(strings.TrimSpace(p)); normalized != "" {
+			filter[normalized] = struct{}{}
+		}
+	}
+	allowed := func(path string) bool {
+		if len(filter) == 0 {
+			return true
+		}
+		_, ok := filter[path]
+		return ok
+	}
+
+	var additions []apiCommitFileAddition
+	var deletions []apiCommitFileDeletion
+	seenAddition := make(map[string]struct{})
+	seenDeletion := make(map[string]struct{})
+
+	addAddition := func(path string) error {
+		if _, ok := seenAddition[path]; ok || !allowed(path) {
+			return nil
+		}
+		contents, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(path)))
+		if readErr != nil {
+			return fmt.Errorf("read %s: %w", path, readErr)
+		}
+		additions = append(additions, apiCommitFileAddition{
+			Path:     path,
+			Contents: base64.StdEncoding.EncodeToString(contents),
+		})
+		seenAddition[path] = struct{}{}
+		return nil
+	}
+	addDeletion := func(path string) {
+		if _, ok := seenDeletion[path]; ok || !allowed(path) {
+			return
+		}
+		deletions = append(deletions, apiCommitFileDeletion{Path: path})
+		seenDeletion[path] = struct{}{}
+	}
+
+	entries := strings.Split(status, "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 4 {
+			continue
+		}
+		code := entry[:2]
+		path := filepath.ToSlash(entry[3:])
+
+		switch {
+		case code[0] == 'R' || code[0] == 'C':
+			// A rename/copy entry is "XY newpath", followed by the original
+			// path as its own NUL-separated field with no status prefix —
+			// the source is a deletion, the destination an addition.
+			i++
+			var oldPath string
+			if i < len(entries) {
+				oldPath = filepath.ToSlash(entries[i])
+			}
+			if err := addAddition(path); err != nil {
+				return nil, nil, err
+			}
+			if oldPath != "" {
+				addDeletion(oldPath)
+			}
+		case strings.Contains(code, "D"):
+			addDeletion(path)
+		default:
+			if err := addAddition(path); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
+	sort.Slice(additions, func(i, j int) bool { return additions[i].Path < additions[j].Path })
+	sort.Slice(deletions, func(i, j int) bool { return deletions[i].Path < deletions[j].Path })
+
+	if additions == nil {
+		additions = []apiCommitFileAddition{}
+	}
+	if deletions == nil {
+		deletions = []apiCommitFileDeletion{}
+	}
+	return additions, deletions, nil
 }
 
 // runGitPushCommandFn is the authenticated-push seam, injectable for tests that

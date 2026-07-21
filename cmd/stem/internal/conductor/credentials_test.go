@@ -124,6 +124,36 @@ func TestResolveSubstrateCredential(t *testing.T) {
 			t.Fatalf("expected unknown-method error, got %v", err)
 		}
 	})
+
+	t.Run("commit mode defaults to local", func(t *testing.T) {
+		rc, err := resolveSubstrateCredential(SubstrateSpec{}, nil)
+		if err != nil || rc.CommitMode != CommitModeLocal {
+			t.Fatalf("got %+v err=%v, want default commit mode %q", rc, err, CommitModeLocal)
+		}
+	})
+
+	t.Run("commit mode is normalized", func(t *testing.T) {
+		rc, err := resolveSubstrateCredential(SubstrateSpec{Commit: "  API  "}, nil)
+		if err != nil || rc.CommitMode != CommitModeAPI {
+			t.Fatalf("got %+v err=%v, want normalized commit mode %q", rc, err, CommitModeAPI)
+		}
+	})
+
+	t.Run("profile supplies commit mode when inline is empty", func(t *testing.T) {
+		profiles := map[string]CredentialProfile{"github": {Commit: "api"}}
+		rc, err := resolveSubstrateCredential(SubstrateSpec{Profile: "github"}, profiles)
+		if err != nil || rc.CommitMode != CommitModeAPI {
+			t.Fatalf("got %+v err=%v, want profile commit mode %q", rc, err, CommitModeAPI)
+		}
+	})
+
+	t.Run("inline commit mode overrides profile", func(t *testing.T) {
+		profiles := map[string]CredentialProfile{"github": {Commit: "api"}}
+		rc, err := resolveSubstrateCredential(SubstrateSpec{Profile: "github", Commit: "local"}, profiles)
+		if err != nil || rc.CommitMode != CommitModeLocal {
+			t.Fatalf("got %+v err=%v, want inline commit mode %q to win", rc, err, CommitModeLocal)
+		}
+	})
 }
 
 func TestCredentialWarning(t *testing.T) {
@@ -156,6 +186,28 @@ func TestCredentialWarning(t *testing.T) {
 			t.Fatalf("write key: %v", err)
 		}
 		if w := credentialWarning(SubstrateSpec{Auth: AuthSpec{Method: "ssh", Key: keyPath}}, nil); w != "" {
+			t.Fatalf("expected no warning, got %q", w)
+		}
+	})
+
+	t.Run("api commit mode without a github app warns", func(t *testing.T) {
+		t.Setenv("GOOD_PAT", "value")
+		w := credentialWarning(SubstrateSpec{Auth: AuthSpec{Method: "pat", Env: "GOOD_PAT"}, Commit: "api"}, nil)
+		if !strings.Contains(w, `requires auth method "app"`) {
+			t.Fatalf("expected api-mode-requires-app warning, got %q", w)
+		}
+	})
+
+	t.Run("api commit mode with a github app has no warning", func(t *testing.T) {
+		keyPath := filepath.Join(t.TempDir(), "app.pem")
+		if err := os.WriteFile(keyPath, []byte("KEY"), 0o600); err != nil {
+			t.Fatalf("write key: %v", err)
+		}
+		w := credentialWarning(SubstrateSpec{
+			Auth:   AuthSpec{Method: "app", AppID: "1", PrivateKeyPath: keyPath},
+			Commit: "api",
+		}, nil)
+		if w != "" {
 			t.Fatalf("expected no warning, got %q", w)
 		}
 	})

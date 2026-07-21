@@ -35,6 +35,11 @@ type SubstrateSpec struct {
 	Identity IdentitySpec `yaml:"identity,omitempty"`
 	// Checkout controls where a foreign substrate is materialized.
 	Checkout CheckoutSpec `yaml:"checkout,omitempty"`
+	// Commit selects the git.commit execution mode: "local" (the default)
+	// commits with the Stem's own git in the workspace; "api" creates the
+	// commit remotely via the GitHub GraphQL createCommitOnBranch mutation,
+	// signed server-side by GitHub (requires auth method "app"). Design RFC.
+	Commit string `yaml:"commit,omitempty"`
 	// Profile references a named entry under the top-level `credentials:` map,
 	// supplying auth/sign for this substrate without repeating them inline.
 	Profile  string `yaml:"profile,omitempty"`
@@ -113,6 +118,9 @@ type CredentialProfile struct {
 	Auth     AuthSpec     `yaml:"auth,omitempty"`
 	Sign     SignSpec     `yaml:"sign,omitempty"`
 	Identity IdentitySpec `yaml:"identity,omitempty"`
+	// Commit selects the git.commit execution mode for substrates using this
+	// profile: "local" (the default) or "api" — see SubstrateSpec.Commit.
+	Commit string `yaml:"commit,omitempty"`
 }
 
 type substrateExecutionPlan struct {
@@ -311,6 +319,7 @@ func normalizeSubstratesConfig(config *SubstratesConfig) {
 			trimAuthSpec(&profile.Auth)
 			trimSignSpec(&profile.Sign)
 			trimIdentitySpec(&profile.Identity)
+			profile.Commit = strings.ToLower(strings.TrimSpace(profile.Commit))
 			normalizedProfiles[trimmedName] = profile
 		}
 		config.Credentials = normalizedProfiles
@@ -376,6 +385,7 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	trimIdentitySpec(&spec.Identity)
 	spec.Checkout.Mode = strings.ToLower(strings.TrimSpace(spec.Checkout.Mode))
 	spec.Checkout.Path = strings.TrimSpace(spec.Checkout.Path)
+	spec.Commit = strings.ToLower(strings.TrimSpace(spec.Commit))
 	spec.Profile = strings.TrimSpace(spec.Profile)
 	spec.Provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 }

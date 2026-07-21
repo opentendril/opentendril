@@ -50,6 +50,15 @@ func (a AppCredential) isSet() bool {
 	return strings.TrimSpace(a.AppID) != "" || strings.TrimSpace(a.PrivateKeyPath) != "" || strings.TrimSpace(a.PrivateKeyEnv) != ""
 }
 
+// Commit execution modes for the git.commit capability (SubstrateSpec.Commit /
+// CredentialProfile.Commit). "local" (the default) is the existing Stem-side
+// git path; "api" creates the commit remotely via the GitHub GraphQL
+// createCommitOnBranch mutation, server-signed by GitHub. Design RFC.
+const (
+	CommitModeLocal = "local"
+	CommitModeAPI   = "api"
+)
+
 // ResolvedCredential is the typed credential the terrarium (slice 3) consumes.
 // It never carries a secret to a log: String() redacts TokenValue.
 type ResolvedCredential struct {
@@ -61,6 +70,9 @@ type ResolvedCredential struct {
 	Sign       ResolvedSigning
 	Identity   ResolvedIdentity
 	Checkout   CheckoutSpec
+	// CommitMode is the resolved git.commit execution mode: CommitModeLocal
+	// (the default) or CommitModeAPI. Never empty after resolution.
+	CommitMode string
 }
 
 // String redacts the token so a credential is safe to log or %v-print. The
@@ -70,8 +82,8 @@ func (c ResolvedCredential) String() string {
 	if c.TokenValue != "" {
 		token = "***"
 	}
-	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q identityName:%q identityEmail:%q checkout:%q}",
-		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Identity.Name, c.Identity.Email, c.Checkout.Mode)
+	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q identityName:%q identityEmail:%q checkout:%q commit:%q}",
+		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Identity.Name, c.Identity.Email, c.Checkout.Mode, c.CommitMode)
 }
 
 func isZeroAuthSpec(a AuthSpec) bool {
@@ -88,21 +100,22 @@ func isZeroIdentitySpec(i IdentitySpec) bool {
 }
 
 // mergeCredentialProfile applies a named credentials profile as the base for a
-// substrate's auth/sign/identity, with any inline (non-zero) spec values taking
-// precedence. Returns an error if the profile name is unknown.
-func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialProfile) (AuthSpec, SignSpec, IdentitySpec, error) {
+// substrate's auth/sign/identity/commit, with any inline (non-zero) spec values
+// taking precedence. Returns an error if the profile name is unknown.
+func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialProfile) (AuthSpec, SignSpec, IdentitySpec, string, error) {
 	auth := spec.Auth
 	sign := spec.Sign
 	identity := spec.Identity
+	commit := strings.ToLower(strings.TrimSpace(spec.Commit))
 
 	profileName := strings.TrimSpace(spec.Profile)
 	if profileName == "" {
-		return auth, sign, identity, nil
+		return auth, sign, identity, commit, nil
 	}
 
 	profile, ok := profiles[profileName]
 	if !ok {
-		return auth, sign, identity, fmt.Errorf("references unknown credentials profile %q", profileName)
+		return auth, sign, identity, commit, fmt.Errorf("references unknown credentials profile %q", profileName)
 	}
 	if isZeroAuthSpec(auth) {
 		auth = profile.Auth
@@ -113,14 +126,17 @@ func mergeCredentialProfile(spec SubstrateSpec, profiles map[string]CredentialPr
 	if isZeroIdentitySpec(identity) {
 		identity = profile.Identity
 	}
-	return auth, sign, identity, nil
+	if commit == "" {
+		commit = strings.ToLower(strings.TrimSpace(profile.Commit))
+	}
+	return auth, sign, identity, commit, nil
 }
 
 // resolveSubstrateCredential turns a substrate spec (+ credential profiles) into
 // a typed, resolved credential. It preserves the GITHUB_TOKEN /
 // GITHUB_PERSONAL_ACCESS_TOKEN fallback for PAT auth (see resolveAuthTokenValue).
 func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]CredentialProfile) (ResolvedCredential, error) {
-	auth, sign, identity, err := mergeCredentialProfile(spec, profiles)
+	auth, sign, identity, commit, err := mergeCredentialProfile(spec, profiles)
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
@@ -131,11 +147,17 @@ func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]Credenti
 		method = CredentialPAT
 	}
 
+	commitMode := commit
+	if commitMode == "" {
+		commitMode = CommitModeLocal
+	}
+
 	resolved := ResolvedCredential{
-		Method:   method,
-		Checkout: spec.Checkout,
-		Sign:     ResolvedSigning{Method: strings.ToLower(strings.TrimSpace(sign.Method)), Key: strings.TrimSpace(sign.Key)},
-		Identity: ResolvedIdentity{Name: strings.TrimSpace(identity.Name), Email: strings.TrimSpace(identity.Email)},
+		Method:     method,
+		Checkout:   spec.Checkout,
+		Sign:       ResolvedSigning{Method: strings.ToLower(strings.TrimSpace(sign.Method)), Key: strings.TrimSpace(sign.Key)},
+		Identity:   ResolvedIdentity{Name: strings.TrimSpace(identity.Name), Email: strings.TrimSpace(identity.Email)},
+		CommitMode: commitMode,
 	}
 
 	switch method {
@@ -279,6 +301,9 @@ func credentialWarning(spec SubstrateSpec, profiles map[string]CredentialProfile
 	}
 	if w := signingWarning(resolved.Sign); w != "" {
 		return w
+	}
+	if resolved.CommitMode == CommitModeAPI && resolved.Method != CredentialApp {
+		return fmt.Sprintf("commit mode %q requires auth method \"app\" (GitHub signs the commit server-side); got %q", CommitModeAPI, resolved.Method)
 	}
 	return ""
 }

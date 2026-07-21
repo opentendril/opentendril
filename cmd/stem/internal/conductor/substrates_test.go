@@ -466,6 +466,12 @@ credentials:
     sign:
       method: ssh
       key: ~/.ssh/id_work
+  github:
+    auth:
+      method: app
+      appId: "4276558"
+      privateKeyPath: ~/.tendril/app.pem
+    commit: API
 
 substrates:
   legacy:
@@ -488,6 +494,9 @@ substrates:
   profiled:
     url: https://example.com/profiled.git
     profile: work
+  apisigned:
+    url: https://example.com/apisigned.git
+    profile: github
 `)
 
 	config, err := LoadSubstratesConfig("")
@@ -530,5 +539,45 @@ substrates:
 	}
 	if work.Auth.Env != "GITHUB_TOKEN_WORK" || work.Sign.Method != "ssh" {
 		t.Fatalf("work profile = %+v, want auth.env GITHUB_TOKEN_WORK + sign.method ssh", work)
+	}
+
+	// The commit field parses on both a profile and a substrate, and
+	// normalizes (trim + lowercase) exactly like auth.method and sign.method.
+	github, ok := config.Credentials["github"]
+	if !ok {
+		t.Fatalf("expected credential profile %q", "github")
+	}
+	if github.Commit != "api" {
+		t.Fatalf("github profile Commit = %q, want normalized %q", github.Commit, "api")
+	}
+	if config.Substrates["apisigned"].Profile != "github" {
+		t.Fatalf("apisigned.Profile = %q, want github", config.Substrates["apisigned"].Profile)
+	}
+	if config.Substrates["legacy"].Commit != "" {
+		t.Fatalf("legacy.Commit = %q, want empty (defaults to local at resolution)", config.Substrates["legacy"].Commit)
+	}
+}
+
+// TestSubstrateSpecCommitFieldNormalizes proves an inline substrate-level
+// commit field (not just a profile's) is trimmed and lowercased the same way.
+func TestSubstrateSpecCommitFieldNormalizes(t *testing.T) {
+	cwd := chdirToTempDir(t)
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), `
+substrates:
+  inline:
+    url: https://example.com/inline.git
+    auth:
+      method: app
+      appId: "1"
+      privateKeyPath: ~/.tendril/app.pem
+    commit: "  API  "
+`)
+
+	config, err := LoadSubstratesConfig("")
+	if err != nil {
+		t.Fatalf("LoadSubstratesConfig failed: %v", err)
+	}
+	if got := config.Substrates["inline"].Commit; got != "api" {
+		t.Fatalf("inline.Commit = %q, want normalized %q", got, "api")
 	}
 }

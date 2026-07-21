@@ -24,10 +24,11 @@ import (
 // short-lived JWT with the App's private key, exchanges it for an installation
 // access token (≤1h, cached), and uses that token as the git HTTPS bearer.
 
-// githubAPIBaseURL and githubAppHTTPClient are package vars so tests can point
-// them at an httptest server.
+// githubAPIBaseURL, githubGraphQLURL, and githubAppHTTPClient are package vars
+// so tests can point them at an httptest server.
 var (
 	githubAPIBaseURL    = "https://api.github.com"
+	githubGraphQLURL    = "https://api.github.com/graphql"
 	githubAppHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 	appTokenMu    sync.Mutex
@@ -144,6 +145,72 @@ func githubAppAPIPost(ctx context.Context, path, jwt string, out any) error {
 	req.Header.Set("Authorization", "Bearer "+jwt)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	return doGithubAppRequest(req, out)
+}
+
+// githubGraphQLRequest is the JSON body of a GraphQL POST: the query/mutation
+// document plus its variables.
+type githubGraphQLRequest struct {
+	Query     string `json:"query"`
+	Variables any    `json:"variables"`
+}
+
+// githubGraphQLError is one entry of a GraphQL response's top-level "errors"
+// array — present even on an HTTP 200 when the mutation itself failed.
+type githubGraphQLError struct {
+	Message string `json:"message"`
+}
+
+// githubGraphQLPost issues a GraphQL request against api.github.com/graphql,
+// authenticated with an installation access token (not the App JWT — GraphQL
+// operations like createCommitOnBranch act as the installation, the same
+// bearer the git HTTPS credential helper uses). decodeInto receives the
+// decoded "data" object; a non-empty top-level "errors" array is always
+// reported as an error, even on an HTTP 200 (GraphQL's error-reporting
+// convention differs from the REST helpers above).
+func githubGraphQLPost(ctx context.Context, installationToken, query string, variables any, decodeInto any) error {
+	body, err := json.Marshal(githubGraphQLRequest{Query: query, Variables: variables})
+	if err != nil {
+		return fmt.Errorf("encode github graphql request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, githubGraphQLURL, strings.NewReader(string(body)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+installationToken)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := githubAppHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github graphql request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("github graphql returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var envelope struct {
+		Data   json.RawMessage      `json:"data"`
+		Errors []githubGraphQLError `json:"errors"`
+	}
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return fmt.Errorf("decode github graphql response: %w", err)
+	}
+	if len(envelope.Errors) > 0 {
+		messages := make([]string, 0, len(envelope.Errors))
+		for _, e := range envelope.Errors {
+			messages = append(messages, e.Message)
+		}
+		return fmt.Errorf("github graphql request failed: %s", strings.Join(messages, "; "))
+	}
+	if decodeInto != nil && len(envelope.Data) > 0 {
+		if err := json.Unmarshal(envelope.Data, decodeInto); err != nil {
+			return fmt.Errorf("decode github graphql data: %w", err)
+		}
+	}
+	return nil
 }
 
 func doGithubAppRequest(req *http.Request, out any) error {
