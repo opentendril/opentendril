@@ -99,3 +99,52 @@ func TestGitCommitPathsNormalized(t *testing.T) {
 		t.Fatalf("spec paths = %v, want nil for an all-blank list", captured.Paths)
 	}
 }
+
+func TestGitPRValidatesInput(t *testing.T) {
+	captured := &GitPRSpec{}
+	svc := NewService(nil).WithGit(GitOperations{
+		PullRequest: func(_ context.Context, spec GitPRSpec) (GitPRResult, error) {
+			*captured = spec
+			return GitPRResult{Status: "created", Number: 1}, nil
+		},
+	})
+	ctx := context.Background()
+
+	if _, err := svc.GitPR(ctx, GitPRInput{Title: "feat: x"}); err == nil {
+		t.Fatal("missing substrate accepted")
+	}
+	if _, err := svc.GitPR(ctx, GitPRInput{Substrate: "  ", Title: "feat: x"}); err == nil {
+		t.Fatal("blank substrate accepted")
+	}
+	if _, err := svc.GitPR(ctx, GitPRInput{Substrate: "core"}); err == nil {
+		t.Fatal("missing title accepted")
+	}
+	if _, err := svc.GitPR(ctx, GitPRInput{Substrate: "core", Title: "   "}); err == nil {
+		t.Fatal("blank title accepted")
+	}
+
+	// Head and base are optional at this layer on purpose: an omitted head is
+	// read from the workspace and an omitted base is read from the repository
+	// by the execution port. Neither is defaulted to a guessed branch name
+	// here — the Core must not invent branches.
+	if _, err := svc.GitPR(ctx, GitPRInput{Substrate: " core ", Title: " feat: grow ", Draft: true}); err != nil {
+		t.Fatalf("pull request: %v", err)
+	}
+	if captured.Substrate != "core" || captured.Title != "feat: grow" {
+		t.Fatalf("spec = %+v, want trimmed substrate/title", captured)
+	}
+	if captured.Head != "" || captured.Base != "" {
+		t.Fatalf("spec = %+v, want empty head/base passed through for the execution port to resolve", captured)
+	}
+	if !captured.Draft {
+		t.Fatalf("spec = %+v, want draft carried through", captured)
+	}
+}
+
+func TestGitPRNotWired(t *testing.T) {
+	svc := NewService(nil)
+	_, err := svc.GitPR(context.Background(), GitPRInput{Substrate: "core", Title: "feat: x"})
+	if err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("unwired git pull request error = %v, want a not-wired report", err)
+	}
+}

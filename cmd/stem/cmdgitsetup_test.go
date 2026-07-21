@@ -118,7 +118,7 @@ func resolveGenerated(t *testing.T, opts gitSetupOptions) conductor.ResolvedCred
 func TestRenderGrantsYAMLParses(t *testing.T) {
 	opts := gitSetupOptions{substrate: "r", grantSubject: "claude"}
 	out := renderGrantsYAML(opts)
-	for _, want := range []string{"grants:", "claude:", "operationClasses: [git.commit, git.push]", "substrates: [r]"} {
+	for _, want := range []string{"grants:", "claude:", "operationClasses: [git.commit, git.push, git.pr]", "substrates: [r]"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("generated grants missing %q:\n%s", want, out)
 		}
@@ -189,8 +189,24 @@ func TestUpsertGrantUnionsSubstrates(t *testing.T) {
 		t.Fatalf("load grants: %v", err)
 	}
 	bySubject := map[string][]string{}
+	classesBySubject := map[string][]string{}
 	for _, g := range grants {
 		bySubject[g.Subject] = g.Substrates
+		classesBySubject[g.Subject] = g.OperationClasses
+	}
+
+	// Every setup run grants the full governed loop — commit, push, and the
+	// pull request that finishes it — so an authorised agent never has to
+	// leave Tendril for the last mile. Unioning must not duplicate them.
+	for subject, classes := range classesBySubject {
+		if len(classes) != 3 {
+			t.Errorf("%s operation-classes = %v, want exactly the three git classes unioned once", subject, classes)
+		}
+		for _, want := range []string{core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
+			if !contains(classes, want) {
+				t.Errorf("%s operation-classes = %v, want %s included", subject, classes, want)
+			}
+		}
 	}
 	if got := bySubject["claude"]; len(got) != 2 || !contains(got, "repo1") || !contains(got, "repo2") {
 		t.Errorf("claude substrates = %v, want [repo1 repo2] unioned", got)

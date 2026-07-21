@@ -433,6 +433,17 @@ func (m *mockCore) GitPush(_ context.Context, in core.GitPushInput) (core.GitPus
 	}, nil
 }
 
+func (m *mockCore) GitPR(_ context.Context, in core.GitPRInput) (core.GitPRResult, error) {
+	m.record("GitPR", in)
+	return core.GitPRResult{
+		Status: "created",
+		Number: 42,
+		URL:    "https://github.com/opentendril/opentendril/pull/42",
+		Head:   "feat/mock",
+		Base:   "main",
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -663,6 +674,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 					return nil, err
 				}
 				return m.GitPush(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapGitPR,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitPRInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitPR(ctx, in)
 			},
 		},
 	}

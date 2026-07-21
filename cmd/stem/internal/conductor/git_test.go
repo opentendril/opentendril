@@ -583,3 +583,343 @@ func TestSplitCommitMessage(t *testing.T) {
 		}
 	}
 }
+
+// --- delegated pull request (git.pr) ----------------------------------------
+
+// newPullRequestWorkspace builds a real git workspace on the given branch with
+// an origin remote pointing at a GitHub repository, so RunGitPullRequest can
+// read the branch and owner/repo from actual state rather than being told.
+func newPullRequestWorkspace(t *testing.T, branch string) string {
+	t.Helper()
+	ctx := context.Background()
+	workspace := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "ambient@example.com"},
+		{"config", "user.name", "Ambient Tester"},
+		{"checkout", "-b", branch},
+		{"remote", "add", "origin", "https://github.com/opentendril/opentendril.git"},
+	} {
+		if _, err := runGitCommand(ctx, workspace, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "leaf.txt"), []byte("grown\n"), 0o644); err != nil {
+		t.Fatalf("write leaf.txt: %v", err)
+	}
+	if _, err := runGitCommand(ctx, workspace, "add", "-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGitCommand(ctx, workspace, "commit", "-m", "initial"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	return workspace
+}
+
+// fakePullRequestAPI is an httptest stand-in for GitHub's REST surface,
+// recording what the pull-request path actually asked for. No live GitHub is
+// involved.
+type fakePullRequestAPI struct {
+	repoGets    int
+	listGets    int
+	creates     int
+	tokenMints  int
+	listQuery   string
+	createBody  []byte
+	authHeaders []string
+}
+
+// newFakePullRequestAPI points githubAPIBaseURL at a server that answers the
+// repository lookup, the open-pull-request list (with the supplied existing
+// entries) and the create call, plus the GitHub App token exchange.
+func newFakePullRequestAPI(t *testing.T, defaultBranch string, existing []map[string]any) *fakePullRequestAPI {
+	t.Helper()
+	fake := &fakePullRequestAPI{}
+	if existing == nil {
+		existing = []map[string]any{}
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only the pull-request calls' bearers are recorded; the GitHub App
+		// token exchange legitimately authenticates with the App JWT instead.
+		if strings.Contains(r.URL.Path, "/pulls") || r.URL.Path == "/repos/opentendril/opentendril" {
+			fake.authHeaders = append(fake.authHeaders, r.Header.Get("Authorization"))
+		}
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99001})
+		case strings.Contains(r.URL.Path, "/access_tokens"):
+			fake.tokenMints++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token":      "ghs_installation_token",
+				"expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
+			})
+		case strings.HasSuffix(r.URL.Path, "/pulls") && r.Method == http.MethodGet:
+			fake.listGets++
+			fake.listQuery = r.URL.RawQuery
+			_ = json.NewEncoder(w).Encode(existing)
+		case strings.HasSuffix(r.URL.Path, "/pulls") && r.Method == http.MethodPost:
+			fake.creates++
+			body, _ := io.ReadAll(r.Body)
+			fake.createBody = body
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number":   4242,
+				"html_url": "https://github.com/opentendril/opentendril/pull/4242",
+			})
+		case r.URL.Path == "/repos/opentendril/opentendril" && r.Method == http.MethodGet:
+			fake.repoGets++
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": defaultBranch})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	origBase := githubAPIBaseURL
+	githubAPIBaseURL = srv.URL
+	t.Cleanup(func() { githubAPIBaseURL = origBase })
+
+	appTokenMu.Lock()
+	appTokenCache = map[string]cachedAppToken{}
+	appTokenMu.Unlock()
+
+	return fake
+}
+
+func TestRunGitPullRequestValidatesExecution(t *testing.T) {
+	if _, err := RunGitPullRequest(context.Background(), GitPRExecution{Title: "feat: x"}); err == nil {
+		t.Fatal("missing workspace accepted")
+	}
+	if _, err := RunGitPullRequest(context.Background(), GitPRExecution{Workspace: t.TempDir()}); err == nil {
+		t.Fatal("missing title accepted")
+	}
+}
+
+// TestRunGitPullRequestResolvesBaseAndCreates is the full success path under
+// the GitHub App posture: the base branch is READ from the repository (never
+// assumed), the head comes from the workspace's actual current branch, and the
+// create call carries every field GitHub needs.
+func TestRunGitPullRequestResolvesBaseAndCreates(t *testing.T) {
+	_, keyPath := genTestKeyPEM(t)
+	workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+	// The repository's real default branch is deliberately NOT "main" — a
+	// hard-coded assumption would produce the wrong base and pass unnoticed.
+	fake := newFakePullRequestAPI(t, "trunk", nil)
+
+	result, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace: workspace,
+		Title:     "feat: grow a new leaf",
+		Body:      "Detailed description.",
+		Draft:     true,
+		Credential: ResolvedCredential{
+			Method: CredentialApp,
+			App:    AppCredential{AppID: "4276558", PrivateKeyPath: keyPath},
+		},
+	})
+	if err != nil {
+		t.Fatalf("pull request: %v", err)
+	}
+
+	if result.Status != "created" || result.Number != 4242 {
+		t.Fatalf("result = %+v, want a created pull request numbered 4242", result)
+	}
+	if result.Head != "feat/new-leaf" || result.Base != "trunk" {
+		t.Fatalf("result = %+v, want head feat/new-leaf into the repository's real default branch trunk", result)
+	}
+	if fake.repoGets != 1 || fake.listGets != 1 || fake.creates != 1 {
+		t.Fatalf("calls = repo:%d list:%d create:%d, want 1/1/1", fake.repoGets, fake.listGets, fake.creates)
+	}
+
+	body := string(fake.createBody)
+	for _, want := range []string{
+		`"title":"feat: grow a new leaf"`,
+		`"head":"feat/new-leaf"`,
+		`"base":"trunk"`,
+		`"body":"Detailed description."`,
+		`"draft":true`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("create request body missing %q; body=%s", want, body)
+		}
+	}
+
+	// The duplicate check must be scoped to this repository's head branch.
+	if !strings.Contains(fake.listQuery, "state=open") || !strings.Contains(fake.listQuery, "opentendril%3Afeat%2Fnew-leaf") {
+		t.Fatalf("list query = %q, want an open-pull-request check scoped to owner:head", fake.listQuery)
+	}
+
+	// Every pull-request API call must carry the installation token, never the
+	// App JWT that was only used to mint it.
+	if len(fake.authHeaders) != 3 {
+		t.Fatalf("recorded %d pull-request api call(s), want 3 (repository, list, create)", len(fake.authHeaders))
+	}
+	for _, header := range fake.authHeaders {
+		if header != "Bearer ghs_installation_token" {
+			t.Fatalf("api request Authorization = %q, want the installation token bearer", header)
+		}
+	}
+}
+
+// TestRunGitPullRequestExplicitBaseSkipsLookup: an explicit base always wins,
+// and costs no repository lookup.
+func TestRunGitPullRequestExplicitBaseSkipsLookup(t *testing.T) {
+	_, keyPath := genTestKeyPEM(t)
+	workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+	fake := newFakePullRequestAPI(t, "trunk", nil)
+
+	result, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace:  workspace,
+		Title:      "feat: grow a new leaf",
+		Base:       "refs/heads/release/2026",
+		Credential: ResolvedCredential{Method: CredentialApp, App: AppCredential{AppID: "4276558", PrivateKeyPath: keyPath}},
+	})
+	if err != nil {
+		t.Fatalf("pull request: %v", err)
+	}
+	if result.Base != "release/2026" {
+		t.Fatalf("base = %q, want the explicit base with its refs/heads/ prefix stripped", result.Base)
+	}
+	if fake.repoGets != 0 {
+		t.Fatalf("repo lookups = %d, want 0 when the base is explicit", fake.repoGets)
+	}
+	if !strings.Contains(string(fake.createBody), `"base":"release/2026"`) {
+		t.Fatalf("create body = %s, want the explicit base", fake.createBody)
+	}
+}
+
+// TestRunGitPullRequestReturnsExistingWithoutCreating: look before creating.
+// An open pull request for the same head branch is returned untouched — no
+// duplicate, and no rewrite of a description a human may have edited.
+func TestRunGitPullRequestReturnsExistingWithoutCreating(t *testing.T) {
+	_, keyPath := genTestKeyPEM(t)
+	workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+	existing := []map[string]any{{
+		"number":   99,
+		"html_url": "https://github.com/opentendril/opentendril/pull/99",
+		"base":     map[string]any{"ref": "trunk"},
+		"head":     map[string]any{"ref": "feat/new-leaf"},
+	}}
+	fake := newFakePullRequestAPI(t, "trunk", existing)
+
+	result, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace:  workspace,
+		Title:      "feat: a different title that must not be applied",
+		Credential: ResolvedCredential{Method: CredentialApp, App: AppCredential{AppID: "4276558", PrivateKeyPath: keyPath}},
+	})
+	if err != nil {
+		t.Fatalf("pull request: %v", err)
+	}
+	if result.Status != "exists" || result.Number != 99 {
+		t.Fatalf("result = %+v, want the existing pull request 99 reported as exists", result)
+	}
+	if result.Base != "trunk" {
+		t.Fatalf("base = %q, want the existing pull request's own base", result.Base)
+	}
+	if fake.creates != 0 {
+		t.Fatalf("created %d pull request(s), want 0 — a duplicate must never be opened", fake.creates)
+	}
+}
+
+// TestRunGitPullRequestRefusesHeadOnDefaultBranch is the guardrail: opening a
+// pull request FROM the repository's default branch means the work was
+// committed to the wrong branch. It is refused before anything is created, and
+// there is no override flag.
+func TestRunGitPullRequestRefusesHeadOnDefaultBranch(t *testing.T) {
+	_, keyPath := genTestKeyPEM(t)
+	workspace := newPullRequestWorkspace(t, "trunk")
+	fake := newFakePullRequestAPI(t, "trunk", nil)
+
+	_, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace:  workspace,
+		Title:      "feat: grown straight onto the default branch",
+		Credential: ResolvedCredential{Method: CredentialApp, App: AppCredential{AppID: "4276558", PrivateKeyPath: keyPath}},
+	})
+	if err == nil {
+		t.Fatal("a pull request from the default branch was accepted")
+	}
+	if !strings.Contains(err.Error(), "default branch") || !strings.Contains(err.Error(), "feature branch") {
+		t.Fatalf("error = %v, want a refusal naming the default branch and directing to a feature branch", err)
+	}
+	if fake.creates != 0 || fake.listGets != 0 {
+		t.Fatalf("calls = list:%d create:%d, want the refusal to short-circuit before both", fake.listGets, fake.creates)
+	}
+}
+
+// TestRunGitPullRequestPersonalAccessTokenPosture proves the second supported
+// posture works through the identical request path: only the bearer differs,
+// and no GitHub App token is minted.
+func TestRunGitPullRequestPersonalAccessTokenPosture(t *testing.T) {
+	workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+	fake := newFakePullRequestAPI(t, "main", nil)
+
+	result, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace: workspace,
+		Title:     "feat: grow a new leaf",
+		Credential: ResolvedCredential{
+			Method:     CredentialPAT,
+			TokenEnv:   "TENDRIL_GITHUB_PAT",
+			TokenValue: "github_pat_example",
+		},
+	})
+	if err != nil {
+		t.Fatalf("pull request: %v", err)
+	}
+	if result.Status != "created" || result.Number != 4242 {
+		t.Fatalf("result = %+v, want a created pull request", result)
+	}
+	if fake.tokenMints != 0 {
+		t.Fatal("the Personal Access Token posture minted a GitHub App installation token")
+	}
+	for _, header := range fake.authHeaders {
+		if header != "Bearer github_pat_example" {
+			t.Fatalf("api request Authorization = %q, want the Personal Access Token bearer", header)
+		}
+	}
+}
+
+// TestRunGitPullRequestRefusesWithoutAPICredential is the deny-closed posture
+// check: Secure Shell keys can push code but cannot open a pull request, and
+// an unconfigured connection cannot either. Both are refused with an error
+// naming the postures that work, before any network call.
+func TestRunGitPullRequestRefusesWithoutAPICredential(t *testing.T) {
+	fake := newFakePullRequestAPI(t, "main", nil)
+
+	for _, credential := range []ResolvedCredential{
+		{Method: CredentialSSH, SSHKeyPath: "/tmp/id_ed25519"},
+		{Method: CredentialNone},
+		{},
+	} {
+		workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+		_, err := RunGitPullRequest(context.Background(), GitPRExecution{
+			Workspace:  workspace,
+			Title:      "feat: grow a new leaf",
+			Credential: credential,
+		})
+		if err == nil {
+			t.Fatalf("credential %v opened a pull request with no GitHub API token", credential.Method)
+		}
+		if !strings.Contains(err.Error(), "GitHub App") || !strings.Contains(err.Error(), "Personal Access Token") {
+			t.Fatalf("error = %v, want a refusal naming both supported postures", err)
+		}
+	}
+	if fake.creates != 0 || fake.listGets != 0 || fake.repoGets != 0 {
+		t.Fatal("a credential-less pull request still reached the GitHub API")
+	}
+}
+
+// TestRunGitPullRequestRefusesEmptyTokenValue: a Personal Access Token posture
+// whose environment variable is unset is refused with the variable named,
+// rather than sending an empty bearer to GitHub.
+func TestRunGitPullRequestRefusesEmptyTokenValue(t *testing.T) {
+	workspace := newPullRequestWorkspace(t, "feat/new-leaf")
+	newFakePullRequestAPI(t, "main", nil)
+
+	_, err := RunGitPullRequest(context.Background(), GitPRExecution{
+		Workspace:  workspace,
+		Title:      "feat: grow a new leaf",
+		Credential: ResolvedCredential{Method: CredentialPAT, TokenEnv: "TENDRIL_GITHUB_PAT"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "TENDRIL_GITHUB_PAT") {
+		t.Fatalf("error = %v, want a refusal naming the empty Personal Access Token variable", err)
+	}
+}

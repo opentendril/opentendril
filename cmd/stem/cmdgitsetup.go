@@ -209,7 +209,7 @@ func renderGrantsYAML(o gitSetupOptions) string {
 	b.WriteString("# (subject) may run which git operation on which substrate. No grant = denied.\n")
 	b.WriteString("grants:\n")
 	fmt.Fprintf(&b, "  %s:\n", o.grantSubject)
-	b.WriteString("    operationClasses: [git.commit, git.push]\n")
+	b.WriteString("    operationClasses: [git.commit, git.push, git.pr]\n")
 	fmt.Fprintf(&b, "    substrates: [%s]\n", o.substrate)
 	return b.String()
 }
@@ -258,9 +258,12 @@ func printGitSetupNextSteps(o gitSetupOptions) {
 	if o.posture == "pat" {
 		fmt.Println("Next: ensure the signing key is uploaded to GitHub (Settings → GPG keys)")
 		fmt.Printf("      and the token env %s is set, so commits show Verified.\n", envOrDefault(o.tokenEnv, "GITHUB_TOKEN"))
+		fmt.Println("      The token needs Contents: Read and write, plus Pull requests: Read")
+		fmt.Println("      and write for the granted git.pr operation.")
 	} else {
 		fmt.Println("Next: ensure the GitHub App is installed on the repository (Contents: Read")
-		fmt.Println("      and write). Commits are then signed by GitHub and show Verified.")
+		fmt.Println("      and write, plus Pull requests: Read and write for the granted git.pr")
+		fmt.Println("      operation). Commits are then signed by GitHub and show Verified.")
 	}
 	fmt.Printf("Check it:  tendril git setup --verify --substrate %s --dir %s\n", o.substrate, o.dir)
 }

@@ -310,3 +310,209 @@ func TestGitPushUnchangedWithoutDelegationMarker(t *testing.T) {
 		t.Fatal("non-delegated push produced a delegation audit event")
 	}
 }
+
+// newGitPRTestHandler builds a GitHandler over a real Core with a stubbed
+// pull-request port, returning the mux, the bus, a counter of executed pull
+// requests, and the last spec the port saw.
+func newGitPRTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64, *core.GitPRSpec) {
+	t.Helper()
+
+	executed := &atomic.Int64{}
+	lastSpec := &core.GitPRSpec{}
+	coreSvc := core.NewService(nil).WithGit(core.GitOperations{
+		PullRequest: func(ctx context.Context, spec core.GitPRSpec) (core.GitPRResult, error) {
+			executed.Add(1)
+			*lastSpec = spec
+			return core.GitPRResult{Status: "created", Number: 7, URL: "https://example.invalid/pull/7", Head: "feat/x", Base: "main"}, nil
+		},
+	})
+
+	bus := eventbus.New()
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: bus}
+	handler := NewGitHandler(coreSvc).WithDelegation(gate)
+
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+	return mux, bus, executed, lastSpec
+}
+
+const gitPRBody = `{"substrate":"core","title":"feat: grow a new leaf"}`
+
+// TestDelegatedGitPRDeniedAndAuditedWithoutGrant is the deny-closed
+// regression: a delegated pull request with no covering grant is refused
+// before the execution port is reached, and the denial is audited under the
+// git.pr operation-class.
+func TestDelegatedGitPRDeniedAndAuditedWithoutGrant(t *testing.T) {
+	mux, bus, executed, _ := newGitPRTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a denied delegated invocation still opened a pull request")
+	}
+
+	event, found := lastDelegationEvent(bus)
+	if !found {
+		t.Fatal("denied delegated invocation left no audit event")
+	}
+	if event.Type != eventbus.EventDelegationDenied {
+		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationDenied)
+	}
+	if event.Data["subject"] != "local-agent" || event.Data["operationClass"] != core.CapGitPR {
+		t.Fatalf("audit event data = %v, want the denied pull request's subject and operation-class", event.Data)
+	}
+}
+
+// TestDelegatedGitPRPermittedByMatchingGrant: a grant covering git.pr on the
+// substrate lets the pull request run, and the exercise is audited.
+func TestDelegatedGitPRPermittedByMatchingGrant(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitPR},
+		Substrates:       []string{"core"},
+	}}
+	mux, bus, executed, lastSpec := newGitPRTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("opened %d pull request(s), want 1", executed.Load())
+	}
+	if lastSpec.Substrate != "core" || lastSpec.Title != "feat: grow a new leaf" {
+		t.Fatalf("spec = %+v, want the request's substrate and title", *lastSpec)
+	}
+
+	event, found := lastDelegationEvent(bus)
+	if !found {
+		t.Fatal("authorized delegated invocation left no audit event")
+	}
+	if event.Type != eventbus.EventDelegationAuthorized {
+		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationAuthorized)
+	}
+}
+
+// TestDelegatedGitPRDeniedByCommitAndPushGrant proves git.pr is its own
+// operation-class: a subject granted the whole commit-and-push loop still
+// cannot open a pull request without git.pr.
+func TestDelegatedGitPRDeniedByCommitAndPushGrant(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitCommit, core.CapGitPush},
+		Substrates:       []string{"core"},
+	}}
+	mux, _, executed, _ := newGitPRTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (a commit+push grant must not authorize a pull request): %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a commit+push grant opened a pull request")
+	}
+}
+
+// TestDelegatedGitPRDeniedOnSubstrateMismatch: the grant covers git.pr but on
+// a different substrate, so the invocation is refused.
+func TestDelegatedGitPRDeniedOnSubstrateMismatch(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitPR},
+		Substrates:       []string{"some-other-substrate"},
+	}}
+	mux, _, executed, _ := newGitPRTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a grant for another substrate opened a pull request")
+	}
+}
+
+// TestGitPRDelegatedDeniedWithNilGate: with no gate wired at all, a delegated
+// pull request is denied rather than falling through — deny-closed.
+func TestGitPRDelegatedDeniedWithNilGate(t *testing.T) {
+	executed := &atomic.Int64{}
+	coreSvc := core.NewService(nil).WithGit(core.GitOperations{
+		PullRequest: func(ctx context.Context, spec core.GitPRSpec) (core.GitPRResult, error) {
+			executed.Add(1)
+			return core.GitPRResult{Status: "created", Number: 1}, nil
+		},
+	})
+	mux := http.NewServeMux()
+	NewGitHandler(coreSvc).Register(mux, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 with no delegation gate wired: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a delegated pull request ran with no delegation gate wired")
+	}
+}
+
+// TestGitPRUnchangedWithoutDelegationMarker is the security-first regression:
+// a non-delegated request runs the plain bearer-authenticated path, stamps the
+// REST origin, and produces no delegation audit event.
+func TestGitPRUnchangedWithoutDelegationMarker(t *testing.T) {
+	mux, bus, executed, lastSpec := newGitPRTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(gitPRBody))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("opened %d pull request(s), want 1", executed.Load())
+	}
+	if lastSpec.Origin != session.OriginREST {
+		t.Fatalf("origin = %q, want the REST default", lastSpec.Origin)
+	}
+	if _, found := lastDelegationEvent(bus); found {
+		t.Fatal("non-delegated pull request produced a delegation audit event")
+	}
+}
+
+// TestGitPRRequiresTitle: the adapter rejects a request with no title before
+// the Core is reached.
+func TestGitPRRequiresTitle(t *testing.T) {
+	mux, _, executed, _ := newGitPRTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/pr", strings.NewReader(`{"substrate":"core"}`))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a titleless pull request reached the execution port")
+	}
+}
