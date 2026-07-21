@@ -120,7 +120,7 @@ type DelegatedWorkspace struct {
 //
 // The branch is registered as an owned reference at creation, which is what
 // later makes it reclaimable rather than litter.
-func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, subject string) (DelegatedWorkspace, error) {
+func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, subject string, credential ResolvedCredential) (DelegatedWorkspace, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -143,6 +143,14 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 	if isGitRepo(path) {
 		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
 			workspace.Branch = strings.TrimSpace(current)
+		}
+		// A workspace whose branch is finished is cycled onto a fresh one, so
+		// the next piece of work starts from the current default branch rather
+		// than piling onto something already merged. This is the other half of
+		// owning a reference: it is reclaimed at the moment its purpose ends,
+		// which for a subject's working branch is the moment its work lands.
+		if rotated, err := rotateFinishedWorkspaceBranch(ctx, base, path, workspace.Branch, trimmedSubject, credential); err == nil && rotated != "" {
+			workspace.Branch = rotated
 		}
 		return workspace, nil
 	}
@@ -184,23 +192,97 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 	return workspace, nil
 }
 
+// rotateFinishedWorkspaceBranch resets a subject's working branch onto the
+// current default branch when the old one is finished — meaning it holds
+// nothing, or everything it held has merged. It returns the branch name when
+// it rotated, and "" when the branch was left alone.
+//
+// Anything else is left strictly alone: a branch carrying unmerged commits is
+// the subject's work in progress, and resetting it would destroy exactly what
+// this whole design exists to protect.
+func rotateFinishedWorkspaceBranch(ctx context.Context, base, workspacePath, branch, subject string, credential ResolvedCredential) (string, error) {
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch != ownedWorkspaceBranchName(subject) {
+		return "", nil
+	}
+
+	var ref OwnedRef
+	for _, candidate := range OwnedRefsFor(base) {
+		if candidate.Branch == branch {
+			ref = candidate
+			break
+		}
+	}
+	if ref.Branch == "" {
+		return "", nil
+	}
+
+	finished := branchHasNoWork(ctx, workspacePath, ref)
+	if !finished {
+		merged, _ := ownedRefIsMerged(ctx, workspacePath, ref, credential)
+		finished = merged
+	}
+	if !finished {
+		return "", nil
+	}
+
+	startPoint, err := workspaceStartPoint(ctx, base)
+	if err != nil {
+		return "", err
+	}
+	// Already current: rotating would achieve nothing.
+	if current, err := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", "HEAD"); err == nil {
+		if target, targetErr := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", startPoint); targetErr == nil {
+			if strings.TrimSpace(current) == strings.TrimSpace(target) {
+				return "", nil
+			}
+		}
+	}
+
+	if _, err := runGitCommitCommandFn(ctx, workspacePath, "checkout", "-B", branch, startPoint); err != nil {
+		return "", err
+	}
+	baseCommit := ""
+	if out, revErr := runGitCommitCommandFn(ctx, workspacePath, "rev-parse", "HEAD"); revErr == nil {
+		baseCommit = strings.TrimSpace(out)
+	}
+	_ = RegisterOwnedRef(OwnedRef{
+		Repository: base,
+		Branch:     branch,
+		Purpose:    PurposeDelegatedWorkspace,
+		Subject:    subject,
+		Base:       baseCommit,
+	})
+	return branch, nil
+}
+
 // workspaceStartPoint resolves what a new delegated workspace should be cut
 // from: the remote-tracking default branch when there is one (so a subject
 // starts from what the remote actually has), then the local default branch,
 // then the substrate's head as a last resort.
+//
+// It returns a resolved COMMIT, not a reference name, and that matters. A
+// worktree has its own HEAD, so a name like "HEAD" means one thing in the
+// substrate and another inside the workspace — resolving it here, against the
+// substrate, removes the ambiguity before the value travels anywhere.
 func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 	resolution := ResolveDefaultBranchLocal(ctx, base, "")
+	candidates := []string{}
 	if resolution.Known() {
-		for _, candidate := range []string{"origin/" + resolution.Branch, resolution.Branch} {
-			if _, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", candidate); err == nil {
-				return candidate, nil
-			}
+		candidates = append(candidates, "origin/"+resolution.Branch, resolution.Branch)
+	}
+	candidates = append(candidates, "HEAD")
+
+	for _, candidate := range candidates {
+		commit, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", candidate)
+		if err != nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(commit); trimmed != "" {
+			return trimmed, nil
 		}
 	}
-	if _, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", "HEAD"); err != nil {
-		return "", fmt.Errorf("substrate %q has no commits to start a workspace from", base)
-	}
-	return "HEAD", nil
+	return "", fmt.Errorf("substrate %q has no commits to start a workspace from", base)
 }
 
 // ownedWorkspaceBranchName builds the branch a subject works on. The shape is

@@ -63,11 +63,11 @@ func subjectContext(subject string) context.Context {
 func TestDelegatedSubjectsGetSeparateWorkspaces(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 
-	first, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	first, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve for agent-a: %v", err)
 	}
-	second, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-b"), name, path, "agent-b")
+	second, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-b"), name, path, "agent-b", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve for agent-b: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestDelegatedSubjectsGetSeparateWorkspaces(t *testing.T) {
 	// Reuse is stable: the same subject always returns to its own tree, which
 	// is what lets an agent's sequence of calls stay consistent without the
 	// agent tracking anything.
-	again, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	again, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("re-resolve for agent-a: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestDelegatedSubjectsGetSeparateWorkspaces(t *testing.T) {
 func TestNonDelegatedCallUsesOperatorCheckout(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
 
-	workspace, err := conductor.ResolveDelegatedWorkspace(context.Background(), name, path, "")
+	workspace, err := conductor.ResolveDelegatedWorkspace(context.Background(), name, path, "", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -120,11 +120,11 @@ func TestConcurrentSubjectsDoNotCorruptEachOther(t *testing.T) {
 		Identity: conductor.ResolvedIdentity{Name: "Bot", Email: "bot@example.com"},
 	}
 
-	agentA, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	agentA, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("workspace for agent-a: %v", err)
 	}
-	agentB, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-b"), name, path, "agent-b")
+	agentB, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-b"), name, path, "agent-b", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("workspace for agent-b: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestConcurrentSubjectsDoNotCorruptEachOther(t *testing.T) {
 // delegated workspace is ever on it.
 func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
-	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestIsolatedWorkspaceArrivesReadyToWork(t *testing.T) {
 // nobody can ever decide is finished, which is how the system came to litter.
 func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	name, path := newIsolationSubstrate(t)
-	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a")
+	workspace, err := conductor.ResolveDelegatedWorkspace(subjectContext("agent-a"), name, path, "agent-a", conductor.ResolvedCredential{})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -291,5 +291,59 @@ func TestOwnedWorkspaceBranchIsRegistered(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("workspace branch %q was not registered as owned; owned = %+v", workspace.Branch, owned)
+	}
+}
+
+// TestWorkspaceBranchRotatesWhenFinished: a subject returning to its workspace
+// after its work landed starts from the current default branch, rather than
+// piling the next task onto a branch that is already merged. A workspace whose
+// branch holds unmerged commits is left strictly alone — that is work in
+// progress, and resetting it would destroy exactly what this design protects.
+func TestWorkspaceBranchRotatesWhenFinished(t *testing.T) {
+	name, path := newIsolationSubstrate(t)
+	ctx := subjectContext("agent-a")
+
+	workspace, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	startingHead := gitRun(t, workspace.Path, "rev-parse", "HEAD")
+
+	// The substrate's default branch moves on while the subject's empty
+	// workspace sits idle.
+	gitRun(t, path, "commit", "--allow-empty", "-m", "someone else's work")
+	movedHead := gitRun(t, path, "rev-parse", "trunk")
+	if movedHead == startingHead {
+		t.Fatal("fixture did not advance the default branch")
+	}
+
+	// Returning to an EMPTY workspace rotates it onto the new default state.
+	again, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	if err != nil {
+		t.Fatalf("re-resolve: %v", err)
+	}
+	if again.Branch != workspace.Branch {
+		t.Fatalf("branch changed name to %q, want the stable %q", again.Branch, workspace.Branch)
+	}
+	if head := gitRun(t, again.Path, "rev-parse", "HEAD"); head != movedHead {
+		t.Fatalf("workspace head = %s, want it rebuilt on the current default %s", head, movedHead)
+	}
+
+	// Now the subject has unmerged work: the workspace must be left alone.
+	if err := os.WriteFile(filepath.Join(again.Path, "wip.txt"), []byte("in progress\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gitRun(t, again.Path, "add", "-A")
+	gitRun(t, again.Path, "-c", "user.email=bot@example.com", "-c", "user.name=Bot", "commit", "-m", "unmerged work")
+	workHead := gitRun(t, again.Path, "rev-parse", "HEAD")
+
+	gitRun(t, path, "commit", "--allow-empty", "-m", "default moves again")
+
+	third, err := conductor.ResolveDelegatedWorkspace(ctx, name, path, "agent-a", conductor.ResolvedCredential{})
+	if err != nil {
+		t.Fatalf("third resolve: %v", err)
+	}
+	if head := gitRun(t, third.Path, "rev-parse", "HEAD"); head != workHead {
+		t.Fatalf("workspace head = %s, want the subject's unmerged work %s left untouched", head, workHead)
 	}
 }

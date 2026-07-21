@@ -376,7 +376,17 @@ func resolveGitWorkspace(ctx context.Context, substrate string, substratesConfig
 		return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("substrate %q does not resolve to a local workspace directory (the delegated git ladder runs against a local checkout)", substrate)
 	}
 
-	resolved, err := conductor.ResolveDelegatedWorkspace(ctx, substrate, workspace, core.DelegationSubjectFromContext(ctx))
+	// The credential is resolved before the workspace because workspace
+	// resolution may need it: a subject returning to a workspace whose work has
+	// merged gets a fresh branch, and "has it merged" is forge evidence.
+	credential := conductor.ResolvedCredential{}
+	if substrateSpec != nil {
+		if resolvedCredential, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig); credentialErr == nil {
+			credential = resolvedCredential
+		}
+	}
+
+	resolved, err := conductor.ResolveDelegatedWorkspace(ctx, substrate, workspace, core.DelegationSubjectFromContext(ctx), credential)
 	if err != nil {
 		return conductor.DelegatedWorkspace{}, nil, err
 	}
