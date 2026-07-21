@@ -281,9 +281,15 @@ You do not configure anything for this. The agent's subject — the one bound in
 its MCP block — is the key, so isolation follows the same identity your grants
 already use. `tendril git status` reports which workspace it is describing.
 
-A fresh workspace starts on **no branch**, deliberately: it is the agent's job
-to create a feature branch before committing, and `git.status` says so up front
-rather than letting a commit strand work on a detached head.
+A workspace arrives **already on its own branch**, cut from the repository's
+real default branch. The agent is never asked which branch to work on, so it
+cannot pick the wrong one — committing to your default branch is not refused,
+it is impossible, because no agent workspace is ever on it.
+
+Those branches are **owned**: Tendril records each one when it creates it and
+takes it away again when it is finished. A run that produces nothing takes its
+branch with it; a branch carrying commits is always kept, published or not.
+Nothing Tendril creates is left for you to clean up later.
 
 Running `tendril git ...` yourself, at a terminal, is not delegated — it uses
 your own checkout, as you would expect.

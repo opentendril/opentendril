@@ -30,16 +30,25 @@ if [ ! -f "${pruner}" ]; then
   exit 1
 fi
 
-# The one reviewed exception: selection.go deletes losing PHENOTYPE branches —
-# refs Tendril created itself moments earlier during evolutionary selection, from
-# a list it produced. They are never a user's work, so forge verification would
-# be meaningless there. Any site beyond these two is a second chance to delete
-# someone's work and fails the build.
+# The reviewed exceptions, each named so it stays visible:
+#
+#   selection.go — deletes losing PHENOTYPE branches, refs Tendril created
+#   itself moments earlier during evolutionary selection, from a list it
+#   produced. Never a user's work, so forge verification would be meaningless.
+#
+#   reclaim.go — reclaims OWNED references (branches Tendril created and
+#   recorded). It is checked separately below for its own gate, because it
+#   deletes automatically rather than on confirmation and therefore has to be
+#   at least as strict as the pruner.
+#
+# Any site beyond these fails the build: it is a further chance to delete
+# someone's work.
+reclaimer="cmd/stem/internal/conductor/reclaim.go"
 allowed_other="cmd/stem/internal/conductor/selection.go"
 
 sites="$(grep -rln '"branch", "-D"\|"branch", "-d"' cmd/ --include='*.go' \
     | grep -v '_test\.go$' | sort || true)"
-unexpected="$(printf '%s\n' "${sites}" | grep -v "^${pruner}$" | grep -v "^${allowed_other}$" || true)"
+unexpected="$(printf '%s\n' "${sites}" | grep -v "^${pruner}$" | grep -v "^${allowed_other}$" | grep -v "^${reclaimer}$" || true)"
 
 if [ -n "${unexpected}" ]; then
   echo "::error::Branch deletion appears somewhere new."
@@ -64,9 +73,26 @@ if ! grep -qF "${gate}" "${pruner}"; then
   exit 1
 fi
 
+# The reclaimer deletes without anyone confirming it, so it must be strictly
+# more careful than the pruner: a branch is reclaimed only when it has produced
+# nothing beyond its base (nothing to lose) or its tip is in a merged pull
+# request (the same forge evidence the pruner demands).
+# These are CALL SITES, deliberately — matching the bare identifier would also
+# match each function's own definition, so removing every use of a gate would
+# still pass. That mistake was made once while writing this guard and caught by
+# testing the guard against a deliberately broken version of the code.
+for required in "case branchHasNoWork(ctx, repository, ref):" "merged, reason := ownedRefIsMerged(ctx, repository, ref, credential)"; do
+  if ! grep -qF "${required}" "${reclaimer}"; then
+    echo "::error::${reclaimer} deletes branches without its ${required} gate."
+    echo "Automatic reclamation must be at least as strict as the confirmed prune:"
+    echo "only an empty branch, or one whose pull request merged, may ever be removed."
+    exit 1
+  fi
+done
+
 # 3. The local-only shortcuts must never appear in the lifecycle path.
-if grep -nE '"--merged"' "${pruner}"; then
-  echo "::error::${pruner} uses git's own --merged check."
+if grep -nE '"--merged"' "${pruner}" "${reclaimer}"; then
+  echo "::error::A lifecycle path uses git's own --merged check."
   echo "That misses squash merges entirely and will classify merged work as unmerged"
   echo "(and, if the sense is ever inverted, unmerged work as deletable)."
   exit 1
