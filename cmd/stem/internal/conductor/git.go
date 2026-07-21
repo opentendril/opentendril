@@ -15,7 +15,7 @@ import (
 // Delegated git commit — the lowest rung of the delegated-execution ladder
 // from the Design RFC. RunGitCommit commits the current state of a resolved
 // local workspace directory under the substrate's configured commit identity,
-// so an external agent never needs to shell out git on the host itself. Like
+// so an external mind never needs to shell out git on the host itself. Like
 // commitTerrariumExecution, it runs the Stem's own git against the workspace
 // directory on the host — no container is involved.
 //
@@ -196,7 +196,7 @@ func guardDefaultBranchCommit(ctx context.Context, execution GitCommitExecution)
 // The sharing is the point, not an optimization. If status answered this
 // question with its own logic it would eventually disagree with the guard, and
 // a status that says "fine" followed by a commit that is refused is worse than
-// no status at all: it teaches an agent to distrust the read-side and go back
+// no status at all: it teaches a subject to distrust the read-side and go back
 // to guessing. One predicate, two consumers, no drift — and an agreement test
 // pins it.
 type DefaultBranchCommitAssessment struct {
@@ -610,7 +610,7 @@ func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult,
 }
 
 // Delegated pull request — the top rung of the delegated-execution ladder, and
-// the last mile that previously forced an agent off Tendril's governed path
+// the last mile that previously forced a delegation subject off Tendril's governed path
 // (shelling out to the GitHub command line tool, or guessing at credentials).
 // Like the push it runs here on the Stem, the sole secret-holding zone; a
 // Sprout stays network-sealed and never talks to GitHub.
@@ -830,14 +830,14 @@ func RunGitPullRequest(ctx context.Context, execution GitPRExecution) (GitPRResu
 
 // Delegated branch creation — the operation that makes default-branch
 // protection actionable. Without it, refusing a commit on the default branch
-// tells an agent what it may not do and offers nothing it may do, which sends
+// tells a subject what it may not do and offers nothing it may do, which sends
 // it back to running git on the host: the exact behaviour the governed path
 // exists to replace.
 //
 // It is deliberately the narrowest useful operation: create a branch from the
 // current state and switch to it. No delete, no rename, no reset, no upstream
 // tracking changes — a branch operation that can destroy work would need a far
-// stronger authorization story than "the agent asked".
+// stronger authorization story than "the subject asked".
 
 // GitBranchExecution is a fully resolved delegated branch request.
 type GitBranchExecution struct {

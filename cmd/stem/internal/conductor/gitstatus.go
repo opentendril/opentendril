@@ -10,11 +10,11 @@ import (
 
 // The read-side of the delegated git ladder.
 //
-// Four write operations carry guardrails that exist because an agent guessed
+// Four write operations carry guardrails that exist because a delegation subject guessed
 // something it could not see — which branch was the default, whether the
 // workspace was already on a feature branch, whether a pull request existed.
 // Every one of those guardrails catches a guess; none of them removed the
-// reason for guessing. RunGitStatus does: it lets an agent look before it
+// reason for guessing. RunGitStatus does: it lets a subject look before it
 // acts, so a refusal becomes a prediction instead of a surprise.
 //
 // Two properties make it trustworthy, and both are deliberate:
@@ -23,7 +23,7 @@ import (
 //     from AssessDefaultBranchCommit — the same predicate the commit guard
 //     acts on — not from a reimplementation. A status that disagreed with the
 //     write path would be worse than no status, because it would teach an
-//     agent to distrust the read-side.
+//     subject to distrust the read-side.
 //  2. It makes no network calls, for the same reason: the commit guard is
 //     offline, so status must be offline or the two would diverge whenever
 //     the interface and the local record differ. It is also strictly
@@ -31,7 +31,7 @@ import (
 //     repository.
 
 // gitStatusFileLimit bounds the reported path list. An unbounded list would
-// drop an entire repository's worth of paths into an agent's context on a
+// drop an entire repository's worth of paths into a subject's context on a
 // large change; the read-side exists to reduce cognitive load, not create it.
 // The total count is always reported, so a truncated list is never mistaken
 // for the whole picture.
@@ -128,8 +128,8 @@ func RunGitStatus(ctx context.Context, execution GitStatusExecution) (GitStatusR
 
 	result := GitStatusResult{Clean: true, CommitAllowed: true}
 
-	// A repository with no commits yet is a real state an agent needs
-	// described, not an error: refusing it would send the agent back to
+	// A repository with no commits yet is a real state a subject needs
+	// described, not an error: refusing it would send the subject back to
 	// guessing at the moment it is most confused.
 	if head, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "HEAD"); err == nil {
 		result.Head = strings.TrimSpace(head)
@@ -161,7 +161,7 @@ func RunGitStatus(ctx context.Context, execution GitStatusExecution) (GitStatusR
 
 	// Upstream, and the ahead/behind counts against it. A branch that has
 	// never been pushed simply has none — reported as such rather than as an
-	// error, since "not pushed yet" is exactly what the agent needs to know.
+	// error, since "not pushed yet" is exactly what the subject needs to know.
 	if upstream, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"); err == nil {
 		result.Upstream = strings.TrimSpace(upstream)
 		if counts, countErr := runGitCommitCommandFn(ctx, execution.Workspace, "rev-list", "--left-right", "--count", result.Upstream+"...HEAD"); countErr == nil {

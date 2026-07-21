@@ -9,7 +9,7 @@ import (
 // Delegated execution — the grant model and authorizer (Design RFC).
 //
 // A DelegationGrant is the unit of durable authorization the Stem checks
-// before executing a *delegated* capability invocation: an external agent
+// before executing a *delegated* capability invocation: an external mind
 // asking the Stem to run work on its behalf instead of shelling out on the
 // host. One durable, scoped, revocable grant replaces N per-command host
 // permission prompts.
@@ -48,7 +48,8 @@ func delegationImpactRank(impact string) int {
 	}
 }
 
-// DelegationGrant authorizes one subject (an agent/session/mesh trust-root
+// DelegationGrant authorizes one subject (a delegation-subject / Phytomer /
+// mesh trust-root
 // identity) to invoke a bounded set of operation-classes on a bounded set of
 // Substrates. It is control-plane policy — distinct from substrates.yaml,
 // which stays about connections and credentials.

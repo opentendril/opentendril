@@ -12,21 +12,21 @@ import (
 // Per-subject workspace isolation for the delegated git ladder.
 //
 // Without this, every delegated operation ran in one shared directory per
-// substrate. Two agents granted the same substrate silently corrupted each
-// other: the delegated commit stages the whole tree, so one agent's
+// substrate. Two delegation subjects granted the same substrate silently corrupted
+// each other: the delegated commit stages the whole tree, so one subject's
 // uncommitted files were committed by the other, onto the other's branch,
 // under the other's identity — destroying exactly the attribution the
-// delegated commit exists to provide. The second agent also branched from
+// delegated commit exists to provide. The second subject also branched from
 // whatever the shared tree happened to be on, so it branched from the first
-// agent's branch rather than from the substrate's.
+// subject's branch rather than from the substrate's.
 //
 // The fix reuses the mechanism the Sprout path already proves
 // (createShadowWorktree): a real git worktree, private to the caller. The
 // isolation unit is the DELEGATION SUBJECT, because the subject is already the
 // unit of authorization and is already bound at connection time — so it
-// requires no new parameter on any operation, and an agent's whole sequence
+// requires no new parameter on any operation, and a subject's whole sequence
 // (status, branch, commit, push, pull request) lands in one private tree
-// without the agent tracking anything.
+// without the subject tracking anything.
 //
 // A worktree shares the repository's object store with the substrate, so
 // commits made in it are immediately visible to the substrate as branches —
@@ -68,10 +68,10 @@ func sanitizeWorkspaceComponent(value string) string {
 
 // workspaceLocks serializes operations that target the same workspace.
 //
-// Isolation removes agent-versus-agent corruption; it does not remove one
+// Isolation removes subject-versus-subject corruption; it does not remove one
 // subject issuing two overlapping calls. This is an in-process lock, which
-// covers the realistic case — one Stem serving many agents — and deliberately
-// does NOT claim to coordinate with a separate process operating on the same
+// covers the realistic case — one Stem serving many delegation subjects — and
+// deliberately does NOT claim to coordinate with a separate process on the same
 // directory. Claiming more than it delivers would be worse than the honest
 // limitation.
 var workspaceLocks sync.Map
@@ -112,8 +112,8 @@ type DelegatedWorkspace struct {
 //
 // That branch is the point. Every branch guardrail on the ladder — the
 // default-branch commit refusal, the detached-head refusal, the pull-request
-// head check — exists to catch an agent choosing a branch badly. Handing the
-// agent a workspace that is already on a correct branch removes the choice, so
+// head check — exists to catch a subject choosing a branch badly. Handing the
+// subject a workspace that is already on a correct branch removes the choice, so
 // there is nothing left to choose badly: a delegated workspace is never on the
 // default branch at any point in its life, and never on no branch at all. The
 // guards remain as a backstop; they simply stop being the mechanism.

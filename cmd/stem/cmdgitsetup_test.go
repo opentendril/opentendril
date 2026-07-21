@@ -163,7 +163,7 @@ func TestUpsertMergesMultipleConnections(t *testing.T) {
 	}
 }
 
-// TestUpsertGrantUnionsSubstrates proves granting an existing agent access to a
+// TestUpsertGrantUnionsSubstrates proves granting an existing subject access to a
 // second repo adds the substrate to its list rather than replacing it, and a
 // distinct subject is kept separate.
 func TestUpsertGrantUnionsSubstrates(t *testing.T) {

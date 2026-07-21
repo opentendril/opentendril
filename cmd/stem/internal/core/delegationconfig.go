@@ -27,7 +27,8 @@ import (
 const DelegationGrantsFilename = "grants.yaml"
 
 // delegationGrantsFile maps .tendril/grants.yaml. Grants are keyed by
-// subject — the agent/session/mesh trust-root identity exercising them.
+// subject — the delegation-subject / Phytomer / mesh trust-root identity
+// exercising them.
 type delegationGrantsFile struct {
 	Grants map[string]delegationGrantSpec `yaml:"grants"`
 }

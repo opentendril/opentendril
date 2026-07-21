@@ -11,7 +11,7 @@ import (
 // The read-side must never lie about the write-side.
 //
 // git.status predicts whether a commit will be allowed; git.commit decides it.
-// If those two ever disagree, the read-side becomes actively harmful: an agent
+// If those two ever disagree, the read-side becomes actively harmful: a subject
 // that is told "fine" and then refused learns to distrust status and goes back
 // to guessing, which is the behaviour the whole ladder exists to remove.
 //
@@ -139,7 +139,7 @@ func TestStatusPredictionMatchesCommitOutcome(t *testing.T) {
 			if status.CommitAllowed != testCase.wantCommitAllowed {
 				t.Fatalf("commitAllowed = %v, want %v (both paths agreed, but on the wrong answer)", status.CommitAllowed, testCase.wantCommitAllowed)
 			}
-			// A blocked prediction must explain itself: an agent acts on the
+			// A blocked prediction must explain itself: a subject acts on the
 			// reason, not just the boolean.
 			if !status.CommitAllowed && status.BlockedReason == "" {
 				t.Fatal("a blocked commit was predicted with no reason given")

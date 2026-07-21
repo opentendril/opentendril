@@ -98,7 +98,7 @@ type Core interface {
 	// through the injected GitOperations execution port.
 	GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error)
 	// GitStatus reports a substrate's git state — the read-side of the
-	// ladder, so an agent can look before it acts instead of discovering the
+	// ladder, so a delegation subject can look before it acts instead of discovering the
 	// guardrails by being refused. Runs through the injected GitOperations
 	// execution port.
 	GitStatus(ctx context.Context, in GitStatusInput) (GitStatusResult, error)

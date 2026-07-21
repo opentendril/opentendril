@@ -190,7 +190,7 @@ func (h *MCPHandler) callCoreCapability(id interface{}, name string, args map[st
 // callCoreCapabilityAs dispatches with a caller-supplied context, so a
 // delegated invocation can carry its authorized subject. The subject selects
 // the isolated workspace the operation runs in and therefore never travels in
-// the arguments: an agent that could name it could claim another subject's
+// the arguments: a caller that could name it could claim another subject's
 // workspace. It is bound by the trusted launch configuration at connection
 // time and stamped here, after authorization.
 func (h *MCPHandler) callCoreCapabilityAs(ctx context.Context, id interface{}, name string, args map[string]interface{}) []byte {

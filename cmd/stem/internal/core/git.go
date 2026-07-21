@@ -7,7 +7,7 @@ import (
 )
 
 // The git capability family: the delegated-execution ladder from the Design
-// RFC. It lets an external agent ask the Stem to do git work — under the
+// RFC. It lets an external mind ask the Stem to do git work — under the
 // substrate's configured connection — instead of shelling out git on the host
 // itself and guessing at credentials. Three operation-classes exist today:
 // git.commit (commit the workspace under the configured identity), git.push
@@ -94,7 +94,7 @@ type GitPushResult struct {
 // already been published. Opening a pull request is a separate operation-class
 // from pushing on purpose: operation-classes are separately grantable, so a
 // subject granted only git.pr must never be able to publish a branch as a side
-// effect. The agent's loop is git.commit → git.push → git.pr.
+// effect. The subject's loop is git.commit → git.push → git.pr.
 type GitPRInput struct {
 	// Substrate is the absolute path or named substrate key of the target
 	// workspace.
@@ -149,7 +149,7 @@ type GitPRResult struct {
 
 // GitBranchInput asks the Stem to create (or switch to) a feature branch in a
 // substrate's workspace. It exists so that default-branch protection has a
-// correct next move: an agent told "commit on a feature branch" must be able
+// correct next move: a subject told "commit on a feature branch" must be able
 // to make one through Tendril, or the guardrail simply pushes it off the
 // governed path.
 type GitBranchInput struct {
@@ -184,7 +184,7 @@ type GitBranchResult struct {
 
 // GitStatusInput asks the Stem to report a substrate's git state. It is the
 // read-side of the ladder: every write operation carries a guardrail that
-// exists because an agent guessed something it could not see, and this is how
+// exists because a delegation subject guessed something it could not see, and this is how
 // it sees instead. The answer is computed from the guards' own view, so a
 // prediction here and a refusal there can never disagree.
 type GitStatusInput struct {
@@ -245,7 +245,7 @@ type GitStatusResult struct {
 	Renamed   int `json:"renamed"`
 	Untracked int `json:"untracked"`
 	// Changes lists changed paths, bounded so a large change cannot flood an
-	// agent's context; Truncated says the list is shorter than ChangeCount.
+	// subject's context; Truncated says the list is shorter than ChangeCount.
 	Changes   []GitStatusChange `json:"changes"`
 	Truncated bool              `json:"truncated,omitempty"`
 	// OnDefaultBranch reports that the workspace sits on the protected
@@ -257,7 +257,7 @@ type GitStatusResult struct {
 	BlockedReason string `json:"blockedReason,omitempty"`
 	// Workspace is the directory this status describes. A delegated caller
 	// works in its own isolated worktree, not the substrate's checkout, and
-	// an agent that cannot see that it is isolated will eventually assume it
+	// a subject that cannot see that it is isolated will eventually assume it
 	// is not — the same "invited to guess" failure the read-side exists to
 	// remove. So the isolation is reported rather than implied.
 	Workspace string `json:"workspace,omitempty"`
@@ -628,7 +628,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitBranchList,
-			Description: "Classify a substrate's local branches against evidence from GitHub: which are merged, which have an open or closed-without-merging pull request, which were never pushed, and which are held by another agent's workspace. Read-only. Merge state comes from the forge because a squash-merged branch looks unmerged to git itself.",
+			Description: "Classify a substrate's local branches against evidence from GitHub: which are merged, which have an open or closed-without-merging pull request, which were never pushed, and which are held by another subject's workspace. Read-only. Merge state comes from the forge because a squash-merged branch looks unmerged to git itself.",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
@@ -643,7 +643,7 @@ func (s *Service) gitCapabilities() []Capability {
 		},
 		{
 			Name:        CapGitPrune,
-			Description: "Delete local branches whose pull request merged, and nothing else. Reports what it WOULD delete unless confirm is true. Never deletes the current or default branch, a branch with an open or closed-unmerged pull request, one the remote has never seen, or one held by another agent's workspace.",
+			Description: "Delete local branches whose pull request merged, and nothing else. Reports what it WOULD delete unless confirm is true. Never deletes the current or default branch, a branch with an open or closed-unmerged pull request, one the remote has never seen, or one held by another subject's workspace.",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
 				"confirm":   map[string]any{"type": "boolean", "description": "Actually delete. Omit to report what would be deleted and change nothing."},

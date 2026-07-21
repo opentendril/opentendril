@@ -9,7 +9,7 @@ import (
 )
 
 // Merge/append mode for `tendril git setup`. A deployment has multiple
-// repositories and multiple agent subjects, so re-running setup must be
+// repositories and multiple delegation subjects, so re-running setup must be
 // additive: upsert this run's entries into an existing substrates.yaml /
 // grants.yaml while preserving every other entry AND the user's comments and
 // formatting. The work is done on the YAML node tree (a surgical insert/update)
@@ -20,7 +20,7 @@ import (
 //   - An existing named entry is overwritten only with --force (otherwise a
 //     clear error) — a specific connection is never silently replaced.
 //   - A grant subject's operation-classes and substrates are UNIONED, so
-//     granting an existing agent access to a new repository is additive and
+//     granting an existing subject access to a new repository is additive and
 //     needs no --force.
 
 // fileExists reports whether path is an existing file.
@@ -207,7 +207,7 @@ func mergeConnection(path string, o gitSetupOptions) error {
 
 // mergeGrant upserts the run's subject into an existing grants.yaml. When the
 // subject already exists, its operation-classes and substrates are unioned, so
-// authorising an existing agent on a new repository is additive.
+// authorising an existing subject on a new repository is additive.
 func mergeGrant(path string, o gitSetupOptions) error {
 	root, err := loadYAMLMapping(path)
 	if err != nil {

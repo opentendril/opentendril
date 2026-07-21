@@ -359,7 +359,7 @@ func gitOperations() core.GitOperations {
 // terminal still sees their working copy.
 //
 // Every git operation goes through here. Resolving a substrate's raw path for a
-// delegated call is exactly the bug this exists to prevent — two agents sharing
+// delegated call is exactly the bug this exists to prevent — two delegation subjects sharing
 // one tree, staging each other's files — so the isolation cannot be bypassed by
 // one operation quietly doing its own resolution. TestDelegatedOperationsAreIsolated
 // pins that.
@@ -554,7 +554,7 @@ func printGitUsage() {
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
-	fmt.Println("  agent MCP config. Run `tendril git setup --help` for the full flag list.")
+	fmt.Println("  Model Context Protocol block for the subject. Run `tendril git setup --help` for the full flag list.")
 	fmt.Println()
 	fmt.Println("status --substrate <path|name>")
 	fmt.Println("  Reports the workspace's branch, the resolved default branch, uncommitted")
@@ -563,7 +563,7 @@ func printGitUsage() {
 	fmt.Println()
 	fmt.Println("branches --substrate <path|name>")
 	fmt.Println("  Classifies local branches against GitHub: merged, pull request open or")
-	fmt.Println("  closed-without-merging, never pushed, or held by another agent. Read-only.")
+	fmt.Println("  closed-without-merging, never pushed, or held by another subject. Read-only.")
 	fmt.Println()
 	fmt.Println("prune --substrate <path|name> [--confirm]")
 	fmt.Println("  Deletes local branches whose pull request MERGED, and nothing else. Without")

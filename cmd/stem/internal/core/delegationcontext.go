@@ -10,10 +10,10 @@ import (
 // context.
 //
 // It is deliberately not a field on any capability input. Those structs are
-// decoded from agent-supplied JSON, so a subject field would be a subject an
-// agent could name — and since the subject decides which isolated workspace an
-// operation runs in (and which grants apply to it), an agent that could name it
-// could claim another agent's workspace. The subject is bound by the trusted
+// decoded from caller-supplied JSON, so a subject field would be a subject the
+// caller could name — and since the subject decides which isolated workspace an
+// operation runs in (and which grants apply to it), a caller that could name it
+// could claim another subject's workspace. The subject is bound by the trusted
 // launch configuration (the Model Context Protocol connection) or by an
 // authenticated header (the Representational State Transfer surface), stamped
 // here after authorization, and is unforgeable from request content.

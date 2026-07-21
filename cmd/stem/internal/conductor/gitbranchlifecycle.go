@@ -57,7 +57,7 @@ const (
 	// is never treated as merged.
 	BranchUnverified = "unverified"
 	// BranchCheckedOutElsewhere is held by another workspace (an isolated
-	// per-subject worktree), so another agent is working on it.
+	// per-subject worktree), so another delegation subject is working on it.
 	BranchCheckedOutElsewhere = "checked-out-elsewhere"
 )
 
@@ -77,7 +77,7 @@ type GitBranchInfo struct {
 	// Deletable reports whether this branch may be pruned. Only a merged
 	// classification is ever true.
 	Deletable bool
-	// Reason explains the classification in one line, for a human or an agent
+	// Reason explains the classification in one line, for the Botanist or a delegation subject
 	// deciding what to do next.
 	Reason string
 }
@@ -200,7 +200,7 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 	}
 
 	// %(worktreepath) is non-empty when a branch is checked out somewhere —
-	// including another subject's isolated workspace, where another agent is
+	// including another subject's isolated workspace, where another subject is
 	// working on it right now.
 	raw, err := runGitCommitCommandFn(ctx, execution.Workspace, "for-each-ref",
 		"--format=%(refname:short)%09%(objectname)%09%(upstream:short)%09%(worktreepath)", "refs/heads")
@@ -248,7 +248,7 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 			info.Reason = fmt.Sprintf("the repository's default branch (%s)", resolution.Describe())
 		case worktreePath != "":
 			info.Classification = BranchCheckedOutElsewhere
-			info.Reason = fmt.Sprintf("checked out in another workspace (%s) — another agent may be working on it", worktreePath)
+			info.Reason = fmt.Sprintf("checked out in another workspace (%s) — another delegation subject may be working on it", worktreePath)
 		case !result.Verified:
 			info.Classification = BranchUnverified
 			info.Reason = "merge state could not be established (the connection has no GitHub API credential) — nothing is deletable without evidence"
@@ -316,7 +316,7 @@ type GitPruneExecution struct {
 	//
 	// This inverts the usual convention, where the destructive action is the
 	// default and a dry run is opt-in, and the inversion is the point: for an
-	// operation invoked by an agent that may have misread its instructions,
+	// operation invoked by a subject that may have misread its instructions,
 	// the safe path must be the one taken by accident.
 	Confirm bool
 }
