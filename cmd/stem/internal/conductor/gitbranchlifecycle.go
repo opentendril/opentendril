@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -144,6 +145,42 @@ func lookupPullRequestForCommit(ctx context.Context, owner, repo, sha, token str
 	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true}, nil
 }
 
+// lookupPullRequestsForHead asks which pull requests were ever opened FROM a
+// branch name. It exists because the commit-to-pull-request lookup above does
+// not reliably associate a pull request that was CLOSED WITHOUT MERGING — that
+// branch comes back looking like it never had one, which is a materially
+// worse thing to tell someone deciding whether to delete it.
+//
+// It is used ONLY to downgrade a classification, never to grant deletability.
+// The distinction matters: a commit hash is unique forever, but a branch NAME
+// can be reused. If a branch called feat/x was merged last year and someone
+// creates a new feat/x today, this query finds the old merged pull request
+// while the new tip is unpushed work. Trusting it to mark something deletable
+// would delete that work. Trusting it to say "there is a closed pull request
+// here, be careful" is always safe.
+func lookupPullRequestsForHead(ctx context.Context, owner, repo, branch, token string) (forgePullRequestState, error) {
+	var pulls []struct {
+		Number   int    `json:"number"`
+		State    string `json:"state"`
+		MergedAt string `json:"merged_at"`
+	}
+	path := fmt.Sprintf("/repos/%s/%s/pulls?state=all&head=%s", owner, repo, url.QueryEscape(owner+":"+branch))
+	if err := githubRESTRequest(ctx, http.MethodGet, path, token, nil, &pulls); err != nil {
+		return forgePullRequestState{}, err
+	}
+	if len(pulls) == 0 {
+		return forgePullRequestState{Known: true}, nil
+	}
+	// Prefer an open pull request, then the most recent closed one; a merged
+	// result is deliberately NOT reported as merged here (see above).
+	for _, pull := range pulls {
+		if strings.EqualFold(pull.State, "open") {
+			return forgePullRequestState{Number: pull.Number, State: pull.State, Known: true}, nil
+		}
+	}
+	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true}, nil
+}
+
 // RunGitBranchList enumerates local branches and classifies each one against
 // evidence. It never deletes anything.
 func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (GitBranchListResult, error) {
@@ -226,6 +263,16 @@ func RunGitBranchList(ctx context.Context, execution GitBranchListExecution) (Gi
 				}
 				stateBySHA[info.Head] = state
 			}
+			// A tip with no associated pull request may still have one that
+			// was closed without merging, which the commit lookup misses.
+			// This can only make the answer more cautious, never less.
+			if state.Known && state.Number == 0 {
+				if byHead, headErr := lookupPullRequestsForHead(ctx, owner, repo, info.Name, token); headErr == nil && byHead.Number > 0 {
+					state.Number = byHead.Number
+					state.State = byHead.State
+				}
+			}
+
 			info.PullRequest = state.Number
 			switch {
 			case !state.Known:

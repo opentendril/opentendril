@@ -17,7 +17,11 @@ type fakeForge struct {
 	// would return. A hash absent from the map is reported as unknown (HTTP
 	// 422), which is what the interface does for a commit it has never seen.
 	byCommit map[string][]map[string]any
-	lookups  int
+	// byHead maps a branch NAME to the pull requests ever opened from it —
+	// the head-ref query, which reveals closed-unmerged pull requests that the
+	// commit lookup does not associate.
+	byHead  map[string][]map[string]any
+	lookups int
 }
 
 func newFakeForge(t *testing.T, forge *fakeForge) {
@@ -30,6 +34,16 @@ func newFakeForge(t *testing.T, forge *fakeForge) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"token": "ghs_installation_token", "expires_at": time.Now().Add(time.Hour).Format(time.RFC3339),
 			})
+		case strings.HasSuffix(r.URL.Path, "/pulls") && r.URL.Query().Get("head") != "":
+			head := r.URL.Query().Get("head")
+			if index := strings.Index(head, ":"); index >= 0 {
+				head = head[index+1:]
+			}
+			pulls := forge.byHead[head]
+			if pulls == nil {
+				pulls = []map[string]any{}
+			}
+			_ = json.NewEncoder(w).Encode(pulls)
 		case strings.Contains(r.URL.Path, "/commits/") && strings.HasSuffix(r.URL.Path, "/pulls"):
 			forge.lookups++
 			parts := strings.Split(r.URL.Path, "/")
@@ -76,7 +90,7 @@ func branchAt(t *testing.T, repo, branch, content string) string {
 func newLifecycleRepo(t *testing.T) (repo string, forge *fakeForge) {
 	t.Helper()
 	repo = newBranchRepo(t, "trunk", "trunk")
-	forge = &fakeForge{byCommit: map[string][]map[string]any{}}
+	forge = &fakeForge{byCommit: map[string][]map[string]any{}, byHead: map[string][]map[string]any{}}
 
 	mergedSHA := branchAt(t, repo, "feat/merged", "merged work")
 	forge.byCommit[mergedSHA] = []map[string]any{{"number": 101, "state": "closed", "merged_at": "2026-07-20T10:00:00Z"}}
@@ -318,5 +332,69 @@ func TestBranchListCachesLookupsPerCommit(t *testing.T) {
 	// sixth lookup.
 	if got := forge.lookups - before; got > 5 {
 		t.Fatalf("%d interface lookups for 5 distinct tips — the per-commit cache is not working", got)
+	}
+}
+
+// TestBranchListFindsClosedPullRequestTheCommitLookupMisses covers the real
+// gap found live: GitHub's commit-to-pull-request endpoint does not associate a
+// pull request that was CLOSED WITHOUT MERGING, so such a branch comes back
+// looking as though it never had one. The head-ref fallback recovers it.
+func TestBranchListFindsClosedPullRequestTheCommitLookupMisses(t *testing.T) {
+	repo := newBranchRepo(t, "trunk", "trunk")
+	forge := &fakeForge{byCommit: map[string][]map[string]any{}, byHead: map[string][]map[string]any{}}
+
+	sha := branchAt(t, repo, "agent/rejected-work", "work that was turned down")
+	// The commit lookup knows the commit but reports no pull request…
+	forge.byCommit[sha] = []map[string]any{}
+	// …while the head query reveals it was closed without merging.
+	forge.byHead["agent/rejected-work"] = []map[string]any{{"number": 333, "state": "closed", "merged_at": nil}}
+
+	if _, err := runGitCommand(context.Background(), repo, "checkout", "trunk"); err != nil {
+		t.Fatalf("checkout trunk: %v", err)
+	}
+	newFakeForge(t, forge)
+
+	result, err := RunGitBranchList(context.Background(), GitBranchListExecution{
+		Workspace: repo, ConfiguredBranch: "trunk", Credential: lifecycleCredential(t),
+	})
+	if err != nil {
+		t.Fatalf("branch list: %v", err)
+	}
+	branch := classificationOf(result, "agent/rejected-work")
+	if branch.Classification != BranchPullRequestClosed {
+		t.Fatalf("classified as %q, want %q — a closed-unmerged pull request must not look like no pull request at all", branch.Classification, BranchPullRequestClosed)
+	}
+	if branch.PullRequest != 333 || branch.Deletable {
+		t.Fatalf("branch = %+v, want pull request 333 reported and the branch kept", branch)
+	}
+}
+
+// TestHeadFallbackNeverGrantsDeletability is the safety property of that
+// fallback. A commit hash is unique forever; a branch NAME can be reused. If
+// an old merged pull request used this name, the fallback must not mark a
+// branch carrying different, unpushed work as deletable.
+func TestHeadFallbackNeverGrantsDeletability(t *testing.T) {
+	repo := newBranchRepo(t, "trunk", "trunk")
+	forge := &fakeForge{byCommit: map[string][]map[string]any{}, byHead: map[string][]map[string]any{}}
+
+	sha := branchAt(t, repo, "feat/reused-name", "brand new work under an old name")
+	forge.byCommit[sha] = []map[string]any{}
+	// An OLD pull request with this branch name merged long ago.
+	forge.byHead["feat/reused-name"] = []map[string]any{{"number": 42, "state": "closed", "merged_at": "2026-01-01T00:00:00Z"}}
+
+	if _, err := runGitCommand(context.Background(), repo, "checkout", "trunk"); err != nil {
+		t.Fatalf("checkout trunk: %v", err)
+	}
+	newFakeForge(t, forge)
+
+	result, err := RunGitBranchList(context.Background(), GitBranchListExecution{
+		Workspace: repo, ConfiguredBranch: "trunk", Credential: lifecycleCredential(t),
+	})
+	if err != nil {
+		t.Fatalf("branch list: %v", err)
+	}
+	branch := classificationOf(result, "feat/reused-name")
+	if branch.Deletable || branch.Classification == BranchMerged {
+		t.Fatalf("branch = %+v — a merged pull request found by NAME must never make the current tip deletable; the name was reused and this work would be destroyed", branch)
 	}
 }
