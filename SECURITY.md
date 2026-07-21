@@ -88,7 +88,11 @@ root — including the Stem's private key — no matter who owns the file. A
 account with extra steps, and it gives back precisely what a separate principal
 was meant to take away.
 
-Three ways out, in order of preference:
+The full, ordered procedure — rootless containers, the Stem's own user, the
+service unit, per-Pollinator credentials, and the sudo rules that decide whether
+administering the account undoes it — is in
+[docs/HOST-TENDRIL.md](docs/HOST-TENDRIL.md). Three ways out, in order of
+preference:
 
 | Approach | What it needs | Why it holds |
 |---|---|---|
