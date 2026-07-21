@@ -418,3 +418,78 @@ func apiCommitFileChangesFromWorkspace(ctx context.Context, workspace string, pa
 	}
 	return additions, deletions, nil
 }
+
+// runGitPushCommandFn is the authenticated-push seam, injectable for tests that
+// exercise branch resolution and credential materialization without a real
+// remote.
+var runGitPushCommandFn = runGitCommandWithEnv
+
+// GitPushExecution is a fully resolved delegated-push request: a workspace on
+// disk, the branch to push (empty means the workspace's current branch), and
+// the substrate's resolved credential carrying the authentication material.
+type GitPushExecution struct {
+	// Workspace is the resolved local workspace directory the push targets.
+	Workspace string
+	// Branch optionally names the branch to push; empty pushes the workspace's
+	// current branch.
+	Branch string
+	// Credential is the substrate's resolved credential; its authentication
+	// material (Personal Access Token, GitHub App token, or SSH key) is
+	// materialized into the push process environment, never persisted or placed
+	// on the command line.
+	Credential ResolvedCredential
+}
+
+// GitPushResult reports a finished delegated push.
+type GitPushResult struct {
+	// Status is "pushed" when the push command succeeded (git treats an
+	// already-current ref as a successful no-op push).
+	Status string
+	// Branch is the branch that was pushed.
+	Branch string
+}
+
+// RunGitPush pushes the workspace's branch to its origin remote using the
+// substrate's resolved credential. The push runs here on the Stem — the sole
+// secret-holding zone — never inside a sealed Sprout, mirroring the
+// authenticated push the ordinary Sprout pipeline performs
+// (pushTerrariumCommit). The secret travels only in the process environment via
+// materializeGitAuth: never in the remote URL, the command line, or
+// .git/config.
+func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(execution.Workspace) == "" {
+		return GitPushResult{}, fmt.Errorf("git push workspace is required")
+	}
+
+	targetBranch := strings.TrimSpace(execution.Branch)
+	if targetBranch == "" {
+		current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+		if err != nil {
+			return GitPushResult{}, err
+		}
+		targetBranch = strings.TrimSpace(current)
+	}
+	if targetBranch == "" {
+		return GitPushResult{}, fmt.Errorf("unable to determine branch for push (the workspace has no current branch; pass an explicit branch)")
+	}
+	targetBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
+
+	originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin")
+	if err != nil {
+		return GitPushResult{}, err
+	}
+
+	pushEnv, authErr := materializeGitAuth(ctx, execution.Credential, strings.TrimSpace(originURL))
+	if authErr != nil {
+		return GitPushResult{}, authErr
+	}
+
+	if _, err := runGitPushCommandFn(ctx, execution.Workspace, pushEnv, "push", "origin", "--", "HEAD:refs/heads/"+targetBranch); err != nil {
+		return GitPushResult{}, err
+	}
+
+	return GitPushResult{Status: "pushed", Branch: targetBranch}, nil
+}

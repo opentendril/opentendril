@@ -283,7 +283,7 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 // are delegated, every one of them is a canonical capability, and no
 // non-delegated capability is misclassified.
 func TestDelegatedCapabilityTaxonomy(t *testing.T) {
-	delegated := []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit}
+	delegated := []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit, core.CapGitPush}
 	for _, name := range delegated {
 		if !core.IsDelegatedCapability(name) {
 			t.Errorf("IsDelegatedCapability(%q) = false, want true", name)

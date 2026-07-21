@@ -43,6 +43,42 @@ func TestGitCommitNotWired(t *testing.T) {
 	}
 }
 
+func TestGitPushValidatesInput(t *testing.T) {
+	captured := &GitPushSpec{}
+	svc := NewService(nil).WithGit(GitOperations{
+		Push: func(_ context.Context, spec GitPushSpec) (GitPushResult, error) {
+			*captured = spec
+			return GitPushResult{Status: "pushed", Branch: spec.Branch}, nil
+		},
+	})
+	ctx := context.Background()
+
+	if _, err := svc.GitPush(ctx, GitPushInput{}); err == nil {
+		t.Fatal("missing substrate accepted")
+	}
+	if _, err := svc.GitPush(ctx, GitPushInput{Substrate: "  "}); err == nil {
+		t.Fatal("blank substrate accepted")
+	}
+
+	// A push with only a substrate is valid: the branch is optional (empty
+	// means the workspace's current branch), unlike commit which requires a
+	// message.
+	if _, err := svc.GitPush(ctx, GitPushInput{Substrate: " core ", Branch: " feature/x "}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if captured.Substrate != "core" || captured.Branch != "feature/x" {
+		t.Fatalf("spec = %+v, want trimmed substrate/branch", captured)
+	}
+}
+
+func TestGitPushNotWired(t *testing.T) {
+	svc := NewService(nil)
+	_, err := svc.GitPush(context.Background(), GitPushInput{Substrate: "core"})
+	if err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("unwired git push error = %v, want a not-wired report", err)
+	}
+}
+
 func TestGitCommitPathsNormalized(t *testing.T) {
 	svc, captured := newGitService(t)
 	ctx := context.Background()

@@ -60,15 +60,19 @@ func runGitCmd(ctx context.Context, args []string) {
 
 	result, err := svc.Invoke(ctx, command.capability, input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Git commit failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "❌ Git %s failed: %v\n", strings.TrimPrefix(command.capability, "git."), err)
 		os.Exit(1)
 	}
 
-	commitResult, _ := result.(core.GitCommitResult)
-	if commitResult.Status == "committed" {
-		fmt.Fprintf(os.Stderr, "🌱 Committed %s\n", commitResult.CommitHash)
-	} else {
-		fmt.Fprintln(os.Stderr, "🌱 Nothing to commit")
+	switch typed := result.(type) {
+	case core.GitCommitResult:
+		if typed.Status == "committed" {
+			fmt.Fprintf(os.Stderr, "🌱 Committed %s\n", typed.CommitHash)
+		} else {
+			fmt.Fprintln(os.Stderr, "🌱 Nothing to commit")
+		}
+	case core.GitPushResult:
+		fmt.Fprintf(os.Stderr, "🌱 Pushed %s\n", typed.Branch)
 	}
 }
 
@@ -136,6 +140,44 @@ func gitOperations() core.GitOperations {
 				CommitHash: result.CommitHash,
 			}, nil
 		},
+		Push: func(ctx context.Context, spec core.GitPushSpec) (core.GitPushResult, error) {
+			workspace := spec.Substrate
+			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			if isName && substrateSpec != nil {
+				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+					workspace = trimmedPath
+				}
+			}
+			info, statErr := os.Stat(workspace)
+			if statErr != nil || !info.IsDir() {
+				return core.GitPushResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a delegated git push runs against a local checkout)", spec.Substrate)
+			}
+
+			// Resolve the substrate's credential so the configured
+			// authentication material reaches the conductor's authenticated
+			// push. A bare path input resolves to an empty credential; the push
+			// then relies on whatever ambient auth the remote accepts (and fails
+			// clearly if none does).
+			credential := conductor.ResolvedCredential{}
+			if substrateSpec != nil {
+				resolved, credentialErr := conductor.ResolveSubstrateCredential(*substrateSpec, substratesConfig)
+				if credentialErr != nil {
+					return core.GitPushResult{}, credentialErr
+				}
+				credential = resolved
+			}
+
+			result, err := conductor.RunGitPush(ctx, conductor.GitPushExecution{
+				Workspace:  workspace,
+				Branch:     spec.Branch,
+				Credential: credential,
+			})
+			if err != nil {
+				return core.GitPushResult{}, err
+			}
+
+			return core.GitPushResult{Status: result.Status, Branch: result.Branch}, nil
+		},
 	}
 }
 
@@ -151,6 +193,7 @@ type gitCommand struct {
 // the source of truth the parity coverage test reads for the CLI arm.
 var gitCommands = []gitCommand{
 	{"commit", core.CapGitCommit},
+	{"push", core.CapGitPush},
 }
 
 // lookupGitCommand resolves a CLI subcommand token to its registered entry.
@@ -203,6 +246,8 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "substrate")
 		case "--message":
 			err = stringFlag(&i, "message")
+		case "--branch":
+			err = stringFlag(&i, "branch")
 		case "--path":
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("flag --path requires a value")
@@ -223,24 +268,40 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 		input["paths"] = paths
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
-		return nil, fmt.Errorf("missing substrate. Usage: tendril git commit --substrate <path|name> --message <message>")
+		return nil, fmt.Errorf("missing substrate. Usage: tendril git %s --substrate <path|name>%s", strings.TrimPrefix(capName, "git."), gitUsageSuffix(capName))
 	}
-	if message, _ := input["message"].(string); strings.TrimSpace(message) == "" {
-		return nil, fmt.Errorf("missing message. Usage: tendril git commit --substrate <path|name> --message <message>")
+	// A commit message is required only for commit; push takes no message.
+	if capName == core.CapGitCommit {
+		if message, _ := input["message"].(string); strings.TrimSpace(message) == "" {
+			return nil, fmt.Errorf("missing message. Usage: tendril git commit --substrate <path|name> --message <message>")
+		}
 	}
 	return input, nil
 }
 
+// gitUsageSuffix returns the capability-specific flag hint appended to a
+// missing-substrate error so each git subcommand shows its own required flags.
+func gitUsageSuffix(capName string) string {
+	if capName == core.CapGitCommit {
+		return " --message <message>"
+	}
+	return ""
+}
+
 func printGitUsage() {
-	fmt.Println("Usage: tendril git commit --substrate <path|name> --message <message> [flags]")
-	fmt.Println("  --substrate         The absolute path or named substrate key of the target workspace (required)")
-	fmt.Println("  --message           The commit message (required)")
-	fmt.Println("  --path P            Workspace-relative path to stage (repeatable; omit to stage all changes)")
+	fmt.Println("Usage: tendril git <commit|push> --substrate <path|name> [flags]")
+	fmt.Println()
+	fmt.Println("commit --substrate <path|name> --message <message> [--path P ...]")
+	fmt.Println("  Commits the current state of a substrate's workspace under the substrate's")
+	fmt.Println("  configured commit identity. Deny-closed: a substrate without a configured")
+	fmt.Println("  identity is refused — an unattributable delegated commit is never created.")
+	fmt.Println()
+	fmt.Println("push --substrate <path|name> [--branch B]")
+	fmt.Println("  Pushes the substrate's branch (current branch if --branch is omitted) to its")
+	fmt.Println("  remote using the substrate's configured credential. The push runs on the Stem,")
+	fmt.Println("  never inside a sealed Sprout; the token travels only in the process environment.")
+	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("Commits the current state of a substrate's workspace under the substrate's")
-	fmt.Println("configured commit identity. Deny-closed: a substrate without a configured")
-	fmt.Println("identity is refused — an unattributable delegated commit is never created.")
-	fmt.Println()
-	fmt.Println("commit is a projection of the shared Core capability registry.")
+	fmt.Println("commit and push are projections of the shared Core capability registry.")
 }
