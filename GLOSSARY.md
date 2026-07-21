@@ -36,6 +36,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Phloem** | Vascular channel carrying diffs (outputs) down to the Substrate. | Output pipe | per-run |
 | **Phytomer** | A session — one persistent interaction thread; the repeating module the Meristem initiates and Sprouts emerge from. | Session / interaction thread | persistent |
 | **Plasmid** | A modular, injectable block of context or tools (*a skill*). | RAG context / tool definition | definition |
+| **Pollinator** | An **external** requester that reaches *in* and asks the organism for governed work — a Botanist at a terminal, or an external Mycorrhizal mind connected over a governed interface. Carries a **delegation subject** (its bound identity) and is granted operation-classes; no grant, no access. | External API caller / client (*not* "agent") | external |
 | **Resin** | Live internal logging trace. | Debug log / trace | transient |
 | **Rhizome** | The background code/AST index of the Substrate. | Vector DB / code index | persistent |
 | **Rhizosphere** | The **external** ecosystem the Roots tap — the LLM providers, Docker, git, MCP themselves. *(The outside world; contrast **Roots**, which is OpenTendril's own code that reaches into it.)* | Underlying tech stack / dependencies | environment |
@@ -81,6 +82,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | Standard IT / AI | OpenTendril | Note |
 |---|---|---|
 | Agent / autonomous worker | **Sprout** (body) + **Mycorrhizae** (mind) | Tendril deliberately *decomposes* "agent"; it is not one thing. |
+| External caller / client asking Tendril for work | **Pollinator** | The mirror of a **Symbiotic Nodule**: a Nodule is reached *out* to, a Pollinator reaches *in*. |
 | Session / interaction thread | **Phytomer** | The Meristem initiates it; Sprouts emerge from it. |
 | Task / user prompt | **Transcript** (single) / **Seed** (product-level intent) | |
 | Run / execute | **grow** (verb) | A Sprout *grows* its Transcript. |

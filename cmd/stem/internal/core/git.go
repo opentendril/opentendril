@@ -7,7 +7,7 @@ import (
 )
 
 // The git capability family: the delegated-execution ladder from the Design
-// RFC. It lets an external mind ask the Stem to do git work — under the
+// RFC. It lets a Pollinator ask the Stem to do git work — under the
 // substrate's configured connection — instead of shelling out git on the host
 // itself and guessing at credentials. Three operation-classes exist today:
 // git.commit (commit the workspace under the configured identity), git.push

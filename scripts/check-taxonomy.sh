@@ -40,7 +40,7 @@ base="${1:-origin/main}"
 # terms that have actually drifted, not every word standard IT owns. Add to it
 # when a new drift is observed, not in anticipation of one.
 declare -A replacements=(
-  ["agent"]="a delegation subject (an external mind holding a grant), a Sprout (Tendril's own worker), or the Mycorrhizal Network (the LLM) — say which"
+  ["agent"]="a Pollinator (an external requester holding a delegation subject), a Sprout (Tendril's own sealed worker), or the Mycorrhizal Network (the LLM) — say which"
   ["sandbox"]="Terrarium"
   ["worker container"]="Sprout"
 )

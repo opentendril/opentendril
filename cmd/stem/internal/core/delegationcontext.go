@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// The delegation subject travels from the surface that authenticated it to the
-// execution adapter through the request context, and ONLY through the request
-// context.
+// The delegation subject — the Pollinator's bound identity — travels from the
+// surface that authenticated it to the execution adapter through the request
+// context, and ONLY through the request context.
 //
 // It is deliberately not a field on any capability input. Those structs are
 // decoded from caller-supplied JSON, so a subject field would be a subject the

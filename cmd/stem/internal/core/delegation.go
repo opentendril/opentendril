@@ -9,7 +9,7 @@ import (
 // Delegated execution — the grant model and authorizer (Design RFC).
 //
 // A DelegationGrant is the unit of durable authorization the Stem checks
-// before executing a *delegated* capability invocation: an external mind
+// before executing a *delegated* capability invocation: a Pollinator
 // asking the Stem to run work on its behalf instead of shelling out on the
 // host. One durable, scoped, revocable grant replaces N per-command host
 // permission prompts.

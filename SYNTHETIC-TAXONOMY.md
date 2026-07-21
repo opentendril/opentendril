@@ -145,6 +145,32 @@ growth cycle:
     and *studies* it, working from outside the plant and observing through the
     **Greenhouse**. ("Gardener" names the tending activity; the Botanist is the
     person.)
+*   **Pollinator** — an **external requester** that reaches *in* and asks the
+    organism for governed work: a **Botanist** at a terminal, or an external
+    **Mycorrhizal** mind connected over a governed interface. In botany a
+    pollinator is not part of the plant — it arrives, exchanges, and leaves, and
+    what it brings is what precedes **Fruit**. Here it brings intent and receives
+    a deliverable, and the chain reads exactly as botany does: *Pollinator →
+    growth → Fruit*.
+
+    A Pollinator is identified by its **delegation subject** — the bound identity
+    a grant names — and may run only the operation-classes it has been granted;
+    no grant, no access. The mutualism is real but not assumed: pollinators are
+    also how disease travels between plants, which is precisely why the grant
+    exists.
+
+    **Direction distinguishes it from a Symbiotic Nodule.** A Nodule is an
+    external *service* the organism reaches **out** to (GitHub's interface, a
+    cloud provider). A Pollinator reaches **in**. Same boundary, opposite
+    direction — and the security posture differs accordingly.
+
+    **This is the word that replaces "agent"** for an external requester. Note
+    what it is *not*: not a **Sprout** (Tendril's own ephemeral, network-sealed
+    worker), and not the **Mycorrhizal Network** itself (the reasoning mind,
+    which a Pollinator may *be* or may merely *use*). Collapsing those into one
+    word is exactly the imprecision the taxonomy exists to prevent — a Sprout is
+    sealed off from the network, a Pollinator is the thing being granted mediated
+    access to it.
 *   **Greenhouse** — the **Command Center UI**. The pane of glass through which the
     Botanist watches the headless organism grow via telemetry (REST/WebSockets).
 

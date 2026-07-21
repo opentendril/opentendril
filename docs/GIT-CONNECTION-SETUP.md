@@ -1,8 +1,9 @@
-# Git connection setup — get a delegation subject committing through Tendril
+# Git connection setup — get a Pollinator committing through Tendril
 
 **The problem this solves:** every LLM wastes time and tokens guessing how to
 authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
-Tendril gives an external mind **one pre-configured, correct git method**. It
+Tendril gives a **Pollinator** — an external requester, human or Mycorrhizal —
+**one pre-configured, correct git method**. It
 calls `git.status` / `git.branch` / `git.commit` / `git.push` / `git.pr`, and can
 tidy up afterwards with `git.branch.list` / `git.prune`; it never touches
 credentials. You
@@ -44,7 +45,7 @@ reference, and the repository ships `substrates.yaml.example` /
 - A **Substrate** is a repository.
 - A **Nodule** is a *git connection* — identity + auth + signing — defined once
   and shared by every repository that uses it (one Nodule → many Substrates).
-- A **grant** says which delegation subject may run which git operation on which
+- A **grant** says which Pollinator (by its delegation subject) may run which git operation on which
   Substrate. No grant → no access (deny-closed).
 - The **Stem** (Tendril's daemon) holds the secrets and does the git work.
   **Sprouts are network-sealed and never push.**
@@ -165,7 +166,7 @@ instead of a path. **That `.pem` + App ID is the whole per-machine setup.**
 
 ---
 
-## Authorise a delegation subject (the security gate)
+## Authorise a Pollinator (the security gate)
 
 Access is **two keys**: the subject must (a) be *connected* to Tendril and (b)
 have a *grant*. Missing either → denied.
@@ -189,7 +190,7 @@ response names branches and changed file paths.
 
 ### 2. Configure the subject's Model Context Protocol connection
 
-Point the external mind at Tendril's Model Context Protocol server and bind its
+Point the Pollinator at Tendril's Model Context Protocol server and bind its
 subject (the subject is set by the trusted launch configuration — a subject can
 never self-declare it):
 
@@ -261,7 +262,7 @@ grants:
 
 ---
 
-## Several delegation subjects at once
+## Several Pollinators at once
 
 Tendril is built for simultaneous work, so **each authorised subject gets its own
 isolated workspace** for a repository — a private git worktree, created on first

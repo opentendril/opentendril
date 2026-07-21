@@ -11,11 +11,11 @@ import (
 )
 
 // `tendril git setup` — one command that stands up a git connection so neither
-// neither the Botanist nor a delegation subject hand-assembles config. It writes a `substrates.yaml`
+// neither the Botanist nor a Pollinator hand-assembles config. It writes a `substrates.yaml`
 // credentials profile + substrate and (optionally) a `.tendril/grants.yaml`
 // grant, prints the per-subject Model Context Protocol block, and can check the result with
-// --verify. It is flag-driven (no interactive-only path) so a delegation
-// subject can call
+// --verify. It is flag-driven (no interactive-only path) so a Pollinator can
+// call
 // it too, and it writes only references — env-var names and key paths — never a
 // secret. Two postures mirror the connection tiers: `app` (GitHub App, commits
 // signed server-side via commit: api) and `pat` (fine-grained Personal Access
@@ -249,7 +249,7 @@ func printGitSetupNextSteps(o gitSetupOptions) {
 		subject = "<subject-name>"
 	}
 	fmt.Println()
-	fmt.Println("Authorise a delegation subject — add this to its Model Context Protocol")
+	fmt.Println("Authorise a Pollinator — add this to its Model Context Protocol")
 	fmt.Println("configuration (one block per subject,")
 	fmt.Println("each with its own subject; the subject is bound here, never self-declared):")
 	fmt.Println(`  { "mcpServers": { "opentendril": {`)

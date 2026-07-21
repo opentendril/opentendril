@@ -15,7 +15,7 @@ import (
 // Delegated git commit — the lowest rung of the delegated-execution ladder
 // from the Design RFC. RunGitCommit commits the current state of a resolved
 // local workspace directory under the substrate's configured commit identity,
-// so an external mind never needs to shell out git on the host itself. Like
+// so a Pollinator never needs to shell out git on the host itself. Like
 // commitTerrariumExecution, it runs the Stem's own git against the workspace
 // directory on the host — no container is involved.
 //
@@ -610,7 +610,7 @@ func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult,
 }
 
 // Delegated pull request — the top rung of the delegated-execution ladder, and
-// the last mile that previously forced a delegation subject off Tendril's governed path
+// the last mile that previously forced a Pollinator off Tendril's governed path
 // (shelling out to the GitHub command line tool, or guessing at credentials).
 // Like the push it runs here on the Stem, the sole secret-holding zone; a
 // Sprout stays network-sealed and never talks to GitHub.

@@ -24,6 +24,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Phloem**: vascular channel carrying diffs (outputs) down to the Substrate.
 - **Phytomer**: a session — one persistent interaction thread; the Meristem initiates it and Sprouts emerge from it. (An **axillary bud** on it buds into a new Phytomer chain: a branch, parallel line, or recursion.)
 - **Plasmid**: a modular, injectable block of context or tools (*a skill*).
+- **Pollinator**: an *external* requester that reaches IN and asks for governed work — a Botanist, or an external Mycorrhizal mind over a governed interface. Identified by a **delegation subject**; granted operation-classes; no grant, no access. The mirror of a Symbiotic Nodule (which the organism reaches OUT to). Never call it an "agent": it is neither a Sprout (sealed internal worker) nor the Mycorrhizal Network itself.
 - **Resin**: live internal log trace (hardens into Amber).
 - **Rhizome**: the code/AST index of the Substrate.
 - **Rhizosphere**: the *external* ecosystem the Roots tap — the providers, Docker, git, MCP themselves (the outside world).
