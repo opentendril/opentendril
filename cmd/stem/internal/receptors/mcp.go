@@ -184,7 +184,17 @@ func (h *MCPHandler) formatDelegationDenied(id interface{}, decision core.Delega
 // registry and wraps its JSON result in an MCP tool-result envelope. Adapter
 // translation only — no business logic.
 func (h *MCPHandler) callCoreCapability(id interface{}, name string, args map[string]interface{}) []byte {
-	result, err := h.core.Invoke(context.Background(), name, args)
+	return h.callCoreCapabilityAs(context.Background(), id, name, args)
+}
+
+// callCoreCapabilityAs dispatches with a caller-supplied context, so a
+// delegated invocation can carry its authorized subject. The subject selects
+// the isolated workspace the operation runs in and therefore never travels in
+// the arguments: an agent that could name it could claim another subject's
+// workspace. It is bound by the trusted launch configuration at connection
+// time and stamped here, after authorization.
+func (h *MCPHandler) callCoreCapabilityAs(ctx context.Context, id interface{}, name string, args map[string]interface{}) []byte {
+	result, err := h.core.Invoke(ctx, name, args)
 	return h.formatCapabilityResult(id, result, err)
 }
 
@@ -571,11 +581,13 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			// capabilities dispatch untouched (their decision stays the zero
 			// value, which carries no grant).
 			var decision core.DelegationDecision
+			callCtx := context.Background()
 			if core.IsDelegatedCapability(params.Name) {
 				decision = h.authorizeDelegatedTool(params.Name, params.Arguments)
 				if !decision.Authorized {
 					return h.formatDelegationDenied(req.ID, decision)
 				}
+				callCtx = core.WithDelegationSubject(callCtx, h.delegationSubject)
 			}
 			if params.Name == core.CapSproutGrow {
 				// Origin and the pinned stdio session are MCP-surface metadata
@@ -598,7 +610,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				// places the authorized grant's allow-list itself.
 				return h.callPassthroughRun(req.ID, params.Arguments, decision)
 			}
-			return h.callCoreCapability(req.ID, params.Name, params.Arguments)
+			return h.callCoreCapabilityAs(callCtx, req.ID, params.Name, params.Arguments)
 		}
 
 		// Deprecated aliases of the governed genome capabilities:

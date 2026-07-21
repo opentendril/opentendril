@@ -211,6 +211,42 @@ matching grant.
 
 ---
 
+## Several agents at once
+
+Tendril is built for simultaneous work, so **each authorised agent gets its own
+isolated workspace** for a repository — a private git worktree, created on first
+use, keyed to that agent's subject.
+
+This matters more than it sounds. Without it, two agents sharing one checkout
+will commit each other's half-finished files, onto each other's branches, under
+each other's identity, with no error anywhere. With it:
+
+- each agent's commits contain only that agent's work, correctly attributed;
+- each agent branches from the repository's branch, not from whatever another
+  agent happened to be doing;
+- both agents' branches are still visible in your repository, so pushing,
+  pull requests, and your own review work exactly as before (a worktree shares
+  the repository's object store).
+
+You do not configure anything for this. The agent's subject — the one bound in
+its MCP block — is the key, so isolation follows the same identity your grants
+already use. `tendril git status` reports which workspace it is describing.
+
+A fresh workspace starts on **no branch**, deliberately: it is the agent's job
+to create a feature branch before committing, and `git.status` says so up front
+rather than letting a commit strand work on a detached head.
+
+Running `tendril git ...` yourself, at a terminal, is not delegated — it uses
+your own checkout, as you would expect.
+
+**One caution about `checkout: { mode: path }`:** that mode points Tendril at
+*your* clone. Sprout runs refresh a checkout to a pristine tree before working,
+so Tendril now refuses to refresh your own checkout when it has uncommitted
+changes rather than discarding them. If you want Tendril working continuously
+without touching your files, prefer `mode: managed` — its own clone.
+
+---
+
 ## Look before acting — `tendril git status`
 
 Every guardrail below exists because an agent guessed something it could not

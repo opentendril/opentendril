@@ -1484,7 +1484,7 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 	// Reuse a persistent checkout that already exists: refresh it to a clean,
 	// current tree instead of failing to clone into a non-empty directory.
 	if checkout.persistent && isGitRepo(dest) {
-		if err := refreshExistingCheckout(dest, branch, gitEnv); err != nil {
+		if err := refreshExistingCheckout(dest, branch, gitEnv, checkout.tendrilOwned); err != nil {
 			return "", false, err
 		}
 		return dest, true, nil

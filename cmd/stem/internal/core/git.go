@@ -255,6 +255,17 @@ type GitStatusResult struct {
 	CommitAllowed bool `json:"commitAllowed"`
 	// BlockedReason explains a false CommitAllowed ("" when allowed).
 	BlockedReason string `json:"blockedReason,omitempty"`
+	// Workspace is the directory this status describes. A delegated caller
+	// works in its own isolated worktree, not the substrate's checkout, and
+	// an agent that cannot see that it is isolated will eventually assume it
+	// is not — the same "invited to guess" failure the read-side exists to
+	// remove. So the isolation is reported rather than implied.
+	Workspace string `json:"workspace,omitempty"`
+	// Isolated reports that Workspace is a per-subject worktree.
+	Isolated bool `json:"isolated"`
+	// Subject is the delegation subject the workspace belongs to ("" for a
+	// direct, non-delegated invocation).
+	Subject string `json:"subject,omitempty"`
 }
 
 // GitOperations is the injection port for delegated git execution. Each member

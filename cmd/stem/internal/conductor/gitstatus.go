@@ -144,14 +144,13 @@ func RunGitStatus(ctx context.Context, execution GitStatusExecution) (GitStatusR
 	result.DefaultBranchSource = string(assessment.DefaultBranch.Source)
 	result.OnDefaultBranch = assessment.OnDefaultBranch
 	result.CommitAllowed = assessment.CommitAllowed
+	result.DetachedHead = assessment.DetachedHead
 	if !result.CommitAllowed {
-		result.BlockedReason = fmt.Sprintf("the workspace is on %q, the repository's default branch (default branch %s) — create a feature branch with git.branch first", assessment.Branch, assessment.DefaultBranch.Describe())
-	}
-
-	// An empty branch name with commits present means a detached head; with no
-	// commits it means the repository has no branch yet.
-	if result.Branch == "" && result.HasCommits {
-		result.DetachedHead = true
+		if assessment.DetachedHead {
+			result.BlockedReason = "the workspace is on no branch (detached head) — create a feature branch with git.branch first"
+		} else {
+			result.BlockedReason = fmt.Sprintf("the workspace is on %q, the repository's default branch (default branch %s) — create a feature branch with git.branch first", assessment.Branch, assessment.DefaultBranch.Describe())
+		}
 	}
 
 	if originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin"); err == nil {

@@ -182,6 +182,9 @@ func guardDefaultBranchCommit(ctx context.Context, execution GitCommitExecution)
 	if assessment.CommitAllowed {
 		return nil
 	}
+	if assessment.DetachedHead {
+		return fmt.Errorf("delegated git commit refused: the workspace is on no branch (detached head) — a commit here is reachable only by hash and is silently stranded by the next checkout. Create a feature branch first (tendril git branch --substrate <name> --branch <feature-branch>), then commit")
+	}
 	return fmt.Errorf("delegated git commit refused: the workspace is on %q, the repository's default branch — default branch %s. Create a feature branch first (tendril git branch --substrate <name> --branch <feature-branch>), then commit; committing here is what later costs a rebase or a commit reversed off the default branch. To allow it for this repository, set protectDefaultBranch: false on the substrate", assessment.Branch, assessment.DefaultBranch.Describe())
 }
 
@@ -206,6 +209,11 @@ type DefaultBranchCommitAssessment struct {
 	// OnDefaultBranch is the factual answer: the current branch is the
 	// protected default branch. It ignores any opt-out.
 	OnDefaultBranch bool
+	// DetachedHead reports a workspace on no branch at all. A commit there is
+	// reachable only by hash and is trivially lost, so it is refused — and an
+	// isolated delegated workspace starts detached on purpose, which makes
+	// "create a branch first" the read-side's advice rather than a surprise.
+	DetachedHead bool
 	// CommitAllowed is the predictive answer, accounting for the substrate's
 	// opt-out. This is exactly what the commit guard acts on.
 	CommitAllowed bool
@@ -224,14 +232,21 @@ func AssessDefaultBranchCommit(ctx context.Context, workspace, configuredBranch 
 
 	current, err := runGitCommitCommandFn(ctx, workspace, "branch", "--show-current")
 	if err != nil {
-		// A workspace whose branch cannot be read (a fresh repository with no
-		// commits, or a detached head) is not on the default branch by
-		// definition, and the downstream commands report their own failures
-		// more precisely than a guess here would.
+		// A workspace whose branch cannot be read at all (a repository with no
+		// commits yet) is not on the default branch by definition, and the
+		// downstream commands report their own failures more precisely than a
+		// guess here would.
 		return assessment
 	}
 	assessment.Branch = strings.TrimSpace(current)
 	if assessment.Branch == "" {
+		// No branch, but a resolvable head means a detached head: committing
+		// here produces work reachable only by hash, which the next checkout
+		// silently strands. Refuse, and say what to do instead.
+		if head, headErr := runGitCommitCommandFn(ctx, workspace, "rev-parse", "HEAD"); headErr == nil && strings.TrimSpace(head) != "" {
+			assessment.DetachedHead = true
+			assessment.CommitAllowed = allowDefaultBranchCommit
+		}
 		return assessment
 	}
 

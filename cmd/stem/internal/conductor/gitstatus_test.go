@@ -180,10 +180,15 @@ func TestRunGitStatusDescribesUnusualStates(t *testing.T) {
 	if !status.DetachedHead || status.Branch != "" {
 		t.Fatalf("status = %+v, want a detached-head report", status)
 	}
-	// A detached head is not the default branch, so a commit is not blocked
-	// by this guard — the honest answer, not a defensive guess.
-	if !status.CommitAllowed {
-		t.Fatalf("status = %+v, want a commit allowed on a detached head", status)
+	// A commit on a detached head is reachable only by hash and is silently
+	// stranded by the next checkout, so it is refused — and the reason says
+	// so. An isolated delegated workspace starts detached deliberately, which
+	// makes this the read-side's advice rather than a surprise.
+	if status.CommitAllowed {
+		t.Fatalf("status = %+v, want a commit blocked on a detached head", status)
+	}
+	if !strings.Contains(status.BlockedReason, "detached head") {
+		t.Fatalf("blocked reason = %q, want it to name the detached head", status.BlockedReason)
 	}
 }
 
