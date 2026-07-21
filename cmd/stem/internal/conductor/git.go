@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -492,4 +494,226 @@ func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult,
 	}
 
 	return GitPushResult{Status: "pushed", Branch: targetBranch}, nil
+}
+
+// Delegated pull request — the top rung of the delegated-execution ladder, and
+// the last mile that previously forced an agent off Tendril's governed path
+// (shelling out to the GitHub command line tool, or guessing at credentials).
+// Like the push it runs here on the Stem, the sole secret-holding zone; a
+// Sprout stays network-sealed and never talks to GitHub.
+//
+// Three rules are enforced, all of them "look at reality before acting"
+// rather than "assume and fail later":
+//
+//  1. The base branch is READ from the repository (its real default branch)
+//     when the caller does not name one. A default branch is never assumed to
+//     be "main" — that assumption is the recurring, expensive failure this
+//     capability exists to design out (work opened against, or landed on, the
+//     wrong branch, then paid for in rebases and reversed commits).
+//  2. A head branch that IS the default branch is refused outright, before
+//     anything is created. There is deliberately no override flag: the way
+//     past the guard is to name a real feature branch, not to let the caller
+//     wave it through.
+//  3. An existing open pull request for the same head branch is returned
+//     untouched rather than duplicated. Its title and body are deliberately
+//     NOT rewritten — a repeat call must not silently overwrite a description
+//     a human may have edited.
+
+// GitPRExecution is a fully resolved delegated pull-request request: a
+// workspace on disk, the pull request's content, the optional head/base
+// branches, and the substrate's resolved credential carrying the API token.
+type GitPRExecution struct {
+	// Workspace is the resolved local workspace directory whose origin remote
+	// and current branch address the pull request.
+	Workspace string
+	// Title is the pull request title.
+	Title string
+	// Body is the optional pull request description.
+	Body string
+	// Head optionally names the branch to open the pull request from; empty
+	// uses the workspace's current branch.
+	Head string
+	// Base optionally names the branch to merge into; empty resolves the
+	// repository's real default branch from the GitHub API.
+	Base string
+	// Draft opens the pull request as a draft.
+	Draft bool
+	// Credential is the substrate's resolved credential. Its GitHub App
+	// installation token or Personal Access Token authenticates the API calls;
+	// a connection with neither is refused deny-closed.
+	Credential ResolvedCredential
+}
+
+// GitPRResult reports a finished delegated pull-request operation.
+type GitPRResult struct {
+	// Status is "created" for a newly opened pull request, or "exists" when an
+	// open pull request for the same head branch was already there.
+	Status string
+	// Number is the pull request number.
+	Number int
+	// URL is the pull request's web address.
+	URL string
+	// Head is the branch the pull request was opened from.
+	Head string
+	// Base is the branch the pull request merges into, as actually resolved.
+	Base string
+}
+
+// githubPullRequest is the subset of GitHub's pull-request resource this path
+// reads back, shared by the list and create calls.
+type githubPullRequest struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+	Base    struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+	Head struct {
+		Ref string `json:"ref"`
+	} `json:"head"`
+}
+
+// createPullRequestBody is GitHub's REST create-a-pull-request payload.
+type createPullRequestBody struct {
+	Title string `json:"title"`
+	Head  string `json:"head"`
+	Base  string `json:"base"`
+	Body  string `json:"body,omitempty"`
+	Draft bool   `json:"draft,omitempty"`
+}
+
+// pullRequestAPIToken resolves the bearer token the pull-request API calls
+// authenticate with, per connection posture. Deny-closed: a posture that
+// cannot reach the API at all (Secure Shell, or no credential) is refused with
+// an error naming the two postures that work, rather than letting the caller
+// discover it through an opaque GitHub failure. Secure Shell keys can push
+// code but cannot open a pull request — that is a property of the transport,
+// not a Tendril limitation.
+func pullRequestAPIToken(ctx context.Context, cred ResolvedCredential, originURL string) (string, error) {
+	switch cred.Method {
+	case CredentialApp:
+		token, err := githubAppInstallationToken(ctx, cred.App, originURL)
+		if err != nil {
+			return "", fmt.Errorf("github app auth: %w", err)
+		}
+		return token, nil
+	case CredentialPAT:
+		if strings.TrimSpace(cred.TokenValue) == "" {
+			return "", fmt.Errorf("delegated pull request refused: the substrate's Personal Access Token environment variable (%s) is empty", cred.TokenEnv)
+		}
+		return cred.TokenValue, nil
+	default:
+		return "", fmt.Errorf("delegated pull request refused: the substrate's connection (auth method %q) has no GitHub API credential — opening a pull request requires a GitHub App (auth.method: app) or a fine-grained Personal Access Token (auth.method: pat)", cred.Method)
+	}
+}
+
+// RunGitPullRequest opens a pull request for a branch that has already been
+// pushed. It never pushes: git.pr and git.push are separately grantable
+// operation-classes, so a subject granted only git.pr must not be able to
+// publish a branch as a side effect.
+func RunGitPullRequest(ctx context.Context, execution GitPRExecution) (GitPRResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if strings.TrimSpace(execution.Workspace) == "" {
+		return GitPRResult{}, fmt.Errorf("pull request workspace is required")
+	}
+	if strings.TrimSpace(execution.Title) == "" {
+		return GitPRResult{}, fmt.Errorf("pull request title is required")
+	}
+
+	originURL, err := runGitCommitCommandFn(ctx, execution.Workspace, "remote", "get-url", "origin")
+	if err != nil {
+		return GitPRResult{}, fmt.Errorf("pull request: resolve origin remote: %w", err)
+	}
+	originURL = strings.TrimSpace(originURL)
+	owner, repo, err := parseOwnerRepo(originURL)
+	if err != nil {
+		return GitPRResult{}, fmt.Errorf("pull request: %w", err)
+	}
+
+	// Head is read from actual workspace state when unnamed — never assumed.
+	head := strings.TrimPrefix(strings.TrimSpace(execution.Head), "refs/heads/")
+	if head == "" {
+		current, branchErr := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+		if branchErr != nil {
+			return GitPRResult{}, fmt.Errorf("pull request: determine current branch: %w", branchErr)
+		}
+		head = strings.TrimSpace(current)
+	}
+	if head == "" {
+		return GitPRResult{}, fmt.Errorf("pull request: unable to determine the head branch (the workspace has no current branch; pass an explicit head)")
+	}
+
+	token, err := pullRequestAPIToken(ctx, execution.Credential, originURL)
+	if err != nil {
+		return GitPRResult{}, err
+	}
+
+	// Base is READ from the repository when unnamed. This extra call is the
+	// deliberate price of never hard-coding "main".
+	base := strings.TrimPrefix(strings.TrimSpace(execution.Base), "refs/heads/")
+	if base == "" {
+		var repository struct {
+			DefaultBranch string `json:"default_branch"`
+		}
+		if err := githubRESTRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s", owner, repo), token, nil, &repository); err != nil {
+			return GitPRResult{}, fmt.Errorf("pull request: resolve the repository's default branch: %w", err)
+		}
+		base = strings.TrimSpace(repository.DefaultBranch)
+		if base == "" {
+			return GitPRResult{}, fmt.Errorf("pull request: github reported no default branch for %s/%s (pass an explicit base)", owner, repo)
+		}
+	}
+
+	// Deny-closed guard: opening a pull request FROM the default branch means
+	// the work was committed to the wrong branch. Refuse while it is still
+	// cheap to fix, instead of after a merge that must be unpicked.
+	if head == base {
+		return GitPRResult{}, fmt.Errorf("delegated pull request refused: the head branch %q is the repository's default branch — commit the work on a feature branch and open the pull request from that (a pull request from the default branch into itself is the shape that later costs a rebase or a reversed commit)", head)
+	}
+
+	// Look before creating: an open pull request for this head branch is
+	// returned as-is, so a repeat call is idempotent and never duplicates.
+	var existing []githubPullRequest
+	listPath := fmt.Sprintf("/repos/%s/%s/pulls?state=open&head=%s", owner, repo, url.QueryEscape(owner+":"+head))
+	if err := githubRESTRequest(ctx, http.MethodGet, listPath, token, nil, &existing); err != nil {
+		return GitPRResult{}, fmt.Errorf("pull request: check for an existing pull request: %w", err)
+	}
+	if len(existing) > 0 {
+		open := existing[0]
+		existingBase := strings.TrimSpace(open.Base.Ref)
+		if existingBase == "" {
+			existingBase = base
+		}
+		return GitPRResult{
+			Status: "exists",
+			Number: open.Number,
+			URL:    open.HTMLURL,
+			Head:   head,
+			Base:   existingBase,
+		}, nil
+	}
+
+	var created githubPullRequest
+	body := createPullRequestBody{
+		Title: execution.Title,
+		Head:  head,
+		Base:  base,
+		Body:  execution.Body,
+		Draft: execution.Draft,
+	}
+	if err := githubRESTRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls", owner, repo), token, body, &created); err != nil {
+		return GitPRResult{}, fmt.Errorf("pull request: %w", err)
+	}
+	if created.Number == 0 {
+		return GitPRResult{}, fmt.Errorf("pull request: github returned no pull request number")
+	}
+
+	return GitPRResult{
+		Status: "created",
+		Number: created.Number,
+		URL:    created.HTMLURL,
+		Head:   head,
+		Base:   base,
+	}, nil
 }

@@ -88,6 +88,11 @@ type Core interface {
 	// configured credential; the push runs on the Stem, never inside a sealed
 	// Sprout. Runs through the injected GitOperations execution port.
 	GitPush(ctx context.Context, in GitPushInput) (GitPushResult, error)
+	// GitPR opens a pull request for a substrate's already-pushed branch via
+	// the GitHub API using the substrate's configured credential; like the
+	// push, it runs on the Stem, never inside a sealed Sprout. Runs through
+	// the injected GitOperations execution port.
+	GitPR(ctx context.Context, in GitPRInput) (GitPRResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability

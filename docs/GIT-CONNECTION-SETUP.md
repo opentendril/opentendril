@@ -3,8 +3,9 @@
 **The problem this solves:** every LLM wastes time and tokens guessing how to
 authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
 Tendril gives an agent **one pre-configured, correct git method**. The agent
-calls `git.commit` / `git.push`; it never touches credentials. You configure the
-connection **once**, on any machine, and every agent you authorise inherits it.
+calls `git.commit` / `git.push` / `git.pr`; it never touches credentials. You
+configure the connection **once**, on any machine, and every agent you authorise
+inherits it.
 
 This guide is deliberately linear: follow it top to bottom.
 
@@ -118,6 +119,7 @@ substrates:
 ```bash
 tendril git commit --substrate opentendril --message "chore: verify connection"
 tendril git push   --substrate opentendril
+tendril git pr     --substrate opentendril --title "chore: verify connection"
 ```
 
 The commit is signed by your dedicated key and attributed to the configured
@@ -169,13 +171,16 @@ have a *grant*. Missing either → denied.
 
 ```yaml
 grants:
-  claude:                                    # the agent's subject identity
-    operationClasses: [git.commit, git.push] # commit-only? drop git.push
+  claude:                                             # the agent's subject identity
+    operationClasses: [git.commit, git.push, git.pr]  # commit-only? drop the rest
     substrates: [opentendril]
     expires: 2027-01-01
 ```
 
-No grant → every delegated call from that subject is denied and audited.
+No grant → every delegated call from that subject is denied and audited. Each
+operation is its own class and confers nothing else: a subject granted
+`git.commit` and `git.push` still cannot open a pull request, and `git.pr` never
+pushes on your behalf.
 
 ### 2. Configure the agent's MCP connection
 
@@ -199,6 +204,42 @@ matching grant.
 - **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
+
+---
+
+## Opening pull requests — the branch rules Tendril enforces
+
+`tendril git pr` finishes the loop: commit → push → pull request, all through
+the same connection, so an agent never has to guess at credentials or shell out
+to another tool for the last mile.
+
+```bash
+tendril git pr --substrate opentendril --title "feat: grow a new leaf" \
+  --body "What changed and why." [--head B] [--base B] [--draft]
+```
+
+It is deliberately strict about branches, because the expensive failures here
+are branch mistakes discovered late — rebases, merge repair, and reversing
+commits off the default branch:
+
+- **The base branch is read, never assumed.** Omit `--base` and Tendril asks the
+  repository for its *actual* default branch. It never assumes `main`. An
+  explicit `--base` always wins.
+- **The head branch defaults to the workspace's current branch** — read from
+  actual state, not guessed.
+- **Opening a pull request from the default branch is refused.** If the head
+  branch *is* the default branch, the work was committed to the wrong place;
+  Tendril says so while it is still cheap to fix, instead of after a merge that
+  has to be unpicked. There is no override flag — create a feature branch.
+- **A repeat call never duplicates.** If an open pull request already exists for
+  that head branch, Tendril returns it (`status: exists`) and changes nothing —
+  including leaving its title and body alone, so a description you have edited
+  is never overwritten.
+- **It never pushes.** `git.push` and `git.pr` are separate grants; push first.
+
+Both connection postures work. Opening a pull request needs a GitHub API
+credential, so a connection using an SSH key — or none — is refused with an
+error naming the two postures that do work.
 
 ---
 

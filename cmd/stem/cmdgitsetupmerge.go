@@ -222,6 +222,7 @@ func mergeGrant(path string, o gitSetupOptions) error {
 	classes := getOrCreateSequence(subject, "operationClasses")
 	ensureSequenceContains(classes, "git.commit")
 	ensureSequenceContains(classes, "git.push")
+	ensureSequenceContains(classes, "git.pr")
 	ensureSequenceContains(getOrCreateSequence(subject, "substrates"), o.substrate)
 	return writeYAMLMapping(path, root)
 }

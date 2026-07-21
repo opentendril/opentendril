@@ -213,6 +213,53 @@ func githubGraphQLPost(ctx context.Context, installationToken, query string, var
 	return nil
 }
 
+// githubRESTRequest issues an authenticated REST request against
+// api.github.com and decodes the JSON response into out (nil to discard).
+//
+// Unlike the two helpers above it is bearer-agnostic: the token may be a
+// GitHub App installation token OR a fine-grained Personal Access Token,
+// because both connection postures authenticate a REST call with the exact
+// same header. That is why the pull-request path uses REST rather than
+// GraphQL — one request shape serves both postures, and owner/repo is enough
+// to address the resource (GraphQL would need a node-identifier lookup first).
+func githubRESTRequest(ctx context.Context, method, path, token string, body any, out any) error {
+	var payload io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode github rest request: %w", err)
+		}
+		payload = strings.NewReader(string(encoded))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, githubAPIBaseURL+path, payload)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := githubAppHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("github api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("github api %s %s returned %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+	if out != nil {
+		if err := json.Unmarshal(respBody, out); err != nil {
+			return fmt.Errorf("decode github api response: %w", err)
+		}
+	}
+	return nil
+}
+
 func doGithubAppRequest(req *http.Request, out any) error {
 	resp, err := githubAppHTTPClient.Do(req)
 	if err != nil {
