@@ -24,18 +24,17 @@ This guide is deliberately linear: follow it top to bottom.
 
 ## Choose your connection tier
 
-| | **Fine-grained PAT + GPG** | **GitHub App** *(recommended target)* |
+| | **Fine-grained PAT + GPG** | **GitHub App** |
 |---|---|---|
 | Auth | fine-grained Personal Access Token | GitHub App installation token (short-lived, auto-expiring, not tied to a person) |
 | Signing | your **dedicated GPG key**, signed locally | **GitHub signs server-side** (verified) — no key material anywhere |
-| Setup cost | ~5 minutes, works **today** | create an App once, then drop in one `.pem` |
-| Status | fully working | auth works today; **API-signed commit creation is a separate, in-progress capability** |
+| Setup | one token + one GPG key | create an App once, then drop in one `.pem` |
 
-> **Recommendation:** the GitHub App is the gold standard (highest security,
-> survives staff turnover, no local key material) and is the documented default.
-> Until the API-signed commit path lands, use the **fine-grained PAT + GPG**
-> path below — it is fully secure and works now. GPG signing is a PAT-path
-> option; the GitHub App signs on its own.
+The **GitHub App** is the higher-security posture: installation tokens are
+short-lived, not tied to a person, and there is no key material on the machine.
+The **fine-grained PAT + GPG** posture is the simplest to stand up: one scoped
+token and one dedicated signing key. GPG signing is a PAT-path option; a GitHub
+App connection signs on its own.
 
 Do **not** use a classic Personal Access Token (blanket access). SSH keys can
 push code but cannot open pull requests, so SSH alone cannot deliver full git
@@ -43,7 +42,7 @@ access.
 
 ---
 
-## Path A — fine-grained PAT + GPG (works today)
+## Path A — fine-grained PAT + GPG
 
 ### 1. Create a dedicated fine-grained Personal Access Token
 
@@ -100,7 +99,7 @@ identity — confirm with `git log --show-signature -1`.
 
 ---
 
-## Path B — GitHub App (recommended target)
+## Path B — GitHub App
 
 **No OAuth, no client secret.** Tendril is a server-to-server automation: the
 App authenticates *as itself* (a signed JWT mints a short-lived installation
@@ -173,8 +172,7 @@ matching grant.
   subject, plus the grant. Adequate for a personal machine.
 - **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
-  authorise two-key gate. (Short-lived scoped tokens for networked/multi-user
-  instances are on the roadmap — see #273.)
+  authorise two-key gate.
 
 ---
 
