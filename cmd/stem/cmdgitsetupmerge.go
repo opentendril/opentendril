@@ -220,6 +220,7 @@ func mergeGrant(path string, o gitSetupOptions) error {
 		grants.Content = append(grants.Content, scalarNode(o.grantSubject), subject)
 	}
 	classes := getOrCreateSequence(subject, "operationClasses")
+	ensureSequenceContains(classes, "git.status")
 	ensureSequenceContains(classes, "git.branch")
 	ensureSequenceContains(classes, "git.commit")
 	ensureSequenceContains(classes, "git.push")

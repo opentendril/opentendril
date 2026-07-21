@@ -453,6 +453,17 @@ func (m *mockCore) GitBranch(_ context.Context, in core.GitBranchInput) (core.Gi
 	}, nil
 }
 
+func (m *mockCore) GitStatus(_ context.Context, in core.GitStatusInput) (core.GitStatusResult, error) {
+	m.record("GitStatus", in)
+	return core.GitStatusResult{
+		Branch:        "feat/mock",
+		HasCommits:    true,
+		Clean:         true,
+		CommitAllowed: true,
+		Changes:       []core.GitStatusChange{},
+	}, nil
+}
+
 // Capabilities mirrors the real registry's declarative shape closely enough
 // for the MCP adapter's isCoreCapability/tool-listing checks — but every
 // Invoke closure below dispatches to this mock's own typed methods above,
@@ -705,6 +716,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 					return nil, err
 				}
 				return m.GitBranch(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapGitStatus,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitStatusInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitStatus(ctx, in)
 			},
 		},
 	}

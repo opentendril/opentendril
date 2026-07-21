@@ -97,6 +97,11 @@ type Core interface {
 	// workspace, so default-branch protection has a governed next move. Runs
 	// through the injected GitOperations execution port.
 	GitBranch(ctx context.Context, in GitBranchInput) (GitBranchResult, error)
+	// GitStatus reports a substrate's git state — the read-side of the
+	// ladder, so an agent can look before it acts instead of discovering the
+	// guardrails by being refused. Runs through the injected GitOperations
+	// execution port.
+	GitStatus(ctx context.Context, in GitStatusInput) (GitStatusResult, error)
 
 	// Capabilities returns the declarative registry that every surface
 	// projects. Adding an entry here is the single act that makes a capability

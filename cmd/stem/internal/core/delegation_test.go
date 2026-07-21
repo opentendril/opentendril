@@ -279,11 +279,13 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 }
 
 // TestDelegatedCapabilityTaxonomy pins the canonical delegated
-// operation-class set: exactly sprout.grow, passthrough.run, git.commit,
-// git.push, git.pr and git.branch are delegated, every one of them is a
-// canonical capability, and no non-delegated capability is misclassified.
+// operation-class set: exactly sprout.grow, passthrough.run and the five git
+// classes are delegated, every one of them is a canonical capability, and no
+// non-delegated capability is misclassified. git.status is included
+// deliberately: read-only does not mean ungated, since a status response names
+// branches and changed file paths.
 func TestDelegatedCapabilityTaxonomy(t *testing.T) {
-	delegated := []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit, core.CapGitPush, core.CapGitPR, core.CapGitBranch}
+	delegated := []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus}
 	for _, name := range delegated {
 		if !core.IsDelegatedCapability(name) {
 			t.Errorf("IsDelegatedCapability(%q) = false, want true", name)

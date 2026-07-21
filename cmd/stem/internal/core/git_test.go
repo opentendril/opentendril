@@ -183,3 +183,35 @@ func TestGitBranchNotWired(t *testing.T) {
 		t.Fatalf("unwired git branch error = %v, want a not-wired report", err)
 	}
 }
+
+func TestGitStatusValidatesInput(t *testing.T) {
+	captured := &GitStatusSpec{}
+	svc := NewService(nil).WithGit(GitOperations{
+		Status: func(_ context.Context, spec GitStatusSpec) (GitStatusResult, error) {
+			*captured = spec
+			return GitStatusResult{Branch: "feat/x", CommitAllowed: true}, nil
+		},
+	})
+	ctx := context.Background()
+
+	if _, err := svc.GitStatus(ctx, GitStatusInput{}); err == nil {
+		t.Fatal("missing substrate accepted")
+	}
+	if _, err := svc.GitStatus(ctx, GitStatusInput{Substrate: "  "}); err == nil {
+		t.Fatal("blank substrate accepted")
+	}
+	if _, err := svc.GitStatus(ctx, GitStatusInput{Substrate: " core "}); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if captured.Substrate != "core" {
+		t.Fatalf("spec = %+v, want a trimmed substrate", captured)
+	}
+}
+
+func TestGitStatusNotWired(t *testing.T) {
+	svc := NewService(nil)
+	_, err := svc.GitStatus(context.Background(), GitStatusInput{Substrate: "core"})
+	if err == nil || !strings.Contains(err.Error(), "not wired") {
+		t.Fatalf("unwired git status error = %v, want a not-wired report", err)
+	}
+}

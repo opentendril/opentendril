@@ -178,29 +178,66 @@ func RunGitCommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 // points at the operation that resolves the situation — a guardrail with no
 // stated next move just pushes the caller off the governed path.
 func guardDefaultBranchCommit(ctx context.Context, execution GitCommitExecution) error {
-	if execution.AllowDefaultBranchCommit {
+	assessment := AssessDefaultBranchCommit(ctx, execution.Workspace, execution.ConfiguredBranch, execution.AllowDefaultBranchCommit)
+	if assessment.CommitAllowed {
 		return nil
 	}
+	return fmt.Errorf("delegated git commit refused: the workspace is on %q, the repository's default branch — default branch %s. Create a feature branch first (tendril git branch --substrate <name> --branch <feature-branch>), then commit; committing here is what later costs a rebase or a commit reversed off the default branch. To allow it for this repository, set protectDefaultBranch: false on the substrate", assessment.Branch, assessment.DefaultBranch.Describe())
+}
 
-	current, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+// DefaultBranchCommitAssessment is the single answer to "may a commit happen
+// in this workspace right now, and why" — computed once and consumed by two
+// callers with different jobs: the commit guard, which turns a refusal into an
+// error, and git.status, which reports it before anything is attempted.
+//
+// The sharing is the point, not an optimization. If status answered this
+// question with its own logic it would eventually disagree with the guard, and
+// a status that says "fine" followed by a commit that is refused is worse than
+// no status at all: it teaches an agent to distrust the read-side and go back
+// to guessing. One predicate, two consumers, no drift — and an agreement test
+// pins it.
+type DefaultBranchCommitAssessment struct {
+	// Branch is the workspace's current branch ("" when it cannot be read:
+	// a repository with no commits, or a detached head).
+	Branch string
+	// DefaultBranch is how the default branch was resolved, including the
+	// undetermined case that engages the protection floor.
+	DefaultBranch DefaultBranchResolution
+	// OnDefaultBranch is the factual answer: the current branch is the
+	// protected default branch. It ignores any opt-out.
+	OnDefaultBranch bool
+	// CommitAllowed is the predictive answer, accounting for the substrate's
+	// opt-out. This is exactly what the commit guard acts on.
+	CommitAllowed bool
+}
+
+// AssessDefaultBranchCommit resolves the default branch offline and reports
+// whether a commit would be permitted in this workspace.
+func AssessDefaultBranchCommit(ctx context.Context, workspace, configuredBranch string, allowDefaultBranchCommit bool) DefaultBranchCommitAssessment {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	assessment := DefaultBranchCommitAssessment{
+		DefaultBranch: ResolveDefaultBranchLocal(ctx, workspace, configuredBranch),
+		CommitAllowed: true,
+	}
+
+	current, err := runGitCommitCommandFn(ctx, workspace, "branch", "--show-current")
 	if err != nil {
 		// A workspace whose branch cannot be read (a fresh repository with no
-		// commits, or a detached HEAD) is not on the default branch by
+		// commits, or a detached head) is not on the default branch by
 		// definition, and the downstream commands report their own failures
 		// more precisely than a guess here would.
-		return nil
+		return assessment
 	}
-	branch := strings.TrimSpace(current)
-	if branch == "" {
-		return nil
-	}
-
-	resolution := ResolveDefaultBranchLocal(ctx, execution.Workspace, execution.ConfiguredBranch)
-	if !resolution.IsProtected(branch) {
-		return nil
+	assessment.Branch = strings.TrimSpace(current)
+	if assessment.Branch == "" {
+		return assessment
 	}
 
-	return fmt.Errorf("delegated git commit refused: the workspace is on %q, the repository's default branch — default branch %s. Create a feature branch first (tendril git branch --substrate <name> --branch <feature-branch>), then commit; committing here is what later costs a rebase or a commit reversed off the default branch. To allow it for this repository, set protectDefaultBranch: false on the substrate", branch, resolution.Describe())
+	assessment.OnDefaultBranch = assessment.DefaultBranch.IsProtected(assessment.Branch)
+	assessment.CommitAllowed = !assessment.OnDefaultBranch || allowDefaultBranchCommit
+	return assessment
 }
 
 // API-mode delegated commit (commit: api) — the recommended default git

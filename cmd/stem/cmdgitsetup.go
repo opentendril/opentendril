@@ -209,7 +209,7 @@ func renderGrantsYAML(o gitSetupOptions) string {
 	b.WriteString("# (subject) may run which git operation on which substrate. No grant = denied.\n")
 	b.WriteString("grants:\n")
 	fmt.Fprintf(&b, "  %s:\n", o.grantSubject)
-	b.WriteString("    operationClasses: [git.branch, git.commit, git.push, git.pr]\n")
+	b.WriteString("    operationClasses: [git.status, git.branch, git.commit, git.push, git.pr]\n")
 	fmt.Fprintf(&b, "    substrates: [%s]\n", o.substrate)
 	return b.String()
 }

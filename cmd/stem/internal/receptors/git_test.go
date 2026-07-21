@@ -633,3 +633,90 @@ func TestGitBranchRequiresBranch(t *testing.T) {
 		t.Fatal("a branchless request reached the execution port")
 	}
 }
+
+// newGitStatusTestHandler builds a GitHandler over a real Core with a stubbed
+// status port.
+func newGitStatusTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *atomic.Int64) {
+	t.Helper()
+
+	executed := &atomic.Int64{}
+	coreSvc := core.NewService(nil).WithGit(core.GitOperations{
+		Status: func(ctx context.Context, spec core.GitStatusSpec) (core.GitStatusResult, error) {
+			executed.Add(1)
+			return core.GitStatusResult{Branch: "feat/x", Clean: true, CommitAllowed: true}, nil
+		},
+	})
+
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
+	handler := NewGitHandler(coreSvc).WithDelegation(gate)
+
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+	return mux, executed
+}
+
+const gitStatusBody = `{"substrate":"core"}`
+
+// TestDelegatedGitStatusDeniedWithoutGrant: read-only does not mean ungated —
+// a status response names branches and changed file paths, so the deny-closed
+// default applies to disclosure as it does to mutation.
+func TestDelegatedGitStatusDeniedWithoutGrant(t *testing.T) {
+	mux, executed := newGitStatusTestHandler(t, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/status", strings.NewReader(gitStatusBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a denied delegated invocation still read the workspace")
+	}
+}
+
+// TestDelegatedGitStatusNotConferredByWriteGrants: a subject granted every
+// write operation still cannot read state without git.status.
+func TestDelegatedGitStatusNotConferredByWriteGrants(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR},
+		Substrates:       []string{"core"},
+	}}
+	mux, executed := newGitStatusTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/status", strings.NewReader(gitStatusBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (write grants must not confer git.status): %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 0 {
+		t.Fatal("a write grant authorized a status read")
+	}
+}
+
+// TestDelegatedGitStatusPermittedByMatchingGrant closes the loop.
+func TestDelegatedGitStatusPermittedByMatchingGrant(t *testing.T) {
+	grants := []core.DelegationGrant{{
+		Subject:          "local-agent",
+		OperationClasses: []string{core.CapGitStatus},
+		Substrates:       []string{"core"},
+	}}
+	mux, executed := newGitStatusTestHandler(t, grants)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/git/status", strings.NewReader(gitStatusBody))
+	request.Header.Set(DelegationSubjectHeader, "local-agent")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("executed %d status read(s), want 1", executed.Load())
+	}
+}

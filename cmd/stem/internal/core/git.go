@@ -182,6 +182,81 @@ type GitBranchResult struct {
 	PreviousBranch string `json:"previousBranch,omitempty"`
 }
 
+// GitStatusInput asks the Stem to report a substrate's git state. It is the
+// read-side of the ladder: every write operation carries a guardrail that
+// exists because an agent guessed something it could not see, and this is how
+// it sees instead. The answer is computed from the guards' own view, so a
+// prediction here and a refusal there can never disagree.
+type GitStatusInput struct {
+	// Substrate is the absolute path or named substrate key of the target
+	// workspace.
+	Substrate string `json:"substrate"`
+	// Origin records which surface invoked the operation (cli, mcp, rest).
+	Origin string `json:"origin,omitempty"`
+}
+
+// GitStatusSpec is the fully resolved, transport-free status request handed to
+// the GitOperations port.
+type GitStatusSpec struct {
+	Substrate string
+	Origin    string
+}
+
+// GitStatusChange is one changed path and how it changed.
+type GitStatusChange struct {
+	Path string `json:"path"`
+	// Kind is "modified", "added", "deleted", "renamed", or "untracked".
+	Kind string `json:"kind"`
+}
+
+// GitStatusResult is a workspace's git state: what git reports, and what
+// Tendril will do about it.
+type GitStatusResult struct {
+	// Branch is the current branch ("" for a detached head or a repository
+	// with no commits).
+	Branch string `json:"branch"`
+	// DetachedHead reports a workspace not on any branch.
+	DetachedHead bool `json:"detachedHead,omitempty"`
+	// HasCommits is false for a freshly initialized repository.
+	HasCommits bool `json:"hasCommits"`
+	// Head is the current commit hash ("" when there are no commits).
+	Head string `json:"head,omitempty"`
+	// DefaultBranch is the resolved default branch ("" when undetermined).
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	// DefaultBranchSource is how it was determined: config, api, remote-head,
+	// or unknown — in which case the protection floor is what is in force.
+	DefaultBranchSource string `json:"defaultBranchSource,omitempty"`
+	// Repository is the "owner/repo" the origin remote points at.
+	Repository string `json:"repository,omitempty"`
+	// Upstream is the tracking ref ("" when the branch has never been pushed).
+	Upstream string `json:"upstream,omitempty"`
+	// Ahead and Behind count commits relative to Upstream.
+	Ahead  int `json:"ahead"`
+	Behind int `json:"behind"`
+	// Clean reports a workspace with no uncommitted changes.
+	Clean bool `json:"clean"`
+	// ChangeCount is the total number of changed paths, whether or not
+	// Changes was truncated.
+	ChangeCount int `json:"changeCount"`
+	// Modified, Added, Deleted, Renamed and Untracked count changes by kind.
+	Modified  int `json:"modified"`
+	Added     int `json:"added"`
+	Deleted   int `json:"deleted"`
+	Renamed   int `json:"renamed"`
+	Untracked int `json:"untracked"`
+	// Changes lists changed paths, bounded so a large change cannot flood an
+	// agent's context; Truncated says the list is shorter than ChangeCount.
+	Changes   []GitStatusChange `json:"changes"`
+	Truncated bool              `json:"truncated,omitempty"`
+	// OnDefaultBranch reports that the workspace sits on the protected
+	// default branch, ignoring any opt-out.
+	OnDefaultBranch bool `json:"onDefaultBranch"`
+	// CommitAllowed predicts whether git.commit would be permitted right now.
+	CommitAllowed bool `json:"commitAllowed"`
+	// BlockedReason explains a false CommitAllowed ("" when allowed).
+	BlockedReason string `json:"blockedReason,omitempty"`
+}
+
 // GitOperations is the injection port for delegated git execution. Each member
 // may be nil, in which case the corresponding capability reports that it is not
 // wired rather than acting.
@@ -204,6 +279,10 @@ type GitOperations struct {
 	// Implementations own substrate resolution and the protected-name and
 	// dirty-workspace guards.
 	Branch func(ctx context.Context, spec GitBranchSpec) (GitBranchResult, error)
+	// Status reports the resolved workspace's git state. Implementations own
+	// substrate resolution and must compute the predictive fields from the
+	// same predicate the write-side guards use.
+	Status func(ctx context.Context, spec GitStatusSpec) (GitStatusResult, error)
 }
 
 // WithGit wires the delegated git execution port onto the Service and returns
@@ -307,6 +386,21 @@ func (s *Service) GitBranch(ctx context.Context, in GitBranchInput) (GitBranchRe
 	return s.git.Branch(ctx, spec)
 }
 
+// GitStatus validates the request and reports the workspace's state via the
+// injected execution port.
+func (s *Service) GitStatus(ctx context.Context, in GitStatusInput) (GitStatusResult, error) {
+	if s.git.Status == nil {
+		return GitStatusResult{}, fmt.Errorf("git.status is not wired: construct the Core with WithGit(GitOperations{Status: …})")
+	}
+	if strings.TrimSpace(in.Substrate) == "" {
+		return GitStatusResult{}, fmt.Errorf("substrate is required")
+	}
+	return s.git.Status(ctx, GitStatusSpec{
+		Substrate: strings.TrimSpace(in.Substrate),
+		Origin:    in.Origin,
+	})
+}
+
 // gitCapabilities declares the git family's registry entry, bound to this
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
@@ -382,6 +476,21 @@ func (s *Service) gitCapabilities() []Capability {
 					return nil, err
 				}
 				return s.GitBranch(ctx, in)
+			},
+		},
+		{
+			Name:        CapGitStatus,
+			Description: "Report a substrate's git state: current branch, resolved default branch and how it was determined, uncommitted changes, ahead/behind against the upstream, and whether a commit would be allowed right now. Read-only, no network. Call this before committing to predict a refusal instead of discovering it.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
+				"origin":    stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitStatusInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitStatus(ctx, in)
 			},
 		},
 	}

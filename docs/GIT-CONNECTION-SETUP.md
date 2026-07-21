@@ -3,7 +3,7 @@
 **The problem this solves:** every LLM wastes time and tokens guessing how to
 authenticate to GitHub (which token? SSH? gh? App?) and often gets it wrong.
 Tendril gives an agent **one pre-configured, correct git method**. The agent
-calls `git.branch` / `git.commit` / `git.push` / `git.pr`; it never touches
+calls `git.status` / `git.branch` / `git.commit` / `git.push` / `git.pr`; it never touches
 credentials. You
 configure the connection **once**, on any machine, and every agent you authorise
 inherits it.
@@ -174,7 +174,7 @@ have a *grant*. Missing either → denied.
 ```yaml
 grants:
   claude:                                             # the agent's subject identity
-    operationClasses: [git.branch, git.commit, git.push, git.pr]  # commit-only? drop the rest
+    operationClasses: [git.status, git.branch, git.commit, git.push, git.pr]  # commit-only? drop the rest
     substrates: [opentendril]
     expires: 2027-01-01
 ```
@@ -183,6 +183,8 @@ No grant → every delegated call from that subject is denied and audited. Each
 operation is its own class and confers nothing else: a subject granted
 `git.commit` and `git.push` still cannot open a pull request or create a
 branch, `git.pr` never pushes on your behalf, and `git.branch` never commits.
+`git.status` is gated too: read-only does not mean ungated, since a status
+response names branches and changed file paths.
 
 ### 2. Configure the agent's MCP connection
 
@@ -206,6 +208,40 @@ matching grant.
 - **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
+
+---
+
+## Look before acting — `tendril git status`
+
+Every guardrail below exists because an agent guessed something it could not
+see. `git.status` is how it sees instead: one read-only, offline call that
+reports what git says *and* what Tendril will do about it.
+
+```bash
+tendril git status --substrate myrepo
+```
+
+```
+⛔ Commit blocked: the workspace is on "main", the repository's default branch
+   (default branch "main" (from remote-head)) — create a feature branch with
+   git.branch first
+🌱 main · owner/repo · default: main (remote-head)
+   upstream: origin/main · ahead 0, behind 2
+   workspace: 3 change(s) — 2 modified, 0 added, 0 deleted, 0 renamed, 1 untracked
+     modified  cmd/thing.go
+     modified  README.md
+     untracked notes.txt
+```
+
+It reports the current branch, the resolved default branch **and how it was
+determined**, uncommitted changes with counts by kind, ahead/behind against the
+upstream (or "no upstream" for a branch never pushed) — and, crucially, whether
+a commit would be allowed right now, with the reason when it would not.
+
+That prediction is computed by the *same code the commit guard runs*, so status
+can never tell you a commit is fine and then have it refused. A repository with
+no commits, no upstream, or a detached head is described rather than refused;
+the changed-file list is capped, with the true total always reported.
 
 ---
 
@@ -233,6 +269,7 @@ What that means in practice:
 
 ```bash
 # The loop, in the order the guardrails expect:
+tendril git status --substrate myrepo                      # look before acting
 tendril git branch --substrate myrepo --branch feat/new-leaf
 tendril git commit --substrate myrepo --message "feat: grow a new leaf"
 tendril git push   --substrate myrepo

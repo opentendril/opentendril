@@ -77,6 +77,8 @@ func runGitCmd(ctx context.Context, args []string) {
 		}
 	case core.GitPushResult:
 		fmt.Fprintf(os.Stderr, "🌱 Pushed %s\n", typed.Branch)
+	case core.GitStatusResult:
+		printGitStatus(typed)
 	case core.GitBranchResult:
 		if typed.Status == "created" {
 			fmt.Fprintf(os.Stderr, "🌱 Created branch %s (from %s)\n", typed.Branch, typed.PreviousBranch)
@@ -254,6 +256,68 @@ func gitOperations() core.GitOperations {
 				Base:   result.Base,
 			}, nil
 		},
+		Status: func(ctx context.Context, spec core.GitStatusSpec) (core.GitStatusResult, error) {
+			workspace := spec.Substrate
+			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			if isName && substrateSpec != nil {
+				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
+					workspace = trimmedPath
+				}
+			}
+			info, statErr := os.Stat(workspace)
+			if statErr != nil || !info.IsDir() {
+				return core.GitStatusResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (git status inspects a local checkout)", spec.Substrate)
+			}
+
+			// The opt-out and configured branch are read exactly as the commit
+			// path reads them, so the predicted answer matches the real one.
+			allowDefaultBranchCommit := false
+			configuredBranch := ""
+			if substrateSpec != nil {
+				configuredBranch = substrateSpec.Branch
+				if substrateSpec.ProtectDefaultBranch != nil && !*substrateSpec.ProtectDefaultBranch {
+					allowDefaultBranchCommit = true
+				}
+			}
+
+			result, err := conductor.RunGitStatus(ctx, conductor.GitStatusExecution{
+				Workspace:                workspace,
+				ConfiguredBranch:         configuredBranch,
+				AllowDefaultBranchCommit: allowDefaultBranchCommit,
+			})
+			if err != nil {
+				return core.GitStatusResult{}, err
+			}
+
+			changes := make([]core.GitStatusChange, 0, len(result.Changes))
+			for _, change := range result.Changes {
+				changes = append(changes, core.GitStatusChange{Path: change.Path, Kind: change.Kind})
+			}
+			return core.GitStatusResult{
+				Branch:              result.Branch,
+				DetachedHead:        result.DetachedHead,
+				HasCommits:          result.HasCommits,
+				Head:                result.Head,
+				DefaultBranch:       result.DefaultBranch,
+				DefaultBranchSource: result.DefaultBranchSource,
+				Repository:          result.Repository,
+				Upstream:            result.Upstream,
+				Ahead:               result.Ahead,
+				Behind:              result.Behind,
+				Clean:               result.Clean,
+				ChangeCount:         result.ChangeCount,
+				Modified:            result.Modified,
+				Added:               result.Added,
+				Deleted:             result.Deleted,
+				Renamed:             result.Renamed,
+				Untracked:           result.Untracked,
+				Changes:             changes,
+				Truncated:           result.Truncated,
+				OnDefaultBranch:     result.OnDefaultBranch,
+				CommitAllowed:       result.CommitAllowed,
+				BlockedReason:       result.BlockedReason,
+			}, nil
+		},
 		Branch: func(ctx context.Context, spec core.GitBranchSpec) (core.GitBranchResult, error) {
 			workspace := spec.Substrate
 			substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
@@ -312,6 +376,7 @@ var gitCommands = []gitCommand{
 	{"push", core.CapGitPush},
 	{"pr", core.CapGitPR},
 	{"branch", core.CapGitBranch},
+	{"status", core.CapGitStatus},
 }
 
 // lookupGitCommand resolves a CLI subcommand token to its registered entry.
@@ -434,11 +499,16 @@ func gitUsageSuffix(capName string) string {
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|branch|commit|push|pr> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|status|branch|commit|push|pr> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
 	fmt.Println("  agent MCP config. Run `tendril git setup --help` for the full flag list.")
+	fmt.Println()
+	fmt.Println("status --substrate <path|name>")
+	fmt.Println("  Reports the workspace's branch, the resolved default branch, uncommitted")
+	fmt.Println("  changes, ahead/behind, and whether a commit would be allowed right now.")
+	fmt.Println("  Read-only and offline. Call it before committing to predict a refusal.")
 	fmt.Println()
 	fmt.Println("branch --substrate <path|name> --branch <feature-branch>")
 	fmt.Println("  Creates the branch and switches to it — the governed way off the default")
@@ -464,5 +534,51 @@ func printGitUsage() {
 	fmt.Println()
 	fmt.Println("  --json '{...}'      Full JSON input (the generic escape hatch)")
 	fmt.Println()
-	fmt.Println("branch, commit, push and pr are projections of the shared Core capability registry.")
+	fmt.Println("status, branch, commit, push and pr are projections of the shared Core registry.")
+}
+
+// printGitStatus renders a status result for a human at a terminal. The
+// predictive line comes first when a commit is blocked: that is the fact the
+// reader most needs, and burying it under counts would defeat the purpose of
+// having a read-side at all.
+func printGitStatus(status core.GitStatusResult) {
+	if !status.CommitAllowed {
+		fmt.Fprintf(os.Stderr, "⛔ Commit blocked: %s\n", status.BlockedReason)
+	}
+
+	branch := status.Branch
+	switch {
+	case status.DetachedHead:
+		branch = "(detached head)"
+	case !status.HasCommits:
+		branch = "(no commits yet)"
+	}
+	defaultBranch := status.DefaultBranch
+	if defaultBranch == "" {
+		defaultBranch = "undetermined"
+	}
+	fmt.Fprintf(os.Stderr, "🌱 %s", branch)
+	if status.Repository != "" {
+		fmt.Fprintf(os.Stderr, " · %s", status.Repository)
+	}
+	fmt.Fprintf(os.Stderr, " · default: %s (%s)\n", defaultBranch, status.DefaultBranchSource)
+
+	if status.Upstream == "" {
+		fmt.Fprintln(os.Stderr, "   upstream: none (branch not pushed yet)")
+	} else {
+		fmt.Fprintf(os.Stderr, "   upstream: %s · ahead %d, behind %d\n", status.Upstream, status.Ahead, status.Behind)
+	}
+
+	if status.Clean {
+		fmt.Fprintln(os.Stderr, "   workspace: clean")
+		return
+	}
+	fmt.Fprintf(os.Stderr, "   workspace: %d change(s) — %d modified, %d added, %d deleted, %d renamed, %d untracked\n",
+		status.ChangeCount, status.Modified, status.Added, status.Deleted, status.Renamed, status.Untracked)
+	for _, change := range status.Changes {
+		fmt.Fprintf(os.Stderr, "     %-9s %s\n", change.Kind, change.Path)
+	}
+	if status.Truncated {
+		fmt.Fprintf(os.Stderr, "     … %d more not shown\n", status.ChangeCount-len(status.Changes))
+	}
 }
