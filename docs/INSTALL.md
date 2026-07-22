@@ -362,6 +362,57 @@ grants:
 **Check:** `tendril git setup --substrate myrepo --repo myorg/myrepo --verify`
 reports the connection ready.
 
+### Commit signing
+
+*Preference in general — **required** if the target repository demands signed
+commits.* Many do, either through a repository ruleset or classic branch
+protection, and an unsigned commit is then rejected at push time. Discovering
+that during the Stem's first delegated run is a bad way to learn it, so settle it
+here.
+
+The two connection postures differ, and this is the practical reason to prefer
+the App:
+
+| Posture | Signing | What you configure |
+|---|---|---|
+| **GitHub App** (`--posture app`) | GitHub signs server-side; commits show **Verified** | nothing — it is automatic |
+| Personal Access Token (`--posture pat`) | your own GPG key, signed locally | a dedicated key, and its public half uploaded to GitHub |
+
+With the App posture the Stem commits through the API (`commit: api`), so no key
+material exists on the Terroir at all and signing needs no setup. That is the
+recommended path and the one this guide instantiates.
+
+If you are using the Personal Access Token posture instead, generate a dedicated
+signing key and pass it at setup:
+
+```bash
+# as tendril, in /home/tendril
+tendril git setup \
+  --substrate myrepo --repo myorg/myrepo \
+  --posture pat \
+  --token-env TENDRIL_GITHUB_PAT \
+  --sign-key <gpg-key-id> \
+  --identity-name "Tendril Bot" --identity-email "tendril-bot@your-domain"
+```
+
+Upload the key's public half to GitHub so its commits verify.
+[GIT-CONNECTION-SETUP.md](./GIT-CONNECTION-SETUP.md) covers key generation and
+both postures in full; it is not repeated here.
+
+**Check:** confirm the target repository's requirement before the first
+delegated run, so a rejection is not the way you find out:
+
+```bash
+gh api repos/<owner>/<repo>/rulesets --jq '.[].name'
+gh api repos/<owner>/<repo>/rulesets/<id> --jq '[.rules[].type]'
+```
+
+A `required_signatures` rule means every commit must be signed — including the
+Stem's. Note that the classic endpoint
+(`repos/<owner>/<repo>/branches/main/protection`) reports nothing when protection
+comes from a ruleset, so checking it alone will tell you a repository is
+unprotected when it is not.
+
 ---
 
 ## Stage 6 — Issue a credential per Pollinator
