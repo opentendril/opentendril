@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -58,6 +59,61 @@ func TestWithAPIKeyAuthRequiresMatchingBearer(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+// A credential issued under the superseded "otp_" prefix must be refused
+// outright once the prefix changes.
+//
+// This is the one behaviour worth pinning about that rename. The prefix is the
+// discriminator that routes a presented bearer to credential resolution, so an
+// old value no longer looks credential-shaped and falls through to the
+// Botanist-key comparison instead. It must fail there. The forbidden outcome is
+// that it is accepted — either by matching the Botanist key or by being treated
+// as an ordinary unauthenticated request that proceeds anyway.
+func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	secret, _, err := core.IssuePollinatorCredential(dir, "claude", "")
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	credentials, err := core.LoadPollinatorCredentials(dir)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	reached := false
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// The same secret carrying the superseded prefix: what a Pollinator issued
+	// before the rename would still be presenting.
+	superseded := "otp_" + strings.TrimPrefix(secret, "tendril_")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
+	req.Header.Set("Authorization", "Bearer "+superseded)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if reached {
+		t.Fatal("a credential with the superseded prefix reached the handler")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d for a superseded-prefix credential", rec.Code, http.StatusUnauthorized)
+	}
+
+	// The current prefix still works, so the refusal above is about the prefix
+	// rather than a broken fixture.
+	reached = false
+	req = httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
+	req.Header.Set("Authorization", "Bearer "+secret)
+	rec = httptest.NewRecorder()
+	handler(rec, req)
+
+	if !reached || rec.Code != http.StatusOK {
+		t.Fatalf("a current credential was refused: reached=%v status=%d", reached, rec.Code)
 	}
 }
 

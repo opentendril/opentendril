@@ -279,7 +279,7 @@ its bearer token:
 
 ```bash
 curl -X POST localhost:8080/v1/git/status \
-  -H "Authorization: Bearer otp_..." -d '{"substrate":"myrepo"}'
+  -H "Authorization: Bearer tendril_..." -d '{"substrate":"myrepo"}'
 ```
 
 The Stem **derives** the Pollen from the credential. The `X-OpenTendril-Pollen`
@@ -292,7 +292,7 @@ that identity may do*.
 
 | How the Pollen is established | What it is |
 |---|---|
-| Issued credential (`otp_...`) | **proven** — the caller cannot influence it |
+| Issued credential (`tendril_...`) | **proven** — the caller cannot influence it |
 | `X-OpenTendril-Pollen` header, or `OPENTENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
 
 ## Is the boundary actually real here?

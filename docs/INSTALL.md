@@ -374,7 +374,7 @@ tendril pollinator issue --pollen claude --note "laptop"
 ```
 
 The secret prints **once** and is never stored — only its SHA-256 digest is kept,
-so a leaked store is not a leaked credential. It begins `otp_`, which makes it
+so a leaked store is not a leaked credential. It begins `tendril_`, which makes it
 recognisable in a log or a configuration file.
 
 The Pollinator presents it as a bearer token and the Stem **derives** the Pollen
@@ -471,7 +471,7 @@ including the Model Context Protocol endpoint at `POST /v1` — refuses it by
 default rather than running the request as ordinary traffic:
 
 ```console
-$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer otp_…" …
+$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer tendril_…" …
 HTTP/1.1 403 Forbidden
 delegation denied: this endpoint exposes no delegable operation-class
 ```
@@ -492,7 +492,7 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 
 ```bash
 curl -X POST http://localhost:8080/v1/git/status \
-  -H "Authorization: Bearer otp_…" \
+  -H "Authorization: Bearer tendril_…" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo"}'
 ```
@@ -501,7 +501,7 @@ curl -X POST http://localhost:8080/v1/git/status \
 the reason:
 
 ```console
-$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer otp_…" …
+$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer tendril_…" …
 HTTP/1.1 403 Forbidden
 delegation denied: no active grant covers Pollen "claude",
 operation-class "git.prune", substrate "myrepo"
