@@ -303,12 +303,7 @@ func ListSequenceFiles(basePath string) ([]string, error) {
 	}
 	root = repoRoot(root)
 
-	var searchDirs []string
-	if configDir, err := os.UserConfigDir(); err == nil {
-		searchDirs = append(searchDirs, filepath.Join(configDir, "opentendril", "sequences"))
-	}
-	searchDirs = append(searchDirs, filepath.Join("/etc", "opentendril", "sequences"))
-	searchDirs = append(searchDirs, filepath.Join(root, ".tendril", "sequences"))
+	searchDirs, _ := DefinitionSearchPath(root, DefinitionKindSequences)
 
 	fileSet := make(map[string]bool)
 
@@ -1943,12 +1938,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 }
 
 func quarantineScriptPrompt(stepID, taskPrompt string) error {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return fmt.Errorf("resolve user config dir: %w", err)
-	}
-
-	quarantineDir := filepath.Join(configDir, "opentendril", "quarantine")
+	quarantineDir := QuarantineDir()
 	if err := os.MkdirAll(quarantineDir, 0o755); err != nil {
 		return fmt.Errorf("create quarantine directory: %w", err)
 	}
@@ -2159,25 +2149,15 @@ func sequencePathCandidates(input, cwd, root string) []string {
 	add(filepath.Join(cwd, trimmed))
 	add(filepath.Join(root, trimmed))
 
-	// System sequence directories take priority before workspace sequences
-	if configDir, err := os.UserConfigDir(); err == nil {
-		sysUserDir := filepath.Join(configDir, "opentendril", "sequences")
+	// Trusted sequence directories take priority over workspace sequences.
+	for _, dir := range TrustedDefinitionDirs(root, DefinitionKindSequences) {
 		if !strings.Contains(trimmed, string(filepath.Separator)) {
-			add(filepath.Join(sysUserDir, trimmed))
+			add(filepath.Join(dir, trimmed))
 		}
 		if !hasExt {
-			add(filepath.Join(sysUserDir, baseNoExt+".yaml"))
-			add(filepath.Join(sysUserDir, baseNoExt+".yml"))
+			add(filepath.Join(dir, baseNoExt+".yaml"))
+			add(filepath.Join(dir, baseNoExt+".yml"))
 		}
-	}
-
-	sysEtcDir := filepath.Join("/etc", "opentendril", "sequences")
-	if !strings.Contains(trimmed, string(filepath.Separator)) {
-		add(filepath.Join(sysEtcDir, trimmed))
-	}
-	if !hasExt {
-		add(filepath.Join(sysEtcDir, baseNoExt+".yaml"))
-		add(filepath.Join(sysEtcDir, baseNoExt+".yml"))
 	}
 
 	if !strings.Contains(trimmed, string(filepath.Separator)) {

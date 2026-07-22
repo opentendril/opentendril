@@ -818,12 +818,15 @@ func loadGenomeContext(workspace string) (string, error) {
 	return strings.TrimSpace(builder.String()), nil
 }
 
-func getSystemGenotypePaths(name string) []string {
-	var paths []string
-	if configDir, err := os.UserConfigDir(); err == nil {
-		paths = append(paths, filepath.Join(configDir, "opentendril", "genotypes", name+".json"))
+// getSystemGenotypePaths returns the trusted locations for a named genotype.
+// It is empty when the control plane is not distinct from the workspace, so a
+// workspace genotype can never be marked System.
+func getSystemGenotypePaths(workspace, name string) []string {
+	dirs := TrustedDefinitionDirs(workspace, DefinitionKindGenotypes)
+	paths := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		paths = append(paths, filepath.Join(dir, name+".json"))
 	}
-	paths = append(paths, filepath.Join("/etc", "opentendril", "genotypes", name+".json"))
 	return paths
 }
 
@@ -838,7 +841,7 @@ func loadGenotypeContext(workspace string, genotypeName string) (*genotypeDefini
 	var genotypePath string
 	var systemGenotype bool
 
-	for _, p := range getSystemGenotypePaths(genotypeName) {
+	for _, p := range getSystemGenotypePaths(workspace, genotypeName) {
 		if c, errRead := os.ReadFile(p); errRead == nil {
 			content = c
 			genotypePath = p
@@ -857,7 +860,7 @@ func loadGenotypeContext(workspace string, genotypeName string) (*genotypeDefini
 	}
 
 	if content == nil {
-		genotypePath = filepath.Join(workspace, ".tendril", "genotypes", genotypeName+".json")
+		genotypePath = filepath.Join(workspace, controlPlaneDirName, DefinitionKindGenotypes, genotypeName+".json")
 		content, err = os.ReadFile(genotypePath)
 		if err != nil {
 			if os.IsNotExist(err) {
