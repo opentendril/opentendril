@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
@@ -136,7 +137,11 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 	//    be replaced by the accounts it is meant to constrain.
 	findings = append(findings, executableIntegrityFinding())
 
-	// 5. Can callers prove an identity, or must they declare one?
+	// 5. Can somebody else rewrite the configuration that decides whether a
+	//    Sprout may escape its Terrarium onto the host?
+	findings = append(findings, hostExecutionConfigFinding())
+
+	// 6. Can callers prove an identity, or must they declare one?
 	credentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
 	switch {
 	case credentialsErr != nil:
@@ -177,7 +182,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 		})
 	}
 
-	// 6. Is anything granted at all? No grants is the secure default, and
+	// 7. Is anything granted at all? No grants is the secure default, and
 	//    saying so avoids an operator wondering why everything is denied.
 	grants, grantsErr := core.LoadDelegationGrants(tendrilDir)
 	switch {
@@ -487,6 +492,145 @@ func pathWritableByOthers(path string) (exposure string, examined bool) {
 		return "group-writable", true
 	}
 	return "", true
+}
+
+// Host-execution configuration — can somebody else decide a Sprout may leave
+// its Terrarium?
+//
+// The host provider runs a Tendril directly on the Stem host, with the Stem's
+// own credentials and reach. It is default-deny: the Stem refuses unless an
+// operator sets TENDRIL_ALLOW_HOST_EXECUTION in its runtime environment. But
+// WHICH substrates run that way is decided by configuration, and configuration
+// is a file.
+//
+// So the question this asks is not "where does the file live" but "who can write
+// it". Trust here is principal ownership, never filesystem location: a path
+// confers no privilege by sitting in one directory rather than another, and a
+// configuration writable by an account that hosts Pollinators is one that
+// account can point at the host provider.
+//
+// The files inspected are the ones the Stem itself would load, taken from the
+// loader rather than re-derived, so the check cannot end up examining different
+// files from the ones in use.
+
+// hostExecutionConfigFinding measures the exposure of the configuration that
+// decides host execution.
+func hostExecutionConfigFinding() hardinessFinding {
+	candidates := conductor.SubstrateConfigCandidates("")
+
+	exposures := []string{}
+	unreadable := []string{}
+	present := 0
+	for _, candidate := range candidates {
+		if _, err := os.Lstat(candidate); err != nil {
+			// Absent is ordinary — the Stem searches several locations and uses
+			// the first that exists. Only an existing-but-unexaminable file is
+			// worth reporting.
+			if !os.IsNotExist(err) {
+				unreadable = append(unreadable, candidate)
+			}
+			continue
+		}
+		present++
+		exposure, examined := pathWritableByOthers(candidate)
+		switch {
+		case !examined:
+			unreadable = append(unreadable, candidate)
+		case exposure != "":
+			exposures = append(exposures, fmt.Sprintf("%s (%s)", candidate, exposure))
+		}
+	}
+
+	gateOpen, gateKnown := hostExecutionGateState()
+	declared := hostProviderDeclared()
+
+	if len(exposures) == 0 && len(unreadable) == 0 {
+		if present == 0 {
+			return hardinessFinding{Severity: "ok", Title: "No substrate configuration is present to grant host execution"}
+		}
+		return hardinessFinding{
+			Severity: "ok",
+			Title:    fmt.Sprintf("Substrate configuration is not writable by others (%d file(s) checked)", present),
+		}
+	}
+
+	detail := ""
+	if len(exposures) > 0 {
+		detail = "  " + strings.Join(exposures, "\n  ") + "\n"
+	}
+	if len(unreadable) > 0 {
+		detail += "  not examined: " + strings.Join(unreadable, ", ") + "\n"
+	}
+
+	// Exposure matters most when host execution is actually reachable. Both
+	// signals are reported, because an operator fixing this needs to know which
+	// of them made it urgent.
+	switch {
+	case gateKnown && gateOpen:
+		return hardinessFinding{
+			Severity: "weak",
+			Title:    "Substrate configuration is writable by others AND host execution is enabled",
+			Detail: detail +
+				"An account that can write these files can declare a substrate with\n" +
+				"provider: host, and a Sprout then runs directly on this host with the\n" +
+				"Stem's own credentials and reach — outside any Terrarium.",
+		}
+	case declared:
+		return hardinessFinding{
+			Severity: "weak",
+			Title:    "Substrate configuration is writable by others AND declares a host substrate",
+			Detail: detail +
+				"A host substrate is configured here, so the only thing standing between a\n" +
+				"writer of these files and execution on this host is the runtime environment\n" +
+				"gate, which this check could not confirm from here.",
+		}
+	default:
+		return hardinessFinding{
+			Severity: "note",
+			Title:    "Substrate configuration is writable by others",
+			Detail: detail +
+				"Host execution is not indicated here, so this is not an escape route today.\n" +
+				"It becomes one the moment TENDRIL_ALLOW_HOST_EXECUTION is set, and whether\n" +
+				"the Stem's own service has it set cannot be seen from this invocation.",
+		}
+	}
+}
+
+// hostExecutionGateState reports whether the runtime gate is open, and whether
+// that could be established at all.
+//
+// The distinction matters. The variable is read from this process's environment,
+// which is the Stem's own only when this runs as the Stem from its working
+// directory — `.env` there is loaded at startup. Invoked from anywhere else, an
+// unset variable means "not visible", not "not set", and the finding must not
+// present the second as the first.
+func hostExecutionGateState() (open bool, known bool) {
+	raw, present := os.LookupEnv(terrariumAllowHostExecutionEnv)
+	if !present {
+		return false, false
+	}
+	return strings.EqualFold(strings.TrimSpace(raw), "true"), true
+}
+
+// terrariumAllowHostExecutionEnv mirrors the terrarium factory's gate variable.
+// It is named here rather than imported because the posture report must not pull
+// in the execution path merely to read a string.
+const terrariumAllowHostExecutionEnv = "TENDRIL_ALLOW_HOST_EXECUTION"
+
+// hostProviderDeclared reports whether any configured substrate asks for the
+// host provider. A malformed or absent configuration answers no: this is a
+// severity signal, and the configuration's own validity is reported elsewhere.
+func hostProviderDeclared() bool {
+	config, err := conductor.LoadSubstratesConfig("")
+	if err != nil || config == nil {
+		return false
+	}
+	for _, spec := range config.Substrates {
+		if strings.EqualFold(strings.TrimSpace(spec.Provider), "host") {
+			return true
+		}
+	}
+	return false
 }
 
 // inGroup reports whether the current user belongs to a named group.

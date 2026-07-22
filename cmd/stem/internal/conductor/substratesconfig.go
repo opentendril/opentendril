@@ -270,6 +270,22 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 	return plan, nil
 }
 
+// SubstrateConfigCandidates lists the paths the Stem searches for a substrates
+// configuration, in order, for a given root. An empty root means the process's
+// working directory, matching every runtime caller.
+//
+// This is exported so the posture report can measure the files the Stem will
+// actually read rather than re-deriving them. A second copy of this list would
+// drift from the one the loader uses, and a check that inspects different files
+// from the ones being loaded is worse than no check.
+func SubstrateConfigCandidates(root string) []string {
+	searchRoot := strings.TrimSpace(root)
+	if searchRoot == "" {
+		searchRoot = mustGetwd()
+	}
+	return substrateConfigCandidates(searchRoot)
+}
+
 func substrateConfigCandidates(root string) []string {
 	base := strings.TrimSpace(root)
 	if base == "" {

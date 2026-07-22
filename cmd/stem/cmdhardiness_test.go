@@ -268,3 +268,142 @@ func containsPath(paths []string, want string) bool {
 	}
 	return false
 }
+
+// Host-execution configuration exposure.
+//
+// The question is who can WRITE the file that decides whether a Sprout may run
+// on the host — never where that file sits. These run in a temporary working
+// directory so the candidate paths the loader produces are the fixture's.
+
+// inCleanWorkingDir runs fn with the process working directory set to a
+// permission-narrowed temporary directory, restoring it afterwards.
+func inCleanWorkingDir(t *testing.T, fn func(dir string)) {
+	t.Helper()
+
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	dir := cleanTempRoot(t)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
+	// Resolve symlinks so comparisons against loader output match on platforms
+	// where the temporary directory is itself a link.
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		resolved = dir
+	}
+	fn(resolved)
+}
+
+func writeSubstrates(t *testing.T, dir, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(dir, "substrates.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write substrates: %v", err)
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("chmod substrates: %v", err)
+	}
+	return path
+}
+
+const dockerSubstrate = "substrates:\n  core:\n    path: .\n"
+const hostSubstrate = "substrates:\n  codex-host:\n    provider: host\n    path: .\n"
+
+func TestHostConfigCleanIsOK(t *testing.T) {
+	inCleanWorkingDir(t, func(dir string) {
+		writeSubstrates(t, dir, dockerSubstrate, 0o644)
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "ok" {
+			t.Fatalf("severity = %q, want ok (detail: %s)", finding.Severity, finding.Detail)
+		}
+	})
+}
+
+func TestHostConfigAbsentIsOK(t *testing.T) {
+	inCleanWorkingDir(t, func(dir string) {
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "ok" {
+			t.Fatalf("severity = %q, want ok with no configuration present", finding.Severity)
+		}
+	})
+}
+
+// Exposure without host execution indicated is information, not an escape route.
+func TestHostConfigGroupWritableIsANote(t *testing.T) {
+	inCleanWorkingDir(t, func(dir string) {
+		path := writeSubstrates(t, dir, dockerSubstrate, 0o664)
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "note" {
+			t.Fatalf("severity = %q, want note", finding.Severity)
+		}
+		if !strings.Contains(finding.Detail, path) {
+			t.Errorf("detail should name the writable file, got:\n%s", finding.Detail)
+		}
+		if !strings.Contains(finding.Detail, "group-writable") {
+			t.Errorf("detail should say why, got:\n%s", finding.Detail)
+		}
+	})
+}
+
+func TestHostConfigWorldWritableIsANote(t *testing.T) {
+	inCleanWorkingDir(t, func(dir string) {
+		writeSubstrates(t, dir, dockerSubstrate, 0o666)
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "note" {
+			t.Fatalf("severity = %q, want note", finding.Severity)
+		}
+		if !strings.Contains(finding.Detail, "world-writable") {
+			t.Errorf("detail should say why, got:\n%s", finding.Detail)
+		}
+	})
+}
+
+// Exposure plus an open runtime gate is the escape route the deleted
+// documentation claimed to prevent, and is the case that must read as weak.
+func TestHostConfigWritableWithGateOpenIsWeak(t *testing.T) {
+	t.Setenv(terrariumAllowHostExecutionEnv, "true")
+	inCleanWorkingDir(t, func(dir string) {
+		writeSubstrates(t, dir, dockerSubstrate, 0o666)
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "weak" {
+			t.Fatalf("severity = %q, want weak when the gate is open", finding.Severity)
+		}
+		if !strings.Contains(finding.Title, "host execution is enabled") {
+			t.Errorf("title should name the gate, got %q", finding.Title)
+		}
+	})
+}
+
+// A declared host substrate is weak on its own, because the gate's state cannot
+// be established from an arbitrary invocation and must not be assumed shut.
+func TestHostConfigWritableWithHostSubstrateIsWeak(t *testing.T) {
+	inCleanWorkingDir(t, func(dir string) {
+		writeSubstrates(t, dir, hostSubstrate, 0o664)
+		finding := hostExecutionConfigFinding()
+		if finding.Severity != "weak" {
+			t.Fatalf("severity = %q, want weak when a host substrate is declared", finding.Severity)
+		}
+	})
+}
+
+// An unset variable means "not visible from here", never "not set".
+func TestHostExecutionGateStateDistinguishesUnsetFromFalse(t *testing.T) {
+	t.Setenv(terrariumAllowHostExecutionEnv, "")
+	if _, known := hostExecutionGateState(); !known {
+		t.Error("an explicitly empty variable is present and therefore known")
+	}
+
+	os.Unsetenv(terrariumAllowHostExecutionEnv)
+	open, known := hostExecutionGateState()
+	if known {
+		t.Error("an absent variable must report as unknown, not as a closed gate")
+	}
+	if open {
+		t.Error("an unknown gate must not report as open")
+	}
+}
