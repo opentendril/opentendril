@@ -97,7 +97,7 @@ func TestUnknownAndMalformedCredentialsResolveToNothing(t *testing.T) {
 	for _, presented := range []string{
 		"", "   ", "not-a-credential", "tendril_", "tendril_wrong",
 		"Bearer tendril_wrong", "TENDRIL_uppercase",
-		// The superseded prefix must not resolve either.
+		// A value carrying any other prefix must not resolve.
 		"otp_wrong",
 	} {
 		if got := ResolvePollenFromCredential(stored, presented); got != "" {

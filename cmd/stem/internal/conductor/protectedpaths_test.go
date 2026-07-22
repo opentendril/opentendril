@@ -8,11 +8,8 @@ import (
 	"testing"
 )
 
-// The kernel guard.
-//
-// These exercise the refusal against real git history rather than against a
-// list of strings, because the property that matters is that a commit does not
-// merge — not that a helper returns an error.
+// The kernel guard, exercised against real git history: the property that matters
+// is that a commit does not merge.
 
 // newGuardedRepo builds a repository with a protected-paths list committed on
 // its default branch, and returns its path.
@@ -136,8 +133,7 @@ func TestMergeRefusesCommitTouchingProtectedFile(t *testing.T) {
 	}
 }
 
-// A directory rule protects everything beneath it, which is the form most of
-// the real list takes.
+// A directory rule protects everything beneath it.
 func TestMergeRefusesPathMatchedByDirectoryRule(t *testing.T) {
 	repo := newGuardedRepo(t, guardList)
 	before := headHash(t, repo)
@@ -157,9 +153,8 @@ func TestMergeRefusesPathMatchedByDirectoryRule(t *testing.T) {
 	}
 }
 
-// A repository that declares nothing protected merges normally. This is the
-// case for every Substrate that is not this project, and getting it wrong would
-// refuse all ordinary work rather than hardening anything.
+// A repository that declares nothing protected merges normally — the case for
+// every Substrate that is not this project.
 func TestMergeAllowsWhenNoListIsPresent(t *testing.T) {
 	repo := newGuardedRepo(t, "")
 	commit := terrariumCommit(t, repo, func() {
@@ -191,9 +186,8 @@ func TestMergeRefusesWhenListIsMalformed(t *testing.T) {
 	}
 }
 
-// The obvious bypass: delete the list in the same commit that edits a kernel
-// file. The rules are read from the checkout as it stands before the merge, so
-// the commit is judged by the list it is trying to remove.
+// Deleting the list in the same commit that edits a kernel file: the commit is
+// judged by the list it is trying to remove.
 func TestMergeRefusesCommitThatDeletesTheListWhileEditingKernel(t *testing.T) {
 	repo := newGuardedRepo(t, guardList)
 	before := headHash(t, repo)

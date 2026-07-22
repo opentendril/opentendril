@@ -8,21 +8,12 @@ import (
 	"testing"
 )
 
-// Executable-integrity findings.
-//
-// The property under test is that nobody except the owner can replace what the
-// Stem runs. These tests construct the exposures directly rather than asserting
-// on the host's real layout, so they measure the check rather than the machine
-// that happens to run them.
+// Executable-integrity findings. Exposures are constructed directly so these
+// measure the check rather than the machine running them.
 
-// cleanTempRoot returns a temporary directory whose whole chain is free of
-// group- and other-write permission.
-//
-// This is necessary rather than fussy. Go creates each t.TempDir subdirectory
-// with mode 0777, so under a permissive umask — 0002 is the default on several
-// distributions — the fixture arrives group-writable and every test would see an
-// exposure it did not create. Narrowing the directory and its parent makes these
-// tests measure the check instead of the umask of whoever runs them.
+// cleanTempRoot returns a temporary directory whose whole chain is free of group-
+// and other-write permission. Go creates t.TempDir subdirectories 0777, so under
+// a permissive umask the fixture would otherwise arrive group-writable.
 func cleanTempRoot(t *testing.T) string {
 	t.Helper()
 
@@ -139,9 +130,8 @@ func TestExecutableIntegrityFollowsSymlinkIntoWritableDirectory(t *testing.T) {
 	}
 }
 
-// A symbolic link's own permission bits are 0777 on Linux and mean nothing.
-// Judging the link by its own mode would report an exposure on every system,
-// so the link is skipped and its directory and target carry the verdict.
+// A symbolic link's own permission bits are 0777 on Linux, so the link is skipped
+// and its directory and target carry the verdict.
 func TestExecutableIntegrityIgnoresSymlinkOwnPermissions(t *testing.T) {
 	_, realExecutable := newExecutable(t)
 
@@ -164,9 +154,8 @@ func TestExecutableIntegrityIgnoresSymlinkOwnPermissions(t *testing.T) {
 	}
 }
 
-// A world-writable directory that is sticky does not permit replacing another
-// user's file, which is the whole point of the sticky bit. Reporting it would
-// flag every shared temporary directory, wrongly.
+// A sticky directory does not permit replacing another user's file, even when
+// world-writable.
 func TestExecutableIntegrityTreatsStickyDirectoryAsSafe(t *testing.T) {
 	dir, executable := newExecutable(t)
 	if err := os.Chmod(dir, os.FileMode(0o777)|os.ModeSticky); err != nil {
@@ -180,8 +169,7 @@ func TestExecutableIntegrityTreatsStickyDirectoryAsSafe(t *testing.T) {
 	}
 }
 
-// An absent path is indeterminate, never a pass. The RFC's negative requirement
-// is that a check which could not be performed must not read as hardy.
+// An absent path is indeterminate, never a pass.
 func TestExecutableIntegrityMissingPathIsNotAPass(t *testing.T) {
 	missing := filepath.Join(cleanTempRoot(t), "absent", "tendril")
 
@@ -269,11 +257,8 @@ func containsPath(paths []string, want string) bool {
 	return false
 }
 
-// Host-execution configuration exposure.
-//
-// The question is who can WRITE the file that decides whether a Sprout may run
-// on the host — never where that file sits. These run in a temporary working
-// directory so the candidate paths the loader produces are the fixture's.
+// Host-execution configuration exposure. These run in a temporary working
+// directory so the loader's candidate paths are the fixture's.
 
 // inCleanWorkingDir runs fn with the process working directory set to a
 // permission-narrowed temporary directory, restoring it afterwards.
@@ -333,7 +318,7 @@ func TestHostConfigAbsentIsOK(t *testing.T) {
 	})
 }
 
-// Exposure without host execution indicated is information, not an escape route.
+// Exposure alone is information, not an escape route.
 func TestHostConfigGroupWritableIsANote(t *testing.T) {
 	inCleanWorkingDir(t, func(dir string) {
 		path := writeSubstrates(t, dir, dockerSubstrate, 0o664)
@@ -363,8 +348,8 @@ func TestHostConfigWorldWritableIsANote(t *testing.T) {
 	})
 }
 
-// Exposure plus an open runtime gate is the escape route the deleted
-// documentation claimed to prevent, and is the case that must read as weak.
+// Exposure plus an open runtime gate is the escape route, and is the case that
+// must read as weak.
 func TestHostConfigWritableWithGateOpenIsWeak(t *testing.T) {
 	t.Setenv(terrariumAllowHostExecutionEnv, "true")
 	inCleanWorkingDir(t, func(dir string) {
@@ -379,8 +364,8 @@ func TestHostConfigWritableWithGateOpenIsWeak(t *testing.T) {
 	})
 }
 
-// A declared host substrate is weak on its own, because the gate's state cannot
-// be established from an arbitrary invocation and must not be assumed shut.
+// A declared host substrate is weak on its own: the gate's state cannot be
+// established from an arbitrary invocation and must not be assumed shut.
 func TestHostConfigWritableWithHostSubstrateIsWeak(t *testing.T) {
 	inCleanWorkingDir(t, func(dir string) {
 		writeSubstrates(t, dir, hostSubstrate, 0o664)
