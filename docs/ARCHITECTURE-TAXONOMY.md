@@ -23,8 +23,8 @@ graph TD
         Stem["🌿 Stem\nGo Orchestrator\n(tendril serve)"]
         HT["⚡ Hormonal Triggers\nSecurity Gates\n(pre-flight bash hooks)"]
         Rhizome[("🍄 Rhizome\nSQLite AST Index\n(background scanner)")]
-        SystemConf["🔒 System Config\n~/.opentendril/\nor /etc/opentendril/\n(immutable from Terrariums)"]
-        WorkspaceConf["📁 Workspace Config\n./.tendril/\n(read by Stem; privileged\nfields stripped before use)"]
+        ControlPlane["🔒 Control Plane\n<Stem working dir>/.tendril/\n(owned by the Stem; never\nmounted into a Terrarium)"]
+        WorkspaceConf["📁 Workspace\n<checkout>/.tendril/\n(a Sprout can write this;\nnever trusted)"]
         MergeBack["🔀 Merge Back\nStash pop → Worktree merge\n→ Commit → PR"]
     end
 
@@ -85,14 +85,14 @@ graph TD
     Sprout -->|"Reads index"| Rhizome
     TerrariumSandbox --> MergeBack
 
-    SystemConf -.->|"Trusted: provider, command,\nsystem genotypes"| SubstratePlan
+    ControlPlane -.->|"Trusted: genotypes, sequences"| SubstratePlan
     WorkspaceConf -.->|"Untrusted for privileged\nfields (stripped by Stem)"| SubstratePlan
 
     class Stem,HT,Rhizome,MergeBack,SeqRunner,PhenoSelect,SubstratePlan host
     class DockerProvider,GVisor,Firecracker,TerrariumSandbox,Sprout terrarium
     class Genotype,Plasmid1,Plasmid2,Plasmid3,GeneticInjection genetics
     class LLM,LLMNetwork external
-    class HostProvider,Abort,SystemConf security
+    class HostProvider,Abort,ControlPlane security
     class Repo,SubstrateLayer,WorkspaceConf data
 ```
 
@@ -140,12 +140,12 @@ graph TB
     classDef untrusted fill:#1a3a4a,stroke:#2980b9,color:#d6eaf8
     classDef stem fill:#1a1a2e,stroke:#4a90d9,color:#e0e0e0
 
-    A["🔒 System Config\n(~/.opentendril/ or /etc/opentendril/)\n\n✅ Trusted for: provider, command,\n   system genotypes, host execution\n❌ Never mounted into Terrariums"]
-    B["📁 Workspace Config\n(./.tendril/ · substrates.yaml)\n\n⚠️ Untrusted for: provider, command\n   (these fields are stripped by the Stem\n   before any Terrarium launch)"]
-    C["🌱 Terrarium\n(Docker / gVisor / Firecracker)\n\n❌ Cannot read System Config\n❌ Cannot modify Genotypes\n❌ Cannot escalate to Host provider\n✅ Can only modify its mounted workspace"]
+    A["🔒 Control Plane\n(the Stem's own working directory)\n\n✅ Trusted: genotypes, sequences\n✅ Owned by the Stem's principal\n❌ Never mounted into Terrariums"]
+    B["📁 Workspace\n(a checkout · .tendril/ · substrates.yaml)\n\n⚠️ A Sprout can write this\n⚠️ Never trusted — a definition here\n   is never marked System"]
+    C["🌱 Terrarium\n(Docker / gVisor / Firecracker)\n\n❌ Cannot read the Control Plane\n❌ Cannot mark a Genotype trusted\n❌ Host execution needs an operator\n   environment gate, not a file\n✅ Can only modify its mounted workspace"]
 
-    A -->|"Stem reads on boot\n(not mounted into containers)"| StemCore["🌿 Stem\n(host process — the trust anchor)"]
-    B -->|"Stem reads from workspace\n(privileged fields stripped at parse time)"| StemCore
+    A -->|"Stem reads from its own directory\n(not mounted into containers)"| StemCore["🌿 Stem\n(host process — the trust anchor)"]
+    B -->|"Stem reads the workspace\n(nothing here is trusted)"| StemCore
     StemCore -->|"Mounts only workspace repo\n+ approved Plasmids from Genotype manifest"| C
 
     class A trusted
