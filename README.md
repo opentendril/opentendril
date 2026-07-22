@@ -36,53 +36,29 @@ For high-security and multi-tenant enterprise environments, OpenTendril supports
 
 ---
 
-## 🚀 Quick Start (Fresh Install)
+## 🚀 Installing
 
-### Step 1 — Clone and install the CLI
+**[docs/INSTALL.md](docs/INSTALL.md) is the installation guide**, and the source
+of truth for what a sound installation is.
 
-```bash
-git clone https://github.com/opentendril/opentendril.git
-cd opentendril
-make install
-```
+It does not prescribe one procedure. What makes an installation sound is a set of
+measurable properties — whether the Stem holds credentials no caller can read,
+whether a caller can escalate to it, whether anything else can replace the binary
+it runs. The guide states those properties, works through the most hardened
+configuration in full, and shows which choices can be made differently without
+weakening any of them.
 
-This compiles the code and installs the `tendril` binary to `~/.local/bin` (make sure this is in your system `$PATH`).
-
-Verify installation:
-```bash
-tendril --help
-```
-
-### Step 2 — Run the setup wizard
+Whichever way you install, this tells you what you actually have:
 
 ```bash
-tendril init
+tendril hardiness
 ```
 
-This will:
-- Auto-detect local [Ollama](https://ollama.ai) models — the default, fully local provider.
-- Alternatively configure a cloud LLM provider (Anthropic, OpenAI, etc.).
-- Optionally capture a `GITHUB_TOKEN` and scaffold a `substrates.yaml`.
-- Write your config to `.env` (re-running updates keys in place).
+It reports rather than gates. A weak finding may describe a configuration you
+chose knowingly — running the Stem as your own user on a laptop is legitimate,
+and the report says so plainly instead of pretending otherwise.
 
-For GitHub pushes from terrariums, load your token with direnv:
-```bash
-cp .envrc.example .envrc && direnv allow
-```
-
-### Step 3 — Start the Stem server
-
-In one terminal:
-```bash
-tendril serve
-```
-
-### Step 4 — Chat!
-
-In a second terminal:
-```bash
-tendril chat
-```
+Once it is running, [QUICKSTART.md](QUICKSTART.md) covers the first session.
 
 ---
 
