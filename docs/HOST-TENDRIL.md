@@ -92,14 +92,6 @@ execution is also indicated:
 ⚠️  Substrate configuration is writable by others AND host execution is enabled
 ```
 
-> [!NOTE]
-> Earlier revisions of this document described two further layers — `provider`
-> and `command` stripped at parse time for workspace configurations, and a
-> privileged system-configuration directory for substrates. **Neither was ever
-> implemented.** They are removed rather than built: trust here comes from which
-> principal owns a file, and adding a second privileged directory would add
-> surface without adding a property.
-
 ## Relationship to a governed installation
 
 Running a Tendril directly on the Stem host means the Sprout executes with the

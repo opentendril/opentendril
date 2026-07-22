@@ -317,12 +317,15 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
     can instantly *block growth* (abort) before a Sprout even emerges.
 *   **Automated Test Suite** — the adaptive immune response, running in sterile
     Terrariums to reject harmful mutations (failing PRs) before they integrate.
-*   **System vs Workspace definitions** — *Workspace* Genotypes/Sequences live in
-    `.tendril/` and are user-editable, so they are **not trusted** for privileged
-    decisions (a Sprout can modify them). *System* Genotypes/Sequences ship with
-    OpenTendril, are never mounted into any Terrarium, and carry immutable deny
-    lists. *(Trusted-tier location — `~/.tendril` vs a separate `~/.opentendril` /
-    `/etc/opentendril` — is an open reconciliation.)*
+*   **Trusted vs Workspace definitions** — a Genotype or Sequence is trusted
+    because of **who owns it and whether a Sprout can reach it**, never because of
+    where it sits. Trusted definitions live in the Stem's own control plane, which
+    belongs to the Stem's principal and is never mounted into a Terrarium; they
+    carry immutable deny lists. Workspace definitions are user-editable, so a
+    Sprout can modify them and they are never trusted for privileged decisions.
+    Where the control plane and the workspace are the same directory the two
+    collapse, and **nothing** is trusted — `tendril hardiness` reports that
+    condition.
 
 ---
 
