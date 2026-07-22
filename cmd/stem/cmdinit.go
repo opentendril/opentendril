@@ -247,6 +247,17 @@ func maybeScaffoldSubstrates(scanner *bufio.Scanner) {
 		return
 	}
 
+	// A path substrate is mounted into the Terrarium. Pointing one at the
+	// directory holding the control plane would mount grants, credentials and
+	// the issued-credential store into a Sprout — the one thing the trust model
+	// forbids. Refuse rather than write it.
+	if _, err := os.Stat(filepath.Join(cwd, ".tendril")); err == nil {
+		fmt.Println("⚠️  Not scaffolding: this directory holds the control plane (.tendril).")
+		fmt.Println("    A path substrate here would mount credentials and grants into a Sprout.")
+		fmt.Println("    Name a repository instead:  tendril git setup --substrate <name> --repo <owner/repo>")
+		return
+	}
+
 	content := fmt.Sprintf(`substrates:
   workspace:
     path: %s
