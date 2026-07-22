@@ -78,7 +78,7 @@ func runSessionCmd(ctx context.Context, args []string) {
 
 // buildSessionCore constructs the Core over a SessionManager backed by the same
 // .tendril/history.db the daemon uses, so the CLI reads and writes the same
-// persisted sessions. With OPENTENDRIL_DB_LOGGING=false it falls back to an
+// persisted sessions. With TENDRIL_DB_LOGGING=false it falls back to an
 // ephemeral in-memory manager.
 func buildSessionCore(ctx context.Context) (core.Core, func(), error) {
 	history, err := historydb.OpenFromEnv(ctx, resolveRepoRoot(""))

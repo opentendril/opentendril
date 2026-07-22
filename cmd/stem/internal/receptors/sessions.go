@@ -234,7 +234,7 @@ func (h *SessionsHandler) messages(w http.ResponseWriter, r *http.Request) {
 
 func (h *SessionsHandler) events(w http.ResponseWriter, r *http.Request) {
 	if h.history == nil {
-		http.Error(w, "persistent history is disabled (OPENTENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
 		return
 	}
 
@@ -252,7 +252,7 @@ func (h *SessionsHandler) events(w http.ResponseWriter, r *http.Request) {
 
 func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 	if h.history == nil {
-		http.Error(w, "persistent history is disabled (OPENTENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
 		return
 	}
 

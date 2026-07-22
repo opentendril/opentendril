@@ -8,7 +8,7 @@ Gives a **Pollinator** the governed git path: `git.status`, `git.branch.list`,
 `git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`. Every delegated
 call is authorised against the grants in `.tendril/grants.yaml`.
 
-`OPENTENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
+`TENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
 set here, in the trusted launch configuration, and **never** by the Pollinator
 itself: a Pollen a caller could name is a workspace a caller could claim. Give
 each Pollinator its own block with its own Pollen, and grant it explicitly:

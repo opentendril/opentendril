@@ -5,7 +5,7 @@
 // It is the durable backbone of the Tendril OS: Tendril sessions, unified chat
 // logs, all EventBus telemetry, and Sprout execution histories are written
 // here so the future UI never loses state on a browser refresh. Setting
-// OPENTENDRIL_DB_LOGGING=false bypasses SQLite entirely for high-performance
+// TENDRIL_DB_LOGGING=false bypasses SQLite entirely for high-performance
 // headless runs.
 package historydb
 
@@ -30,11 +30,11 @@ import (
 const (
 	// EnvDBLogging toggles SQLite persistence. Defaults to enabled; set to
 	// "false" (or "0"/"off") to bypass the database entirely.
-	EnvDBLogging = "OPENTENDRIL_DB_LOGGING"
+	EnvDBLogging = "TENDRIL_DB_LOGGING"
 
 	// EnvDBPath overrides the database location. Defaults to
 	// <repo-root>/.tendril/history.db.
-	EnvDBPath = "OPENTENDRIL_DB_PATH"
+	EnvDBPath = "TENDRIL_DB_PATH"
 )
 
 // SproutRun is one Sprout execution history record.
@@ -91,7 +91,7 @@ func DefaultPath(root string) string {
 }
 
 // OpenFromEnv opens the history database honoring the environment toggles.
-// It returns (nil, nil) when OPENTENDRIL_DB_LOGGING=false so callers can run
+// It returns (nil, nil) when TENDRIL_DB_LOGGING=false so callers can run
 // fully headless without touching disk.
 func OpenFromEnv(ctx context.Context, root string) (*Store, error) {
 	if !LoggingEnabled() {

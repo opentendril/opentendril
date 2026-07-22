@@ -96,7 +96,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	bus := eventbus.New()
 	repoRoot := resolveRepoRoot("")
 
-	// Persistent state layer (.tendril/history.db). OPENTENDRIL_DB_LOGGING=false
+	// Persistent state layer (.tendril/history.db). TENDRIL_DB_LOGGING=false
 	// bypasses SQLite entirely for high-performance headless runs.
 	history, err := historydb.OpenFromEnv(ctx, repoRoot)
 	if err != nil {
@@ -107,7 +107,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		bus.AttachSink(history, 0)
 		log.Printf("Persistent state enabled at %s", history.Path())
 	} else {
-		log.Println("Persistent state disabled (OPENTENDRIL_DB_LOGGING=false or open failure)")
+		log.Println("Persistent state disabled (TENDRIL_DB_LOGGING=false or open failure)")
 	}
 
 	// Unified SessionManager: every interface surface (CLI, MCP, REST, WS)

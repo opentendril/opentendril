@@ -254,7 +254,7 @@ func printGitSetupNextSteps(o gitSetupOptions) {
 	fmt.Println("each with its own subject; the Pollinator is bound here, never self-declared):")
 	fmt.Println(`  { "mcpServers": { "opentendril": {`)
 	fmt.Println(`    "command": "tendril", "args": ["serve", "mcp", "stdio"],`)
-	fmt.Printf("    \"env\": { \"OPENTENDRIL_POLLEN\": %q }\n", pollen)
+	fmt.Printf("    \"env\": { \"TENDRIL_POLLEN\": %q }\n", pollen)
 	fmt.Println(`  }}}`)
 	fmt.Println()
 	if o.posture == "pat" {

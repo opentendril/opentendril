@@ -197,7 +197,7 @@ never self-declare it):
 ```json
 { "mcpServers": { "opentendril": {
   "command": "tendril", "args": ["serve", "mcp", "stdio"],
-  "env": { "OPENTENDRIL_POLLEN": "claude" }
+  "env": { "TENDRIL_POLLEN": "claude" }
 }}}
 ```
 
@@ -293,7 +293,7 @@ that identity may do*.
 | How the Pollen is established | What it is |
 |---|---|
 | Issued credential (`tendril_...`) | **proven** — the caller cannot influence it |
-| `X-OpenTendril-Pollen` header, or `OPENTENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
+| `X-OpenTendril-Pollen` header, or `TENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
 
 ## Is the boundary actually real here?
 
@@ -319,11 +319,11 @@ A Pollinator that drives a terminal — rather than connecting over the Model
 Context Protocol — declares its Pollen in the environment:
 
 ```bash
-export OPENTENDRIL_POLLEN=claude
+export TENDRIL_POLLEN=claude
 tendril git status --substrate myrepo      # authorised, audited, isolated workspace
 ```
 
-With `OPENTENDRIL_POLLEN` set, every delegated operation is checked against the
+With `TENDRIL_POLLEN` set, every delegated operation is checked against the
 grants, the decision is written to `history.db`, and the work runs in that
 Pollinator's own workspace. A refused operation exits non-zero and does nothing.
 

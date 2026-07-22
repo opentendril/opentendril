@@ -22,7 +22,7 @@ import (
 // delete, no rename, no merge, no arbitrary checkout).
 //
 // A command line invocation is delegated only when a Pollen is declared
-// (OPENTENDRIL_POLLEN): the operation-class is then authorised against the
+// (TENDRIL_POLLEN): the operation-class is then authorised against the
 // grants, audited, and run in that Pollen's isolated workspace. Without one it
 // is a Botanist at a terminal, working in their own checkout. The deny-closed
 // attribution rule applies either way — a substrate without a configured commit

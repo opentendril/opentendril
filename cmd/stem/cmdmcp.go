@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+	"strings"
 )
 
 // envPollen names the environment variable that binds this MCP
@@ -22,7 +22,7 @@ import (
 // authorized as that one Pollen against the active grants. Unset means no
 // pollen is bound and every delegated capability is denied over MCP
 // (deny-closed).
-const envPollen = "OPENTENDRIL_POLLEN"
+const envPollen = "TENDRIL_POLLEN"
 
 func runMCPCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, "🚀 OpenTendril MCP Stdio Server initializing...")

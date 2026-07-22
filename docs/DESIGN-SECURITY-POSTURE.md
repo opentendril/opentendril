@@ -16,7 +16,7 @@ Three zones, in decreasing authority.
 ### 1. Stem (host) — full authority
 
 Runs on the host machine. Holds the operator's LLM provider keys, the bearer API
-key (`OPENTENDRIL_API_KEY` / `ADMIN_TOKEN`, or the auto-generated
+key (`TENDRIL_API_KEY` / `ADMIN_TOKEN`, or the auto-generated
 `.tendril/api-key`), the mesh `Ed25519` signing key (see
 `docs/DESIGN-STEM-GRAFTING.md`), and `history.db`. It is the only zone that can
 mint mesh grafting tokens, grow Terrariums, or make LLM provider calls. Every other
@@ -96,7 +96,7 @@ worker "cannot reach out on its own; external calls are Stem-mediated."
 ## Credential model — current state and direction
 
 The Tendril OS today holds the **same long-lived bearer key** the CLI uses
-(`OPENTENDRIL_API_KEY`, or the generated `.tendril/api-key`). This does not grant
+(`TENDRIL_API_KEY`, or the generated `.tendril/api-key`). This does not grant
 the OS any capability a CLI user lacks (per the parity test above), so it does not
 widen the *capability* surface. It does mean a leaked browser key is as durable as
 a leaked CLI key — no expiry, no per-session revocation.

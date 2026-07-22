@@ -212,7 +212,7 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		cloneBranch: strings.TrimSpace(d.SubstrateBranch),
 	}
 	if plan.hostPath == "" {
-		plan.hostPath = getEnvOrDefault("OPENTENDRIL_SUBSTRATE", mustGetwd())
+		plan.hostPath = getEnvOrDefault("TENDRIL_SUBSTRATE", mustGetwd())
 	}
 
 	if spec, isName := ResolveSubstrate(plan.name, config); isName && spec != nil {

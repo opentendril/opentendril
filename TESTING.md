@@ -107,7 +107,7 @@ go test ./cmd/stem/internal/terrarium/ -run Firecracker -v
 Some checks reach a real third party and cannot run without credentials. They are excluded from the default build behind a tag, rather than skipping — a skip would block the gate forever:
 
 ```bash
-OPENTENDRIL_LIVE_APP_ID=... OPENTENDRIL_LIVE_APP_KEY=... OPENTENDRIL_LIVE_APP_REPO=... \
+TENDRIL_LIVE_APP_ID=... TENDRIL_LIVE_APP_KEY=... TENDRIL_LIVE_APP_REPO=... \
   go test -tags livegithub ./cmd/stem/internal/conductor/ -run TestGithubAppLive
 ```
 

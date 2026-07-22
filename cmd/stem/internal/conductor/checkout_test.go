@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveCheckoutPlan(t *testing.T) {
-	t.Setenv("OPENTENDRIL_MANAGED_CHECKOUT_ROOT", "/managed-root")
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", "/managed-root")
 
 	cases := []struct {
 		name       string
@@ -45,7 +45,7 @@ func TestResolveCheckoutPlan(t *testing.T) {
 }
 
 func TestManagedCheckoutDirSanitizesName(t *testing.T) {
-	t.Setenv("OPENTENDRIL_MANAGED_CHECKOUT_ROOT", "/root")
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", "/root")
 	if got := managedCheckoutDir("my/weird:name"); got != filepath.Join("/root", "my-weird-name") {
 		t.Fatalf("managedCheckoutDir sanitization = %q", got)
 	}
@@ -90,7 +90,7 @@ func TestCloneNamedForeignSubstrateCheckoutModes(t *testing.T) {
 
 	t.Run("managed persists and is reused", func(t *testing.T) {
 		root := t.TempDir()
-		t.Setenv("OPENTENDRIL_MANAGED_CHECKOUT_ROOT", root)
+		t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
 		cred := ResolvedCredential{Checkout: CheckoutSpec{Mode: "managed"}}
 
 		path, persistent, err := cloneNamedForeignSubstrate("repo", src, "", cred)

@@ -10,7 +10,7 @@
 //
 // Run it with the credentials and the tag:
 //
-//	OPENTENDRIL_LIVE_APP_ID=... OPENTENDRIL_LIVE_APP_KEY=... OPENTENDRIL_LIVE_APP_REPO=... \
+//	TENDRIL_LIVE_APP_ID=... TENDRIL_LIVE_APP_KEY=... TENDRIL_LIVE_APP_REPO=... \
 //	  go test -tags livegithub ./cmd/stem/internal/conductor/ -run TestGithubAppLive
 
 package conductor
@@ -28,14 +28,14 @@ import (
 )
 
 // TestGithubAppLive is an opt-in end-to-end check against the real GitHub API,
-// run only when OPENTENDRIL_LIVE_APP_ID / OPENTENDRIL_LIVE_APP_KEY / OPENTENDRIL_LIVE_APP_REPO are set.
+// run only when TENDRIL_LIVE_APP_ID / TENDRIL_LIVE_APP_KEY / TENDRIL_LIVE_APP_REPO are set.
 // It never prints the token.
 func TestGithubAppLive(t *testing.T) {
-	appID := os.Getenv("OPENTENDRIL_LIVE_APP_ID")
-	keyPath := os.Getenv("OPENTENDRIL_LIVE_APP_KEY")
-	repo := os.Getenv("OPENTENDRIL_LIVE_APP_REPO")
+	appID := os.Getenv("TENDRIL_LIVE_APP_ID")
+	keyPath := os.Getenv("TENDRIL_LIVE_APP_KEY")
+	repo := os.Getenv("TENDRIL_LIVE_APP_REPO")
 	if appID == "" || keyPath == "" || repo == "" {
-		t.Skip("set OPENTENDRIL_LIVE_APP_ID / OPENTENDRIL_LIVE_APP_KEY / OPENTENDRIL_LIVE_APP_REPO to run the live GitHub App check")
+		t.Skip("set TENDRIL_LIVE_APP_ID / TENDRIL_LIVE_APP_KEY / TENDRIL_LIVE_APP_REPO to run the live GitHub App check")
 	}
 	appTokenMu.Lock()
 	appTokenCache = map[string]cachedAppToken{}

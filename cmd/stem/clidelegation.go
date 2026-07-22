@@ -15,7 +15,7 @@ import (
 
 // The command line as a governed surface.
 //
-// When OPENTENDRIL_POLLEN is set, an invocation is treated as delegated: the
+// When TENDRIL_POLLEN is set, an invocation is treated as delegated: the
 // operation-class is authorised against the grants, the decision is audited, and
 // the work runs in that Pollen's isolated workspace. Unset, nothing is gated.
 //
@@ -28,7 +28,7 @@ import (
 // envPollenCLI is the same variable the Model Context Protocol surface binds
 // from. One name, so a Pollen means the same thing whichever surface a
 // Pollinator reaches through.
-const envPollenCLI = "OPENTENDRIL_POLLEN"
+const envPollenCLI = "TENDRIL_POLLEN"
 
 // cliDelegation carries the gate for one command line invocation.
 type cliDelegation struct {
