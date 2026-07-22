@@ -10,18 +10,15 @@ import (
 // context, and ONLY through the request context.
 //
 // It is deliberately not a field on any capability input. Those structs are
-// decoded from caller-supplied JSON, so a Pollen field would be a Pollen the
-// caller could name — and since the Pollinator decides which isolated workspace an
-// operation runs in (and which grants apply to it), a caller that could name it
-// could claim another subject's workspace. The pollen is bound by the trusted
-// launch configuration (the Model Context Protocol connection) or by an
-// authenticated header (the Representational State Transfer surface), stamped
-// here after authorization, and is unforgeable from request content.
+// decoded from caller-supplied JSON, so a Pollen field would be one the caller
+// could name — and since the Pollen decides which isolated workspace an operation
+// runs in and which grants apply, a caller naming it could claim another
+// subject's workspace. It is bound by the trusted launch configuration or an
+// authenticated header, stamped after authorization, and unforgeable from
+// request content.
 //
-// The Core itself never reads it: it passes the context through to the
-// injected execution port, exactly as it passes the context to any other port.
-// That keeps the Core transport-free — a context value carries no transport
-// type — while letting the adapter layer resolve a per-Pollinator workspace.
+// The Core never reads it; it passes the context to the injected port, which
+// keeps the Core transport-free.
 
 type pollenKey struct{}
 

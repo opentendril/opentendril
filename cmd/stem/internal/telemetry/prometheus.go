@@ -14,10 +14,8 @@ import (
 )
 
 // PrometheusTransporter exposes EventBus activity as a Prometheus scrape
-// endpoint (text exposition format v0.0.4) using only the standard library —
-// no client dependency, in keeping with the "unbloated core" constraint of
-// . It attaches to the bus like every other Transporter: Emit only
-// updates in-memory counters, so a scraper outage can never slow the bus.
+// endpoint (text exposition format v0.0.4) using only the standard library.
+// Emit only updates in-memory counters, so a scraper outage cannot slow the bus.
 //
 // Exposed metrics:
 //
@@ -27,16 +25,12 @@ import (
 //	opentendril_llm_stream_characters_total           characters streamed by LLMs
 //	opentendril_sprouts_active                        sprout workers running now
 //
-// The LLM counters are derived from stream-token events that carry a token
-// payload chunk (the per-token stream the conductor's Sprout publishes);
-// stream start/end markers carry no chunk and are excluded. Cumulative
-// per-state sprout worker counts (emerged/matured/withered) are already the
-// opentendril_events_total series for those event types; the active gauge is
-// the live balance of those transitions.
+// LLM counters come only from stream-token events carrying a payload chunk;
+// start and end markers carry none and are excluded. The active gauge is the
+// live balance of the emerged/matured/withered transitions.
 //
-// Metric names use underscores because the Prometheus data model only permits
-// [a-zA-Z0-9_:] in metric names; the kebab-case biological event types survive
-// verbatim as label values.
+// Metric names use underscores: the Prometheus data model permits only
+// [a-zA-Z0-9_:]. Kebab-case event types survive verbatim as label values.
 type PrometheusTransporter struct {
 	server   *http.Server
 	listener net.Listener

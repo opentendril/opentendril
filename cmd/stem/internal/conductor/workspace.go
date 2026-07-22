@@ -11,33 +11,19 @@ import (
 
 // Per-Pollinator workspace isolation for the delegated git ladder.
 //
-// Without this, every delegated operation ran in one shared directory per
-// substrate. Two Pollinators granted the same substrate silently corrupted
-// each other: the delegated commit stages the whole tree, so one subject's
-// uncommitted files were committed by the other, onto the other's branch,
-// under the other's identity — destroying exactly the attribution the
-// delegated commit exists to provide. The second Pollinator also branched from
-// whatever the shared tree happened to be on, so it branched from the first
-// subject's branch rather than from the substrate's.
+// Each delegation subject gets a real git worktree, private to that subject. The
+// isolation unit is the subject because it is already the unit of authorization
+// and is bound at connection time, so no operation needs an extra parameter.
 //
-// The fix reuses the mechanism the Sprout path already proves
-// (createShadowWorktree): a real git worktree, private to the caller. The
-// isolation unit is the DELEGATION SUBJECT, because the Pollinator is already the
-// unit of authorization and is already bound at connection time — so it
-// requires no new parameter on any operation, and a subject's whole sequence
-// (status, branch, commit, push, pull request) lands in one private tree
-// without the Pollinator tracking anything.
+// Without isolation, two Pollinators on one substrate corrupt each other: a
+// delegated commit stages the whole tree, so one subject's uncommitted files are
+// committed by the other, onto the other's branch, under the other's identity.
 //
-// A worktree shares the repository's object store with the substrate, so
-// commits made in it are immediately visible to the substrate as branches —
-// which is what makes push, pull requests, and human review work unchanged.
-// Git also refuses to check out one branch in two worktrees at once, which
-// turns "two Pollinators on the same branch" from silent corruption into a
-// refusal.
+// A worktree shares the repository's object store, so commits are immediately
+// visible to the substrate as branches — which is what keeps push, pull requests
+// and review working. Git also refuses to check out one branch in two worktrees,
+// turning "two Pollinators on one branch" into a refusal rather than corruption.
 
-// delegatedWorkspaceRoot is where per-Pollinator worktrees live: under the Stem's
-// own directory, never inside a substrate's checkout (a repository must not be
-// able to widen or observe its own delegation surface).
 func delegatedWorkspaceRoot() string {
 	return filepath.Join(expandHome("~/.tendril"), "workspaces")
 }
@@ -103,23 +89,17 @@ type DelegatedWorkspace struct {
 // ResolveDelegatedWorkspace returns the workspace an operation should run in.
 //
 // With no pollen — a human at a terminal — it returns the substrate's own
-// checkout unchanged: an operator running `tendril git status` in their working
-// copy must see their working copy.
-//
-// With a Pollinator, it returns that subject's private worktree of the substrate,
-// creating it on first use ON AN OWNED BRANCH cut from the repository's
+// checkout unchanged. With a Pollinator, it returns that subject's private
+// worktree, created on first use ON AN OWNED BRANCH cut from the repository's
 // resolved default branch.
 //
-// That branch is the point. Every branch guardrail on the ladder — the
-// default-branch commit refusal, the detached-head refusal, the pull-request
-// head check — exists to catch a Pollinator choosing a branch badly. Handing the
-// pollen a workspace that is already on a correct branch removes the choice, so
-// there is nothing left to choose badly: a delegated workspace is never on the
-// default branch at any point in its life, and never on no branch at all. The
-// guards remain as a backstop; they simply stop being the mechanism.
+// The branch matters: a delegated workspace is never on the default branch and
+// never on no branch at all, so the ladder's branch guards have nothing left to
+// catch. They remain as a backstop rather than the mechanism.
 //
-// The branch is registered as an owned reference at creation, which is what
-// later makes it reclaimable rather than litter.
+// The branch is registered as an owned reference at creation, which makes it
+// reclaimable rather than litter.
+
 func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential) (DelegatedWorkspace, error) {
 	if ctx == nil {
 		ctx = context.Background()

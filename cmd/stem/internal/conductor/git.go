@@ -609,28 +609,18 @@ func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult,
 	return GitPushResult{Status: "pushed", Branch: targetBranch}, nil
 }
 
-// Delegated pull request — the top rung of the delegated-execution ladder, and
-// the last mile that previously forced a Pollinator off Tendril's governed path
-// (shelling out to the GitHub command line tool, or guessing at credentials).
-// Like the push it runs here on the Stem, the sole secret-holding zone; a
+// Delegated pull request. It runs on the Stem, the sole secret-holding zone; a
 // Sprout stays network-sealed and never talks to GitHub.
 //
-// Three rules are enforced, all of them "look at reality before acting"
-// rather than "assume and fail later":
+// Three rules:
 //
-//  1. The base branch is READ from the repository (its real default branch)
-//     when the caller does not name one. A default branch is never assumed to
-//     be "main" — that assumption is the recurring, expensive failure this
-//     capability exists to design out (work opened against, or landed on, the
-//     wrong branch, then paid for in rebases and reversed commits).
+//  1. The base branch is READ from the repository when the caller does not name
+//     one. A default branch is never assumed to be "main".
 //  2. A head branch that IS the default branch is refused outright, before
-//     anything is created. There is deliberately no override flag: the way
-//     past the guard is to name a real feature branch, not to let the caller
-//     wave it through.
+//     anything is created. There is deliberately no override flag.
 //  3. An existing open pull request for the same head branch is returned
-//     untouched rather than duplicated. Its title and body are deliberately
-//     NOT rewritten — a repeat call must not silently overwrite a description
-//     a human may have edited.
+//     untouched rather than duplicated, and its title and body are NOT
+//     rewritten — a repeat call must not overwrite a description a human edited.
 
 // GitPRExecution is a fully resolved delegated pull-request request: a
 // workspace on disk, the pull request's content, the optional head/base

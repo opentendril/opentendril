@@ -692,19 +692,17 @@ func renderToolObservation(toolName string, response ToolResponse) string {
 // Byte budgets for genome context injected into the system prompt.
 //
 // The genome directory can hold files far larger than a local model's context
-// window — the generated repository map alone reaches hundreds of kilobytes on
-// a real repository, and the epigenetic learnings file grows without bound.
-// Local inference servers silently truncate an oversized prompt from the
-// front, which deletes the Sprout rules and the tool catalog and leaves only
-// the genome tail: the model then answers in prose instead of calling tools,
-// and the run ends with nothing done. Measured against a 4096-token window
-// (the local serving default), assembled prompts up to roughly eleven
-// kilobytes drive tools correctly on every attempt and prompts past roughly
-// seventeen kilobytes never do. The fixed rules, workspace, and tool catalog
-// cost about two kilobytes, so an eight-kilobyte genome budget keeps the
-// assembled prompt inside the smallest window seen in practice while leaving
-// room for the task and the first tool observations. Files stay complete on
-// disk; each truncation marker tells the Sprout where to readFile the rest.
+// window. Local inference servers silently truncate an oversized prompt FROM THE
+// FRONT, deleting the Sprout rules and tool catalog and leaving the genome tail,
+// so the model answers in prose instead of calling tools.
+//
+// Measured against a 4096-token window: prompts up to roughly eleven kilobytes
+// drive tools reliably, past seventeen they never do. Fixed rules, workspace and
+// tool catalog cost about two kilobytes, so an eight-kilobyte genome budget
+// leaves room for the task and the first observations.
+//
+// Files stay complete on disk; each truncation marker tells the Sprout where to
+// readFile the rest.
 const (
 	genomePerFileByteBudget = 4 * 1024
 	genomeTotalByteBudget   = 8 * 1024

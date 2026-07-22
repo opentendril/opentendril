@@ -238,7 +238,7 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		}
 		plan.credential = credential
 		// Keep authRef populated for the PAT path so the terrarium clone/push
-		// (slice 3) and today's behavior are preserved; ssh/none carry no env.
+		// are preserved; ssh/none carry no env.
 		plan.authRef = credential.TokenEnv
 		plan.provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 		plan.command = spec.Command

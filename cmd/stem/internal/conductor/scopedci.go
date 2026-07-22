@@ -53,21 +53,13 @@ func listChangedFiles(ctx context.Context, moduleRoot, baseReference string) ([]
 // The script captures the listing and exits 1 when it is non-empty, naming
 // the unformatted files in the step output.
 //
-// The file set comes from `go list`, not from walking the mount. gofmt is not
-// module-aware: it recurses whatever directory it is handed, so `gofmt -l .`
-// also reported unformatted files belonging to *other* modules that merely sit
-// inside the workspace — a nested checkout or a tool's scratch directory — and
-// failed the step for code the change never touched. `go build` and `go vet`
-// never had this problem because `./...` already means "this module".
+// The file set comes from `go list`, never from walking the mount: gofmt is not
+// module-aware and would otherwise report files belonging to other modules that
+// merely sit inside the workspace. Deriving the directory list also avoids a
+// hand-maintained one, which goes fail-open as soon as the tree moves on.
 //
-// Asking the module which directories are its own, and letting gofmt recurse
-// those, keeps the check derived rather than declared: a hand-maintained list
-// of directories to scan (or to exclude) is fail-open the moment the tree
-// moves on without it.
-//
-// Fail closed on an unusable answer: if `go list` fails, `set -e` aborts; if
-// it somehow reports nothing, the step exits non-zero rather than pass a
-// gofmt that examined no files.
+// Fail closed: if `go list` fails, `set -e` aborts; if it reports nothing, the
+// step exits non-zero rather than pass a gofmt that examined no files.
 const gofmtCheckScript = `set -e
 packageDirs="$(go list -f '{{.Dir}}' ./...)"
 if [ -z "$packageDirs" ]; then echo "gofmt check: go list reported no packages to format"; exit 1; fi
@@ -89,14 +81,11 @@ if [ -n "$unformatted" ]; then echo "unformatted Go files:"; echo "$unformatted"
 //     the fail-closed whole-module fallback, or NO step at all when the
 //     change is known inert (for example documentation only).
 //
-// The test step is a single invocation rather than a per-package fan-out:
-// SequenceStep.Parallel means parallel LLM sprouting, not command fan-out,
-// and `go test` already parallelizes across packages internally. `-json`
-// opts the step into the skip-aware verdict (see reportGoTestVerifier), and
-// `-short` follows the sealed verifier convention:
-// tests that need the network or a Docker daemon gate on testing.Short(), so
-// under the seal they surface as skips — which the verdict reports as
-// blocked/unverified — instead of failures that blame the code for the seal.
+// The test step is one invocation, not a per-package fan-out: SequenceStep.Parallel
+// means parallel LLM sprouting, and `go test` already parallelizes internally.
+// `-json` opts into the skip-aware verdict; `-short` lets tests needing the
+// network or a Docker daemon surface as skips (reported blocked) rather than as
+// failures blaming the code for the seal.
 //
 // Fail closed: when the change set itself cannot be computed, the test step
 // covers the whole module.

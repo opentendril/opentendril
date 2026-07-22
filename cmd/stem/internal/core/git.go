@@ -6,22 +6,17 @@ import (
 	"strings"
 )
 
-// The git capability family: the delegated-execution ladder from the Design
-// RFC. It lets a Pollinator ask the Stem to do git work — under the
-// substrate's configured connection — instead of shelling out git on the host
-// itself and guessing at credentials. Three operation-classes exist today:
-// git.commit (commit the workspace under the configured identity), git.push
-// (Stem-mediated authenticated push) and git.pr (open a pull request through
-// the GitHub API). Each is separately grantable, and the family stays
-// deliberately narrow: no branch, no checkout, no merge.
+// The git capability family: the delegated-execution ladder. A Pollinator asks
+// the Stem to do git work under the substrate's configured connection rather
+// than shelling out git on the host. Each operation-class is separately
+// grantable, and the family stays deliberately narrow.
 //
-// Attribution model (security-first): a delegated commit exists to be
-// *attributable*, so the execution refuses to commit when the resolved
-// substrate credential carries no commit identity — deny-closed, enforced in
-// the conductor (see RunGitCommit). The git execution itself lives outside
-// the Core in the conductor (which the Core is structurally forbidden from
-// importing — see boundary_test.go), so it is injected as a transport-free
-// function port via WithGit, the same template as PassthroughOperations.
+// Attribution is deny-closed: a delegated commit exists to be attributable, so
+// execution refuses when the resolved credential carries no commit identity
+// (enforced in the conductor, see RunGitCommit).
+//
+// Execution lives in the conductor, which the Core is structurally forbidden
+// from importing (see boundary_test.go), and is injected via WithGit.
 
 // GitCommitInput asks the Stem to commit the current state of a substrate's
 // workspace under the substrate's configured commit identity.

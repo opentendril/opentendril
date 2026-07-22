@@ -14,33 +14,19 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
-// Passthrough execution — the minimal delegable operation-class: one bounded
-// command inside a network-sealed Terrarium, with all external reach mediated
-// by the Stem under a delegation grant's egress allow-list.
+// Passthrough execution: one bounded command inside a network-sealed Terrarium,
+// with external reach mediated by the Stem under a grant's egress allow-list.
 //
-// How deny-all egress + the allow-list map onto the existing isolation:
+// Two properties, both load-bearing:
 //
-//  1. The Terrarium itself is physically sealed. The docker provider pins
-//     --network none (with --cap-drop=ALL and no-new-privileges) for every
-//     container it creates, regardless of spec — asserted by the provider
-//     regression tests. The executed command therefore has NO network reach
-//     at all, ever. Deny-all is enforced by the container runtime, not by a
-//     policy check that could drift.
-//
-//  2. The grant's egress allow-list is consumed at the Stem-mediation point:
-//     the only external reach a passthrough execution has is the optional
-//     fetch list, retrieved BY THE STEM (on the host, with the Stem's own
-//     network) BEFORE the sealed container runs. Every fetch URL must name a
-//     host on the EgressPolicy built from the matching grant's Egress field;
-//     an empty policy (no grant, or a grant with no egress) denies every
-//     fetch. Fetched payloads are delivered read-only into the Terrarium
-//     under /tmp/egress, then the command executes fully offline.
-//
-// So "the allow-list opens a host" means: the Stem will fetch from that host
-// on the execution's behalf — the container stays sealed either way. This
-// mirrors the security posture doc's model (a sealed Sprout "cannot reach out
-// on its own; external calls are Stem-mediated") and keeps the sealed-Sprout
-// invariant intact for the new operation-class.
+//   - The Terrarium is sealed by the container runtime, not by a policy check.
+//     The docker provider pins --network none, --cap-drop=ALL and
+//     no-new-privileges for every container regardless of spec, so the executed
+//     command has no network reach at all.
+//   - The grant's egress allow-list governs only the Stem's own fetches, made on
+//     the host before the sealed container runs. Every fetch URL must name a host
+//     on the EgressPolicy; an empty policy denies every fetch. Payloads are
+//     delivered read-only under /tmp/egress and the command executes offline.
 
 // passthroughEgressDirectory is where Stem-mediated fetch payloads land
 // inside the Terrarium. It lives under /tmp so delivery never touches the

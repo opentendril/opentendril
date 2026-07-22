@@ -9,10 +9,9 @@ import (
 // Reclamation: giving an owned reference the moment at which it is finished.
 //
 // The rules are deliberately narrower than git.prune's, because reclamation is
-// automatic and prune is not. Anything a human explicitly confirms can afford
-// to be a judgement call; anything the system does on its own must be a
-// certainty. So exactly two conditions reclaim a branch, and both mean "there
-// is nothing here to lose":
+// automatic and prune is not: anything the system does unattended must be a
+// certainty. Exactly two conditions reclaim a branch, and both mean there is
+// nothing to lose:
 //
 //  1. The branch has produced no commits beyond the base it was cut from. It
 //     is pure litter — a reference that was created in case work happened, and
@@ -23,8 +22,7 @@ import (
 //     merge.
 //
 // Everything else is kept. A branch carrying unpublished commits is somebody's
-// work, however old it looks and whoever created it, and automatic deletion of
-// work is the failure this whole line of work exists to prevent.
+// work, however old it looks and whoever created it.
 
 // ReclaimOutcome reports what happened to one owned reference.
 type ReclaimOutcome struct {

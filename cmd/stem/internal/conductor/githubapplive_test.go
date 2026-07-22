@@ -1,21 +1,12 @@
 //go:build livegithub
 
-// This live check is excluded from the default build, and that exclusion is
-// what lets the merge gate stay skip-aware. Under the skip-aware verdict a
-// skipped test reads as blocked, never green — correct for code that could
-// have run and did not, but this check mints a real token against real GitHub
-// and can never run where those credentials are absent, which is everywhere
-// except a maintainer's machine. Left as a t.Skip it would block every gate
-// forever.
+// Excluded from the default build by a build tag, not a t.Skip. The skip-aware
+// verdict reads a skipped test as blocked rather than green, so a credential-gated
+// t.Skip here would block every merge gate forever. A build tag is compile-time
+// and reviewable; a list of tolerated skips would be fail-open once it drifts.
 //
-// A build tag rather than a list of tolerated skips: a list is fail-open the
-// moment it drifts, whereas exclusion here is compile-time and reviewable. Add
-// a credential-gated test with t.Skip and the gate blocks until someone
-// decides deliberately — which is the point.
-//
-// Nothing is left unverified by this: the token-minting logic is covered by
-// TestGithubAppInstallationToken and friends against a fake API. Only the live
-// third-party round trip lives here.
+// Only the live third-party round trip lives here — the token-minting logic is
+// covered against a fake API by TestGithubAppInstallationToken and friends.
 //
 // Run it with the credentials and the tag:
 //

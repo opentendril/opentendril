@@ -10,25 +10,18 @@ import (
 
 // The read-side of the delegated git ladder.
 //
-// Four write operations carry guardrails that exist because a Pollen guessed
-// something it could not see — which branch was the default, whether the
-// workspace was already on a feature branch, whether a pull request existed.
-// Every one of those guardrails catches a guess; none of them removed the
-// reason for guessing. RunGitStatus does: it lets a Pollinator look before it
-// acts, so a refusal becomes a prediction instead of a surprise.
+// RunGitStatus lets a Pollinator look before it acts, so a guardrail refusal
+// becomes a prediction rather than a surprise.
 //
-// Two properties make it trustworthy, and both are deliberate:
+// Two properties keep it trustworthy:
 //
-//  1. It shares the guards' own view. The "may I commit here" answer comes
-//     from AssessDefaultBranchCommit — the same predicate the commit guard
-//     acts on — not from a reimplementation. A status that disagreed with the
-//     write path would be worse than no status, because it would teach an
-//     Pollinator to distrust the read-side.
-//  2. It makes no network calls, for the same reason: the commit guard is
-//     offline, so status must be offline or the two would diverge whenever
-//     the interface and the local record differ. It is also strictly
-//     read-only — no fetch, no index refresh, nothing that writes to the
-//     repository.
+//  1. It shares the guards' own view. "May I commit here" comes from
+//     AssessDefaultBranchCommit, the same predicate the commit guard acts on,
+//     never a reimplementation. A status disagreeing with the write path would
+//     be worse than none.
+//  2. It makes no network calls, because the commit guard is offline and the
+//     two must not diverge. It is strictly read-only — no fetch, no index
+//     refresh, nothing that writes to the repository.
 
 // gitStatusFileLimit bounds the reported path list. An unbounded list would
 // drop an entire repository's worth of paths into a subject's context on a

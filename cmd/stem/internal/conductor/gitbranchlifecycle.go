@@ -10,26 +10,19 @@ import (
 
 // Branch lifecycle after a merge: classification, and the deletion it gates.
 //
-// This is the first operation on the delegated ladder that can DESTROY work.
-// Everything else adds — a branch, a commit, a published ref, a pull request —
-// and a mistake is recoverable. A branch whose commits exist nowhere else is
-// simply gone. So the safety argument comes first and the capability is built
-// around it, rather than the other way round.
+// This is the only operation on the delegated ladder that can DESTROY work: a
+// branch whose commits exist nowhere else is simply gone.
 //
-// The classification rule is the important part, and it comes from a real
-// cleanup that had to be done by hand:
+// Merged-ness is never inferred from local history or from a branch name:
 //
-//   - `git branch --merged` MISSES SQUASH MERGES ENTIRELY. A branch merged
-//     through a squashing pull request still reports as unmerged, because its
-//     commits never appear in the target's history.
-//   - `git diff base...branch` is useless for the same reason: a squash-merged
-//     branch still shows a non-empty diff against a base that has moved.
-//   - The only reliable signal is asking the forge which pull request a branch
+//   - `git branch --merged` MISSES SQUASH MERGES ENTIRELY — a squash-merged
+//     branch reports as unmerged, because its commits never appear in the
+//     target's history;
+//   - `git diff base...branch` fails for the same reason;
+//   - the only reliable signal is asking the forge which pull request a branch
 //     tip belongs to and whether that pull request merged.
 //
-// So merged-ness here is never inferred from local history or from a branch's
-// name. It is evidence, fetched per branch, and a branch is deletable only
-// when that evidence says merged.
+// A branch is deletable only when that evidence says merged.
 
 // Branch classifications. Exactly one of these is deletable.
 const (

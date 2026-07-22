@@ -7,38 +7,24 @@ import (
 	"time"
 )
 
-// The passthrough/run capability family. passthrough.run is the minimal
-// delegable operation-class from the delegated-execution Design RFC: it runs
-// ONE bounded command (an argv vector, never a shell string) inside the same
-// network-sealed Terrarium every Sprout gets, so an external Pollinator can hand
-// the Stem the commands it would otherwise execute on the host — formatters,
-// linters, test runs, codegen — without holding host access itself. The
-// Terrarium orchestration lives outside the Core in the conductor (which the
-// Core is structurally forbidden from importing — see boundary_test.go), so
-// execution is injected as a transport-free function port via WithPassthrough,
-// the same template as SproutOperations.
+// The passthrough/run capability family: one bounded command (an argv vector,
+// never a shell string) inside the same network-sealed Terrarium every Sprout
+// gets. Terrarium orchestration lives in the conductor, which the Core is
+// structurally forbidden from importing, so execution is injected as a
+// transport-free port via WithPassthrough.
 //
-// Egress model (security-first, minimal-config default):
-//   - The Terrarium is physically network-sealed (--network none, asserted by
-//     the terrarium provider tests), so the executed command itself can never
-//     reach any host. Deny-all is the wire-level default, not a policy check.
-//   - The ONLY external reach a passthrough execution has is Stem-mediated:
-//     the optional fetch entries below are retrieved BY THE STEM, before the
-//     sealed Terrarium runs, and each fetched URL must name a host on the
-//     matching delegation grant's egress allow-list. With no grant (every
-//     non-delegated invocation) the effective allow-list is empty and every
-//     fetch is denied — deny-all needs zero configuration.
-//   - The allow-list itself travels on the Egress field, which deliberately
-//     has no JSON tag surface (json:"-"): it can only be set programmatically
-//     by the Stem's own call sites from an authorized DelegationGrant, never
-//     decoded from caller input — a caller structurally cannot widen its own
-//     egress (no self-escalation).
+// Egress model:
+//
+//   - The Terrarium is network-sealed at the wire level (--network none), so the
+//     executed command can never reach any host. Deny-all needs no configuration.
+//   - The only external reach is Stem-mediated: fetch entries are retrieved by
+//     the Stem before the sealed Terrarium runs, and each URL must name a host on
+//     the matching delegation grant's egress allow-list. No grant means an empty
+//     list and every fetch denied.
+//   - Egress carries json:"-", so it can only be set programmatically by the
+//     Stem from an authorized grant and never decoded from caller input. A caller
+//     structurally cannot widen its own egress.
 
-// PassthroughFetchInput asks the Stem to retrieve one URL on the execution's
-// behalf and deliver it into the Terrarium as a read-only file. This is the
-// Stem-mediated egress channel: the fetch happens on the Stem, gated by the
-// delegation grant's egress allow-list, never from inside the sealed
-// container.
 type PassthroughFetchInput struct {
 	// URL is the http(s) resource to retrieve.
 	URL string `json:"url"`

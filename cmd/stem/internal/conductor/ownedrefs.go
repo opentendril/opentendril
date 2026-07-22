@@ -14,22 +14,13 @@ import (
 // Owned references: every branch Tendril creates is recorded at creation and
 // reclaimed when its purpose ends.
 //
-// This exists because the system was littering. A run would create a
-// protective branch (docker.go's sprout/task-<id>) and abandon it; nothing
-// ever removed it. Worktrees were already reclaimed properly — the deferred
-// removeShadowWorktree calls in sequence.go and parallelsprouting.go — so the
-// pattern was understood, it had simply never been applied to branches.
+// A reference created without a recorded purpose has no moment at which anyone
+// can say it is finished, so it survives forever by default. Recording ownership
+// at creation gives it that moment.
 //
-// The result was measurable: branches left behind by finished runs, authored
-// by the automation identity, still present after a full manual cleanup. And
-// they were unreachable by git.prune, because they had never been pushed and
-// no remote could vouch for them — so the cleanup capability was structurally
-// incapable of clearing the mess the system itself produced. That is the sign
-// of a symptom being treated instead of a cause.
-//
-// The cause is unowned creation. A reference created without a recorded
-// purpose has no moment at which anyone can say it is finished, so it survives
-// forever by default. Recording ownership at creation gives it that moment.
+// Unpushed branches are unreachable by git.prune, which needs a remote to vouch
+// for a branch — so without this record, the cleanup capability cannot clear
+// branches the system itself produced.
 
 // ownedRefsFileName is the registry, kept in the Stem's own directory — never
 // inside a substrate, so a repository can neither observe nor rewrite what

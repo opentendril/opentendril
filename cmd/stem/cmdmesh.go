@@ -17,7 +17,8 @@ import (
 )
 
 // runMeshCmd hosts three kinds of subcommands. graft/promote are the CLI
-// adapter for the governed substrate-grafting capability family (// slice 3): thin projections of the same transport-free core.Core the REST
+// adapter for the governed substrate-grafting capability family: thin
+// projections of the same transport-free core.Core the REST
 // and MCP surfaces use. trait/list-accept-reject expose the governed mesh
 // trait inbox. keygen/issue-token stay deliberately ungoverned,
 // CLI-local key-management commands: they mint the workspace's private mesh

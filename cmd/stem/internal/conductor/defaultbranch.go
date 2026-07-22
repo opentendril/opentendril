@@ -10,24 +10,17 @@ import (
 // The default-branch resolver: one answer to "which branch is this
 // repository's default?", shared by every path that needs to know.
 //
-// It exists because guessing that answer is the single most expensive
-// recurring failure in this codebase's git story. Work assumed onto "main"
-// — or assumed onto whatever branch happened to be checked out — is paid for
-// later in rebases, merge repair, and commits reversed off the default branch
-// onto a feature branch. The rule is therefore absolute: nothing in a git
-// execution path may assume a default-branch name. It is read, or it is
-// reported as unknown.
+// The rule is absolute: nothing in a git execution path may assume a
+// default-branch name. It is read, or it is reported as unknown.
 //
 // Precedence, most authoritative first:
 //
-//  1. the substrate's explicitly configured branch — an operator statement
-//     always wins over anything discovered;
-//  2. the GitHub API (GET /repos/{owner}/{repo} → default_branch), when the
-//     connection carries a token — authoritative for the remote's current
-//     state;
-//  3. the local refs/remotes/origin/HEAD symbolic reference — no network and
-//     no credential required, so it works for a sealed or offline workspace;
-//  4. undetermined — and it says so, rather than returning a guess.
+//  1. the substrate's explicitly configured branch — an operator statement wins
+//     over anything discovered;
+//  2. the GitHub API, when the connection carries a token;
+//  3. the local refs/remotes/origin/HEAD symbolic reference — no network and no
+//     credential required, so it works offline;
+//  4. undetermined — reported as such, never guessed.
 //
 // See defaultBranchProtectionFloor for what callers must do with step 4:
 // protection widens under uncertainty, it never narrows.

@@ -62,14 +62,11 @@ type goTestOutcome struct {
 //     real test decided not to run, so its subject is unverified;
 //   - otherwise → passed.
 //
-// The critical distinction: a "skip" event WITHOUT a Test field is
-// package-level — the toolchain reporting "no test files" — which verifies
-// nothing but also promised nothing, so it is benign, not blocked.
+// A "skip" event WITHOUT a Test field is package-level ("no test files"), which
+// verifies nothing but promised nothing either: benign, not blocked.
 //
-// Lines that do not parse as event objects (stray tool output interleaved
-// with the stream) are ignored: the caller combines this verdict with the
-// process exit code, which already fails the step for any error severe
-// enough to break the stream.
+// Unparseable lines are ignored; the caller combines this verdict with the
+// process exit code, which already fails the step on a broken stream.
 func evaluateGoTestJSONStream(stream string) goTestOutcome {
 	outcome := goTestOutcome{Verdict: goTestVerdictPassed}
 	for _, line := range strings.Split(stream, "\n") {
@@ -115,14 +112,11 @@ func goTestSubject(event goTestEvent) string {
 }
 
 // ReportGoTestRun is the single skip-aware verdict over one completed
-// `go test -json` run, shared by every tier that judges such a run: the local
-// sealed verifier (reportGoTestVerifier) and the `tendril verdict go-test`
-// CLI the remote GitHub Actions gate calls. One implementation, so the tiers
-// cannot drift into disagreeing about what "green" means.
+// `go test -json` run, shared by the local sealed verifier and the
+// `tendril verdict go-test` command, so the tiers cannot disagree about green.
 //
-// The verdict needs the event stream AND the process exit code together: a
-// non-zero exit with no fail event (a compile error, for example) must still
-// fail — a judge that only read the stream would wave compile errors through.
+// It needs the event stream AND the exit code together: a non-zero exit with no
+// fail event (a compile error) must still fail.
 //
 // It returns the human-readable report and the verdict as an error:
 //

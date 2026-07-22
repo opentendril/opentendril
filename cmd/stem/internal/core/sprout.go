@@ -7,26 +7,20 @@ import (
 	"time"
 )
 
-// The sprout/run capability family. sprout.grow
-// delegates a one-shot task to an autonomous Tendril inside a network-isolated
-// terrarium — the core execution path of the product. The terrarium
-// orchestration (substrate resolution, container lifecycle, run recording)
-// lives outside the Core in packages it is structurally forbidden from
-// importing (the conductor and historydb — see boundary_test.go), so it is
-// injected as a transport-free function port via WithSprout, the same
-// template as GenomeOperations (PR).
+// The sprout/run capability family. sprout.grow delegates a one-shot task to an
+// autonomous Tendril inside a network-isolated terrarium.
 //
-// The capability is synchronous: Invoke answers when the Tendril matures or
-// withers, exactly the semantics the MCP sproutTendril tool has always had.
-// Job handles / streaming progress for long runs remain an open design
-// question tracked in — the /ws event stream and the sprout-runs
-// history endpoints stay the views for watching a run.
+// Terrarium orchestration lives outside the Core, in packages it is structurally
+// forbidden from importing (see boundary_test.go), so it is injected as a
+// transport-free port via WithSprout.
 //
-// What lives HERE (business logic shared by every surface): input validation,
-// step-id minting, and binding the run to a Tendril session so its
-// preferences (provider/model/genotype) shape the sprout. What lives in the
-// port (execution wiring): named-substrate resolution, the terrarium itself,
-// and history recording.
+// Invoke is synchronous: it answers when the Tendril matures or withers. The /ws
+// event stream and the sprout-runs history endpoints are the views for watching
+// a run.
+//
+// Here: input validation, step-id minting, and binding the run to a session so
+// its preferences shape the sprout. In the port: substrate resolution, the
+// terrarium, and history recording.
 
 // SproutRunInput asks the Stem to sprout an autonomous Tendril for one task.
 type SproutRunInput struct {

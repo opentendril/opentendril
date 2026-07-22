@@ -6,21 +6,16 @@ import (
 	"strings"
 )
 
-// The substrate-grafting capability family. Grafting
-// delegates a local substrate's latest commit through the Mycelial Mesh; both
-// workspace resolution (substrates config) and the push itself live outside
-// the Core in packages it is structurally forbidden from importing (the
-// conductor and the mesh client — see boundary_test.go). They are therefore
-// injected as transport-free function ports via WithMesh — the same template
-// as GenomeOperations (PR) and PlasmidOperations.
+// The substrate-grafting capability family. Grafting delegates a local
+// substrate's latest commit through the Mycelial Mesh. Workspace resolution and
+// the push live outside the Core, in packages it is structurally forbidden from
+// importing (see boundary_test.go), and are injected via WithMesh.
 //
 // The mesh key-management commands (`tendril mesh keygen|issue-token`) are
-// deliberately NOT governed: they mint the workspace's private mesh keys and
-// signed tokens, a local secret authority that must not be projected onto the
-// network surfaces (posture; same rationale as plasmid.sign). The
-// server-side graft endpoint (/v1/mesh/graft WebSocket) is the *receiving*
-// half of the mesh and stays outside the registry as infrastructure, not a
-// command.
+// deliberately NOT governed: they mint the workspace's private keys and signed
+// tokens, a local secret authority that must not reach the network surfaces —
+// same rationale as plasmid.sign. The server-side graft endpoint is the
+// receiving half of the mesh and stays outside the registry as infrastructure.
 //
 // The mesh trait inbox commands (`tendril mesh trait list|accept|reject`) are
 // governed because they manipulate shared pending-trait state rather than

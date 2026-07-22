@@ -139,8 +139,8 @@ func sproutCLISession(base *url.URL) (string, error) {
 // chatAPIKey resolves the bearer key this CLI sends to the local Stem. It
 // mirrors getOrCreateAPIKey's resolution order (cmdserve.go) without ever
 // generating a key itself: the `serve` command owns key creation, and
-// persists it to the same "./.tendril/api-key" file this reads (// finding 1 — the Stem no longer runs unauthenticated, so this client can no
-// longer assume a keyless server).
+// persists it to the same "./.tendril/api-key" file this reads, so this client
+// never assumes a keyless server.
 func chatAPIKey() string {
 	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
 		return key

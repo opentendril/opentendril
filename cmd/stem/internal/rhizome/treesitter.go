@@ -2,29 +2,16 @@ package rhizome
 
 // In-process tree-sitter engine.
 //
-// TreeSitterParser gives non-Go files high-fidelity tree-sitter symbols by
-// driving the gotreesitter pure-Go tree-sitter runtime, so `go build` stays
-// cgo-free and plain GOOS/GOARCH cross-compiles keep working. It is the sole
-// tree-sitter engine: the original terrarium batch pre-pass (a Docker image
-// running `parse.js`) was demoted once this engine proved out — its extraction
-// rules were ported here line-for-line, so the "mirrors parse.js …" notes
-// below name the removed predecessor (see git history) as the origin of each
-// value. The conductor golden test pins this engine's output against
-// testdata/treesittergolden.json.
+// TreeSitterParser gives non-Go files tree-sitter symbols via the gotreesitter
+// pure-Go runtime, so `go build` stays cgo-free and cross-compiles keep working.
+// The conductor golden test pins its output against testdata/treesittergolden.json.
 //
-// Engine notes:
-//   - Grammars are the gotreesitter registry's embedded blobs (parse tables
-//     extracted from the upstream tree-sitter-python/-javascript/-typescript
-//     grammars pinned in gotreesitter's grammars/languages.lock; external
-//     scanners are hand-written Go). Grammar drift is caught by the golden
-//     fixture, not by version-string comparison.
-//   - Per-file error isolation: a file the engine cannot parse falls back to
-//     the regex extraction INSIDE Parse rather than returning an error,
-//     because ScanRepository hard-fails the whole scan on a parser error (the
-//     GoParser contract). One odd file must never sink an index run.
-//   - Files above maxTreeSitterFileBytes go to the regex fallback, mirroring
-//     parse.js MAX_FILE_BYTES ("larger files are left to the host-side regex
-//     parser").
+//   - Grammars are the gotreesitter registry's embedded blobs. Grammar drift is
+//     caught by the golden fixture, not by version-string comparison.
+//   - A file the engine cannot parse falls back to regex extraction INSIDE
+//     Parse rather than returning an error: ScanRepository hard-fails the whole
+//     scan on a parser error, so one odd file must never sink an index run.
+//   - Files above maxTreeSitterFileBytes go to the regex fallback.
 
 import (
 	"fmt"
@@ -36,14 +23,13 @@ import (
 	"github.com/odvcencio/gotreesitter/grammars"
 )
 
-// maxTreeSitterFileBytes mirrors parse.js MAX_FILE_BYTES: anything larger is
-// left to the regex fallback.
+// maxTreeSitterFileBytes: anything larger goes to the regex fallback.
 const maxTreeSitterFileBytes = 2 * 1024 * 1024
 
-// maxTreeSitterStubLength mirrors parse.js MAX_STUB_LENGTH.
+// maxTreeSitterStubLength caps an extracted stub.
 const maxTreeSitterStubLength = 300
 
-// treeSitterLanguageByExtension mirrors parse.js LANGUAGE_BY_EXTENSION.
+// treeSitterLanguageByExtension maps a file extension to its grammar.
 var treeSitterLanguageByExtension = map[string]string{
 	".py":  "python",
 	".js":  "javascript",
@@ -78,7 +64,7 @@ func NewTreeSitterParser() *TreeSitterParser {
 	}
 }
 
-// Supports mirrors parse.js LANGUAGE_BY_EXTENSION (which is also exactly the
+// Supports the extensions in treeSitterLanguageByExtension (which are also the
 // RegexParser coverage, so the engine never claims a file regex would not).
 func (p *TreeSitterParser) Supports(path string) bool {
 	_, ok := treeSitterLanguageByExtension[strings.ToLower(filepath.Ext(path))]
@@ -104,7 +90,7 @@ func (p *TreeSitterParser) Parse(path string, content []byte) ([]Symbol, error) 
 	return symbols, nil
 }
 
-// parseWithEngine runs the gotreesitter parse and the parse.js-ported symbol
+// parseWithEngine runs the gotreesitter parse and the symbol
 // walk, converting any panic in the third-party runtime into an error so the
 // caller can fall back per file.
 func (p *TreeSitterParser) parseWithEngine(languageName string, content []byte) (symbols []Symbol, err error) {
@@ -157,9 +143,7 @@ func (p *TreeSitterParser) language(languageName string) (*sitter.Language, erro
 	return language, nil
 }
 
-// treeSitterWalker ports the parse.js extraction walkers. Method names and
-// traversal order deliberately track the parse.js functions of the same name
-// so the two engines stay reviewable side by side.
+// treeSitterWalker carries the parse tree and source for symbol extraction.
 type treeSitterWalker struct {
 	language *sitter.Language
 	source   []byte
@@ -211,8 +195,7 @@ func treeSitterFirstLine(text string) string {
 	return strings.TrimSpace(text)
 }
 
-// treeSitterCapStub mirrors parse.js capStub. parse.js counts JavaScript
-// string code units; runes are identical for ASCII and any BMP source.
+// treeSitterCapStub truncates a stub to maxTreeSitterStubLength runes.
 func treeSitterCapStub(text string) string {
 	trimmed := strings.TrimSpace(text)
 	runes := []rune(trimmed)
@@ -222,8 +205,7 @@ func treeSitterCapStub(text string) string {
 	return string(runes[:maxTreeSitterStubLength]) + "…"
 }
 
-// treeSitterFirstJoined mirrors parse.js firstJoined: every line trimmed,
-// blanks dropped, joined with single spaces.
+// treeSitterFirstJoined trims every line, drops blanks, and joins with spaces.
 func treeSitterFirstJoined(raw string) string {
 	lines := strings.Split(raw, "\n")
 	parts := make([]string, 0, len(lines))
@@ -271,7 +253,7 @@ func (w *treeSitterWalker) pythonDocstring(node *sitter.Node) string {
 	// Upstream tree-sitter-python wraps a docstring statement as
 	// expression_statement > string; gotreesitter's materialized tree collapses
 	// the single-expression statement to a bare string. Accept both shapes so
-	// the walk matches parse.js output on either engine.
+	// the walk matches on either engine.
 	if w.nodeType(candidate) == "expression_statement" {
 		if candidate.NamedChildCount() == 0 {
 			return ""
@@ -494,7 +476,7 @@ func (w *treeSitterWalker) walkScript(node *sitter.Node, symbols *[]Symbol, impo
 
 // --- Extraction ----------------------------------------------------------------
 
-// extractSymbols mirrors parse.js extractSymbols: language-specific walk, then
+// extractSymbols: language-specific walk, then
 // a file_context pseudo-symbol prepended when any imports were collected.
 func (w *treeSitterWalker) extractSymbols(root *sitter.Node, languageName string) []Symbol {
 	symbols := make([]Symbol, 0)

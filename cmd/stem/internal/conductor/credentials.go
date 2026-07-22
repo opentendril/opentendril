@@ -59,7 +59,7 @@ const (
 	CommitModeAPI   = "api"
 )
 
-// ResolvedCredential is the typed credential the terrarium (slice 3) consumes.
+// ResolvedCredential is the typed credential the terrarium consumes.
 // It never carries a secret to a log: String() redacts TokenValue.
 type ResolvedCredential struct {
 	Method     CredentialMethod

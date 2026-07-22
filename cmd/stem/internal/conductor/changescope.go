@@ -76,23 +76,18 @@ var moduleDefinitionFileNames = map[string]bool{
 // TestScopeForChanges returns the `go test` package patterns to run for the
 // given changed files, and whether it fell back to the whole module.
 //
-// Every changed file is attributed to its nearest enclosing package directory
-// (which conservatively covers testdata fixtures and go:embed targets, since
-// both always live under their package's directory), and the resulting set is
-// expanded with every in-module package that transitively imports an affected
-// package — including via test files — so a change to a low-level package
-// always pulls in the higher-level packages whose tests exercise it.
+// Every changed file is attributed to its nearest enclosing package directory,
+// which covers testdata fixtures and go:embed targets. That set is expanded with
+// every in-module package transitively importing an affected one, including via
+// test files.
 //
-// The fail-closed fallback (wholeModule true, empty package list, meaning
-// "test everything", e.g. `./...`) is taken when a module definition file
-// changed, when package listing fails for any reason, or when a changed file
-// cannot be attributed but plausibly affects the build. Changed files that are
-// known inert — documentation or tooling configuration outside every package
-// directory — contribute nothing, so a change touching only such files
-// legitimately yields an empty scope with nothing to test.
+// The fail-closed fallback (wholeModule true, empty list, meaning `./...`) is
+// taken when a module definition file changed, when package listing fails, or
+// when a changed file cannot be attributed but may affect the build. Known-inert
+// files contribute nothing, so a documentation-only change yields an empty scope.
 //
-// The returned error reports only invalid input from the caller; resolution
-// failures never surface as errors, they widen the scope instead.
+// The returned error reports only invalid caller input; resolution failures
+// widen the scope rather than surfacing as errors.
 func TestScopeForChanges(ctx context.Context, moduleRoot string, changedFiles []string) (packages []string, wholeModule bool, err error) {
 	if ctx == nil {
 		ctx = context.Background()

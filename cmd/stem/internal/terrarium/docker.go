@@ -699,24 +699,14 @@ func (b *lockedBuffer) String() string {
 	return b.buf.String()
 }
 
-// runDockerCommandWithStartGrace retries a docker command while the
-// asynchronously started container is still coming up, mirroring Run's exec
-// retry: createDockerTerrarium returns before `docker run` has registered the
-// container, so an immediate exec or cp (CopyIn for spec.Files) can race the
-// start. The command has not run in the not-ready case, so retrying is safe.
 // environmentFlags renders a terrarium's environment as `-e KEY` flags — the
-// name only, never `KEY=value`.
+// name only, NEVER `KEY=value`.
 //
 // Docker resolves a valueless -e from its own client environment, which
-// commandEnvironment supplies. The value therefore never reaches the docker
-// command line, and that matters twice over: process arguments are world
-// readable through /proc for the container's lifetime, so any local user could
-// read a GitHub token or an inference API key out of `ps`; and the arguments
-// are echoed to stderr when a terrarium starts, which put those same secrets
-// into terminal scrollback and into anything capturing that output.
-//
-// Keep the split. Rendering `KEY=value` here would reintroduce both leaks at
-// once, and the echo above would broadcast them.
+// commandEnvironment supplies, so the value never reaches the command line. That
+// matters twice: process arguments are world-readable through /proc for the
+// container's lifetime, and the arguments are echoed to stderr on start.
+// Rendering `KEY=value` here would leak every secret to both.
 func environmentFlags(environment map[string]string) []string {
 	flags := make([]string, 0, len(environment)*2)
 	for _, key := range sortedKeys(environment) {
@@ -743,6 +733,11 @@ func commandEnvironment(environment map[string]string) []string {
 	return values
 }
 
+// runDockerCommandWithStartGrace retries a docker command while an
+// asynchronously started container is still coming up: createDockerTerrarium
+// returns before `docker run` has registered the container, so an immediate exec
+// or cp can race the start. The command has not run in the not-ready case, so
+// retrying is safe.
 func runDockerCommandWithStartGrace(ctx context.Context, args ...string) (string, string, error) {
 	startDeadline := time.Now().Add(containerStartGrace)
 	for {

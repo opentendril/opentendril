@@ -1,25 +1,12 @@
-// Package core is the single, transport-free service that owns the shared
-// command capabilities of the OpenTendril Stem. The CLI, MCP, and REST/OpenAPI
-// surfaces are thin *adapters* that translate their transport to and from this
-// package and MUST NOT contain business logic (see AGENTS.md, "Adapters
-// translate only"). The litmus test for a capability living here: it must be
-// invokable with zero HTTP, CLI, or MCP types in scope.
+// Package core is the single, transport-free service that owns the Stem's shared
+// command capabilities. The CLI, MCP and REST surfaces are thin adapters that
+// translate their transport to and from this package and MUST NOT contain
+// business logic. The litmus test for a capability belonging here: it must be
+// invokable with zero HTTP, CLI or MCP types in scope.
 //
-// This began as the first slice of Interface Parity. It governs
-// the session-lifecycle capability family, the genome family (// slice 1), the plasmid family, the substrate-grafting
-// family, and the sequence family —
-// all three surfaces project each identically through this one Core. The remaining
-// Stem capabilities (sprout/run) are NOT yet part of the governed registry — they
-// are tracked in and the parity tests deliberately assert only the
-// governed set so the three surfaces cannot silently diverge on it. plasmid.sign
-// and mesh key-management commands stay deliberately ungoverned (see plasmid.go
-// and mesh.go).
-// slice 1), and the sprout/run family — all three
-// surfaces project each identically through this one Core. The remaining
-// Stem capabilities (sequence, plasmid, substrate grafting) are NOT yet part
-// of the governed registry — they are tracked in and the parity
-// tests deliberately assert only the governed set so the three surfaces
-// cannot silently diverge on it.
+// The parity tests assert that every governed capability is projected identically
+// by all three surfaces. plasmid.sign and the mesh key-management commands are
+// deliberately ungoverned — see plasmid.go and mesh.go.
 package core
 
 import (
