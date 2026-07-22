@@ -46,7 +46,18 @@ const PollinatorCredentialsFilename = "pollinators.json"
 // pollinatorTokenPrefix makes an OpenTendril credential recognisable in a log
 // or a configuration file, so a leaked one can be identified and revoked
 // rather than puzzled over.
-const pollinatorTokenPrefix = "otp_"
+//
+// It names the project rather than a generic security noun deliberately. An
+// earlier value, "otp_", read across the wider ecosystem as "one-time
+// password" — which these credentials are the opposite of: they are long-lived
+// and persist until explicitly revoked. A reader finding one in a log was
+// invited to conclude it had already been spent and was harmless, which is
+// exactly the misreading the prefix exists to prevent.
+//
+// The prefix is functional, not decorative: it is the discriminator that routes
+// a presented bearer to credential resolution rather than to the Botanist's own
+// key. Changing it therefore invalidates every credential already issued.
+const pollinatorTokenPrefix = "tendril_"
 
 var pollinatorStoreMu sync.Mutex
 
