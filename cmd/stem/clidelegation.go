@@ -13,40 +13,17 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 )
 
-// The command line as a governed surface — Tier 1.
-//
-// Until now a command line invocation was never delegated: it ran as the
-// Botanist, against their own checkout, ungated. That is right for a Botanist
-// and wrong for a Pollinator, and it left the governed path available only over
-// the Model Context Protocol. The practical result was that the easiest path at
-// a terminal was the ungated one, and it got used — including, during this
-// project's own construction, to drive the organism's GitHub App credential
-// around the delegation gate that had just been built.
+// The command line as a governed surface.
 //
 // When OPENTENDRIL_POLLEN is set, an invocation is treated as delegated: the
-// operation-class is authorised against the grants, the decision is audited to
-// history.db through the same EventBus lane the other surfaces use, and the work
-// runs in that Pollen's isolated workspace. Unset, behaviour is exactly as
-// before.
+// operation-class is authorised against the grants, the decision is audited, and
+// the work runs in that Pollen's isolated workspace. Unset, nothing is gated.
 //
-// # WHAT THIS IS, AND WHAT IT IS NOT
-//
-// This is accident prevention and audit. It is NOT a security boundary, and
-// describing it as one would be worse than not having it.
-//
-// The Pollen here is DECLARED BY THE CALLER. On the Model Context Protocol
-// surface the Botanist writes it into a launch configuration the Pollinator does
-// not control; at a terminal the Pollinator owns its own environment and can
-// declare any Pollen it likes, including the one with the widest grants. Worse,
-// a caller running as the same operating-system user as the Stem can read the
-// credentials, rewrite the grants file, or ignore this binary altogether.
-//
-// So this gate stops the wrong substrate, the operation nobody meant to grant,
-// and the quiet drift into ungoverned habits — the failures that are actually
-// common. It does not stop a Pollinator that decides to lie. The boundary
-// becomes real only when the Stem runs as its own principal, owning credentials
-// no Pollinator can read; that is the tier above this one, and this tier is a
-// stepping stone to it rather than a substitute for it.
+// This is accident prevention and audit, NOT a security boundary. The Pollen is
+// DECLARED BY THE CALLER: at a terminal a Pollinator owns its own environment and
+// can declare any Pollen it likes. A caller running as the same operating-system
+// user as the Stem can read its credentials and rewrite its grants regardless.
+// The boundary is real only when the Stem runs as its own principal.
 
 // envPollenCLI is the same variable the Model Context Protocol surface binds
 // from. One name, so a Pollen means the same thing whichever surface a

@@ -493,10 +493,10 @@ func readPersistedAPIKey(tendrilDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// getOrCreateAPIKey resolves the Stem's bearer key: OPENTENDRIL_API_KEY/
-// ADMIN_TOKEN win, then a previously generated key on disk, then a freshly
-// generated one persisted for next time. It never returns an empty key, so
-// the Stem can never come up serving its API unauthenticated (// finding 1).
+// getOrCreateAPIKey resolves the Stem's bearer key: TENDRIL_API_KEY or
+// ADMIN_TOKEN wins, then a key already on disk, then a freshly generated one
+// persisted for next time. It never returns an empty key, so the Stem cannot
+// come up serving its API unauthenticated.
 func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
 	if key = resolveServeAPIKey(); key != "" {
 		return key, false, nil

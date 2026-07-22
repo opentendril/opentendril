@@ -211,9 +211,6 @@ func TestGetOrCreateAPIKeyPersistsAndReuses(t *testing.T) {
 	}
 }
 
-// This test previously asserted that OPENTENDRIL_API_KEY became the Stem's
-// bearer key — encoding the defect as expected behaviour, which is why the
-// defect survived. It now pins the Stem's own variable.
 func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 	t.Setenv(EnvStemAPIKey, "env-key")
 	dir := t.TempDir()
@@ -282,15 +279,9 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	}
 }
 
-// The Stem's bearer key must be its own secret, never the inference provider's.
-//
-// These pin a defect rather than a preference. OPENTENDRIL_API_KEY is the
-// credential for the OpenTendril-hosted inference provider: `tendril init`
-// writes a shared trial constant into it, and the conductor passes it into every
-// Terrarium alongside the other provider keys. While the serve path also read it
-// as the Stem's bearer key, both facts became authentication failures — a
-// publicly known string authenticated as the Botanist, and every Sprout received
-// the Botanist credential.
+// The Stem's bearer key must be its own secret, never a provider's. A provider
+// value may be shared and reaches every Terrarium; a bearer key grants unscoped
+// access.
 func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 	os.Unsetenv(EnvStemAPIKey)

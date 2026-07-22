@@ -13,7 +13,6 @@ func clearProviderKeys(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GROK_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
-	t.Setenv("OPENTENDRIL_API_KEY", "")
 	t.Setenv("NVIDIA_API_KEY", "")
 }
 
