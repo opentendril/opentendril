@@ -67,7 +67,18 @@ That is the whole design. Protection is enforced on the trusted side rather than
 The merge-back guard reads the list from the checkout as it stands *before* a merge, never from the commit being merged, so a run cannot delete the list in the same change that edits a kernel file.
 
 > [!IMPORTANT]
-> **`CODEOWNERS` blocks nothing on its own.** It requests review. Blocking requires branch protection on the default branch with required status checks, and — where there is more than one collaborator — "Require review from Code Owners". Neither is configured today, so the pull-request layer currently *records* intent rather than enforcing it. This is stated rather than glossed because a control that looks like a gate and is not is worse than a documented request.
+> **`CODEOWNERS` blocks nothing on its own.** It requests review. Blocking requires the default-branch ruleset to set `require_code_owner_review`, which it currently does not — the pull-request rule requires zero approvals. So the code-owner layer *records* intent rather than enforcing it. This is stated rather than glossed because a control that looks like a gate and is not is worse than a documented request.
+
+### What the default-branch ruleset does enforce
+
+Protection here comes from **repository rulesets**, not classic branch protection — the two are configured separately, and the classic branch-protection endpoint reports nothing even when a ruleset is fully active. Check with `gh api repos/<owner>/<repo>/rulesets`, never with `.../branches/main/protection`.
+
+Enforced today on the default branch, with no bypass actors: deletion and force-push are refused, history must stay linear, **commits must be signed**, a pull request is required, and review threads must be resolved.
+
+Two status checks are required — `Native PR Gate` and `verify-commits`. The first is an aggregator: it fails unless every job the path filter marked necessary succeeded, so the Go and Python suites gate a merge through it rather than by name.
+
+> [!CAUTION]
+> **The Source Hygiene workflow is not among the required checks.** Every job in it — the protected-paths drift check, the taxonomy check, the no-GitHub-references check, the default-branch check, the delegated-isolation check, the branch-deletion guard — reports without gating. A pull request can merge with all six red. Adding them to the ruleset's required contexts is what would make this section's promises true at the pull-request layer.
 
 ### Adding a path
 
