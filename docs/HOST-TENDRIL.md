@@ -76,17 +76,17 @@ This means the attack chain `a Sprout writes substrates.yaml → poisons provide
 
 ---
 
-## Where the deployment procedure went
+## Relationship to a governed installation
 
-This document once carried a full hardened-deployment sequence. It has been
-removed rather than cross-referenced: two procedures for the same task drift, and
-the surviving one is [INSTALL.md](./INSTALL.md), which is the source of truth for
-what a sound installation is.
+Running a Tendril directly on the Stem host means the Sprout executes with the
+Stem's own credentials and reach. On an installation where the Stem runs as its
+own principal precisely so that no caller can read what it holds, a host
+substrate hands a Sprout exactly what that separation was built to withhold.
 
-The host provider interacts with that guide in one way worth knowing. Running a
-Tendril directly on the Stem host means the Sprout executes with the Stem's own
-credentials and reach — so on an installation where the Stem holds credentials no
-caller can read, a host substrate hands a Sprout exactly what the separation was
-built to withhold. Use it where the local command-line tool and its
-authentication are the point, and keep the substrate declaration where a Sprout
-cannot reach it.
+That is not a reason to avoid the host provider — it is the reason it is
+default-deny. Use it where a locally authenticated command-line tool is the whole
+point, keep the substrate declaration somewhere a Sprout cannot reach, and treat
+enabling it as a decision about that specific Terroir rather than a default.
+
+Installing and hardening a Ramet is covered in [INSTALL.md](./INSTALL.md), which
+is the source of truth for what a sound installation is.
