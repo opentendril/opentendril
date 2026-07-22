@@ -211,8 +211,11 @@ func TestGetOrCreateAPIKeyPersistsAndReuses(t *testing.T) {
 	}
 }
 
+// This test previously asserted that OPENTENDRIL_API_KEY became the Stem's
+// bearer key — encoding the defect as expected behaviour, which is why the
+// defect survived. It now pins the Stem's own variable.
 func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
-	t.Setenv("OPENTENDRIL_API_KEY", "env-key")
+	t.Setenv(EnvStemAPIKey, "env-key")
 	dir := t.TempDir()
 
 	key, generated, err := getOrCreateAPIKey(filepath.Join(dir, ".tendril"))
@@ -220,7 +223,7 @@ func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 		t.Fatalf("getOrCreateAPIKey: %v", err)
 	}
 	if generated {
-		t.Fatal("should not generate a key when OPENTENDRIL_API_KEY is set")
+		t.Fatalf("should not generate a key when %s is set", EnvStemAPIKey)
 	}
 	if key != "env-key" {
 		t.Fatalf("key = %q, want env-key", key)
@@ -276,5 +279,64 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	}
 	if sess.Origin != "scheduler" {
 		t.Fatalf("scheduled run session origin = %q, want %q", sess.Origin, "scheduler")
+	}
+}
+
+// The Stem's bearer key must be its own secret, never the inference provider's.
+//
+// These pin a defect rather than a preference. OPENTENDRIL_API_KEY is the
+// credential for the OpenTendril-hosted inference provider: `tendril init`
+// writes a shared trial constant into it, and the conductor passes it into every
+// Terrarium alongside the other provider keys. While the serve path also read it
+// as the Stem's bearer key, both facts became authentication failures — a
+// publicly known string authenticated as the Botanist, and every Sprout received
+// the Botanist credential.
+func TestInferenceProviderKeyIsNotTheStemBearerKey(t *testing.T) {
+	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+	os.Unsetenv(EnvStemAPIKey)
+	os.Unsetenv("ADMIN_TOKEN")
+
+	if key := resolveServeAPIKey(); key != "" {
+		t.Fatalf("resolveServeAPIKey returned %q from the inference provider variable; the Stem's bearer key must not come from it", key)
+	}
+}
+
+func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
+	t.Setenv(EnvStemAPIKey, "a-real-bearer-key")
+	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+
+	if key := resolveServeAPIKey(); key != "a-real-bearer-key" {
+		t.Fatalf("resolveServeAPIKey = %q, want the value of %s", key, EnvStemAPIKey)
+	}
+}
+
+// The end of the chain: the trial constant must not authenticate.
+func TestTrialConstantDoesNotAuthenticate(t *testing.T) {
+	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+	os.Unsetenv(EnvStemAPIKey)
+	os.Unsetenv("ADMIN_TOKEN")
+
+	dir := t.TempDir()
+	apiKey, _, err := getOrCreateAPIKey(filepath.Join(dir, ".tendril"))
+	if err != nil {
+		t.Fatalf("getOrCreateAPIKey: %v", err)
+	}
+	if apiKey == "free-trial" {
+		t.Fatal("the inference provider's trial constant became the Stem's bearer key")
+	}
+
+	reached := false
+	handler := withAPIKeyAuth(apiKey, func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/sessions", nil)
+	req.Header.Set("Authorization", "Bearer free-trial")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if reached || rec.Code != http.StatusUnauthorized {
+		t.Fatalf("the trial constant authenticated: reached=%v status=%d", reached, rec.Code)
 	}
 }

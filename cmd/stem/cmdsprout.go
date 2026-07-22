@@ -434,9 +434,7 @@ func submitSproutAsync(ctx context.Context, input map[string]any) {
 		os.Exit(1)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	} else if key := strings.TrimSpace(os.Getenv("TENDRIL_API_KEY")); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 

@@ -84,13 +84,14 @@ func runServeCmd(ctx context.Context, args []string) {
 	// 1): an explicit key wins, otherwise a previously generated key is
 	// reused, otherwise a new one is generated and persisted so the
 	// zero-config CLI/dashboard flow keeps working without a fail-open gap.
+	warnIfInferenceKeyMistakenForBearer()
 	apiKey, generatedKey, err := getOrCreateAPIKey(tendrilDir)
 	if err != nil {
 		log.Fatalf("⚠️ Failed to establish an API key: %v", err)
 	}
 	if generatedKey {
 		log.Printf("🔑 Generated API key (saved to %s)", apiKeyFilePath(tendrilDir))
-		log.Println("   Set OPENTENDRIL_API_KEY to use your own instead.")
+		log.Printf("   Set %s to use your own instead.", EnvStemAPIKey)
 	}
 
 	bus := eventbus.New()
@@ -466,11 +467,48 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	}
 }
 
+// EnvStemAPIKey names the Stem's own bearer key — the credential that
+// authenticates the Botanist to this Ramet's surfaces.
+//
+// It is deliberately NOT OPENTENDRIL_API_KEY. That variable is the credential
+// for the OpenTendril-hosted inference provider, an entirely different secret
+// belonging to an entirely different party, and it is passed into every
+// Terrarium alongside the other provider keys. Reading it here made one string
+// serve as both a remote service credential and this Ramet's local
+// authentication, with two consequences: `tendril init` writing a provider's
+// shared trial token installed that constant as the Stem's bearer key, and any
+// operator who set the provider key handed their Botanist credential to every
+// Sprout.
+const EnvStemAPIKey = "TENDRIL_API_KEY"
+
+// envInferenceProviderAPIKey is named here only so the warning below can say
+// what it is for. Nothing in the authentication path reads it.
+const envInferenceProviderAPIKey = "OPENTENDRIL_API_KEY"
+
 func resolveServeAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
 		return key
 	}
 	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+}
+
+// warnIfInferenceKeyMistakenForBearer tells an operator that a variable which
+// used to become the Stem's bearer key no longer does.
+//
+// Saying nothing would be the failure this project keeps correcting: a Ramet
+// that silently starts answering to a different credential than the operator
+// believes. This is not a deprecation — the previous behaviour was a defect —
+// so the message says what the variable is for now rather than offering it as a
+// fallback.
+func warnIfInferenceKeyMistakenForBearer() {
+	if strings.TrimSpace(os.Getenv(envInferenceProviderAPIKey)) == "" {
+		return
+	}
+	if strings.TrimSpace(os.Getenv(EnvStemAPIKey)) != "" {
+		return
+	}
+	log.Printf("⚠️  %s is set but is NOT this Stem's bearer key — it is the inference provider's credential.", envInferenceProviderAPIKey)
+	log.Printf("    Set %s to choose this Ramet's bearer key; otherwise one is generated and persisted.", EnvStemAPIKey)
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
