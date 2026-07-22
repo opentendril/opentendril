@@ -650,9 +650,12 @@ func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
 		return hardinessFinding{Severity: "ok", Title: "No credential files are readable by this account"}
 	}
 
-	ownsControlPlane, _ := pathOwnedByCurrentUser(tendrilDir)
+	// Owning a .tendril directory is not being the Stem. A control plane a Stem
+	// has actually started in carries an identity record; without one, readable
+	// credential material here is leftover rather than in use, which is exactly
+	// what a caller-side run exists to surface.
 	identity, recorded := readStemIdentity(tendrilDir)
-	isStem := (recorded && identity.UID == os.Getuid()) || ownsControlPlane
+	isStem := recorded && identity.UID == os.Getuid()
 
 	// Material inside the measured control plane belongs to it. Material found
 	// elsewhere — a key left in an account's own home — belongs to nothing here,
@@ -684,13 +687,21 @@ func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
 		}
 	}
 
+	detail := "  " + strings.Join(readable, "\n  ") + "\n" +
+		"A Pollinator running as this account can use a credential directly — without\n" +
+		"asking the Stem, and without appearing in the audit lane.\n"
+	if !recorded {
+		detail += "No Stem has recorded itself in " + tendrilDir + ", so this is leftover\n" +
+			"material rather than a running Ramet's. Remove it, or start the Stem here if\n" +
+			"this account is meant to run one."
+	} else {
+		detail += "The Stem here runs as another principal, so this account should not be\n" +
+			"able to read its credentials at all."
+	}
 	return hardinessFinding{
 		Severity: "weak",
 		Title:    fmt.Sprintf("%d credential file(s) are readable by this account", len(readable)),
-		Detail: "  " + strings.Join(readable, "\n  ") + "\n" +
-			"This account does not own the control plane, so a Pollinator running here\n" +
-			"can use a credential directly — without asking the Stem, and without\n" +
-			"appearing in the audit lane.",
+		Detail:   detail,
 	}
 }
 
