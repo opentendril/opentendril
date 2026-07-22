@@ -122,18 +122,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 
 	// 2. Are the secrets readable by this user? This is the specific failure
 	//    that let the organism's own credential be borrowed.
-	readable := readableSecrets(tendrilDir)
-	if len(readable) > 0 {
-		findings = append(findings, hardinessFinding{
-			Severity: "weak",
-			Title:    fmt.Sprintf("%d credential file(s) are readable by this user", len(readable)),
-			Detail: "  " + strings.Join(readable, "\n  ") + "\n" +
-				"A Pollinator that can read a credential can use it directly, without asking\n" +
-				"the Stem and without appearing in the audit lane.",
-		})
-	} else {
-		findings = append(findings, hardinessFinding{Severity: "ok", Title: "No credential files are readable by this user"})
-	}
+	findings = append(findings, credentialExclusivityFinding(tendrilDir))
 
 	// 3. Escalation paths that defeat a separate principal before it starts.
 	//    File ownership is necessary and nowhere near sufficient: a caller that
@@ -637,6 +626,42 @@ func mustGetwdOrDot() string {
 		return wd
 	}
 	return "."
+}
+
+// credentialExclusivityFinding reports credential material this account can
+// read, relative to whether this account is the Stem.
+//
+// The Stem must be able to read its own credentials; that is what they are for.
+// The same fact from an account that hosts Pollinators is the weakness. Reported
+// as one verdict it condemns a correct installation.
+func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
+	readable := readableSecrets(tendrilDir)
+	if len(readable) == 0 {
+		return hardinessFinding{Severity: "ok", Title: "No credential files are readable by this account"}
+	}
+
+	ownsControlPlane, _ := pathOwnedByCurrentUser(tendrilDir)
+	identity, recorded := readStemIdentity(tendrilDir)
+	isStem := (recorded && identity.UID == os.Getuid()) || ownsControlPlane
+
+	if isStem {
+		return hardinessFinding{
+			Severity: "ok",
+			Title:    fmt.Sprintf("%d credential file(s) readable — this is the Stem's own material", len(readable)),
+			Detail: "  " + strings.Join(readable, "\n  ") + "\n" +
+				"The Stem must be able to read these. Run this again from an account that\n" +
+				"hosts Pollinators: there, none of them may be readable.",
+		}
+	}
+
+	return hardinessFinding{
+		Severity: "weak",
+		Title:    fmt.Sprintf("%d credential file(s) are readable by this account", len(readable)),
+		Detail: "  " + strings.Join(readable, "\n  ") + "\n" +
+			"This account does not own the control plane, so a Pollinator running here\n" +
+			"can use a credential directly — without asking the Stem, and without\n" +
+			"appearing in the audit lane.",
+	}
 }
 
 // controlPlanePrincipalFinding reports who owns the control plane, relative to
