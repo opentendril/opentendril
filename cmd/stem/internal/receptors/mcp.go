@@ -371,12 +371,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 
 		root := resolveRepoRoot("")
 
-		var searchDirs []string
-		if configDir, err := os.UserConfigDir(); err == nil {
-			searchDirs = append(searchDirs, filepath.Join(configDir, "opentendril", "genotypes"))
-		}
-		searchDirs = append(searchDirs, filepath.Join("/etc", "opentendril", "genotypes"))
-		searchDirs = append(searchDirs, filepath.Join(root, ".tendril", "genotypes"))
+		searchDirs, _ := conductor.DefinitionSearchPath(root, conductor.DefinitionKindGenotypes)
 
 		var content []byte
 		var err error
@@ -1053,11 +1048,8 @@ func syncGenotypeIndex() error {
 func collectGenotypeIndex(root string) (genotypeIndex, error) {
 	var searchDirs []string
 
-	if configDir, err := os.UserConfigDir(); err == nil {
-		searchDirs = append(searchDirs, filepath.Join(configDir, "opentendril", "genotypes"))
-	}
-	searchDirs = append(searchDirs, filepath.Join("/etc", "opentendril", "genotypes"))
-	searchDirs = append(searchDirs, filepath.Join(root, ".tendril", "genotypes"))
+	genotypeDirs, _ := conductor.DefinitionSearchPath(root, conductor.DefinitionKindGenotypes)
+	searchDirs = append(searchDirs, genotypeDirs...)
 
 	genotypeMap := make(map[string]genotypeIndexEntry)
 	var errs []error

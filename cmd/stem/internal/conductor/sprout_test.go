@@ -206,41 +206,98 @@ func TestParseModelResponseDoesNotRepairUnterminatedString(t *testing.T) {
 	}
 }
 
-func TestSystemGenotypePriority(t *testing.T) {
-	workspace := t.TempDir()
-	genotypeName := "test-priority"
-
-	// Mock UserConfigDir via environment variable for tests
-	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
-	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
-
-	sysConfigDir := filepath.Join(workspace, "sysconfig")
-	os.Setenv("XDG_CONFIG_HOME", sysConfigDir)
-
-	sysGenotypeDir := filepath.Join(sysConfigDir, "opentendril", "genotypes")
-	os.MkdirAll(sysGenotypeDir, 0o755)
-	sysContent := `{"name":"test-priority","instructions":"I am the system genotype","denyPlasmids":["evilTool"]}`
-	os.WriteFile(filepath.Join(sysGenotypeDir, genotypeName+".json"), []byte(sysContent), 0o644)
-
-	workspaceGenotypeDir := filepath.Join(workspace, ".tendril", "genotypes")
-	os.MkdirAll(workspaceGenotypeDir, 0o755)
-	workspaceContent := `{"name":"test-priority","instructions":"I am the workspace override","denyPlasmids":[]}`
-	os.WriteFile(filepath.Join(workspaceGenotypeDir, genotypeName+".json"), []byte(workspaceContent), 0o644)
-
-	genotype, err := loadGenotypeContext(workspace, genotypeName)
+// inControlPlane runs fn with the process working directory set to a temporary
+// one, so the control plane resolves somewhere the test owns and is distinct
+// from the workspace it creates.
+func inControlPlane(t *testing.T, fn func(controlPlaneRoot string)) {
+	t.Helper()
+	original, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("loadGenotypeContext failed: %v", err)
+		t.Fatalf("getwd: %v", err)
 	}
+	root := t.TempDir()
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+	fn(root)
+}
 
-	if genotype.Instructions != "I am the system genotype" {
-		t.Errorf("expected system genotype instructions, got %q", genotype.Instructions)
+func writeDefinition(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
 	}
-	if len(genotype.DenyPlasmids) != 1 || genotype.DenyPlasmids[0] != "evilTool" {
-		t.Errorf("expected denyPlasmids=[evilTool], got %v", genotype.DenyPlasmids)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
 	}
-	if !genotype.System {
-		t.Errorf("expected genotype loaded from system path to be marked system")
-	}
+}
+
+// A control-plane genotype wins over a workspace one of the same name, and only
+// it is marked System.
+func TestControlPlaneGenotypeWinsAndIsTrusted(t *testing.T) {
+	inControlPlane(t, func(controlPlaneRoot string) {
+		workspace := t.TempDir()
+		genotypeName := "test-priority"
+
+		writeDefinition(t, filepath.Join(controlPlaneRoot, ".tendril", "genotypes"),
+			genotypeName+".json",
+			`{"name":"test-priority","instructions":"I am the trusted genotype","denyPlasmids":["evilTool"]}`)
+		writeDefinition(t, filepath.Join(workspace, ".tendril", "genotypes"),
+			genotypeName+".json",
+			`{"name":"test-priority","instructions":"I am the workspace override","denyPlasmids":[]}`)
+
+		genotype, err := loadGenotypeContext(workspace, genotypeName)
+		if err != nil {
+			t.Fatalf("loadGenotypeContext failed: %v", err)
+		}
+		if genotype.Instructions != "I am the trusted genotype" {
+			t.Errorf("expected the control-plane genotype, got %q", genotype.Instructions)
+		}
+		if len(genotype.DenyPlasmids) != 1 || genotype.DenyPlasmids[0] != "evilTool" {
+			t.Errorf("expected denyPlasmids=[evilTool], got %v", genotype.DenyPlasmids)
+		}
+		if !genotype.System {
+			t.Error("a control-plane genotype must be marked System")
+		}
+	})
+}
+
+// A workspace genotype is never System, whatever it contains.
+func TestWorkspaceGenotypeIsNeverTrusted(t *testing.T) {
+	inControlPlane(t, func(controlPlaneRoot string) {
+		workspace := t.TempDir()
+		writeDefinition(t, filepath.Join(workspace, ".tendril", "genotypes"), "only-here.json",
+			`{"name":"only-here","instructions":"workspace","denyPlasmids":[]}`)
+
+		genotype, err := loadGenotypeContext(workspace, "only-here")
+		if err != nil {
+			t.Fatalf("loadGenotypeContext failed: %v", err)
+		}
+		if genotype.System {
+			t.Error("a workspace genotype was marked System")
+		}
+	})
+}
+
+// When the control plane IS the workspace, nothing there may be trusted: a
+// Sprout editing that workspace could write it.
+func TestCollapsedTiersTrustNothing(t *testing.T) {
+	inControlPlane(t, func(controlPlaneRoot string) {
+		writeDefinition(t, filepath.Join(controlPlaneRoot, ".tendril", "genotypes"), "collapsed.json",
+			`{"name":"collapsed","instructions":"same directory","denyPlasmids":["evilTool"]}`)
+
+		genotype, err := loadGenotypeContext(controlPlaneRoot, "collapsed")
+		if err != nil {
+			t.Fatalf("loadGenotypeContext failed: %v", err)
+		}
+		if genotype == nil {
+			t.Fatal("the definition should still be found, just not trusted")
+		}
+		if genotype.System {
+			t.Error("a definition was trusted while the control plane and workspace are the same directory")
+		}
+	})
 }
 
 func TestEmbeddedGenotypePriority(t *testing.T) {
@@ -276,17 +333,19 @@ func TestEmbeddedGenotypePriority(t *testing.T) {
 }
 
 func TestAgentDenyPlasmidsFilter(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	controlPlaneRoot := t.TempDir()
+	if err := os.Chdir(controlPlaneRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
+
 	workspace := t.TempDir()
-
-	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
-	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
-	sysConfigDir := filepath.Join(workspace, "sysconfig")
-	os.Setenv("XDG_CONFIG_HOME", sysConfigDir)
-
-	sysGenotypeDir := filepath.Join(sysConfigDir, "opentendril", "genotypes")
-	os.MkdirAll(sysGenotypeDir, 0o755)
-	sysContent := `{"name":"secure","instructions":"I am secure","denyPlasmids":["evilTool","injectPlasmidTarget"]}`
-	os.WriteFile(filepath.Join(sysGenotypeDir, "secure.json"), []byte(sysContent), 0o644)
+	writeDefinition(t, filepath.Join(controlPlaneRoot, ".tendril", "genotypes"), "secure.json",
+		`{"name":"secure","instructions":"I am secure","denyPlasmids":["evilTool","injectPlasmidTarget"]}`)
 
 	client := &fakeLLM{
 		responses: []string{
@@ -380,61 +439,41 @@ steps:
 	}
 }
 
-func TestSystemSequencePathResolution(t *testing.T) {
-	// Create a temp dir to act as XDG_CONFIG_HOME
-	configHome := t.TempDir()
-	origConfigHome := os.Getenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_HOME", configHome)
-	t.Cleanup(func() { os.Setenv("XDG_CONFIG_HOME", origConfigHome) })
-
-	// Create a system sequence in the XDG config dir
-	sysSeqDir := filepath.Join(configHome, "opentendril", "sequences")
-	if err := os.MkdirAll(sysSeqDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+// A control-plane sequence is searched before a workspace one of the same name.
+func TestControlPlaneSequenceTakesPriority(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
 	}
-	sysSeqPath := filepath.Join(sysSeqDir, "pr-close-cycle.yaml")
-	seqContent := `name: pr-close-cycle
-system: true
-steps:
-  - id: analyse
-    transcript: "analyse commits"
-`
-	if err := os.WriteFile(sysSeqPath, []byte(seqContent), 0o644); err != nil {
-		t.Fatalf("write system sequence: %v", err)
+	controlPlaneRoot := t.TempDir()
+	if err := os.Chdir(controlPlaneRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
 	}
+	t.Cleanup(func() { _ = os.Chdir(original) })
 
-	// workspace has NO .tendril/sequences directory
+	writeDefinition(t, filepath.Join(controlPlaneRoot, ".tendril", "sequences"), "pr-close-cycle.yaml",
+		"name: pr-close-cycle\nsystem: true\nsteps:\n  - id: analyse\n    transcript: \"analyse commits\"\n")
+
 	workspace := t.TempDir()
-	cwd := workspace
+	candidates := sequencePathCandidates("pr-close-cycle", workspace, workspace)
 
-	// sequencePathCandidates should include the system path
-	candidates := sequencePathCandidates("pr-close-cycle", cwd, workspace)
+	trustedPath := filepath.Join(".tendril", "sequences", "pr-close-cycle.yaml")
+	workspacePath := filepath.Join(workspace, ".tendril", "sequences", "pr-close-cycle.yaml")
 
-	found := false
-	for _, c := range candidates {
-		if c == sysSeqPath {
-			found = true
-			break
+	trustedIdx, workspaceIdx := -1, -1
+	for i, candidate := range candidates {
+		if candidate == trustedPath && trustedIdx == -1 {
+			trustedIdx = i
+		}
+		if candidate == workspacePath && workspaceIdx == -1 {
+			workspaceIdx = i
 		}
 	}
-	if !found {
-		t.Errorf("expected system sequence path %q to be in candidates, got: %v", sysSeqPath, candidates)
+	if trustedIdx == -1 {
+		t.Fatalf("the control-plane sequence path is not a candidate: %v", candidates)
 	}
-
-	// Verify system path appears before workspace path
-	sysIdx := -1
-	wsIdx := -1
-	wsSeqPath := filepath.Join(workspace, ".tendril", "sequences", "pr-close-cycle.yaml")
-	for i, c := range candidates {
-		if c == sysSeqPath {
-			sysIdx = i
-		}
-		if c == wsSeqPath {
-			wsIdx = i
-		}
-	}
-	if wsIdx != -1 && sysIdx != -1 && sysIdx > wsIdx {
-		t.Errorf("expected system sequence (idx %d) to have higher priority than workspace sequence (idx %d)", sysIdx, wsIdx)
+	if workspaceIdx != -1 && trustedIdx > workspaceIdx {
+		t.Errorf("control-plane sequence (idx %d) must precede the workspace one (idx %d)", trustedIdx, workspaceIdx)
 	}
 }
 
