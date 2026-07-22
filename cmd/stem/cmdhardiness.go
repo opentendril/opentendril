@@ -223,6 +223,9 @@ func pathOwnedByCurrentUser(path string) (bool, string) {
 // opens rather than inspecting the mode, because that is the question that
 // matters — permissions can be satisfied through group membership.
 func readableSecrets(tendrilDir string) []string {
+	// Candidates are collected as written and de-duplicated by resolved path: a
+	// relative control plane and an absolute home reach the same file, and
+	// counting it twice overstates what is exposed.
 	candidates := []string{
 		filepath.Join(tendrilDir, core.PollinatorCredentialsFilename),
 		filepath.Join(tendrilDir, "api-key"),
@@ -236,10 +239,17 @@ func readableSecrets(tendrilDir string) []string {
 	seen := map[string]bool{}
 	readable := []string{}
 	for _, candidate := range candidates {
-		if seen[candidate] {
+		identity := candidate
+		if absolute, err := filepath.Abs(candidate); err == nil {
+			identity = absolute
+			if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+				identity = resolved
+			}
+		}
+		if seen[identity] {
 			continue
 		}
-		seen[candidate] = true
+		seen[identity] = true
 		file, err := os.Open(candidate)
 		if err != nil {
 			continue
@@ -809,6 +819,12 @@ func pathOwnerOtherThan(path string, uid int) (owner string, differs bool) {
 	}
 	actual, ok := fileOwnerUID(info)
 	if !ok || actual == uid {
+		return "", false
+	}
+	// Root is out of scope by definition: it can write anything whatever the
+	// owner is, and every path eventually ascends into root-owned system
+	// directories. Reporting those would flag / and /home on every machine.
+	if actual == 0 {
 		return "", false
 	}
 	name := fmt.Sprintf("uid %d", actual)
