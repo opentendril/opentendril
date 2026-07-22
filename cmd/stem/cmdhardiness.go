@@ -644,11 +644,31 @@ func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
 	identity, recorded := readStemIdentity(tendrilDir)
 	isStem := (recorded && identity.UID == os.Getuid()) || ownsControlPlane
 
+	// Material inside the measured control plane belongs to it. Material found
+	// elsewhere — a key left in an account's own home — belongs to nothing here,
+	// and is worth reporting however the rest resolves.
+	controlPlane, stray := partitionByPrefix(readable, tendrilDir)
+
+	if len(stray) > 0 {
+		detail := "  " + strings.Join(stray, "\n  ") + "\n" +
+			"These are outside the control plane being measured. A credential sitting in\n" +
+			"an account's home is readable by anything running as that account, whether\n" +
+			"or not this Ramet knows about it."
+		if len(controlPlane) > 0 && isStem {
+			detail += "\n(The Stem's own material in " + tendrilDir + " is expected and not counted here.)"
+		}
+		return hardinessFinding{
+			Severity: "weak",
+			Title:    fmt.Sprintf("%d credential file(s) readable outside the control plane", len(stray)),
+			Detail:   detail,
+		}
+	}
+
 	if isStem {
 		return hardinessFinding{
 			Severity: "ok",
-			Title:    fmt.Sprintf("%d credential file(s) readable — this is the Stem's own material", len(readable)),
-			Detail: "  " + strings.Join(readable, "\n  ") + "\n" +
+			Title:    fmt.Sprintf("%d credential file(s) readable — this is the Stem's own material", len(controlPlane)),
+			Detail: "  " + strings.Join(controlPlane, "\n  ") + "\n" +
 				"The Stem must be able to read these. Run this again from an account that\n" +
 				"hosts Pollinators: there, none of them may be readable.",
 		}
@@ -662,6 +682,34 @@ func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
 			"can use a credential directly — without asking the Stem, and without\n" +
 			"appearing in the audit lane.",
 	}
+}
+
+// partitionByPrefix splits paths into those under a directory and those outside
+// it, comparing resolved absolute paths so a relative control plane matches.
+func partitionByPrefix(paths []string, dir string) (inside, outside []string) {
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return paths, nil
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			outside = append(outside, path)
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+			absolute = resolved
+		}
+		if absolute == root || strings.HasPrefix(absolute, root+string(filepath.Separator)) {
+			inside = append(inside, path)
+		} else {
+			outside = append(outside, path)
+		}
+	}
+	return inside, outside
 }
 
 // controlPlanePrincipalFinding reports who owns the control plane, relative to
