@@ -59,11 +59,11 @@ This is defended by two properties. Neither is a rule about where a configuratio
 > [!IMPORTANT]
 > Earlier revisions of this document described a **config-origin trust model**: `provider` and `command` stripped at parse time for workspace configurations, and a privileged system-configuration directory for substrates. **Neither was implemented.** Both claims have been removed rather than built, and the properties above are what actually holds. If you relied on the removed description when assessing this project, please re-assess against this section.
 
-**Genotypes work differently, and the difference is deliberate.** A Genotype loaded from a system configuration directory — the user configuration directory's `opentendril/genotypes/`, or `/etc/opentendril/genotypes/` — is marked as a System Genotype and carries an immutable `deny` list of blocked Plasmids (tools). A Sprout cannot grant itself additional tool access by editing its own Genotype, because a workspace-resident Genotype is never a System Genotype.
+**Genotypes follow the same principle.** A Genotype is trusted — marked System, carrying an immutable `deny` list of blocked Plasmids — when it lives in the Stem's own control plane, which belongs to the Stem's principal and is never mounted into a Terrarium. A workspace-resident Genotype is never trusted, so a Sprout cannot grant itself additional tool access by editing its own.
 
-That *is* location-derived trust, unlike substrate configuration above, and it is implemented. The distinction is worth holding: these are two mechanisms with two different trust models, and conflating them is how the removed substrate claims came to be believed.
+Trust here is ownership and unreachability, not location. Where the control plane and the workspace resolve to the same directory — a Stem running inside the repository a Sprout is editing — the two tiers collapse and **nothing** is trusted, because a Sprout could write it. `tendril hardiness` reports that condition.
 
-See the full System Genotype RFC.
+Genotypes compiled into the binary are trusted independently of any of this: nothing on disk can reach them.
 
 ---
 
