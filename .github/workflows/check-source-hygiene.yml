@@ -68,6 +68,21 @@ jobs:
       - name: Branch deletion is gated on merge evidence
         run: bash scripts/check-branch-deletion-guard.sh
 
+  protected-paths:
+    name: Protected paths have a code owner
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # .github/protected-paths is the single definition of the kernel a Sprout
+      # must not rewrite. The Stem enforces it at merge-back; GitHub enforces it
+      # at review through CODEOWNERS. The second only works if every listed path
+      # actually has an owner, and nothing stops one file being edited without
+      # the other. This proves the projection is complete — it does not check
+      # reviews, which GitHub does better.
+      - name: CODEOWNERS covers every protected path
+        run: bash scripts/check-protected-paths.sh
+
   taxonomy:
     name: Taxonomy is used inside the organism
     runs-on: ubuntu-latest

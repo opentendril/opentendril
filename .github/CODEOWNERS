@@ -1,0 +1,32 @@
+# Code owners for the kernel of the self-building organism.
+#
+# Every entry here mirrors one in .github/protected-paths, which is the single
+# definition. This file is the projection of that list onto GitHub's review
+# mechanism; scripts/check-protected-paths.sh fails when the two drift apart, so
+# a path can never be protected in one place and unowned in the other.
+#
+# What this file does on its own: requests review from the owner when a pull
+# request touches a listed path.
+#
+# What it does NOT do on its own: block anything. Blocking requires branch
+# protection with "Require review from Code Owners" enabled on the default
+# branch. See GUARDRAILS.md for which layers are enforced and which are
+# advisory — this file is deliberately explicit about the difference rather
+# than implying a gate that is not configured.
+
+/.github/protected-paths            @opentendril
+/.github/workflows/                 @opentendril
+/.github/CODEOWNERS                 @opentendril
+/.github/dependabot.yml             @opentendril
+/cmd/stem/main.go                   @opentendril
+/cmd/stem/cmdserve.go               @opentendril
+/cmd/stem/internal/core/            @opentendril
+/cmd/stem/internal/conductor/protectedpaths.go  @opentendril
+/scripts/                           @opentendril
+/AGENTS.md                          @opentendril
+/GUARDRAILS.md                      @opentendril
+/ARCHITECTURE.md                    @opentendril
+/SYNTHETIC-TAXONOMY.md              @opentendril
+/CAPABILITIES.md                    @opentendril
+/USE-CASES.md                       @opentendril
+/.env                               @opentendril
