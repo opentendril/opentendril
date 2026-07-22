@@ -16,19 +16,9 @@ import (
 	"time"
 )
 
-// Pollinator credentials — the credential IS the Pollen.
-//
-// Until now, authentication and identity were separate things and only one of
-// them was enforced. One shared bearer key authenticated every caller, and the
-// caller then named itself: a Pollen in a header on the Representational State
-// Transfer surface, or an environment variable at a terminal. The grant model
-// then constrained whoever the caller claimed to be. Anyone holding the shared
-// key could claim any Pollen, including the one with the widest grants.
-//
-// A credential issued to one Pollinator removes the claim. The Stem looks the
-// credential up and *derives* the Pollen from it; nothing the caller sends is
-// consulted. Declaring an identity becomes impossible rather than discouraged,
-// which is the difference between Tier 1's audit control and a boundary.
+// Pollinator credentials: the credential IS the Pollen. The Stem looks a
+// presented credential up and derives the Pollen from it; nothing the caller
+// sends is consulted, so a caller cannot declare an identity.
 //
 // Storage rules, so a leaked store is not a leaked credential:
 //
@@ -36,27 +26,17 @@ import (
 //   - only a SHA-256 digest is stored, so the file cannot be replayed;
 //   - lookup is constant-time against every digest, so a timing signal cannot
 //     narrow the search;
-//   - the file is written 0600 in the Stem's own directory, which under a
-//     separated principal is unreadable by the Pollinators it describes.
+//   - the file is written 0600 in the Stem's own directory.
 
 // PollinatorCredentialsFilename is the store, alongside grants.yaml in the
 // Stem's control-plane directory.
 const PollinatorCredentialsFilename = "pollinators.json"
 
-// pollinatorTokenPrefix makes an OpenTendril credential recognisable in a log
-// or a configuration file, so a leaked one can be identified and revoked
-// rather than puzzled over.
+// pollinatorTokenPrefix makes a credential recognisable in a log or a
+// configuration file, so a leaked one can be identified and revoked.
 //
-// It names the project rather than a generic security noun deliberately. An
-// earlier value, "otp_", read across the wider ecosystem as "one-time
-// password" — which these credentials are the opposite of: they are long-lived
-// and persist until explicitly revoked. A reader finding one in a log was
-// invited to conclude it had already been spent and was harmless, which is
-// exactly the misreading the prefix exists to prevent.
-//
-// The prefix is functional, not decorative: it is the discriminator that routes
-// a presented bearer to credential resolution rather than to the Botanist's own
-// key. Changing it therefore invalidates every credential already issued.
+// It is functional, not decorative: it discriminates a Pollinator credential
+// from the Botanist's key. Changing it invalidates every credential issued.
 const pollinatorTokenPrefix = "tendril_"
 
 var pollinatorStoreMu sync.Mutex

@@ -293,38 +293,23 @@ func escalationFindings() []hardinessFinding {
 	return findings
 }
 
-// Executable integrity — can somebody else replace what the Stem runs?
+// Executable integrity: whether an account other than the owner can replace the
+// binary the Stem runs. The whole resolution chain is inspected — the binary,
+// each symbolic link followed, and every ancestor directory — because replacing
+// a file needs write permission on its directory, not on the file.
 //
-// Every other finding is about what an account may READ or BECOME. This one is
-// about what it may WRITE, and it is the gap those leave: an installation can
-// hold its credentials perfectly, refuse every escalation path, and still be
-// defeated by an account that simply overwrites the binary before the Stem next
-// starts. Nothing about file ownership of the credentials protects against that.
-//
-// The exposure is not only the binary. A directory anywhere on the path used to
-// reach it is just as good to an attacker — replacing a file needs write
-// permission on its directory, not on the file — so the whole resolution chain
-// is inspected, following symbolic links to their targets.
-//
-// What "writable by somebody else" means here is the group-write or other-write
-// permission bit. Two deliberate limits, stated rather than hidden:
-//
-//   - a group-writable path is only an exposure if that group has members
-//     besides the owner, which this cannot determine portably, so it is reported
-//     with that qualification rather than suppressed;
-//   - root can write anything regardless, and is out of scope by definition —
-//     the boundary this measures is against Pollinator-hosting accounts.
+// Group-write is reported with a qualification: it is only an exposure if the
+// group has members besides the owner, which cannot be determined portably.
+// Root is out of scope; the boundary measured is against Pollinator-hosting
+// accounts.
 
 // maxExecutableLinkHops bounds the symbolic-link walk. The value matches the
 // conventional kernel limit; a chain longer than this is a loop in practice.
 const maxExecutableLinkHops = 40
 
 // executableIntegrityFinding measures the binary this process is running from.
-//
-// Note what that does and does not answer. Run by the Stem's own principal it
-// names the Stem's binary exactly. Run by an account hosting Pollinators it
-// names THAT account's binary, which is a different question — a useful one,
-// but the finding says which it answered rather than letting the reader assume.
+// Run as the Stem it names the Stem's binary; run as another account it names
+// that account's. The finding states which it answered.
 func executableIntegrityFinding() hardinessFinding {
 	executable, err := os.Executable()
 	if err != nil {
@@ -401,16 +386,12 @@ func executableIntegrityFindingFor(executable string) hardinessFinding {
 	}
 }
 
-// executableResolutionChain lists every path whose permissions decide whether
-// the executable can be replaced: the binary, each symbolic link followed to
-// reach it, each link's target, and every ancestor directory of all of those.
+// executableResolutionChain lists every path whose permissions decide whether the
+// executable can be replaced: the binary, each symbolic link followed, each
+// link's target, and every ancestor directory of those.
 //
-// Ancestors matter as much as the file. Replacing a file requires write
-// permission on its directory rather than on the file itself, so a writable
-// directory anywhere on the chain is the same exposure as a writable binary.
-//
-// The second return value lists paths that could not be examined at all, which
-// the caller must report rather than treat as clean.
+// The second return value lists paths that could not be examined, which the
+// caller must report rather than treat as clean.
 func executableResolutionChain(executable string) (inspect []string, unresolved []string) {
 	seen := map[string]bool{}
 	add := func(path string) {
@@ -453,20 +434,14 @@ func executableResolutionChain(executable string) (inspect []string, unresolved 
 }
 
 // pathWritableByOthers reports whether a path carries the group-write or
-// other-write permission bit, and whether the question could be answered at all.
+// other-write permission bit, and whether the question could be answered.
 //
-// It uses Lstat rather than Stat so a symbolic link is judged as itself. That
-// matters because link permission bits are meaningless on Linux — they are
-// always 0777 — so judging a link by its own mode would report an exposure on
-// every system. What actually protects a link is the directory holding it, which
-// the resolution chain already inspects, and the link's target is inspected as
-// its own hop.
+// Symbolic links are skipped: their permission bits are always 0777 on Linux, so
+// judging one by its own mode reports an exposure on every system. The directory
+// holding a link, and the link's target, are inspected as their own entries.
 //
-// A sticky directory is not an exposure even when it is world-writable. The
-// sticky bit is precisely the rule that only an entry's owner may rename or
-// delete it, so an attacker cannot swap the binary. Without this, every path
-// under a shared temporary directory would be reported, which is both noise and
-// wrong.
+// A sticky directory is not an exposure even when world-writable: only an entry's
+// owner may replace it.
 func pathWritableByOthers(path string) (exposure string, examined bool) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -494,24 +469,13 @@ func pathWritableByOthers(path string) (exposure string, examined bool) {
 	return "", true
 }
 
-// Host-execution configuration — can somebody else decide a Sprout may leave
-// its Terrarium?
+// Host-execution configuration: whether an account other than the owner can
+// declare a substrate that runs on the host. Host execution is default-deny
+// behind TENDRIL_ALLOW_HOST_EXECUTION, but which substrates use it is decided by
+// a file, so the question is who can write that file rather than where it sits.
 //
-// The host provider runs a Tendril directly on the Stem host, with the Stem's
-// own credentials and reach. It is default-deny: the Stem refuses unless an
-// operator sets TENDRIL_ALLOW_HOST_EXECUTION in its runtime environment. But
-// WHICH substrates run that way is decided by configuration, and configuration
-// is a file.
-//
-// So the question this asks is not "where does the file live" but "who can write
-// it". Trust here is principal ownership, never filesystem location: a path
-// confers no privilege by sitting in one directory rather than another, and a
-// configuration writable by an account that hosts Pollinators is one that
-// account can point at the host provider.
-//
-// The files inspected are the ones the Stem itself would load, taken from the
-// loader rather than re-derived, so the check cannot end up examining different
-// files from the ones in use.
+// The inspected paths come from the loader, so the check cannot examine
+// different files from the ones the Stem reads.
 
 // hostExecutionConfigFinding measures the exposure of the configuration that
 // decides host execution.
@@ -597,13 +561,9 @@ func hostExecutionConfigFinding() hardinessFinding {
 }
 
 // hostExecutionGateState reports whether the runtime gate is open, and whether
-// that could be established at all.
-//
-// The distinction matters. The variable is read from this process's environment,
-// which is the Stem's own only when this runs as the Stem from its working
-// directory — `.env` there is loaded at startup. Invoked from anywhere else, an
-// unset variable means "not visible", not "not set", and the finding must not
-// present the second as the first.
+// that could be established. The variable is this process's environment, which
+// is the Stem's own only when run as the Stem from its working directory. An
+// unset variable means "not visible", never "not set".
 func hostExecutionGateState() (open bool, known bool) {
 	raw, present := os.LookupEnv(terrariumAllowHostExecutionEnv)
 	if !present {
@@ -612,9 +572,9 @@ func hostExecutionGateState() (open bool, known bool) {
 	return strings.EqualFold(strings.TrimSpace(raw), "true"), true
 }
 
-// terrariumAllowHostExecutionEnv mirrors the terrarium factory's gate variable.
-// It is named here rather than imported because the posture report must not pull
-// in the execution path merely to read a string.
+// terrariumAllowHostExecutionEnv mirrors the terrarium factory's gate variable,
+// named here rather than imported to keep the posture report off the execution
+// path.
 const terrariumAllowHostExecutionEnv = "TENDRIL_ALLOW_HOST_EXECUTION"
 
 // hostProviderDeclared reports whether any configured substrate asks for the

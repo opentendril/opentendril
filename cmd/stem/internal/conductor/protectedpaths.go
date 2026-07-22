@@ -8,24 +8,14 @@ import (
 	"strings"
 )
 
-// Protected paths — the kernel a Sprout must not be able to rewrite.
+// Protected paths: files a Sprout must not be able to rewrite, because they
+// decide what every later run may do. A change to one must reach a human.
 //
-// OpenTendril builds itself, which means a Sprout can be asked to change the
-// orchestrator that is currently running it. Some of those files decide what
-// every later run is permitted to do: the capability registry, the continuous
-// integration that enforces the rules, the governance documents, this guard.
-// A change to one of them must reach a human before it lands.
+// Enforcement is here, on the trusted side, rather than asked of the Sprout.
 //
-// The protection is enforced HERE, on the trusted side, rather than asked of
-// the Sprout. That distinction is the whole point. A rule the editing party is
-// asked to honour constrains only a party that chooses to honour it — the same
-// weakness a declared Pollen had before credentials replaced it. A Sprout that
-// ignores every convention still cannot merge a commit this refuses.
-//
-// The list lives in the repository under change rather than in the Stem's own
-// tree, because it describes that repository's kernel. A Substrate belonging to
-// somebody else declares nothing protected, which is the correct reading: there
-// is no orchestrator of ours inside it to protect.
+// The list lives in the repository under change, so it describes that
+// repository's kernel. A Substrate that carries no list declares nothing
+// protected.
 
 // protectedPathsFile is the single definition, relative to a repository root.
 const protectedPathsFile = ".github/protected-paths"
@@ -40,16 +30,9 @@ type protectedPathRule struct {
 	Directory bool
 }
 
-// loadProtectedPaths reads the list from a repository checkout.
-//
-// The three outcomes are deliberately distinct:
-//
-//   - the file is absent  → no rules, no error. Nothing is declared protected
-//     in this repository, which is the only sensible reading for a Substrate
-//     that is not this project.
-//   - the file is present and parses → its rules.
-//   - the file is present and malformed → an error, which callers must treat as
-//     a refusal. A damaged control must never degrade into an absent one.
+// loadProtectedPaths reads the list from a repository checkout. Three distinct
+// outcomes: absent means no rules and no error; present and valid yields its
+// rules; present and malformed is an error callers must treat as a refusal.
 func loadProtectedPaths(repoRoot string) ([]protectedPathRule, error) {
 	path := filepath.Join(repoRoot, protectedPathsFile)
 
@@ -133,13 +116,12 @@ func (v protectedPathViolation) Error() string {
 		v.Path, v.Rule.Pattern, protectedPathsFile, v.Rule.Line)
 }
 
-// checkProtectedPaths refuses a set of changed paths against the repository's
-// own list.
+// checkProtectedPaths refuses a set of changed paths against the repository's own
+// list.
 //
-// The rules are read from the checkout as it stands BEFORE the merge, never
-// from the commit being merged. That ordering is load-bearing: reading the
-// incoming commit would let a Sprout delete the list in the same change that
-// edits a kernel file, and disable the guard in the act of tripping it.
+// The rules are read from the checkout as it stands BEFORE the merge, never from
+// the commit being merged: otherwise a commit could delete the list in the same
+// change that edits a kernel file.
 func checkProtectedPaths(repoRoot string, changed []string) error {
 	rules, err := loadProtectedPaths(repoRoot)
 	if err != nil {
