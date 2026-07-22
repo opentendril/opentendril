@@ -1,0 +1,63 @@
+# Protected paths — the kernel of the self-building organism.
+#
+# This is the single definition. Every enforcer reads THIS file; none carries
+# its own copy, and GUARDRAILS.md describes the control rather than restating
+# the paths, because a second copy is a second source of truth and will drift.
+#
+# What enforces it:
+#
+#   1. The Stem refuses to merge a Terrarium commit that touches any path
+#      listed here, so a Sprout cannot rewrite the orchestrator that is
+#      running it. Enforced by the trusted side — a Sprout is not asked to
+#      cooperate.
+#   2. Code-owner review is required before such a change can land on the
+#      default branch, so every author is caught regardless of the route the
+#      edit took.
+#
+# Editing a listed path is normal and expected. What is not possible is
+# landing that edit without a human control-plane review.
+#
+# Syntax:
+#
+#   * one pattern per line; blank lines and lines beginning with # are ignored
+#   * a pattern ending in "/" matches every path beneath that directory
+#   * any other pattern is matched against the whole path, with the shell
+#     wildcards * ? and [] available
+#
+# A malformed pattern is an error rather than a line to skip: a control that
+# silently ignores the part of itself it cannot parse is not a control.
+
+# The list itself. Removing or narrowing it is a change to a protected path,
+# which is what stops the guard being disabled in passing.
+.github/protected-paths
+
+# Continuous integration: the Adaptive Immune System, and the enforcement
+# surface for everything else here.
+.github/workflows/
+.github/CODEOWNERS
+.github/dependabot.yml
+
+# Stem kernel: the entry point and the daemon bootstrap. A Sprout editing
+# these can corrupt the process currently executing it.
+cmd/stem/main.go
+cmd/stem/cmdserve.go
+
+# The governed capability registry and its boundary/parity tests — where
+# delegation decides what a Pollen may do.
+cmd/stem/internal/core/
+
+# Enforcement code itself. The guard must not be editable by the thing it
+# guards.
+cmd/stem/internal/conductor/protectedpaths.go
+scripts/
+
+# Governance. These define the rules the rest of the work is judged against.
+AGENTS.md
+GUARDRAILS.md
+ARCHITECTURE.md
+SYNTHETIC-TAXONOMY.md
+CAPABILITIES.md
+USE-CASES.md
+
+# Environment secrets.
+.env

@@ -1391,11 +1391,41 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 }
 
 func mergeTerrariumCommit(ctx context.Context, sourcePath, commitHash string) error {
+	// The kernel guard runs before the merge, not after: once a fast-forward
+	// lands, the orchestrator's own files have already changed underneath it.
+	if err := checkTerrariumCommitPaths(ctx, sourcePath, commitHash); err != nil {
+		return err
+	}
+
 	if _, err := runGitCommand(ctx, sourcePath, "merge", "--ff-only", commitHash); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// checkTerrariumCommitPaths refuses a Terrarium commit that would change a
+// protected path.
+//
+// The paths are those the merge would actually bring in — the difference
+// between where the checkout stands now and the commit offered — so a Sprout is
+// judged on what it changed rather than on what the repository contains.
+func checkTerrariumCommitPaths(ctx context.Context, sourcePath, commitHash string) error {
+	output, err := runGitCommand(ctx, sourcePath, "diff", "--name-only", "HEAD", commitHash)
+	if err != nil {
+		// Failing to determine what a commit touches is not permission to merge
+		// it: the guard cannot be satisfied by breaking the question.
+		return fmt.Errorf("protected-path check could not read the incoming changes: %w", err)
+	}
+
+	changed := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			changed = append(changed, trimmed)
+		}
+	}
+
+	return checkProtectedPaths(sourcePath, changed)
 }
 
 func runContainerFitnessTest(ctx context.Context, imageName, shadowPath, fitnessTest string) error {
