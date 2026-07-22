@@ -84,8 +84,15 @@ func runHardinessCmd(ctx context.Context, args []string) {
 	fmt.Println()
 	fmt.Println(strings.Repeat("─", 72))
 	if weak == 0 {
-		fmt.Printf("HARDY — no weak conditions (%d note(s)). The delegation boundary is\n", notes)
-		fmt.Println("enforced by the operating system, as measured from this account.")
+		if notes > 0 {
+			fmt.Printf("NO WEAK CONDITIONS — but %d note(s) above.\n\n", notes)
+			fmt.Println("Nothing measurable is wrong from this account. A note means something is")
+			fmt.Println("not configured yet or could not be established, so this is not the same")
+			fmt.Println("as a boundary proven sound. Re-run once the notes are resolved.")
+			return
+		}
+		fmt.Println("HARDY — no weak conditions and nothing unestablished. The delegation")
+		fmt.Println("boundary is enforced by the operating system, as measured from this account.")
 		return
 	}
 	fmt.Printf("ADVISORY — %d weak condition(s), %d note(s).\n\n", weak, notes)
