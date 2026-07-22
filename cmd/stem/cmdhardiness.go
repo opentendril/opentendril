@@ -131,7 +131,12 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 	//    not need to read a file it is not permitted to read.
 	findings = append(findings, escalationFindings()...)
 
-	// 4. Can callers prove an identity, or must they declare one?
+	// 4. Can somebody else rewrite what the Stem runs? Ownership of the
+	//    credentials is pointless if the binary that enforces the boundary can
+	//    be replaced by the accounts it is meant to constrain.
+	findings = append(findings, executableIntegrityFinding())
+
+	// 5. Can callers prove an identity, or must they declare one?
 	credentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
 	switch {
 	case credentialsErr != nil:
@@ -172,7 +177,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 		})
 	}
 
-	// 5. Is anything granted at all? No grants is the secure default, and
+	// 6. Is anything granted at all? No grants is the secure default, and
 	//    saying so avoids an operator wondering why everything is denied.
 	grants, grantsErr := core.LoadDelegationGrants(tendrilDir)
 	switch {
@@ -281,6 +286,207 @@ func escalationFindings() []hardinessFinding {
 	}
 
 	return findings
+}
+
+// Executable integrity — can somebody else replace what the Stem runs?
+//
+// Every other finding is about what an account may READ or BECOME. This one is
+// about what it may WRITE, and it is the gap those leave: an installation can
+// hold its credentials perfectly, refuse every escalation path, and still be
+// defeated by an account that simply overwrites the binary before the Stem next
+// starts. Nothing about file ownership of the credentials protects against that.
+//
+// The exposure is not only the binary. A directory anywhere on the path used to
+// reach it is just as good to an attacker — replacing a file needs write
+// permission on its directory, not on the file — so the whole resolution chain
+// is inspected, following symbolic links to their targets.
+//
+// What "writable by somebody else" means here is the group-write or other-write
+// permission bit. Two deliberate limits, stated rather than hidden:
+//
+//   - a group-writable path is only an exposure if that group has members
+//     besides the owner, which this cannot determine portably, so it is reported
+//     with that qualification rather than suppressed;
+//   - root can write anything regardless, and is out of scope by definition —
+//     the boundary this measures is against Pollinator-hosting accounts.
+
+// maxExecutableLinkHops bounds the symbolic-link walk. The value matches the
+// conventional kernel limit; a chain longer than this is a loop in practice.
+const maxExecutableLinkHops = 40
+
+// executableIntegrityFinding measures the binary this process is running from.
+//
+// Note what that does and does not answer. Run by the Stem's own principal it
+// names the Stem's binary exactly. Run by an account hosting Pollinators it
+// names THAT account's binary, which is a different question — a useful one,
+// but the finding says which it answered rather than letting the reader assume.
+func executableIntegrityFinding() hardinessFinding {
+	executable, err := os.Executable()
+	if err != nil {
+		return hardinessFinding{
+			Severity: "note",
+			Title:    "The running binary could not be located, so its integrity is unknown",
+			Detail: err.Error() + "\n" +
+				"This is not a pass: whether somebody else can replace what the Stem runs\n" +
+				"has not been established.",
+		}
+	}
+	return executableIntegrityFindingFor(executable)
+}
+
+// executableIntegrityFindingFor is the measurement itself, separated from
+// os.Executable so it can be exercised against a constructed tree.
+func executableIntegrityFindingFor(executable string) hardinessFinding {
+	inspected, unresolved := executableResolutionChain(executable)
+
+	exposures := []string{}
+	unreadable := []string{}
+	// A path that broke the link walk is also in the inspected set, so both
+	// sources are merged through one seen-set rather than listed twice.
+	noted := map[string]bool{}
+	noteUnreadable := func(path string) {
+		if noted[path] {
+			return
+		}
+		noted[path] = true
+		unreadable = append(unreadable, path)
+	}
+	for _, path := range unresolved {
+		noteUnreadable(path)
+	}
+	for _, path := range inspected {
+		exposure, examined := pathWritableByOthers(path)
+		switch {
+		case !examined:
+			noteUnreadable(path)
+		case exposure != "":
+			exposures = append(exposures, fmt.Sprintf("%s (%s)", path, exposure))
+		}
+	}
+
+	if len(exposures) > 0 {
+		detail := "  " + strings.Join(exposures, "\n  ") + "\n" +
+			"An account that can write any of these can replace the binary the Stem\n" +
+			"executes, and the next start runs whatever it was replaced with. A\n" +
+			"group-writable path is only an exposure if that group has members besides\n" +
+			"the owner — check the group before deciding this is harmless."
+		if len(unreadable) > 0 {
+			detail += "\nAlso not examined: " + strings.Join(unreadable, ", ")
+		}
+		return hardinessFinding{
+			Severity: "weak",
+			Title:    fmt.Sprintf("%d path(s) on the running binary's resolution chain are writable by others", len(exposures)),
+			Detail:   detail,
+		}
+	}
+
+	if len(unreadable) > 0 {
+		return hardinessFinding{
+			Severity: "note",
+			Title:    "The running binary's resolution chain could not be fully examined",
+			Detail: "  " + strings.Join(unreadable, "\n  ") + "\n" +
+				"This is not a pass: these paths may or may not be writable by another\n" +
+				"account, and the difference has not been established.",
+		}
+	}
+
+	return hardinessFinding{
+		Severity: "ok",
+		Title:    fmt.Sprintf("Nothing on the running binary's resolution chain is writable by others (%s)", executable),
+	}
+}
+
+// executableResolutionChain lists every path whose permissions decide whether
+// the executable can be replaced: the binary, each symbolic link followed to
+// reach it, each link's target, and every ancestor directory of all of those.
+//
+// Ancestors matter as much as the file. Replacing a file requires write
+// permission on its directory rather than on the file itself, so a writable
+// directory anywhere on the chain is the same exposure as a writable binary.
+//
+// The second return value lists paths that could not be examined at all, which
+// the caller must report rather than treat as clean.
+func executableResolutionChain(executable string) (inspect []string, unresolved []string) {
+	seen := map[string]bool{}
+	add := func(path string) {
+		for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+			if !seen[current] {
+				seen[current] = true
+				inspect = append(inspect, current)
+			}
+			if parent := filepath.Dir(current); parent == current {
+				break
+			}
+		}
+	}
+
+	current := filepath.Clean(executable)
+	for hop := 0; hop < maxExecutableLinkHops; hop++ {
+		add(current)
+
+		info, err := os.Lstat(current)
+		if err != nil {
+			unresolved = append(unresolved, current)
+			break
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+
+		target, err := os.Readlink(current)
+		if err != nil {
+			unresolved = append(unresolved, current)
+			break
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+		current = filepath.Clean(target)
+	}
+
+	return inspect, unresolved
+}
+
+// pathWritableByOthers reports whether a path carries the group-write or
+// other-write permission bit, and whether the question could be answered at all.
+//
+// It uses Lstat rather than Stat so a symbolic link is judged as itself. That
+// matters because link permission bits are meaningless on Linux — they are
+// always 0777 — so judging a link by its own mode would report an exposure on
+// every system. What actually protects a link is the directory holding it, which
+// the resolution chain already inspects, and the link's target is inspected as
+// its own hop.
+//
+// A sticky directory is not an exposure even when it is world-writable. The
+// sticky bit is precisely the rule that only an entry's owner may rename or
+// delete it, so an attacker cannot swap the binary. Without this, every path
+// under a shared temporary directory would be reported, which is both noise and
+// wrong.
+func pathWritableByOthers(path string) (exposure string, examined bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", false
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", true
+	}
+	if info.IsDir() && info.Mode()&os.ModeSticky != 0 {
+		return "", true
+	}
+
+	mode := info.Mode().Perm()
+	groupWritable := mode&0o020 != 0
+	otherWritable := mode&0o002 != 0
+
+	switch {
+	case groupWritable && otherWritable:
+		return "group- and world-writable", true
+	case otherWritable:
+		return "world-writable", true
+	case groupWritable:
+		return "group-writable", true
+	}
+	return "", true
 }
 
 // inGroup reports whether the current user belongs to a named group.
