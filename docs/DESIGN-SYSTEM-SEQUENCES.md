@@ -11,8 +11,8 @@ When you want OpenTendril to perform a repeated, structured task, there are two 
 
 | Layer | Term | "What it is" | "Where it lives" |
 |---|---|---|---|
-| **1. The instructions** | **Genotype** | *Who* the Tendril is and *how it should think* | `~/.opentendril/genotypes/` (System) or `.tendril/genotypes/` (Workspace) |
-| **2. The workflow** | **Sequence** | *What steps* to run, in what order, with what Genotype | `~/.opentendril/sequences/` (System) or `.tendril/sequences/` (Workspace) |
+| **1. The instructions** | **Genotype** | *Who* the Tendril is and *how it should think* | the control plane (trusted) or the workspace (never trusted) |
+| **2. The workflow** | **Sequence** | *What steps* to run, in what order, with what Genotype | the control plane (trusted) or the workspace (never trusted) |
 
 A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. This separation is fundamental to security: a Genotype operating inside a Terrarium cannot trigger new Sequences or elevate its own scope — only the Stem can initiate Sequences, and only a human (or a trusted host-level trigger) can call `stem sequence grow`.
 
@@ -20,7 +20,7 @@ A Sequence **orchestrates** Genotypes. A Genotype **cannot** run a Sequence. Thi
 
 ## System Sequences
 
-Just as System Genotypes ship with OpenTendril as immutable, pre-built AI personas, **System Sequences** are pre-built workflow definitions that ship in `~/.opentendril/sequences/` and cover the standard SDLC lifecycle. They are:
+Just as System Genotypes ship with OpenTendril as immutable, pre-built AI personas, **System Sequences** are pre-built workflow definitions that ship in the Stem's control plane and cover the standard SDLC lifecycle. They are:
 
 - **Immutable from within Terrariums** — Sprouts cannot modify them
 - **Parameterised** — accept user-supplied inputs (branch name, PR number, etc.)
@@ -193,6 +193,6 @@ This allows the Stem to parse Tendril outputs programmatically without relying o
 
 ## Implementation Path
 
-1. **Phase 1 (Issue #116):** Define the `system: true` flag in the Sequence YAML schema. Implement System Config path discovery for sequences (`~/.opentendril/sequences/`). Ship `pr-close-cycle.yaml` and `feature-branch-open.yaml`.
+1. **Phase 1 (Issue #116):** Define the `system: true` flag in the Sequence YAML schema. Implement control-plane discovery for sequences. Ship `pr-close-cycle.yaml` and `feature-branch-open.yaml`.
 2. **Phase 2:** Implement the structured `ACTION_RESULT` reply contract in System Genotype prompts. Wire step event emission to the EventBus.
 3. **Phase 3:** Build a Sequence audit log viewer in the Web UI (connects to Issue #14 — Thought-Stream Visualizer).
