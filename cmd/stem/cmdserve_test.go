@@ -291,19 +291,19 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 // as the Stem's bearer key, both facts became authentication failures — a
 // publicly known string authenticated as the Botanist, and every Sprout received
 // the Botanist credential.
-func TestInferenceProviderKeyIsNotTheStemBearerKey(t *testing.T) {
-	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
+	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 	os.Unsetenv(EnvStemAPIKey)
 	os.Unsetenv("ADMIN_TOKEN")
 
 	if key := resolveServeAPIKey(); key != "" {
-		t.Fatalf("resolveServeAPIKey returned %q from the inference provider variable; the Stem's bearer key must not come from it", key)
+		t.Fatalf("resolveServeAPIKey returned %q from a variable that is not the bearer key", key)
 	}
 }
 
 func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
 	t.Setenv(EnvStemAPIKey, "a-real-bearer-key")
-	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 
 	if key := resolveServeAPIKey(); key != "a-real-bearer-key" {
 		t.Fatalf("resolveServeAPIKey = %q, want the value of %s", key, EnvStemAPIKey)
@@ -311,8 +311,8 @@ func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
 }
 
 // The end of the chain: the trial constant must not authenticate.
-func TestTrialConstantDoesNotAuthenticate(t *testing.T) {
-	t.Setenv(envInferenceProviderAPIKey, "free-trial")
+func TestProviderValueDoesNotAuthenticate(t *testing.T) {
+	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 	os.Unsetenv(EnvStemAPIKey)
 	os.Unsetenv("ADMIN_TOKEN")
 
@@ -321,8 +321,8 @@ func TestTrialConstantDoesNotAuthenticate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getOrCreateAPIKey: %v", err)
 	}
-	if apiKey == "free-trial" {
-		t.Fatal("the inference provider's trial constant became the Stem's bearer key")
+	if apiKey == "a-shared-provider-value" {
+		t.Fatal("a provider value became the Stem's bearer key")
 	}
 
 	reached := false
@@ -332,11 +332,11 @@ func TestTrialConstantDoesNotAuthenticate(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/sessions", nil)
-	req.Header.Set("Authorization", "Bearer free-trial")
+	req.Header.Set("Authorization", "Bearer a-shared-provider-value")
 	rec := httptest.NewRecorder()
 	handler(rec, req)
 
 	if reached || rec.Code != http.StatusUnauthorized {
-		t.Fatalf("the trial constant authenticated: reached=%v status=%d", reached, rec.Code)
+		t.Fatalf("a provider value authenticated: reached=%v status=%d", reached, rec.Code)
 	}
 }

@@ -39,7 +39,6 @@ var FallbackModels = []ModelDefinition{
 	{Provider: "google", Name: "gemini-3.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierCheapest},
 	{Provider: "grok", Name: "grok-4.5", Family: ModelFamilyGPT, ContextSize: 256000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "openrouter", Name: "google/gemini-2.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
-	{Provider: "opentendril", Name: "anthropic/claude-sonnet-5", Family: ModelFamilyClaude, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "nvidia", Name: "meta/llama-3.1-405b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "nvidia", Name: "meta/llama-3.3-70b-instruct", Family: ModelFamilyLlama, ContextSize: 128000, DrivesTools: true, CostTier: TierStandard},
 	// Local models: only qwen3.5:9b reliably drives tools (measured). A 3B
@@ -62,7 +61,6 @@ func AvailableProviders() []string {
 		{provider: "google", key: "GOOGLE_API_KEY"},
 		{provider: "grok", key: "GROK_API_KEY"},
 		{provider: "openrouter", key: "OPENROUTER_API_KEY"},
-		{provider: "opentendril", key: "OPENTENDRIL_API_KEY"},
 		{provider: "nvidia", key: "NVIDIA_API_KEY"},
 	}
 	for _, candidate := range candidates {
