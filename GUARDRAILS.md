@@ -42,26 +42,36 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
 
 ---
 
-## 🔒 Security & Code Write Protection
+## 🔒 Kernel Write Protection
 
-OpenTendril operates a self-building pipeline. To protect the orchestrator from corrupting its own running process during a session, we define strict write permissions.
+OpenTendril builds itself, so a Sprout can be asked to change the orchestrator that is currently running it. Some of those files decide what every later run is permitted to do: the governed capability registry, the continuous integration that enforces these rules, the governance documents, the guard itself. A change to one of them must reach a human before it lands.
 
-### Protected Files (No AI Edits in Session)
-The following kernel files must **never** be modified directly via the AI orchestrator's `write_file` or `apply_code_patch` tools during active chat execution:
-* `cmd/stem/main.go` — Stem kernel entry point
-* `cmd/stem/cmdserve.go` — daemon / gateway surface bootstrap
-* `cmd/stem/internal/core/` — the governed capability registry and its boundary/parity tests
-* `.github/workflows/` — CI pipelines (the Adaptive Immune System)
-* `.github/dependabot.yml` — supply-chain update policy
-* `.env` — Environment secrets
-* `AGENTS.md`, `GUARDRAILS.md`, `ARCHITECTURE.md`, `SYNTHETIC-TAXONOMY.md`, `CAPABILITIES.md`, `USE-CASES.md` — Governance files
+### The list lives in one place
 
-### Staged Modification Pipeline
-If these protected files must be edited, they must route through the **`staged_edit`** tool. This tool:
-1. Creates a git staging branch (`staging/*`).
-2. Applies the surgical code patch.
-3. Compiles the syntax and runs automated Docker canary tests.
-4. Commits and checks out back to `main`, leaving the staging branch for manual human code review and merge.
+The protected paths are defined in **[`.github/protected-paths`](.github/protected-paths)** and nowhere else. This document deliberately does not restate them: a second copy is a second source of truth, and it will drift.
+
+### Editing a protected file is normal
+
+There is no tool you are required to use and no ceremony to perform. Work on a branch and open a pull request, exactly as for anything else. What is not possible is *landing* the change without human review.
+
+That is the whole design. Protection is enforced on the trusted side rather than asked of whoever is editing, because a rule the editing party is asked to honour constrains only a party that chooses to honour it — the same weakness a declared Pollen had before issued credentials replaced it.
+
+### What enforces it
+
+| Layer | Catches | Status |
+|---|---|---|
+| The Stem's merge-back guard | a Sprout rewriting the kernel through a Terrarium run | **enforced** — refuses the merge, names the path and the rule |
+| `CODEOWNERS` | a change reaching the default branch through a pull request | **requests review** — see the caveat below |
+| `scripts/check-protected-paths.sh` | the two files above drifting apart | **enforced in CI** |
+
+The merge-back guard reads the list from the checkout as it stands *before* a merge, never from the commit being merged, so a run cannot delete the list in the same change that edits a kernel file.
+
+> [!IMPORTANT]
+> **`CODEOWNERS` blocks nothing on its own.** It requests review. Blocking requires branch protection on the default branch with required status checks, and — where there is more than one collaborator — "Require review from Code Owners". Neither is configured today, so the pull-request layer currently *records* intent rather than enforcing it. This is stated rather than glossed because a control that looks like a gate and is not is worse than a documented request.
+
+### Adding a path
+
+Add it to `.github/protected-paths` **and** `.github/CODEOWNERS`. The hygiene job fails if you do only one.
 
 ---
 
