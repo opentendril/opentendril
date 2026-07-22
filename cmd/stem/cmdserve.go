@@ -90,7 +90,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	if generatedKey {
 		log.Printf("🔑 Generated API key (saved to %s)", apiKeyFilePath(tendrilDir))
-		log.Println("   Set OPENTENDRIL_API_KEY to use your own instead.")
+		log.Printf("   Set %s to use your own instead.", EnvStemAPIKey)
 	}
 
 	bus := eventbus.New()
@@ -466,8 +466,13 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	}
 }
 
+// EnvStemAPIKey names the Stem's own bearer key. It must stay distinct from any
+// inference provider's key: a provider key may be shared and is passed into every
+// Terrarium; a bearer key grants unscoped access and must never enter one.
+const EnvStemAPIKey = "TENDRIL_API_KEY"
+
 func resolveServeAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv("OPENTENDRIL_API_KEY")); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
 		return key
 	}
 	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))

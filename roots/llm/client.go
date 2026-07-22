@@ -301,7 +301,6 @@ func detectProviderFallback() string {
 		{provider: "grok", key: "GROK_API_KEY"},
 		{provider: "google", key: "GOOGLE_API_KEY"},
 		{provider: "openrouter", key: "OPENROUTER_API_KEY"},
-		{provider: "opentendril", key: "OPENTENDRIL_API_KEY"},
 		{provider: "nvidia", key: "NVIDIA_API_KEY"},
 	}
 	for _, candidate := range candidates {
@@ -391,16 +390,6 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Provider:    "openrouter",
 			BaseURL:     envOrConfig("OPENROUTER_BASE_URL", providerConfig.BaseURL, "https://openrouter.ai/api/v1"),
 			APIKey:      envOrConfig("OPENROUTER_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-		}
-	case "opentendril":
-		return ProviderSpec{
-			Provider:    "opentendril",
-			BaseURL:     envOrConfig("OPENTENDRIL_BASE_URL", providerConfig.BaseURL, "https://api.opentendril.com/v1"),
-			APIKey:      envOrConfig("OPENTENDRIL_API_KEY", providerConfig.APIKey, ""),
 			Model:       model,
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,

@@ -70,8 +70,7 @@ func runInitCmd(args []string) {
 		fmt.Println("2) OpenAI (GPT-4o)")
 		fmt.Println("3) xAI (Grok)")
 		fmt.Println("4) Google (Gemini)")
-		fmt.Println("5) OpenTendril Free Trial")
-		fmt.Print("Enter number (1-5): ")
+		fmt.Print("Enter number (1-4): ")
 
 		if scanner.Scan() {
 			choice := strings.TrimSpace(scanner.Text())
@@ -88,10 +87,6 @@ func runInitCmd(args []string) {
 			case "4":
 				defaultProvider = "google"
 				cloudEnvKey = "GOOGLE_API_KEY"
-			case "5":
-				defaultProvider = "opentendril"
-				cloudEnvKey = "OPENTENDRIL_API_KEY"
-				cloudEnvValue = "free-trial"
 			default:
 				defaultProvider = "anthropic"
 				cloudEnvKey = "ANTHROPIC_API_KEY"

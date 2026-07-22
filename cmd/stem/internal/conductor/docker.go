@@ -762,7 +762,6 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 		"GOOGLE_API_KEY",
 		"GROK_API_KEY",
 		"OPENROUTER_API_KEY",
-		"OPENTENDRIL_API_KEY",
 		"NVIDIA_API_KEY",
 		"DEFAULT_LLM_PROVIDER",
 		"LOCAL_INFERENCE_URL",
