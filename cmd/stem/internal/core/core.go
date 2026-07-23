@@ -67,6 +67,10 @@ type Core interface {
 	// minimal delegable operation-class. Runs through the injected
 	// PassthroughOperations execution port.
 	PassthroughRun(ctx context.Context, in PassthroughRunInput) (PassthroughRunResult, error)
+	// Seed family: grow a Seed — a bounded intent — to Fruit, building toward a
+	// goal and iterating until a verify predicate passes, within iteration/time
+	// bounds. Runs through the injected SeedOperations execution port.
+	SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error)
 	// Git family: commit a substrate's workspace under its configured commit
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.
@@ -180,6 +184,7 @@ type Service struct {
 	sequence    SequenceOperations
 	sprout      SproutOperations
 	passthrough PassthroughOperations
+	seed        SeedOperations
 	git         GitOperations
 }
 

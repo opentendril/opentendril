@@ -231,6 +231,34 @@ func (h *MCPHandler) callPassthroughRun(id interface{}, args map[string]interfac
 	return h.formatCapabilityResult(id, result, runErr)
 }
 
+// callSeedGrow is the typed dispatch for seed.grow. Like callPassthroughRun, the
+// Seed's egress allow-list is grant material with no JSON surface, so the
+// adapter places the authorized grant's allow-list itself rather than trusting
+// the generic registry decode.
+func (h *MCPHandler) callSeedGrow(id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return h.formatError(id, -32602, "Invalid params", err.Error())
+	}
+	var in core.SeedGrowInput
+	if err := json.Unmarshal(encoded, &in); err != nil {
+		return h.formatError(id, -32602, "Invalid params", err.Error())
+	}
+
+	// Egress is grant material: the decode above can never have populated it.
+	// It is set below — and only below — from the authorized delegation grant.
+	// Without a grant the empty list stands: deny-all egress.
+	if decision.Grant != nil {
+		in.Egress = decision.Grant.Egress
+	}
+	if strings.TrimSpace(in.Origin) == "" {
+		in.Origin = session.OriginMCP
+	}
+
+	result, runErr := h.core.SeedGrow(context.Background(), in)
+	return h.formatCapabilityResult(id, result, runErr)
+}
+
 // formatCapabilityResult wraps one capability outcome in the MCP tool-result
 // envelope (content plus isError) shared by every capability dispatch path.
 func (h *MCPHandler) formatCapabilityResult(id interface{}, result interface{}, err error) []byte {
@@ -603,6 +631,13 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				// generic registry decode can never carry it — the adapter
 				// places the authorized grant's allow-list itself.
 				return h.callPassthroughRun(req.ID, params.Arguments, decision)
+			}
+			if params.Name == core.CapSeedGrow {
+				// seed.grow carries the same grant-material egress allow-list as
+				// passthrough.run (json:"-"), so it takes the same typed
+				// dispatch: the adapter places the authorized grant's allow-list
+				// itself rather than trusting the generic registry decode.
+				return h.callSeedGrow(req.ID, params.Arguments, decision)
 			}
 			return h.callCoreCapabilityAs(callCtx, req.ID, params.Name, params.Arguments)
 		}

@@ -229,6 +229,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOperations(history, bus)).
 		WithPassthrough(passthroughOperations()).
+		WithSeed(seedOperations()).
 		WithGit(gitOperations())
 
 	// Native scheduled sequences: cron entries from
@@ -297,6 +298,15 @@ func runServeCmd(ctx context.Context, args []string) {
 	// ladder. Like the passthrough route it consults the delegation gate
 	// per-invocation, so it takes the bare bearer auth rather than
 	// guardedAuth's blanket delegated-request denial.
+	// Seed REST API (adapter): grow a Seed (a bounded intent) to Fruit. Like the
+	// passthrough route it consults the delegation gate per-invocation (the
+	// matching grant supplies the egress allow-list), so it takes the bare
+	// bearer auth rather than guardedAuth's blanket delegated-request denial.
+	seedHandler := receptors.NewSeedHandler(coreSvc).WithDelegation(delegationGate)
+	seedHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
+	})
+
 	gitHandler := receptors.NewGitHandler(coreSvc).WithDelegation(delegationGate)
 	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)

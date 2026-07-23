@@ -14,6 +14,7 @@
 //   tendril sequence - Run or list YAML task sequences
 //   tendril sprout - Delegate a one-shot task to an autonomous Tendril
 //   tendril passthrough - Run one bounded command in a network-sealed terrarium
+//   tendril seed  - Grow a Seed: build toward a goal until a verify command passes
 //   tendril git   - Commit a substrate's workspace under its configured identity
 //   tendril terrarium - Manage execution terrarium environments
 //   tendril health - Run infrastructure health diagnostics
@@ -96,6 +97,8 @@ func main() {
 		runSproutCmd(ctx, os.Args[2:])
 	case "passthrough":
 		runPassthroughCmd(ctx, os.Args[2:])
+	case "seed":
+		runSeedCmd(ctx, os.Args[2:])
 	case "git":
 		runGitCmd(ctx, os.Args[2:])
 	case "pollinator":
@@ -146,6 +149,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "verdict", "Judge a completed test run, skip-aware")
 	fmt.Printf("  %-11s  %s\n", "sprout", "Delegate a one-shot task to an autonomous Tendril in a terrarium")
 	fmt.Printf("  %-11s  %s\n", "passthrough", "Run one bounded command in a network-sealed terrarium")
+	fmt.Printf("  %-11s  %s\n", "seed", "Grow a Seed: build toward a goal until a verify command passes")
 	fmt.Printf("  %-11s  %s\n", "git", "Commit a substrate's workspace under its configured commit identity")
 	fmt.Printf("  %-11s  %s\n", "terrarium", "Manage execution terrarium environments")
 	fmt.Printf("  %-11s  %s\n", "health", "Run infrastructure health diagnostics")

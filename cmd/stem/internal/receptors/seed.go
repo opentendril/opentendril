@@ -1,0 +1,120 @@
+package receptors
+
+import (
+	"encoding/json"
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+)
+
+// SeedHandler is the REST adapter for the governed seed/grow capability family —
+// grow a Seed (a bounded intent) to Fruit. Exactly like PassthroughHandler, it
+// translates HTTP to and from the transport-free core.Core and holds no
+// business logic.
+//
+// POST /v1/seeds/grow grows a Seed. Delegated invocations (marked with
+// PollenHeader) are gated per-invocation by the delegation authorizer and
+// receive the matching grant's egress allow-list; a request without the marker
+// follows the plain bearer-authenticated path with deny-all egress.
+type SeedHandler struct {
+	core core.Core
+	// delegation gates *delegated* invocations against the active grants and
+	// supplies the matching grant's egress allow-list. A nil gate denies every
+	// delegated invocation; requests without the header are untouched.
+	delegation *DelegationGate
+	// registered accumulates the governed capability names actually mounted by
+	// Register, so Capabilities() reflects the wired routes (not the canonical
+	// list) — the independence the parity coverage test relies on.
+	registered []string
+}
+
+// NewSeedHandler creates the seed REST surface over the shared Core.
+func NewSeedHandler(coreSvc core.Core) *SeedHandler {
+	return &SeedHandler{core: coreSvc}
+}
+
+// WithDelegation wires the delegation gate onto the handler and returns it
+// for chaining.
+func (h *SeedHandler) WithDelegation(gate *DelegationGate) *SeedHandler {
+	h.delegation = gate
+	return h
+}
+
+// governedRoutes is the single table of seed-capability routes this adapter
+// wires (same contract as PassthroughHandler.governedRoutes).
+func (h *SeedHandler) governedRoutes() []governedRoute {
+	return []governedRoute{
+		{"POST /v1/seeds/grow", core.CapSeedGrow, h.grow},
+	}
+}
+
+// Capabilities reports the governed capability names this REST adapter has
+// actually mounted (populated by Register). Read by the parity coverage test.
+func (h *SeedHandler) Capabilities() []string {
+	out := append([]string(nil), h.registered...)
+	sort.Strings(out)
+	return out
+}
+
+// Register mounts the seed routes onto the mux, wrapping each handler with the
+// provided auth middleware.
+func (h *SeedHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
+	if auth == nil {
+		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
+	}
+
+	h.registered = h.registered[:0]
+	for _, route := range h.governedRoutes() {
+		mux.HandleFunc(route.pattern, auth(route.handler))
+		h.registered = append(h.registered, route.capability)
+	}
+}
+
+func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
+	var req core.SeedGrowInput
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if strings.TrimSpace(req.Substrate) == "" || strings.TrimSpace(req.Goal) == "" || len(req.Verify) == 0 {
+		http.Error(w, "substrate, goal and verify are required", http.StatusBadRequest)
+		return
+	}
+
+	// Egress is grant material: it has no JSON surface on the input type, so
+	// the decode above can never have populated it. It is set below — and only
+	// below — from an authorized delegation grant. A non-delegated invocation
+	// keeps the empty list: deny-all egress with zero configuration.
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Pollen:         pollen,
+			OperationClass: core.CapSeedGrow,
+			Substrate:      strings.TrimSpace(req.Substrate),
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+		req.Egress = decision.Grant.Egress
+	}
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+
+	result, err := h.core.SeedGrow(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
