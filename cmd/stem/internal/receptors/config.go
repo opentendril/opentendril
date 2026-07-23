@@ -22,8 +22,8 @@ import (
 // delegated-marked request is denied outright rather than silently executed
 // as if it were non-delegated.
 //
-// Key resolution matches the Stem serve chain (taxonomy first, legacy last):
-// TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY → ADMIN_TOKEN.
+// Key resolution matches the Stem serve chain:
+// TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY.
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := botanistKeyFromEnv()
@@ -72,9 +72,9 @@ func bearerToken(r *http.Request) string {
 
 // botanistKeyFromEnv returns the first configured Botanist/Stem bearer. Names
 // mirror the serve resolver so config routes and data routes honour the same
-// operator secret (including the legacy ADMIN_TOKEN alias).
+// operator secret.
 func botanistKeyFromEnv() string {
-	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY", "ADMIN_TOKEN"} {
+	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY"} {
 		if key := strings.TrimSpace(os.Getenv(name)); key != "" {
 			return key
 		}

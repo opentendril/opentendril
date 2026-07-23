@@ -284,7 +284,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 // access.
 func clearBotanistKeyEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey, EnvAdminTokenLegacy} {
+	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey} {
 		os.Unsetenv(name)
 	}
 }
@@ -308,8 +308,8 @@ func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
 	}
 }
 
-// TestBotanistKeyAliasesResolve: taxonomy names and the legacy admin alias are
-// accepted when the primary TENDRIL_API_KEY is unset.
+// TestBotanistKeyAliasesResolve: Botanist-key names are accepted when the
+// primary TENDRIL_API_KEY is unset.
 func TestBotanistKeyAliasesResolve(t *testing.T) {
 	clearBotanistKeyEnv(t)
 	t.Setenv(EnvBotanistKey, "botanist-value")
@@ -323,13 +323,7 @@ func TestBotanistKeyAliasesResolve(t *testing.T) {
 		t.Fatalf("TENDRIL_BOTANIST_KEY: got %q", key)
 	}
 
-	clearBotanistKeyEnv(t)
-	t.Setenv(EnvAdminTokenLegacy, "legacy-admin")
-	if key := resolveServeAPIKey(); key != "legacy-admin" {
-		t.Fatalf("ADMIN_TOKEN legacy: got %q", key)
-	}
-
-	// Primary wins over aliases.
+	// Primary wins over Botanist aliases.
 	clearBotanistKeyEnv(t)
 	t.Setenv(EnvStemAPIKey, "primary")
 	t.Setenv(EnvBotanistKey, "alias")

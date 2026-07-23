@@ -432,16 +432,14 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 }
 
-// serveListenHost resolves the Terroir bind host. Preference order is domain-
-// native first, then legacy generic names, then loopback so a bare start never
-// exposes the Stem beyond the local machine:
+// serveListenHost resolves the Terroir bind host. Preference order:
 //
-//	TERROIR_HOST → TENDRIL_TERROIR_HOST → HOST → 127.0.0.1
+//	TERROIR_HOST → TENDRIL_TERROIR_HOST → 127.0.0.1
 //
 // Values must be a host/IP only (no port). If a caller accidentally includes a
 // port, it is stripped so net.JoinHostPort does not produce a double-port address.
 func serveListenHost() string {
-	for _, name := range []string{EnvTerroirHost, EnvTendrilTerroirHost, EnvHostLegacy} {
+	for _, name := range []string{EnvTerroirHost, EnvTendrilTerroirHost} {
 		host := strings.TrimSpace(os.Getenv(name))
 		if host == "" {
 			continue
@@ -569,25 +567,23 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 // Terrarium; a bearer key grants unscoped access and must never enter one.
 const EnvStemAPIKey = "TENDRIL_API_KEY"
 
-// Botanist-key aliases (taxonomy-aligned) and the legacy ADMIN_TOKEN name. The
-// Botanist is the human operator; these grant the same unscoped Stem bearer as
-// EnvStemAPIKey when that primary is unset.
+// Botanist-key and Terroir-host environment names. The Botanist is the human
+// operator; these grant the same unscoped Stem bearer as EnvStemAPIKey when
+// that primary is unset. There is no legacy ADMIN_TOKEN / HOST alias — use the
+// taxonomy names only.
 const (
 	EnvBotanistKey        = "BOTANIST_KEY"
 	EnvTendrilBotanistKey = "TENDRIL_BOTANIST_KEY"
-	EnvAdminTokenLegacy   = "ADMIN_TOKEN"
 	EnvTerroirHost        = "TERROIR_HOST"
 	EnvTendrilTerroirHost = "TENDRIL_TERROIR_HOST"
-	EnvHostLegacy         = "HOST"
 )
 
 // resolveServeAPIKey returns the first non-empty Botanist/Stem bearer from the
-// environment. Preference order keeps the long-standing primary first, then the
-// taxonomy names, then the legacy admin alias:
+// environment:
 //
-//	TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY → ADMIN_TOKEN
+//	TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY
 func resolveServeAPIKey() string {
-	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey, EnvAdminTokenLegacy} {
+	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey} {
 		if key := strings.TrimSpace(os.Getenv(name)); key != "" {
 			return key
 		}

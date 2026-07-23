@@ -42,35 +42,33 @@ func TestIsLoopbackBindHost(t *testing.T) {
 	}
 }
 
-// TestServeListenHostDefaultsToLoopback: with no Terroir/HOST env, the bind
-// host is 127.0.0.1 so a bare start never exposes the Stem beyond the local machine.
+// TestServeListenHostDefaultsToLoopback: with no Terroir env, the bind host is
+// 127.0.0.1 so a bare start never exposes the Stem beyond the local machine.
 func TestServeListenHostDefaultsToLoopback(t *testing.T) {
 	t.Setenv(EnvTerroirHost, "")
 	t.Setenv(EnvTendrilTerroirHost, "")
-	t.Setenv(EnvHostLegacy, "")
 	if got := serveListenHost(); got != "127.0.0.1" {
 		t.Fatalf("serveListenHost() = %q, want 127.0.0.1", got)
 	}
-	t.Setenv(EnvHostLegacy, "0.0.0.0")
+	t.Setenv(EnvTerroirHost, "0.0.0.0")
 	if got := serveListenHost(); got != "0.0.0.0" {
-		t.Fatalf("serveListenHost() with HOST=0.0.0.0 = %q", got)
+		t.Fatalf("serveListenHost() with TERROIR_HOST=0.0.0.0 = %q", got)
 	}
 }
 
-// TestServeListenHostPrefersTerroirAndStripsPort: taxonomy names win over the
-// legacy HOST alias, and an accidental host:port value is stripped to the host.
+// TestServeListenHostPrefersTerroirAndStripsPort: TERROIR_HOST wins over
+// TENDRIL_TERROIR_HOST, and an accidental host:port value is stripped to the host.
 func TestServeListenHostPrefersTerroirAndStripsPort(t *testing.T) {
-	t.Setenv(EnvTerroirHost, "")
+	t.Setenv(EnvTerroirHost, "127.0.0.1:8080")
 	t.Setenv(EnvTendrilTerroirHost, "")
-	t.Setenv(EnvHostLegacy, "127.0.0.1:8080")
 	if got := serveListenHost(); got != "127.0.0.1" {
-		t.Fatalf("HOST with port: got %q, want 127.0.0.1", got)
+		t.Fatalf("TERROIR_HOST with port: got %q, want 127.0.0.1", got)
 	}
 
-	t.Setenv(EnvHostLegacy, "0.0.0.0")
 	t.Setenv(EnvTerroirHost, "192.168.1.10")
+	t.Setenv(EnvTendrilTerroirHost, "0.0.0.0")
 	if got := serveListenHost(); got != "192.168.1.10" {
-		t.Fatalf("TERROIR_HOST should win over HOST: got %q", got)
+		t.Fatalf("TERROIR_HOST should win over TENDRIL_TERROIR_HOST: got %q", got)
 	}
 
 	t.Setenv(EnvTerroirHost, "")

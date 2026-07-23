@@ -234,7 +234,7 @@ func TestPollenForResolvesAndDeniesTokens(t *testing.T) {
 func TestAuthMiddlewareRejectsAccessToken(t *testing.T) {
 	// Clear any host Botanist key so we exercise the delegation-shape guard,
 	// not the Botanist-key comparison.
-	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY", "ADMIN_TOKEN"} {
+	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY"} {
 		t.Setenv(name, "")
 	}
 
