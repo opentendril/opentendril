@@ -53,6 +53,25 @@ type SproutRun struct {
 	FinishedAt time.Time `json:"finishedAt,omitempty"`
 }
 
+// SeedRun is one bounded-task (seed.grow) execution: the durable handle a
+// Pollinator dispatches against and later collects, plus the reviewable Fruit
+// (status, branch, diff, logs). It records the dispatching Pollen so collection
+// can be scoped to the subject that owns the run.
+type SeedRun struct {
+	Handle     string    `json:"handle"`
+	Pollen     string    `json:"pollen,omitempty"`
+	Substrate  string    `json:"substrate,omitempty"`
+	Goal       string    `json:"goal,omitempty"`
+	Status     string    `json:"status"`
+	Iterations int       `json:"iterations"`
+	Branch     string    `json:"branch,omitempty"`
+	Diff       string    `json:"diff,omitempty"`
+	Logs       string    `json:"logs,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	StartedAt  time.Time `json:"startedAt"`
+	FinishedAt time.Time `json:"finishedAt,omitempty"`
+}
+
 // EventRecord is one persisted EventBus telemetry row.
 type EventRecord struct {
 	ID        int64                  `json:"id"`
@@ -197,7 +216,22 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	startedAt TEXT NOT NULL,
 	finishedAt TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);`
+CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);
+CREATE TABLE IF NOT EXISTS seedruns (
+	handle TEXT PRIMARY KEY,
+	pollen TEXT NOT NULL DEFAULT '',
+	substrate TEXT NOT NULL DEFAULT '',
+	goal TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL,
+	iterations INTEGER NOT NULL DEFAULT 0,
+	branch TEXT NOT NULL DEFAULT '',
+	diff TEXT NOT NULL DEFAULT '',
+	logs TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	startedAt TEXT NOT NULL,
+	finishedAt TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize history schema: %w", err)
@@ -534,4 +568,87 @@ LIMIT ?`
 		return nil, fmt.Errorf("iterate sprout runs: %w", err)
 	}
 	return runs, nil
+}
+
+// RecordSeedRun upserts one seed.grow execution keyed by its handle; call it
+// once when the run is dispatched (status "running") and again when it settles
+// (satisfied / exhausted / withered).
+func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
+	if strings.TrimSpace(run.Handle) == "" {
+		return fmt.Errorf("seed run requires a handle")
+	}
+	if run.StartedAt.IsZero() {
+		run.StartedAt = time.Now().UTC()
+	}
+
+	finishedAt := ""
+	if !run.FinishedAt.IsZero() {
+		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+
+	const statement = `
+INSERT INTO seedruns (handle, pollen, substrate, goal, status, iterations, branch, diff, logs, error, startedAt, finishedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(handle) DO UPDATE SET
+	status = excluded.status,
+	iterations = excluded.iterations,
+	branch = excluded.branch,
+	diff = excluded.diff,
+	logs = excluded.logs,
+	error = excluded.error,
+	finishedAt = excluded.finishedAt`
+
+	_, err := s.db.ExecContext(ctx, statement,
+		run.Handle,
+		run.Pollen,
+		run.Substrate,
+		run.Goal,
+		run.Status,
+		run.Iterations,
+		run.Branch,
+		run.Diff,
+		run.Logs,
+		run.Error,
+		run.StartedAt.UTC().Format(time.RFC3339Nano),
+		finishedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("record seed run: %w", err)
+	}
+	return nil
+}
+
+// GetSeedRun returns one seed.grow execution by handle. The boolean reports
+// whether a record was found; a missing handle is not an error.
+func (s *Store) GetSeedRun(ctx context.Context, handle string) (SeedRun, bool, error) {
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return SeedRun{}, false, fmt.Errorf("handle is required")
+	}
+
+	const query = `
+SELECT handle, pollen, substrate, goal, status, iterations, branch, diff, logs, error, startedAt, finishedAt
+FROM seedruns
+WHERE handle = ?`
+
+	var run SeedRun
+	var startedAt, finishedAt string
+	err := s.db.QueryRowContext(ctx, query, handle).Scan(
+		&run.Handle, &run.Pollen, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
+		&run.Branch, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt)
+	if err == sql.ErrNoRows {
+		return SeedRun{}, false, nil
+	}
+	if err != nil {
+		return SeedRun{}, false, fmt.Errorf("get seed run: %w", err)
+	}
+	if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
+		return SeedRun{}, false, fmt.Errorf("parse seed run startedAt: %w", err)
+	}
+	if finishedAt != "" {
+		if run.FinishedAt, err = time.Parse(time.RFC3339Nano, finishedAt); err != nil {
+			return SeedRun{}, false, fmt.Errorf("parse seed run finishedAt: %w", err)
+		}
+	}
+	return run, true, nil
 }
