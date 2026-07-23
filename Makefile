@@ -14,7 +14,7 @@ stem: ## Build the tendril binary (does not install it)
 	@echo "✅ Built: $(STEM_DIR)/tendril"
 	@echo "   Nothing has been installed. Choose where it goes:"
 	@echo ""
-	@echo "   Governed install — hand it to the Stem's own user (see docs/INSTALL.md):"
+	@echo "   Governed install — hand it to the Stem's own user (see docs/GUIDE-INSTALL.md):"
 	@echo "     sudo install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin"
 	@echo "     sudo install -o tendril -g tendril -m 750 $(STEM_DIR)/tendril /home/tendril/.local/bin/tendril"
 	@echo ""
@@ -58,7 +58,7 @@ test-stem: ## Run Go tests in a sterile Docker container
 
 test-all: test-stem ## Run all tests
 
-check-all: ## Full pre-merge gate: clean build + all tests (see CONTRIBUTING.md / TESTING.md)
+check-all: ## Full pre-merge gate: clean build + all tests (see .github/CONTRIBUTING.md / TESTING.md)
 	$(MAKE) stem
 	$(MAKE) test-all
 

@@ -38,7 +38,7 @@ For high-security and multi-tenant enterprise environments, OpenTendril supports
 
 ## 🚀 Installing
 
-**[docs/INSTALL.md](docs/INSTALL.md) is the installation guide**, and the source
+**[docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md) is the installation guide**, and the source
 of truth for what a sound installation is.
 
 It does not prescribe one procedure. What makes an installation sound is a set of
@@ -58,7 +58,7 @@ It reports rather than gates. A weak finding may describe a configuration you
 chose knowingly — running the Stem as your own user on a laptop is legitimate,
 and the report says so plainly instead of pretending otherwise.
 
-Once it is running, [QUICKSTART.md](QUICKSTART.md) covers the first session.
+Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers the first session.
 
 ---
 

@@ -67,11 +67,11 @@ steps:
 
   - id: update-affected-docs
     genotype: code-writer
-    description: "Update SECURITY.md, ARCHITECTURE.md, or relevant design docs for any architectural changes"
+    description: "Update .github/SECURITY.md, ARCHITECTURE.md, or relevant design docs for any architectural changes"
     dependsOn: [analyse-commits]
     transcript: |
       Review the commit list and identify any changes that should be reflected
-      in SECURITY.md, ARCHITECTURE.md, or docs/. Update the relevant documents
+      in .github/SECURITY.md, ARCHITECTURE.md, or docs/. Update the relevant documents
       to reflect new behaviour, security posture changes, or new components.
 
   - id: check-workspace

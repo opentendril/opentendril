@@ -56,13 +56,13 @@ The generated map is formatted as a compact hierarchical list:
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [orchestrator/repomap.go](../cmd/stem/internal/orchestrator/repomap.go)
+#### [NEW] [orchestrator/repomap.go](../cmd/stem/internal/rhizome/repomap.go)
 *   Implement `GenerateRepoMap(dir string) (string, error)`.
 *   Implement `parseGoFile(path string) ([]string, error)` using `go/parser` and `go/ast`.
 *   Implement `parseTypeScriptFile(path string) ([]string, error)` extracting exports and class signatures.
 *   Implement `parsePythonFile(path string) ([]string, error)` extracting classes and defs.
 
-#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/conductor/docker.go)
 *   Inside `RunTendril`, after staging Genotype plasmids and before starting Docker:
     *   Call `GenerateRepoMap(mountPath)`.
     *   Write the output to `mountPath/.tendril/genome/repomap.md` to inject the Thigmotropism Plasmid.

@@ -397,7 +397,7 @@ tendril git setup \
 ```
 
 Upload the key's public half to GitHub so its commits verify.
-[GIT-CONNECTION-SETUP.md](./GIT-CONNECTION-SETUP.md) covers key generation and
+[GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md) covers key generation and
 both postures in full; it is not repeated here.
 
 **Check:** confirm the target repository's requirement before the first
@@ -913,9 +913,9 @@ back into your home directory.
 
 ## Related documents
 
-* [GIT-CONNECTION-SETUP.md](./GIT-CONNECTION-SETUP.md) — connection postures,
+* [GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md) — connection postures,
   signing, and what each grant operation-class permits.
-* [HOST-TENDRIL.md](./HOST-TENDRIL.md) — running a Tendril directly on the Stem
+* [GUIDE-HOST-TENDRIL.md](./GUIDE-HOST-TENDRIL.md) — running a Tendril directly on the Stem
   host to reach locally authenticated command-line tools.
-* [POLLINATOR-INTEGRATION-GUIDE.md](./POLLINATOR-INTEGRATION-GUIDE.md) — client
+* [GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) — client
   configuration per Pollinator.
