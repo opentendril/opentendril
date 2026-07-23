@@ -282,10 +282,16 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 // The Stem's bearer key must be its own secret, never a provider's. A provider
 // value may be shared and reaches every Terrarium; a bearer key grants unscoped
 // access.
+func clearBotanistKeyEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey, EnvAdminTokenLegacy} {
+		os.Unsetenv(name)
+	}
+}
+
 func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
-	os.Unsetenv(EnvStemAPIKey)
-	os.Unsetenv("ADMIN_TOKEN")
+	clearBotanistKeyEnv(t)
 
 	if key := resolveServeAPIKey(); key != "" {
 		t.Fatalf("resolveServeAPIKey returned %q from a variable that is not the bearer key", key)
@@ -293,6 +299,7 @@ func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
 }
 
 func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
+	clearBotanistKeyEnv(t)
 	t.Setenv(EnvStemAPIKey, "a-real-bearer-key")
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 
@@ -301,11 +308,40 @@ func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
 	}
 }
 
+// TestBotanistKeyAliasesResolve: taxonomy names and the legacy admin alias are
+// accepted when the primary TENDRIL_API_KEY is unset.
+func TestBotanistKeyAliasesResolve(t *testing.T) {
+	clearBotanistKeyEnv(t)
+	t.Setenv(EnvBotanistKey, "botanist-value")
+	if key := resolveServeAPIKey(); key != "botanist-value" {
+		t.Fatalf("BOTANIST_KEY: got %q", key)
+	}
+
+	clearBotanistKeyEnv(t)
+	t.Setenv(EnvTendrilBotanistKey, "tendril-botanist")
+	if key := resolveServeAPIKey(); key != "tendril-botanist" {
+		t.Fatalf("TENDRIL_BOTANIST_KEY: got %q", key)
+	}
+
+	clearBotanistKeyEnv(t)
+	t.Setenv(EnvAdminTokenLegacy, "legacy-admin")
+	if key := resolveServeAPIKey(); key != "legacy-admin" {
+		t.Fatalf("ADMIN_TOKEN legacy: got %q", key)
+	}
+
+	// Primary wins over aliases.
+	clearBotanistKeyEnv(t)
+	t.Setenv(EnvStemAPIKey, "primary")
+	t.Setenv(EnvBotanistKey, "alias")
+	if key := resolveServeAPIKey(); key != "primary" {
+		t.Fatalf("primary should win: got %q", key)
+	}
+}
+
 // The end of the chain: the trial constant must not authenticate.
 func TestProviderValueDoesNotAuthenticate(t *testing.T) {
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
-	os.Unsetenv(EnvStemAPIKey)
-	os.Unsetenv("ADMIN_TOKEN")
+	clearBotanistKeyEnv(t)
 
 	dir := t.TempDir()
 	apiKey, _, err := getOrCreateAPIKey(filepath.Join(dir, ".tendril"))

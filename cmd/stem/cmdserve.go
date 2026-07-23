@@ -368,10 +368,10 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
-	adminKey := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	// Mesh admin uses the same Botanist-key chain as the Stem bearer; never
+	// fail open when no dedicated secret is configured.
+	adminKey := resolveServeAPIKey()
 	if adminKey == "" {
-		// No dedicated admin secret configured: fall back to the Stem's own
-		// (never-empty) API key rather than fail open on mesh token issuance.
 		adminKey = apiKey
 	}
 	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, delegationGate.Middleware(meshServer.HandleAdminIssueToken)))
@@ -432,14 +432,26 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 }
 
-// serveListenHost resolves the bind host: HOST env, defaulting to loopback so
-// a bare start never exposes the Stem beyond the local machine.
+// serveListenHost resolves the Terroir bind host. Preference order is domain-
+// native first, then legacy generic names, then loopback so a bare start never
+// exposes the Stem beyond the local machine:
+//
+//	TERROIR_HOST → TENDRIL_TERROIR_HOST → HOST → 127.0.0.1
+//
+// Values must be a host/IP only (no port). If a caller accidentally includes a
+// port, it is stripped so net.JoinHostPort does not produce a double-port address.
 func serveListenHost() string {
-	host := strings.TrimSpace(os.Getenv("HOST"))
-	if host == "" {
-		return "127.0.0.1"
+	for _, name := range []string{EnvTerroirHost, EnvTendrilTerroirHost, EnvHostLegacy} {
+		host := strings.TrimSpace(os.Getenv(name))
+		if host == "" {
+			continue
+		}
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			return h
+		}
+		return host
 	}
-	return host
+	return "127.0.0.1"
 }
 
 // isLoopbackBindHost reports whether host is a loopback bind target. Empty,
@@ -557,11 +569,30 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 // Terrarium; a bearer key grants unscoped access and must never enter one.
 const EnvStemAPIKey = "TENDRIL_API_KEY"
 
+// Botanist-key aliases (taxonomy-aligned) and the legacy ADMIN_TOKEN name. The
+// Botanist is the human operator; these grant the same unscoped Stem bearer as
+// EnvStemAPIKey when that primary is unset.
+const (
+	EnvBotanistKey        = "BOTANIST_KEY"
+	EnvTendrilBotanistKey = "TENDRIL_BOTANIST_KEY"
+	EnvAdminTokenLegacy   = "ADMIN_TOKEN"
+	EnvTerroirHost        = "TERROIR_HOST"
+	EnvTendrilTerroirHost = "TENDRIL_TERROIR_HOST"
+	EnvHostLegacy         = "HOST"
+)
+
+// resolveServeAPIKey returns the first non-empty Botanist/Stem bearer from the
+// environment. Preference order keeps the long-standing primary first, then the
+// taxonomy names, then the legacy admin alias:
+//
+//	TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY → ADMIN_TOKEN
 func resolveServeAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
-		return key
+	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey, EnvAdminTokenLegacy} {
+		if key := strings.TrimSpace(os.Getenv(name)); key != "" {
+			return key
+		}
 	}
-	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	return ""
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
@@ -579,10 +610,10 @@ func readPersistedAPIKey(tendrilDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// getOrCreateAPIKey resolves the Stem's bearer key: TENDRIL_API_KEY or
-// ADMIN_TOKEN wins, then a key already on disk, then a freshly generated one
-// persisted for next time. It never returns an empty key, so the Stem cannot
-// come up serving its API unauthenticated.
+// getOrCreateAPIKey resolves the Stem's bearer key: the Botanist/Stem env chain
+// (see resolveServeAPIKey) wins, then a key already on disk, then a freshly
+// generated one persisted for next time. It never returns an empty key, so the
+// Stem cannot come up serving its API unauthenticated.
 func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
 	if key = resolveServeAPIKey(); key != "" {
 		return key, false, nil
