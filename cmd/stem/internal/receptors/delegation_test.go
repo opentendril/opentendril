@@ -254,9 +254,7 @@ func TestDelegationGateMiddlewareDefaultDeny(t *testing.T) {
 // delegation posture: its config routes expose no delegable operation-class,
 // so a delegated-marked request is refused rather than silently executed.
 func TestAuthMiddlewareDeniesDelegatedRequests(t *testing.T) {
-	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY"} {
-		t.Setenv(name, "")
-	}
+	t.Setenv("TENDRIL_API_KEY", "")
 
 	nextCalled := 0
 	wrapped := AuthMiddleware(func(w http.ResponseWriter, r *http.Request) { nextCalled++ })

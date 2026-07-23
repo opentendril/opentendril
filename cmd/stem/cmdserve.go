@@ -432,24 +432,19 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 }
 
-// serveListenHost resolves the Terroir bind host. Preference order:
-//
-//	TERROIR_HOST → TENDRIL_TERROIR_HOST → 127.0.0.1
-//
+// serveListenHost resolves the Terroir bind host from TERROIR_HOST, defaulting
+// to loopback so a bare start never exposes the Stem beyond the local machine.
 // Values must be a host/IP only (no port). If a caller accidentally includes a
 // port, it is stripped so net.JoinHostPort does not produce a double-port address.
 func serveListenHost() string {
-	for _, name := range []string{EnvTerroirHost, EnvTendrilTerroirHost} {
-		host := strings.TrimSpace(os.Getenv(name))
-		if host == "" {
-			continue
-		}
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			return h
-		}
-		return host
+	host := strings.TrimSpace(os.Getenv(EnvTerroirHost))
+	if host == "" {
+		return "127.0.0.1"
 	}
-	return "127.0.0.1"
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 // isLoopbackBindHost reports whether host is a loopback bind target. Empty,
@@ -562,33 +557,19 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	}
 }
 
-// EnvStemAPIKey names the Stem's own bearer key. It must stay distinct from any
-// inference provider's key: a provider key may be shared and is passed into every
-// Terrarium; a bearer key grants unscoped access and must never enter one.
+// EnvStemAPIKey names the Stem's own bearer key (the Botanist secret). It must
+// stay distinct from any inference provider's key: a provider key may be shared
+// and is passed into every Terrarium; a bearer key grants unscoped access and
+// must never enter one. One name only — no alternate env aliases.
 const EnvStemAPIKey = "TENDRIL_API_KEY"
 
-// Botanist-key and Terroir-host environment names. The Botanist is the human
-// operator; these grant the same unscoped Stem bearer as EnvStemAPIKey when
-// that primary is unset. There is no legacy ADMIN_TOKEN / HOST alias — use the
-// taxonomy names only.
-const (
-	EnvBotanistKey        = "BOTANIST_KEY"
-	EnvTendrilBotanistKey = "TENDRIL_BOTANIST_KEY"
-	EnvTerroirHost        = "TERROIR_HOST"
-	EnvTendrilTerroirHost = "TENDRIL_TERROIR_HOST"
-)
+// EnvTerroirHost names the bind address for the Stem's network habitat. One
+// name only; unset means loopback (127.0.0.1).
+const EnvTerroirHost = "TERROIR_HOST"
 
-// resolveServeAPIKey returns the first non-empty Botanist/Stem bearer from the
-// environment:
-//
-//	TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY
+// resolveServeAPIKey returns the Stem bearer from EnvStemAPIKey, or "" when unset.
 func resolveServeAPIKey() string {
-	for _, name := range []string{EnvStemAPIKey, EnvBotanistKey, EnvTendrilBotanistKey} {
-		if key := strings.TrimSpace(os.Getenv(name)); key != "" {
-			return key
-		}
-	}
-	return ""
+	return strings.TrimSpace(os.Getenv(EnvStemAPIKey))
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
@@ -606,10 +587,10 @@ func readPersistedAPIKey(tendrilDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// getOrCreateAPIKey resolves the Stem's bearer key: the Botanist/Stem env chain
-// (see resolveServeAPIKey) wins, then a key already on disk, then a freshly
-// generated one persisted for next time. It never returns an empty key, so the
-// Stem cannot come up serving its API unauthenticated.
+// getOrCreateAPIKey resolves the Stem's bearer key: EnvStemAPIKey wins, then a
+// key already on disk, then a freshly generated one persisted for next time. It
+// never returns an empty key, so the Stem cannot come up serving its API
+// unauthenticated.
 func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
 	if key = resolveServeAPIKey(); key != "" {
 		return key, false, nil

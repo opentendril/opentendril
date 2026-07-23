@@ -232,11 +232,9 @@ func TestPollenForResolvesAndDeniesTokens(t *testing.T) {
 // TestAuthMiddlewareRejectsAccessToken: config routes expose no delegable
 // operation-class, so a token-shaped bearer is refused even when shaped validly.
 func TestAuthMiddlewareRejectsAccessToken(t *testing.T) {
-	// Clear any host Botanist key so we exercise the delegation-shape guard,
+	// Clear any host Stem bearer so we exercise the delegation-shape guard,
 	// not the Botanist-key comparison.
-	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY"} {
-		t.Setenv(name, "")
-	}
+	t.Setenv("TENDRIL_API_KEY", "")
 
 	signer, _, _ := mintFixture(t)
 	token, err := signer.MintAccessToken("claude", 0, core.AccessTokenScope{})

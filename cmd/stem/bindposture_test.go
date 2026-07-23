@@ -42,11 +42,10 @@ func TestIsLoopbackBindHost(t *testing.T) {
 	}
 }
 
-// TestServeListenHostDefaultsToLoopback: with no Terroir env, the bind host is
-// 127.0.0.1 so a bare start never exposes the Stem beyond the local machine.
+// TestServeListenHostDefaultsToLoopback: with TERROIR_HOST unset, the bind host
+// is 127.0.0.1 so a bare start never exposes the Stem beyond the local machine.
 func TestServeListenHostDefaultsToLoopback(t *testing.T) {
 	t.Setenv(EnvTerroirHost, "")
-	t.Setenv(EnvTendrilTerroirHost, "")
 	if got := serveListenHost(); got != "127.0.0.1" {
 		t.Fatalf("serveListenHost() = %q, want 127.0.0.1", got)
 	}
@@ -56,25 +55,16 @@ func TestServeListenHostDefaultsToLoopback(t *testing.T) {
 	}
 }
 
-// TestServeListenHostPrefersTerroirAndStripsPort: TERROIR_HOST wins over
-// TENDRIL_TERROIR_HOST, and an accidental host:port value is stripped to the host.
-func TestServeListenHostPrefersTerroirAndStripsPort(t *testing.T) {
+// TestServeListenHostStripsPort: an accidental host:port value is stripped so
+// JoinHostPort cannot double-append a port.
+func TestServeListenHostStripsPort(t *testing.T) {
 	t.Setenv(EnvTerroirHost, "127.0.0.1:8080")
-	t.Setenv(EnvTendrilTerroirHost, "")
 	if got := serveListenHost(); got != "127.0.0.1" {
 		t.Fatalf("TERROIR_HOST with port: got %q, want 127.0.0.1", got)
 	}
-
-	t.Setenv(EnvTerroirHost, "192.168.1.10")
-	t.Setenv(EnvTendrilTerroirHost, "0.0.0.0")
-	if got := serveListenHost(); got != "192.168.1.10" {
-		t.Fatalf("TERROIR_HOST should win over TENDRIL_TERROIR_HOST: got %q", got)
-	}
-
-	t.Setenv(EnvTerroirHost, "")
-	t.Setenv(EnvTendrilTerroirHost, "[::1]:9090")
+	t.Setenv(EnvTerroirHost, "[::1]:9090")
 	if got := serveListenHost(); got != "::1" {
-		t.Fatalf("TENDRIL_TERROIR_HOST bracketed+port: got %q, want ::1", got)
+		t.Fatalf("TERROIR_HOST bracketed+port: got %q, want ::1", got)
 	}
 }
 

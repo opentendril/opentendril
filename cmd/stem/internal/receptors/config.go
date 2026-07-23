@@ -15,18 +15,15 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
-// AuthMiddleware wraps a handler to require the Botanist bearer key when one is
-// configured. Bearer presence authenticates the caller; *delegated* invocations
-// (marked with PollenHeader) are additionally gated by the delegation
-// authorizer. These config routes expose no delegable operation-class, so a
-// delegated-marked request is denied outright rather than silently executed
-// as if it were non-delegated.
-//
-// Key resolution matches the Stem serve chain:
-// TENDRIL_API_KEY → BOTANIST_KEY → TENDRIL_BOTANIST_KEY.
+// AuthMiddleware wraps a handler to require the Stem bearer (TENDRIL_API_KEY)
+// when one is configured. Bearer presence authenticates the caller; *delegated*
+// invocations (marked with PollenHeader) are additionally gated by the
+// delegation authorizer. These config routes expose no delegable
+// operation-class, so a delegated-marked request is denied outright rather than
+// silently executed as if it were non-delegated.
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := botanistKeyFromEnv()
+		token := strings.TrimSpace(os.Getenv("TENDRIL_API_KEY"))
 		if token != "" {
 			authHeader := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") || strings.TrimPrefix(authHeader, "Bearer ") != token {
@@ -68,18 +65,6 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-}
-
-// botanistKeyFromEnv returns the first configured Botanist/Stem bearer. Names
-// mirror the serve resolver so config routes and data routes honour the same
-// operator secret.
-func botanistKeyFromEnv() string {
-	for _, name := range []string{"TENDRIL_API_KEY", "BOTANIST_KEY", "TENDRIL_BOTANIST_KEY"} {
-		if key := strings.TrimSpace(os.Getenv(name)); key != "" {
-			return key
-		}
-	}
-	return ""
 }
 
 // PollinatorCredentials is the set a surface resolves presented credentials
