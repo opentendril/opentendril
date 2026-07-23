@@ -45,7 +45,7 @@ OpenTendril is designed under a Zero-Trust architecture. We assume that the code
 
 ## 5. Genotype & Substrate Trust Boundaries
 
-> 📐 **Visual reference:** See [docs/ARCHITECTURE-TAXONOMY.md](docs/ARCHITECTURE-TAXONOMY.md) for diagrams of the full security trust model.
+> 📐 **Visual reference:** See [docs/ARCHITECTURE-TAXONOMY.md](../docs/ARCHITECTURE-TAXONOMY.md) for diagrams of the full security trust model.
 
 OpenTendril's host execution capability introduces a specific threat: an autonomous Sprout operating inside a workspace Terrarium could potentially modify `.tendril/substrates.yaml` to inject `provider: host`, causing its next Sequence run to execute arbitrary commands directly on the host machine — completely bypassing Docker isolation.
 
@@ -94,7 +94,7 @@ was meant to take away.
 The full, ordered procedure — rootless containers, the Stem's own user, the
 service unit, per-Pollinator credentials, and the sudo rules that decide whether
 administering the account undoes it — is in
-[docs/HOST-TENDRIL.md](docs/HOST-TENDRIL.md). Three ways out, in order of
+[docs/GUIDE-HOST-TENDRIL.md](../docs/GUIDE-HOST-TENDRIL.md). Three ways out, in order of
 preference:
 
 | Approach | What it needs | Why it holds |

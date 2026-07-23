@@ -81,7 +81,7 @@ Two properties make the answer safe on a sound installation:
   the Stem reads its own control plane. The two are different directories.
 * That control plane belongs to the Stem's own principal, so no account hosting
   a Pollinator can write it — which is exactly what
-  [INSTALL.md](./INSTALL.md) means by requiring that the Stem's working
+  [GUIDE-INSTALL.md](./GUIDE-INSTALL.md) means by requiring that the Stem's working
   directory is not a repository checkout.
 
 `tendril hardiness` measures this. It reports when substrate configuration is
@@ -104,5 +104,5 @@ default-deny. Use it where a locally authenticated command-line tool is the whol
 point, keep the substrate declaration somewhere a Sprout cannot reach, and treat
 enabling it as a decision about that specific Terroir rather than a default.
 
-Installing and hardening a Ramet is covered in [INSTALL.md](./INSTALL.md), which
+Installing and hardening a Ramet is covered in [GUIDE-INSTALL.md](./GUIDE-INSTALL.md), which
 is the source of truth for what a sound installation is.

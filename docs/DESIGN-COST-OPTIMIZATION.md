@@ -80,11 +80,11 @@ For Anthropic provider queries, Go Stem formats system and user prompts to lever
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/conductor/docker.go)
 *   Add `Tier llm.ModelTier` to `DockerOrchestrator`.
 *   Update `resolveLLMClient()` to fetch the correct client using the configured `Tier`.
 
-#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
+#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/conductor/sequence.go)
 *   Assign appropriate model tiers during step and chronicler execution.
 
 ---

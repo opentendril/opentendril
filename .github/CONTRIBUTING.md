@@ -50,7 +50,7 @@ npm install
 STEM_TARGET=http://localhost:8080 npm run dev   # http://localhost:5173
 npm run build                                   # type-check + static build to ui/dist/
 ```
-See [`ui/README.md`](./ui/README.md) for the full UI guide.
+See [`ui/README.md`](../ui/README.md) for the full UI guide.
 
 ---
 
@@ -118,7 +118,7 @@ git rebase --exec 'git commit --amend --no-edit -S' main
 
 ## 🎨 Coding and Naming Standards
 
-To prevent visual noise and scanning friction, we enforce strict language casing boundaries across the filesystem and code. Before writing code, review [GUARDRAILS.md](./GUARDRAILS.md).
+To prevent visual noise and scanning friction, we enforce strict language casing boundaries across the filesystem and code. Before writing code, review [GUARDRAILS.md](../GUARDRAILS.md).
 
 ### Crucial File Naming Rule:
 * **No underscores or hyphens in code filenames.** All Python modules and Go source files must use **merged lowercase** only (e.g., `llmrouter.py`, `mcpserver.go`).
@@ -164,7 +164,7 @@ These are ruleset rules, not conventions — they fail your push or block your m
 
 ### Changing a protected path
 
-Some files are listed in [`.github/protected-paths`](.github/protected-paths) — the kernel: the capability registry, the CI workflows, the governance documents, the guard itself. Editing them is normal; open a pull request as usual. What differs is that `CODEOWNERS` requests a maintainer's review, and the Stem refuses to merge a Sprout-authored change to them at all. See [GUARDRAILS.md](./GUARDRAILS.md) for which layers enforce and which only record.
+Some files are listed in [`.github/protected-paths`](protected-paths) — the kernel: the capability registry, the CI workflows, the governance documents, the guard itself. Editing them is normal; open a pull request as usual. What differs is that `CODEOWNERS` requests a maintainer's review, and the Stem refuses to merge a Sprout-authored change to them at all. See [GUARDRAILS.md](../GUARDRAILS.md) for which layers enforce and which only record.
 
 > [!NOTE]
-> **Setting up a Ramet is a different task from setting up a development environment.** The Quick Local Setup above gets you building and testing the code. Running OpenTendril as a governed service — its own principal, credentials no caller can read — is [docs/INSTALL.md](./docs/INSTALL.md).
+> **Setting up a Ramet is a different task from setting up a development environment.** The Quick Local Setup above gets you building and testing the code. Running OpenTendril as a governed service — its own principal, credentials no caller can read — is [docs/GUIDE-INSTALL.md](../docs/GUIDE-INSTALL.md).

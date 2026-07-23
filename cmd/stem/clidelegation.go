@@ -77,7 +77,7 @@ func newCLIDelegation(ctx context.Context) *cliDelegation {
 
 	fmt.Fprintf(os.Stderr, "🔏 Pollen %q declared via %s: %d grant(s) loaded; delegated operations are authorized and audited\n",
 		pollen, envPollenCLI, len(grants))
-	fmt.Fprintln(os.Stderr, "   (a declared Pollen is an audit control, not a security boundary — see docs/GIT-CONNECTION-SETUP.md)")
+	fmt.Fprintln(os.Stderr, "   (a declared Pollen is an audit control, not a security boundary — see docs/GUIDE-GIT-CONNECTION.md)")
 	return delegation
 }
 

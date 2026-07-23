@@ -108,7 +108,7 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 
 ### Component: Go Stem Orchestrator
 
-#### [NEW] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
+#### [NEW] [orchestrator/sequence.go](../cmd/stem/internal/conductor/sequence.go)
 *   Define `Sequence` and `SequenceStep` Go structs.
 *   Implement DAG topological traversal and concurrent task scheduler using channels and goroutines.
 *   Implement CLI prompt checking for `onFailure: pause` interaction.
@@ -118,10 +118,10 @@ While the `sproutTendril` tool is registered in my available MCP servers, runnin
 *   Support `--provider`, `--model`, and `--base-url` override flags.
 *   Support `--detach` flag for asynchronous execution.
 
-#### [NEW] [internal/api/sessions.go](../cmd/stem/internal/api/sessions.go)
+#### [NEW] [internal/api/sessions.go](../cmd/stem/internal/receptors/sessions.go)
 *   Implement `POST /v1/phytomers/{sessionId}/sequences/grow` to support detached background runs.
 
-#### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/api/mcp.go)
+#### [MODIFY] [internal/api/mcp.go](../cmd/stem/internal/receptors/mcp.go)
 *   Expose `runSequence` tool in MCP, supporting headless execution of parallel sequence files.
 
 ---

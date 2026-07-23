@@ -61,6 +61,10 @@ exact name):** `README.md`, `LICENSE`, `CHANGELOG.md`, `AGENTS.md` in root;
 `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md` in `.github/`.
 `AGENTS.md` is the single canonical agent-instruction file — do not add per-tool
 instruction docs (`CODEX.md`, `CLAUDE.md`, …); fold tool guidance into `AGENTS.md`.
+The canonical governance docs anchored at root by `.github/protected-paths`,
+`.github/CODEOWNERS`, and the taxonomy guard — `GUARDRAILS.md`,
+`ARCHITECTURE.md`, `SYNTHETIC-TAXONOMY.md`, `CAPABILITIES.md`, `GLOSSARY.md` —
+stay at repo root; they are tooling-anchored by path and must not be moved.
 
 ---
 

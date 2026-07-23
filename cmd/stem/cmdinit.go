@@ -173,7 +173,7 @@ func runInitCmd(args []string) {
 	fmt.Println()
 	fmt.Println("  ⚠️  That runs the Stem AS WHOEVER LAUNCHES IT, in their own directory.")
 	fmt.Println("      Correct for a single-user install. If you are running the Stem under")
-	fmt.Println("      its own principal, it bypasses that boundary — see docs/INSTALL.md")
+	fmt.Println("      its own principal, it bypasses that boundary — see docs/GUIDE-INSTALL.md")
 	fmt.Println("      for the surface a credential-bearing Pollinator uses instead.")
 	fmt.Println("════════════════════════════════════════")
 

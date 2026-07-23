@@ -82,12 +82,12 @@ In botany, **grafting** is the act of joining tissues from two different plants 
 #### [NEW] [llm/client.go](../roots/llm/client.go)
 *   Extract the provider resolution, specification parsing, and HTTP POST chat completions calling code from `chronicler.go`.
 
-#### [NEW] [orchestrator/sprout.go](../cmd/stem/internal/orchestrator/sprout.go)
+#### [NEW] [orchestrator/sprout.go](../cmd/stem/internal/conductor/sprout.go)
 *   Implement the Go-native ReAct loop.
 *   Binds tool definitions to the LLM.
 *   Pipes tool arguments to the active Sprout container's stdin.
 
-#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/conductor/docker.go)
 *   Update `RunTendril` to launch the Sprout container in interactive mode (`-i`).
 *   Establish persistent stdin/stdout readers.
 *   Query `listAvailableTools` on startup to bind capabilities dynamically.

@@ -83,6 +83,19 @@ jobs:
       - name: CODEOWNERS covers every protected path
         run: bash scripts/check-protected-paths.sh
 
+  doc-links:
+    name: Markdown relative links resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Documentation layout moves break inbound relative links silently.
+      # Scan every tracked .md file for [text](path) targets that do not exist;
+      # http(s), mailto, and bare anchors are skipped. No extra dependency —
+      # pure shell, matching the other hygiene guards.
+      - name: Relative markdown links resolve
+        run: bash scripts/check-doc-links.sh
+
   taxonomy:
     name: Taxonomy is used inside the organism
     runs-on: ubuntu-latest

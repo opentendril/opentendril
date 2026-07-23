@@ -105,7 +105,7 @@ The detailed filesystem naming policy and its exceptions are maintained in
 * **Internal Python Norms:** Inside Python files, use standard PEP 8 `snake_case` for variables, functions, and methods.
 * **Internal Go/JS Norms:** Inside Go, JS, and TS files, use standard `camelCase` (or `PascalCase` for public Go symbols). **No `snake_case` is permitted.**
 * **External Contracts Boundary:**
-  * JSON request/response payload keys must use **`camelCase`** (Go/TS must map internal identifiers to camelCase JSON tags, e.g. `json:"sessionId"`). This matches GUARDRAILS.md and CONTRIBUTING.md.
+  * JSON request/response payload keys must use **`camelCase`** (Go/TS must map internal identifiers to camelCase JSON tags, e.g. `json:"sessionId"`). This matches GUARDRAILS.md and .github/CONTRIBUTING.md.
   * HTTP API endpoint paths must use **kebab-case** (e.g. `/api/mcp-tools`).
   * Stored database keys and domain enums must use **kebab-case** (e.g. the EventBus event types `sprout-emerged`, `phenotypic-selection`).
 * **Filesystem separators:** No underscores are allowed in project filenames across the filesystem, with these narrow exceptions: Go test files (`*_test.go`), platform build suffixes (e.g. `*_linux.go`), and externally required canonical filenames such as GitHub's `CODE_OF_CONDUCT.md`. The canonical-name exception applies only when a platform uses the filename for automatic discovery; it does not authorize general snake_case filenames.

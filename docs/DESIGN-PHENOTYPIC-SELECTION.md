@@ -63,7 +63,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
 
 ### Component: Go Stem Orchestrator
 
-#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/orchestrator/sequence.go)
+#### [MODIFY] [orchestrator/sequence.go](../cmd/stem/internal/conductor/sequence.go)
 *   Add fields `PhenotypesCount int` and `FitnessTest string` to `SequenceStep` struct.
 *   Update `normalizeSequence` to validate that `PhenotypesCount` defaults to `1` if empty.
 *   In `defaultSequenceStepRunner`, check if `step.PhenotypesCount > 1`.
@@ -78,7 +78,7 @@ In OpenTendril, the **compiler, test suite, and linter** act as the objective en
             *   Return success.
         *   If all runs fail, return the error of the first or last failed phenotype.
 
-#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/orchestrator/docker.go)
+#### [MODIFY] [orchestrator/docker.go](../cmd/stem/internal/conductor/docker.go)
 *   Add fields `DisableMergeBack bool` and `Temperature float64` to `DockerOrchestrator`.
 *   Update `resolveLLMClient()` to set the temperature on the LLM client if `orch.Temperature > 0`.
 *   Inside `RunTendril`:

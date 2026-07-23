@@ -34,7 +34,7 @@ func NewCoordinatorClientFromEnv() *Client {
 }
 ```
 
-In [docker.go](../cmd/stem/internal/orchestrator/docker.go), the `DockerOrchestrator` struct is updated to track whether the active run is a coordinator-level process:
+In [docker.go](../cmd/stem/internal/conductor/docker.go), the `DockerOrchestrator` struct is updated to track whether the active run is a coordinator-level process:
 ```go
 type DockerOrchestrator struct {
 	...
@@ -58,7 +58,7 @@ Dynamic sequences replace static YAML files with planning steps designed at exec
 4.  The sequence runner parses this array on the host side and appends the steps directly to the active sequence.
 
 ### Code Changes
-In [sequence.go](../cmd/stem/internal/orchestrator/sequence.go), when a step completes successfully, we check if it generated dynamic steps:
+In [sequence.go](../cmd/stem/internal/conductor/sequence.go), when a step completes successfully, we check if it generated dynamic steps:
 ```go
 if isMeristemStep(result.stepID) {
 	newSteps, err := parseDynamicSteps(result.output)

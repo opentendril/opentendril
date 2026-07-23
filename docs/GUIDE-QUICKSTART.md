@@ -5,7 +5,7 @@ live, and the four ways to talk to it.
 
 > [!IMPORTANT]
 > **Installation is not here.** It lives in
-> **[docs/INSTALL.md](docs/INSTALL.md)**, which is the source of truth for what a
+> **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)**, which is the source of truth for what a
 > sound installation is — the properties that decide whether the delegation
 > boundary is enforced by the operating system or merely recorded, and the
 > configurations that satisfy them.
@@ -63,7 +63,7 @@ Restart your IDE or Claude Desktop. The OpenTendril tools (`sproutTendril`, `cre
 > control plane from that caller's working directory. It does not connect to a
 > Stem running as another user. If you installed the Stem under its own
 > principal, this bypasses that boundary — see
-> [docs/INSTALL.md](docs/INSTALL.md) for the surface a credential-bearing
+> [docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md) for the surface a credential-bearing
 > Pollinator uses instead.
 
 ---

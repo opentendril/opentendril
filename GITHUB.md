@@ -71,7 +71,7 @@ export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
 [ -f .env ] && dotenv .env
 ```
 
-Use a **fine-grained PAT** strictly scoped to your repositories with Read/Write on Contents, Pull Requests, and Issues (see QUICKSTART.md Step 0). `.envrc` and `.env` are both gitignored — never commit tokens.
+Use a **fine-grained PAT** strictly scoped to your repositories with Read/Write on Contents, Pull Requests, and Issues (see docs/GUIDE-QUICKSTART.md Step 0). `.envrc` and `.env` are both gitignored — never commit tokens.
 
 ---
 

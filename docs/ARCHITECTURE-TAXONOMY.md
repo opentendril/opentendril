@@ -1,6 +1,6 @@
 # OpenTendril Architecture Taxonomy
 
-> **See also:** [SYNTHETIC-TAXONOMY.md](../SYNTHETIC-TAXONOMY.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [SECURITY.md](../SECURITY.md)
+> **See also:** [SYNTHETIC-TAXONOMY.md](../SYNTHETIC-TAXONOMY.md) · [ARCHITECTURE.md](../ARCHITECTURE.md) · [SECURITY.md](../.github/SECURITY.md)
 
 This document provides visual architecture diagrams for OpenTendril, mapping the biological taxonomy to actual system components, security boundaries, and execution flows.
 
