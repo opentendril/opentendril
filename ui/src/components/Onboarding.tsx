@@ -45,7 +45,7 @@ export function Onboarding() {
       if (err instanceof StemApiError && err.status === 401) {
         setStatus({
           kind: "err",
-          text: "The Stem rejected that key. Paste the OPENTENDRIL_API_KEY value your administrator gave you.",
+          text: "The Stem rejected that key. Paste the BOTANIST_KEY value your administrator gave you.",
         });
         return;
       }
@@ -108,13 +108,13 @@ export function Onboarding() {
         </div>
 
         <div className="field">
-          <label htmlFor="ob-key">Operator API key</label>
+          <label htmlFor="ob-key">Botanist key</label>
           <input
             id="ob-key"
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="OPENTENDRIL_API_KEY"
+            placeholder="BOTANIST_KEY"
             spellCheck={false}
             autoComplete="off"
           />

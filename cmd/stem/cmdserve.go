@@ -98,7 +98,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	if generatedKey {
 		log.Printf("🔑 Generated API key (saved to %s)", apiKeyFilePath(tendrilDir))
-		log.Printf("   Set %s to use your own instead.", EnvStemAPIKey)
+		log.Printf("   Set %s to use your own instead.", EnvBotanistKey)
 	}
 
 	bus := eventbus.New()
@@ -557,19 +557,19 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	}
 }
 
-// EnvStemAPIKey names the Stem's own bearer key (the Botanist secret). It must
-// stay distinct from any inference provider's key: a provider key may be shared
-// and is passed into every Terrarium; a bearer key grants unscoped access and
-// must never enter one. One name only — no alternate env aliases.
-const EnvStemAPIKey = "TENDRIL_API_KEY"
+// EnvBotanistKey is the single authoritative Stem bearer secret — the Botanist's
+// own key. It must stay distinct from any inference provider's key: a provider
+// key may be shared and is passed into every Terrarium; this key grants unscoped
+// access and must never enter one. One name only — no alternate env aliases.
+const EnvBotanistKey = "BOTANIST_KEY"
 
 // EnvTerroirHost names the bind address for the Stem's network habitat. One
 // name only; unset means loopback (127.0.0.1).
 const EnvTerroirHost = "TERROIR_HOST"
 
-// resolveServeAPIKey returns the Stem bearer from EnvStemAPIKey, or "" when unset.
+// resolveServeAPIKey returns the Stem bearer from EnvBotanistKey, or "" when unset.
 func resolveServeAPIKey() string {
-	return strings.TrimSpace(os.Getenv(EnvStemAPIKey))
+	return strings.TrimSpace(os.Getenv(EnvBotanistKey))
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
@@ -587,7 +587,7 @@ func readPersistedAPIKey(tendrilDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// getOrCreateAPIKey resolves the Stem's bearer key: EnvStemAPIKey wins, then a
+// getOrCreateAPIKey resolves the Stem's bearer key: EnvBotanistKey wins, then a
 // key already on disk, then a freshly generated one persisted for next time. It
 // never returns an empty key, so the Stem cannot come up serving its API
 // unauthenticated.

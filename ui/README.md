@@ -101,7 +101,7 @@ only; `ui/Dockerfile`'s production stage copies just `dist/`, never
 ### Onboarding (no `.env`)
 
 On first load a welcome screen asks a non-technical operator for the Stem
-address and the operator API key (`TENDRIL_API_KEY`). The key is validated
+address and the Botanist bearer key (`BOTANIST_KEY`). The key is validated
 live — `/health` confirms the Stem is reachable, `/v1/phytomers` confirms the
 key is accepted — then persisted to `localStorage`. No `.env` editing, and the
 key never leaves the browser. "Uproot" (top-right) clears it and returns to

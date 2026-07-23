@@ -142,7 +142,7 @@ func sproutCLISession(base *url.URL) (string, error) {
 // persists it to the same "./.tendril/api-key" file this reads, so this client
 // never assumes a keyless server.
 func chatAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
 		return key
 	}
 	if key := readPersistedAPIKey("./.tendril"); key != "" {

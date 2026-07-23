@@ -212,7 +212,7 @@ func TestGetOrCreateAPIKeyPersistsAndReuses(t *testing.T) {
 }
 
 func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
-	t.Setenv(EnvStemAPIKey, "env-key")
+	t.Setenv(EnvBotanistKey, "env-key")
 	dir := t.TempDir()
 
 	key, generated, err := getOrCreateAPIKey(filepath.Join(dir, ".tendril"))
@@ -220,7 +220,7 @@ func TestGetOrCreateAPIKeyPrefersEnv(t *testing.T) {
 		t.Fatalf("getOrCreateAPIKey: %v", err)
 	}
 	if generated {
-		t.Fatalf("should not generate a key when %s is set", EnvStemAPIKey)
+		t.Fatalf("should not generate a key when %s is set", EnvBotanistKey)
 	}
 	if key != "env-key" {
 		t.Fatalf("key = %q, want env-key", key)
@@ -284,7 +284,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 // access.
 func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
-	os.Unsetenv(EnvStemAPIKey)
+	os.Unsetenv(EnvBotanistKey)
 
 	if key := resolveServeAPIKey(); key != "" {
 		t.Fatalf("resolveServeAPIKey returned %q from a variable that is not the bearer key", key)
@@ -292,18 +292,18 @@ func TestOtherProviderKeysAreNotTheStemBearerKey(t *testing.T) {
 }
 
 func TestStemBearerKeyComesFromItsOwnVariable(t *testing.T) {
-	t.Setenv(EnvStemAPIKey, "a-real-bearer-key")
+	t.Setenv(EnvBotanistKey, "a-real-bearer-key")
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
 
 	if key := resolveServeAPIKey(); key != "a-real-bearer-key" {
-		t.Fatalf("resolveServeAPIKey = %q, want the value of %s", key, EnvStemAPIKey)
+		t.Fatalf("resolveServeAPIKey = %q, want the value of %s", key, EnvBotanistKey)
 	}
 }
 
 // The end of the chain: the trial constant must not authenticate.
 func TestProviderValueDoesNotAuthenticate(t *testing.T) {
 	t.Setenv("SOME_PROVIDER_API_KEY", "a-shared-provider-value")
-	os.Unsetenv(EnvStemAPIKey)
+	os.Unsetenv(EnvBotanistKey)
 
 	dir := t.TempDir()
 	apiKey, _, err := getOrCreateAPIKey(filepath.Join(dir, ".tendril"))

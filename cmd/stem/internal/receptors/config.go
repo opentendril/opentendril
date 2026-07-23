@@ -15,7 +15,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
-// AuthMiddleware wraps a handler to require the Stem bearer (TENDRIL_API_KEY)
+// AuthMiddleware wraps a handler to require the Botanist bearer (BOTANIST_KEY)
 // when one is configured. Bearer presence authenticates the caller; *delegated*
 // invocations (marked with PollenHeader) are additionally gated by the
 // delegation authorizer. These config routes expose no delegable
@@ -23,7 +23,7 @@ import (
 // silently executed as if it were non-delegated.
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimSpace(os.Getenv("TENDRIL_API_KEY"))
+		token := strings.TrimSpace(os.Getenv("BOTANIST_KEY"))
 		if token != "" {
 			authHeader := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") || strings.TrimPrefix(authHeader, "Bearer ") != token {
