@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
@@ -91,13 +92,35 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 	return core.NewService(manager).WithSeed(seedOperations()), nil
 }
 
-// seedOperations binds the Seed-growth execution port — the sprout builder loop
-// plus the sealed-Terrarium verify run. Run is nil until that executor is
-// provided, so the Core reports seed.grow is not wired. This wiring lives in the
-// adapter layer precisely so the Core never imports the conductor (see
-// internal/core/boundary_test.go).
+// seedOperations binds the Seed-growth execution port to the conductor's
+// bounded-task executor — the Sprout builder loop plus the sealed-Terrarium
+// verify run. This wiring lives in the adapter layer precisely so the Core never
+// imports the conductor (see internal/core/boundary_test.go); it translates the
+// Core's transport-free spec into the conductor's execution request and the
+// reviewable Fruit back.
 func seedOperations() core.SeedOperations {
-	return core.SeedOperations{Run: nil}
+	return core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			result, err := conductor.RunSeed(ctx, conductor.SeedExecution{
+				Substrate:     spec.Substrate,
+				Goal:          spec.Goal,
+				Verify:        spec.Verify,
+				MaxIterations: spec.MaxIterations,
+				Timeout:       spec.Timeout,
+				Egress:        spec.Egress,
+			})
+			if err != nil {
+				return core.SeedGrowResult{}, err
+			}
+			return core.SeedGrowResult{
+				Status:     result.Status,
+				Iterations: result.Iterations,
+				Branch:     result.Branch,
+				Diff:       result.Diff,
+				Logs:       result.Logs,
+			}, nil
+		},
+	}
 }
 
 // seedCommand is one subcommand actually registered on the `tendril seed`
