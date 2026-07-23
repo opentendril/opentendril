@@ -83,7 +83,7 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 	}
 
 	reached := false
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, nil, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, nil, false, func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})
