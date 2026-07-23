@@ -17,7 +17,7 @@ Three zones, in decreasing authority.
 
 Runs on the host machine. Holds the operator's LLM provider keys, the Botanist
 bearer key (`BOTANIST_KEY`, or the auto-generated `.tendril/api-key`), the mesh
-`Ed25519` signing key (see `docs/DESIGN-STEM-GRAFTING.md`), and `history.db`. It
+`Ed25519` signing key (see `docs/DESIGN-MESH.md`), and `history.db`. It
 is the only zone that can mint mesh grafting tokens, grow Terrariums, or make LLM
 provider calls. Every other zone reaches capability only by asking the Stem.
 
@@ -134,5 +134,5 @@ same gate.
   flags and their regression tests.
 - `cmd/stem/parity_test.go` — CLI/REST/MCP capability parity enforcement.
 - `docs/GREENHOUSE.md` — Tendril OS deployment and auth contract.
-- `docs/DESIGN-STEM-GRAFTING.md` — mesh token model; the one place delegated,
+- `docs/DESIGN-MESH.md` — mesh token model; the one place delegated,
   short-lived tokens already exist today.
