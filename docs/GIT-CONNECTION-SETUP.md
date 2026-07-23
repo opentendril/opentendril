@@ -274,25 +274,54 @@ tendril pollinator revoke --pollen claude
 ```
 
 The secret prints **once** and is never stored — only its digest is kept, so a
-leaked store cannot be replayed. Give it to that Pollinator, which presents it as
-its bearer token:
+leaked store cannot be replayed. That secret is the **durable refresh root**.
+
+### Minting an access token
+
+Surfaces accept a **short-lived access token** (≤15 minutes) per request. Mint
+one from a held root:
+
+**Local (filesystem-trusted Botanist CLI):**
 
 ```bash
-curl -X POST localhost:8080/v1/git/status \
-  -H "Authorization: Bearer tendril_..." -d '{"substrate":"myrepo"}'
+tendril pollinator token --pollen claude
+tendril pollinator token --pollen claude --ttl 5m   # shorter; over 15m is refused
 ```
 
-The Stem **derives** the Pollen from the credential. The `X-OpenTendril-Pollen`
-header is ignored entirely for such callers, so holding a credential cannot be
-used to act as somebody else. An unknown or revoked credential is refused
-outright and never falls back to being treated as an ordinary request.
+**Remote client** (presents the durable root only at mint):
 
-A grant is still required. A credential says *who you are*; the grant says *what
-that identity may do*.
+```bash
+curl -s -X POST http://127.0.0.1:8080/v1/pollinator/token \
+  -H "Authorization: Bearer tendril_..." \
+  -H "Content-Type: application/json" \
+  -d '{}'
+# → { "token": "tendrilat_...", "pollen": "claude", "expiresAt": "..." }
+```
+
+Then call data routes with the access token:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/git/status \
+  -H "Authorization: Bearer tendrilat_..." -d '{"substrate":"myrepo"}'
+```
+
+On **loopback** binds, presenting the durable root on a data route still works
+for local convenience. On an **off-host** bind (`TERROIR_HOST=0.0.0.0`, …), data
+routes refuse the root — mint a token first. The mint endpoint always accepts
+the root. MCP stays personal-stdio; scoped tokens are a REST surface.
+
+The Stem **derives** the Pollen from a verified credential or token. The
+`X-OpenTendril-Pollen` header is ignored entirely for such callers, so holding a
+secret cannot be used to act as somebody else. An unknown, revoked, expired, or
+forged bearer is refused outright and never falls back to a declared identity.
+
+A grant is still required. A credential or token says *who you are*; the grant
+says *what that identity may do*.
 
 | How the Pollen is established | What it is |
 |---|---|
-| Issued credential (`tendril_...`) | **proven** — the caller cannot influence it |
+| Issued credential (`tendril_...`) | **proven** refresh root — mint only (or data routes on loopback) |
+| Access token (`tendrilat_...`) | **proven** short-lived — signature-verified per request |
 | `X-OpenTendril-Pollen` header, or `TENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
 
 ## Is the boundary actually real here?

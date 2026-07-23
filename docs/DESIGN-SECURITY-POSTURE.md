@@ -92,20 +92,41 @@ delegation grant's `egress` allow-list onto the existing isolation seams:
 This keeps the sealed-Sprout invariant intact for the new operation-class: a
 worker "cannot reach out on its own; external calls are Stem-mediated."
 
-## Credential model — current state and direction
+## Credential model — two-tier Pollinator access
 
-The Tendril OS today holds the **same long-lived Botanist bearer** the CLI uses
-(`BOTANIST_KEY`, or the generated `.tendril/api-key`). This does not grant
-the OS any capability a CLI user lacks (per the parity test above), so it does not
-widen the *capability* surface. It does mean a leaked browser key is as durable as
-a leaked CLI key — no expiry, no per-session revocation.
+Pollinator REST access is **two-tier**:
 
-The intended direction is **short-lived, OS-scoped tokens** distinct from the
-master key, minted at onboarding. Doing this well requires an identity/issuance
-story, which is the natural responsibility of an enterprise identity/secrets
-provider. The mesh already demonstrates the pattern in a narrower form: delegated,
-short-lived signing tokens (`docs/DESIGN-STEM-GRAFTING.md`). Until an OS-scoped
-token issuer exists, the bearer-key model is the deliberate, documented interim.
+1. **Durable refresh root** — a Pollinator credential (`tendril_…`) issued by
+   `tendril pollinator issue`. Digest-stored, revocable by Pollen, no inherent
+   lifetime. Presented **only to mint** (CLI `tendril pollinator token`, or
+   `POST /v1/pollinator/token`).
+2. **Short-lived access token** — a Stem-signed bearer (`tendrilat_…`) carrying
+   a Pollen and an expiry, hard-capped at **≤15 minutes**. Surfaces accept it
+   per request. Verification is **stateless** (signature against the Stem public
+   key); there is no per-token store or denylist.
+
+**Revocation is at the root:** revoke the credential → minting stops → outstanding
+tokens age out within the cap. Tokens are not individually revocable.
+
+**Botanist key** (`BOTANIST_KEY`, or the generated `.tendril/api-key`) remains the
+Stem's own unscoped bearer for operator/CLI/Command Center use. It is not a
+Pollinator credential and is not exchanged for access tokens.
+
+### Bind posture (self-declaring exposure)
+
+| Bind | Env | Data routes |
+| --- | --- | --- |
+| **Loopback (default)** | `TERROIR_HOST` unset → `127.0.0.1` | Durable root credentials still accepted (local personal setups unchanged). |
+| **Off-host** | e.g. `TERROIR_HOST=0.0.0.0` | Durable roots **refused** on data routes (401 → mint); access tokens and `BOTANIST_KEY` unchanged. Mint endpoint still accepts the root. |
+
+Exposure is self-declaring: there is no separate “require tokens” flag. Narrowing
+the bind is the only opt-out of the hardened posture.
+
+### MCP
+
+MCP stays **personal-stdio** (`tendril serve mcp stdio` + `TENDRIL_POLLEN`). Scoped
+access tokens are a **REST** surface; networked MCP is a deferred consumer of the
+same gate.
 
 ## References
 
