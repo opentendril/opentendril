@@ -14,7 +14,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
-// Passthrough execution: one bounded command inside a network-sealed Terrarium,
+// Stoma execution: one bounded command inside a network-sealed Terrarium,
 // with external reach mediated by the Stem under a grant's egress allow-list.
 //
 // Two properties, both load-bearing:
@@ -28,50 +28,50 @@ import (
 //     on the EgressPolicy; an empty policy denies every fetch. Payloads are
 //     delivered read-only under /tmp/egress and the command executes offline.
 
-// passthroughEgressDirectory is where Stem-mediated fetch payloads land
+// stomaEgressDirectory is where Stem-mediated fetch payloads land
 // inside the Terrarium. It lives under /tmp so delivery never touches the
 // mounted workspace: mediated egress produces container-local inputs, not
 // host files.
-const passthroughEgressDirectory = "/tmp/egress"
+const stomaEgressDirectory = "/tmp/egress"
 
-// passthroughFetchResponseLimit caps one mediated fetch payload (32 MiB) so a
+// stomaFetchResponseLimit caps one mediated fetch payload (32 MiB) so a
 // delegated execution cannot turn the Stem into an unbounded downloader.
-const passthroughFetchResponseLimit = 32 << 20
+const stomaFetchResponseLimit = 32 << 20
 
-// passthroughFetchTimeout bounds one Stem-mediated fetch.
-const passthroughFetchTimeout = 30 * time.Second
+// stomaFetchTimeout bounds one Stem-mediated fetch.
+const stomaFetchTimeout = 30 * time.Second
 
-// passthroughHTTPClient performs Stem-mediated fetches; a package variable so
+// stomaHTTPClient performs Stem-mediated fetches; a package variable so
 // tests can observe or replace transport behavior.
-var passthroughHTTPClient = &http.Client{Timeout: passthroughFetchTimeout}
+var stomaHTTPClient = &http.Client{Timeout: stomaFetchTimeout}
 
-// PassthroughFetch is one Stem-mediated egress retrieval.
-type PassthroughFetch struct {
+// StomaFetch is one Stem-mediated egress retrieval.
+type StomaFetch struct {
 	// URL is the http(s) resource to retrieve.
 	URL string
 	// Path is the destination relative to the Terrarium egress directory.
 	Path string
 }
 
-// PassthroughExecution is a fully resolved passthrough request: a workspace
+// StomaExecution is a fully resolved stoma request: a workspace
 // on disk, one command, and the (possibly empty) egress allow-list from the
 // authorizing delegation grant.
-type PassthroughExecution struct {
+type StomaExecution struct {
 	// Workspace is the resolved local workspace directory mounted at /app.
 	Workspace string
 	// Command is the argv vector executed inside the Terrarium.
 	Command []string
 	// Fetches are the Stem-mediated retrievals delivered before the command
 	// runs; each is gated by Egress.
-	Fetches []PassthroughFetch
+	Fetches []StomaFetch
 	// Egress is the delegation grant's host allow-list; empty means deny-all.
 	Egress []string
 	// Timeout bounds the command's execution.
 	Timeout time.Duration
 }
 
-// PassthroughResult reports the executed command's outcome.
-type PassthroughResult struct {
+// StomaResult reports the executed command's outcome.
+type StomaResult struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
@@ -129,11 +129,11 @@ func (p EgressPolicy) Authorize(rawURL string) error {
 }
 
 // fetchEgressPayloads performs the Stem-mediated retrievals for one
-// passthrough execution: every URL is authorized against the policy, fetched
+// stoma execution: every URL is authorized against the policy, fetched
 // on the Stem with size and time bounds, and returned as read-only file
 // payloads addressed under the Terrarium egress directory. Any denial or
 // failure aborts the whole execution before a container exists.
-func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []PassthroughFetch) ([]terrarium.FilePayload, error) {
+func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []StomaFetch) ([]terrarium.FilePayload, error) {
 	if len(fetches) == 0 {
 		return nil, nil
 	}
@@ -146,7 +146,7 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Pas
 		if err := policy.Authorize(fetch.URL); err != nil {
 			return nil, err
 		}
-		destination, err := passthroughEgressPath(fetch.Path)
+		destination, err := stomaEgressPath(fetch.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -155,11 +155,11 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Pas
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: %w", fetch.URL, err)
 		}
-		response, err := passthroughHTTPClient.Do(request)
+		response, err := stomaHTTPClient.Do(request)
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: %w", fetch.URL, err)
 		}
-		content, err := io.ReadAll(io.LimitReader(response.Body, passthroughFetchResponseLimit+1))
+		content, err := io.ReadAll(io.LimitReader(response.Body, stomaFetchResponseLimit+1))
 		_ = response.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: read response: %w", fetch.URL, err)
@@ -167,8 +167,8 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Pas
 		if response.StatusCode < 200 || response.StatusCode > 299 {
 			return nil, fmt.Errorf("mediated fetch %q: status %d", fetch.URL, response.StatusCode)
 		}
-		if len(content) > passthroughFetchResponseLimit {
-			return nil, fmt.Errorf("mediated fetch %q: response exceeds the %d-byte bound", fetch.URL, passthroughFetchResponseLimit)
+		if len(content) > stomaFetchResponseLimit {
+			return nil, fmt.Errorf("mediated fetch %q: response exceeds the %d-byte bound", fetch.URL, stomaFetchResponseLimit)
 		}
 
 		payloads = append(payloads, terrarium.FilePayload{
@@ -180,42 +180,42 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Pas
 	return payloads, nil
 }
 
-// passthroughEgressPath validates one fetch destination and anchors it under
+// stomaEgressPath validates one fetch destination and anchors it under
 // the Terrarium egress directory. Destinations must be relative and must not
 // traverse upward — a fetch can never address the workspace mount or any
 // other container path.
-func passthroughEgressPath(relative string) (string, error) {
+func stomaEgressPath(relative string) (string, error) {
 	trimmed := strings.TrimSpace(relative)
 	if trimmed == "" {
 		return "", fmt.Errorf("mediated fetch destination path is required")
 	}
 	if pathpkg.IsAbs(trimmed) {
-		return "", fmt.Errorf("mediated fetch destination %q must be relative (it is anchored under %s)", relative, passthroughEgressDirectory)
+		return "", fmt.Errorf("mediated fetch destination %q must be relative (it is anchored under %s)", relative, stomaEgressDirectory)
 	}
 	clean := pathpkg.Clean(trimmed)
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return "", fmt.Errorf("mediated fetch destination %q escapes the egress directory", relative)
 	}
-	return pathpkg.Join(passthroughEgressDirectory, clean), nil
+	return pathpkg.Join(stomaEgressDirectory, clean), nil
 }
 
-// runPassthroughCommandFn is the Terrarium seam, injectable for tests that
+// runStomaCommandFn is the Terrarium seam, injectable for tests that
 // exercise the mediation path without a container runtime.
-var runPassthroughCommandFn = runPassthroughCommand
+var runStomaCommandFn = runStomaCommand
 
-// RunPassthrough executes one bounded command inside a sealed Terrarium.
+// RunStoma executes one bounded command inside a sealed Terrarium.
 // Mediation order is deliberate: egress is authorized and fetched first, so a
 // denied execution aborts before any container (or any other side effect)
 // exists.
-func RunPassthrough(ctx context.Context, execution PassthroughExecution) (PassthroughResult, error) {
+func RunStoma(ctx context.Context, execution StomaExecution) (StomaResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(execution.Workspace) == "" {
-		return PassthroughResult{}, fmt.Errorf("passthrough workspace is required")
+		return StomaResult{}, fmt.Errorf("stoma workspace is required")
 	}
 	if len(execution.Command) == 0 {
-		return PassthroughResult{}, fmt.Errorf("passthrough command is required")
+		return StomaResult{}, fmt.Errorf("stoma command is required")
 	}
 	timeout := execution.Timeout
 	if timeout <= 0 {
@@ -224,26 +224,26 @@ func RunPassthrough(ctx context.Context, execution PassthroughExecution) (Passth
 
 	payloads, err := fetchEgressPayloads(ctx, NewEgressPolicy(execution.Egress), execution.Fetches)
 	if err != nil {
-		return PassthroughResult{}, err
+		return StomaResult{}, err
 	}
 
-	return runPassthroughCommandFn(ctx, execution, payloads, timeout)
+	return runStomaCommandFn(ctx, execution, payloads, timeout)
 }
 
-// runPassthroughCommand owns the Terrarium lifecycle for one passthrough
+// runStomaCommand owns the Terrarium lifecycle for one stoma
 // execution. It mirrors the deterministic verifier runner: the same
 // toolchain-bearing image and the same sealed-container spec — differing only
-// in mounting the workspace read-write (a passthrough exists to replace
+// in mounting the workspace read-write (a stoma exists to replace
 // host-side formatters/test runs, so its workspace edits are the point) and
 // in delivering the mediated egress payloads before the command runs.
-func runPassthroughCommand(ctx context.Context, execution PassthroughExecution, payloads []terrarium.FilePayload, timeout time.Duration) (PassthroughResult, error) {
+func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []terrarium.FilePayload, timeout time.Duration) (StomaResult, error) {
 	if err := ensureSproutImageFn(ctx, verifierImage); err != nil {
-		return PassthroughResult{}, fmt.Errorf("build passthrough image: %w", err)
+		return StomaResult{}, fmt.Errorf("build stoma image: %w", err)
 	}
 
 	provider, err := terrarium.NewProvider(ctx, resolveTerrariumProviderName(nil))
 	if err != nil {
-		return PassthroughResult{}, fmt.Errorf("resolve terrarium provider for passthrough: %w", err)
+		return StomaResult{}, fmt.Errorf("resolve terrarium provider for stoma: %w", err)
 	}
 
 	spec := terrarium.TerrariumSpec{
@@ -256,7 +256,7 @@ func runPassthroughCommand(ctx context.Context, execution PassthroughExecution, 
 		Timeout:       timeout + time.Minute,
 		// Run as the host uid:gid so files the command writes into the
 		// read-write workspace bind mount are owned by the Stem's user, not
-		// root. A passthrough exists to replace host-side formatters/test runs,
+		// root. A stoma exists to replace host-side formatters/test runs,
 		// so its edits land back in the operator's checkout; a root-owned tree
 		// would need sudo to clean up. The container user then also matches the
 		// bind mount owner.
@@ -274,7 +274,7 @@ func runPassthroughCommand(ctx context.Context, execution PassthroughExecution, 
 
 	instance, err := provider.Create(ctx, spec)
 	if err != nil {
-		return PassthroughResult{}, fmt.Errorf("start passthrough terrarium: %w", err)
+		return StomaResult{}, fmt.Errorf("start stoma terrarium: %w", err)
 	}
 	defer func() { _ = instance.Stop(context.Background()) }()
 
@@ -296,10 +296,10 @@ func runPassthroughCommand(ctx context.Context, execution PassthroughExecution, 
 		Timeout: timeout,
 	})
 	if runErr != nil {
-		return PassthroughResult{}, fmt.Errorf("run passthrough command %q: %w", strings.Join(execution.Command, " "), runErr)
+		return StomaResult{}, fmt.Errorf("run stoma command %q: %w", strings.Join(execution.Command, " "), runErr)
 	}
 
-	return PassthroughResult{
+	return StomaResult{
 		ExitCode: result.ExitCode,
 		Stdout:   result.Stdout,
 		Stderr:   result.Stderr,

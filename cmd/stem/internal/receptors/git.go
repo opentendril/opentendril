@@ -11,7 +11,7 @@ import (
 )
 
 // GitHandler is the REST adapter for the governed git capability family.
-// Exactly like PassthroughHandler, it translates HTTP to and from the
+// Exactly like StomaHandler, it translates HTTP to and from the
 // transport-free core.Core and holds no business logic.
 //
 // POST /v1/git/commit commits the current state of a substrate's workspace
@@ -45,7 +45,7 @@ func (h *GitHandler) WithDelegation(gate *DelegationGate) *GitHandler {
 }
 
 // governedRoutes is the single table of git-capability routes this adapter
-// wires (same contract as PassthroughHandler.governedRoutes).
+// wires (same contract as StomaHandler.governedRoutes).
 func (h *GitHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},

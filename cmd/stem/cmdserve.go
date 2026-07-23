@@ -228,7 +228,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithMesh(meshOperations()).
 		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOperations(history, bus)).
-		WithPassthrough(passthroughOperations()).
+		WithStoma(stomaOperations()).
 		WithSeed(seedOperations()).
 		WithGit(gitOperations())
 
@@ -283,23 +283,23 @@ func runServeCmd(ctx context.Context, args []string) {
 		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
 	})
 
-	// Passthrough REST API (adapter): one bounded command in a
+	// Stoma REST API (adapter): one bounded command in a
 	// network-sealed terrarium, the minimal delegable operation-class. Like
 	// the sprout routes it consults the delegation gate per-invocation (the
 	// matching grant supplies the egress allow-list), so it takes the bare
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
-	passthroughHandler := receptors.NewPassthroughHandler(coreSvc).WithDelegation(delegationGate)
-	passthroughHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+	stomaHandler := receptors.NewStomaHandler(coreSvc).WithDelegation(delegationGate)
+	stomaHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
 		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, next)
 	})
 
 	// Git REST API (adapter): commit a substrate's workspace under its
 	// configured commit identity, the lowest rung of the delegated-execution
-	// ladder. Like the passthrough route it consults the delegation gate
+	// ladder. Like the stoma route it consults the delegation gate
 	// per-invocation, so it takes the bare bearer auth rather than
 	// guardedAuth's blanket delegated-request denial.
 	// Seed REST API (adapter): grow a Seed (a bounded intent) to Fruit. Like the
-	// passthrough route it consults the delegation gate per-invocation (the
+	// stoma route it consults the delegation gate per-invocation (the
 	// matching grant supplies the egress allow-list), so it takes the bare
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	seedHandler := receptors.NewSeedHandler(coreSvc).WithDelegation(delegationGate)

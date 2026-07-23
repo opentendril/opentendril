@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// The passthrough/run capability family: one bounded command (an argv vector,
+// The stoma/pass capability family: one bounded command (an argv vector,
 // never a shell string) inside the same network-sealed Terrarium every Sprout
 // gets. Terrarium orchestration lives in the conductor, which the Core is
 // structurally forbidden from importing, so execution is injected as a
-// transport-free port via WithPassthrough.
+// transport-free port via WithStoma.
 //
 // Egress model:
 //
@@ -25,7 +25,7 @@ import (
 //     Stem from an authorized grant and never decoded from caller input. A caller
 //     structurally cannot widen its own egress.
 
-type PassthroughFetchInput struct {
+type StomaFetchInput struct {
 	// URL is the http(s) resource to retrieve.
 	URL string `json:"url"`
 	// Path is the relative destination the command reads the payload from,
@@ -33,9 +33,9 @@ type PassthroughFetchInput struct {
 	Path string `json:"path"`
 }
 
-// PassthroughRunInput asks the Stem to run one bounded command inside a
+// StomaPassInput asks the Stem to run one bounded command inside a
 // sealed Terrarium.
-type PassthroughRunInput struct {
+type StomaPassInput struct {
 	// Substrate is the absolute path or named substrate key of the target
 	// workspace.
 	Substrate string `json:"substrate"`
@@ -46,7 +46,7 @@ type PassthroughRunInput struct {
 	// the Terrarium before the command runs. Every URL is checked against the
 	// delegation grant's egress allow-list; with no grant the list is empty
 	// and every fetch is denied.
-	Fetch []PassthroughFetchInput `json:"fetch,omitempty"`
+	Fetch []StomaFetchInput `json:"fetch,omitempty"`
 	// TimeoutSeconds bounds the command's execution; the default applies when
 	// zero.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
@@ -59,12 +59,12 @@ type PassthroughRunInput struct {
 	Egress []string `json:"-"`
 }
 
-// PassthroughSpec is the fully resolved, transport-free execution request
-// handed to the PassthroughOperations port.
-type PassthroughSpec struct {
+// StomaSpec is the fully resolved, transport-free execution request
+// handed to the StomaOperations port.
+type StomaSpec struct {
 	Substrate string
 	Command   []string
-	Fetch     []PassthroughFetchInput
+	Fetch     []StomaFetchInput
 	Timeout   time.Duration
 	Origin    string
 	// Egress is the grant-supplied allow-list bounding Stem-mediated fetches;
@@ -72,8 +72,8 @@ type PassthroughSpec struct {
 	Egress []string
 }
 
-// PassthroughRunResult is the outcome of a finished passthrough run.
-type PassthroughRunResult struct {
+// StomaPassResult is the outcome of a finished stoma pass.
+type StomaPassResult struct {
 	// Status is "completed" when the command ran to an exit code, or
 	// "timed-out" when the execution bound elapsed first.
 	Status string `json:"status"`
@@ -86,77 +86,77 @@ type PassthroughRunResult struct {
 	DurationMS int64 `json:"durationMs"`
 }
 
-// passthroughDefaultTimeout bounds a passthrough command when the caller does
-// not; passthroughMaximumTimeout caps what a caller may request — a
-// passthrough is a bounded command, not a long-lived process.
+// stomaDefaultTimeout bounds a stoma command when the caller does
+// not; stomaMaximumTimeout caps what a caller may request — a
+// stoma is a bounded command, not a long-lived process.
 const (
-	passthroughDefaultTimeout = 5 * time.Minute
-	passthroughMaximumTimeout = 30 * time.Minute
+	stomaDefaultTimeout = 5 * time.Minute
+	stomaMaximumTimeout = 30 * time.Minute
 )
 
-// PassthroughOperations is the injection port for passthrough execution. Run may be
+// StomaOperations is the injection port for stoma execution. Run may be
 // nil, in which case the capability reports that it is not wired rather than
 // acting.
-type PassthroughOperations struct {
+type StomaOperations struct {
 	// Run executes the spec inside a sealed Terrarium and returns the
 	// command's outcome. Implementations own substrate resolution, egress
 	// mediation, and the Terrarium lifecycle.
-	Run func(ctx context.Context, spec PassthroughSpec) (PassthroughRunResult, error)
+	Run func(ctx context.Context, spec StomaSpec) (StomaPassResult, error)
 }
 
-// WithPassthrough wires the passthrough execution port onto the Service and
+// WithStoma wires the stoma execution port onto the Service and
 // returns the Service for chaining.
-func (s *Service) WithPassthrough(operations PassthroughOperations) *Service {
-	s.passthrough = operations
+func (s *Service) WithStoma(operations StomaOperations) *Service {
+	s.stoma = operations
 	return s
 }
 
-// PassthroughRun validates the request and runs the bounded command to
+// StomaPass validates the request and runs the bounded command to
 // completion via the injected execution port.
-func (s *Service) PassthroughRun(ctx context.Context, in PassthroughRunInput) (PassthroughRunResult, error) {
-	if s.passthrough.Run == nil {
-		return PassthroughRunResult{}, fmt.Errorf("passthrough.run is not wired: construct the Core with WithPassthrough(PassthroughOperations{Run: …})")
+func (s *Service) StomaPass(ctx context.Context, in StomaPassInput) (StomaPassResult, error) {
+	if s.stoma.Run == nil {
+		return StomaPassResult{}, fmt.Errorf("stoma.pass is not wired: construct the Core with WithStoma(StomaOperations{Run: …})")
 	}
 	if strings.TrimSpace(in.Substrate) == "" {
-		return PassthroughRunResult{}, fmt.Errorf("substrate is required")
+		return StomaPassResult{}, fmt.Errorf("substrate is required")
 	}
 	// Argument tokens pass through verbatim (a token may legitimately carry
 	// whitespace); only the executable token must be non-blank.
 	command := append([]string(nil), in.Command...)
 	if len(command) == 0 || strings.TrimSpace(command[0]) == "" {
-		return PassthroughRunResult{}, fmt.Errorf("command is required (an argv vector with at least one token)")
+		return StomaPassResult{}, fmt.Errorf("command is required (an argv vector with at least one token)")
 	}
 	if in.TimeoutSeconds < 0 {
-		return PassthroughRunResult{}, fmt.Errorf("timeoutSeconds must not be negative")
+		return StomaPassResult{}, fmt.Errorf("timeoutSeconds must not be negative")
 	}
 
-	timeout := passthroughDefaultTimeout
+	timeout := stomaDefaultTimeout
 	if in.TimeoutSeconds > 0 {
 		timeout = time.Duration(in.TimeoutSeconds) * time.Second
 	}
-	if timeout > passthroughMaximumTimeout {
-		timeout = passthroughMaximumTimeout
+	if timeout > stomaMaximumTimeout {
+		timeout = stomaMaximumTimeout
 	}
 
-	spec := PassthroughSpec{
+	spec := StomaSpec{
 		Substrate: strings.TrimSpace(in.Substrate),
 		Command:   command,
-		Fetch:     append([]PassthroughFetchInput(nil), in.Fetch...),
+		Fetch:     append([]StomaFetchInput(nil), in.Fetch...),
 		Timeout:   timeout,
 		Origin:    in.Origin,
 		Egress:    append([]string(nil), in.Egress...),
 	}
-	return s.passthrough.Run(ctx, spec)
+	return s.stoma.Run(ctx, spec)
 }
 
-// passthroughCapabilities declares the passthrough family's registry entry,
+// stomaCapabilities declares the stoma family's registry entry,
 // bound to this Service's typed method — identical in shape to the other
 // families. The egress allow-list deliberately has no place in this schema:
 // it is grant material, supplied only by the Stem's own call sites.
-func (s *Service) passthroughCapabilities() []Capability {
+func (s *Service) stomaCapabilities() []Capability {
 	return []Capability{
 		{
-			Name:        CapPassthroughRun,
+			Name:        CapStomaPass,
 			Description: "Run one bounded command inside a network-sealed terrarium; external reach only via Stem-mediated fetches bounded by the delegation grant's egress allow-list (deny-all by default).",
 			InputSchema: schemaObject(map[string]any{
 				"substrate": stringProp("The absolute path or named substrate key for the target repository workspace."),
@@ -177,11 +177,11 @@ func (s *Service) passthroughCapabilities() []Capability {
 				"origin":         stringProp("Interaction origin recorded on the run (cli, mcp, rest)."),
 			}, []string{"substrate", "command"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
-				var in PassthroughRunInput
+				var in StomaPassInput
 				if err := decodeInput(input, &in); err != nil {
 					return nil, err
 				}
-				return s.PassthroughRun(ctx, in)
+				return s.StomaPass(ctx, in)
 			},
 		},
 	}

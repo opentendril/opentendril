@@ -67,7 +67,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 			// delegation audit lane.
 			WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
 			WithSprout(sproutOperations(history, nil)).
-			WithPassthrough(passthroughOperations()).
+			WithStoma(stomaOperations()).
 			WithGit(gitOperations())
 		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
 		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)

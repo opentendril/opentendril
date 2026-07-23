@@ -12,41 +12,41 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
-// newPassthroughTestHandler builds a PassthroughHandler over a real Core with
-// a stubbed passthrough execution port, returning the mux, the bus (for audit
+// newStomaTestHandler builds a StomaHandler over a real Core with
+// a stubbed stoma execution port, returning the mux, the bus (for audit
 // assertions), a counter of executed runs, and the last spec the port saw.
-func newPassthroughTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64, *core.PassthroughSpec) {
+func newStomaTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *eventbus.Bus, *atomic.Int64, *core.StomaSpec) {
 	t.Helper()
 
 	executed := &atomic.Int64{}
-	lastSpec := &core.PassthroughSpec{}
-	coreSvc := core.NewService(nil).WithPassthrough(core.PassthroughOperations{
-		Run: func(ctx context.Context, spec core.PassthroughSpec) (core.PassthroughRunResult, error) {
+	lastSpec := &core.StomaSpec{}
+	coreSvc := core.NewService(nil).WithStoma(core.StomaOperations{
+		Run: func(ctx context.Context, spec core.StomaSpec) (core.StomaPassResult, error) {
 			executed.Add(1)
 			*lastSpec = spec
-			return core.PassthroughRunResult{Status: "completed", ExitCode: 0, Stdout: "ran"}, nil
+			return core.StomaPassResult{Status: "completed", ExitCode: 0, Stdout: "ran"}, nil
 		},
 	})
 
 	bus := eventbus.New()
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: bus}
-	handler := NewPassthroughHandler(coreSvc).WithDelegation(gate)
+	handler := NewStomaHandler(coreSvc).WithDelegation(gate)
 
 	mux := http.NewServeMux()
 	handler.Register(mux, nil)
 	return mux, bus, executed, lastSpec
 }
 
-const passthroughRunBody = `{"substrate":"core","command":["gofmt","-l","."]}`
+const stomaPassBody = `{"substrate":"core","command":["gofmt","-l","."]}`
 
-// TestPassthroughUnchangedWithoutDelegationMarker is the security-first
+// TestStomaUnchangedWithoutDelegationMarker is the security-first
 // regression: a request without the delegation marker follows the plain path
 // — it executes, its egress allow-list is empty (deny-all), and no delegation
 // audit event is produced.
-func TestPassthroughUnchangedWithoutDelegationMarker(t *testing.T) {
-	mux, bus, executed, lastSpec := newPassthroughTestHandler(t, nil)
+func TestStomaUnchangedWithoutDelegationMarker(t *testing.T) {
+	mux, bus, executed, lastSpec := newStomaTestHandler(t, nil)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	request := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
 
@@ -64,13 +64,13 @@ func TestPassthroughUnchangedWithoutDelegationMarker(t *testing.T) {
 	}
 }
 
-// TestDelegatedPassthroughDeniedAndAuditedWithoutGrant: a delegated
+// TestDelegatedStomaDeniedAndAuditedWithoutGrant: a delegated
 // invocation with no covering grant is refused before the execution port is
 // reached, and the denial is audited (delegation-denied).
-func TestDelegatedPassthroughDeniedAndAuditedWithoutGrant(t *testing.T) {
-	mux, bus, executed, _ := newPassthroughTestHandler(t, nil)
+func TestDelegatedStomaDeniedAndAuditedWithoutGrant(t *testing.T) {
+	mux, bus, executed, _ := newStomaTestHandler(t, nil)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	request := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
@@ -79,7 +79,7 @@ func TestDelegatedPassthroughDeniedAndAuditedWithoutGrant(t *testing.T) {
 		t.Fatalf("status = %d, want 403: %s", recorder.Code, recorder.Body.String())
 	}
 	if executed.Load() != 0 {
-		t.Fatal("a denied delegated invocation still executed a passthrough run")
+		t.Fatal("a denied delegated invocation still executed a stoma pass")
 	}
 
 	event, found := lastDelegationEvent(bus)
@@ -89,25 +89,25 @@ func TestDelegatedPassthroughDeniedAndAuditedWithoutGrant(t *testing.T) {
 	if event.Type != eventbus.EventDelegationDenied {
 		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationDenied)
 	}
-	if event.Data["pollen"] != "local-pollinator" || event.Data["operationClass"] != core.CapPassthroughRun {
+	if event.Data["pollen"] != "local-pollinator" || event.Data["operationClass"] != core.CapStomaPass {
 		t.Fatalf("audit event data = %v, want the denied request's pollen and operation-class", event.Data)
 	}
 }
 
-// TestDelegatedPassthroughPermittedByMatchingGrant: an active grant covering
-// {pollen, passthrough.run, substrate} lets the invocation run, the exercise
+// TestDelegatedStomaPermittedByMatchingGrant: an active grant covering
+// {pollen, stoma.pass, substrate} lets the invocation run, the exercise
 // is audited, and — the egress-threading contract — the grant's allow-list
 // (and only the grant's) reaches the execution port.
-func TestDelegatedPassthroughPermittedByMatchingGrant(t *testing.T) {
+func TestDelegatedStomaPermittedByMatchingGrant(t *testing.T) {
 	grants := []core.DelegationGrant{{
 		Pollen:           "local-pollinator",
-		OperationClasses: []string{core.CapPassthroughRun},
+		OperationClasses: []string{core.CapStomaPass},
 		Substrates:       []string{"core"},
 		Egress:           []string{"proxy.golang.org"},
 	}}
-	mux, bus, executed, lastSpec := newPassthroughTestHandler(t, grants)
+	mux, bus, executed, lastSpec := newStomaTestHandler(t, grants)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	request := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
@@ -131,17 +131,17 @@ func TestDelegatedPassthroughPermittedByMatchingGrant(t *testing.T) {
 	}
 }
 
-// TestDelegatedPassthroughDeniedOnSubstrateMismatch verifies the grant's
-// substrate scope is enforced on the passthrough route.
-func TestDelegatedPassthroughDeniedOnSubstrateMismatch(t *testing.T) {
+// TestDelegatedStomaDeniedOnSubstrateMismatch verifies the grant's
+// substrate scope is enforced on the stoma route.
+func TestDelegatedStomaDeniedOnSubstrateMismatch(t *testing.T) {
 	grants := []core.DelegationGrant{{
 		Pollen:           "local-pollinator",
-		OperationClasses: []string{core.CapPassthroughRun},
+		OperationClasses: []string{core.CapStomaPass},
 		Substrates:       []string{"another-substrate"},
 	}}
-	mux, _, executed, _ := newPassthroughTestHandler(t, grants)
+	mux, _, executed, _ := newStomaTestHandler(t, grants)
 
-	request := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	request := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	request.Header.Set(PollenHeader, "local-pollinator")
 	recorder := httptest.NewRecorder()
 	mux.ServeHTTP(recorder, request)
@@ -154,21 +154,21 @@ func TestDelegatedPassthroughDeniedOnSubstrateMismatch(t *testing.T) {
 	}
 }
 
-// TestPassthroughCallerCannotSupplyEgress is the transport-level
+// TestStomaCallerCannotSupplyEgress is the transport-level
 // no-self-escalation check: a request body smuggling an "egress" key never
 // widens the execution's allow-list — with or without a delegation marker.
-func TestPassthroughCallerCannotSupplyEgress(t *testing.T) {
+func TestStomaCallerCannotSupplyEgress(t *testing.T) {
 	grants := []core.DelegationGrant{{
 		Pollen:           "local-pollinator",
-		OperationClasses: []string{core.CapPassthroughRun},
+		OperationClasses: []string{core.CapStomaPass},
 		Substrates:       []string{"core"},
 		// The grant deliberately opens nothing.
 	}}
-	mux, _, _, lastSpec := newPassthroughTestHandler(t, grants)
+	mux, _, _, lastSpec := newStomaTestHandler(t, grants)
 
 	smuggled := `{"substrate":"core","command":["true"],"egress":["evil.example.com"],"Egress":["evil.example.com"]}`
 
-	plain := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(smuggled))
+	plain := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(smuggled))
 	plainRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(plainRecorder, plain)
 	if plainRecorder.Code != http.StatusOK {
@@ -178,7 +178,7 @@ func TestPassthroughCallerCannotSupplyEgress(t *testing.T) {
 		t.Fatalf("caller-supplied egress reached the port: %v", lastSpec.Egress)
 	}
 
-	delegated := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(smuggled))
+	delegated := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(smuggled))
 	delegated.Header.Set(PollenHeader, "local-pollinator")
 	delegatedRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(delegatedRecorder, delegated)
@@ -190,27 +190,27 @@ func TestPassthroughCallerCannotSupplyEgress(t *testing.T) {
 	}
 }
 
-// TestPassthroughDelegatedDeniedWithNilGate covers the fully unwired posture:
+// TestStomaDelegatedDeniedWithNilGate covers the fully unwired posture:
 // a handler constructed without WithDelegation still denies delegated-marked
 // traffic while non-delegated traffic is untouched.
-func TestPassthroughDelegatedDeniedWithNilGate(t *testing.T) {
-	coreSvc := core.NewService(nil).WithPassthrough(core.PassthroughOperations{
-		Run: func(ctx context.Context, spec core.PassthroughSpec) (core.PassthroughRunResult, error) {
-			return core.PassthroughRunResult{Status: "completed"}, nil
+func TestStomaDelegatedDeniedWithNilGate(t *testing.T) {
+	coreSvc := core.NewService(nil).WithStoma(core.StomaOperations{
+		Run: func(ctx context.Context, spec core.StomaSpec) (core.StomaPassResult, error) {
+			return core.StomaPassResult{Status: "completed"}, nil
 		},
 	})
-	handler := NewPassthroughHandler(coreSvc)
+	handler := NewStomaHandler(coreSvc)
 	mux := http.NewServeMux()
 	handler.Register(mux, nil)
 
-	plain := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	plain := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	plainRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(plainRecorder, plain)
 	if plainRecorder.Code != http.StatusOK {
 		t.Fatalf("non-delegated status = %d, want 200: %s", plainRecorder.Code, plainRecorder.Body.String())
 	}
 
-	delegated := httptest.NewRequest(http.MethodPost, "/v1/passthrough/run", strings.NewReader(passthroughRunBody))
+	delegated := httptest.NewRequest(http.MethodPost, "/v1/stoma/pass", strings.NewReader(stomaPassBody))
 	delegated.Header.Set(PollenHeader, "local-pollinator")
 	delegatedRecorder := httptest.NewRecorder()
 	mux.ServeHTTP(delegatedRecorder, delegated)

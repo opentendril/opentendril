@@ -31,7 +31,7 @@ const (
 	CapSequenceList    = "sequence.list"
 	CapSequenceGrow    = "sequence.grow"
 	CapSproutGrow      = "sprout.grow"
-	CapPassthroughRun  = "passthrough.run"
+	CapStomaPass       = "stoma.pass"
 	CapSeedGrow        = "seed.grow"
 	CapGitCommit       = "git.commit"
 	CapGitPush         = "git.push"
@@ -82,7 +82,7 @@ func CapabilityNames() []string {
 		CapSequenceList,
 		CapSequenceGrow,
 		CapSproutGrow,
-		CapPassthroughRun,
+		CapStomaPass,
 		CapSeedGrow,
 		CapGitCommit,
 		CapGitPush,
@@ -105,7 +105,7 @@ func CapabilityNames() []string {
 func DelegatedCapabilityNames() []string {
 	names := []string{
 		CapSproutGrow,
-		CapPassthroughRun,
+		CapStomaPass,
 		CapSeedGrow,
 		CapGitCommit,
 		CapGitPush,
@@ -225,7 +225,7 @@ func (s *Service) Capabilities() []Capability {
 	caps = append(caps, s.meshCapabilities()...)
 	caps = append(caps, s.sequenceCapabilities()...)
 	caps = append(caps, s.sproutCapabilities()...)
-	caps = append(caps, s.passthroughCapabilities()...)
+	caps = append(caps, s.stomaCapabilities()...)
 	caps = append(caps, s.seedCapabilities()...)
 	caps = append(caps, s.gitCapabilities()...)
 	return caps

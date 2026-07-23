@@ -197,18 +197,18 @@ func (h *MCPHandler) callCoreCapabilityAs(ctx context.Context, id interface{}, n
 	return h.formatCapabilityResult(id, result, err)
 }
 
-// callPassthroughRun dispatches passthrough.run through the Core's typed
+// callStomaPass dispatches stoma.pass through the Core's typed
 // method rather than the generic capability registry. The typed path exists
 // for one reason: the egress allow-list is grant material with no JSON surface
 // on the input type, so no argument decode — generic or typed — can ever carry
 // it. Only this adapter places the authorized grant's allow-list onto the run,
-// exactly like the REST passthrough adapter.
-func (h *MCPHandler) callPassthroughRun(id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
+// exactly like the REST stoma adapter.
+func (h *MCPHandler) callStomaPass(id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return h.formatError(id, -32602, "Invalid params", err.Error())
 	}
-	var in core.PassthroughRunInput
+	var in core.StomaPassInput
 	if err := json.Unmarshal(encoded, &in); err != nil {
 		return h.formatError(id, -32602, "Invalid params", err.Error())
 	}
@@ -227,11 +227,11 @@ func (h *MCPHandler) callPassthroughRun(id interface{}, args map[string]interfac
 		in.Origin = session.OriginMCP
 	}
 
-	result, runErr := h.core.PassthroughRun(context.Background(), in)
+	result, runErr := h.core.StomaPass(context.Background(), in)
 	return h.formatCapabilityResult(id, result, runErr)
 }
 
-// callSeedGrow is the typed dispatch for seed.grow. Like callPassthroughRun, the
+// callSeedGrow is the typed dispatch for seed.grow. Like callStomaPass, the
 // Seed's egress allow-list is grant material with no JSON surface, so the
 // adapter places the authorized grant's allow-list itself rather than trusting
 // the generic registry decode.
@@ -625,16 +625,16 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 					params.Arguments["origin"] = session.OriginMCP
 				}
 			}
-			if params.Name == core.CapPassthroughRun {
-				// passthrough.run alone needs the typed dispatch: its egress
+			if params.Name == core.CapStomaPass {
+				// stoma.pass alone needs the typed dispatch: its egress
 				// allow-list is grant material with no JSON surface, so the
 				// generic registry decode can never carry it — the adapter
 				// places the authorized grant's allow-list itself.
-				return h.callPassthroughRun(req.ID, params.Arguments, decision)
+				return h.callStomaPass(req.ID, params.Arguments, decision)
 			}
 			if params.Name == core.CapSeedGrow {
 				// seed.grow carries the same grant-material egress allow-list as
-				// passthrough.run (json:"-"), so it takes the same typed
+				// stoma.pass (json:"-"), so it takes the same typed
 				// dispatch: the adapter places the authorized grant's allow-list
 				// itself rather than trusting the generic registry decode.
 				return h.callSeedGrow(req.ID, params.Arguments, decision)

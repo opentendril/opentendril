@@ -63,7 +63,7 @@ type DelegationGrant struct {
 	Substrates []string
 	// Egress allow-lists the hosts a delegated execution may reach. The
 	// default is deny-all (empty). Enforcement inside the Terrarium is the
-	// passthrough slice; the list is carried on the grant so an authorized
+	// stoma slice; the list is carried on the grant so an authorized
 	// decision is complete.
 	Egress []string
 	// Expires ends the grant at the given instant. Zero means the grant does

@@ -428,7 +428,7 @@ type gitCommand struct {
 }
 
 // gitCommands is the CLI command tree for `tendril git`. Like
-// passthroughCommands, this registration — NOT core.CapabilityNames() — is
+// stomaCommands, this registration — NOT core.CapabilityNames() — is
 // the source of truth the parity coverage test reads for the CLI arm.
 var gitCommands = []gitCommand{
 	{"commit", core.CapGitCommit},
@@ -463,7 +463,7 @@ func gitCLICapabilityNames() []string {
 
 // parseGitArgs turns CLI args into a capability input map. `--path` may be
 // repeated to limit staging; omitting it stages all changes. `--json '{...}'`
-// is the generic escape hatch, mirroring parsePassthroughArgs.
+// is the generic escape hatch, mirroring parseStomaArgs.
 func parseGitArgs(capName string, args []string) (map[string]any, error) {
 	input := map[string]any{}
 	var paths []any

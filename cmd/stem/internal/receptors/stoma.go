@@ -10,16 +10,16 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
-// PassthroughHandler is the REST adapter for the governed passthrough/run
+// StomaHandler is the REST adapter for the governed stoma/pass
 // capability family. Exactly like SproutHandler, it translates HTTP to and
 // from the transport-free core.Core and holds no business logic.
 //
-// POST /v1/passthrough/run executes one bounded command synchronously inside
+// POST /v1/stoma/pass executes one bounded command synchronously inside
 // a network-sealed Terrarium. Delegated invocations (marked with
 // PollenHeader) are gated per-invocation by the delegation
 // authorizer; a request without the marker follows the plain
 // bearer-authenticated path with deny-all egress (no grant, no allow-list).
-type PassthroughHandler struct {
+type StomaHandler struct {
 	core core.Core
 	// delegation gates *delegated* invocations against the active grants and
 	// supplies the matching grant's egress allow-list. A nil gate denies every
@@ -31,38 +31,38 @@ type PassthroughHandler struct {
 	registered []string
 }
 
-// NewPassthroughHandler creates the passthrough REST surface over the shared
+// NewStomaHandler creates the stoma REST surface over the shared
 // Core.
-func NewPassthroughHandler(coreSvc core.Core) *PassthroughHandler {
-	return &PassthroughHandler{core: coreSvc}
+func NewStomaHandler(coreSvc core.Core) *StomaHandler {
+	return &StomaHandler{core: coreSvc}
 }
 
 // WithDelegation wires the delegation gate onto the handler and returns it
 // for chaining.
-func (h *PassthroughHandler) WithDelegation(gate *DelegationGate) *PassthroughHandler {
+func (h *StomaHandler) WithDelegation(gate *DelegationGate) *StomaHandler {
 	h.delegation = gate
 	return h
 }
 
-// governedRoutes is the single table of passthrough-capability routes this
+// governedRoutes is the single table of stoma-capability routes this
 // adapter wires (same contract as SproutHandler.governedRoutes).
-func (h *PassthroughHandler) governedRoutes() []governedRoute {
+func (h *StomaHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
-		{"POST /v1/passthrough/run", core.CapPassthroughRun, h.run},
+		{"POST /v1/stoma/pass", core.CapStomaPass, h.pass},
 	}
 }
 
 // Capabilities reports the governed capability names this REST adapter has
 // actually mounted (populated by Register). Read by the parity coverage test.
-func (h *PassthroughHandler) Capabilities() []string {
+func (h *StomaHandler) Capabilities() []string {
 	out := append([]string(nil), h.registered...)
 	sort.Strings(out)
 	return out
 }
 
-// Register mounts the passthrough routes onto the mux, wrapping each handler
+// Register mounts the stoma routes onto the mux, wrapping each handler
 // with the provided auth middleware.
-func (h *PassthroughHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
+func (h *StomaHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
 	if auth == nil {
 		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
 	}
@@ -74,8 +74,8 @@ func (h *PassthroughHandler) Register(mux *http.ServeMux, auth func(http.Handler
 	}
 }
 
-func (h *PassthroughHandler) run(w http.ResponseWriter, r *http.Request) {
-	var req core.PassthroughRunInput
+func (h *StomaHandler) pass(w http.ResponseWriter, r *http.Request) {
+	var req core.StomaPassInput
 	if r.Body != nil && r.ContentLength != 0 {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -99,7 +99,7 @@ func (h *PassthroughHandler) run(w http.ResponseWriter, r *http.Request) {
 	if pollen != "" {
 		decision := h.delegation.Authorize(core.DelegationRequest{
 			Pollen:         pollen,
-			OperationClass: core.CapPassthroughRun,
+			OperationClass: core.CapStomaPass,
 			Substrate:      strings.TrimSpace(req.Substrate),
 		})
 		if !decision.Authorized {
@@ -112,7 +112,7 @@ func (h *PassthroughHandler) run(w http.ResponseWriter, r *http.Request) {
 		req.Origin = session.OriginREST
 	}
 
-	result, err := h.core.PassthroughRun(r.Context(), req)
+	result, err := h.core.StomaPass(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return

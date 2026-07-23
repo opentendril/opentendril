@@ -108,7 +108,7 @@ type seedCommand struct {
 }
 
 // seedCommands is the CLI command tree for `tendril seed`. Like
-// passthroughCommands, this registration — NOT core.CapabilityNames() — is the
+// stomaCommands, this registration — NOT core.CapabilityNames() — is the
 // source of truth the parity coverage test reads for the CLI arm.
 var seedCommands = []seedCommand{
 	{"grow", core.CapSeedGrow},
@@ -139,7 +139,7 @@ func seedCLICapabilityNames() []string {
 // every argument after a bare `--` (and every non-flag positional) is a verify
 // command token, so `tendril seed grow --substrate . --goal "fix tests" -- go
 // test ./...` carries the verify command's own flags untouched. `--json '{...}'`
-// is the generic escape hatch, mirroring parsePassthroughArgs.
+// is the generic escape hatch, mirroring parseStomaArgs.
 func parseSeedArgs(capName string, args []string) (map[string]any, error) {
 	input := map[string]any{}
 	var verify []string

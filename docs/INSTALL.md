@@ -551,7 +551,7 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/git/push` | `git.push` |
 | `POST /v1/git/pr` | `git.pr` |
 | `POST /v1/git/prune` | `git.prune` |
-| `POST /v1/passthrough/run` | `passthrough.run` |
+| `POST /v1/stoma/pass` | `stoma.pass` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
 
 ```bash

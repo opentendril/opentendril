@@ -8,7 +8,7 @@ import (
 )
 
 // The seed/grow capability family: grow a Seed — a bounded, well-specified
-// intent — to Fruit. Where passthrough.run runs ONE command and sprout.grow
+// intent — to Fruit. Where stoma.pass runs ONE command and sprout.grow
 // runs an open-ended transcript, seed.grow hands the Stem a bounded unit of work
 // — a goal plus a verification predicate plus explicit iteration and time bounds
 // — and asks it to converge: build toward the goal, run the verify predicate,
@@ -21,7 +21,7 @@ import (
 // conductor (see internal/core/boundary_test.go). Until that port is wired the
 // capability reports that it is not wired rather than acting.
 //
-// Egress model (identical to passthrough): the verify predicate and any build
+// Egress model (identical to stoma): the verify predicate and any build
 // work run network-sealed; the only external reach is Stem-mediated and bounded
 // by the delegation grant's egress allow-list. Egress carries json:"-", so it
 // is set only by the Stem's own call sites from an authorized grant and can
@@ -61,7 +61,7 @@ type SeedGrowInput struct {
 	// Verify is the argv command that defines "done": the Seed is satisfied
 	// only when this command exits 0. It runs inside the sealed Terrarium, one
 	// bounded command executed directly (never through a shell) — the same
-	// harness passthrough.run uses. (The argv form is the predicate; a
+	// harness stoma.pass uses. (The argv form is the predicate; a
 	// named-sequence predicate is a compatible future addition.)
 	Verify []string `json:"verify"`
 	// MaxIterations bounds how many build/verify passes the loop may take. The
@@ -181,7 +181,7 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 }
 
 // seedCapabilities declares the seed family's registry entry, bound to this
-// Service's typed method — identical in shape to the passthrough family. The
+// Service's typed method — identical in shape to the stoma family. The
 // egress allow-list deliberately has no place in this schema: it is grant
 // material, supplied only by the Stem's own call sites.
 func (s *Service) seedCapabilities() []Capability {

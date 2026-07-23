@@ -63,10 +63,10 @@ type Core interface {
 	// Sprout/run family. Runs through the injected
 	// SproutOperations execution port.
 	SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error)
-	// Passthrough family: one bounded command in a sealed Terrarium, the
+	// Stoma family: one bounded command in a sealed Terrarium, the
 	// minimal delegable operation-class. Runs through the injected
-	// PassthroughOperations execution port.
-	PassthroughRun(ctx context.Context, in PassthroughRunInput) (PassthroughRunResult, error)
+	// StomaOperations execution port.
+	StomaPass(ctx context.Context, in StomaPassInput) (StomaPassResult, error)
 	// Seed family: grow a Seed — a bounded intent — to Fruit, building toward a
 	// goal and iterating until a verify predicate passes, within iteration/time
 	// bounds. Runs through the injected SeedOperations execution port.
@@ -177,15 +177,15 @@ type MeshTraitRejectOutput struct {
 // sequence, and sprout fields are the injected execution ports for their capability families
 // (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
-	sessions    *session.Manager
-	genome      GenomeOperations
-	plasmid     PlasmidOperations
-	mesh        MeshOperations
-	sequence    SequenceOperations
-	sprout      SproutOperations
-	passthrough PassthroughOperations
-	seed        SeedOperations
-	git         GitOperations
+	sessions *session.Manager
+	genome   GenomeOperations
+	plasmid  PlasmidOperations
+	mesh     MeshOperations
+	sequence SequenceOperations
+	sprout   SproutOperations
+	stoma    StomaOperations
+	seed     SeedOperations
+	git      GitOperations
 }
 
 // NewService builds a Core over the shared SessionManager.

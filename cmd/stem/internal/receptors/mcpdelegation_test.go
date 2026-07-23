@@ -13,19 +13,19 @@ import (
 )
 
 // newMCPDelegationTestHandler builds an MCPHandler over a real Core with
-// stubbed delegated execution ports (sprout, passthrough, git), returning the
+// stubbed delegated execution ports (sprout, stoma, git), returning the
 // handler, the bus (for audit assertions), a counter of executed runs, and the
-// last PassthroughSpec the stubbed passthrough port received (so tests can
+// last StomaSpec the stubbed stoma port received (so tests can
 // assert exactly which egress allow-list reached the run). The delegation gate
 // and pollen are left for each test to bind (or not) via WithDelegation, so
 // every posture — unwired, subjectless, granted — is exercised through the
 // same fixture.
-func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *atomic.Int64, *core.PassthroughSpec) {
+func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *atomic.Int64, *core.StomaSpec) {
 	t.Helper()
 	chdirTempDir(t)
 
 	executed := &atomic.Int64{}
-	passthroughSpec := &core.PassthroughSpec{}
+	stomaSpec := &core.StomaSpec{}
 	sessions, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("session manager: %v", err)
@@ -37,11 +37,11 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 				return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
 			},
 		}).
-		WithPassthrough(core.PassthroughOperations{
-			Run: func(ctx context.Context, spec core.PassthroughSpec) (core.PassthroughRunResult, error) {
+		WithStoma(core.StomaOperations{
+			Run: func(ctx context.Context, spec core.StomaSpec) (core.StomaPassResult, error) {
 				executed.Add(1)
-				*passthroughSpec = spec
-				return core.PassthroughRunResult{Status: "completed", ExitCode: 0, Stdout: "ran"}, nil
+				*stomaSpec = spec
+				return core.StomaPassResult{Status: "completed", ExitCode: 0, Stdout: "ran"}, nil
 			},
 		}).
 		WithGit(core.GitOperations{
@@ -53,7 +53,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 
 	bus := eventbus.New()
 	handler := NewMCPHandler().WithSessions(sessions, nil).WithCore(coreSvc)
-	return handler, bus, executed, passthroughSpec
+	return handler, bus, executed, stomaSpec
 }
 
 // mcpDelegationGrant covers every delegated operation-class on the "core"
@@ -61,7 +61,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 func mcpDelegationGrant() core.DelegationGrant {
 	return core.DelegationGrant{
 		Pollen:           "mcp-Pollinator",
-		OperationClasses: []string{core.CapSproutGrow, core.CapPassthroughRun, core.CapGitCommit},
+		OperationClasses: []string{core.CapSproutGrow, core.CapStomaPass, core.CapGitCommit},
 		Substrates:       []string{"core"},
 	}
 }
@@ -110,10 +110,10 @@ func mcpCallTool(t *testing.T, handler *MCPHandler, name string, args map[string
 // sproutTendril alias (which reaches sprout.grow).
 func delegatedToolCalls() map[string]map[string]any {
 	return map[string]map[string]any{
-		core.CapSproutGrow:     {"transcript": "grow", "substrate": "core"},
-		core.CapPassthroughRun: {"substrate": "core", "command": []string{"gofmt", "-l", "."}},
-		core.CapGitCommit:      {"substrate": "core", "message": "delegated commit"},
-		"sproutTendril":        {"transcript": "grow", "substrate": "core"},
+		core.CapSproutGrow: {"transcript": "grow", "substrate": "core"},
+		core.CapStomaPass:  {"substrate": "core", "command": []string{"gofmt", "-l", "."}},
+		core.CapGitCommit:  {"substrate": "core", "message": "delegated commit"},
+		"sproutTendril":    {"transcript": "grow", "substrate": "core"},
 	}
 }
 
@@ -209,12 +209,12 @@ func TestMCPDelegatedCapabilityDeniedWithoutCoveringGrant(t *testing.T) {
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(nil), Bus: bus}
 	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
-	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
+	text, isError := mcpCallTool(t, handler, core.CapStomaPass, map[string]any{
 		"substrate": "core",
 		"command":   []string{"gofmt", "-l", "."},
 	})
 	if !isError {
-		t.Fatalf("passthrough.run without a covering grant was not denied: %q", text)
+		t.Fatalf("stoma.pass without a covering grant was not denied: %q", text)
 	}
 	if executed.Load() != 0 {
 		t.Fatal("a denied delegated invocation still executed")
@@ -227,8 +227,8 @@ func TestMCPDelegatedCapabilityDeniedWithoutCoveringGrant(t *testing.T) {
 	if event.Type != eventbus.EventDelegationDenied {
 		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationDenied)
 	}
-	if event.Data["operationClass"] != core.CapPassthroughRun {
-		t.Fatalf("audit event operation-class = %v, want %s", event.Data["operationClass"], core.CapPassthroughRun)
+	if event.Data["operationClass"] != core.CapStomaPass {
+		t.Fatalf("audit event operation-class = %v, want %s", event.Data["operationClass"], core.CapStomaPass)
 	}
 }
 
@@ -282,19 +282,19 @@ func TestMCPNonDelegatedCapabilityUnaffected(t *testing.T) {
 	}
 }
 
-// TestMCPPassthroughRunReceivesGrantEgress: an authorized MCP passthrough.run
+// TestMCPStomaPassReceivesGrantEgress: an authorized MCP stoma.pass
 // runs with exactly the authorized grant's egress allow-list — the same
 // Stem-mediated egress the REST surface grants — while an "egress" value
 // smuggled into the tool arguments never reaches the run. The allow-list is
 // sourced only from the grant, and the adapter stamps its own origin.
-func TestMCPPassthroughRunReceivesGrantEgress(t *testing.T) {
-	handler, bus, executed, passthroughSpec := newMCPDelegationTestHandler(t)
+func TestMCPStomaPassReceivesGrantEgress(t *testing.T) {
+	handler, bus, executed, stomaSpec := newMCPDelegationTestHandler(t)
 	grant := mcpDelegationGrant()
 	grant.Egress = []string{"proxy.golang.org"}
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
 	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
-	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
+	text, isError := mcpCallTool(t, handler, core.CapStomaPass, map[string]any{
 		"substrate": "core",
 		"command":   []string{"go", "mod", "download"},
 		// A caller must never widen its own egress: the allow-list has no
@@ -302,40 +302,40 @@ func TestMCPPassthroughRunReceivesGrantEgress(t *testing.T) {
 		"egress": []string{"attacker.example"},
 	})
 	if isError {
-		t.Fatalf("authorized passthrough.run was denied: %q", text)
+		t.Fatalf("authorized stoma.pass was denied: %q", text)
 	}
 	if executed.Load() != 1 {
-		t.Fatalf("executed %d passthrough run(s), want 1", executed.Load())
+		t.Fatalf("executed %d stoma pass(s), want 1", executed.Load())
 	}
-	if len(passthroughSpec.Egress) != 1 || passthroughSpec.Egress[0] != "proxy.golang.org" {
-		t.Fatalf("run egress = %v, want the grant's allow-list [proxy.golang.org]", passthroughSpec.Egress)
+	if len(stomaSpec.Egress) != 1 || stomaSpec.Egress[0] != "proxy.golang.org" {
+		t.Fatalf("run egress = %v, want the grant's allow-list [proxy.golang.org]", stomaSpec.Egress)
 	}
-	if passthroughSpec.Origin != session.OriginMCP {
-		t.Fatalf("run origin = %q, want %q", passthroughSpec.Origin, session.OriginMCP)
+	if stomaSpec.Origin != session.OriginMCP {
+		t.Fatalf("run origin = %q, want %q", stomaSpec.Origin, session.OriginMCP)
 	}
 }
 
-// TestMCPPassthroughRunIgnoresArgumentEgress is the sharp negative: with a
+// TestMCPStomaPassIgnoresArgumentEgress is the sharp negative: with a
 // covering grant that allow-lists nothing, an "egress" value in the tool
 // arguments still leaves the run with the empty (deny-all) list — arguments
 // can never widen egress.
-func TestMCPPassthroughRunIgnoresArgumentEgress(t *testing.T) {
-	handler, bus, executed, passthroughSpec := newMCPDelegationTestHandler(t)
+func TestMCPStomaPassIgnoresArgumentEgress(t *testing.T) {
+	handler, bus, executed, stomaSpec := newMCPDelegationTestHandler(t)
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
 	handler = handler.WithDelegation(gate, "mcp-Pollinator")
 
-	text, isError := mcpCallTool(t, handler, core.CapPassthroughRun, map[string]any{
+	text, isError := mcpCallTool(t, handler, core.CapStomaPass, map[string]any{
 		"substrate": "core",
 		"command":   []string{"gofmt", "-l", "."},
 		"egress":    []string{"attacker.example"},
 	})
 	if isError {
-		t.Fatalf("authorized passthrough.run was denied: %q", text)
+		t.Fatalf("authorized stoma.pass was denied: %q", text)
 	}
 	if executed.Load() != 1 {
-		t.Fatalf("executed %d passthrough run(s), want 1", executed.Load())
+		t.Fatalf("executed %d stoma pass(s), want 1", executed.Load())
 	}
-	if len(passthroughSpec.Egress) != 0 {
-		t.Fatalf("run egress = %v, want empty (deny-all): tool arguments must never widen egress", passthroughSpec.Egress)
+	if len(stomaSpec.Egress) != 0 {
+		t.Fatalf("run egress = %v, want empty (deny-all): tool arguments must never widen egress", stomaSpec.Egress)
 	}
 }

@@ -11,7 +11,7 @@ import (
 )
 
 // SeedHandler is the REST adapter for the governed seed/grow capability family —
-// grow a Seed (a bounded intent) to Fruit. Exactly like PassthroughHandler, it
+// grow a Seed (a bounded intent) to Fruit. Exactly like StomaHandler, it
 // translates HTTP to and from the transport-free core.Core and holds no
 // business logic.
 //
@@ -44,7 +44,7 @@ func (h *SeedHandler) WithDelegation(gate *DelegationGate) *SeedHandler {
 }
 
 // governedRoutes is the single table of seed-capability routes this adapter
-// wires (same contract as PassthroughHandler.governedRoutes).
+// wires (same contract as StomaHandler.governedRoutes).
 func (h *SeedHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
 		{"POST /v1/seeds/grow", core.CapSeedGrow, h.grow},

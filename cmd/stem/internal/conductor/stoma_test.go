@@ -57,7 +57,7 @@ func TestFetchEgressPayloadsDenyAllBlocksHost(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy(nil), []PassthroughFetch{
+	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy(nil), []StomaFetch{
 		{URL: server.URL + "/artifact", Path: "artifact.bin"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "egress denied") {
@@ -78,7 +78,7 @@ func TestFetchEgressPayloadsAllowListOpensHost(t *testing.T) {
 	defer server.Close()
 
 	serverHost := hostOf(t, server.URL)
-	payloads, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{serverHost}), []PassthroughFetch{
+	payloads, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{serverHost}), []StomaFetch{
 		{URL: server.URL + "/artifact", Path: "inputs/artifact.txt"},
 	})
 	if err != nil {
@@ -90,8 +90,8 @@ func TestFetchEgressPayloadsAllowListOpensHost(t *testing.T) {
 	if string(payloads[0].Content) != "mediated content" {
 		t.Fatalf("payload content = %q", payloads[0].Content)
 	}
-	if payloads[0].Path != passthroughEgressDirectory+"/inputs/artifact.txt" {
-		t.Fatalf("payload path = %q, want it anchored under %s", payloads[0].Path, passthroughEgressDirectory)
+	if payloads[0].Path != stomaEgressDirectory+"/inputs/artifact.txt" {
+		t.Fatalf("payload path = %q, want it anchored under %s", payloads[0].Path, stomaEgressDirectory)
 	}
 	if payloads[0].Mode != 0o444 {
 		t.Fatalf("payload mode = %o, want read-only 444", payloads[0].Mode)
@@ -101,45 +101,45 @@ func TestFetchEgressPayloadsAllowListOpensHost(t *testing.T) {
 	// opens exactly that host.
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer other.Close()
-	if _, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{serverHost}), []PassthroughFetch{
+	if _, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{serverHost}), []StomaFetch{
 		{URL: other.URL + "/artifact", Path: "artifact.bin"},
 	}); err == nil {
 		t.Fatal("a host outside the allow-list was fetched")
 	}
 }
 
-func TestPassthroughEgressPathRejectsTraversal(t *testing.T) {
+func TestStomaEgressPathRejectsTraversal(t *testing.T) {
 	for _, bad := range []string{"", "  ", "/etc/passwd", "../escape", "a/../../escape", ".."} {
-		if _, err := passthroughEgressPath(bad); err == nil {
-			t.Fatalf("destination %q accepted; it must stay under %s", bad, passthroughEgressDirectory)
+		if _, err := stomaEgressPath(bad); err == nil {
+			t.Fatalf("destination %q accepted; it must stay under %s", bad, stomaEgressDirectory)
 		}
 	}
-	got, err := passthroughEgressPath("nested/./file.txt")
+	got, err := stomaEgressPath("nested/./file.txt")
 	if err != nil {
 		t.Fatalf("clean relative destination rejected: %v", err)
 	}
-	if got != passthroughEgressDirectory+"/nested/file.txt" {
+	if got != stomaEgressDirectory+"/nested/file.txt" {
 		t.Fatalf("destination = %q", got)
 	}
 }
 
-// TestRunPassthroughDeniesEgressBeforeAnyTerrarium asserts mediation order:
+// TestRunStomaDeniesEgressBeforeAnyTerrarium asserts mediation order:
 // an egress denial aborts the execution before the Terrarium seam is ever
 // reached, so no container (and no other side effect) exists for a denied
 // delegated invocation.
-func TestRunPassthroughDeniesEgressBeforeAnyTerrarium(t *testing.T) {
-	originalRun := runPassthroughCommandFn
+func TestRunStomaDeniesEgressBeforeAnyTerrarium(t *testing.T) {
+	originalRun := runStomaCommandFn
 	terrariumReached := false
-	runPassthroughCommandFn = func(ctx context.Context, execution PassthroughExecution, payloads []terrarium.FilePayload, timeout time.Duration) (PassthroughResult, error) {
+	runStomaCommandFn = func(ctx context.Context, execution StomaExecution, payloads []terrarium.FilePayload, timeout time.Duration) (StomaResult, error) {
 		terrariumReached = true
-		return PassthroughResult{}, nil
+		return StomaResult{}, nil
 	}
-	defer func() { runPassthroughCommandFn = originalRun }()
+	defer func() { runStomaCommandFn = originalRun }()
 
-	_, err := RunPassthrough(context.Background(), PassthroughExecution{
+	_, err := RunStoma(context.Background(), StomaExecution{
 		Workspace: t.TempDir(),
 		Command:   []string{"true"},
-		Fetches:   []PassthroughFetch{{URL: "https://evil.example.com/x", Path: "x"}},
+		Fetches:   []StomaFetch{{URL: "https://evil.example.com/x", Path: "x"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "egress denied") {
 		t.Fatalf("error = %v, want an egress denial", err)
@@ -149,29 +149,29 @@ func TestRunPassthroughDeniesEgressBeforeAnyTerrarium(t *testing.T) {
 	}
 }
 
-// TestRunPassthroughThreadsPayloadsAndTimeout covers the authorized path up
+// TestRunStomaThreadsPayloadsAndTimeout covers the authorized path up
 // to the Terrarium seam: mediated payloads and the execution bound arrive at
 // the container runner intact.
-func TestRunPassthroughThreadsPayloadsAndTimeout(t *testing.T) {
+func TestRunStomaThreadsPayloadsAndTimeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("payload"))
 	}))
 	defer server.Close()
 
-	originalRun := runPassthroughCommandFn
+	originalRun := runStomaCommandFn
 	var gotPayloads []terrarium.FilePayload
 	var gotTimeout time.Duration
-	runPassthroughCommandFn = func(ctx context.Context, execution PassthroughExecution, payloads []terrarium.FilePayload, timeout time.Duration) (PassthroughResult, error) {
+	runStomaCommandFn = func(ctx context.Context, execution StomaExecution, payloads []terrarium.FilePayload, timeout time.Duration) (StomaResult, error) {
 		gotPayloads = payloads
 		gotTimeout = timeout
-		return PassthroughResult{ExitCode: 0}, nil
+		return StomaResult{ExitCode: 0}, nil
 	}
-	defer func() { runPassthroughCommandFn = originalRun }()
+	defer func() { runStomaCommandFn = originalRun }()
 
-	_, err := RunPassthrough(context.Background(), PassthroughExecution{
+	_, err := RunStoma(context.Background(), StomaExecution{
 		Workspace: t.TempDir(),
 		Command:   []string{"true"},
-		Fetches:   []PassthroughFetch{{URL: server.URL + "/p", Path: "p.bin"}},
+		Fetches:   []StomaFetch{{URL: server.URL + "/p", Path: "p.bin"}},
 		Egress:    []string{hostOf(t, server.URL)},
 		Timeout:   42 * time.Second,
 	})
