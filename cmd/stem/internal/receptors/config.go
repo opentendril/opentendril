@@ -15,15 +15,15 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
-// AuthMiddleware wraps a handler to require an ADMIN_TOKEN. Bearer presence
-// authenticates the caller; *delegated* invocations (marked with
-// PollenHeader) are additionally gated by the delegation
-// authorizer. These config routes expose no delegable operation-class, so a
-// delegated-marked request is denied outright rather than silently executed
-// as if it were non-delegated.
+// AuthMiddleware wraps a handler to require the Botanist bearer (BOTANIST_KEY)
+// when one is configured. Bearer presence authenticates the caller; *delegated*
+// invocations (marked with PollenHeader) are additionally gated by the
+// delegation authorizer. These config routes expose no delegable
+// operation-class, so a delegated-marked request is denied outright rather than
+// silently executed as if it were non-delegated.
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token := os.Getenv("ADMIN_TOKEN")
+		token := strings.TrimSpace(os.Getenv("BOTANIST_KEY"))
 		if token != "" {
 			authHeader := r.Header.Get("Authorization")
 			if !strings.HasPrefix(authHeader, "Bearer ") || strings.TrimPrefix(authHeader, "Bearer ") != token {

@@ -434,7 +434,7 @@ func submitSproutAsync(ctx context.Context, input map[string]any) {
 		os.Exit(1)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 

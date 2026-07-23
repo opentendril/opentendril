@@ -12,7 +12,7 @@ Implement the **Mycorrhizal Mesh Network** (Stem Grafting) to allow multiple Ope
 - **Governance Hooks**: The Central Stem will execute a `.tendril/mesh-governance.yaml` sequence inside an ephemeral terrarium before accepting a push. This enables full pre-push CI or fast security gating.
 - **Token Management**: A **Layered Approach** is selected.
     1. Basic CLI tools (`tendril mesh keygen` and `tendril mesh issue-token`) for initial/offline setup.
-    2. A secure Admin API endpoint (`POST /v1/mesh/admin/issue-token` secured via `ADMIN_TOKEN`) for enterprise automation and integrations.
+    2. A secure Admin API endpoint (`POST /v1/mesh/admin/issue-token` secured via `BOTANIST_KEY`) for enterprise automation and integrations.
 
 ## Proposed Changes
 

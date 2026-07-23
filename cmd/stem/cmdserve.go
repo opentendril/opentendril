@@ -15,6 +15,9 @@ import (
 	"time"
 
 	"errors"
+	"io/fs"
+	"net"
+
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/configurator"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -27,7 +30,6 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
-	"io/fs"
 )
 
 type ChatCompletionRequest struct {
@@ -96,7 +98,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	if generatedKey {
 		log.Printf("🔑 Generated API key (saved to %s)", apiKeyFilePath(tendrilDir))
-		log.Printf("   Set %s to use your own instead.", EnvStemAPIKey)
+		log.Printf("   Set %s to use your own instead.", EnvBotanistKey)
 	}
 
 	bus := eventbus.New()
@@ -213,12 +215,18 @@ func runServeCmd(ctx context.Context, args []string) {
 		log.Printf("Delegation enabled: %d grant(s) loaded from %s", len(delegationGrants), filepath.Join(tendrilDir, core.DelegationGrantsFilename))
 	}
 
+	// Bind posture: loopback by default. An off-host bind is self-declaring —
+	// no opt-in flag — and is the signal that engages root-credential hardening
+	// on data routes (access tokens required; roots still accepted at mint).
+	listenHost := serveListenHost()
+	networked := isNetworkedBindHost(listenHost)
+
 	// guardedAuth authenticates with the bearer key and default-denies
 	// delegated-marked requests: in this slice only the sprout routes consult
 	// the delegation authorizer per-invocation, so every other surface refuses
 	// a delegated invocation rather than silently running it as plain traffic.
 	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, delegationGate.Middleware(next))
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, delegationGate.Middleware(next))
 	}
 
 	mux := http.NewServeMux()
@@ -296,7 +304,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// blanket delegated-request denial.
 	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus).WithDelegation(delegationGate)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
 	})
 
 	// Stoma REST API (adapter): one bounded command in a
@@ -306,7 +314,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	stomaHandler := receptors.NewStomaHandler(coreSvc).WithDelegation(delegationGate)
 	stomaHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
 	})
 
 	// Git REST API (adapter): commit a substrate's workspace under its
@@ -320,12 +328,12 @@ func runServeCmd(ctx context.Context, args []string) {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	seedHandler := receptors.NewSeedHandler(coreSvc).WithDelegation(delegationGate).WithHistory(history)
 	seedHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
 	})
 
 	gitHandler := receptors.NewGitHandler(coreSvc).WithDelegation(delegationGate)
 	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, next)
+		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
 	})
 
 	// Phase 4: Configuration API
@@ -360,10 +368,10 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
-	adminKey := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	// Mesh admin uses the same Botanist-key chain as the Stem bearer; never
+	// fail open when no dedicated secret is configured.
+	adminKey := resolveServeAPIKey()
 	if adminKey == "" {
-		// No dedicated admin secret configured: fall back to the Stem's own
-		// (never-empty) API key rather than fail open on mesh token issuance.
 		adminKey = apiKey
 	}
 	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, delegationGate.Middleware(meshServer.HandleAdminIssueToken)))
@@ -373,9 +381,10 @@ func runServeCmd(ctx context.Context, args []string) {
 	if port == "" {
 		port = "8080"
 	}
+	apiAddr := net.JoinHostPort(listenHost, port)
 
 	server := &http.Server{
-		Addr:    ":" + port,
+		Addr:    apiAddr,
 		Handler: mux,
 	}
 
@@ -399,23 +408,71 @@ func runServeCmd(ctx context.Context, args []string) {
 	if gatewayPort == "" {
 		gatewayPort = "9090"
 	}
+	gatewayAddr := net.JoinHostPort(listenHost, gatewayPort)
 	go func() {
 		gatewayMux := http.NewServeMux()
 		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
 		gatewayServer := &http.Server{
-			Addr:    ":" + gatewayPort,
+			Addr:    gatewayAddr,
 			Handler: gatewayMux,
 		}
-		log.Printf("Starting Gateway WebSocket server on port %s...", gatewayPort)
+		log.Printf("Starting Gateway WebSocket server on %s...", gatewayAddr)
 		if err := gatewayServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("⚠️ Gateway WebSocket server unavailable on port %s: %v (main /ws endpoint still serves)", gatewayPort, err)
+			log.Printf("⚠️ Gateway WebSocket server unavailable on %s: %v (main /ws endpoint still serves)", gatewayAddr, err)
 		}
 	}()
 
-	log.Printf("Starting Go Stem API on port %s...", port)
+	if networked {
+		log.Printf("Starting Go Stem API on %s (off-host: data routes require access tokens; durable roots only at mint)...", apiAddr)
+	} else {
+		log.Printf("Starting Go Stem API on %s (loopback: durable Pollinator credentials still accepted on data routes)...", apiAddr)
+	}
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+// serveListenHost resolves the Terroir bind host from TERROIR_HOST, defaulting
+// to loopback so a bare start never exposes the Stem beyond the local machine.
+// Values must be a host/IP only (no port). If a caller accidentally includes a
+// port, it is stripped so net.JoinHostPort does not produce a double-port address.
+func serveListenHost() string {
+	host := strings.TrimSpace(os.Getenv(EnvTerroirHost))
+	if host == "" {
+		return "127.0.0.1"
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// isLoopbackBindHost reports whether host is a loopback bind target. Empty,
+// 127.0.0.1, ::1, and localhost are loopback; 0.0.0.0, ::, and any other
+// hostname or address are networked (off-host exposure is self-declaring).
+func isLoopbackBindHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return true
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	// net.ParseIP rejects bracketed IPv6; strip a single pair if present.
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// isNetworkedBindHost is the inverse of isLoopbackBindHost: true when the bind
+// exposes the Stem beyond loopback and therefore engages off-host hardening.
+func isNetworkedBindHost(host string) bool {
+	return !isLoopbackBindHost(host)
 }
 
 // scheduledRunFirer is the concrete firing seam the scheduler grows entries
@@ -500,16 +557,19 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	}
 }
 
-// EnvStemAPIKey names the Stem's own bearer key. It must stay distinct from any
-// inference provider's key: a provider key may be shared and is passed into every
-// Terrarium; a bearer key grants unscoped access and must never enter one.
-const EnvStemAPIKey = "TENDRIL_API_KEY"
+// EnvBotanistKey is the single authoritative Stem bearer secret — the Botanist's
+// own key. It must stay distinct from any inference provider's key: a provider
+// key may be shared and is passed into every Terrarium; this key grants unscoped
+// access and must never enter one. One name only — no alternate env aliases.
+const EnvBotanistKey = "BOTANIST_KEY"
 
+// EnvTerroirHost names the bind address for the Stem's network habitat. One
+// name only; unset means loopback (127.0.0.1).
+const EnvTerroirHost = "TERROIR_HOST"
+
+// resolveServeAPIKey returns the Stem bearer from EnvBotanistKey, or "" when unset.
 func resolveServeAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
-		return key
-	}
-	return strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
+	return strings.TrimSpace(os.Getenv(EnvBotanistKey))
 }
 
 // apiKeyFilePath is where getOrCreateAPIKey persists a generated bearer key,
@@ -527,10 +587,10 @@ func readPersistedAPIKey(tendrilDir string) string {
 	return strings.TrimSpace(string(content))
 }
 
-// getOrCreateAPIKey resolves the Stem's bearer key: TENDRIL_API_KEY or
-// ADMIN_TOKEN wins, then a key already on disk, then a freshly generated one
-// persisted for next time. It never returns an empty key, so the Stem cannot
-// come up serving its API unauthenticated.
+// getOrCreateAPIKey resolves the Stem's bearer key: EnvBotanistKey wins, then a
+// key already on disk, then a freshly generated one persisted for next time. It
+// never returns an empty key, so the Stem cannot come up serving its API
+// unauthenticated.
 func getOrCreateAPIKey(tendrilDir string) (key string, generated bool, err error) {
 	if key = resolveServeAPIKey(); key != "" {
 		return key, false, nil
@@ -563,11 +623,14 @@ func bearerMatches(header, apiKey string) bool {
 }
 
 func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
-	return withAPIKeyOrPollinatorAuth(apiKey, nil, nil, next)
+	// API-key-only paths never accept a Pollinator root, so the bind posture
+	// does not change their behaviour; networked=false is the no-op default.
+	return withAPIKeyOrPollinatorAuth(apiKey, nil, nil, false, next)
 }
 
 // withAPIKeyOrPollinatorAuth authenticates a caller as EITHER the Botanist
-// (the Stem's own bearer key) or a Pollinator (an issued credential).
+// (the Stem's own bearer key) or a Pollinator (an issued credential or a
+// short-lived access token).
 //
 // A Pollinator credential has to authenticate the transport as well as carry
 // the identity, otherwise a Pollinator would still need the Botanist's key to
@@ -575,9 +638,14 @@ func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 // route, including those with no delegable operation-class. One credential,
 // one identity, one level of access.
 //
+// networked is true when the Stem is bound beyond loopback. In that posture a
+// durable Pollinator credential is refused on every data route (mint a token
+// instead); access tokens and the Botanist api-key path are unchanged. On
+// loopback, root credentials still work exactly as before.
+//
 // The credential or token is only accepted here; what it may then DO is decided
 // by the grant model downstream, which derives the Pollen from this same bearer.
-func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, next http.HandlerFunc) http.HandlerFunc {
+func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		presented := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
 
@@ -599,6 +667,14 @@ func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorC
 		}
 
 		if core.LooksLikePollinatorCredential(presented) {
+			// Off-host: the durable root is the refresh secret only. Present it
+			// at POST /v1/pollinator/token; data routes accept the short-lived
+			// access token it mints. Loopback keeps the prior root-on-data-routes
+			// behaviour so personal local setups are unchanged.
+			if networked {
+				http.Error(w, "Unauthorized: durable Pollinator credentials are not accepted on off-host binds; mint an access token via POST /v1/pollinator/token", http.StatusUnauthorized)
+				return
+			}
 			// A credential-shaped bearer is resolved or refused. It never falls
 			// back to the Botanist key comparison, so a revoked credential
 			// cannot be retried as anything else.

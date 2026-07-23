@@ -22,7 +22,7 @@ func TestAccessTokenIsAcceptedOnDataRoutes(t *testing.T) {
 	}
 
 	reached := false
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, signer, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, signer, false, func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -52,7 +52,7 @@ func TestExpiredOrForgedTokenIsRefused(t *testing.T) {
 	forged, _ := other.MintAccessToken("claude", 5*time.Minute, core.AccessTokenScope{})
 
 	reached := false
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, signer, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, signer, false, func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})
@@ -81,7 +81,7 @@ func TestTokenWithNilVerifierIsDenied(t *testing.T) {
 	token, _ := signer.MintAccessToken("claude", 5*time.Minute, core.AccessTokenScope{})
 
 	reached := false
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, nil, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", nil, nil, false, func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})

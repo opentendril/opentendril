@@ -299,7 +299,7 @@ func seedDaemonRequest(ctx context.Context, method, path string, body []byte) (*
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
+	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	return http.DefaultClient.Do(req)

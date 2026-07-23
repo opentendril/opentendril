@@ -1,5 +1,5 @@
-// Thin typed client over the Stem REST surface. All calls attach the operator
-// bearer key (OPENTENDRIL_API_KEY on the server side) when one is configured.
+// Thin typed client over the Stem REST surface. All calls attach the Botanist
+// bearer key (BOTANIST_KEY on the Stem) when one is configured.
 
 import type {
   ChatCompletionResponse,

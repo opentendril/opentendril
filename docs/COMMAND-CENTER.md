@@ -52,10 +52,9 @@ It leans on three Phase 1 backend capabilities:
 ## 2. REST surface consumed by the Command Center
 
 All endpoints are served by the Go Stem on its API port (default `:8080`) and
-authenticated with the operator bearer key. `TENDRIL_API_KEY` (or
-`ADMIN_TOKEN`) sets it explicitly; if neither is set, the Stem generates one on
-first run and persists it to `.tendril/api-key` (printed once to the log) —
-the API is never served unauthenticated. Handlers:
+authenticated with the Botanist bearer key. `BOTANIST_KEY` sets it explicitly; if
+unset, the Stem generates one on first run and persists it to `.tendril/api-key`
+(printed once to the log) — the API is never served unauthenticated. Handlers:
 `cmd/stem/internal/api/sessions.go`.
 
 The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy

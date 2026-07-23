@@ -208,7 +208,7 @@ matching grant.
 
 - **MCP (stdio):** the gate is your machine + the launch config that binds the
   pollen, plus the grant. Adequate for a personal machine.
-- **REST / WebSocket:** set `ADMIN_TOKEN`; callers must then send
+- **REST / WebSocket:** set `BOTANIST_KEY`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
 
