@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -48,5 +49,17 @@ func TestMintPollinatorAccessTokenRejectsEmptyPollen(t *testing.T) {
 	_, _, err := mintPollinatorAccessToken(dir, "  ", 0)
 	if err == nil {
 		t.Fatal("expected empty-pollen mint to fail")
+	}
+}
+
+// TestParsePollinatorTokenArgsRejectsNegativeTTL: negative durations must not
+// silently become the 15-minute default (aligns with the REST mint path).
+func TestParsePollinatorTokenArgsRejectsNegativeTTL(t *testing.T) {
+	_, _, err := parsePollinatorTokenArgs([]string{"--pollen", "claude", "--ttl", "-5m"})
+	if err == nil {
+		t.Fatal("expected negative --ttl to fail")
+	}
+	if !strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("error = %v, want must-not-be-negative message", err)
 	}
 }

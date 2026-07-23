@@ -192,6 +192,11 @@ func parsePollinatorTokenArgs(args []string) (pollen string, ttl time.Duration, 
 			if parseErr != nil {
 				return "", 0, fmt.Errorf("flag --ttl: %w", parseErr)
 			}
+			// Negative is a client error, not a request for the default: mint
+			// treats <=0 as "use default", which would quietly upgrade a bug.
+			if parsed < 0 {
+				return "", 0, fmt.Errorf("flag --ttl must not be negative")
+			}
 			ttl = parsed
 		default:
 			return "", 0, fmt.Errorf("unknown argument %q", args[i])
