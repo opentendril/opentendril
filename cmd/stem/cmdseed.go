@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -32,6 +35,9 @@ func runSeedCmd(ctx context.Context, args []string) {
 	case "-h", "--help", "help":
 		printSeedUsage()
 		return
+	case "collect":
+		runSeedCollect(ctx, args[1:])
+		return
 	}
 
 	sub := strings.ToLower(strings.TrimSpace(args[0]))
@@ -42,13 +48,21 @@ func runSeedCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	input, err := parseSeedArgs(command.capability, args[1:])
+	rest, async := extractSeedAsyncFlag(args[1:])
+	input, err := parseSeedArgs(command.capability, rest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 	if origin, _ := input["origin"].(string); strings.TrimSpace(origin) == "" {
 		input["origin"] = session.OriginCLI
+	}
+
+	// --async hands the growth to the running daemon and returns a handle,
+	// rather than growing in-process and blocking until the Seed settles.
+	if async {
+		submitSeedAsync(ctx, input)
+		return
 	}
 
 	svc, err := buildSeedCore(ctx)
@@ -244,12 +258,162 @@ func parseSeedArgs(capName string, args []string) (map[string]any, error) {
 	return input, nil
 }
 
+// extractSeedAsyncFlag removes a --async flag appearing before the `--`
+// separator (never from the verify command's own tokens) and reports whether
+// async dispatch was requested.
+func extractSeedAsyncFlag(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	async := false
+	pastSeparator := false
+	for _, arg := range args {
+		if !pastSeparator && arg == "--async" {
+			async = true
+			continue
+		}
+		if arg == "--" {
+			pastSeparator = true
+		}
+		out = append(out, arg)
+	}
+	return out, async
+}
+
+// seedDaemonRequest issues an authenticated request to the local Stem daemon —
+// the same bearer-authenticated client path the detached sprout and sequence
+// commands use. Async dispatch and collection are daemon operations because the
+// growth and its durable handle live in the persistent serve process, not in a
+// one-shot CLI invocation.
+func seedDaemonRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://localhost:%s%s", port, path), reader)
+	if err != nil {
+		return nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if key := strings.TrimSpace(os.Getenv(EnvStemAPIKey)); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	return http.DefaultClient.Do(req)
+}
+
+// submitSeedAsync dispatches a Seed to the daemon and prints the durable handle
+// the operator collects the Fruit by later.
+func submitSeedAsync(ctx context.Context, input map[string]any) {
+	body := map[string]any{}
+	for _, key := range []string{"substrate", "goal", "verify", "maxIterations", "timeoutSeconds", "origin"} {
+		if v, ok := input[key]; ok {
+			body[key] = v
+		}
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to encode seed request: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := seedDaemonRequest(ctx, http.MethodPost, "/v1/seeds/grow/async", payload)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`) to dispatch a Seed asynchronously.")
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted {
+		fmt.Fprintf(os.Stderr, "❌ Stem daemon rejected the dispatch (status %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var accepted struct {
+		Handle string `json:"handle"`
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to decode daemon response: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintln(os.Stdout, "🌱 Seed dispatched for growth.")
+	fmt.Fprintf(os.Stdout, "   Handle:  %s\n", accepted.Handle)
+	fmt.Fprintf(os.Stdout, "   Collect: tendril seed collect %s\n", accepted.Handle)
+}
+
+// runSeedCollect fetches the reviewable Fruit for a dispatched growth by handle.
+func runSeedCollect(ctx context.Context, args []string) {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintln(os.Stderr, "Usage: tendril seed collect <handle>")
+		os.Exit(1)
+	}
+	handle := strings.TrimSpace(args[0])
+
+	resp, err := seedDaemonRequest(ctx, http.MethodGet, "/v1/seeds/runs/"+handle, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "❌ Collect failed (status %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var run struct {
+		Status     string `json:"status"`
+		Iterations int    `json:"iterations"`
+		Branch     string `json:"branch"`
+		Diff       string `json:"diff"`
+		Logs       string `json:"logs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&run); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Failed to decode Fruit: %v\n", err)
+		os.Exit(1)
+	}
+
+	if strings.TrimSpace(run.Logs) != "" {
+		fmt.Fprintln(os.Stderr, run.Logs)
+	}
+	if strings.TrimSpace(run.Diff) != "" {
+		fmt.Fprintln(os.Stdout, run.Diff)
+	}
+	fmt.Fprintf(os.Stderr, "🌱 Seed %s after %d iteration(s)", run.Status, run.Iterations)
+	if strings.TrimSpace(run.Branch) != "" {
+		fmt.Fprintf(os.Stderr, " on branch %s", run.Branch)
+	}
+	fmt.Fprintln(os.Stderr)
+
+	// A still-growing Seed is not an error — collect again later. A settled Seed
+	// that did not reach satisfied exits non-zero so scripts can branch on it.
+	if run.Status == "running" {
+		return
+	}
+	if run.Status != core.SeedStatusSatisfied {
+		os.Exit(1)
+	}
+}
+
 func printSeedUsage() {
 	fmt.Println("Usage: tendril seed grow --substrate <path|name> --goal <goal> [flags] -- <verify command...>")
+	fmt.Println("       tendril seed collect <handle>")
 	fmt.Println("  --substrate          The absolute path or named substrate key of the target workspace (required)")
 	fmt.Println("  --goal               The intent handed to the builder (required)")
 	fmt.Println("  --max-iterations N   Maximum build/verify passes (default 3, maximum 10)")
 	fmt.Println("  --timeout N          Whole-growth wall-clock bound in seconds (default 900, maximum 3600)")
+	fmt.Println("  --async              Dispatch to the running daemon and return a handle instead of blocking; collect the Fruit later with `tendril seed collect <handle>`")
 	fmt.Println("  --json '{...}'       Full JSON input (the generic escape hatch)")
 	fmt.Println()
 	fmt.Println("Grows a Seed: builds toward the goal and iterates until the verify command")
