@@ -19,7 +19,7 @@
 
 - Route requests to itself — `cmd/stem` (`cmdserve.go`) selects this path when the request model is `configurator`.
 - Evaluate, run, or validate the generated trigger — that is `internal/security`'s `EvaluateTriggers`, invoked separately by the Stem.
-- Review, lint, or sandbox the LLM output before making it executable — the returned script is written directly with the executable bit set.
+- Review, lint, or isolate the LLM output before making it executable — the returned script is written directly with the executable bit set.
 - Expose CLI, REST, or MCP surface, or define governed capabilities.
 - Configure the model, provider, or API key at call time — the model is hard-coded and the key is read once from the environment at construction.
 
