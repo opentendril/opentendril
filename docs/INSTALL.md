@@ -427,23 +427,30 @@ tendril pollinator issue --pollen claude --note "laptop"
 
 The secret prints **once** and is never stored — only its SHA-256 digest is kept,
 so a leaked store is not a leaked credential. It begins `tendril_`, which makes it
-recognisable in a log or a configuration file.
+recognisable in a log or a configuration file. That secret is the **durable
+refresh root** for this Pollinator.
 
-The Pollinator presents it as a bearer token and the Stem **derives** the Pollen
-from it; a header claim is ignored for such callers, and an unknown or revoked
-credential is refused rather than treated as ordinary traffic.
+On a **loopback** bind (the default), the Pollinator may present the durable root
+as a bearer token on data routes for local convenience. On an **off-host** bind,
+data routes refuse the root — mint a short-lived access token first
+(`tendril pollinator token --pollen claude`, or `POST /v1/pollinator/token` with
+the root). The Stem **derives** the Pollen from a verified credential or token; a
+header claim is ignored for such callers, and an unknown, revoked, expired, or
+forged bearer is refused rather than treated as ordinary traffic.
 
-> [!IMPORTANT]
-> **Credentials and grants are read at startup.** A credential issued while the
-> Stem is running is rejected with `401` until it restarts. Issue everything
-> first, then start (or restart) the service once.
-
-Revocation is per Pollinator and takes effect on the next start:
+Revocation is at the root and takes effect on the next start: revoke the
+credential, minting stops, and outstanding access tokens age out within their
+cap (≤15 minutes):
 
 ```bash
 tendril pollinator revoke --pollen claude
 tendril pollinator list
 ```
+
+> [!IMPORTANT]
+> **Credentials and grants are read at startup.** A credential issued while the
+> Stem is running is rejected with `401` until it restarts. Issue everything
+> first, then start (or restart) the service once.
 
 ---
 
@@ -498,7 +505,13 @@ journalctl -u tendril -f
 
 On first start the Stem generates a bearer key at
 `/home/tendril/.tendril/api-key`, mode `0600`. That key authenticates **you**,
-the Botanist. It is not what a Pollinator uses.
+the Botanist (`BOTANIST_KEY` sets it explicitly when you prefer not to use the
+file). It is not what a Pollinator uses.
+
+The daemon binds **loopback by default** (`TERROIR_HOST` unset → `127.0.0.1`).
+To expose the REST surface off-host, set `TERROIR_HOST=0.0.0.0` (or a specific
+interface) in the unit's environment — and once off-host, Pollinator data routes
+require short-lived access tokens (see Stage 6).
 
 **Check:** `curl -s localhost:8080/health` returns a health report.
 
@@ -886,10 +899,15 @@ back into your home directory.
 
 * **It does not stop the Botanist.** Whoever administers the machine can become
   the Stem's user. The boundary is against the accounts that host Pollinators.
-* **It does not narrow the network surface.** The Representational State Transfer
-  surface binds all interfaces. On a Ramet reachable from a network, put it
-  behind something that terminates and restricts. Per-Pollinator credentials
-  already make revocation per-caller rather than a shared-secret rotation.
+* **It does not replace network perimeter controls when you opt into exposure.**
+  The Representational State Transfer surface binds **loopback by default**
+  (`TERROIR_HOST` unset → `127.0.0.1`). Setting `TERROIR_HOST=0.0.0.0` (or another
+  non-loopback address) makes the daemon reachable off-host; at that point
+  durable Pollinator credentials are refused on data routes and callers must
+  present short-lived access tokens, but you should still put a network-facing
+  Ramet behind something that terminates TLS and restricts who can reach the
+  mint and data ports. Per-Pollinator roots already make revocation per-caller
+  rather than a shared-secret rotation.
 
 ---
 
