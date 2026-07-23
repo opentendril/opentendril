@@ -552,6 +552,7 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/git/pr` | `git.pr` |
 | `POST /v1/git/prune` | `git.prune` |
 | `POST /v1/stoma/pass` | `stoma.pass` |
+| `POST /v1/seeds/grow` | `seed.grow` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
 
 ```bash
@@ -582,6 +583,36 @@ caller. That is the boundary working.
 > defeats per-Pollinator identity. If your Pollinator speaks only that protocol,
 > see the single-principal configuration under Variations and accept that
 > delegation there is advisory.
+
+### Handing off a bounded Seed
+
+`seed.grow` grows a **Seed** — a bounded intent: a goal, a verify command that
+must exit 0, and iteration/time bounds. A Sprout builds toward the goal and the
+Stem runs the verify command deterministically in a network-sealed Terrarium;
+that exit code — never the Sprout's own claim — is the verdict. The work lands on
+a branch for review as **Fruit**; nothing is ever merged.
+
+```bash
+# Synchronous — blocks until the Seed settles, then prints the Fruit.
+tendril seed grow --substrate myrepo --goal "make the failing tests pass" -- go test ./...
+
+# Asynchronous — hand it to the running daemon and walk away with a handle.
+tendril seed grow --substrate myrepo --goal "make the failing tests pass" --async -- go test ./...
+#   → Handle: seed-1723488000000000000
+tendril seed collect seed-1723488000000000000
+```
+
+The daemon routes underneath, each gated by the `seed.grow` operation-class:
+
+| Route | Behaviour |
+|---|---|
+| `POST /v1/seeds/grow` | grow synchronously; the response body is the Fruit |
+| `POST /v1/seeds/grow/async` | dispatch; the response body is a durable `handle` |
+| `GET /v1/seeds/runs/{handle}` | collect the Fruit — **only** by the Pollen that dispatched it |
+
+A settled Seed reports `satisfied` (verify passed), `exhausted` (bounds spent), or
+`withered` (the Sprout failed). Collection is scoped to the dispatching subject:
+one Pollinator can never read another's handle.
 
 ---
 
