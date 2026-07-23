@@ -52,7 +52,7 @@ Sentinel errors: None explicitly exported; returns wrapped `fmt.Errorf`s.
 - **Provider Parity Gaps**: The four providers do not enforce identical isolation.
   - `DockerProvider` is fully featured (`SupportsMounts`, `SupportsImages`, `NetworkModeBridge` | `NetworkModeNone`).
   - `GVisorProvider` is just `DockerProvider` substituting `--runtime=runsc`.
-  - `FirecrackerProvider` does not support interactive I/O via stdin (requires an explicit command array) and only supports `NetworkModeNone`. It relies on an external microVM stoma agent over vsock and ignores the image requested in `TerrariumSpec`, booting a pre-configured rootfs instead.
+  - `FirecrackerProvider` does not support interactive I/O via stdin (requires an explicit command array) and only supports `NetworkModeNone`. It relies on an external microVM stoma process over vsock and ignores the image requested in `TerrariumSpec`, booting a pre-configured rootfs instead.
   - `HostProvider` is dangerously permissive. It bypasses all isolation, ignores mounts and network sealing, and runs with full host-user privileges. It is disabled by default and gated by `TENDRIL_ALLOW_HOST_EXECUTION=true` (`factory.go`).
 - **Network Default Posture**: `DockerProvider` enforces `--network none` unless explicitly overridden. `FirecrackerProvider` strictly only supports `none`. The isolation design aims for a sealed box, but `HostProvider` silently permits host network usage.
 - **Validation**: Capability enforcement in `validate.go` prevents silent downgrades (e.g., asking for an image in Firecracker, which boots a pre-baked kernel/rootfs), but it relies on provider capability declarations rather than deep structural checks.
