@@ -34,9 +34,14 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// No gate is in scope here, so a delegation marker of any kind is
 		// refused rather than interpreted. This path exposes no delegable
 		// operation-class, so there is nothing a Pollen could legitimately ask
-		// for.
-		if pollen, _ := DelegatedPollen(r, nil); pollen != "" || core.LooksLikePollinatorCredential(bearerToken(r)) {
-			log.Printf("🚫 Delegation denied for Pollen %q: %s exposes no delegable operation-class", pollen, r.URL.Path)
+		// for — whether it arrives as a header claim, a credential, or a token.
+		presented := bearerToken(r)
+		if pollen, _ := DelegatedPollen(r, nil, nil); pollen != "" || core.LooksLikePollinatorCredential(presented) || core.LooksLikeAccessToken(presented) {
+			if core.LooksLikeAccessToken(presented) {
+				log.Printf("🚫 Access token denied: %s exposes no delegable operation-class", r.URL.Path)
+			} else {
+				log.Printf("🚫 Delegation denied for Pollen %q: %s exposes no delegable operation-class", pollen, r.URL.Path)
+			}
 			http.Error(w, "delegation denied: this endpoint exposes no delegable operation-class", http.StatusForbidden)
 			return
 		}
@@ -67,22 +72,42 @@ func bearerToken(r *http.Request) string {
 // a Pollen by credential — the secure default.
 type PollinatorCredentials []core.PollinatorCredential
 
+// AccessTokenVerifier verifies a presented access token and returns its claims.
+// It is satisfied by the Stem's own signer; a nil verifier proves nothing, so a
+// token-bearing request denies (deny-closed) rather than falling back.
+type AccessTokenVerifier interface {
+	VerifyAccessToken(token string) (core.AccessTokenClaims, bool)
+}
+
 // DelegatedPollen returns the Pollen this request acts as, and whether it was
-// PROVEN by a credential rather than merely claimed.
+// PROVEN (by a token or a credential) rather than merely claimed.
 //
-// Two paths, and the difference between them is the whole of Tier 2:
+// Three paths, in precedence order:
 //
+//   - An access token is proven by SIGNATURE: the verifier validates it and the
+//     Pollen comes from its claims. A token that does not verify (or a nil
+//     verifier) resolves to nothing and is denied. This is a boundary.
 //   - A Pollinator credential resolves to the Pollen it was issued for. The
 //     caller cannot influence the result; an unknown or revoked credential
 //     resolves to nothing and is denied. This is a boundary.
-//   - No credential presented: the header claim is returned, as before. This is
-//     an audit control, and it is what a Botanist's own key plus a header has
+//   - Neither presented: the header claim is returned, as before. This is an
+//     audit control, and it is what a Botanist's own key plus a header has
 //     always been.
 //
-// A caller presenting a credential can never fall back to the claim, so
-// possessing a credential cannot be used to assert a different identity.
-func DelegatedPollen(r *http.Request, credentials PollinatorCredentials) (pollen string, proven bool) {
+// A caller presenting a token or a credential can never fall back to the claim,
+// so proving one identity can never be used to assert a different one.
+func DelegatedPollen(r *http.Request, credentials PollinatorCredentials, verifier AccessTokenVerifier) (pollen string, proven bool) {
 	presented := bearerToken(r)
+	if core.LooksLikeAccessToken(presented) {
+		// Deliberately terminal, exactly like a credential-shaped bearer: a
+		// token is verified or denied, and never degrades into the header claim.
+		if verifier != nil {
+			if claims, ok := verifier.VerifyAccessToken(presented); ok {
+				return claims.Pollen, true
+			}
+		}
+		return "", true
+	}
 	if core.LooksLikePollinatorCredential(presented) {
 		// Deliberately terminal: a credential-shaped bearer is resolved or
 		// denied. It never degrades into the header claim.
@@ -102,10 +127,12 @@ func DelegatedPollen(r *http.Request, credentials PollinatorCredentials) (pollen
 // existed" from "revoked yesterday".
 func (g *DelegationGate) PollenFor(r *http.Request) (pollen string, ok bool) {
 	var credentials PollinatorCredentials
+	var verifier AccessTokenVerifier
 	if g != nil {
 		credentials = g.Pollinators
+		verifier = g.Signer
 	}
-	resolved, proven := DelegatedPollen(r, credentials)
+	resolved, proven := DelegatedPollen(r, credentials, verifier)
 	if proven && resolved == "" {
 		return "", false
 	}
@@ -123,8 +150,12 @@ type DelegationGate struct {
 	// presented bearers against. Empty means none were issued, so no caller can
 	// authenticate as a Pollen by credential.
 	Pollinators PollinatorCredentials
-	Authorizer  *core.DelegationAuthorizer
-	Bus         *eventbus.Bus
+	// Signer verifies presented access tokens. Nil means no token can be proven,
+	// so a token-bearing request denies (deny-closed) — the same posture as an
+	// empty credential set.
+	Signer     AccessTokenVerifier
+	Authorizer *core.DelegationAuthorizer
+	Bus        *eventbus.Bus
 }
 
 // Authorize evaluates one delegated invocation against the active grants and
