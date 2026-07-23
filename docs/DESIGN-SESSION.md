@@ -65,4 +65,4 @@ Package-level sentinel errors: None declared at the package level (errors are re
 
 ## Design & rationale
 
-The Phytomer model provides a unified context for interaction, regardless of the entry point (CLI, REST, MCP). The `Store` interface ensures that [session.go](file:///home/dr3w/GitHub/opentendril/opentendril/cmd/stem/internal/session/session.go) remains a fan-out 0 leaf, inverting the dependency so `internal/historydb` can provide SQLite persistence without creating a cyclic dependency. `NewID` creates unique IDs prefixed with `tendril-` using cryptographic randomness, falling back to Unix timestamps if the random reader fails.
+The Phytomer model provides a unified context for interaction, regardless of the entry point (CLI, REST, MCP). The `Store` interface keeps `session.go` a fan-out 0 leaf, inverting the dependency so `internal/historydb` can provide SQLite persistence without creating a cyclic dependency. `NewID` creates unique IDs prefixed with `tendril-` using cryptographic randomness, falling back to Unix timestamps if the random reader fails.
