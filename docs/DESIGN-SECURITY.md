@@ -14,10 +14,9 @@
 - Fail closed by blocking the run if any script returns a non-zero exit code, returning the script's stderr as the error message.
 
 **Does not:**
-- Maintain state or history of executed triggers.
 - Run scripts that are not marked as executable, or scripts named `README.md`.
 - Capture script stdout (it is explicitly discarded).
-- Provide a Sprout or Terrarium for execution; scripts run in the host environment.
+- Provide a persistent state or history of executed triggers.
 
 ## Public interface
 
@@ -35,11 +34,10 @@
 
 ## Limitations
 
-- **Trust model of trigger scripts:** Scripts are executed directly on the host using `os/exec` without a Sprout or Terrarium. They have the same permissions as the calling `stem` process, which poses egress and injection risks if the triggers directory contains untrusted code.
-- **Execution environment:** The scripts are executed natively on the host, not inside an isolated environment. The interpreter is determined by the host OS (e.g., via shebangs).
-- **Failure-mode:** The gate fails closed (blocks) if a script returns a non-zero exit code. However, if the triggers directory does not exist, the evaluation returns `nil` and allows execution (fail open on missing directory).
+- **Execution environment:** Triggers run isolated inside an `alpine:3.20` Terrarium (NetworkMode: None, read-only mount, non-root, resource-capped, 30s timeout) and must be POSIX-sh compliant.
+- **Gate mode and failure-mode:** Controlled via `TENDRIL_TRIGGERS_MODE`. Under `enforce` (the default), the gate fails closed (blocks) if a script returns a non-zero exit code, or if the triggers directory is missing or unreadable. `disabled` allows all sprouts. Any invalid value falls back to `enforce`.
+- **Host execution override:** By setting `TENDRIL_ALLOW_HOST_EXECUTION=true`, operators can explicitly bypass isolation and execute triggers directly on the host.
 - **Ordering:** Scripts are evaluated in the order returned by `os.ReadDir` (lexicographical order), meaning naming conventions dictate the execution sequence.
-- **Missing tests:** There are no tests included for the component (e.g., missing `_test.go`), limiting verification.
 
 ## Design & rationale
 
