@@ -58,18 +58,6 @@ type Choice struct {
 	FinishReason string     `json:"finishReason"`
 }
 
-type chatHistoryRecord struct {
-	ChatID    string `json:"chatId"`
-	StepID    string `json:"stepId"`
-	SessionID string `json:"sessionId,omitempty"`
-	Model     string `json:"model"`
-	Prompt    string `json:"prompt"`
-	Status    string `json:"status"`
-	Response  string `json:"response,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Timestamp string `json:"timestamp"`
-}
-
 func runServeCmd(ctx context.Context, args []string) {
 	if len(args) >= 2 && strings.EqualFold(strings.TrimSpace(args[0]), "mcp") && strings.EqualFold(strings.TrimSpace(args[1]), "stdio") {
 		runMCPCmd(ctx, args[2:])
@@ -775,16 +763,6 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		chatID := fmt.Sprintf("chat-%d", runStamp)
 		stepID := fmt.Sprintf("step-%d", runStamp)
 		completionID := fmt.Sprintf("chatcmpl-%d", runStamp)
-		historyRoot := resolveRepoRoot("")
-		historyPath := filepath.Join(historyRoot, ".tendril", "history", chatID+".json")
-		historyRecord := chatHistoryRecord{
-			ChatID:    chatID,
-			StepID:    stepID,
-			SessionID: sess.ID,
-			Model:     model,
-			Prompt:    taskPrompt,
-			Timestamp: runStarted.Format(time.RFC3339Nano),
-		}
 
 		// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
 		payload := security.TriggerPayload{
@@ -861,11 +839,8 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		})
 
 		sproutRun.FinishedAt = time.Now().UTC()
-		historyRecord.Response = output
 		if err != nil {
 			log.Printf("Tendril execution failed: %v", err)
-			historyRecord.Status = "failed"
-			historyRecord.Error = err.Error()
 			sproutRun.Status = "withered"
 			sproutRun.Error = err.Error()
 			if history != nil {
@@ -873,23 +848,16 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 					log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
 				}
 			}
-			if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
-				log.Printf("⚠️ Failed to write chat history: %v", writeErr)
-			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		historyRecord.Status = "complete"
 		sproutRun.Status = "matured"
 		sproutRun.Output = output
 		if history != nil {
 			if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
 				log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
 			}
-		}
-		if writeErr := writeChatHistory(historyPath, historyRecord); writeErr != nil {
-			log.Printf("⚠️ Failed to write chat history: %v", writeErr)
 		}
 
 		if recordErr := sessions.RecordMessage(r.Context(), session.Message{
@@ -923,24 +891,6 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
-}
-
-func writeChatHistory(path string, record chatHistoryRecord) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create chat history directory: %w", err)
-	}
-
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode chat history: %w", err)
-	}
-	payload = append(payload, '\n')
-
-	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return fmt.Errorf("write chat history %s: %w", path, err)
-	}
-
-	return nil
 }
 
 const triggerExecTimeout = 30 * time.Second
