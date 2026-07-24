@@ -34,7 +34,7 @@ func EvaluateTriggers(ctx context.Context, mode TriggerMode, runner TriggerRunne
 	if mode == ModeDisabled {
 		return nil
 	}
-	
+
 	// Default to enforce for any unrecognized mode value.
 	if mode != ModeEnforce {
 		mode = ModeEnforce
