@@ -1,0 +1,20 @@
+#!/bin/sh
+# Auto-format staged Go files with gofmt so a commit can never fail CI's
+# gofmt gate (which runs before the test suite and blocks the whole run).
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -eu
+
+staged_go="$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)"
+[ -z "$staged_go" ] && exit 0
+
+# shellcheck disable=SC2086
+unformatted="$(gofmt -l $staged_go || true)"
+[ -z "$unformatted" ] && exit 0
+
+echo "pre-commit: gofmt-formatting staged Go files:"
+echo "$unformatted" | sed 's/^/  /'
+# shellcheck disable=SC2086
+gofmt -w $unformatted
+# shellcheck disable=SC2086
+git add $unformatted

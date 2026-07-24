@@ -82,6 +82,16 @@ Before starting work on ANY task, the builder MUST run this sequence to guarante
 
 Only after the preflight check returns exactly `0 0` on a clean `main` branch may you create a new feature/staging branch.
 
+### gofmt pre-commit hook (enable once per clone)
+
+CI's `Stem Tests (Go)` job runs a `gofmt` check **before** the test suite, so a single unformatted Go file fails the entire run. To make that impossible, enable the tracked pre-commit hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` auto-runs `gofmt -w` on staged `.go` files and re-stages them, so commits are always formatted. Builders MUST enable this (or run `gofmt -l` on changed Go files) before committing.
+
 ### GitHub Auth: `GITHUB_TOKEN` via direnv
 
 The canonical GitHub PAT variable is **`GITHUB_TOKEN`** (the Stem also accepts `GITHUB_PERSONAL_ACCESS_TOKEN` as a legacy alternate). The token must be present in the Stem's **process environment** — terrariums push branches over HTTPS, and `gh`'s keyring does not expose its token to child processes. The recommended setup uses [direnv](https://direnv.net/):
