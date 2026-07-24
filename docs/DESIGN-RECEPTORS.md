@@ -8,7 +8,7 @@
 
 **Does:**
 
-- **Config & Security Gate (`cmd/stem/internal/receptors/config.go`):** Exposes `ConfigHandler` endpoints for managing hormonal triggers and AI genotypes (`/v1/config/triggers`, `/v1/config/genotypes`), and provides `DelegationGate` and `AccessTokenVerifier` to resolve, prove, and audit Pollen identities (`DelegatedPollen`, `PollenFor`, `Authorize`, `Middleware`), publishing decision outcomes to `eventbus.Bus`. It also defines a legacy `AuthMiddleware` (a `BOTANIST_KEY` bearer check), but the live serve path in `cmd/stem/cmdserve.go` does not use it — those config routes are mounted behind `withAPIKeyOrPollinatorAuth` + `DelegationGate.Middleware` instead (see Limitations).
+- **Config & Security Gate (`cmd/stem/internal/receptors/config.go`):** Exposes `ConfigHandler` endpoints for managing hormonal triggers and AI genotypes (`/v1/config/triggers`, `/v1/config/genotypes`), and provides `DelegationGate` and `AccessTokenVerifier` to resolve, prove, and audit Pollen identities (`DelegatedPollen`, `PollenFor`, `Authorize`, `Middleware`), publishing decision outcomes to `eventbus.Bus`.
 - **Session Lifecycle Adapter (`cmd/stem/internal/receptors/sessions.go`):** Implements `SessionsHandler` over `core.Core`, mapping canonical `/v1/phytomers` REST endpoints (create, list, get, update, delete, history) and legacy `/v1/sessions` aliases to Core session capabilities, while supporting ungoverned event/run views and async sequence triggers (`runSequenceAsync`).
 - **Git Operations Adapter (`cmd/stem/internal/receptors/git.go`):** Implements `GitHandler`, projecting governed git capabilities (`POST /v1/git/commit`, `push`, `pr`, `branch`, `status`, `branches`, `prune`) onto Core git operations with per-invocation delegation checks against operation-classes.
 - **Sprout Execution Adapter (`cmd/stem/internal/receptors/sprout.go`):** Implements `SproutHandler`, mapping synchronous `POST /v1/sprouts/grow` and detached 202 Accepted `POST /v1/phytomers/{sessionId}/sprout/grow` (and legacy `/v1/sessions` alias) to Core sprout runs with background goroutine tracking and history logging.
@@ -37,9 +37,8 @@
 | `AccessTokenVerifier` | Interface for verifying Stem-signed short-lived access tokens (`VerifyAccessToken`). |
 | `DelegatedPollen` | Resolves presented Pollen identity and returns whether it was proven by signature/credential. |
 | `DelegationGate` / `(*DelegationGate).PollenFor` | Evaluates credentials/tokens and authorizer decision for a request (`Authorize`, `Middleware`). |
-| `ConfigHandler` / `NewConfigHandler` | REST adapter for trigger/genotype management (`ListTriggers`, `UploadTrigger`, `ListGenotypes`, `UploadGenotype`). |
+| `ConfigHandler` / `NewConfigHandler` | REST adapter for trigger/genotype management (`ListTriggers`, `ListGenotypes`, `UploadGenotype`). |
 | `Trigger` | JSON DTO for trigger file metadata (`Name`, `Size`). |
-| `AuthMiddleware` | Legacy `BOTANIST_KEY` bearer-check middleware. Exported but **unwired** — no non-test caller; the live serve path uses `withAPIKeyOrPollinatorAuth` instead (see Limitations). |
 | `SessionsHandler` / `NewSessionsHandler` | REST adapter for session lifecycle (`Register`, `Capabilities`). |
 | `GitHandler` / `NewGitHandler` | REST adapter for governed git operations (`Register`, `Capabilities`, `WithDelegation`). |
 | `SproutHandler` / `NewSproutHandler` | REST adapter for sprout execution (`Register`, `Capabilities`, `WithDelegation`). |
@@ -75,8 +74,6 @@ The package exports approximately 108 symbols across exported types, constructor
 
 ## Limitations
 
-- **`AuthMiddleware` fails open when `BOTANIST_KEY` is unset — but it is unwired dead code, not a live exposure (`cmd/stem/internal/receptors/config.go`):** When `BOTANIST_KEY` is empty or unset, `AuthMiddleware` skips bearer validation and calls `next`. It is **not** mounted anywhere: the config routes (`/v1/config/triggers`, `/v1/config/genotypes`) are wrapped in `cmd/stem/cmdserve.go` by `withAPIKeyOrPollinatorAuth`, which fails **closed** on an empty key (its own comment: "an empty apiKey is a caller bug, not an invitation to skip auth"). The live posture is therefore fail-closed. The latent risk is that `AuthMiddleware` remains exported and inviting: wiring it (mistaking it for the config guard) would reintroduce the fail-open. Treat it as a dead-code trap to remove or fix, not a live unauthenticated-upload path.
-- **`UploadTrigger` creates executable files without content validation (`cmd/stem/internal/receptors/config.go`):** `UploadTrigger` parses multipart form data up to 10MB and writes target files to `transduction/hormonal-triggers/` with `0755` executable permissions. Path traversal is prevented via `validConfigFileName`, but uploaded binary scripts are not validated or sandboxed before creation.
 - **Monolithic `mcp.go` size and breadth (`cmd/stem/internal/receptors/mcp.go`):** At 1,279 lines, `cmd/stem/internal/receptors/mcp.go` combines JSON-RPC protocol parsing, tool registration, deprecated tool alias adapters, typed parameter conversions (`callStomaPass`, `callSeedGrow`), and disk-based genotype YAML index generation (`syncGenotypeIndex`, `collectGenotypeIndex`, `writeGenotypeIndex`) into a single file.
 - **Surface Asymmetries and Unadvertised Capabilities:**
   - `createGenotype` is exposed as an MCP tool in `cmd/stem/internal/receptors/mcp.go` and as a REST route in `cmd/stem/internal/receptors/config.go`, but is absent from `core.CapabilityNames()`, creating an asymmetry where genotype creation bypasses the governed Core parity registry.

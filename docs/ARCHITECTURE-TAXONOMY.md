@@ -21,7 +21,7 @@ graph TD
 
     subgraph HostSystem ["🖥️  Host System  (outside all Terrariums)"]
         Stem["🌿 Stem\nGo Orchestrator\n(tendril serve)"]
-        HT["⚡ Hormonal Triggers\nSecurity Gates\n(pre-flight bash hooks)"]
+        HT["⚡ Hormonal Triggers\nSecurity Gates\n(pre-flight POSIX-sh hooks in Terrarium)"]
         Rhizome[("🍄 Rhizome\nSQLite AST Index\n(background scanner)")]
         ControlPlane["🔒 Control Plane\n<Stem working dir>/.tendril/\n(owned by the Stem; never\nmounted into a Terrarium)"]
         WorkspaceConf["📁 Workspace\n<checkout>/.tendril/\n(a Sprout can write this;\nnever trusted)"]
@@ -161,7 +161,7 @@ graph TB
 |---|---|---|
 | **Stem** | Go Orchestrator | Trust anchor. Runs on host. Owns all security decisions. |
 | **Mycorrhizal Network** | LLM (Claude/GPT/Ollama) | External. Never touches the host filesystem. |
-| **Hormonal Trigger** | Security Gate / Hook | Pre-flight bash script. Blocks execution before Terrarium boots. |
+| **Hormonal Trigger** | Security Gate / Hook | Pre-flight POSIX-sh script running in an isolated Terrarium. Blocks execution if exit > 0. |
 | **Sprout** | One Terrarium execution run — the ephemeral worker | Created fresh, destroyed on completion. The executor: dumb by design, only follows Genotype instructions. *(Formerly split as "Tendril" for the worker loop; now a single organ.)* |
 | **Terrarium** | Docker / gVisor / Firecracker / Host | Isolation layer. Defines the security boundary. |
 | **Genotype** | System Prompt / Persona | Defines identity, capability scope, and **deny-list** of blocked tools. |

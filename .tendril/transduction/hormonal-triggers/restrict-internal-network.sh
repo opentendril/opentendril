@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Hormonal Trigger: Network Security
 # Runs at the Meristem before a Tendril is allowed to sprout.
