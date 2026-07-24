@@ -1,13 +1,10 @@
 package security
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 )
 
@@ -16,22 +13,39 @@ type TriggerPayload struct {
 	Transcript string `json:"transcript"`
 }
 
-// EvaluateTriggers executes all scripts in the given triggers directory.
-// It serializes the payload to a temp file and passes the path to each script.
-// If any script returns > 0, it returns an error with the script's stderr.
-func EvaluateTriggers(ctx context.Context, triggersDir string, payload TriggerPayload) error {
-	// Check if directory exists
-	if _, err := os.Stat(triggersDir); os.IsNotExist(err) {
-		// No triggers configured, allow execution
+// TriggerMode defines the explicit states of the Hormonal Trigger gate.
+type TriggerMode string
+
+const (
+	ModeEnforce  TriggerMode = "enforce"
+	ModeDisabled TriggerMode = "disabled"
+)
+
+// TriggerRunner executes a single trigger script.
+type TriggerRunner interface {
+	RunTrigger(ctx context.Context, scriptPath string, payload TriggerPayload) error
+}
+
+// EvaluateTriggers evaluates the Hormonal Trigger gate against the given payload.
+// If mode is disabled, it returns immediately. If mode is enforce, it requires
+// the triggers directory to exist and be readable. It executes each executable
+// script via the runner; a non-zero exit blocks the run.
+func EvaluateTriggers(ctx context.Context, mode TriggerMode, runner TriggerRunner, triggersDir string, payload TriggerPayload) error {
+	if mode == ModeDisabled {
 		return nil
+	}
+
+	// Default to enforce for any unrecognized mode value.
+	if mode != ModeEnforce {
+		mode = ModeEnforce
 	}
 
 	entries, err := os.ReadDir(triggersDir)
 	if err != nil {
-		return fmt.Errorf("failed to read triggers directory: %w", err)
+		// Deny (fail-closed) on missing or unreadable directory.
+		return fmt.Errorf("Hormonal Trigger gate blocked: failed to read triggers directory: %w", err)
 	}
 
-	// Filter executable scripts
 	var scripts []string
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Name() == "README.md" {
@@ -48,37 +62,13 @@ func EvaluateTriggers(ctx context.Context, triggersDir string, payload TriggerPa
 	}
 
 	if len(scripts) == 0 {
-		return nil // No executable triggers
+		log.Printf("Hormonal Triggers: no executable triggers configured in %s", triggersDir)
+		return nil
 	}
 
-	// Create temp JSON file
-	tmpFile, err := os.CreateTemp("", "tendril-trigger-*.json")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file for trigger payload: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if err := json.NewEncoder(tmpFile).Encode(payload); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("failed to encode trigger payload: %w", err)
-	}
-	tmpFile.Close()
-
-	// Execute each script
 	for _, script := range scripts {
-		cmd := exec.CommandContext(ctx, script, tmpFile.Name())
-
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		cmd.Stdout = io.Discard // Discard stdout as per requirements, or we could capture it.
-
-		if err := cmd.Run(); err != nil {
-			// Trigger failed! Return the stderr.
-			errMsg := stderr.String()
-			if errMsg == "" {
-				errMsg = err.Error()
-			}
-			return fmt.Errorf("Hormonal Trigger Blocked: script '%s' failed.\nReason: %s", filepath.Base(script), errMsg)
+		if err := runner.RunTrigger(ctx, script, payload); err != nil {
+			return err // runner formats the block message
 		}
 	}
 

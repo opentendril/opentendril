@@ -30,6 +30,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 type ChatCompletionRequest struct {
@@ -83,6 +84,12 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	tendrilDir := "./.tendril"
+
+	// Ensure hormonal triggers directory exists (Slice 1 requirement)
+	triggersDir := getTriggersDir()
+	if err := os.MkdirAll(triggersDir, 0o755); err != nil {
+		log.Printf("⚠️ Could not create triggers directory: %v", err)
+	}
 
 	// The Stem must never serve its API unauthenticated (finding
 	// 1): an explicit key wins, otherwise a previously generated key is
@@ -264,7 +271,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	if schedCfg, err := scheduler.LoadConfig(schedulesPath); err != nil {
 		log.Printf("⚠️ Failed to load scheduler config: %v (scheduling disabled)", err)
 	} else if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
-		firer := scheduledRunFirer(coreSvc, sessions, "./.tendril/transduction/hormonal-triggers")
+		firer := scheduledRunFirer(coreSvc, sessions, getTriggersDir())
 		scheduler.New(schedCfg, firer, log.Default()).Start(ctx)
 		log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
 	}
@@ -503,7 +510,8 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 			payload.Genotype = firstNonEmpty(e.Sprout.Genotype, e.Sprout.Model, e.Model)
 			payload.Transcript = e.Sprout.Transcript
 		}
-		if err := security.EvaluateTriggers(ctx, triggersDir, payload); err != nil {
+		mode, runner := resolveTriggerModeAndRunner()
+		if err := security.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
 			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
 			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
 		}
@@ -789,8 +797,9 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			Transcript: taskPrompt,
 		}
 
-		triggersDir := "./.tendril/transduction/hormonal-triggers"
-		if err := security.EvaluateTriggers(r.Context(), triggersDir, payload); err != nil {
+		triggersDir := getTriggersDir()
+		mode, runner := resolveTriggerModeAndRunner()
+		if err := security.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
 			log.Printf("Sprout blocked by Hormonal Triggers: %v", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
@@ -942,4 +951,94 @@ func writeChatHistory(path string, record chatHistoryRecord) error {
 	}
 
 	return nil
+}
+
+const triggerExecTimeout = 30 * time.Second
+
+func getTriggersDir() string {
+	return filepath.Join(".", ".tendril", "transduction", "hormonal-triggers")
+}
+
+// terrariumRunner executes triggers inside an isolated Terrarium.
+// Note: Hormonal triggers run in an isolated alpine:3.20 Terrarium.
+// The script must be an executable POSIX sh script; #!/bin/bash is not available.
+// Full operator documentation will be provided in Slice 3.
+type terrariumRunner struct {
+	providerName string
+}
+
+func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payload security.TriggerPayload) error {
+	provider, err := terrarium.NewProvider(ctx, r.providerName)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to resolve terrarium provider for isolated execution: %w", err)
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to serialize payload: %w", err)
+	}
+
+	spec := terrarium.TerrariumSpec{
+		Image:       "alpine:3.20",
+		WorkingDir:  "/app",
+		NetworkMode: terrarium.NetworkModeNone,
+		Timeout:     triggerExecTimeout,
+		// Defense in depth
+		RunAsUser:     "65534", // nobody
+		PidsLimit:     128,
+		MemoryLimitMB: 256,
+		// Note: ReadOnlyRootFS is intentionally omitted because the payload is delivered
+		// as a file payload under /tmp, which requires a writable rootfs in some providers.
+		Mounts: []terrarium.MountSpec{
+			{Source: filepath.Dir(scriptPath), Target: "/triggers", ReadOnly: true},
+		},
+		Files: []terrarium.FilePayload{
+			{Path: "/tmp/payload.json", Content: payloadJSON, Mode: 0o444},
+		},
+		Command: []string{filepath.Join("/triggers", filepath.Base(scriptPath)), "/tmp/payload.json"},
+	}
+
+	instance, err := provider.Create(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to create isolated runner terrarium: %w", err)
+	}
+	defer func() { _ = instance.Stop(context.Background()) }()
+
+	result, runErr := instance.Run(ctx, terrarium.CommandSpec{
+		Command:    spec.Command,
+		WorkingDir: "/triggers",
+	})
+	if result.TimedOut || runErr != nil {
+		if result.TimedOut {
+			return fmt.Errorf("Hormonal Trigger blocked: script '%s' exceeded timeout of %v", filepath.Base(scriptPath), triggerExecTimeout)
+		}
+		return fmt.Errorf("Hormonal Trigger blocked: script '%s' failed to execute: %w (hormonal triggers run in an isolated alpine:3.20 Terrarium — the script must be an executable POSIX sh script; #!/bin/bash is not available)", filepath.Base(scriptPath), runErr)
+	}
+
+	if result.ExitCode != 0 {
+		errMsg := strings.TrimSpace(result.Stderr)
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("exit code %d", result.ExitCode)
+		}
+		return fmt.Errorf("Hormonal Trigger Blocked: script '%s' failed.\nReason: %s", filepath.Base(scriptPath), errMsg)
+	}
+
+	return nil
+}
+
+func resolveTriggerModeAndRunner() (security.TriggerMode, security.TriggerRunner) {
+	modeStr := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_TRIGGERS_MODE")))
+	var mode security.TriggerMode
+	if modeStr == string(security.ModeDisabled) {
+		mode = security.ModeDisabled
+	} else {
+		mode = security.ModeEnforce
+	}
+
+	providerName := ""
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TENDRIL_ALLOW_HOST_EXECUTION")), "true") {
+		providerName = terrarium.ProviderHost
+	}
+
+	return mode, terrariumRunner{providerName: providerName}
 }
