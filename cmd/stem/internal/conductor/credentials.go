@@ -62,14 +62,15 @@ const (
 // ResolvedCredential is the typed credential the terrarium consumes.
 // It never carries a secret to a log: String() redacts TokenValue.
 type ResolvedCredential struct {
-	Method     CredentialMethod
-	TokenEnv   string // env var name the PAT was read from (method pat)
-	TokenValue string // resolved PAT secret (method pat) — never log this
-	SSHKeyPath string // expanded key path (method ssh)
-	App        AppCredential
-	Sign       ResolvedSigning
-	Identity   ResolvedIdentity
-	Checkout   CheckoutSpec
+	Method      CredentialMethod
+	TokenEnv    string // env var name the PAT was read from (method pat)
+	TokenValue  string // resolved PAT secret (method pat) — never log this
+	ExposeToken bool
+	SSHKeyPath  string // expanded key path (method ssh)
+	App         AppCredential
+	Sign        ResolvedSigning
+	Identity    ResolvedIdentity
+	Checkout    CheckoutSpec
 	// CommitMode is the resolved git.commit execution mode: CommitModeLocal
 	// (the default) or CommitModeAPI. Never empty after resolution.
 	CommitMode string
@@ -82,8 +83,8 @@ func (c ResolvedCredential) String() string {
 	if c.TokenValue != "" {
 		token = "***"
 	}
-	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q identityName:%q identityEmail:%q checkout:%q commit:%q}",
-		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Identity.Name, c.Identity.Email, c.Checkout.Mode, c.CommitMode)
+	return fmt.Sprintf("ResolvedCredential{method:%q env:%q token:%s sshKey:%q sign:%q identityName:%q identityEmail:%q checkout:%q commit:%q exposeToken:%t}",
+		c.Method, c.TokenEnv, token, c.SSHKeyPath, c.Sign.Method, c.Identity.Name, c.Identity.Email, c.Checkout.Mode, c.CommitMode, c.ExposeToken)
 }
 
 func isZeroAuthSpec(a AuthSpec) bool {
@@ -153,11 +154,12 @@ func resolveSubstrateCredential(spec SubstrateSpec, profiles map[string]Credenti
 	}
 
 	resolved := ResolvedCredential{
-		Method:     method,
-		Checkout:   spec.Checkout,
-		Sign:       ResolvedSigning{Method: strings.ToLower(strings.TrimSpace(sign.Method)), Key: strings.TrimSpace(sign.Key)},
-		Identity:   ResolvedIdentity{Name: strings.TrimSpace(identity.Name), Email: strings.TrimSpace(identity.Email)},
-		CommitMode: commitMode,
+		Method:      method,
+		Checkout:    spec.Checkout,
+		Sign:        ResolvedSigning{Method: strings.ToLower(strings.TrimSpace(sign.Method)), Key: strings.TrimSpace(sign.Key)},
+		Identity:    ResolvedIdentity{Name: strings.TrimSpace(identity.Name), Email: strings.TrimSpace(identity.Email)},
+		CommitMode:  commitMode,
+		ExposeToken: auth.ExposeToken,
 	}
 
 	switch method {

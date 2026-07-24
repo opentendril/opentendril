@@ -74,6 +74,9 @@ type AuthSpec struct {
 	InstallationID int64  `yaml:"installationId,omitempty"` // optional — auto-discovered when 0
 	PrivateKeyPath string `yaml:"privateKeyPath,omitempty"` // path to the App .pem
 	PrivateKeyEnv  string `yaml:"privateKeyEnv,omitempty"`  // or env holding the PEM contents
+	// ExposeToken optionally exposes the resolved token to the Terrarium under
+	// the standard GITHUB_TOKEN names for in-container tooling. Default false.
+	ExposeToken bool `yaml:"exposeToken,omitempty"`
 }
 
 // UnmarshalYAML accepts either a scalar env-var name (back-compat) or a mapping.

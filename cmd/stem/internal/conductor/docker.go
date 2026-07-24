@@ -178,10 +178,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if plan.readOnly {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
-	// ssh/none/app substrates authenticate without the ambient PAT — keep it out
-	// of the terrarium so it is never exposed to sprout code (RFC).
-	if m := plan.credential.Method; m == CredentialSSH || m == CredentialNone || m == CredentialApp {
-		extraEnv = append(extraEnv, suppressGitHubPATEnvSentinel+"=true")
+	if plan.credential.ExposeToken && strings.TrimSpace(plan.credential.TokenValue) != "" {
+		extraEnv = append(extraEnv, gitHubTokenEnv+"="+plan.credential.TokenValue, gitHubPATLegacyEnv+"="+plan.credential.TokenValue)
 	}
 
 	if plan.remoteClone {
@@ -748,11 +746,6 @@ func (s *terrariumToolSession) Logs() string {
 	return logs.Stderr
 }
 
-// suppressGitHubPATEnvSentinel, when passed via extraEnv, keeps the ambient
-// GitHub PAT out of the terrarium (used for ssh/none substrates). It is stripped
-// from the resulting environment and never surfaces in the container.
-const suppressGitHubPATEnvSentinel = "TENDRIL_SUPPRESS_GITHUB_PAT"
-
 func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 	values := make(map[string]string)
 
@@ -772,30 +765,10 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 		}
 	}
 
-	suppressPAT := false
-	for _, entry := range extraEnv {
-		if strings.TrimSpace(entry) == suppressGitHubPATEnvSentinel+"=true" {
-			suppressPAT = true
-		}
-	}
-
-	// GitHub PAT: accept either variable name on the host and expose the
-	// resolved value under both names inside the terrarium — unless suppressed
-	// because the substrate authenticates over SSH or anonymously.
-	if !suppressPAT {
-		if _, pat := resolveGitHubPAT(); pat != "" {
-			values[gitHubTokenEnv] = pat
-			values[gitHubPATLegacyEnv] = pat
-		}
-	}
-
 	for _, entry := range extraEnv {
 		key, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
 		if !ok || strings.TrimSpace(key) == "" {
 			continue
-		}
-		if strings.TrimSpace(key) == suppressGitHubPATEnvSentinel {
-			continue // internal sentinel — never expose it to the terrarium
 		}
 		values[key] = value
 	}

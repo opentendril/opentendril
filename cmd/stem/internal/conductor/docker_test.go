@@ -517,3 +517,34 @@ func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestBuildTerrariumEnvironmentTokenExposure(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ambient-host-pat")
+	t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "ambient-legacy-pat")
+
+	t.Run("default no-token", func(t *testing.T) {
+		env := buildTerrariumEnvironment()
+		if _, ok := env["GITHUB_TOKEN"]; ok {
+			t.Fatalf("expected no GITHUB_TOKEN in default terrarium env")
+		}
+		if _, ok := env["GITHUB_PERSONAL_ACCESS_TOKEN"]; ok {
+			t.Fatalf("expected no legacy PAT in default terrarium env")
+		}
+	})
+
+	t.Run("opt-in exposure", func(t *testing.T) {
+		ownToken := "substrate-own-pat"
+		extraEnv := []string{
+			gitHubTokenEnv + "=" + ownToken,
+			gitHubPATLegacyEnv + "=" + ownToken,
+		}
+		env := buildTerrariumEnvironment(extraEnv...)
+
+		if got := env["GITHUB_TOKEN"]; got != ownToken {
+			t.Fatalf("expected %q, got %q", ownToken, got)
+		}
+		if got := env["GITHUB_PERSONAL_ACCESS_TOKEN"]; got != ownToken {
+			t.Fatalf("expected %q, got %q", ownToken, got)
+		}
+	})
+}

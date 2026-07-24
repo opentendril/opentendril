@@ -35,19 +35,3 @@ func TestResolveAuthTokenValueFallsBackAcrossGitHubPATNames(t *testing.T) {
 		}
 	})
 }
-
-func TestResolveGitHubPATPrefersCanonicalName(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "canonical")
-	t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "legacy")
-
-	name, value := resolveGitHubPAT()
-	if name != "GITHUB_TOKEN" || value != "canonical" {
-		t.Fatalf("expected GITHUB_TOKEN/canonical, got %s/%s", name, value)
-	}
-
-	t.Setenv("GITHUB_TOKEN", "")
-	name, value = resolveGitHubPAT()
-	if name != "GITHUB_PERSONAL_ACCESS_TOKEN" || value != "legacy" {
-		t.Fatalf("expected legacy fallback, got %s/%s", name, value)
-	}
-}
