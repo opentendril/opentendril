@@ -78,7 +78,12 @@ func (s *ResinSink) handle(event eventbus.Event) {
 	}
 	defer file.Close()
 
-	payload, err := json.Marshal(event)
+	evToLog := event
+	if !RedactionDisabled() {
+		evToLog = RedactEvent(event)
+	}
+
+	payload, err := json.Marshal(evToLog)
 	if err != nil {
 		return
 	}

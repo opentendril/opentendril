@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -48,7 +46,7 @@ func wrapIfRedacting(t Transporter, rawConfig bool) Transporter {
 	if rawConfig {
 		return t
 	}
-	if v := os.Getenv("TENDRIL_TELEMETRY_REDACTION"); strings.ToLower(v) == "off" || strings.ToLower(v) == "false" {
+	if RedactionDisabled() {
 		return t
 	}
 	return &redactingTransporter{wrapped: t}

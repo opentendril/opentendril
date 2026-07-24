@@ -168,3 +168,61 @@ func TestResinWithoutAmberNeverRotates(t *testing.T) {
 		t.Errorf("active log is %d bytes, expected unrotated growth past 1 KB", info.Size())
 	}
 }
+
+func TestResinSinkRedaction(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "resin.log")
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sink, err := InitResinSink(bus, ResinConfig{Enabled: true}, logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ev := eventbus.Event{
+		Type:   "test",
+		Source: "test-source",
+		Data: map[string]interface{}{
+			"label":   "build",
+			"api_key": "sk-abcdefghijklmnopqrstuvwxyz123456",
+		},
+	}
+
+	sink.handle(ev)
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(content), "sk-abcdefghijklmnopqrstuvwxyz123456") {
+		t.Errorf("log contains raw secret")
+	}
+	if !strings.Contains(string(content), "[REDACTED]") {
+		t.Errorf("log does not contain [REDACTED]")
+	}
+	if !strings.Contains(string(content), "build") {
+		t.Errorf("log does not contain non-secret content")
+	}
+	if ev.Data["api_key"] != "sk-abcdefghijklmnopqrstuvwxyz123456" {
+		t.Errorf("original event was mutated")
+	}
+
+	os.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	defer os.Unsetenv("TENDRIL_TELEMETRY_REDACTION")
+
+	sink.handle(ev)
+	content2, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(content2)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[1], "sk-abcdefghijklmnopqrstuvwxyz123456") {
+		t.Errorf("log does not contain raw secret when redaction is disabled")
+	}
+}
