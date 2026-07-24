@@ -1,7 +1,7 @@
 # System Sequences: Pre-built Git & SDLC Workflows
 
 > **Status:** Design RFC
-> **See also:** [DESIGN-SEQUENCE-RUNNER.md](./DESIGN-SEQUENCE-RUNNER.md)
+> **See also:** [DESIGN-CONDUCTOR.md](./DESIGN-CONDUCTOR.md)
 
 ---
 
