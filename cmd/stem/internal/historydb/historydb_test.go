@@ -2,17 +2,26 @@ package historydb
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	dbDir := t.TempDir()
+	keyPath := filepath.Join(dbDir, "rhizome.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := Open(context.Background(), filepath.Join(dbDir, "history.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -162,5 +171,157 @@ func TestSproutRunUpsert(t *testing.T) {
 	}
 	if runs[0].Origin != "scheduler" {
 		t.Fatalf("a scheduler-originated run must read back origin %q, got %q", "scheduler", runs[0].Origin)
+	}
+}
+
+func TestEncryptionAtRest_CiphertextOnDisk(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	// Insert test data
+	if err := store.AppendMessage(ctx, session.Message{
+		SessionID: "s1", Role: "user", Content: "secret_msg",
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	if err := store.RecordSproutRun(ctx, SproutRun{
+		RunID: "r1", SessionID: "s1", Transcript: "secret_transcript", Status: "running", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("RecordSproutRun: %v", err)
+	}
+
+	if err := store.RecordSeedRun(ctx, SeedRun{
+		Handle: "seed1", Diff: "secret_diff", Status: "running", StartedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("RecordSeedRun: %v", err)
+	}
+
+	if err := store.RecordEvent(ctx, eventbus.Event{
+		SessionID: "s1", Type: "test_event", Data: map[string]any{"key": "val"},
+	}); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	// Open raw sql to inspect disk format
+	raw, err := sql.Open("sqlite", store.Path())
+	if err != nil {
+		t.Fatalf("Raw sql.Open: %v", err)
+	}
+	defer raw.Close()
+
+	var content, sessionId string
+	if err := raw.QueryRow("SELECT content, sessionId FROM messages WHERE sessionId='s1' LIMIT 1").Scan(&content, &sessionId); err != nil {
+		t.Fatalf("Raw select message: %v", err)
+	}
+	if !strings.HasPrefix(content, heartwood.Prefix) {
+		t.Errorf("expected ciphertext prefix for content, got: %q", content)
+	}
+	if sessionId != "s1" {
+		t.Errorf("expected plaintext sessionId, got: %q", sessionId)
+	}
+
+	var transcript string
+	if err := raw.QueryRow("SELECT transcript FROM sproutruns WHERE runId='r1' LIMIT 1").Scan(&transcript); err != nil {
+		t.Fatalf("Raw select sprout: %v", err)
+	}
+	if !strings.HasPrefix(transcript, heartwood.Prefix) {
+		t.Errorf("expected ciphertext prefix for transcript, got: %q", transcript)
+	}
+
+	var diff string
+	if err := raw.QueryRow("SELECT diff FROM seedruns WHERE handle='seed1' LIMIT 1").Scan(&diff); err != nil {
+		t.Fatalf("Raw select seed: %v", err)
+	}
+	if !strings.HasPrefix(diff, heartwood.Prefix) {
+		t.Errorf("expected ciphertext prefix for diff, got: %q", diff)
+	}
+
+	var data string
+	if err := raw.QueryRow("SELECT data FROM events WHERE type='test_event' LIMIT 1").Scan(&data); err != nil {
+		t.Fatalf("Raw select event: %v", err)
+	}
+	if !strings.HasPrefix(data, heartwood.Prefix) {
+		t.Errorf("expected ciphertext prefix for event data, got: %q", data)
+	}
+}
+
+func TestEncryptionAtRest_LegacyPlaintextReadCompat(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	// Manually insert legacy plaintext
+	_, err := store.db.Exec(`INSERT INTO messages (sessionId, role, content, model, createdAt) VALUES ('s2', 'user', 'legacy_text', 'mod', '2023-01-01T00:00:00Z')`)
+	if err != nil {
+		t.Fatalf("Raw insert legacy: %v", err)
+	}
+
+	msgs, err := store.LoadMessages(ctx, "s2", 10)
+	if err != nil {
+		t.Fatalf("LoadMessages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "legacy_text" {
+		t.Fatalf("Expected legacy plaintext read compat, got: %+v", msgs)
+	}
+}
+
+func TestEncryptionAtRest_OptOut(t *testing.T) {
+	t.Setenv("TENDRIL_ENCRYPT_AT_REST", "off")
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if err := store.AppendMessage(ctx, session.Message{
+		SessionID: "s3", Role: "user", Content: "opt_out_msg",
+	}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", store.Path())
+	if err != nil {
+		t.Fatalf("Raw sql.Open: %v", err)
+	}
+	defer raw.Close()
+
+	var content string
+	if err := raw.QueryRow("SELECT content FROM messages WHERE sessionId='s3' LIMIT 1").Scan(&content); err != nil {
+		t.Fatalf("Raw select: %v", err)
+	}
+	if content != "opt_out_msg" {
+		t.Fatalf("expected plaintext written when opted out, got: %q", content)
+	}
+
+	msgs, err := store.LoadMessages(ctx, "s3", 10)
+	if err != nil {
+		t.Fatalf("LoadMessages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Content != "opt_out_msg" {
+		t.Fatalf("LoadMessages failed after opt-out write")
+	}
+}
+
+func TestTelemetryRedactThenEncrypt(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	err := store.RecordEvent(ctx, eventbus.Event{
+		SessionID: "s4",
+		Type:      "redact_test",
+		Data:      map[string]any{"token": "sk-abc-1234567890"},
+	})
+	if err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	events, err := store.LoadEvents(ctx, "s4", 10)
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("Expected 1 event, got %d", len(events))
+	}
+
+	token, ok := events[0].Data["token"].(string)
+	if !ok || token != "[REDACTED]" {
+		t.Fatalf("expected token to be [REDACTED], got: %v", token)
 	}
 }

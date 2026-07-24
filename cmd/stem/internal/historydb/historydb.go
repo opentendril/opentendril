@@ -24,7 +24,9 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 )
 
 const (
@@ -35,6 +37,10 @@ const (
 	// EnvDBPath overrides the database location. Defaults to
 	// <repo-root>/.tendril/history.db.
 	EnvDBPath = "TENDRIL_DB_PATH"
+
+	// EnvEncryptAtRest, when off/false/0/no/disabled, writes payload columns in
+	// plaintext. Reads still decrypt any pre-existing ciphertext.
+	EnvEncryptAtRest = "TENDRIL_ENCRYPT_AT_REST"
 )
 
 // SproutRun is one Sprout execution history record.
@@ -85,9 +91,21 @@ type EventRecord struct {
 // Store is the SQLite-backed history database. It implements session.Store
 // for the SessionManager and eventbus.Sink for telemetry persistence.
 type Store struct {
-	db          *sql.DB
-	path        string
-	eventErrors atomic.Int64
+	db            *sql.DB
+	path          string
+	eventErrors   atomic.Int64
+	cipher        *heartwood.Cipher
+	encryptWrites bool
+}
+
+func encryptionDisabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(EnvEncryptAtRest)))
+	switch value {
+	case "false", "0", "off", "no", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // LoggingEnabled reports whether SQLite persistence is switched on.
@@ -130,6 +148,22 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("create history database directory: %w", err)
 	}
 
+	keyPath := filepath.Join(filepath.Dir(path), "rhizome.key")
+	material, err := heartwood.ResolveKey(keyPath)
+
+	var cipher *heartwood.Cipher
+	if err == nil {
+		cipher, err = heartwood.NewCipher(material)
+	}
+
+	if err != nil {
+		if encryptionDisabled() {
+			log.Printf("⚠️ historydb: encryption opt-out set, ignoring cipher error: %v", err)
+		} else {
+			return nil, fmt.Errorf("resolve encryption cipher: %w", err)
+		}
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open history database %s: %w", path, err)
@@ -138,7 +172,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// with WAL avoids SQLITE_BUSY under the concurrent gateway surfaces.
 	db.SetMaxOpenConns(1)
 
-	store := &Store{db: db, path: path}
+	store := &Store{
+		db:            db,
+		path:          path,
+		cipher:        cipher,
+		encryptWrites: !encryptionDisabled() && cipher != nil,
+	}
 	if err := store.initSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -160,6 +199,23 @@ func (s *Store) Path() string {
 		return ""
 	}
 	return s.path
+}
+
+// enc returns the versioned ciphertext for a payload value, or the value
+// unchanged when empty, encryption is off, or no cipher is configured.
+func (s *Store) enc(plaintext, aad string) (string, error) {
+	if plaintext == "" || !s.encryptWrites || s.cipher == nil {
+		return plaintext, nil
+	}
+	return s.cipher.Encrypt(plaintext, []byte(aad))
+}
+
+// dec reverses enc and passes through pre-existing plaintext (LegacyPlaintext).
+func (s *Store) dec(stored, aad string) (string, error) {
+	if stored == "" || s.cipher == nil {
+		return stored, nil
+	}
+	return s.cipher.Decrypt(stored, []byte(aad), heartwood.LegacyPlaintext)
 }
 
 func (s *Store) initSchema(ctx context.Context) error {
@@ -242,9 +298,13 @@ CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);`
 // --- session.Store implementation -------------------------------------------
 
 func (s *Store) SaveSession(ctx context.Context, sess session.Phytomer) error {
-	prefs, err := json.Marshal(sess.Preferences)
+	prefsBytes, err := json.Marshal(sess.Preferences)
 	if err != nil {
 		return fmt.Errorf("encode session preferences: %w", err)
+	}
+	prefs, err := s.enc(string(prefsBytes), "historydb/sessions/preferences")
+	if err != nil {
+		return fmt.Errorf("encrypt session preferences: %w", err)
 	}
 
 	const statement = `
@@ -260,7 +320,7 @@ ON CONFLICT(sessionId) DO UPDATE SET
 		sess.Origin,
 		sess.CreatedAt.UTC().Format(time.RFC3339Nano),
 		sess.LastActiveAt.UTC().Format(time.RFC3339Nano),
-		string(prefs),
+		prefs,
 	)
 	if err != nil {
 		return fmt.Errorf("save session: %w", err)
@@ -300,7 +360,11 @@ func (s *Store) LoadSessions(ctx context.Context) ([]session.Phytomer, error) {
 		if sess.LastActiveAt, err = time.Parse(time.RFC3339Nano, lastActiveAt); err != nil {
 			return nil, fmt.Errorf("parse session lastActiveAt: %w", err)
 		}
-		if err := json.Unmarshal([]byte(prefs), &sess.Preferences); err != nil {
+		prefsDec, err := s.dec(prefs, "historydb/sessions/preferences")
+		if err != nil {
+			return nil, fmt.Errorf("decrypt session preferences: %w", err)
+		}
+		if err := json.Unmarshal([]byte(prefsDec), &sess.Preferences); err != nil {
 			return nil, fmt.Errorf("decode session preferences: %w", err)
 		}
 		sessions = append(sessions, sess)
@@ -321,10 +385,15 @@ VALUES (?, ?, ?, ?, ?)`
 		createdAt = time.Now().UTC()
 	}
 
-	_, err := s.db.ExecContext(ctx, statement,
+	encContent, err := s.enc(msg.Content, "historydb/messages/content")
+	if err != nil {
+		return fmt.Errorf("encrypt message content: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, statement,
 		msg.SessionID,
 		msg.Role,
-		msg.Content,
+		encContent,
 		msg.Model,
 		createdAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -363,6 +432,9 @@ ORDER BY id ASC`
 		if err := rows.Scan(&msg.SessionID, &msg.Role, &msg.Content, &msg.Model, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
+		if msg.Content, err = s.dec(msg.Content, "historydb/messages/content"); err != nil {
+			return nil, fmt.Errorf("decrypt message content: %w", err)
+		}
 		if msg.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 			return nil, fmt.Errorf("parse message createdAt: %w", err)
 		}
@@ -389,16 +461,26 @@ func (s *Store) Consume(event eventbus.Event) {
 
 // RecordEvent writes one EventBus telemetry event.
 func (s *Store) RecordEvent(ctx context.Context, event eventbus.Event) error {
+	ev := event
+	if !telemetry.RedactionDisabled() {
+		ev = telemetry.RedactEvent(event)
+	}
+
 	data := "{}"
-	if len(event.Data) > 0 {
-		encoded, err := json.Marshal(event.Data)
+	if len(ev.Data) > 0 {
+		encoded, err := json.Marshal(ev.Data)
 		if err != nil {
 			return fmt.Errorf("encode event data: %w", err)
 		}
 		data = string(encoded)
 	}
 
-	timestamp := event.Timestamp
+	data, err := s.enc(data, "historydb/events/data")
+	if err != nil {
+		return fmt.Errorf("encrypt event data: %w", err)
+	}
+
+	timestamp := ev.Timestamp
 	if timestamp.IsZero() {
 		timestamp = time.Now().UTC()
 	}
@@ -407,10 +489,10 @@ func (s *Store) RecordEvent(ctx context.Context, event eventbus.Event) error {
 INSERT INTO events (sessionId, type, source, data, createdAt)
 VALUES (?, ?, ?, ?, ?)`
 
-	_, err := s.db.ExecContext(ctx, statement,
-		event.SessionID,
-		string(event.Type),
-		event.Source,
+	_, err = s.db.ExecContext(ctx, statement,
+		ev.SessionID,
+		string(ev.Type),
+		ev.Source,
 		data,
 		timestamp.UTC().Format(time.RFC3339Nano),
 	)
@@ -458,6 +540,10 @@ ORDER BY id ASC`
 		if err := rows.Scan(&record.ID, &record.SessionID, &record.Type, &record.Source, &data, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
+		data, err = s.dec(data, "historydb/events/data")
+		if err != nil {
+			return nil, fmt.Errorf("decrypt event data: %w", err)
+		}
 		if data != "" && data != "{}" {
 			if err := json.Unmarshal([]byte(data), &record.Data); err != nil {
 				return nil, fmt.Errorf("decode event data: %w", err)
@@ -491,6 +577,23 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 
+	genotype, err := s.enc(run.Genotype, "historydb/sproutruns/genotype")
+	if err != nil {
+		return fmt.Errorf("encrypt sprout run genotype: %w", err)
+	}
+	transcript, err := s.enc(run.Transcript, "historydb/sproutruns/transcript")
+	if err != nil {
+		return fmt.Errorf("encrypt sprout run transcript: %w", err)
+	}
+	output, err := s.enc(run.Output, "historydb/sproutruns/output")
+	if err != nil {
+		return fmt.Errorf("encrypt sprout run output: %w", err)
+	}
+	runError, err := s.enc(run.Error, "historydb/sproutruns/error")
+	if err != nil {
+		return fmt.Errorf("encrypt sprout run error: %w", err)
+	}
+
 	const statement = `
 INSERT INTO sproutruns (runId, sessionId, stepId, origin, model, genotype, transcript, status, output, error, startedAt, finishedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -500,17 +603,17 @@ ON CONFLICT(runId) DO UPDATE SET
 	error = excluded.error,
 	finishedAt = excluded.finishedAt`
 
-	_, err := s.db.ExecContext(ctx, statement,
+	_, err = s.db.ExecContext(ctx, statement,
 		run.RunID,
 		run.SessionID,
 		run.StepID,
 		run.Origin,
 		run.Model,
-		run.Genotype,
-		run.Transcript,
+		genotype,
+		transcript,
 		run.Status,
-		run.Output,
-		run.Error,
+		output,
+		runError,
 		run.StartedAt.UTC().Format(time.RFC3339Nano),
 		finishedAt,
 	)
@@ -554,6 +657,18 @@ LIMIT ?`
 		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scan sprout run: %w", err)
 		}
+		if run.Genotype, err = s.dec(run.Genotype, "historydb/sproutruns/genotype"); err != nil {
+			return nil, fmt.Errorf("decrypt sprout run genotype: %w", err)
+		}
+		if run.Transcript, err = s.dec(run.Transcript, "historydb/sproutruns/transcript"); err != nil {
+			return nil, fmt.Errorf("decrypt sprout run transcript: %w", err)
+		}
+		if run.Output, err = s.dec(run.Output, "historydb/sproutruns/output"); err != nil {
+			return nil, fmt.Errorf("decrypt sprout run output: %w", err)
+		}
+		if run.Error, err = s.dec(run.Error, "historydb/sproutruns/error"); err != nil {
+			return nil, fmt.Errorf("decrypt sprout run error: %w", err)
+		}
 		if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
 			return nil, fmt.Errorf("parse sprout run startedAt: %w", err)
 		}
@@ -586,6 +701,23 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 
+	goal, err := s.enc(run.Goal, "historydb/seedruns/goal")
+	if err != nil {
+		return fmt.Errorf("encrypt seed run goal: %w", err)
+	}
+	diff, err := s.enc(run.Diff, "historydb/seedruns/diff")
+	if err != nil {
+		return fmt.Errorf("encrypt seed run diff: %w", err)
+	}
+	logs, err := s.enc(run.Logs, "historydb/seedruns/logs")
+	if err != nil {
+		return fmt.Errorf("encrypt seed run logs: %w", err)
+	}
+	runError, err := s.enc(run.Error, "historydb/seedruns/error")
+	if err != nil {
+		return fmt.Errorf("encrypt seed run error: %w", err)
+	}
+
 	const statement = `
 INSERT INTO seedruns (handle, pollen, substrate, goal, status, iterations, branch, diff, logs, error, startedAt, finishedAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -598,17 +730,17 @@ ON CONFLICT(handle) DO UPDATE SET
 	error = excluded.error,
 	finishedAt = excluded.finishedAt`
 
-	_, err := s.db.ExecContext(ctx, statement,
+	_, err = s.db.ExecContext(ctx, statement,
 		run.Handle,
 		run.Pollen,
 		run.Substrate,
-		run.Goal,
+		goal,
 		run.Status,
 		run.Iterations,
 		run.Branch,
-		run.Diff,
-		run.Logs,
-		run.Error,
+		diff,
+		logs,
+		runError,
 		run.StartedAt.UTC().Format(time.RFC3339Nano),
 		finishedAt,
 	)
@@ -641,6 +773,18 @@ WHERE handle = ?`
 	}
 	if err != nil {
 		return SeedRun{}, false, fmt.Errorf("get seed run: %w", err)
+	}
+	if run.Goal, err = s.dec(run.Goal, "historydb/seedruns/goal"); err != nil {
+		return SeedRun{}, false, fmt.Errorf("decrypt seed run goal: %w", err)
+	}
+	if run.Diff, err = s.dec(run.Diff, "historydb/seedruns/diff"); err != nil {
+		return SeedRun{}, false, fmt.Errorf("decrypt seed run diff: %w", err)
+	}
+	if run.Logs, err = s.dec(run.Logs, "historydb/seedruns/logs"); err != nil {
+		return SeedRun{}, false, fmt.Errorf("decrypt seed run logs: %w", err)
+	}
+	if run.Error, err = s.dec(run.Error, "historydb/seedruns/error"); err != nil {
+		return SeedRun{}, false, fmt.Errorf("decrypt seed run error: %w", err)
 	}
 	if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
 		return SeedRun{}, false, fmt.Errorf("parse seed run startedAt: %w", err)
