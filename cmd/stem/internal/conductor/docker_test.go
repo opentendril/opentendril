@@ -3,6 +3,8 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -547,4 +549,148 @@ func TestBuildTerrariumEnvironmentTokenExposure(t *testing.T) {
 			t.Fatalf("expected %q, got %q", ownToken, got)
 		}
 	})
+}
+
+func TestAllowHostWorkspace(t *testing.T) {
+	tests := []struct {
+		envVal string
+		want   bool
+	}{
+		{"true", true},
+		{"TRUE", true},
+		{"True", true},
+		{"false", false},
+		{"", false},
+		{"1", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(fmt.Sprintf("env=%s", tc.envVal), func(t *testing.T) {
+			if tc.envVal != "" {
+				t.Setenv(EnvAllowHostWorkspace, tc.envVal)
+			} else {
+				os.Unsetenv(EnvAllowHostWorkspace)
+			}
+			if got := allowHostWorkspace(); got != tc.want {
+				t.Errorf("allowHostWorkspace() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunSproutFailClosedIsolation(t *testing.T) {
+	origCreateShadowWorktreeFn := createShadowWorktreeFn
+	origRunSproutPreflightChecksFn := runSproutPreflightChecksFn
+	origGenerateRepoMapFn := generateRepoMapFn
+	defer func() {
+		createShadowWorktreeFn = origCreateShadowWorktreeFn
+		runSproutPreflightChecksFn = origRunSproutPreflightChecksFn
+		generateRepoMapFn = origGenerateRepoMapFn
+	}()
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
+
+	workdir := t.TempDir()
+	runGitCommand(context.Background(), workdir, "init")
+	runGitCommand(context.Background(), workdir, "commit", "--allow-empty", "-m", "init")
+
+	tests := []struct {
+		name       string
+		allowHost  bool
+		wantErr    bool
+		wantTarget string
+	}{
+		{
+			name:       "unset fails closed",
+			allowHost:  false,
+			wantErr:    true,
+			wantTarget: "",
+		},
+		{
+			name:       "opt-in proceeds on host workspace",
+			allowHost:  true,
+			wantErr:    false,
+			wantTarget: workdir,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.allowHost {
+				t.Setenv(EnvAllowHostWorkspace, "true")
+			} else {
+				os.Unsetenv(EnvAllowHostWorkspace)
+			}
+
+			createShadowWorktreeFn = func(sourcePath, cloneBranch string) (string, error) {
+				return "", fmt.Errorf("simulated isolation failure")
+			}
+
+			// We need a lightweight mock for ensureSproutImageFn and newSproutFn to test the execution path
+			origEnsureSproutImageFn := ensureSproutImageFn
+			origNewSproutFn := newSproutFn
+			origStartTerrariumSessionFn := startTerrariumSessionFn
+			origCollectStageableFilesFn := collectStageableFilesFn
+			origCommitTerrariumExecutionFn := commitTerrariumExecutionFn
+			origMergeTerrariumCommitFn := mergeTerrariumCommitFn
+			defer func() {
+				ensureSproutImageFn = origEnsureSproutImageFn
+				newSproutFn = origNewSproutFn
+				startTerrariumSessionFn = origStartTerrariumSessionFn
+				collectStageableFilesFn = origCollectStageableFilesFn
+				commitTerrariumExecutionFn = origCommitTerrariumExecutionFn
+				mergeTerrariumCommitFn = origMergeTerrariumCommitFn
+			}()
+
+			ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
+			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
+				return &terrariumToolSession{}, nil // Dummy session
+			}
+			newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+				if tc.allowHost && workspace != tc.wantTarget {
+					t.Errorf("sprout workspace = %q, want %q (host workspace)", workspace, tc.wantTarget)
+				}
+				return &mockSproutRunner{response: "success"}, nil
+			}
+			collectStageableFilesFn = func(ctx context.Context, mountPath string, excludedPaths ...string) ([]string, error) {
+				return nil, nil
+			}
+			commitTerrariumExecutionFn = func(ctx context.Context, shadowPath, sourcePath, statusPath string, execution sproutExecutionStatus, prompt string, cred ResolvedCredential) (string, error) {
+				return "hash", nil
+			}
+			mergeTerrariumCommitFn = func(ctx context.Context, hostPath, commitHash string) error { return nil }
+
+			orch := NewDockerOrchestrator()
+			orch.Substrate = workdir
+			orch.StepID = "test-step"
+			orch.DisableMergeBack = true // simplify testing
+
+			report, err := orch.RunSprout(context.Background(), "test prompt")
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected RunSprout to fail closed, got nil error")
+				} else if !strings.Contains(err.Error(), "isolation could not be established") {
+					t.Errorf("expected isolation error, got: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected RunSprout to proceed, got error: %v", err)
+				}
+				if report.Outcome != SproutOutcomeNoChanges {
+					t.Errorf("expected complete outcome, got %q", report.Outcome)
+				}
+			}
+		})
+	}
+}
+
+type mockSproutRunner struct {
+	response string
+	err      error
+}
+
+func (m *mockSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
+	return sproutResult{Response: m.response}, m.err
 }

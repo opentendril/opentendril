@@ -852,3 +852,76 @@ func TestFallbackStepModelTier(t *testing.T) {
 		})
 	}
 }
+
+func TestRunSequenceSproutFailClosedIsolation(t *testing.T) {
+	origCreateShadowWorktreeFn := createShadowWorktreeFn
+	defer func() {
+		createShadowWorktreeFn = origCreateShadowWorktreeFn
+	}()
+
+	workdir := t.TempDir()
+	runGitCommand(context.Background(), workdir, "init")
+	runGitCommand(context.Background(), workdir, "commit", "--allow-empty", "-m", "init")
+
+	tests := []struct {
+		name      string
+		allowHost bool
+		wantErr   bool
+	}{
+		{
+			name:      "unset fails closed",
+			allowHost: false,
+			wantErr:   true,
+		},
+		{
+			name:      "opt-in proceeds on host workspace",
+			allowHost: true,
+			wantErr:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.allowHost {
+				t.Setenv(EnvAllowHostWorkspace, "true")
+			} else {
+				os.Unsetenv(EnvAllowHostWorkspace)
+			}
+
+			createShadowWorktreeFn = func(sourcePath, cloneBranch string) (string, error) {
+				return "", fmt.Errorf("simulated sequence isolation failure")
+			}
+
+			origRunSequenceSproutAtPathFn := runSequenceSproutAtPathFn
+			defer func() {
+				runSequenceSproutAtPathFn = origRunSequenceSproutAtPathFn
+			}()
+
+			runSequenceSproutAtPathFn = func(ctx context.Context, orch *DockerOrchestrator, taskPrompt, sourcePath, mountPath string) (sproutExecutionResult, error) {
+				if tc.allowHost && mountPath != sourcePath {
+					t.Errorf("sprout mountPath = %q, want %q (host workspace)", mountPath, sourcePath)
+				}
+				return sproutExecutionResult{Response: "success", Outcome: SproutOutcomeComplete}, nil
+			}
+
+			orch := NewDockerOrchestrator()
+			orch.Substrate = workdir
+			orch.StepID = "seq-test-step"
+			orch.DisableMergeBack = true // simplify testing
+
+			_, err := runSequenceSprout(context.Background(), orch, "test prompt")
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("expected runSequenceSprout to fail closed, got nil error")
+				} else if !strings.Contains(err.Error(), "isolation could not be established") {
+					t.Errorf("expected isolation error, got: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected runSequenceSprout to proceed, got error: %v", err)
+				}
+			}
+		})
+	}
+}

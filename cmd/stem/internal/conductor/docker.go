@@ -24,7 +24,18 @@ import (
 	"github.com/opentendril/opentendril/roots/llm"
 )
 
-const terrariumProviderEnvKey = "TENDRIL_TERRARIUM_PROVIDER"
+const (
+	terrariumProviderEnvKey = "TENDRIL_TERRARIUM_PROVIDER"
+	// EnvAllowHostWorkspace opts into running on the active host workspace when
+	// shadow-worktree isolation cannot be established. Default (unset) is fail-closed.
+	EnvAllowHostWorkspace = "TENDRIL_ALLOW_HOST_WORKSPACE"
+)
+
+// allowHostWorkspace reports whether the operator explicitly opted into the
+// host-workspace fallback.
+func allowHostWorkspace() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(EnvAllowHostWorkspace)), "true")
+}
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
@@ -306,8 +317,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				cleanup = func() {
 					removeShadowWorktreeFn(sourcePath, shadowPath)
 				}
+			} else if allowHostWorkspace() {
+				fmt.Fprintf(os.Stderr, "⚠️  Failed to create shadow worktree: %v. Using active workspace (%s).\n", err, EnvAllowHostWorkspace)
 			} else {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
+				return report, fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git terrariuming disabled.\n", sourcePath)

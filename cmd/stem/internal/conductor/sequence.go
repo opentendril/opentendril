@@ -1708,15 +1708,17 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	mountPath := sourcePath
 	var cleanup func()
 	if gitRepo {
-		shadowPath, err := createShadowWorktree(sourcePath, orch.SubstrateBranch)
+		shadowPath, err := createShadowWorktreeFn(sourcePath, orch.SubstrateBranch)
 		if err == nil {
 			mountPath = shadowPath
-			injectMycorrhizalCache(sourcePath, shadowPath)
+			injectMycorrhizalCacheFn(sourcePath, shadowPath)
 			cleanup = func() {
-				removeShadowWorktree(sourcePath, shadowPath)
+				removeShadowWorktreeFn(sourcePath, shadowPath)
 			}
+		} else if allowHostWorkspace() {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to create shadow worktree: %v. Using active workspace (%s).\n", err, EnvAllowHostWorkspace)
 		} else {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to create shadow worktree: %v. Using active workspace.\n", err)
+			return "", fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
 		}
 	}
 
