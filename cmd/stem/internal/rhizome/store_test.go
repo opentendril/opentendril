@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 )
 
 func TestSQLiteStoreEncryptsStubsAndSearchesSymbols(t *testing.T) {
@@ -277,11 +279,11 @@ func TestGenerateMemoryMap(t *testing.T) {
 func openTestStore(t *testing.T, ctx context.Context, dbPath string) *SQLiteIndexStore {
 	t.Helper()
 
-	encryptor, err := NewEncryptor([]byte("0123456789abcdef0123456789abcdef"))
+	cipher, err := heartwood.NewCipher(heartwood.Material{Key: []byte("0123456789abcdef0123456789abcdef")})
 	if err != nil {
-		t.Fatalf("NewEncryptor returned error: %v", err)
+		t.Fatalf("NewCipher returned error: %v", err)
 	}
-	store, err := OpenSQLiteIndexStore(ctx, dbPath, encryptor)
+	store, err := OpenSQLiteIndexStore(ctx, dbPath, cipher)
 	if err != nil {
 		t.Fatalf("OpenSQLiteIndexStore returned error: %v", err)
 	}
@@ -290,14 +292,14 @@ func openTestStore(t *testing.T, ctx context.Context, dbPath string) *SQLiteInde
 
 func TestOpenMemoryBackend_Gate(t *testing.T) {
 	ctx := context.Background()
-	encryptor, err := NewEncryptor([]byte("0123456789abcdef0123456789abcdef"))
+	cipher, err := heartwood.NewCipher(heartwood.Material{Key: []byte("0123456789abcdef0123456789abcdef")})
 	if err != nil {
-		t.Fatalf("NewEncryptor returned error: %v", err)
+		t.Fatalf("NewCipher returned error: %v", err)
 	}
 
 	// pinecone without ack
 	config := MemoryConfig{Backend: "pinecone", RemoteCleartextAck: false}
-	backend, err := OpenMemoryBackend(ctx, config, encryptor)
+	backend, err := OpenMemoryBackend(ctx, config, cipher)
 	if err == nil {
 		t.Fatalf("expected error for pinecone without ack")
 	}
@@ -310,7 +312,7 @@ func TestOpenMemoryBackend_Gate(t *testing.T) {
 
 	// weaviate without ack
 	config = MemoryConfig{Backend: "weaviate", RemoteCleartextAck: false}
-	backend, err = OpenMemoryBackend(ctx, config, encryptor)
+	backend, err = OpenMemoryBackend(ctx, config, cipher)
 	if err == nil {
 		t.Fatalf("expected error for weaviate without ack")
 	}
@@ -323,7 +325,7 @@ func TestOpenMemoryBackend_Gate(t *testing.T) {
 
 	// pinecone with ack, no base url -> pinecone's own error
 	config = MemoryConfig{Backend: "pinecone", RemoteCleartextAck: true}
-	_, err = OpenMemoryBackend(ctx, config, encryptor)
+	_, err = OpenMemoryBackend(ctx, config, cipher)
 	if err == nil {
 		t.Fatalf("expected pinecone config error")
 	}
@@ -333,7 +335,7 @@ func TestOpenMemoryBackend_Gate(t *testing.T) {
 
 	// weaviate with ack, no base url -> weaviate's own error
 	config = MemoryConfig{Backend: "weaviate", RemoteCleartextAck: true}
-	_, err = OpenMemoryBackend(ctx, config, encryptor)
+	_, err = OpenMemoryBackend(ctx, config, cipher)
 	if err == nil {
 		t.Fatalf("expected weaviate config error")
 	}

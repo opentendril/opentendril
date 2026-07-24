@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
@@ -174,19 +174,19 @@ func openMemoryBackendForCLI(ctx context.Context) rhizome.MemoryBackend {
 		failMemoryCmd("load memory config", err)
 	}
 
-	var encryptor *rhizome.Encryptor
+	var cipher *heartwood.Cipher
 	if config.Backend == "" || config.Backend == "sqlite" {
-		key, err := getOrCreateMemoryKey(filepath.Join(".", ".tendril", "rhizome.key"))
+		material, err := heartwood.ResolveKey(filepath.Join(".", ".tendril", "rhizome.key"))
 		if err != nil {
 			failMemoryCmd("resolve memory key", err)
 		}
-		encryptor, err = rhizome.NewEncryptor(key)
+		cipher, err = heartwood.NewCipher(material)
 		if err != nil {
-			failMemoryCmd("initialize encryptor", err)
+			failMemoryCmd("initialize cipher", err)
 		}
 	}
 
-	backend, err := rhizome.OpenMemoryBackend(ctx, config, encryptor)
+	backend, err := rhizome.OpenMemoryBackend(ctx, config, cipher)
 	if err != nil {
 		failMemoryCmd("open memory backend", err)
 	}
@@ -218,28 +218,6 @@ func currentRepositoryName() string {
 		return "workspace"
 	}
 	return name
-}
-
-func getOrCreateMemoryKey(keyPath string) ([]byte, error) {
-	if envKey := os.Getenv("OPEN_TENDRIL_INDEX_KEY"); envKey != "" {
-		key := make([]byte, 32)
-		copy(key, []byte(envKey))
-		return key, nil
-	}
-	if content, err := os.ReadFile(keyPath); err == nil && len(content) == 32 {
-		return content, nil
-	}
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("generate random key: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(keyPath), 0o755); err != nil {
-		return nil, fmt.Errorf("create key directory: %w", err)
-	}
-	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
-		return nil, fmt.Errorf("save generated key: %w", err)
-	}
-	return key, nil
 }
 
 func failMemoryCmd(action string, err error) {
