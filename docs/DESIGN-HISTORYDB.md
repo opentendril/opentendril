@@ -18,10 +18,10 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 - Persist Sprout execution history as a lifecycle upsert — once when the Sprout emerges (`running`) and again when it matures or withers (`RecordSproutRun` / `LoadSproutRuns`).
 - Persist `seed.grow` bounded-task runs keyed by the durable `handle` a Pollinator collects against, recording the dispatching Pollen so collection can be scoped, plus the reviewable Fruit — status, iterations, branch, diff, logs (`RecordSeedRun` / `GetSeedRun`).
 - Honor the persistence toggle: `OpenFromEnv` returns `(nil, nil)` when logging is disabled so callers run fully headless without touching disk (`LoggingEnabled` / `OpenFromEnv`).
+- Encrypt payload columns at rest (`messages.content`, `sessions.preferences`, `sproutruns.transcript`/`output`/`error`/`genotype`, `seedruns.goal`/`diff`/`logs`/`error`, `events.data`) via AES-GCM using `heartwood` and the key shared with `rhizome` (`.tendril/rhizome.key` or `OPEN_TENDRIL_INDEX_KEY`). Structural/index columns stay plaintext for queries. `events.data` is redact-then-encrypt (`telemetry.RedactEvent` before sealing). Opt-out is available via `TENDRIL_ENCRYPT_AT_REST`. Note: The Tier-1 auto-key is defense-in-depth, not a boundary against a full disk read (see DESIGN-HEARTWOOD.md).
 
 **Does not:**
 
-- Encrypt anything at rest — the SQLite file stores transcripts, diffs, logs, and preferences as plaintext (no encryption code exists in the package).
 - Own any CLI, REST, MCP, or WebSocket wiring — surfaces in `cmd/stem` open the store and attach it; this package is storage only.
 - Prune, expire, vacuum, or cap growth — no retention logic exists; the `events` table grows with every published event.
 - Version or migrate the schema beyond `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`; there is no migration table and no `ALTER` path.
@@ -53,10 +53,12 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 
 ## Dependencies
 
-**Fan-out (2):**
+**Fan-out (4):**
 
 - **`internal/eventbus`** — imported for `eventbus.Event` and the `eventbus.Sink` contract. `Store` **implements** `Sink` via `Consume(event)`, so it can be attached to a `Bus` with `AttachSink`; each published event is persisted to the `events` table on the bus's dedicated sink goroutine. Because the bus drops on a full buffer and this sink swallows errors, telemetry persistence is lossy by design and never back-pressures `Publish`.
 - **`internal/session`** — imported for `session.Phytomer` and `session.Message`. `Store` **implements** the `session.Store` interface (`SaveSession`, `DeleteSession`, `LoadSessions`, `AppendMessage`, `LoadMessages`). This is the dependency inversion: `session` owns the port and knows nothing of SQLite; `historydb` is the adapter, and a `nil` store keeps the `Manager` fully in-memory.
+- **`internal/heartwood`** — imported for the `Cipher` to perform at-rest encryption of payload columns.
+- **`internal/telemetry`** — imported for `RedactEvent` and `RedactionDisabled` to apply redact-then-encrypt to `events.data`.
 
 Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver (blank-imported) plus the standard library — no CGO.
 
@@ -71,7 +73,7 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 - **`TENDRIL_DB_LOGGING=false` disables all persistence.** `OpenFromEnv` returns `(nil, nil)`, so the `SessionManager` runs in-memory and receptor record calls short-circuit on their nil guard. Nothing is written and nothing survives a restart. This is the intended fail-safe posture: an open failure in `cmdserve.go` is also downgraded to a nil store with a warning rather than aborting startup — the Stem always keeps running, persistence is best-effort.
 - **Single-writer concurrency ceiling.** `Open` sets `db.SetMaxOpenConns(1)`; the CGO-free driver serializes access per connection, and WAL plus `busy_timeout = 5000` avoids `SQLITE_BUSY` under the concurrent gateway surfaces. All writes funnel through one connection — adequate for a local Stem, not a high-concurrency multi-writer store.
 - **Unbounded growth.** There is no retention, pruning, expiry, or vacuum. Every published event is appended to `events`, and transcripts/diffs/logs are stored in full; the file grows without limit over the life of a workspace.
-- **No encryption at rest.** The database is plaintext SQLite. Session preferences, full chat content, Sprout transcripts, and seed-run diffs and logs are readable by anyone with file access. Encryption scope is out of this component entirely.
+- **Encryption scope is payload-only.** Structural and index columns stay plaintext for queries. The Tier-1 auto-key (`.tendril/rhizome.key`) is defense-in-depth, not a boundary against a full `.tendril` read; only `OPEN_TENDRIL_INDEX_KEY` provides a real control (see DESIGN-HEARTWOOD.md). Encryption can be bypassed by setting `TENDRIL_ENCRYPT_AT_REST=false`.
 - **Naive migration handling.** Schema creation is `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only. There is no schema-version row and no `ALTER TABLE` path, so a column or type change against an existing `.tendril/history.db` is not handled automatically — an old file keeps its old columns.
 - **Lossy telemetry, silent by design.** `Consume` never returns an error; failures increment `eventErrors` and log only on every 100th failure. Combined with the bus dropping events on a full sink buffer, some telemetry can be lost without a hard signal.
 - **No exported sentinel errors.** Callers cannot match on typed errors; a missing `seed.grow` handle is disambiguated only by `GetSeedRun`'s `found` boolean.
@@ -86,3 +88,5 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 **Why the event-sink model.** Telemetry persistence must never slow the orchestrator. Rather than have producers write to the database, `historydb` attaches to the `eventbus.Bus` as one `Sink` among many (local persistence sits alongside remote Redis/WebSocket transporters). The bus fans each event out to per-sink buffered channels drained on dedicated goroutines; a slow or failing persistence sink drops events for itself only and can never block `Publish`. That is why `Consume` deliberately swallows and merely samples errors — correctness of the hot path is worth more than guaranteed telemetry durability.
 
 **Why upsert-by-key for runs.** Sprout and seed runs are recorded twice — at dispatch (`running`) and at settlement — using `ON CONFLICT ... DO UPDATE`. Keying Sprout runs on `runId` and seed runs on the collectible `handle` makes the record idempotent and lets an async dispatcher update terminal state (the reviewable Fruit) against the same row a Pollinator later collects by handle, recording the dispatching Pollen so collection stays scoped to its owner.
+
+**Why the sidecar was removed.** The redundant plaintext `.tendril/history/<chatID>.json` chat sidecar was removed. Chat runs now persist solely through `RecordSproutRun` and the session store, keeping all historical data unified inside SQLite under the at-rest encryption umbrella.

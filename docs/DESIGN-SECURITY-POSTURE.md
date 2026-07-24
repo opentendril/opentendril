@@ -92,6 +92,21 @@ delegation grant's `egress` allow-list onto the existing isolation seams:
 This keeps the sealed-Sprout invariant intact for the new operation-class: a
 worker "cannot reach out on its own; external calls are Stem-mediated."
 
+## Data-at-rest encryption
+
+OpenTendril applies application-level AES-GCM encryption to sensitive fields before they reach local SQLite storage, ensuring the binary remains CGO-free (no SQLCipher required). 
+
+- **What is encrypted:** `rhizome` SQLite `stubContent` and memory `content`, plus `historydb` payload columns (`messages.content`, `sessions.preferences`, `sproutruns.transcript`/`output`/`error`/`genotype`, `seedruns.goal`/`diff`/`logs`/`error`, `events.data`).
+- **What is deliberately not encrypted:** Structural/index columns remain plaintext to allow fast FTS queries. Remote-backend fields (e.g. Pinecone/Weaviate metadata) are sent in the clear, but this is explicitly consent-gated.
+- **Two-tier key model:**
+  - **Tier-1 (auto-key):** A generated key (`.tendril/rhizome.key`) provides defense-in-depth against casual reads, but is not a boundary against a full directory read (e.g., folder sync or disk backup).
+  - **Tier-2 (env key):** The operator-supplied `OPEN_TENDRIL_INDEX_KEY` is never persisted and provides the real control against at-rest compromise.
+- **Env knobs:**
+  - `OPEN_TENDRIL_INDEX_KEY` to provide the Tier-2 encryption key.
+  - `TENDRIL_ENCRYPT_AT_REST` to globally opt out of history database payload encryption.
+  - `TENDRIL_MEMORY_REMOTE_CLEARTEXT_ACK` must be explicitly set to acknowledge cleartext egress if selecting a remote memory backend.
+- **Explicitly deferred items:** Key rotation is deferred, though the `tnd:atrest:1:<keyID>:` prefix leaves the door open for future support. Active re-encryption or scrubbing verbs do not yet exist — existing plaintext rows are simply read lazily until overwritten.
+
 ## Credential model — two-tier Pollinator access
 
 Pollinator REST access is **two-tier**:

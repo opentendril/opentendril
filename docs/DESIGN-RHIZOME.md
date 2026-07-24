@@ -11,7 +11,7 @@
 - Walk a repository tree, skip noise directories (`.git`, `node_modules`, `vendor`, `venv`, build outputs, etc.), and parse supported source files (`scanner.go`).
 - Skip unchanged files on re-scan by content SHA-256 hash recorded in the index (`ScanRepository` + `IndexStore.GetFile`).
 - Provide a first-match parser stack: native `go/ast` for Go, in-process pure-Go tree-sitter for Python/JavaScript/TypeScript/TSX, regex fallback for the same non-Go extensions (`parser.go`, `treesitter.go`).
-- Persist symbols and file hashes in SQLite FTS5 with AES-GCM encryption of `stubContent` at rest (`schema.go`, `crypto.go`).
+- Persist symbols and file hashes in SQLite FTS5 with AES-GCM encryption of `stubContent` at rest via `heartwood` (`schema.go`).
 - Search symbols and render a markdown Repo Map grouped by file path, with `file_context` pseudo-symbols sorted first within each file (`repomap.go`).
 - Store, list, search, and delete project **memories** (title/category/content/tags) via `MemoryBackend`; render a category-grouped Memory Map (`schema.go`, `memorymap.go`).
 - Select a memory backend from env (`LoadMemoryConfig` / `OpenMemoryBackend`): `sqlite` (default), `pinecone`, or `weaviate`.
@@ -44,13 +44,12 @@
 | `IndexStore` | Close, file get/upsert, symbol delete-for-file / upsert / search. |
 | `MemoryBackend` | Store / list / search / delete memories. |
 | `MemoryConfig` / `LoadMemoryConfig` | Backend name and paths/keys from `TENDRIL_*` env vars. |
-| `OpenMemoryBackend` | Construct SQLite (needs encryptor), Pinecone, or Weaviate backend. |
-| `SQLiteIndexStore` / `OpenSQLiteIndexStore` | Dual-purpose store: implements `IndexStore` and the SQLite `MemoryBackend` methods; requires non-nil `Encryptor`. |
+| `OpenMemoryBackend` | Construct SQLite (requires non-nil `heartwood.Cipher`), Pinecone, or Weaviate backend. |
+| `SQLiteIndexStore` / `OpenSQLiteIndexStore` | Dual-purpose store: implements `IndexStore` and the SQLite `MemoryBackend` methods; requires non-nil `heartwood.Cipher`. |
 | `PineconeMemoryBackend` / `NewPineconeMemoryBackend` | HTTP upsert/query/list/delete against a Pinecone index URL + API key. |
 | `WeaviateMemoryBackend` / `NewWeaviateMemoryBackend` | HTTP objects + BM25 GraphQL against a Weaviate instance (`TendrilMemory` class). |
-| `Encryptor` / `NewEncryptor` | AES-GCM encrypt/decrypt of strings (base64 raw ciphertext with prepended nonce). |
 
-Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf` strings (e.g. `"index store is required"`, `"encryptor is required"`, `"unsupported memory backend %q"`).
+Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf` strings (e.g. `"index store is required"`, `"cipher is required"`, `"unsupported memory backend %q"`).
 
 ## Dependencies
 
@@ -59,15 +58,15 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 **Fan-in:**
 
 - **`cmd/stem`** — `cmdrepomap.go` calls Conductor’s facade (not rhizome directly). `cmdmemory.go` imports rhizome for `LoadMemoryConfig`, `OpenMemoryBackend`, `Memory` CRUD, and key material under `.tendril/rhizome.key`.
-- **`internal/conductor`** — `rhizomefacade.go` opens the encryptor + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) and optional `memorymap.md` under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing `rhizome.key`, `rhizome.db*` and `repomap.md`.
+- **`internal/conductor`** — `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) and optional `memorymap.md` under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing `rhizome.key`, `rhizome.db*` and `repomap.md`.
 
 ## Limitations
 
 - **Parser language coverage is narrow.** First-class: Go (`go/ast`); Python, JavaScript, TypeScript, TSX via tree-sitter; regex covers the same non-Go extensions (including `.jsx`/`.mjs`/`.cjs`/`.mts`/`.cts`). No Rust, Java, Ruby, C/C++, etc.
 - **Tree-sitter is size-capped and fail-soft.** Files above 2 MiB, grammar load failures, parse errors, and panics fall back to regex **inside** `TreeSitterParser.Parse` so one bad non-Go file cannot abort the whole scan. **`GoParser` and bare `RegexParser` still return errors**, and `ScanRepository` fails the entire walk on any parser error.
 - **Incremental scan is hash-skip only.** Unchanged content is skipped; changed files are re-parsed. There is **no sweep that removes symbols for deleted paths**, so removed files can leave stale index rows until an external purge.
-- **SQLite encryption scope is partial.** Only symbol `stubContent` and memory `content` are AES-GCM encrypted. Names, paths, types, tags, categories, and titles are plaintext FTS columns. Remote backends (Pinecone metadata, Weaviate properties) store memory fields **in the clear** over HTTPS.
-- **Encryptor is mandatory for SQLite.** `OpenSQLiteIndexStore` rejects a nil encryptor; key lifecycle (`.tendril/rhizome.key` or `OPEN_TENDRIL_INDEX_KEY`) lives in Conductor/CLI adapters, not in this package.
+- **SQLite encryption scope is partial.** Only symbol `stubContent` and memory `content` are AES-GCM encrypted. Names, paths, types, tags, categories, and titles are plaintext FTS columns. Remote backends (Pinecone metadata, Weaviate properties) store memory fields **in the clear** over HTTPS. This remote egress is now gated fail-closed behind the explicit `TENDRIL_MEMORY_REMOTE_CLEARTEXT_ACK` acknowledgement (selecting a remote backend without it is a startup error).
+- **Cipher is mandatory for SQLite.** `OpenSQLiteIndexStore` rejects a nil cipher; key lifecycle flows through `heartwood.ResolveKey` (two-tier: `OPEN_TENDRIL_INDEX_KEY` or `.tendril/rhizome.key`), managed by Conductor/CLI adapters, not in this package.
 - **Pinecone is not real semantic embedding.** `textVector` folds lowercase bytes into a small fixed-dimension bag (default dimension 8 from `TENDRIL_PINECONE_DIMENSION`). Useful as a wire-shaped backend, not as quality RAG.
 - **Weaviate search is BM25**, not vector similarity; class name is hard-coded `TendrilMemory`. Schema creation is not performed by this package (caller/ops must provision the class).
 - **Conductor memory-map path always opens SQLite**, not `OpenMemoryBackend`. Pluggable Pinecone/Weaviate backends are reachable from `tendril memory` CLI, not from terrarium map injection.
