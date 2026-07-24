@@ -43,15 +43,3 @@ func resolveAuthTokenValue(authRef string) string {
 	}
 	return ""
 }
-
-// resolveGitHubPAT returns the first non-empty GitHub PAT from the accepted
-// environment variables, preferring GITHUB_TOKEN, along with the variable
-// name it was read from. Both return values are "" when no PAT is set.
-func resolveGitHubPAT() (envName, value string) {
-	for _, name := range []string{gitHubTokenEnv, gitHubPATLegacyEnv} {
-		if v := strings.TrimSpace(os.Getenv(name)); v != "" {
-			return name, v
-		}
-	}
-	return "", ""
-}

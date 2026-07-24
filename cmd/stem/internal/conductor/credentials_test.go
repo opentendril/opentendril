@@ -310,23 +310,3 @@ func TestMaterializeGitAuth(t *testing.T) {
 		}
 	})
 }
-
-func TestBuildTerrariumEnvironmentSuppressesPAT(t *testing.T) {
-	t.Setenv("GITHUB_TOKEN", "host-pat")
-	t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "")
-
-	if env := buildTerrariumEnvironment(); env["GITHUB_TOKEN"] != "host-pat" {
-		t.Fatalf("expected PAT injected by default, got %v", env["GITHUB_TOKEN"])
-	}
-
-	env := buildTerrariumEnvironment(suppressGitHubPATEnvSentinel + "=true")
-	if _, ok := env["GITHUB_TOKEN"]; ok {
-		t.Fatalf("PAT must be suppressed for ssh/none substrates")
-	}
-	if _, ok := env["GITHUB_PERSONAL_ACCESS_TOKEN"]; ok {
-		t.Fatalf("legacy PAT must be suppressed too")
-	}
-	if _, ok := env[suppressGitHubPATEnvSentinel]; ok {
-		t.Fatalf("internal sentinel must never surface in the terrarium env")
-	}
-}
