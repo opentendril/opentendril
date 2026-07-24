@@ -248,9 +248,13 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 		},
 	})
 
-	// A nonexistent triggers dir means no Hormonal Triggers are configured,
+	// An empty triggers dir means no Hormonal Triggers are configured,
 	// so the fire proceeds.
-	firer := scheduledRunFirer(svc, manager, filepath.Join(t.TempDir(), "no-triggers"))
+	triggersDir := filepath.Join(t.TempDir(), "no-triggers")
+	if err := os.MkdirAll(triggersDir, 0o755); err != nil {
+		t.Fatalf("failed to create triggers dir: %v", err)
+	}
+	firer := scheduledRunFirer(svc, manager, triggersDir)
 	entry := scheduler.Entry{
 		Cron: "0 3 * * *",
 		Sprout: &scheduler.SproutSpec{

@@ -30,6 +30,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 type ChatCompletionRequest struct {
@@ -83,6 +84,12 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	tendrilDir := "./.tendril"
+
+	// Ensure hormonal triggers directory exists (Slice 1 requirement)
+	triggersDir := filepath.Join(tendrilDir, "transduction", "hormonal-triggers")
+	if err := os.MkdirAll(triggersDir, 0o755); err != nil {
+		log.Printf("⚠️ Could not create triggers directory: %v", err)
+	}
 
 	// The Stem must never serve its API unauthenticated (finding
 	// 1): an explicit key wins, otherwise a previously generated key is
@@ -503,7 +510,8 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 			payload.Genotype = firstNonEmpty(e.Sprout.Genotype, e.Sprout.Model, e.Model)
 			payload.Transcript = e.Sprout.Transcript
 		}
-		if err := security.EvaluateTriggers(ctx, triggersDir, payload); err != nil {
+		mode, runner := resolveTriggerModeAndRunner()
+		if err := security.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
 			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
 			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
 		}
@@ -790,7 +798,8 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		}
 
 		triggersDir := "./.tendril/transduction/hormonal-triggers"
-		if err := security.EvaluateTriggers(r.Context(), triggersDir, payload); err != nil {
+		mode, runner := resolveTriggerModeAndRunner()
+		if err := security.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
 			log.Printf("Sprout blocked by Hormonal Triggers: %v", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
@@ -942,4 +951,74 @@ func writeChatHistory(path string, record chatHistoryRecord) error {
 	}
 
 	return nil
+}
+
+type terrariumRunner struct {
+	providerName string
+}
+
+func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payload security.TriggerPayload) error {
+	provider, err := terrarium.NewProvider(ctx, r.providerName)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to resolve terrarium provider for isolated execution: %w", err)
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to serialize payload: %w", err)
+	}
+
+	spec := terrarium.TerrariumSpec{
+		Image:       "alpine:3.20",
+		WorkingDir:  "/app",
+		NetworkMode: terrarium.NetworkModeNone,
+		Mounts: []terrarium.MountSpec{
+			{Source: filepath.Dir(scriptPath), Target: "/triggers", ReadOnly: true},
+		},
+		Files: []terrarium.FilePayload{
+			{Path: "/tmp/payload.json", Content: payloadJSON, Mode: 0o444},
+		},
+		Command: []string{filepath.Join("/triggers", filepath.Base(scriptPath)), "/tmp/payload.json"},
+	}
+
+	instance, err := provider.Create(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: failed to create isolated runner terrarium: %w", err)
+	}
+	defer func() { _ = instance.Stop(context.Background()) }()
+
+	result, runErr := instance.Run(ctx, terrarium.CommandSpec{
+		Command:    spec.Command,
+		WorkingDir: "/triggers",
+	})
+	if runErr != nil {
+		return fmt.Errorf("Hormonal Trigger blocked: script '%s' failed to execute: %w", filepath.Base(scriptPath), runErr)
+	}
+
+	if result.ExitCode != 0 {
+		errMsg := strings.TrimSpace(result.Stderr)
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("exit code %d", result.ExitCode)
+		}
+		return fmt.Errorf("Hormonal Trigger Blocked: script '%s' failed.\nReason: %s", filepath.Base(scriptPath), errMsg)
+	}
+
+	return nil
+}
+
+func resolveTriggerModeAndRunner() (security.TriggerMode, security.TriggerRunner) {
+	modeStr := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_TRIGGERS_MODE")))
+	var mode security.TriggerMode
+	if modeStr == string(security.ModeDisabled) {
+		mode = security.ModeDisabled
+	} else {
+		mode = security.ModeEnforce
+	}
+
+	providerName := ""
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("TENDRIL_ALLOW_HOST_EXECUTION")), "true") {
+		providerName = terrarium.ProviderHost
+	}
+
+	return mode, terrariumRunner{providerName: providerName}
 }
