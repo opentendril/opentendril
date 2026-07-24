@@ -25,24 +25,83 @@ func newTestPrometheusTransporter(t *testing.T) *PrometheusTransporter {
 	return transporter
 }
 
-func scrape(t *testing.T, transporter *PrometheusTransporter) string {
+func scrapeWithAuth(t *testing.T, transporter *PrometheusTransporter, authHeader string) (*http.Response, string) {
 	t.Helper()
-	resp, err := http.Get(fmt.Sprintf("http://%s/metrics", transporter.Addr()))
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/metrics", transporter.Addr()), nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("scrape /metrics: %v", err)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /metrics body: %v", err)
+	}
+	return resp, string(body)
+}
+
+func scrape(t *testing.T, transporter *PrometheusTransporter) string {
+	t.Helper()
+	resp, body := scrapeWithAuth(t, transporter, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("scrape /metrics: status %d", resp.StatusCode)
 	}
 	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "version=0.0.4") {
 		t.Fatalf("unexpected Content-Type %q", got)
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read /metrics body: %v", err)
+	return body
+}
+
+func TestPrometheusTransporterOffHostAuth(t *testing.T) {
+	// Off-host Endpoint + empty APIKey: fail closed
+	_, err := NewPrometheusTransporter(TransporterConfig{
+		Type:     "prometheus",
+		Endpoint: "0.0.0.0:0",
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot expose /metrics off-host without api_key") {
+		t.Fatalf("expected fail closed on off-host without APIKey, got %v", err)
 	}
-	return string(body)
+
+	// Off-host Endpoint + APIKey set
+	transporter, err := NewPrometheusTransporter(TransporterConfig{
+		Type:     "prometheus",
+		Endpoint: "0.0.0.0:0",
+		APIKey:   "secret-token",
+	})
+	if err != nil {
+		t.Fatalf("NewPrometheusTransporter: %v", err)
+	}
+	defer transporter.Close()
+
+	// request without bearer -> 401
+	resp, _ := scrapeWithAuth(t, transporter, "")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without auth, got %d", resp.StatusCode)
+	}
+
+	// request with wrong bearer -> 401
+	resp, _ = scrapeWithAuth(t, transporter, "Bearer wrong-token")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong auth, got %d", resp.StatusCode)
+	}
+
+	// request with correct bearer -> 200
+	resp, body := scrapeWithAuth(t, transporter, "Bearer secret-token")
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with correct auth, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "version=0.0.4") {
+		t.Errorf("unexpected Content-Type %q", got)
+	}
+	if !strings.Contains(body, "opentendril_events_last_timestamp_seconds") {
+		t.Errorf("expected metrics in body, got %q", body)
+	}
 }
 
 func TestPrometheusTransporterCountsEvents(t *testing.T) {

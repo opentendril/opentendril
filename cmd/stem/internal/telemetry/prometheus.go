@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
@@ -35,6 +36,8 @@ type PrometheusTransporter struct {
 	server   *http.Server
 	listener net.Listener
 
+	authKey string
+
 	mu                  sync.Mutex
 	counts              map[string]uint64
 	lastEvent           time.Time
@@ -62,6 +65,22 @@ func NewPrometheusTransporter(cfg TransporterConfig) (*PrometheusTransporter, er
 		addr = fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 	}
 
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus transporter: parse address %s: %w", addr, err)
+	}
+
+	ip := net.ParseIP(host)
+	isLoopback := host == "localhost" || (ip != nil && ip.IsLoopback())
+
+	var authKey string
+	if !isLoopback {
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("prometheus transporter: cannot expose /metrics off-host without api_key")
+		}
+		authKey = cfg.APIKey
+	}
+
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("prometheus transporter: listen on %s: %w", addr, err)
@@ -69,6 +88,7 @@ func NewPrometheusTransporter(cfg TransporterConfig) (*PrometheusTransporter, er
 
 	transporter := &PrometheusTransporter{
 		listener: listener,
+		authKey:  authKey,
 		counts:   make(map[string]uint64, len(eventbus.AllEventTypes())),
 	}
 	// Pre-register every known event type at zero so dashboards and alert
@@ -137,7 +157,16 @@ func (t *PrometheusTransporter) Emit(event eventbus.Event) error {
 	return nil
 }
 
-func (t *PrometheusTransporter) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+func (t *PrometheusTransporter) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if t.authKey != "" {
+		authHeader := r.Header.Get("Authorization")
+		expected := "Bearer " + t.authKey
+		if subtle.ConstantTimeCompare([]byte(authHeader), []byte(expected)) != 1 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	t.mu.Lock()
 	types := make([]string, 0, len(t.counts))
 	for eventType := range t.counts {
