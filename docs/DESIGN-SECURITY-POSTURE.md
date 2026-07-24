@@ -35,7 +35,11 @@ through it.
 
 Ephemeral Docker containers that execute a single Sprout run and then die. They
 hold no credentials at all — LLM calls and mesh operations happen on the Stem,
-never inside a Terrarium. Isolation is enforced at the container level
+never inside a Terrarium. No GitHub token is injected by default, upholding the
+zero-authority guarantee; a substrate must explicitly opt in with `exposeToken: true`
+to expose its own resolved token to in-container tooling (see
+[Conductor fail-closed](#conductor-fail-closed--identity--isolation) below).
+Isolation is enforced at the container level
 (`cmd/stem/internal/terrarium/docker.go`):
 
 ```
@@ -106,6 +110,38 @@ OpenTendril applies application-level AES-GCM encryption to sensitive fields bef
   - `TENDRIL_ENCRYPT_AT_REST` to globally opt out of history database payload encryption.
   - `TENDRIL_MEMORY_REMOTE_CLEARTEXT_ACK` must be explicitly set to acknowledge cleartext egress if selecting a remote memory backend.
 - **Explicitly deferred items:** Key rotation is deferred, though the `tnd:atrest:1:<keyID>:` prefix leaves the door open for future support. Active re-encryption or scrubbing verbs do not yet exist — existing plaintext rows are simply read lazily until overwritten.
+
+## Conductor fail-closed — identity & isolation
+
+The conductor enforces fail-closed defaults for GitHub identity and shadow-worktree
+isolation. These replaced prior fail-open defaults and constitute breaking changes;
+each error message names the exact corrective action.
+
+- **No ambient GitHub identity.** The conductor never reads an ambient host
+  `GITHUB_TOKEN`. Substrates declare auth explicitly (`auth: GITHUB_TOKEN`,
+  `auth.method: pat+env`, `ssh`, `app`, or `none`). A github.com substrate with no
+  declared auth fails closed with an actionable error (`requireGitHubPushAuth` in
+  `credentials.go`). There is no compatibility switch that restores the old ambient
+  behaviour.
+
+- **Least-privilege Terrarium credential.** A Sprout receives no GitHub token by
+  default — the authenticated push runs host-side. A substrate opts in with
+  `exposeToken: true` to expose only its own resolved token to in-container tooling;
+  the ambient host token is never injected. Short-lived GitHub App installation
+  tokens (scoped to the target repo) are recommended over long-lived PATs for Sprout
+  work (`githubapp.go`).
+
+- **Isolation fail-closed.** A sequence or single-run step that cannot establish
+  shadow-worktree isolation aborts by default with an actionable error. The opt-in
+  for a deliberate in-place run is `TENDRIL_ALLOW_HOST_WORKSPACE=true`. Parallel,
+  selection, and seed paths were already fail-closed; this extends the guarantee to
+  all paths (`docker.go`).
+
+- **Migration note (breaking change).** These defaults flip prior fail-open
+  behaviour. Operators migrating from earlier versions will encounter errors on
+  first run for any substrate relying on ambient auth or implicit host-workspace
+  fallback. Each error names the exact fix (`auth: …`, `TENDRIL_ALLOW_HOST_WORKSPACE`);
+  no compatibility switch restores the old ambient behaviour.
 
 ## Credential model — two-tier Pollinator access
 

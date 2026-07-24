@@ -74,13 +74,13 @@ The package exports on the order of **~365** symbols. The load-bearing surface i
 
 **Sequence runner complexity** (`sequence.go`). One file owns YAML schema, DAG scheduling, failure policy, meristem dynamic-step parsing, recursive debugger budding, parallel/vascular/phenotypic/selection dispatch, genotype inference from step IDs, and event publishing. That concentration makes behavior hard to reason about and review in isolation.
 
-**Isolation can degrade to the host workspace** (`docker.go`). When shadow worktree creation fails, the orchestrator logs a warning and continues on the active workspace rather than failing closed. Parallel and selection paths require git; non-git substrates disable state externalization and cannot classify file-change outcomes honestly.
+**Isolation requires git** (`docker.go`). Shadow-worktree isolation now fails closed — a single-run or sequence step whose worktree cannot be created aborts with an actionable error unless the operator sets `TENDRIL_ALLOW_HOST_WORKSPACE=true`. The genuine residual limitation: isolation depends on git; non-git substrates disable state externalization and cannot classify file-change outcomes.
 
 **Direct `roots/llm` coupling.** Orchestration constructs and configures LLM clients inside conductor instead of accepting an injected client port everywhere. Cost-tier routing and coordinator resolution are therefore entangled with sprout/sequence code paths (conductor-side of cost optimization lives here; client defaults live in `roots/llm`).
 
-**Credential ambient fallback** (`credentials.go`, `githubauth.go`). Unspecified / PAT paths still accept ambient `GITHUB_TOKEN` / `GITHUB_PERSONAL_ACCESS_TOKEN` for github.com remotes when a substrate does not pin auth. That preserves legacy ergonomics but is a fail-open toward host identity. SSH materialization uses `StrictHostKeyChecking=accept-new` (`gitSSHCommand`) so first-seen hosts are accepted without an interactive prompt.
+**No ambient GitHub identity** (`credentials.go`, `githubauth.go`). The conductor no longer reads an ambient host `GITHUB_TOKEN` — a github.com substrate that does not declare auth fails closed with an actionable error. The supported way to supply a token is an explicit substrate reference (`auth: GITHUB_TOKEN` or `auth.method: pat+env`). Residual posture: SSH materialization uses `StrictHostKeyChecking=accept-new` (`gitSSHCommand`) so first-seen hosts are accepted via TOFU without an interactive prompt.
 
-**Empty auth can materialize as “no env”** (`materializeGitAuth`). PAT/unspecified with an empty token returns `nil` env rather than a hard error in some paths, deferring failure to the later git operation.
+**Empty PAT is a resolve-time error** (`materializeGitAuth`). An empty pinned PAT is now caught at credential-resolution time and produces an actionable error naming the env var. A github.com push with no resolved credential fails closed with an explicit "no GitHub auth configured" error (`requireGitHubPushAuth`) rather than an opaque downstream git failure.
 
 **Default-branch protection is floor-based when unknown** (`defaultbranch.go`). If the default branch cannot be resolved, `main` and `master` are treated as protected — deliberately wider protection, never a guess of “the” default name for non-protection purposes.
 
@@ -112,7 +112,7 @@ Macrophage steps after the sprout turn run **deterministic** `go test -fuzz` in 
 
 **State externalization.** Successful work is a git commit (local or GitHub API createCommitOnBranch), not a durable in-memory session. Owned isolation branches are registered so empty protective branches can be reclaimed. Protected paths refuse merges that touch kernel files. Scoped CI derives package lists from the module graph of changed files.
 
-**Credentials.** Method-typed resolution (pat/ssh/none/app) plus GitHub App JWT → installation token minting keeps long-lived secrets off the happy path when App auth is configured. Token helpers inject credentials only via process environment.
+**Credentials.** Method-typed resolution (pat/ssh/none/app) plus GitHub App JWT → installation token minting keeps long-lived secrets off the happy path when App auth is configured. Token helpers inject credentials only via process environment. Least-privilege Terrarium posture: a Sprout receives no GitHub token by default — the authenticated push runs host-side. A substrate opts in with `exposeToken: true` to expose only its own resolved token to in-container tooling; the ambient host token is never injected into a Terrarium. GitHub App installation tokens (short-lived, scoped to the target repo) are recommended over long-lived PATs for Sprout work.
 
 **Genomics & chronicler.** Plasmids are markdown traits injected into `.tendril/genome`; fitness scores reinforce or prune rules/plasmids; adaptation mines commit history through the coordinator into trait bullets; the chronicler transcribes post-run diffs into epigenetic learnings and may reduce/push the genome.
 
