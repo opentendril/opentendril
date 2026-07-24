@@ -249,31 +249,3 @@ func TestDelegationGateMiddlewareDefaultDeny(t *testing.T) {
 		t.Fatalf("nil gate: nextCalled=%d status=%d, want 1 and 403", nextCalled, nilRecorder.Code)
 	}
 }
-
-// TestAuthMiddlewareDeniesDelegatedRequests verifies the bearer middleware's
-// delegation posture: its config routes expose no delegable operation-class,
-// so a delegated-marked request is refused rather than silently executed.
-func TestAuthMiddlewareDeniesDelegatedRequests(t *testing.T) {
-	t.Setenv("BOTANIST_KEY", "")
-
-	nextCalled := 0
-	wrapped := AuthMiddleware(func(w http.ResponseWriter, r *http.Request) { nextCalled++ })
-
-	plain := httptest.NewRequest(http.MethodGet, "/v1/config/triggers", nil)
-	plainRecorder := httptest.NewRecorder()
-	wrapped(plainRecorder, plain)
-	if nextCalled != 1 || plainRecorder.Code != http.StatusOK {
-		t.Fatalf("non-delegated request blocked: nextCalled=%d status=%d", nextCalled, plainRecorder.Code)
-	}
-
-	delegated := httptest.NewRequest(http.MethodGet, "/v1/config/triggers", nil)
-	delegated.Header.Set(PollenHeader, "local-pollinator")
-	delegatedRecorder := httptest.NewRecorder()
-	wrapped(delegatedRecorder, delegated)
-	if nextCalled != 1 {
-		t.Fatal("delegated-marked request passed the bearer middleware")
-	}
-	if delegatedRecorder.Code != http.StatusForbidden {
-		t.Fatalf("delegated status = %d, want 403", delegatedRecorder.Code)
-	}
-}

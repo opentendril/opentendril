@@ -228,35 +228,3 @@ func TestPollenForResolvesAndDeniesTokens(t *testing.T) {
 		t.Fatalf("forged token: pollen=%q ok=%v, want \"\"/false (deny-closed, no header fallback)", pollen, ok)
 	}
 }
-
-// TestAuthMiddlewareRejectsAccessToken: config routes expose no delegable
-// operation-class, so a token-shaped bearer is refused even when shaped validly.
-func TestAuthMiddlewareRejectsAccessToken(t *testing.T) {
-	// Clear any host Botanist key so we exercise the delegation-shape guard,
-	// not the Botanist-key comparison.
-	t.Setenv("BOTANIST_KEY", "")
-
-	signer, _, _ := mintFixture(t)
-	token, err := signer.MintAccessToken("claude", 0, core.AccessTokenScope{})
-	if err != nil {
-		t.Fatalf("mint: %v", err)
-	}
-
-	reached := false
-	handler := AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		reached = true
-		w.WriteHeader(http.StatusOK)
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/config/genotypes", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	handler(rec, req)
-
-	if reached {
-		t.Fatal("an access token reached a config route with no delegable operation-class")
-	}
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
-	}
-}

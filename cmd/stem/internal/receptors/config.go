@@ -3,7 +3,6 @@ package receptors
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -14,40 +13,6 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
-
-// AuthMiddleware wraps a handler to require the Botanist bearer (BOTANIST_KEY)
-// when one is configured. Bearer presence authenticates the caller; *delegated*
-// invocations (marked with PollenHeader) are additionally gated by the
-// delegation authorizer. These config routes expose no delegable
-// operation-class, so a delegated-marked request is denied outright rather than
-// silently executed as if it were non-delegated.
-func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimSpace(os.Getenv("BOTANIST_KEY"))
-		if token != "" {
-			authHeader := r.Header.Get("Authorization")
-			if !strings.HasPrefix(authHeader, "Bearer ") || strings.TrimPrefix(authHeader, "Bearer ") != token {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
-		// No gate is in scope here, so a delegation marker of any kind is
-		// refused rather than interpreted. This path exposes no delegable
-		// operation-class, so there is nothing a Pollen could legitimately ask
-		// for — whether it arrives as a header claim, a credential, or a token.
-		presented := bearerToken(r)
-		if pollen, _ := DelegatedPollen(r, nil, nil); pollen != "" || core.LooksLikePollinatorCredential(presented) || core.LooksLikeAccessToken(presented) {
-			if core.LooksLikeAccessToken(presented) {
-				log.Printf("🚫 Access token denied: %s exposes no delegable operation-class", r.URL.Path)
-			} else {
-				log.Printf("🚫 Delegation denied for Pollen %q: %s exposes no delegable operation-class", pollen, r.URL.Path)
-			}
-			http.Error(w, "delegation denied: this endpoint exposes no delegable operation-class", http.StatusForbidden)
-			return
-		}
-		next(w, r)
-	}
-}
 
 // PollenHeader marks an HTTP request as a *delegated* capability
 // invocation and names the trust-root Pollen exercising a delegation grant.
@@ -287,52 +252,6 @@ func (h *ConfigHandler) ListTriggers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// UploadTrigger handles POST /v1/config/triggers
-func (h *ConfigHandler) UploadTrigger(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// 10 MB max memory for parsing multipart form
-	if err := r.ParseMultipartForm(10 << 20); err != nil {
-		http.Error(w, "Failed to parse form", http.StatusBadRequest)
-		return
-	}
-
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		http.Error(w, "Missing file part", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
-
-	if !validConfigFileName(header.Filename) {
-		http.Error(w, "Invalid filename: must not be empty or contain path separators or traversal components", http.StatusBadRequest)
-		return
-	}
-
-	triggersDir := filepath.Join(h.TendrilDir, "transduction", "hormonal-triggers")
-	os.MkdirAll(triggersDir, 0755)
-
-	targetPath := filepath.Join(triggersDir, header.Filename)
-	out, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755) // Ensure executable
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, file); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to save file: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("Uploaded new Hormonal Trigger: %s", header.Filename)
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("Trigger uploaded successfully.\n"))
-}
-
 // ListGenotypes handles GET /v1/config/genotypes
 func (h *ConfigHandler) ListGenotypes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -423,31 +342,4 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	w.Write([]byte("Genotype saved successfully.\n"))
-}
-
-// SetupRoutes registers the configuration endpoints
-func (h *ConfigHandler) SetupRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/v1/config/triggers", func(w http.ResponseWriter, r *http.Request) {
-		AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				h.ListTriggers(w, r)
-			} else if r.Method == http.MethodPost {
-				h.UploadTrigger(w, r)
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
-		})(w, r)
-	})
-
-	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
-		AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodGet {
-				h.ListGenotypes(w, r)
-			} else if r.Method == http.MethodPost {
-				h.UploadGenotype(w, r)
-			} else {
-				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			}
-		})(w, r)
-	})
 }

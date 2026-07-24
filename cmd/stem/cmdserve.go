@@ -19,7 +19,6 @@ import (
 	"net"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
-	"github.com/opentendril/opentendril/cmd/stem/internal/configurator"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
@@ -348,10 +347,6 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.HandleFunc("/v1/config/triggers", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			configHandler.ListTriggers(w, r)
-			return
-		}
-		if r.Method == http.MethodPost {
-			configHandler.UploadTrigger(w, r)
 			return
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -845,22 +840,17 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 
 		var output string
 
-		// Route to internal Configurator Tendril or external Docker Tendril
-		if model == "configurator" {
-			configTendril := configurator.NewConfiguratorTendril(triggersDir)
-			output, err = configTendril.Execute(r.Context(), taskPrompt)
-		} else {
-			orch := conductor.NewDockerOrchestrator()
-			orch.StepID = stepID
-			orch.EventBus = bus
-			orch.SessionID = sess.ID
-			orch.Provider = sess.Preferences.Provider
-			orch.Model = sess.Preferences.Model
-			orch.Genotype = sess.Preferences.Genotype
-			var sproutReport conductor.SproutRunReport
-			sproutReport, err = orch.RunSprout(r.Context(), taskPrompt)
-			output = sproutReport.Output
-		}
+		// Route to external Docker Tendril
+		orch := conductor.NewDockerOrchestrator()
+		orch.StepID = stepID
+		orch.EventBus = bus
+		orch.SessionID = sess.ID
+		orch.Provider = sess.Preferences.Provider
+		orch.Model = sess.Preferences.Model
+		orch.Genotype = sess.Preferences.Genotype
+		var sproutReport conductor.SproutRunReport
+		sproutReport, err = orch.RunSprout(r.Context(), taskPrompt)
+		output = sproutReport.Output
 
 		// Emit stream end event
 		bus.Publish(eventbus.Event{

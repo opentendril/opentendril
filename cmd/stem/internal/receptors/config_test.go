@@ -3,7 +3,6 @@ package receptors
 import (
 	"bytes"
 	"encoding/json"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -80,40 +79,6 @@ func TestUploadGenotypeAcceptsValidName(t *testing.T) {
 	target := filepath.Join(root, ".tendril", "genotypes", "frontend-dev.json")
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("expected genotype file at %s: %v", target, err)
-	}
-}
-
-// TestUploadTriggerRejectsTraversalFilenames proves the trigger upload rejects
-// filenames that would resolve outside the hormonal-triggers directory. (A
-// filename with forward-slash components is already reduced to its base name
-// by mime/multipart before the handler sees it, so the handler's own boundary
-// covers the remaining traversal shapes: bare ".." and backslash separators.)
-func TestUploadTriggerRejectsTraversalFilenames(t *testing.T) {
-	root := chdirTempDir(t)
-	handler := NewConfigHandler(filepath.Join(root, ".tendril"))
-
-	for _, filename := range []string{"..", `..\escaped.sh`} {
-		var buf bytes.Buffer
-		writer := multipart.NewWriter(&buf)
-		part, err := writer.CreateFormFile("file", filename)
-		if err != nil {
-			t.Fatalf("create form file: %v", err)
-		}
-		if _, err := part.Write([]byte("#!/bin/sh\n")); err != nil {
-			t.Fatalf("write form file: %v", err)
-		}
-		if err := writer.Close(); err != nil {
-			t.Fatalf("close multipart writer: %v", err)
-		}
-
-		req := httptest.NewRequest(http.MethodPost, "/v1/config/triggers", &buf)
-		req.Header.Set("Content-Type", writer.FormDataContentType())
-		rec := httptest.NewRecorder()
-		handler.UploadTrigger(rec, req)
-
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("UploadTrigger(%q) status = %d, want %d", filename, rec.Code, http.StatusBadRequest)
-		}
 	}
 }
 
