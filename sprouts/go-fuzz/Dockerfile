@@ -2,7 +2,7 @@
 #
 # Unlike sprouts/go/Dockerfile — which builds the sprout-go tool harness
 # once and then discards the Go toolchain to hit a <20MB runtime budget
-# (docs/DESIGN-STATELESS-SPROUT.md) — the Macrophage role needs `go test
+# (docs/DESIGN-SPROUTS.md) — the Macrophage role needs `go test
 # -fuzz` available at container *runtime*, so this image keeps the full Go
 # toolchain. It is only ever used for the deterministic post-generation fuzz
 # check the Conductor runs for a "macrophage" sequence step; every other Go

@@ -2,7 +2,7 @@
 #
 # Unlike sprouts/go/Dockerfile — which builds the sprout-go tool harness once
 # and then discards the Go toolchain to hit a minimal runtime budget
-# (docs/DESIGN-STATELESS-SPROUT.md) — a deterministic verifier step needs the
+# (docs/DESIGN-SPROUTS.md) — a deterministic verifier step needs the
 # full Go toolchain available at container *runtime* to run `go build` /
 # `go test`, so this image keeps it. It is only ever used for the Conductor's
 # deterministic command steps (SequenceStep.Command); every LLM-driven Go

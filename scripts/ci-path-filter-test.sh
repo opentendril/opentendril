@@ -48,7 +48,7 @@ check "Python sprout image runs the audit"              true   false  sprouts/py
 check "the workflow itself runs everything"             true   true   .github/workflows/ci.yml
 check "the filter itself runs everything"               true   true   scripts/ci-path-filter.sh
 check "Makefile runs everything"                        true   true   Makefile
-check "documentation runs nothing"                      false  false  docs/DESIGN-STATELESS-SPROUT.md
+check "documentation runs nothing"                      false  false  docs/DESIGN-SPROUTS.md
 check "top-level markdown runs nothing"                 false  false  README.md
 check "nested markdown runs nothing"                    false  false  sprouts/python/README.md
 check "no changes at all runs nothing"                  false  false  ""
