@@ -602,6 +602,10 @@ func RunGitPush(ctx context.Context, execution GitPushExecution) (GitPushResult,
 		return GitPushResult{}, authErr
 	}
 
+	if err := requireGitHubPushAuth(pushEnv, strings.TrimSpace(originURL), execution.Credential); err != nil {
+		return GitPushResult{}, err
+	}
+
 	if _, err := runGitPushCommandFn(ctx, execution.Workspace, pushEnv, "push", "origin", "--", "HEAD:refs/heads/"+targetBranch); err != nil {
 		return GitPushResult{}, err
 	}

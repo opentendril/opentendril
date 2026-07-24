@@ -274,15 +274,31 @@ func TestMaterializeGitAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("unspecified github uses ambient PAT", func(t *testing.T) {
+	t.Run("unspecified github does not use ambient PAT", func(t *testing.T) {
 		t.Setenv("GITHUB_TOKEN", "ambient")
 		t.Setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "")
-		env, err := materializeGitAuth(ctx, ResolvedCredential{}, "https://github.com/o/r.git")
-		if err != nil {
-			t.Fatal(err)
+		env, err := materializeGitAuth(ctx, ResolvedCredential{Method: CredentialUnspecified}, "https://github.com/o/r.git")
+		if err != nil || env != nil {
+			t.Fatalf("expected nil env, got env=%v err=%v", env, err)
 		}
-		if got := authTokenFromEnv(t, env); got != "ambient" {
-			t.Fatalf("credential token = %q, want ambient", got)
+	})
+
+	t.Run("empty explicit PAT returns error", func(t *testing.T) {
+		_, err := materializeGitAuth(ctx, ResolvedCredential{Method: CredentialPAT, TokenEnv: "MY_TOKEN", TokenValue: ""}, "https://github.com/o/r.git")
+		if err == nil || !strings.Contains(err.Error(), "MY_TOKEN") {
+			t.Fatalf("expected error naming MY_TOKEN, got %v", err)
+		}
+	})
+
+	t.Run("requireGitHubPushAuth", func(t *testing.T) {
+		if err := requireGitHubPushAuth(nil, "https://github.com/o/r.git", ResolvedCredential{Method: CredentialUnspecified}); err == nil {
+			t.Fatalf("expected error for empty pushEnv + github origin")
+		}
+		if err := requireGitHubPushAuth([]string{"ENV=1"}, "https://github.com/o/r.git", ResolvedCredential{}); err != nil {
+			t.Fatalf("expected nil for non-empty pushEnv, got %v", err)
+		}
+		if err := requireGitHubPushAuth(nil, "https://gitlab.com/o/r.git", ResolvedCredential{}); err != nil {
+			t.Fatalf("expected nil for empty pushEnv + non-github origin, got %v", err)
 		}
 	})
 

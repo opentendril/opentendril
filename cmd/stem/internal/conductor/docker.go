@@ -1600,6 +1600,9 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred Res
 	if authErr != nil {
 		return authErr
 	}
+	if err := requireGitHubPushAuth(pushEnv, strings.TrimSpace(originURL), cred); err != nil {
+		return err
+	}
 	if _, err := runGitCommandWithEnv(ctx, mountPath, pushEnv, "push", "origin", "--", "HEAD:refs/heads/"+targetBranch); err != nil {
 		return err
 	}

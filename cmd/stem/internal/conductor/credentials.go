@@ -237,16 +237,23 @@ func materializeGitAuth(ctx context.Context, cred ResolvedCredential, repoURL st
 		return gitTokenCredentialEnv(token), nil
 	default: // pat or unspecified (legacy)
 		token := cred.TokenValue
-		if token == "" && cred.Method == CredentialUnspecified && strings.Contains(repoURL, "github.com") {
-			if _, pat := resolveGitHubPAT(); pat != "" {
-				token = pat
-			}
+		if cred.Method == CredentialPAT && token == "" {
+			return nil, fmt.Errorf("substrate's Personal Access Token environment variable (%s) is empty", cred.TokenEnv)
 		}
 		if token == "" {
 			return nil, nil
 		}
 		return gitTokenCredentialEnv(token), nil
 	}
+}
+
+// requireGitHubPushAuth turns "no credential resolved for a github.com push" into
+// an actionable error instead of an opaque git failure.
+func requireGitHubPushAuth(pushEnv []string, originURL string, cred ResolvedCredential) error {
+	if len(pushEnv) == 0 && strings.Contains(originURL, "github.com") {
+		return fmt.Errorf("delegated push refused: this substrate has no GitHub auth configured (auth method %q) — set `auth: <ENV_VAR>` or `auth.method: pat|ssh|app` for the substrate", cred.Method)
+	}
+	return nil
 }
 
 // expandHome expands a leading ~ or ~/ to the current user's home directory.
