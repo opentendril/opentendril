@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +26,34 @@ type WebhookTransporter struct {
 	client   *http.Client
 }
 
+// redactingTransporter wraps a sink to redact event data before emission.
+type redactingTransporter struct {
+	wrapped Transporter
+}
+
+func (t *redactingTransporter) Emit(event eventbus.Event) error {
+	redacted := eventbus.Event{
+		Type:      event.Type,
+		Timestamp: event.Timestamp,
+		Source:    event.Source,
+		SessionID: event.SessionID,
+		// Data is explicitly omitted (nil/empty).
+	}
+	return t.wrapped.Emit(redacted)
+}
+
+// wrapIfRedacting applies the redacting decorator unless the sink is configured as raw
+// or the global TENDRIL_TELEMETRY_REDACTION opt-out is set.
+func wrapIfRedacting(t Transporter, rawConfig bool) Transporter {
+	if rawConfig {
+		return t
+	}
+	if v := os.Getenv("TENDRIL_TELEMETRY_REDACTION"); strings.ToLower(v) == "off" || strings.ToLower(v) == "false" {
+		return t
+	}
+	return &redactingTransporter{wrapped: t}
+}
+
 // NewTransporter builds a Transporter from configuration.
 func NewTransporter(cfg TransporterConfig) (Transporter, error) {
 	switch cfg.Type {
@@ -31,21 +61,25 @@ func NewTransporter(cfg TransporterConfig) (Transporter, error) {
 		if cfg.Endpoint == "" {
 			return nil, fmt.Errorf("webhook transporter requires endpoint")
 		}
-		return NewWebhookTransporter(cfg.Endpoint, cfg.APIKey), nil
+		return wrapIfRedacting(NewWebhookTransporter(cfg.Endpoint, cfg.APIKey), cfg.Raw), nil
 	case "redis":
 		if cfg.Endpoint == "" {
 			return nil, fmt.Errorf("redis transporter requires endpoint (host:port)")
 		}
-		return NewRedisTransporter(cfg.Endpoint, cfg.Channel, cfg.APIKey), nil
+		return wrapIfRedacting(NewRedisTransporter(cfg.Endpoint, cfg.Channel, cfg.APIKey), cfg.Raw), nil
 	case "websocket":
 		if cfg.Endpoint == "" {
 			return nil, fmt.Errorf("websocket transporter requires endpoint")
 		}
-		return NewRemoteWebSocketTransporter(cfg.Endpoint, cfg.APIKey), nil
+		return wrapIfRedacting(NewRemoteWebSocketTransporter(cfg.Endpoint, cfg.APIKey), cfg.Raw), nil
 	case "prometheus":
 		return NewPrometheusTransporter(cfg)
 	case "kafka":
-		return NewKafkaTransporter(cfg)
+		t, err := NewKafkaTransporter(cfg)
+		if err != nil {
+			return nil, err
+		}
+		return wrapIfRedacting(t, cfg.Raw), nil
 	default:
 		return nil, fmt.Errorf("unknown transporter type %q", cfg.Type)
 	}

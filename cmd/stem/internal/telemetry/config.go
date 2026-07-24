@@ -40,6 +40,7 @@ type TransporterConfig struct {
 	Brokers  []string `yaml:"brokers,omitempty"`
 	Channel  string   `yaml:"channel,omitempty"`
 	APIKey   string   `yaml:"api_key,omitempty"`
+	Raw      bool     `yaml:"raw,omitempty"`
 }
 
 // LoadConfig parses telemetry settings from the given YAML file path.

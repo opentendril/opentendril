@@ -187,7 +187,7 @@ func TestNewTransporterBuildsKafka(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTransporter(kafka): %v", err)
 	}
-	if _, ok := transporter.(*KafkaTransporter); !ok {
-		t.Fatalf("NewTransporter(kafka) = %T, want *KafkaTransporter", transporter)
+	if _, ok := transporter.(*redactingTransporter); !ok {
+		t.Fatalf("NewTransporter(kafka) = %T, want *redactingTransporter", transporter)
 	}
 }

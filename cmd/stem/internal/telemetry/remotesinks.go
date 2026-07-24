@@ -203,7 +203,7 @@ func TransportersFromEnv() ([]Transporter, []error) {
 			errs = append(errs, err)
 			continue
 		}
-		transporters = append(transporters, transporter)
+		transporters = append(transporters, wrapIfRedacting(transporter, false))
 	}
 	return transporters, errs
 }
