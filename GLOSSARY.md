@@ -30,6 +30,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Genotype** | The base persona / system prompt (*who* a Sprout is). | System prompt / persona | definition |
 | **Greenhouse** | The Command Center UI the Botanist observes through. | Dashboard / observability UI | external |
 | **Hardiness** | What a **Terroir** can withstand — whether its conditions permit the delegation boundary to be *enforced* rather than merely recorded. A site property, not a runtime one. | Deployment security posture | environment |
+| **Heartwood** | The at-rest confidentiality layer — the dense, durable, protected inner core; application-level AES-GCM encryption of sensitive columns before they reach local storage. | At-rest encryption / storage confidentiality | persistent |
 | **Hormonal Trigger** | A pre-execution security gate that can abort before a Sprout emerges. | Security gate / middleware | per-run |
 | **Meristem** | A Sequence step that dynamically plans steps and translates human intent. | Planner / workflow conductor | per-run |
 | **Mycorrhizal Network** | The LLM — the external mind that reasons; holds no state. | Large Language Model | external |
@@ -72,6 +73,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Rhizosphere** | Underlying tech ecosystem | The active root-zone of existing life the roots tap into. |
 | **Botanist** | The directing human | Studies *and* cultivates (gardens) the organism — an active tender, not passive climate. |
 | **Greenhouse** | Observability UI | The glass the Botanist watches the organism through. |
+| **Heartwood** | At-rest encryption layer | The dense, durable, protected inner core of the tree. |
 | **Mycorrhizal Network** | LLM | A fungal symbiont *outside* the plant that does the thinking. |
 | **Substrate** | Target repo | The soil the plant is rooted in and cultivates. |
 | **Symbiotic Nodule** | Service integration | A root nodule housing a symbiont (Rhizobia) for a capability the core lacks. |
@@ -99,6 +101,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | Target repo | **Substrate** | |
 | Host OS / machine | **Terroir** | |
 | Tech stack / dependencies | **Rhizosphere** | |
+| At-rest encryption / storage confidentiality | **Heartwood** | |
 | Compliance regime (ISO 27001/42001) | **Biome** | |
 | Microservice plugin (GCP/Datadog/GitHub API) | **Symbiotic Nodule** | |
 | Node / deployment / running instance | **Ramet** | One individual; the **Genet** is all ramets of the same Genome. |

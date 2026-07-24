@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	_ "modernc.org/sqlite"
 )
 
@@ -70,13 +71,13 @@ type MemoryConfig struct {
 }
 
 type SQLiteIndexStore struct {
-	db        *sql.DB
-	encryptor *Encryptor
+	db     *sql.DB
+	cipher *heartwood.Cipher
 }
 
-func OpenSQLiteIndexStore(ctx context.Context, dbPath string, encryptor *Encryptor) (*SQLiteIndexStore, error) {
-	if encryptor == nil {
-		return nil, fmt.Errorf("encryptor is required")
+func OpenSQLiteIndexStore(ctx context.Context, dbPath string, cipher *heartwood.Cipher) (*SQLiteIndexStore, error) {
+	if cipher == nil {
+		return nil, fmt.Errorf("cipher is required")
 	}
 
 	db, err := sql.Open("sqlite", dbPath)
@@ -84,7 +85,7 @@ func OpenSQLiteIndexStore(ctx context.Context, dbPath string, encryptor *Encrypt
 		return nil, fmt.Errorf("open SQLite index: %w", err)
 	}
 
-	store := &SQLiteIndexStore{db: db, encryptor: encryptor}
+	store := &SQLiteIndexStore{db: db, cipher: cipher}
 	if err := store.initSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -207,7 +208,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 	defer stmt.Close()
 
 	for _, symbol := range symbols {
-		encryptedStub, encryptErr := s.encryptor.EncryptString(symbol.StubContent)
+		aad := []byte("rhizome/symbols/stubContent\x00" + symbol.RepositoryName + "\x00" + symbol.FilePath + "\x00" + symbol.Name)
+		encryptedStub, encryptErr := s.cipher.Encrypt(symbol.StubContent, aad)
 		if encryptErr != nil {
 			err = encryptErr
 			return fmt.Errorf("encrypt symbol stub: %w", err)
@@ -273,7 +275,8 @@ func (s *SQLiteIndexStore) scanSymbolRows(rows *sql.Rows) ([]Symbol, error) {
 			return nil, fmt.Errorf("scan symbol: %w", err)
 		}
 		var err error
-		symbol.StubContent, err = s.encryptor.DecryptString(encryptedStub)
+		aad := []byte("rhizome/symbols/stubContent\x00" + symbol.RepositoryName + "\x00" + symbol.FilePath + "\x00" + symbol.Name)
+		symbol.StubContent, err = s.cipher.Decrypt(encryptedStub, aad, heartwood.LegacyCiphertext)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt symbol stub: %w", err)
 		}
@@ -291,7 +294,8 @@ func (s *SQLiteIndexStore) StoreMemory(ctx context.Context, memory Memory) error
 		memory.CreatedAt = time.Now().UTC()
 	}
 
-	encryptedContent, err := s.encryptor.EncryptString(memory.Content)
+	aad := []byte("rhizome/memories/content\x00" + memory.RepositoryName + "\x00" + memory.Title)
+	encryptedContent, err := s.cipher.Encrypt(memory.Content, aad)
 	if err != nil {
 		return fmt.Errorf("encrypt memory content: %w", err)
 	}
@@ -383,7 +387,8 @@ func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
 			return nil, fmt.Errorf("scan memory: %w", err)
 		}
 		var err error
-		memory.Content, err = s.encryptor.DecryptString(encryptedContent)
+		aad := []byte("rhizome/memories/content\x00" + memory.RepositoryName + "\x00" + memory.Title)
+		memory.Content, err = s.cipher.Decrypt(encryptedContent, aad, heartwood.LegacyCiphertext)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt memory content: %w", err)
 		}
@@ -436,16 +441,16 @@ func LoadMemoryConfig() (MemoryConfig, error) {
 	}, nil
 }
 
-func OpenMemoryBackend(ctx context.Context, config MemoryConfig, encryptor *Encryptor) (MemoryBackend, error) {
+func OpenMemoryBackend(ctx context.Context, config MemoryConfig, cipher *heartwood.Cipher) (MemoryBackend, error) {
 	switch strings.ToLower(strings.TrimSpace(config.Backend)) {
 	case "", "sqlite":
-		if encryptor == nil {
-			return nil, fmt.Errorf("encryptor is required")
+		if cipher == nil {
+			return nil, fmt.Errorf("cipher is required")
 		}
 		if err := os.MkdirAll(filepath.Dir(config.SQLitePath), 0o755); err != nil {
 			return nil, fmt.Errorf("create memory database directory: %w", err)
 		}
-		return OpenSQLiteIndexStore(ctx, config.SQLitePath, encryptor)
+		return OpenSQLiteIndexStore(ctx, config.SQLitePath, cipher)
 	case "pinecone":
 		if !config.RemoteCleartextAck {
 			return nil, errRemoteCleartextNotAcknowledged("pinecone")

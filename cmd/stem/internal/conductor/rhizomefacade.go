@@ -2,12 +2,12 @@ package conductor
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
@@ -74,18 +74,18 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 	}
 
 	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
-	key, err := getOrCreateIndexKey(keyPath)
+	material, err := heartwood.ResolveKey(keyPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve index key: %w", err)
 	}
 
-	encryptor, err := rhizome.NewEncryptor(key)
+	cipher, err := heartwood.NewCipher(material)
 	if err != nil {
-		return "", fmt.Errorf("initialize encryptor: %w", err)
+		return "", fmt.Errorf("initialize cipher: %w", err)
 	}
 
 	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
-	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
+	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, cipher)
 	if err != nil {
 		return "", fmt.Errorf("open index store: %w", err)
 	}
@@ -125,18 +125,18 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 	}
 
 	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
-	key, err := getOrCreateIndexKey(keyPath)
+	material, err := heartwood.ResolveKey(keyPath)
 	if err != nil {
 		return "", fmt.Errorf("resolve index key: %w", err)
 	}
 
-	encryptor, err := rhizome.NewEncryptor(key)
+	cipher, err := heartwood.NewCipher(material)
 	if err != nil {
-		return "", fmt.Errorf("initialize encryptor: %w", err)
+		return "", fmt.Errorf("initialize cipher: %w", err)
 	}
 
 	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
-	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, encryptor)
+	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, cipher)
 	if err != nil {
 		return "", fmt.Errorf("open index store: %w", err)
 	}
@@ -159,31 +159,4 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 		return "", nil
 	}
 	return memoryMap, nil
-}
-
-func getOrCreateIndexKey(keyPath string) ([]byte, error) {
-	if envKey := os.Getenv("OPEN_TENDRIL_INDEX_KEY"); envKey != "" {
-		if len(envKey) >= 32 {
-			return []byte(envKey[:32]), nil
-		}
-		// Pad to 32 bytes if shorter
-		padded := make([]byte, 32)
-		copy(padded, envKey)
-		return padded, nil
-	}
-
-	if content, err := os.ReadFile(keyPath); err == nil && len(content) == 32 {
-		return content, nil
-	}
-
-	key := make([]byte, 32)
-	if _, err := rand.Read(key); err != nil {
-		return nil, fmt.Errorf("generate random key: %w", err)
-	}
-
-	if err := os.WriteFile(keyPath, key, 0o600); err != nil {
-		return nil, fmt.Errorf("save generated key: %w", err)
-	}
-
-	return key, nil
 }
