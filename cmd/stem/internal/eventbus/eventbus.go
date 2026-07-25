@@ -105,6 +105,11 @@ type Event struct {
 
 type Handler func(Event)
 
+type subscription struct {
+	id      uint64
+	handler Handler
+}
+
 // Sink consumes every event published to the Bus, regardless of type.
 // Sinks are the pluggable transport boundary of the bus: local persistence
 // (history.db), the Resin trace log, and remote transporters (Redis, Kafka,
@@ -124,7 +129,8 @@ type sinkPump struct {
 
 type Bus struct {
 	mu       sync.RWMutex
-	handlers map[EventType][]Handler
+	handlers map[EventType][]subscription
+	nextID   uint64
 	history  []Event
 	sinks    []*sinkPump
 	closed   bool
@@ -132,7 +138,7 @@ type Bus struct {
 
 func New() *Bus {
 	return &Bus{
-		handlers: make(map[EventType][]Handler),
+		handlers: make(map[EventType][]subscription),
 		history:  make([]Event, 0, maxHistory),
 	}
 }
@@ -192,15 +198,31 @@ func (b *Bus) Shutdown() {
 	}
 }
 
-func (b *Bus) Subscribe(eventType EventType, handler Handler) {
+func (b *Bus) Subscribe(eventType EventType, handler Handler) func() {
 	if b == nil || handler == nil {
-		return
+		return func() {}
 	}
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
+	id := b.nextID
+	b.nextID++
+	b.handlers[eventType] = append(b.handlers[eventType], subscription{id: id, handler: handler})
+	b.mu.Unlock()
 
-	b.handlers[eventType] = append(b.handlers[eventType], handler)
+	return func() {
+		if b == nil {
+			return
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		subs := b.handlers[eventType]
+		for i, sub := range subs {
+			if sub.id == id {
+				b.handlers[eventType] = append(subs[:i], subs[i+1:]...)
+				break
+			}
+		}
+	}
 }
 
 func (b *Bus) Publish(event Event) {
@@ -217,7 +239,11 @@ func (b *Bus) Publish(event Event) {
 		copy(b.history, b.history[len(b.history)-maxHistory:])
 		b.history = b.history[:maxHistory]
 	}
-	handlers := append([]Handler(nil), b.handlers[event.Type]...)
+	subs := b.handlers[event.Type]
+	handlers := make([]Handler, 0, len(subs))
+	for _, sub := range subs {
+		handlers = append(handlers, sub.handler)
+	}
 	b.mu.Unlock()
 
 	for _, handler := range handlers {
@@ -251,4 +277,15 @@ func (b *Bus) History(n int) []Event {
 	}
 	start := len(b.history) - n
 	return append([]Event(nil), b.history[start:]...)
+}
+
+// HandlerCount returns the number of active handlers for a given event type.
+// It is intended primarily for testing.
+func (b *Bus) HandlerCount(eventType EventType) int {
+	if b == nil {
+		return 0
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.handlers[eventType])
 }
