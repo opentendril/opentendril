@@ -58,8 +58,13 @@ func NewServer(workspace string) *Server {
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024 * 8,
 			WriteBufferSize: 1024 * 8,
+			// Reject any WebSocket upgrade that carries an Origin header.
+			// Origin is a browser-controlled header that legitimate
+			// service-to-service callers (mesh.Client, CLI, another Stem)
+			// never send. Accepting only requests without Origin is stricter
+			// than a same-host allowlist and requires no configuration knob.
 			CheckOrigin: func(r *http.Request) bool {
-				return true
+				return r.Header.Get("Origin") == ""
 			},
 		},
 	}

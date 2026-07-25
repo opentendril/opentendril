@@ -143,6 +143,33 @@ each error message names the exact corrective action.
   fallback. Each error names the exact fix (`auth: …`, `TENDRIL_ALLOW_HOST_WORKSPACE`);
   no compatibility switch restores the old ambient behaviour.
 
+## Mesh graft hardening — workspace binding & origin restriction
+
+The `/v1/mesh/graft` WebSocket endpoint previously had two fail-open defaults
+that are now fail-closed. Both controls are unconditional with no override or
+opt-out — cross-workspace tokens and browser-origin callers are never legitimate
+for this endpoint.
+
+- **Workspace binding (was: unbound).** `HandleGraftWebSocket` previously
+  verified issuer, audience, and scope but did not bind the `workspacePath` JWT
+  claim to the server's own workspace (`server.go`). A token minted for any
+  workspace would be accepted. It now validates `workspacePath` against
+  `s.workspace` via `TokenValidationOptions.ExpectedWorkspace`; a mismatched
+  claim is rejected with `401 Unauthorized` before the WebSocket upgrade begins.
+  `HandleAdminIssueToken` ignores any caller-supplied `workspacePath` — issued
+  tokens always carry `s.workspace`, so a caller cannot mint a cross-workspace
+  token even with admin access to the issuance endpoint.
+
+- **Origin restriction (was: always-true CheckOrigin).** The `websocket.Upgrader`
+  in `NewServer` previously set `CheckOrigin: func(r *http.Request) bool { return true }`,
+  accepting upgrades from any origin. It now accepts upgrades only when the
+  `Origin` header is absent. `Origin` is a browser-controlled header that
+  legitimate service-to-service callers (`mesh.Client`, CLI, another Stem) never
+  send; this is stricter than a same-host allowlist and requires no configuration
+  knob. There is no opt-out: a browser-initiated call to this endpoint is never
+  a legitimate use-case by design (the mesh graft endpoint is service-to-service
+  only, as documented in `DESIGN-MESH.md`).
+
 ## Credential model — two-tier Pollinator access
 
 Pollinator REST access is **two-tier**:
