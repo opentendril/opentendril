@@ -194,6 +194,15 @@ isolation cannot happen silently.
   warning or the telemetry event. The audit trail is the mandatory consequence
   of explicitly opting into host execution; it is not a separate gate.
 
+## Delegation confirm-above — pending confirmation and approval
+
+The `confirmAbove` bound on a delegation grant ensures that high-impact operations require explicit human approval before execution.
+
+- **Pending confirmation state machine (was: blanket denial).** Previously, `confirmAbove` denied everything because no impact was wired and there was no confirmation surface. It now creates a pending confirmation (not a denial) when a grant threshold is crossed.
+- **Botanist-only approval.** The pending confirmation can only be approved or denied by the Botanist via REST (`/v1/delegation/pending`) or the CLI (`tendril delegation pending`, `tendril delegation approve <id>`). There is no "loosen this" override — the approval surface itself is the mechanism, not a bypass of it.
+- **Live-grant re-validation.** A pending approval is validated against the live grant at consumption time, not a stale snapshot. Revoking or narrowing a grant while a confirmation is outstanding takes effect immediately.
+- **Single-use and TTL.** An approved confirmation authorizes exactly one matching retry and expires after an hour (1-hour TTL) if unresolved.
+
 ## Credential model — two-tier Pollinator access
 
 Pollinator REST access is **two-tier**:
