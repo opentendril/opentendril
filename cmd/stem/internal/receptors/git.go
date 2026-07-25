@@ -106,6 +106,7 @@ func (h *GitHandler) commit(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitCommit,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactMedium,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -155,6 +156,7 @@ func (h *GitHandler) push(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitPush,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactHigh,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -205,6 +207,7 @@ func (h *GitHandler) pullRequest(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitPR,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactHigh,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -254,6 +257,7 @@ func (h *GitHandler) branch(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitBranch,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactMedium,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -304,6 +308,7 @@ func (h *GitHandler) status(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitStatus,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactLow,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -350,6 +355,7 @@ func (h *GitHandler) branchList(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitBranchList,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactLow,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
@@ -395,6 +401,7 @@ func (h *GitHandler) prune(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapGitPrune,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactHigh,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)

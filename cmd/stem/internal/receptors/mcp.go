@@ -156,6 +156,7 @@ func (h *MCPHandler) authorizeDelegatedTool(operationClass string, args map[stri
 		Pollen:         h.pollen,
 		OperationClass: operationClass,
 		Substrate:      strings.TrimSpace(substrate),
+		Impact:         core.CapabilityImpact(operationClass),
 	}
 	if h.delegation == nil || h.pollen == "" {
 		decision := core.DelegationDecision{Reason: "delegation is not configured for this MCP session"}

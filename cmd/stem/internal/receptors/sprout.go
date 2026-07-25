@@ -69,6 +69,7 @@ func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Reques
 		Pollen:         pollen,
 		OperationClass: core.CapSproutGrow,
 		Substrate:      strings.TrimSpace(substrate),
+		Impact:         core.DelegationImpactHigh,
 	})
 	if !decision.Authorized {
 		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)

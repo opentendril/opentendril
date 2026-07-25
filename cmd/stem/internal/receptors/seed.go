@@ -112,6 +112,7 @@ func (h *SeedHandler) authorizeSeed(w http.ResponseWriter, r *http.Request, subs
 		Pollen:         pollen,
 		OperationClass: core.CapSeedGrow,
 		Substrate:      strings.TrimSpace(substrate),
+		Impact:         core.DelegationImpactHigh,
 	})
 	if !decision.Authorized {
 		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
