@@ -61,6 +61,10 @@ func newBaseProvider(ctx context.Context, name string) (TerrariumProvider, error
 // setting TENDRIL_ALLOW_HOST_EXECUTION=true in the environment.
 func checkHostExecutionAllowed() error {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv(EnvAllowHostExecution)), "true") {
+		fmt.Fprintf(os.Stderr,
+			"⚠️   Host execution provider activated (%s=true): terrarium isolation bypassed — no mount sealing, no network sealing, running with full host-user permissions.\n",
+			EnvAllowHostExecution,
+		)
 		return nil
 	}
 	return fmt.Errorf(
