@@ -357,7 +357,9 @@ grants:
     substrates: [myrepo]
     # egress: [github.com]              # optional: hosts the Stem may fetch for this pollen
     # expires: 2027-01-01               # optional: RFC 3339 timestamp or YYYY-MM-DD
-    # confirmAbove: { impact: high }    # optional: escalate high-impact operations to a human
+    # confirmAbove: { impact: high }    # NOT YET FUNCTIONAL: denies every invocation under this
+    #                                   # grant instead of escalating (no confirmation surface
+    #                                   # exists yet; see DESIGN-CORE.md). Do not enable.
 ```
 
 **Check:** `tendril git setup --substrate myrepo --repo myorg/myrepo --verify`
