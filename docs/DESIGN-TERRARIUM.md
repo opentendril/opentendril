@@ -33,14 +33,15 @@
 | `MountSpec` | Host-to-guest filesystem mapping with `ReadOnly` enforcement. |
 | `Artifact` | Represents a file copied out of the terrarium filesystem after execution. |
 | `TerrariumLogs` | Captures `Stdout` and `Stderr` snapshots from the isolated run. |
-| `NewProvider` | Factory resolving `docker`, `gvisor`, `firecracker`, or `host` (wrapped in `validatingProvider`). |
+| `ActivationObserver` | Callback invoked upon successful host-provider activation, enabling audit telemetry. |
+| `NewProvider` | Factory resolving `docker`, `gvisor`, `firecracker`, or `host` (wrapped in `validatingProvider`, accepts optional `ActivationObserver` callbacks). |
 | Providers | `NewDockerProvider`, `NewFirecrackerProvider`, `NewGVisorProvider`, `NewHostProvider`. |
 
 Sentinel errors: None explicitly exported; returns wrapped `fmt.Errorf`s.
 
 ## Dependencies
 
-**Fan-out:** none (leaf).
+**Fan-out:** none (leaf). The `ActivationObserver` callback pattern was specifically designed to allow the conductor to publish audit events upon host-execution activation without adding an `internal/eventbus` dependency to this package, explicitly preserving its leaf status.
 
 **Fan-in:**
 

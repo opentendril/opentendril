@@ -170,6 +170,30 @@ for this endpoint.
   a legitimate use-case by design (the mesh graft endpoint is service-to-service
   only, as documented in `DESIGN-MESH.md`).
 
+## Host execution auditing — loud activation & telemetry
+
+Host execution is an intentional escape hatch that bypasses Terrarium isolation.
+Previously, activation of this path was unaudited. It is now strictly audited
+with both local warnings and verifiable telemetry events, ensuring that bypassing
+isolation cannot happen silently.
+
+- **Audited activation (was: silent).** Host execution is gated by the explicit
+  `TENDRIL_ALLOW_HOST_EXECUTION=true` environment variable. Previously, when
+  this was enabled, the `host` provider would activate silently. It now prints
+  a loud `stderr` warning (`checkHostExecutionAllowed` in `factory.go`) and
+  publishes an `EventHostExecutionActivated` telemetry event. The telemetry
+  event is published via the `ActivationObserver` callback pattern, allowing the
+  conductor to audit the execution without introducing an eventbus dependency
+  into the `terrarium` leaf package.
+- **Audited workspace fallback (was: silent).** The opt-in for an in-place
+  shadow-worktree run is `TENDRIL_ALLOW_HOST_WORKSPACE=true`. Previously, this
+  fallback was also unaudited. It has been retrofitted to publish the exact same
+  `EventHostExecutionActivated` telemetry event for consistency across all host
+  execution paths.
+- **No audit opt-out.** There is no configuration switch to disable the `stderr`
+  warning or the telemetry event. The audit trail is the mandatory consequence
+  of explicitly opting into host execution; it is not a separate gate.
+
 ## Credential model — two-tier Pollinator access
 
 Pollinator REST access is **two-tier**:
