@@ -174,14 +174,9 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 
 	now := a.now()
 
-	// Check if this exact invocation has an approved pending confirmation.
-	if a.pendingStore != nil {
-		if consumed := a.pendingStore.findApprovedAndConsume(pollen, operationClass, substrate); consumed != nil {
-			// If approved, authorize immediately using the snapshotted grant.
-			return DelegationDecision{Authorized: true, Grant: &consumed.Grant}
-		}
-	}
-
+	// Note: We do not check for an approved pending confirmation here before the grant
+	// matching loop. This ensures that revocation takes effect immediately — we must
+	// always evaluate against live grants rather than bypassing with a stale snapshot.
 	for i := range a.grants {
 		grant := &a.grants[i]
 		if grant.Pollen != pollen {
@@ -200,6 +195,11 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 			delegationImpactRank(request.Impact) >= delegationImpactRank(threshold) {
 
 			if a.pendingStore != nil {
+				if consumed := a.pendingStore.findApprovedAndConsume(pollen, operationClass, substrate); consumed != nil {
+					matched := grant.clone() // the LIVE grant, not consumed.Grant
+					return DelegationDecision{Authorized: true, Grant: &matched}
+				}
+
 				record := a.pendingStore.Create(pollen, operationClass, substrate, request.Impact, *grant, a.pendingTTL)
 				return DelegationDecision{
 					Authorized:          false,
