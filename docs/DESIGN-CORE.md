@@ -36,10 +36,12 @@
 | `CapabilityNames()` | The sorted canonical governed name set — the single source of truth the parity tests compare every surface against. |
 | `DelegatedCapabilityNames()` / `IsDelegatedCapability(name)` | The subset of operation-classes that must pass the delegation gate before running for a Pollinator. |
 | `Cap…` constants (`CapSproutGrow`, `CapStomaPass`, `CapSeedGrow`, `CapGitCommit`, …) | The canonical capability-name identifiers shared verbatim across all three surfaces. |
+| `CapabilityImpact(operationClass)` | Maps a governed capability to its confirm-above-impact taxonomy level (`low`/`medium`/`high`); an unlisted or unknown capability securely defaults to `high`. |
 | `SproutOperations` / `StomaOperations` / `SeedOperations` / `GitOperations` / `SequenceOperations` / `MeshOperations` / `PlasmidOperations` / `GenomeOperations` | The injection ports: structs of function fields the Core defines and adapters/conductor implement. A nil field yields a "not wired" error. |
 | `DelegationGrant` | One durable, revocable grant: a Pollen authorized for a bounded set of operation-classes on a bounded set of Substrates, with optional egress allow-list, expiry, and confirm-above-impact bound. |
-| `DelegationRequest` / `DelegationDecision` | One invocation to authorize (carries no grant material) and the authorizer's verdict (authorized + a copy of the matching grant, or a transport-neutral denial reason). |
-| `DelegationAuthorizer` / `NewDelegationAuthorizer` | Evaluates a request against deep-copied grants; holds no mutable policy surface. |
+| `DelegationRequest` / `DelegationDecision` | One invocation to authorize (carries no grant material) and the authorizer's verdict (authorized + a copy of the matching grant, a transport-neutral denial reason, or `PendingConfirmation`/`ConfirmationID` when a confirm-above bound is crossed). |
+| `DelegationAuthorizer` / `NewDelegationAuthorizer` / `WithPendingStore(store, ttl)` | Evaluates a request against deep-copied grants; holds no mutable policy surface. `WithPendingStore` attaches a `PendingConfirmationStore` so a crossed confirm-above bound creates a pending confirmation instead of a denial. |
+| `PendingConfirmationStore` / `NewPendingConfirmationStore` | In-memory, process-local store for confirm-above escalations: `Create`/`Get`/`List`/`Approve`/`Deny`. An approved confirmation is re-validated against the *live* grant (not a snapshot) and consumed exactly once when `Authorize` matches it. |
 | `LoadDelegationGrants(tendrilDir)` | Reads `grants.yaml` from the Stem's own control-plane directory; a missing file is the secure default (zero grants). |
 | `WithPollen(ctx, pollen)` / `PollenFromContext(ctx)` | Bind the authorized Pollen onto the request context and read it in the port; `""` means "not delegated". |
 | `StemSigner` / `LoadOrCreateStemSigner` | Mints and verifies access tokens with the Stem's own Ed25519 key; `Public()` lets a remote verify with no shared state. |
