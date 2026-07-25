@@ -93,20 +93,14 @@ func (s *Server) HandleAdminIssueToken(w http.ResponseWriter, r *http.Request) {
 		audience = append(audience, trimmed)
 	}
 
-	workspacePath := strings.TrimSpace(req.WorkspacePath)
-	if workspacePath == "" {
-		workspacePath = s.workspace
-	}
-
 	token, err := IssueWorkspaceToken(s.workspace, TokenOptions{
-		Issuer:        req.Issuer,
-		Subject:       req.Subject,
-		Audience:      audience,
-		MeshScope:     req.MeshScope,
-		WorkspacePath: workspacePath,
-		TokenID:       req.TokenID,
-		ExpiresIn:     ttl,
-		Now:           time.Now().UTC(),
+		Issuer:    req.Issuer,
+		Subject:   req.Subject,
+		Audience:  audience,
+		MeshScope: req.MeshScope,
+		TokenID:   req.TokenID,
+		ExpiresIn: ttl,
+		Now:       time.Now().UTC(),
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to issue token: %v", err), http.StatusInternalServerError)
@@ -138,10 +132,11 @@ func (s *Server) HandleGraftWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := VerifyToken(token, publicKey, TokenValidationOptions{
-		Now:              time.Now().UTC(),
-		ExpectedIssuer:   defaultIssuer,
-		ExpectedAudience: defaultAudience,
-		ExpectedScope:    defaultMeshScope,
+		Now:               time.Now().UTC(),
+		ExpectedIssuer:    defaultIssuer,
+		ExpectedAudience:  defaultAudience,
+		ExpectedScope:     defaultMeshScope,
+		ExpectedWorkspace: s.workspace,
 	}); err != nil {
 		http.Error(w, fmt.Sprintf("Unauthorized: %v", err), http.StatusUnauthorized)
 		return
