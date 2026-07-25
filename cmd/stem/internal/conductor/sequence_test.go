@@ -909,7 +909,22 @@ func TestRunSequenceSproutFailClosedIsolation(t *testing.T) {
 			orch.StepID = "seq-test-step"
 			orch.DisableMergeBack = true // simplify testing
 
+			bus := eventbus.New()
+			var eventCount int
+			bus.Subscribe(eventbus.EventHostExecutionActivated, func(e eventbus.Event) {
+				if e.Data["workspace"] == workdir {
+					eventCount++
+				}
+			})
+			orch.EventBus = bus
+
 			_, err := runSequenceSprout(context.Background(), orch, "test prompt")
+
+			if tc.allowHost && eventCount != 1 {
+				t.Errorf("expected 1 host workspace event, got %d", eventCount)
+			} else if !tc.allowHost && eventCount != 0 {
+				t.Errorf("expected 0 host workspace events, got %d", eventCount)
+			}
 
 			if tc.wantErr {
 				if err == nil {

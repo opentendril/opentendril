@@ -668,7 +668,22 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 			orch.StepID = "test-step"
 			orch.DisableMergeBack = true // simplify testing
 
+			bus := eventbus.New()
+			var eventCount int
+			bus.Subscribe(eventbus.EventHostExecutionActivated, func(e eventbus.Event) {
+				if e.Data["workspace"] == workdir {
+					eventCount++
+				}
+			})
+			orch.EventBus = bus
+
 			report, err := orch.RunSprout(context.Background(), "test prompt")
+
+			if tc.allowHost && eventCount != 1 {
+				t.Errorf("expected 1 host workspace event, got %d", eventCount)
+			} else if !tc.allowHost && eventCount != 0 {
+				t.Errorf("expected 0 host workspace events, got %d", eventCount)
+			}
 
 			if tc.wantErr {
 				if err == nil {

@@ -534,6 +534,10 @@ func TestRecordedIdentityRoundTrips(t *testing.T) {
 // An owner can always write its own file, so a binary belonging to another
 // principal is replaceable however narrow its mode.
 func TestExecutableOwnedByAnotherPrincipalIsWeak(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping test as root: hardiness check ignores root-owned paths by design")
+	}
+
 	root := cleanTempRoot(t)
 	tendrilDir := filepath.Join(root, ".tendril")
 

@@ -1717,6 +1717,17 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 			}
 		} else if allowHostWorkspace() {
 			fmt.Fprintf(os.Stderr, "⚠️  Failed to create shadow worktree: %v. Using active workspace (%s).\n", err, EnvAllowHostWorkspace)
+			if orch.EventBus != nil {
+				orch.EventBus.Publish(eventbus.Event{
+					Type:      eventbus.EventHostExecutionActivated,
+					Source:    stepID,
+					SessionID: orch.SessionID,
+					Data: map[string]interface{}{
+						"workspace": sourcePath,
+						"stepId":    stepID,
+					},
+				})
+			}
 		} else {
 			return "", fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
 		}
