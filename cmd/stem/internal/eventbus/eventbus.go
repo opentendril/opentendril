@@ -15,11 +15,19 @@ const (
 	EventHealthRecovered  EventType = "health-recovered"
 	EventTerrariumOOM     EventType = "terrarium-oom"
 	EventTerrariumTimeout EventType = "terrarium-timeout"
-	EventAPIKeyInvalid    EventType = "api-key-invalid"
-	EventSequenceFailure  EventType = "sequence-failure"
-	EventSequenceComplete EventType = "sequence-complete"
-	EventStreamToken      EventType = "stream-token"
-	EventThoughtBranch    EventType = "thought-branch"
+	// EventHostExecutionActivated is published exactly once each time the host
+	// terrarium provider is successfully activated. It forms the structured
+	// audit trail for a security-relevant event: the deliberate bypass of
+	// terrarium isolation (no mount sealing, no network sealing, full
+	// host-user permissions). The observer-callback shape keeps the terrarium
+	// package free of an eventbus dependency; callers with bus access pass a
+	// closure that publishes this event.
+	EventHostExecutionActivated EventType = "host-execution-activated"
+	EventAPIKeyInvalid          EventType = "api-key-invalid"
+	EventSequenceFailure        EventType = "sequence-failure"
+	EventSequenceComplete       EventType = "sequence-complete"
+	EventStreamToken            EventType = "stream-token"
+	EventThoughtBranch          EventType = "thought-branch"
 	// EventToolInvoked reports one tool call the Pollinator made during a run — the
 	// tool name, its arguments, the resulting status, and a truncated
 	// observation. Without it a run's actual actions are invisible: a
@@ -65,6 +73,7 @@ func AllEventTypes() []EventType {
 		EventHealthRecovered,
 		EventTerrariumOOM,
 		EventTerrariumTimeout,
+		EventHostExecutionActivated,
 		EventAPIKeyInvalid,
 		EventSequenceFailure,
 		EventSequenceComplete,

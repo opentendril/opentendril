@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 func TestCloneForeignSubstrate(t *testing.T) {
@@ -644,7 +646,7 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 			}()
 
 			ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
-			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
+			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
 				return &terrariumToolSession{}, nil // Dummy session
 			}
 			newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
@@ -693,4 +695,88 @@ type mockSproutRunner struct {
 
 func (m *mockSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	return sproutResult{Response: m.response}, m.err
+}
+
+func TestDockerOrchestratorPublishesHostActivationEvent(t *testing.T) {
+	t.Setenv("TENDRIL_ALLOW_HOST_EXECUTION", "true")
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "host")
+
+	bus := eventbus.New()
+	var received int
+	bus.Subscribe(eventbus.EventHostExecutionActivated, func(e eventbus.Event) {
+		received++
+	})
+
+	orch := NewDockerOrchestrator()
+	orch.Substrate = t.TempDir()
+	orch.StepID = "test-step"
+	orch.DisableMergeBack = true
+	orch.EventBus = bus
+
+	// Mock preflight
+	origPreflight := runSproutPreflightChecksFn
+	origShadow := createShadowWorktreeFn
+	origRepoMap := generateRepoMapFn
+	origEnsureImage := ensureSproutImageFn
+
+	defer func() {
+		runSproutPreflightChecksFn = origPreflight
+		createShadowWorktreeFn = origShadow
+		generateRepoMapFn = origRepoMap
+		ensureSproutImageFn = origEnsureImage
+	}()
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	createShadowWorktreeFn = func(s, b string) (string, error) { return orch.Substrate, nil }
+	generateRepoMapFn = func(c context.Context, d string) (string, error) { return "", nil }
+	ensureSproutImageFn = func(c context.Context, i string) error { return nil }
+
+	// RunSprout resolves provider to "host" and calls startTerrariumSessionFn (which uses the real startTerrariumSession)
+	// It will error because of missing tools, but the event should be published.
+	_, _ = orch.RunSprout(context.Background(), "test prompt")
+
+	if received != 1 {
+		t.Fatalf("expected exactly 1 host execution event, got %d", received)
+	}
+}
+
+func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
+	t.Setenv("TENDRIL_ALLOW_HOST_EXECUTION", "")
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+
+	bus := eventbus.New()
+	var received int
+	bus.Subscribe(eventbus.EventHostExecutionActivated, func(e eventbus.Event) {
+		received++
+	})
+
+	orch := NewDockerOrchestrator()
+	orch.Substrate = t.TempDir()
+	orch.StepID = "test-step"
+	orch.DisableMergeBack = true
+	orch.EventBus = bus
+
+	// Mock preflight
+	origPreflight := runSproutPreflightChecksFn
+	origShadow := createShadowWorktreeFn
+	origRepoMap := generateRepoMapFn
+	origEnsureImage := ensureSproutImageFn
+
+	defer func() {
+		runSproutPreflightChecksFn = origPreflight
+		createShadowWorktreeFn = origShadow
+		generateRepoMapFn = origRepoMap
+		ensureSproutImageFn = origEnsureImage
+	}()
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	createShadowWorktreeFn = func(s, b string) (string, error) { return orch.Substrate, nil }
+	generateRepoMapFn = func(c context.Context, d string) (string, error) { return "", nil }
+	ensureSproutImageFn = func(c context.Context, i string) error { return nil }
+
+	_, _ = orch.RunSprout(context.Background(), "test prompt")
+
+	if received != 0 {
+		t.Fatalf("expected 0 host execution events for docker provider, got %d", received)
+	}
 }
