@@ -34,6 +34,9 @@ func TestEvaluateTriggers(t *testing.T) {
 	}
 
 	t.Run("unreadable dir under enforce blocks", func(t *testing.T) {
+		if os.Getuid() == 0 {
+			t.Skip("skipping test as root: root can read 0000 directories")
+		}
 		unreadableDir := filepath.Join(tmpDir, "unreadable")
 		if err := os.Mkdir(unreadableDir, 0000); err != nil {
 			t.Fatalf("failed to create unreadable dir: %v", err)
