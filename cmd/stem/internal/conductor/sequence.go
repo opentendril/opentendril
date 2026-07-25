@@ -1814,7 +1814,21 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		command = sequencePlan.command
 	}
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, command)
+	obs := terrarium.ActivationObserver(func(name string) {
+		if orch.EventBus != nil {
+			orch.EventBus.Publish(eventbus.Event{
+				Type:      eventbus.EventHostExecutionActivated,
+				Source:    stepID,
+				SessionID: orch.SessionID,
+				Data: map[string]interface{}{
+					"provider": name,
+					"stepId":   stepID,
+				},
+			})
+		}
+	})
+
+	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, command, nil, obs)
 	if err != nil {
 		return result, err
 	}

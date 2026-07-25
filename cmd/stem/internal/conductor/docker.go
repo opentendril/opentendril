@@ -69,8 +69,8 @@ type sproutRunner interface {
 
 var (
 	ensureSproutImageFn     = ensureSproutImage
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
-		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv...)
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv, observers...)
 	}
 	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
@@ -379,7 +379,21 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	publishSproutEmerged(d.EventBus, stepID, d.SessionID, d.Substrate)
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv...)
+	obs := terrarium.ActivationObserver(func(name string) {
+		if d.EventBus != nil {
+			d.EventBus.Publish(eventbus.Event{
+				Type:      eventbus.EventHostExecutionActivated,
+				Source:    stepID,
+				SessionID: d.SessionID,
+				Data: map[string]interface{}{
+					"provider": name,
+					"stepId":   stepID,
+				},
+			})
+		}
+	})
+
+	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv, obs)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -644,8 +658,8 @@ type terrariumToolSession struct {
 	terrarium terrarium.Terrarium
 }
 
-func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, command []string, extraEnv ...string) (toolSession, error) {
-	provider, err := terrarium.NewProvider(ctx, providerName)
+func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	provider, err := terrarium.NewProvider(ctx, providerName, observers...)
 	if err != nil {
 		return nil, err
 	}
