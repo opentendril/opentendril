@@ -87,3 +87,36 @@ func TestConcurrentPublishIsSafe(t *testing.T) {
 		t.Fatalf("history len = %d, want 100", got)
 	}
 }
+
+func TestUnsubscribe(t *testing.T) {
+	bus := New()
+	count := 0
+
+	unsub := bus.Subscribe(EventHealthCheck, func(event Event) {
+		count++
+	})
+
+	bus.Publish(Event{Type: EventHealthCheck})
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+
+	unsub()
+
+	bus.Publish(Event{Type: EventHealthCheck})
+	if count != 1 {
+		t.Fatalf("count = %d, want 1 after unsubscribe", count)
+	}
+
+	// calling unsub again shouldn't panic or affect other handlers
+	unsub()
+
+	count2 := 0
+	bus.Subscribe(EventHealthCheck, func(event Event) {
+		count2++
+	})
+	bus.Publish(Event{Type: EventHealthCheck})
+	if count2 != 1 {
+		t.Fatalf("count2 = %d, want 1", count2)
+	}
+}

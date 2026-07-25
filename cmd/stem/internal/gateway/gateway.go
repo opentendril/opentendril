@@ -73,9 +73,15 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			}
 		}
 
+		unsubs := make([]func(), 0, len(eventbus.AllEventTypes()))
 		for _, eventType := range eventbus.AllEventTypes() {
-			bus.Subscribe(eventType, handler)
+			unsubs = append(unsubs, bus.Subscribe(eventType, handler))
 		}
+		defer func() {
+			for _, unsub := range unsubs {
+				unsub()
+			}
+		}()
 
 		// Send connected message
 		connectedMsg, _ := json.Marshal(map[string]string{"type": "connected"})

@@ -68,3 +68,34 @@ func TestHandleWebSocketForwardsAllEventTypes(t *testing.T) {
 		t.Fatalf("event source = %v, want step-test", eventMsg["source"])
 	}
 }
+
+func TestGatewayUnsubscribesOnClose(t *testing.T) {
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+
+	// Wait briefly to ensure subscribe loop runs
+	time.Sleep(50 * time.Millisecond)
+
+	countBefore := bus.HandlerCount(eventbus.EventSproutEmerged)
+	if countBefore == 0 {
+		t.Fatalf("expected handler count to be > 0 while connected, got %d", countBefore)
+	}
+
+	// Close client connection to trigger readPump exit and unsubs
+	conn.Close()
+
+	// Wait briefly for server to process disconnect
+	time.Sleep(50 * time.Millisecond)
+
+	countAfter := bus.HandlerCount(eventbus.EventSproutEmerged)
+	if countAfter != 0 {
+		t.Fatalf("expected handler count to be 0 after disconnect, got %d", countAfter)
+	}
+}
