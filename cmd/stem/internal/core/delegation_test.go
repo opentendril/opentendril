@@ -114,11 +114,167 @@ func TestDelegationAuthorizerConfirmAboveImpact(t *testing.T) {
 	if !strings.Contains(decision.Reason, "confirmation") {
 		t.Fatalf("denial reason %q does not mention confirmation", decision.Reason)
 	}
+	// Without a pending store, it does not set PendingConfirmation
+	if decision.PendingConfirmation {
+		t.Fatal("expected PendingConfirmation: false without a store")
+	}
 
 	// Undeclared impact must never slip under a configured bound.
 	undeclared := sproutDelegationRequest()
 	if decision := authorizer.Authorize(undeclared); decision.Authorized {
 		t.Fatal("Authorize permitted an undeclared-impact invocation under a confirm-above bound")
+	}
+}
+
+func TestDelegationAuthorizerConfirmAbovePending(t *testing.T) {
+	bounded := activeGrant()
+	bounded.ConfirmAboveImpact = core.DelegationImpactHigh
+
+	store := core.NewPendingConfirmationStore()
+	authorizer := core.NewDelegationAuthorizer([]core.DelegationGrant{bounded}).WithPendingStore(store, time.Hour)
+
+	req := sproutDelegationRequest()
+	req.Impact = core.DelegationImpactHigh
+
+	// 1. Confirm-above on first request returns PendingConfirmation: true with a non-empty ConfirmationID.
+	decision1 := authorizer.Authorize(req)
+	if decision1.Authorized {
+		t.Fatal("Authorize permitted high impact invocation")
+	}
+	if !decision1.PendingConfirmation {
+		t.Fatal("expected PendingConfirmation: true")
+	}
+	if decision1.ConfirmationID == "" {
+		t.Fatal("expected non-empty ConfirmationID")
+	}
+	id1 := decision1.ConfirmationID
+
+	// 2. Approving that ID, then retrying the exact same request authorizes it.
+	if err := store.Approve(id1); err != nil {
+		t.Fatalf("failed to approve: %v", err)
+	}
+	decision2 := authorizer.Authorize(req)
+	if !decision2.Authorized {
+		t.Fatal("expected Authorized: true after approval")
+	}
+	if decision2.Grant == nil {
+		t.Fatal("expected grant in decision")
+	}
+
+	// 3. Retrying the same request a second time after successful consume does not re-authorize (falls back to new pending).
+	decision3 := authorizer.Authorize(req)
+	if decision3.Authorized {
+		t.Fatal("expected one-time use, but got Authorized: true again")
+	}
+	if !decision3.PendingConfirmation {
+		t.Fatal("expected new pending confirmation")
+	}
+	if decision3.ConfirmationID == id1 || decision3.ConfirmationID == "" {
+		t.Fatal("expected new distinct ConfirmationID")
+	}
+
+	// 4. Retrying a different request after approval does not get authorized.
+	id3 := decision3.ConfirmationID
+	if err := store.Approve(id3); err != nil {
+		t.Fatalf("failed to approve: %v", err)
+	}
+	diffReq := sproutDelegationRequest()
+	diffReq.OperationClass = core.CapSequenceGrow
+	diffReq.Impact = core.DelegationImpactHigh
+	decisionDiff := authorizer.Authorize(diffReq)
+	if decisionDiff.Authorized {
+		t.Fatal("expected different request to be denied")
+	}
+
+	// 5. Denying a pending record, then retrying.
+	// It falls through, hits the threshold again, and creates a new pending record.
+	// This behavior is fine because the caller might realize they made a mistake and
+	// the operator can just ignore or deny the new one.
+	_ = authorizer.Authorize(req) // consumes id3 because we approved it above!
+	// wait, let's create a fresh pending for deny test
+	decisionForDeny := authorizer.Authorize(req) // this makes id5
+	id5 := decisionForDeny.ConfirmationID
+	if err := store.Deny(id5); err != nil {
+		t.Fatalf("failed to deny: %v", err)
+	}
+	decisionAfterDeny := authorizer.Authorize(req)
+	if decisionAfterDeny.Authorized {
+		t.Fatal("expected denial after deny")
+	}
+	if !decisionAfterDeny.PendingConfirmation || decisionAfterDeny.ConfirmationID == id5 {
+		t.Fatal("expected new pending record creation after deny")
+	}
+}
+
+func TestDelegationAuthorizerPendingRevocation(t *testing.T) {
+	bounded := activeGrant()
+	bounded.ConfirmAboveImpact = core.DelegationImpactHigh
+
+	store := core.NewPendingConfirmationStore()
+	authorizer1 := core.NewDelegationAuthorizer([]core.DelegationGrant{bounded}).WithPendingStore(store, time.Hour)
+
+	req := sproutDelegationRequest()
+	req.Impact = core.DelegationImpactHigh
+
+	// 1. Get a pending confirmation and approve it
+	decision1 := authorizer1.Authorize(req)
+	if !decision1.PendingConfirmation {
+		t.Fatal("expected PendingConfirmation: true")
+	}
+	id1 := decision1.ConfirmationID
+	if err := store.Approve(id1); err != nil {
+		t.Fatalf("failed to approve: %v", err)
+	}
+
+	// 2. Construct a second authorizer with NO grants (simulating revocation)
+	authorizer2 := core.NewDelegationAuthorizer(nil).WithPendingStore(store, time.Hour)
+
+	// 3. Authorize should deny, not silently succeed off the orphaned pending record
+	decision2 := authorizer2.Authorize(req)
+	if decision2.Authorized {
+		t.Fatal("expected denial after grant revocation despite approved pending record")
+	}
+	if decision2.PendingConfirmation {
+		t.Fatal("expected no pending confirmation created because no grant matched")
+	}
+}
+
+func TestDelegationAuthorizerPendingModifiedGrant(t *testing.T) {
+	bounded := activeGrant()
+	bounded.ConfirmAboveImpact = core.DelegationImpactHigh
+
+	store := core.NewPendingConfirmationStore()
+	authorizer1 := core.NewDelegationAuthorizer([]core.DelegationGrant{bounded}).WithPendingStore(store, time.Hour)
+
+	req := sproutDelegationRequest()
+	req.Impact = core.DelegationImpactHigh
+
+	// 1. Get a pending confirmation and approve it
+	decision1 := authorizer1.Authorize(req)
+	if !decision1.PendingConfirmation {
+		t.Fatal("expected PendingConfirmation: true")
+	}
+	id1 := decision1.ConfirmationID
+	if err := store.Approve(id1); err != nil {
+		t.Fatalf("failed to approve: %v", err)
+	}
+
+	// 2. Construct a second authorizer where the grant no longer has a ConfirmAboveImpact
+	unbounded := activeGrant()
+	unbounded.ConfirmAboveImpact = ""
+	authorizer2 := core.NewDelegationAuthorizer([]core.DelegationGrant{unbounded}).WithPendingStore(store, time.Hour)
+
+	// 3. Authorize should succeed purely because the live grant allows it, and the pending record
+	// should not govern the behavior. Since there's no confirm-above threshold, it authorizes directly.
+	decision2 := authorizer2.Authorize(req)
+	if !decision2.Authorized {
+		t.Fatal("expected authorization because live grant has no threshold")
+	}
+	if decision2.PendingConfirmation {
+		t.Fatal("expected no pending confirmation")
+	}
+	if decision2.Grant.ConfirmAboveImpact != "" {
+		t.Fatal("expected returned grant to be the LIVE unbounded grant")
 	}
 }
 

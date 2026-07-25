@@ -112,6 +112,12 @@ type DelegationDecision struct {
 	Grant *DelegationGrant
 	// Reason explains a denial in transport-neutral terms.
 	Reason string
+	// PendingConfirmation is true when the invocation was neither authorized
+	// nor denied outright — it crossed a grant's ConfirmAboveImpact threshold
+	// and awaits Botanist approval. Mutually exclusive with Authorized.
+	PendingConfirmation bool
+	// ConfirmationID names the pending record when PendingConfirmation is true.
+	ConfirmationID string
 }
 
 // DelegationAuthorizer gates delegated capability invocations against the
@@ -121,6 +127,9 @@ type DelegationAuthorizer struct {
 	grants []DelegationGrant
 	// now is injectable for expiry tests; defaults to time.Now.
 	now func() time.Time
+
+	pendingStore *PendingConfirmationStore
+	pendingTTL   time.Duration
 }
 
 // NewDelegationAuthorizer builds an authorizer over the given grants. The
@@ -132,6 +141,14 @@ func NewDelegationAuthorizer(grants []DelegationGrant) *DelegationAuthorizer {
 		copied[i] = grant.clone()
 	}
 	return &DelegationAuthorizer{grants: copied, now: time.Now}
+}
+
+// WithPendingStore attaches a PendingConfirmationStore to the authorizer for
+// handling confirm-above impact escalations.
+func (a *DelegationAuthorizer) WithPendingStore(store *PendingConfirmationStore, ttl time.Duration) *DelegationAuthorizer {
+	a.pendingStore = store
+	a.pendingTTL = ttl
+	return a
 }
 
 // Authorize evaluates one delegated invocation. A nil authorizer, an empty
@@ -156,6 +173,10 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 	}
 
 	now := a.now()
+
+	// Note: We do not check for an approved pending confirmation here before the grant
+	// matching loop. This ensures that revocation takes effect immediately — we must
+	// always evaluate against live grants rather than bypassing with a stale snapshot.
 	for i := range a.grants {
 		grant := &a.grants[i]
 		if grant.Pollen != pollen {
@@ -172,6 +193,25 @@ func (a *DelegationAuthorizer) Authorize(request DelegationRequest) DelegationDe
 		}
 		if threshold := strings.TrimSpace(grant.ConfirmAboveImpact); threshold != "" &&
 			delegationImpactRank(request.Impact) >= delegationImpactRank(threshold) {
+
+			if a.pendingStore != nil {
+				if consumed := a.pendingStore.findApprovedAndConsume(pollen, operationClass, substrate); consumed != nil {
+					matched := grant.clone() // the LIVE grant, not consumed.Grant
+					return DelegationDecision{Authorized: true, Grant: &matched}
+				}
+
+				record := a.pendingStore.Create(pollen, operationClass, substrate, request.Impact, *grant, a.pendingTTL)
+				return DelegationDecision{
+					Authorized:          false,
+					PendingConfirmation: true,
+					ConfirmationID:      record.ID,
+					Reason: fmt.Sprintf(
+						"grant for pollen %q requires human confirmation at or above impact %q; pending confirmation %s awaits Botanist approval",
+						pollen, threshold, record.ID,
+					),
+				}
+			}
+
 			return delegationDenied(fmt.Sprintf(
 				"grant for pollen %q requires human confirmation at or above impact %q; no confirmation surface is available yet",
 				pollen, threshold))
