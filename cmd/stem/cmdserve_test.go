@@ -13,6 +13,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
+	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
@@ -254,7 +255,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	if err := os.MkdirAll(triggersDir, 0o755); err != nil {
 		t.Fatalf("failed to create triggers dir: %v", err)
 	}
-	firer := scheduledRunFirer(svc, manager, triggersDir)
+	firer := scheduledRunFirer(svc, manager, triggersDir, nil)
 	entry := scheduler.Entry{
 		Cron: "0 3 * * *",
 		Sprout: &scheduler.SproutSpec{
@@ -331,5 +332,57 @@ func TestProviderValueDoesNotAuthenticate(t *testing.T) {
 
 	if reached || rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a provider value authenticated: reached=%v status=%d", reached, rec.Code)
+	}
+}
+
+// TestTerrariumRunnerPublishesHostActivationEvent verifies that RunTrigger
+// publishes exactly one EventHostExecutionActivated event on the bus when the
+// host terrarium provider is activated. This is the wiring assertion for the
+// structured audit trail — the observer-callback contract in the terrarium
+// package only guarantees the callback is called; this test guarantees the
+// caller correctly translates it into a bus event.
+func TestTerrariumRunnerPublishesHostActivationEvent(t *testing.T) {
+	t.Setenv("TENDRIL_ALLOW_HOST_EXECUTION", "true")
+
+	// The host provider is activated but the script does not exist, so the run
+	// will fail after the provider is resolved. That is fine — we only care
+	// that the event was published before the error.
+	bus := eventbus.New()
+	var received []eventbus.EventType
+	bus.Subscribe(eventbus.EventHostExecutionActivated, func(e eventbus.Event) {
+		received = append(received, e.Type)
+	})
+
+	mode, runner := resolveTriggerModeAndRunner(bus)
+	_ = mode
+	// RunTrigger with a non-existent script: the error from the provider itself
+	// won't happen (the host provider is allowed), but the script-exec will fail.
+	// We just need to verify the event fired before the post-activation error.
+	_ = runner.RunTrigger(context.Background(), "/dev/null/no-such-script", security.TriggerPayload{})
+
+	if len(received) != 1 {
+		t.Fatalf("expected exactly 1 %s event, got %d", eventbus.EventHostExecutionActivated, len(received))
+	}
+}
+
+// TestTerrariumRunnerNoEventForDockerProvider verifies that no
+// EventHostExecutionActivated event is published when the Docker provider is
+// selected. Only host-provider activation is a security-relevant event.
+func TestTerrariumRunnerNoEventForDockerProvider(t *testing.T) {
+	t.Setenv("TENDRIL_ALLOW_HOST_EXECUTION", "")
+
+	bus := eventbus.New()
+	var received int
+	bus.Subscribe(eventbus.EventHostExecutionActivated, func(_ eventbus.Event) {
+		received++
+	})
+
+	// Docker is the default when TENDRIL_ALLOW_HOST_EXECUTION is unset.
+	_, runner := resolveTriggerModeAndRunner(bus)
+	// The script path is irrelevant; we only check the event count.
+	_ = runner.RunTrigger(context.Background(), "/nonexistent", security.TriggerPayload{})
+
+	if received != 0 {
+		t.Fatalf("expected no host-activation events for docker provider, got %d", received)
 	}
 }

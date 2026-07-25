@@ -258,7 +258,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	if schedCfg, err := scheduler.LoadConfig(schedulesPath); err != nil {
 		log.Printf("⚠️ Failed to load scheduler config: %v (scheduling disabled)", err)
 	} else if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
-		firer := scheduledRunFirer(coreSvc, sessions, getTriggersDir())
+		firer := scheduledRunFirer(coreSvc, sessions, getTriggersDir(), bus)
 		scheduler.New(schedCfg, firer, log.Default()).Start(ctx)
 		log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
 	}
@@ -471,7 +471,7 @@ func isNetworkedBindHost(host string) bool {
 // the same governed Core capability (sequence.grow / sprout.grow) as every
 // other surface, so the run's lifecycle telemetry flows to the Command Center
 // via the EventBus-threaded sequence port.
-func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir string) scheduler.FirerFunc {
+func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir string, bus *eventbus.Bus) scheduler.FirerFunc {
 	// scheduledOrigin records which surface grew the run, alongside the
 	// session package's cli/mcp/rest/ws origins.
 	const scheduledOrigin = "scheduler"
@@ -493,7 +493,7 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 			payload.Genotype = firstNonEmpty(e.Sprout.Genotype, e.Sprout.Model, e.Model)
 			payload.Transcript = e.Sprout.Transcript
 		}
-		mode, runner := resolveTriggerModeAndRunner()
+		mode, runner := resolveTriggerModeAndRunner(bus)
 		if err := security.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
 			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
 			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
@@ -771,7 +771,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		}
 
 		triggersDir := getTriggersDir()
-		mode, runner := resolveTriggerModeAndRunner()
+		mode, runner := resolveTriggerModeAndRunner(bus)
 		if err := security.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
 			log.Printf("Sprout blocked by Hormonal Triggers: %v", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
@@ -901,14 +901,25 @@ func getTriggersDir() string {
 
 // terrariumRunner executes triggers inside an isolated Terrarium.
 // Note: Hormonal triggers run in an isolated alpine:3.20 Terrarium.
-// The script must be an executable POSIX sh script; #!/bin/bash is not available.
-// Full operator documentation will be provided in Slice 3.
+// The script must be an executable POSIX sh script; #!/bin/sh is the only available shell.
+// Full operator documentation in docs/DESIGN-SECURITY.md.
 type terrariumRunner struct {
 	providerName string
+	bus          *eventbus.Bus
 }
 
 func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payload security.TriggerPayload) error {
-	provider, err := terrarium.NewProvider(ctx, r.providerName)
+	obs := terrarium.ActivationObserver(func(name string) {
+		r.bus.Publish(eventbus.Event{
+			Type:   eventbus.EventHostExecutionActivated,
+			Source: "hormonal-trigger",
+			Data: map[string]interface{}{
+				"provider": name,
+				"trigger":  scriptPath,
+			},
+		})
+	})
+	provider, err := terrarium.NewProvider(ctx, r.providerName, obs)
 	if err != nil {
 		return fmt.Errorf("Hormonal Trigger blocked: failed to resolve terrarium provider for isolated execution: %w", err)
 	}
@@ -966,7 +977,7 @@ func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payl
 	return nil
 }
 
-func resolveTriggerModeAndRunner() (security.TriggerMode, security.TriggerRunner) {
+func resolveTriggerModeAndRunner(bus *eventbus.Bus) (security.TriggerMode, security.TriggerRunner) {
 	modeStr := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_TRIGGERS_MODE")))
 	var mode security.TriggerMode
 	if modeStr == string(security.ModeDisabled) {
@@ -980,5 +991,5 @@ func resolveTriggerModeAndRunner() (security.TriggerMode, security.TriggerRunner
 		providerName = terrarium.ProviderHost
 	}
 
-	return mode, terrariumRunner{providerName: providerName}
+	return mode, terrariumRunner{providerName: providerName, bus: bus}
 }
