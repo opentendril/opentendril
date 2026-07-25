@@ -101,6 +101,7 @@ func (h *StomaHandler) pass(w http.ResponseWriter, r *http.Request) {
 			Pollen:         pollen,
 			OperationClass: core.CapStomaPass,
 			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactMedium,
 		})
 		if !decision.Authorized {
 			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)

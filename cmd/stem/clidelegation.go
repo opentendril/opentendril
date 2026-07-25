@@ -111,6 +111,7 @@ func (d *cliDelegation) Authorize(ctx context.Context, operationClass, substrate
 		Pollen:         d.Pollen,
 		OperationClass: operationClass,
 		Substrate:      strings.TrimSpace(substrate),
+		Impact:         core.CapabilityImpact(operationClass),
 	})
 	if !decision.Authorized {
 		fmt.Fprintf(os.Stderr, "❌ Delegation denied: %s\n", decision.Reason)
