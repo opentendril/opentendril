@@ -190,10 +190,11 @@ func runServeCmd(ctx context.Context, args []string) {
 	if signerErr != nil {
 		log.Fatalf("❌ Stem signing key could not be read: %v", signerErr)
 	}
+	pendingStore := core.NewPendingConfirmationStore()
 	delegationGate := &receptors.DelegationGate{
 		Pollinators: pollinatorCredentials,
 		Signer:      stemSigner,
-		Authorizer:  core.NewDelegationAuthorizer(delegationGrants),
+		Authorizer:  core.NewDelegationAuthorizer(delegationGrants).WithPendingStore(pendingStore, time.Hour),
 		Bus:         bus,
 	}
 	if len(pollinatorCredentials) > 0 {
@@ -366,6 +367,12 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, delegationGate.Middleware(meshServer.HandleAdminIssueToken)))
 	mux.HandleFunc("/v1/mesh/graft", delegationGate.Middleware(meshServer.HandleGraftWebSocket))
+
+	// Phase 7: Delegation Pending Confirmations API
+	pendingHandler := receptors.NewDelegationPendingHandler(pendingStore)
+	pendingHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(adminKey, delegationGate.Middleware(next))
+	})
 
 	port := os.Getenv("PORT")
 	if port == "" {
