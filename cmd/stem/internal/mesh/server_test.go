@@ -150,6 +150,80 @@ func TestHandleGraftWebSocket_CorrectWorkspaceAccepted(t *testing.T) {
 	}
 }
 
+// dialGraftWSWithOrigin opens a WebSocket connection like dialGraftWS but
+// also sets an Origin header on the upgrade request. The origin argument is
+// sent verbatim; pass an empty string to omit the header entirely.
+func dialGraftWSWithOrigin(srv *httptest.Server, bearerToken, origin string) (*websocket.Conn, *http.Response, error) {
+	u := "ws" + strings.TrimPrefix(srv.URL, "http")
+	header := http.Header{"Authorization": {"Bearer " + bearerToken}}
+	if origin != "" {
+		header.Set("Origin", origin)
+	}
+	dialer := websocket.Dialer{}
+	return dialer.Dial(u, header)
+}
+
+// TestHandleGraftWebSocket_NoOriginSucceeds verifies that a genuine
+// service-to-service dial (no Origin header) still completes the upgrade.
+// This is the no-regression companion to the origin-rejection test below.
+func TestHandleGraftWebSocket_NoOriginSucceeds(t *testing.T) {
+	workspace := t.TempDir()
+	srv, pair := newGraftWSServer(t, workspace)
+
+	goodToken := tokenForWorkspace(t, pair, workspace)
+
+	// Dial without setting any Origin header — simulates mesh.Client / CLI.
+	conn, resp, err := dialGraftWSWithOrigin(srv, goodToken, "")
+	if err != nil {
+		status := 0
+		if resp != nil {
+			status = resp.StatusCode
+		}
+		t.Fatalf("expected successful upgrade with no Origin header, got status %d, err: %v", status, err)
+	}
+	defer conn.Close()
+
+	// Server sends "graft-status: connected" immediately after upgrade.
+	var msg graftMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("ReadJSON: %v", err)
+	}
+	if msg.Type != "graft-status" || msg.Status != "connected" {
+		t.Errorf("got %+v, want graft-status/connected", msg)
+	}
+}
+
+// TestHandleGraftWebSocket_OriginHeaderRejected verifies that any WebSocket
+// upgrade carrying an Origin header is refused — even when the Origin value
+// matches the test server's own URL (proving this is reject-if-present, not
+// a same-host allowlist).
+func TestHandleGraftWebSocket_OriginHeaderRejected(t *testing.T) {
+	workspace := t.TempDir()
+	srv, pair := newGraftWSServer(t, workspace)
+
+	goodToken := tokenForWorkspace(t, pair, workspace)
+
+	cases := []struct {
+		name   string
+		origin string
+	}{
+		{"foreign origin", "http://attacker.example.com"},
+		{"same-host origin", srv.URL}, // must also be rejected
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, resp, err := dialGraftWSWithOrigin(srv, goodToken, tc.origin)
+			if err == nil {
+				t.Fatalf("expected dial to fail with Origin=%q, got nil error", tc.origin)
+			}
+			if resp != nil && resp.StatusCode != http.StatusForbidden {
+				t.Errorf("status = %d, want %d for Origin=%q", resp.StatusCode, http.StatusForbidden, tc.origin)
+			}
+		})
+	}
+}
+
 // TestHandleAdminIssueToken_WorkspaceOverrideIgnored verifies that a caller
 // supplying a workspacePath in the request body cannot influence the claim
 // embedded in the issued token — the token must always carry s.workspace.
