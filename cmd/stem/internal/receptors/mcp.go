@@ -867,7 +867,14 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				// Inject fallback substrate for legacy clients
 				params.Arguments["substrate"] = "core"
 			}
-			resBytes := h.callCoreCapabilityAs(context.Background(), req.ID, "genotype.create", params.Arguments)
+
+			decision := h.authorizeDelegatedTool(core.CapGenotypeCreate, params.Arguments)
+			if !decision.Authorized {
+				return h.formatDelegationDenied(req.ID, decision)
+			}
+			callCtx := core.WithPollen(context.Background(), h.pollen)
+
+			resBytes := h.callCoreCapabilityAs(callCtx, req.ID, core.CapGenotypeCreate, params.Arguments)
 			if !strings.Contains(string(resBytes), `"isError":true`) {
 				if err := SyncGenotypeIndex(); err != nil {
 					log.Printf("[MCP] Failed to sync genotype index after createGenotype: %v", err)

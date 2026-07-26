@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -49,7 +50,7 @@ func runGenotypeCreateCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	substrateDir := resolveRepoRoot("")
+	substrateDir := "core"
 
 	delegation := newCLIDelegation(ctx)
 	defer delegation.Close()
@@ -85,7 +86,8 @@ func buildGenotypeCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager), nil
+	tendrilDir := filepath.Join(resolveRepoRoot(""), ".tendril")
+	return core.NewService(manager).WithTendrilDir(tendrilDir), nil
 }
 
 func genotypeCLICapabilityNames() []string {

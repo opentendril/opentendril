@@ -89,7 +89,13 @@ func TestUploadGenotypeAcceptsValidName(t *testing.T) {
 // the same filename boundary as the REST config surface.
 func TestMCPCreateGenotypeRejectsTraversalNames(t *testing.T) {
 	root := chdirTempDir(t)
-	handler := NewMCPHandler().WithCore(core.NewService(nil))
+	grant := core.DelegationGrant{
+		Pollen:           "test-pollen",
+		OperationClasses: []string{core.CapGenotypeCreate},
+		Substrates:       []string{"core"},
+	}
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: nil}
+	handler := NewMCPHandler().WithCore(core.NewService(nil)).WithDelegation(gate, "test-pollen")
 
 	for _, name := range []string{"../../escaped", "..", "a/b", `a\b`} {
 		reqBytes, err := json.Marshal(map[string]any{

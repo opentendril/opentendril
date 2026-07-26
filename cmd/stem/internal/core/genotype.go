@@ -36,12 +36,11 @@ func (s *Service) GenotypeCreate(ctx context.Context, in GenotypeCreateInput) (a
 		return nil, fmt.Errorf("invalid genotype name: must not contain path separators or traversal components")
 	}
 
-	// We resolve the tendril dir using the workspace path, assuming the stem runs in a workspace.
-	// Since genotype creation isn't inherently bound to a substrate's code but rather to the
-	// configuration tree of the daemon, we resolve the root the same way other config things do.
-	// Actually, the previous implementation in config.go just used `h.TendrilDir`.
-	// We'll write to `./.tendril/genotypes` as the local config tree.
-	genotypesDir := filepath.Join(".", ".tendril", "genotypes")
+	tendrilDir := s.tendrilDir
+	if tendrilDir == "" {
+		tendrilDir = filepath.Join(".", ".tendril")
+	}
+	genotypesDir := filepath.Join(tendrilDir, "genotypes")
 
 	if err := os.MkdirAll(genotypesDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create config directory: %w", err)

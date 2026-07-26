@@ -249,6 +249,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
 	// are adapters that route through this one service.
 	coreSvc := core.NewService(sessions).
+		WithTendrilDir(tendrilDir).
 		WithGenome(genomeOperations(resolveRepoRoot(""))).
 		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
 		WithMesh(meshOperations()).

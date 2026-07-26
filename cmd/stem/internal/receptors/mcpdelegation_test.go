@@ -61,7 +61,7 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 func mcpDelegationGrant() core.DelegationGrant {
 	return core.DelegationGrant{
 		Pollen:           "mcp-Pollinator",
-		OperationClasses: []string{core.CapSproutGrow, core.CapStomaPass, core.CapGitCommit},
+		OperationClasses: []string{core.CapSproutGrow, core.CapStomaPass, core.CapGitCommit, core.CapGenotypeCreate},
 		Substrates:       []string{"core"},
 	}
 }
@@ -114,6 +114,48 @@ func delegatedToolCalls() map[string]map[string]any {
 		core.CapStomaPass:  {"substrate": "core", "command": []string{"gofmt", "-l", "."}},
 		core.CapGitCommit:  {"substrate": "core", "message": "delegated commit"},
 		"sproutTendril":    {"transcript": "grow", "substrate": "core"},
+	}
+}
+
+// TestMCPCreateGenotypeAliasDeniedWithoutGrant proves that the legacy createGenotype
+// MCP alias is properly governed by the delegation system, just like the canonical
+// genotype.create capability.
+func TestMCPCreateGenotypeAliasDeniedWithoutGrant(t *testing.T) {
+	handler, bus, _, _ := newMCPDelegationTestHandler(t)
+
+	// 1. Unwired gate (deny-closed)
+	text, isError := mcpCallTool(t, handler, "createGenotype", map[string]any{
+		"substrate":    "core",
+		"name":         "test",
+		"instructions": "do test",
+	})
+	if !isError {
+		t.Fatalf("createGenotype with nil gate was not denied: %q", text)
+	}
+
+	// 2. Wired gate without pollen
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(nil), Bus: bus}
+	handler = handler.WithDelegation(gate, "")
+	text, isError = mcpCallTool(t, handler, "createGenotype", map[string]any{
+		"substrate":    "core",
+		"name":         "test",
+		"instructions": "do test",
+	})
+	if !isError {
+		t.Fatalf("createGenotype without bound pollen was not denied: %q", text)
+	}
+
+	// 3. Authorized
+	grant := mcpDelegationGrant()
+	gate = &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
+	text, isError = mcpCallTool(t, handler, "createGenotype", map[string]any{
+		"substrate":    "core",
+		"name":         "test",
+		"instructions": "do test",
+	})
+	if isError {
+		t.Fatalf("authorized createGenotype was denied: %q", text)
 	}
 }
 
