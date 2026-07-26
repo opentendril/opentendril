@@ -3,6 +3,7 @@ package mesh
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 )
 
@@ -149,5 +150,41 @@ func TestTraitInboxStoresAndMovesTraits(t *testing.T) {
 	}
 	if pending := inbox.ListPending(); len(pending) != 0 {
 		t.Fatalf("pending = %#v, want empty after reject", pending)
+	}
+}
+
+func TestTraitInboxAcceptRejectUnknownID(t *testing.T) {
+	inbox := NewTraitInbox()
+
+	if err := inbox.Accept("unknown-id"); err == nil {
+		t.Fatal("Accept unknown id: expected non-nil error, got nil")
+	} else if !errors.Is(err, ErrTraitNotFound) {
+		t.Fatalf("Accept unknown id: error = %v, want errors.Is ErrTraitNotFound", err)
+	}
+
+	if err := inbox.Reject("unknown-id"); err == nil {
+		t.Fatal("Reject unknown id: expected non-nil error, got nil")
+	} else if !errors.Is(err, ErrTraitNotFound) {
+		t.Fatalf("Reject unknown id: error = %v, want errors.Is ErrTraitNotFound", err)
+	}
+}
+
+func TestTraitInboxAcceptRejectEmptyID(t *testing.T) {
+	inbox := NewTraitInbox()
+
+	// TraitInbox.Accept/Reject contract: empty string returns ErrTraitNotFound.
+	// Core rejects empty IDs with its own "trait id is required" error before
+	// reaching this layer on the live path, but the inbox's own contract must
+	// still be defined and testable in isolation.
+	if err := inbox.Accept(""); err == nil {
+		t.Fatal("Accept empty id: expected non-nil error, got nil")
+	} else if !errors.Is(err, ErrTraitNotFound) {
+		t.Fatalf("Accept empty id: error = %v, want errors.Is ErrTraitNotFound", err)
+	}
+
+	if err := inbox.Reject(""); err == nil {
+		t.Fatal("Reject empty id: expected non-nil error, got nil")
+	} else if !errors.Is(err, ErrTraitNotFound) {
+		t.Fatalf("Reject empty id: error = %v, want errors.Is ErrTraitNotFound", err)
 	}
 }
