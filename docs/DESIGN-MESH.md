@@ -47,7 +47,7 @@
 | `TraitInbox` / `NewTraitInbox` | In-memory pending/accepted/rejected trait buckets. |
 | `(*TraitInbox).Ingest` / `ListPending` / `Accept` / `Reject` | Inbox lifecycle used by governed trait capabilities. |
 
-Package-level sentinel errors: `ErrMissingPrivateKey`, `ErrMissingPublicKey`, `ErrInvalidToken`, `ErrInvalidSignature`, `ErrExpiredToken`, `ErrNotYetValid`.
+Package-level sentinel errors: `ErrMissingPrivateKey`, `ErrMissingPublicKey`, `ErrInvalidToken`, `ErrInvalidSignature`, `ErrExpiredToken`, `ErrNotYetValid`, `ErrTraitNotFound`.
 
 ## Dependencies
 
@@ -66,7 +66,7 @@ Package-level sentinel errors: `ErrMissingPrivateKey`, `ErrMissingPublicKey`, `E
 - **`IssueToken` never sets `nbf`** even though `VerifyToken` honors it — not-before is unused on the happy path.
 - **WebSocket `CheckOrigin` is fail-closed** — `NewServer` rejects any upgrade request that carries an `Origin` header. `Origin` is a browser-set header that legitimate service-to-service callers (`mesh.Client`, CLI, another Stem) never send; rejecting its presence is stricter than a same-host allowlist and requires no configuration knob. There is no opt-out.
 - **No `client_test.go`** and no integration test for the graft WebSocket path; server tests cover admin token issue only.
-- **Trait inbox is memory-only** and lives as a package-global in the Stem process adapter (`meshtraits.go`); Accept/Reject are silent no-ops when the trait id is unknown.
+- **Trait inbox is memory-only** and lives as a package-global in the Stem process adapter (`meshtraits.go`); `Accept`/`Reject` return an `ErrTraitNotFound`-wrapped error when the supplied trait ID is not present in any bucket (pending, accepted, or rejected), including the empty-string case.
 - **Trait inbound transport is not wired** — envelopes, policy, and inbox exist; the comment in `trait.go` states the ingress hook is a later slice.
 - **Governance sequence must already exist** on the central workspace (default `.tendril/mesh-governance.yaml`); missing sequence fails the graft.
 - **Push requires a configured `origin` remote** and material change after governance; empty/no-op validation returns an error rather than a no-op success.

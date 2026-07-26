@@ -4,12 +4,17 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// ErrTraitNotFound is returned by Accept and Reject when the supplied trait ID
+// does not exist in any inbox bucket (pending, accepted, or rejected).
+var ErrTraitNotFound = errors.New("trait not found")
 
 // TraitKind identifies the epigenetic trait family carried by a signed envelope.
 type TraitKind string
@@ -335,18 +340,23 @@ func (i *TraitInbox) ListPending() []TraitRecord {
 	return records
 }
 
-// Accept moves the trait into the accepted bucket when it exists, and is a
-// no-op otherwise. That keeps the slice permissive while the later persistence
-// slice lands.
+// Accept moves the trait into the accepted bucket. It returns an
+// ErrTraitNotFound-wrapped error when the supplied ID is not present in any
+// inbox bucket (pending, accepted, or rejected), including the empty-string case.
 func (i *TraitInbox) Accept(traitID string) error {
-	i.move(strings.TrimSpace(traitID), TraitStatusAccepted)
+	if !i.move(strings.TrimSpace(traitID), TraitStatusAccepted) {
+		return fmt.Errorf("trait %q: %w", traitID, ErrTraitNotFound)
+	}
 	return nil
 }
 
-// Reject moves the trait into the rejected bucket when it exists, and is a
-// no-op otherwise.
+// Reject moves the trait into the rejected bucket. It returns an
+// ErrTraitNotFound-wrapped error when the supplied ID is not present in any
+// inbox bucket (pending, accepted, or rejected), including the empty-string case.
 func (i *TraitInbox) Reject(traitID string) error {
-	i.move(strings.TrimSpace(traitID), TraitStatusRejected)
+	if !i.move(strings.TrimSpace(traitID), TraitStatusRejected) {
+		return fmt.Errorf("trait %q: %w", traitID, ErrTraitNotFound)
+	}
 	return nil
 }
 
@@ -362,9 +372,9 @@ func (i *TraitInbox) ensure() {
 	}
 }
 
-func (i *TraitInbox) move(traitID string, status TraitStatus) {
+func (i *TraitInbox) move(traitID string, status TraitStatus) bool {
 	if traitID == "" {
-		return
+		return false
 	}
 
 	i.mu.Lock()
@@ -379,7 +389,7 @@ func (i *TraitInbox) move(traitID string, status TraitStatus) {
 	} else if record, ok = i.rejected[traitID]; ok {
 		delete(i.rejected, traitID)
 	} else {
-		return
+		return false
 	}
 
 	record.Status = status
@@ -391,6 +401,7 @@ func (i *TraitInbox) move(traitID string, status TraitStatus) {
 	default:
 		i.pending[traitID] = record
 	}
+	return true
 }
 
 func (i *TraitInbox) pendingDelete(traitID string) {
