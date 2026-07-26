@@ -83,6 +83,8 @@ func main() {
 		runAdaptCmd(ctx, os.Args[2:])
 	case "genome":
 		runGenomeCmd(ctx, os.Args[2:])
+	case "genotype":
+		runGenotypeCmd(ctx, os.Args[2:])
 	case "plasmid":
 		runPlasmidCmd(ctx, os.Args[2:])
 	case "memory":
@@ -144,6 +146,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "hardiness", "Report what this Terroir can withstand (boundary strength)")
 	fmt.Printf("  %-11s  %s\n", "adapt", "Mine recent git history into .tendril/genome/epigenetics.md")
 	fmt.Printf("  %-11s  %s\n", "genome", "Inspect, reduce, or evolve the active genome seeds")
+	fmt.Printf("  %-11s  %s\n", "genotype", "Create or update an AI genotype")
 	fmt.Printf("  %-11s  %s\n", "plasmid", "Sign and verify Plasmid integrity")
 	fmt.Printf("  %-11s  %s\n", "memory", "Store, search, and export project memory")
 	fmt.Printf("  %-11s  %s\n", "repomap", "Generate the active repository map")

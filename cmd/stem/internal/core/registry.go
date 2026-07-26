@@ -21,6 +21,8 @@ const (
 	CapGenomeReduce = "genome.reduce"
 	CapGenomeEvolve = "genome.evolve"
 
+	CapGenotypeCreate = "genotype.create"
+
 	CapPlasmidList     = "plasmid.list"
 	CapPlasmidInject   = "plasmid.inject"
 	CapMeshGraft       = "mesh.graft"
@@ -72,6 +74,7 @@ func CapabilityNames() []string {
 		CapGenomeView,
 		CapGenomeReduce,
 		CapGenomeEvolve,
+		CapGenotypeCreate,
 		CapPlasmidList,
 		CapPlasmidInject,
 		CapMeshGraft,
@@ -104,6 +107,7 @@ func CapabilityNames() []string {
 // delegated; the surfaces that gate per-invocation consult it.
 func DelegatedCapabilityNames() []string {
 	names := []string{
+		CapGenotypeCreate,
 		CapSproutGrow,
 		CapStomaPass,
 		CapSeedGrow,
@@ -221,6 +225,7 @@ func (s *Service) Capabilities() []Capability {
 		},
 	}
 	caps = append(caps, s.genomeCapabilities()...)
+	caps = append(caps, s.genotypeCapabilities()...)
 	caps = append(caps, s.plasmidCapabilities()...)
 	caps = append(caps, s.meshCapabilities()...)
 	caps = append(caps, s.sequenceCapabilities()...)

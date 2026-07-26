@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,7 +37,7 @@ func TestSyncGenotypeIndexWritesMetadata(t *testing.T) {
 		"instructions": "ignored instructions",
 	})
 
-	if err := syncGenotypeIndex(); err != nil {
+	if err := SyncGenotypeIndex(); err != nil {
 		t.Fatalf("syncGenotypeIndex failed: %v", err)
 	}
 
@@ -190,13 +191,11 @@ func TestMCPResourcesListAndRead(t *testing.T) {
 func TestUploadGenotypeSyncsIndex(t *testing.T) {
 	root := chdirTempDir(t)
 	tendrilDir := filepath.Join(root, ".tendril")
-	handler := NewConfigHandler(tendrilDir)
+	handler := NewConfigHandler(core.NewService(nil), tendrilDir)
 
 	payload := map[string]any{
 		"name":         "gamma",
-		"description":  "Gamma description",
 		"instructions": "Gamma instructions for the genotype upload path.",
-		"plasmids":     []string{"react-conventions"},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -225,8 +224,8 @@ func TestUploadGenotypeSyncsIndex(t *testing.T) {
 	if index.Genotypes[0].Name != "gamma" {
 		t.Fatalf("index name = %q, want gamma", index.Genotypes[0].Name)
 	}
-	if index.Genotypes[0].Description != "Gamma description" {
-		t.Fatalf("index description = %q, want Gamma description", index.Genotypes[0].Description)
+	if index.Genotypes[0].Description != "Gamma instructions for the genotype upload path." {
+		t.Fatalf("index description = %q, want Gamma instructions...", index.Genotypes[0].Description)
 	}
 
 	genotypePath := filepath.Join(tendrilDir, "genotypes", "gamma.json")

@@ -108,6 +108,8 @@ type Core interface {
 	// Invoke runs a capability by name with a decoded input map. This is the
 	// uniform projection path used by the MCP and CLI adapters.
 	Invoke(ctx context.Context, name string, input map[string]any) (any, error)
+
+	GenotypeCreate(ctx context.Context, in GenotypeCreateInput) (any, error)
 }
 
 // --- capability input types (plain domain structs) --------------------------
@@ -177,20 +179,27 @@ type MeshTraitRejectOutput struct {
 // sequence, and sprout fields are the injected execution ports for their capability families
 // (see genome.go, plasmid.go, mesh.go, sequence.go, and sprout.go).
 type Service struct {
-	sessions *session.Manager
-	genome   GenomeOperations
-	plasmid  PlasmidOperations
-	mesh     MeshOperations
-	sequence SequenceOperations
-	sprout   SproutOperations
-	stoma    StomaOperations
-	seed     SeedOperations
-	git      GitOperations
+	sessions   *session.Manager
+	tendrilDir string
+	genome     GenomeOperations
+	plasmid    PlasmidOperations
+	mesh       MeshOperations
+	sequence   SequenceOperations
+	sprout     SproutOperations
+	stoma      StomaOperations
+	seed       SeedOperations
+	git        GitOperations
 }
 
 // NewService builds a Core over the shared SessionManager.
 func NewService(sessions *session.Manager) *Service {
 	return &Service{sessions: sessions}
+}
+
+// WithTendrilDir injects the root directory of the Stem's control plane.
+func (s *Service) WithTendrilDir(dir string) *Service {
+	s.tendrilDir = dir
+	return s
 }
 
 var _ Core = (*Service)(nil)

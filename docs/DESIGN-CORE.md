@@ -9,7 +9,7 @@
 **Does:**
 
 - Declare the canonical capability names — the single source of capability-name truth — and project each as one declarative `Capability` (name, description, JSON-schema input, `Invoke`) through the `Registry` (`registry.go`).
-- Expose the `Core` interface and its `Service` implementation: session commands (the only business logic that lives inline) plus the genome/plasmid/mesh/sequence/sprout/stoma/seed/git operation-classes (`core.go`).
+- Expose the `Core` interface and its `Service` implementation: session commands (the only business logic that lives inline) plus the genome/plasmid/mesh/sequence/sprout/stoma/seed/git/genotype operation-classes (`core.go`).
 - Own the **dependency-injection seam**: for every execution-bearing family the Core defines an `*Operations` port (a struct of function fields) and a `WithX` setter; adapters and the conductor supply the implementations (`sprout.go`, `git.go`, `mesh.go`, `sequence.go`, `stoma.go`, `seed.go`, `plasmid.go`, `genome.go`).
 - Define and evaluate the delegation grant model: `DelegationGrant`, `DelegationRequest`, `DelegationDecision`, and `DelegationAuthorizer.Authorize` (`delegation.go`); load grants from the Stem's own control-plane file (`delegationconfig.go`); carry the authorized Pollen through the request context and only the context (`delegationcontext.go`).
 - Classify which capabilities are delegated operation-classes that must pass the grant gate before running for a Pollinator (`DelegatedCapabilityNames`, `IsDelegatedCapability` in `registry.go`).
@@ -35,7 +35,7 @@
 | `Capabilities()` / `Invoke(name, input)` | The live registry (one entry per canonical name) and the uniform name-dispatch path the MCP and CLI adapters use. |
 | `CapabilityNames()` | The sorted canonical governed name set — the single source of truth the parity tests compare every surface against. |
 | `DelegatedCapabilityNames()` / `IsDelegatedCapability(name)` | The subset of operation-classes that must pass the delegation gate before running for a Pollinator. |
-| `Cap…` constants (`CapSproutGrow`, `CapStomaPass`, `CapSeedGrow`, `CapGitCommit`, …) | The canonical capability-name identifiers shared verbatim across all three surfaces. |
+| `Cap…` constants (`CapSproutGrow`, `CapStomaPass`, `CapSeedGrow`, `CapGitCommit`, `CapGenotypeCreate`, …) | The canonical capability-name identifiers shared verbatim across all three surfaces. |
 | `CapabilityImpact(operationClass)` | Maps a governed capability to its confirm-above-impact taxonomy level (`low`/`medium`/`high`); an unlisted or unknown capability securely defaults to `high`. |
 | `SproutOperations` / `StomaOperations` / `SeedOperations` / `GitOperations` / `SequenceOperations` / `MeshOperations` / `PlasmidOperations` / `GenomeOperations` | The injection ports: structs of function fields the Core defines and adapters/conductor implement. A nil field yields a "not wired" error. |
 | `DelegationGrant` | One durable, revocable grant: a Pollen authorized for a bounded set of operation-classes on a bounded set of Substrates, with optional egress allow-list, expiry, and confirm-above-impact bound. |

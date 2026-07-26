@@ -42,7 +42,7 @@ type MCPHandler struct {
 }
 
 func NewMCPHandler() *MCPHandler {
-	if err := syncGenotypeIndex(); err != nil {
+	if err := SyncGenotypeIndex(); err != nil {
 		log.Printf("[MCP] Failed to sync genotype index on startup: %v", err)
 	}
 
@@ -354,7 +354,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 
 	case "resources/list":
 		root := resolveRepoRoot("")
-		if err := syncGenotypeIndex(); err != nil {
+		if err := SyncGenotypeIndex(); err != nil {
 			log.Printf("[MCP] Failed to sync genotype index before listing resources: %v", err)
 		}
 
@@ -484,7 +484,7 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 			},
 			{
 				"name":        "createGenotype",
-				"description": "Dynamically create or update an OpenTendril genotype (core identity/persona). Creates a new JSON configuration file in the genotypes directory. This allows you to define a new base role before sprouting a tendril.",
+				"description": "Deprecated alias of the governed genotype.create capability. Dynamically create or update an OpenTendril genotype (core identity/persona). Creates a new JSON configuration file in the genotypes directory. This allows you to define a new base role before sprouting a tendril.",
 				"inputSchema": map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -640,7 +640,13 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 				// itself rather than trusting the generic registry decode.
 				return h.callSeedGrow(req.ID, params.Arguments, decision)
 			}
-			return h.callCoreCapabilityAs(callCtx, req.ID, params.Name, params.Arguments)
+			resBytes := h.callCoreCapabilityAs(callCtx, req.ID, params.Name, params.Arguments)
+			if params.Name == core.CapGenotypeCreate && !strings.Contains(string(resBytes), `"isError":true`) {
+				if err := SyncGenotypeIndex(); err != nil {
+					log.Printf("[MCP] Failed to sync genotype index after %s: %v", params.Name, err)
+				}
+			}
+			return resBytes
 		}
 
 		// Deprecated aliases of the governed genome capabilities:
@@ -856,57 +862,25 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 		}
 
 		if params.Name == "createGenotype" {
-			name, nameOk := params.Arguments["name"].(string)
-			instructions, instOk := params.Arguments["instructions"].(string)
-			if !nameOk || !instOk || name == "" || instructions == "" {
-				return h.formatError(req.ID, -32602, "Invalid arguments", "The 'name' and 'instructions' parameters are required.")
-			}
-			if !validConfigFileName(name) {
-				return h.formatError(req.ID, -32602, "Invalid name", "The 'name' cannot contain path separators or traversal components.")
+			// Deprecated alias of the governed genotype.create capability.
+			if _, ok := params.Arguments["substrate"]; !ok {
+				// Inject fallback substrate for legacy clients
+				params.Arguments["substrate"] = "core"
 			}
 
-			genotypesDir := "./.tendril/genotypes"
-			os.MkdirAll(genotypesDir, 0755)
+			decision := h.authorizeDelegatedTool(core.CapGenotypeCreate, params.Arguments)
+			if !decision.Authorized {
+				return h.formatDelegationDenied(req.ID, decision)
+			}
+			callCtx := core.WithPollen(context.Background(), h.pollen)
 
-			payload := map[string]interface{}{
-				"name":         name,
-				"instructions": instructions,
-			}
-			fileContent, err := json.MarshalIndent(payload, "", "  ")
-			if err != nil {
-				return h.formatError(req.ID, -32603, "Internal error", err.Error())
-			}
-
-			root, err := os.OpenRoot(genotypesDir)
-			if err != nil {
-				return h.formatError(req.ID, -32603, "Internal error", err.Error())
-			}
-			out, err := root.OpenFile(name+".json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-			if err == nil {
-				_, err = out.Write(fileContent)
-				closeErr := out.Close()
-				if err == nil {
-					err = closeErr
+			resBytes := h.callCoreCapabilityAs(callCtx, req.ID, core.CapGenotypeCreate, params.Arguments)
+			if !strings.Contains(string(resBytes), `"isError":true`) {
+				if err := SyncGenotypeIndex(); err != nil {
+					log.Printf("[MCP] Failed to sync genotype index after createGenotype: %v", err)
 				}
 			}
-			root.Close()
-			if err != nil {
-				return h.formatError(req.ID, -32603, "Failed to write genotype", err.Error())
-			}
-
-			log.Printf("[MCP] Dynamically created genotype: %s", name)
-			if err := syncGenotypeIndex(); err != nil {
-				log.Printf("[MCP] Failed to sync genotype index after createGenotype: %v", err)
-			}
-			return h.formatResult(req.ID, map[string]interface{}{
-				"content": []map[string]interface{}{
-					{
-						"type": "text",
-						"text": fmt.Sprintf("Successfully created genotype '%s'. You can now use it.", name),
-					},
-				},
-				"isError": false,
-			})
+			return resBytes
 		}
 
 		// Deprecated alias of the governed sequence.grow capability:
@@ -1072,7 +1046,7 @@ type genotypeMetadata struct {
 	DenyPlasmids []string `json:"denyPlasmids,omitempty"`
 }
 
-func syncGenotypeIndex() error {
+func SyncGenotypeIndex() error {
 	root := resolveRepoRoot("")
 	index, err := collectGenotypeIndex(root)
 	if writeErr := writeGenotypeIndex(root, index); writeErr != nil {

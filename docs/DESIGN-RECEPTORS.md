@@ -75,8 +75,7 @@ The package exports approximately 108 symbols across exported types, constructor
 ## Limitations
 
 - **Monolithic `mcp.go` size and breadth (`cmd/stem/internal/receptors/mcp.go`):** At 1,279 lines, `cmd/stem/internal/receptors/mcp.go` combines JSON-RPC protocol parsing, tool registration, deprecated tool alias adapters, typed parameter conversions (`callStomaPass`, `callSeedGrow`), and disk-based genotype YAML index generation (`syncGenotypeIndex`, `collectGenotypeIndex`, `writeGenotypeIndex`) into a single file.
-- **Surface Asymmetries and Unadvertised Capabilities:**
-  - `createGenotype` is exposed as an MCP tool in `cmd/stem/internal/receptors/mcp.go` and as a REST route in `cmd/stem/internal/receptors/config.go`, but is absent from `core.CapabilityNames()`, creating an asymmetry where genotype creation bypasses the governed Core parity registry.
+- **Surface Asymmetries:**
   - Asynchronous sprout (`POST /v1/phytomers/{sessionId}/sprout/grow`) and seed growth collection (`GET /v1/seeds/runs/{handle}`) exist on REST handlers (`SproutHandler`, `SeedHandler`) but have no corresponding MCP tool equivalents.
 - **Delegation Gate Posture on Tokens:** `AccessTokenVerifier` and `DelegatedPollen` in `cmd/stem/internal/receptors/config.go` fail closed for unverifiable or missing tokens, but a plain bearer request presenting no Pollen marker header bypasses the delegation gate for ungoverned REST routes.
 

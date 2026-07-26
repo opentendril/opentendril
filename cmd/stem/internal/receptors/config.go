@@ -2,7 +2,6 @@ package receptors
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // PollenHeader marks an HTTP request as a *delegated* capability
@@ -206,10 +206,53 @@ func validConfigFileName(name string) bool {
 // ConfigHandler provides HTTP endpoints for managing .tendril configs
 type ConfigHandler struct {
 	TendrilDir string
+	core       core.Core
+	delegation *DelegationGate
 }
 
-func NewConfigHandler(tendrilDir string) *ConfigHandler {
-	return &ConfigHandler{TendrilDir: tendrilDir}
+func NewConfigHandler(coreSvc core.Core, tendrilDir string) *ConfigHandler {
+	return &ConfigHandler{
+		TendrilDir: tendrilDir,
+		core:       coreSvc,
+	}
+}
+
+func (h *ConfigHandler) WithDelegation(gate *DelegationGate) *ConfigHandler {
+	h.delegation = gate
+	return h
+}
+
+// Capabilities declares the capabilities governed by this handler.
+func (h *ConfigHandler) Capabilities() []string {
+	return []string{core.CapGenotypeCreate}
+}
+
+// Register mounts the configuration endpoints.
+func (h *ConfigHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
+	mux.HandleFunc("/v1/config/triggers", func(w http.ResponseWriter, r *http.Request) {
+		if auth != nil {
+			auth(h.ListTriggers)(w, r)
+		} else {
+			h.ListTriggers(w, r)
+		}
+	})
+	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			if auth != nil {
+				auth(h.ListGenotypes)(w, r)
+			} else {
+				h.ListGenotypes(w, r)
+			}
+		} else if r.Method == http.MethodPost {
+			if auth != nil {
+				auth(h.UploadGenotype)(w, r)
+			} else {
+				h.UploadGenotype(w, r)
+			}
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 }
 
 type Trigger struct {
@@ -290,56 +333,54 @@ func (h *ConfigHandler) UploadGenotype(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	var req core.GenotypeCreateInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	nameObj, ok := payload["name"]
-	if !ok {
-		http.Error(w, "Missing 'name' field", http.StatusBadRequest)
-		return
-	}
-	name, ok := nameObj.(string)
-	if !ok || name == "" {
-		http.Error(w, "Invalid 'name' field", http.StatusBadRequest)
-		return
-	}
-	// The name becomes the on-disk filename: reject path separators and
-	// traversal components so a request can never write outside the
-	// genotypes directory (the same boundary the MCP createGenotype tool
-	// enforces).
-	if !validConfigFileName(name) {
-		http.Error(w, "Invalid 'name' field: must not contain path separators or traversal components", http.StatusBadRequest)
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Instructions) == "" {
+		http.Error(w, "name and instructions are required", http.StatusBadRequest)
 		return
 	}
 
-	genotypesDir := filepath.Join(h.TendrilDir, "genotypes")
-	os.MkdirAll(genotypesDir, 0755)
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	if pollen != "" {
+		decision := h.delegation.Authorize(core.DelegationRequest{
+			Pollen:         pollen,
+			OperationClass: core.CapGenotypeCreate,
+			Substrate:      strings.TrimSpace(req.Substrate),
+			Impact:         core.DelegationImpactMedium,
+		})
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+		r = r.WithContext(core.WithPollen(r.Context(), pollen))
+	}
 
-	root, err := os.OpenRoot(genotypesDir)
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+
+	result, err := h.core.GenotypeCreate(r.Context(), req)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to open config directory: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer root.Close()
-	out, err := root.OpenFile(name+".json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create file: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-
-	if err := json.NewEncoder(out).Encode(payload); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to write config: %v", err), http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "invalid genotype name") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeCoreErr(w, err)
 		return
 	}
 
-	log.Printf("Uploaded new AI Genotype: %s", name)
-	if err := syncGenotypeIndex(); err != nil {
+	log.Printf("Uploaded new AI Genotype: %s", req.Name)
+	if err := SyncGenotypeIndex(); err != nil {
 		log.Printf("Failed to sync genotype index after upload: %v", err)
 	}
-	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte("Genotype saved successfully.\n"))
+
+	writeJSON(w, http.StatusCreated, result)
 }

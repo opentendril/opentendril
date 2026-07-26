@@ -7,7 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 func TestValidConfigFileName(t *testing.T) {
@@ -31,7 +34,7 @@ func TestValidConfigFileName(t *testing.T) {
 // rejected with 400 and no file appears at the escaped path.
 func TestUploadGenotypeRejectsTraversalNames(t *testing.T) {
 	root := chdirTempDir(t)
-	handler := NewConfigHandler(filepath.Join(root, ".tendril"))
+	handler := NewConfigHandler(core.NewService(nil), filepath.Join(root, ".tendril"))
 
 	escaped := filepath.Join(root, "escaped.json")
 	for _, name := range []string{"../../escaped", "..", "a/b", `a\b`} {
@@ -59,7 +62,7 @@ func TestUploadGenotypeRejectsTraversalNames(t *testing.T) {
 
 func TestUploadGenotypeAcceptsValidName(t *testing.T) {
 	root := chdirTempDir(t)
-	handler := NewConfigHandler(filepath.Join(root, ".tendril"))
+	handler := NewConfigHandler(core.NewService(nil), filepath.Join(root, ".tendril"))
 
 	body, err := json.Marshal(map[string]any{
 		"name":         "frontend-dev",
@@ -86,7 +89,13 @@ func TestUploadGenotypeAcceptsValidName(t *testing.T) {
 // the same filename boundary as the REST config surface.
 func TestMCPCreateGenotypeRejectsTraversalNames(t *testing.T) {
 	root := chdirTempDir(t)
-	handler := NewMCPHandler()
+	grant := core.DelegationGrant{
+		Pollen:           "test-pollen",
+		OperationClasses: []string{core.CapGenotypeCreate},
+		Substrates:       []string{"core"},
+	}
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: nil}
+	handler := NewMCPHandler().WithCore(core.NewService(nil)).WithDelegation(gate, "test-pollen")
 
 	for _, name := range []string{"../../escaped", "..", "a/b", `a\b`} {
 		reqBytes, err := json.Marshal(map[string]any{
@@ -107,16 +116,18 @@ func TestMCPCreateGenotypeRejectsTraversalNames(t *testing.T) {
 
 		respBytes := handler.ProcessMCPMessage(reqBytes)
 		var resp struct {
-			Error *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
+			Result struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+				IsError bool `json:"isError"`
+			} `json:"result"`
 		}
 		if err := json.Unmarshal(respBytes, &resp); err != nil {
 			t.Fatalf("decode response: %v", err)
 		}
-		if resp.Error == nil || resp.Error.Code != -32602 {
-			t.Errorf("createGenotype(%q) expected -32602 Invalid name error, got %s", name, string(respBytes))
+		if !resp.Result.IsError || len(resp.Result.Content) == 0 || !strings.Contains(resp.Result.Content[0].Text, "invalid genotype name") {
+			t.Errorf("createGenotype(%q) expected capability error for invalid name, got %s", name, string(respBytes))
 		}
 	}
 
