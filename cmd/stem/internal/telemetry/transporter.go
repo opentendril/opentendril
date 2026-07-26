@@ -116,7 +116,7 @@ func AttachTransporter(bus *eventbus.Bus, t Transporter) {
 	if bus == nil || t == nil {
 		return
 	}
-	bus.AttachSink(&transporterSink{transporter: t}, 0)
+	bus.AttachSink(&transporterSink{transporter: t}, 0, "telemetry")
 }
 
 func (t *WebhookTransporter) Emit(event eventbus.Event) error {

@@ -1,7 +1,9 @@
 package eventbus
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -123,8 +125,11 @@ type Sink interface {
 const defaultSinkBuffer = 1024
 
 type sinkPump struct {
-	events chan Event
-	done   chan struct{}
+	events   chan Event
+	done     chan struct{}
+	name     string
+	dropped  atomic.Uint64
+	dropping atomic.Bool
 }
 
 type Bus struct {
@@ -147,7 +152,7 @@ func New() *Bus {
 // asynchronously. buffer <= 0 selects the default buffer size. When a sink's
 // buffer is full the event is dropped for that sink only; telemetry is lossy
 // by design so the orchestrator hot path never blocks.
-func (b *Bus) AttachSink(sink Sink, buffer int) {
+func (b *Bus) AttachSink(sink Sink, buffer int, name string) {
 	if b == nil || sink == nil {
 		return
 	}
@@ -158,6 +163,7 @@ func (b *Bus) AttachSink(sink Sink, buffer int) {
 	pump := &sinkPump{
 		events: make(chan Event, buffer),
 		done:   make(chan struct{}),
+		name:   name,
 	}
 
 	b.mu.Lock()
@@ -257,7 +263,14 @@ func (b *Bus) Publish(event Event) {
 		for _, pump := range b.sinks {
 			select {
 			case pump.events <- event:
+				if pump.dropping.CompareAndSwap(true, false) {
+					log.Printf("eventbus: sink %q resumed accepting events after dropping %d while its buffer was full", pump.name, pump.dropped.Load())
+				}
 			default:
+				pump.dropped.Add(1)
+				if pump.dropping.CompareAndSwap(false, true) {
+					log.Printf("eventbus: sink %q buffer full (event type %q), dropping events until it catches up", pump.name, event.Type)
+				}
 			}
 		}
 	}
@@ -288,4 +301,20 @@ func (b *Bus) HandlerCount(eventType EventType) int {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	return len(b.handlers[eventType])
+}
+
+// SinkDroppedCount returns how many events have been dropped for the named
+// sink since it was attached. Returns 0 for an unknown name.
+func (b *Bus) SinkDroppedCount(name string) uint64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, pump := range b.sinks {
+		if pump.name == name {
+			return pump.dropped.Load()
+		}
+	}
+	return 0
 }

@@ -56,7 +56,7 @@ func InitResinSink(bus *eventbus.Bus, cfg ResinConfig, logPath string) (*ResinSi
 		return nil, err
 	}
 
-	bus.AttachSink(sink, 0)
+	bus.AttachSink(sink, 0, "resin")
 	return sink, nil
 }
 
