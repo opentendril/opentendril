@@ -176,7 +176,7 @@ func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(origLog)
 
-	// Build a minimal Client backed by a real net.Conn pair so conn.Close
+	// Build a minimal client backed by a real net.Conn pair so conn.Close
 	// is meaningful and gorilla doesn't panic.
 	server2 := httptest.NewServer(HandleWebSocket(eventbus.New()))
 	defer server2.Close()
@@ -197,8 +197,8 @@ func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 		t.Fatalf("read connected frame: %v", err)
 	}
 
-	// Grab the underlying *websocket.Conn for our white-box Client.
-	cli := &Client{
+	// Grab the underlying *websocket.Conn for our white-box client.
+	cli := &client{
 		conn: rawConn,
 		send: make(chan []byte, 256),
 	}
