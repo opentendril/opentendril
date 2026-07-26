@@ -276,7 +276,7 @@ func TestScheduledRunFirerStampsSchedulerOrigin(t *testing.T) {
 	if got.SessionID == "" {
 		t.Fatal("scheduled sprout run must be bound to a session")
 	}
-	sess, ok := manager.Get(got.SessionID)
+	sess, ok := manager.Get(context.Background(), got.SessionID)
 	if !ok {
 		t.Fatalf("session %q not found", got.SessionID)
 	}

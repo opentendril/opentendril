@@ -276,6 +276,13 @@ func runServeCmd(ctx context.Context, args []string) {
 	// with the daemon: it runs on the same shutdown ctx as the scheduler above.
 	healthMonitor.Start(ctx)
 
+	// Idle-session cache eviction: drops idle entries from the in-memory map
+	// when a store is attached (no-op otherwise). Lazy Get/GetOrInitiate resume
+	// from the durable record; List sources from the store. Stops with the
+	// same daemon shutdown ctx as healthmon and the scheduler. TTL via
+	// TENDRIL_SESSION_TTL (default 24h).
+	sessions.StartIdleEviction(ctx)
+
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
 	sessionsHandler.Register(mux, guardedAuth)

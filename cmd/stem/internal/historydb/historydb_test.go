@@ -83,6 +83,21 @@ func TestSessionRoundTrip(t *testing.T) {
 	if loaded[0].Preferences.Provider != "anthropic" || loaded[0].Preferences.Model != "claude-fable-5" {
 		t.Fatalf("preferences did not round-trip: %+v", loaded[0].Preferences)
 	}
+
+	one, ok, err := store.LoadSession(ctx, "tendril-test1")
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !ok {
+		t.Fatal("LoadSession reported missing for a saved session")
+	}
+	if one.Preferences.Provider != "anthropic" || one.Preferences.Genotype != "go-dev" {
+		t.Fatalf("LoadSession preferences mismatch: %+v", one.Preferences)
+	}
+
+	if _, ok, err := store.LoadSession(ctx, "tendril-missing"); err != nil || ok {
+		t.Fatalf("LoadSession missing id: ok=%v err=%v (want ok=false, err=nil)", ok, err)
+	}
 }
 
 func TestMessagesRoundTrip(t *testing.T) {
