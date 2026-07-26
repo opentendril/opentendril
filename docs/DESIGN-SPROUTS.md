@@ -56,15 +56,16 @@ The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `w
 
 ## Limitations
 
-*   `sprouts/typescript/src/main.ts` and `sprouts/node/src/main.ts` are byte-identical source files, indicating unnecessary duplication between the node and typescript executors.
-*   `sprouts/go-verifier/Dockerfile` and `sprouts/go-fuzz/Dockerfile` are named as "sprouts" and placed in the `sprouts/` directory, but they are toolchain images that do not implement the tool protocol at all, causing a category confusion.
 *   The tool sets are static and implemented independently per language, and they already diverge: `sprouts/python/src/main.py` exposes a `runPytest` tool that `sprouts/go/main.go` does not. While `listAvailableTools` allows dynamic discovery, keeping the tools and their JSON contracts synchronized across four separate implementations invites further drift.
+*   `sprouts/go-verifier/Dockerfile` and `sprouts/go-fuzz/Dockerfile` are named as "sprouts" and placed in the `sprouts/` directory, but they are toolchain images that do not implement the tool protocol at all, causing a category confusion.
 
 ## Design & rationale
 
 This architecture migrates the reasoning loop to the host, ensuring that the containerized execution environments (sprouts) are stateless, fast to start, and easily replaceable. 
 *   **Go** serves as the tiny, default executor to hit a minimal runtime budget.
-*   **TypeScript/Node** provides a rich ecosystem executor for JavaScript-heavy projects.
+*   **TypeScript/Node** provides a rich ecosystem executor for JavaScript-heavy projects. Two images share the same executor source (`sprouts/typescript/src/main.ts`, built via `sprouts/typescript/tsconfig.json`):
+    *   **`opentendril-typescript`** (`sprouts/typescript/Dockerfile`) runs on a fixed `node:22-alpine` base with a direct `ENTRYPOINT ["node", ...]` — suitable for projects that need no special Node version.
+    *   **`opentendril-node`** (`sprouts/node/Dockerfile`) runs on `debian:bookworm-slim` with `nvm` installed, pinning a stable executor Node version (22.15.0) for running `main.js`, but its `entrypoint.sh` detects a `.nvmrc` or `.node-version` file in the target project and dynamically installs/switches to that project's required Node version via `nvm install`/`nvm use` before executing — this is the nvm-based variant that honors per-project Node version pins. Both images build from the same shared source to prevent silent drift.
 *   **Python** serves Python substrates.
 *   The universal camelCase JSON protocol ensures that any language can be integrated as an executor easily without shared libraries.
 *   The `go-verifier` and `go-fuzz` images keep the full Go toolchain because they are used for deterministic post-generation checks (SequenceStep.Command) and require `go test` and `go build` at runtime, whereas the LLM-driven worker/verifier/debugger roles use the minimal `opentendril-go` image.
