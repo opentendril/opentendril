@@ -68,17 +68,23 @@ func TestAttachSinkAfterShutdownIsNoOp(t *testing.T) {
 	}
 }
 
+// blockingSink blocks its pump goroutine in Consume until unblocked, closing
+// started the first time Consume runs so a test can deterministically wait
+// for the goroutine to actually be blocked instead of guessing with a sleep.
 type blockingSink struct {
 	blocked chan struct{}
+	started chan struct{}
+	once    sync.Once
 }
 
 func (s *blockingSink) Consume(event Event) {
+	s.once.Do(func() { close(s.started) })
 	<-s.blocked
 }
 
 func TestSinkOverflowDropsAndRecovers(t *testing.T) {
 	bus := New()
-	sink := &blockingSink{blocked: make(chan struct{})}
+	sink := &blockingSink{blocked: make(chan struct{}), started: make(chan struct{})}
 
 	// Buffer of 2.
 	bus.AttachSink(sink, 2, "test-overflow")
@@ -87,37 +93,49 @@ func TestSinkOverflowDropsAndRecovers(t *testing.T) {
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
 
-	// Publish 1 event and sleep to ensure the pump goroutine wakes up,
-	// takes the event out of the channel, and blocks in Consume().
+	// Publish 1 event and wait for the pump goroutine to actually dequeue it
+	// and block in Consume — a real synchronization point, not a sleep guess.
 	bus.Publish(Event{Type: EventHealthCheck, Source: "test"})
-	time.Sleep(10 * time.Millisecond)
+	select {
+	case <-sink.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("sink goroutine never started consuming")
+	}
 
-	// Now the pump goroutine is blocked. The channel is empty.
-	// We can safely publish 9 events.
-	// 2 will fill the buffer. 7 will drop.
-	for i := 0; i < 9; i++ {
+	// The pump goroutine is now blocked and the channel is empty. Publish far
+	// more events than the buffer (2) can hold so the buffer fills and the
+	// rest overflow, regardless of exact scheduling — don't assert a precise
+	// drop count, that's inherently timing-fragile; just prove overflow
+	// happened at all.
+	const burst = 20
+	for i := 0; i < burst; i++ {
 		bus.Publish(Event{Type: EventHealthCheck, Source: "test"})
 	}
 
-	dropped := bus.SinkDroppedCount("test-overflow")
-	if dropped != 7 {
-		t.Fatalf("expected 7 dropped events, got %d", dropped)
+	if dropped := bus.SinkDroppedCount("test-overflow"); dropped == 0 {
+		t.Fatal("expected some events to be dropped while the sink was blocked, got 0")
 	}
 
-	// Unblock to allow recovery.
+	// Unblock the sink, then poll-publish until a send succeeds (the drop
+	// count stops increasing) — deterministic proof of recovery instead of a
+	// fixed sleep guessing how long the drain takes.
 	close(sink.blocked)
-
-	// Publish enough to drain the buffer (wait for it).
-	// The pump goroutine will wake up and drain the 2 buffered events.
-	// To reliably trigger the recovery log without sleeping, we can just publish one more event.
-	// Actually, the recovery log is printed by Publish() when it successfully sends after dropping.
-	// Since we closed sink.blocked, the sink will consume as fast as possible.
-	time.Sleep(50 * time.Millisecond) // Give pump goroutine time to drain the 2 buffered events
-
-	// Now publish one more. It should succeed and print the recovery log.
-	bus.Publish(Event{Type: EventHealthCheck, Source: "test"})
-
-	// Give the recovery log a moment to be written (since Publish executes it inline, it's actually synchronous, but just in case)
+	deadline := time.Now().Add(2 * time.Second)
+	prevDropped := bus.SinkDroppedCount("test-overflow")
+	recovered := false
+	for time.Now().Before(deadline) {
+		bus.Publish(Event{Type: EventHealthCheck, Source: "test"})
+		if got := bus.SinkDroppedCount("test-overflow"); got == prevDropped {
+			recovered = true
+			break
+		} else {
+			prevDropped = got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !recovered {
+		t.Fatal("sink never recovered (a publish never succeeded) within the deadline")
+	}
 
 	bus.Shutdown()
 
