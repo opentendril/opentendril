@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -24,8 +25,21 @@ var upgrader = websocket.Upgrader{
 
 // Client represents a connected WebSocket client
 type Client struct {
-	conn *websocket.Conn
-	send chan []byte
+	conn      *websocket.Conn
+	send      chan []byte
+	closeOnce sync.Once
+}
+
+// dropAndClose is called exactly once when the client's send buffer is full.
+// It logs the overflow event type and closes the underlying connection so
+// readPump exits, triggering the deferred unsubscribe loop in HandleWebSocket.
+// closeOnce guarantees at most one close even when Publish delivers two
+// concurrent overflow events from different goroutines simultaneously.
+func (c *Client) dropAndClose(eventType eventbus.EventType) {
+	c.closeOnce.Do(func() {
+		log.Printf("gateway: closing WS client, send buffer full (256) — event type %q could not be delivered", eventType)
+		c.conn.Close()
+	})
 }
 
 func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
@@ -70,6 +84,7 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			select {
 			case client.send <- payload:
 			default:
+				client.dropAndClose(event.Type)
 			}
 		}
 
