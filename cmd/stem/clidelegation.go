@@ -64,7 +64,7 @@ func newCLIDelegation(ctx context.Context) *cliDelegation {
 	// request anywhere else.
 	bus := eventbus.New()
 	if history, historyErr := historydb.OpenFromEnv(ctx, resolveRepoRoot("")); historyErr == nil && history != nil {
-		bus.AttachSink(history, 0)
+		bus.AttachSink(history, 0, "historydb")
 		delegation.closers = append(delegation.closers, func() { bus.Shutdown() }, func() { history.Close() })
 	} else {
 		delegation.closers = append(delegation.closers, func() { bus.Shutdown() })

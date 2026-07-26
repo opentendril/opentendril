@@ -107,7 +107,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		history = nil
 	}
 	if history != nil {
-		bus.AttachSink(history, 0)
+		bus.AttachSink(history, 0, "historydb")
 		log.Printf("Persistent state enabled at %s", history.Path())
 	} else {
 		log.Println("Persistent state disabled (TENDRIL_DB_LOGGING=false or open failure)")

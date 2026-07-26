@@ -49,7 +49,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 	// deferred history.Close above releases the database.
 	bus := eventbus.New()
 	if history != nil {
-		bus.AttachSink(history, 0)
+		bus.AttachSink(history, 0, "historydb")
 	}
 	defer bus.Shutdown()
 

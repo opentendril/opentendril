@@ -230,7 +230,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			if bus == nil {
 				bus = eventbus.New()
 				if history != nil {
-					bus.AttachSink(history, 0)
+					bus.AttachSink(history, 0, "historydb")
 				}
 				defer bus.Shutdown()
 			}

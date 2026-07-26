@@ -68,8 +68,8 @@ Package-level sentinel errors: **none**.
 ## Limitations
 
 - **Handlers are synchronous on the publish path.** A slow `Subscribe` handler (e.g. a gateway handler that does work beyond a non-blocking channel send) **blocks the publisher** until it returns. Sinks are the non-blocking path; all durable/slow consumers use them.
-- **Sinks are lossy by design.** When a sink buffer is full, `Publish` drops that event for that sink only (`select` / `default`). Default buffer is 1024. No drop counter, metric, or backpressure signal is exposed by this package.
-- **No unsubscribe.** `Subscribe` only appends. Gateway registers one handler per event type **per WebSocket connection** and never removes them when the client disconnects — handlers keep firing and drop on a full `send` channel. Long-lived daemons can accumulate dead handlers (memory + per-publish cost).
+- **Sinks are lossy by design.** When a sink buffer is full, `Publish` drops that event for that sink only (`select` / `default`). Default buffer is 1024. Sink buffer overflows emit an edge-triggered log (once when dropping starts, once when the sink catches up), and a running drop counter is accessible via `SinkDroppedCount`.
+- **Subscribers must manage their lifecycle.** `Subscribe` returns an unsubscribe closure. Broad consumers like the gateway use these closures to deregister their handlers on client disconnect. Sinks, however, cannot be detached once attached; they run until `Shutdown`.
 - **In-memory history only (last 100).** `History` is a process-local ring for `?replay` and tests. Durable retention is entirely sink-side (history.db / Resin / remote). Events published with no attached sink and no live subscriber are gone after the window slides.
 - **No ordering guarantees across concurrent publishers** beyond mutex-protected history append and sequential handler invocation per single `Publish` call. Concurrent `Publish` calls interleave freely.
 - **Publish after `Shutdown` still mutates history and runs handlers** but skips sinks. Callers that only attach sinks and shut down early will miss post-shutdown publishes for those sinks; handlers remain active forever.

@@ -113,7 +113,7 @@ func TestEventPersistenceViaBusSink(t *testing.T) {
 	ctx := context.Background()
 
 	bus := eventbus.New()
-	bus.AttachSink(store, 0)
+	bus.AttachSink(store, 0, "historydb")
 
 	bus.Publish(eventbus.Event{
 		Type:      eventbus.EventSproutEmerged,
