@@ -942,14 +942,6 @@ func mustGetwd() string {
 	return wd
 }
 
-// isGitRepo checks if the given path is inside a git repository.
-func isGitRepo(path string) bool {
-	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	cmd.Dir = path
-	err := cmd.Run()
-	return err == nil
-}
-
 // createShadowWorktree creates a new git worktree in a temporary directory.
 func createShadowWorktree(sourcePath, substrateBranch string) (string, error) {
 	bytes := make([]byte, 4)
