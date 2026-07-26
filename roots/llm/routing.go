@@ -35,6 +35,19 @@ func ShouldBypassInternalRouter() bool {
 		provider = detectProviderFallback()
 	}
 
+	// The explicit is-router config field is checked first — it is authoritative
+	// in both directions and wins over HasStrictModelConstraint and the
+	// string-matching heuristic. This lets an operator:
+	//   - set is-router: true  to always bypass, even for a model name that
+	//     would not match any heuristic pattern.
+	//   - set is-router: false to never bypass, even when a configured model name
+	//     would match a heuristic pattern or trigger HasStrictModelConstraint.
+	providerCfg := configuredProvider(provider)
+	if providerCfg.IsRouter != nil {
+		return *providerCfg.IsRouter
+	}
+
+	// No explicit is-router: fall back to the existing signals.
 	if HasStrictModelConstraint(provider) {
 		return true
 	}
@@ -45,10 +58,15 @@ func ShouldBypassInternalRouter() bool {
 			model = pinned
 		}
 	}
-	return IsThirdPartyRouterModel(model)
+
+	// Resolve the full spec and apply the string-matching heuristic, preserved
+	// unchanged for zero-config setups using OpenRouter or NVIDIA router models.
+	spec := providerSpecForModel(provider, TierPremium, model, "")
+	return IsThirdPartyRouterModel(spec.Model)
 }
 
 func IsThirdPartyRouterModel(model string) bool {
+
 	normalized := strings.ToLower(strings.TrimSpace(model))
 	if normalized == "" {
 		return false
