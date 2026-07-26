@@ -63,6 +63,14 @@ func runGitCommandRawOutput(ctx context.Context, dir string, args ...string) (st
 	return string(output), nil
 }
 
+// isGitRepo checks if the given path is inside a git repository.
+func isGitRepo(path string) bool {
+	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
+	cmd.Dir = path
+	err := cmd.Run()
+	return err == nil
+}
+
 // Delegated git commit — the lowest rung of the delegated-execution ladder
 // from the Design RFC. RunGitCommit commits the current state of a resolved
 // local workspace directory under the substrate's configured commit identity,
