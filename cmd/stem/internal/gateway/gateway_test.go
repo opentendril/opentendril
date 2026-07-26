@@ -187,6 +187,16 @@ func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 	}
 	defer rawConn.Close()
 
+	// Drain the server's initial "connected" handshake frame. Without this,
+	// the frame can still be sitting in the read buffer when dropAndClose
+	// fires below, letting ReadMessage return it successfully instead of
+	// erroring on the closed connection — a race unrelated to dropAndClose
+	// itself, just an artifact of not having consumed the handshake first.
+	_ = rawConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := rawConn.ReadMessage(); err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+
 	// Grab the underlying *websocket.Conn for our white-box Client.
 	cli := &Client{
 		conn: rawConn,
