@@ -22,6 +22,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
+	"github.com/opentendril/opentendril/cmd/stem/internal/healthmon"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
@@ -235,7 +236,13 @@ func runServeCmd(ctx context.Context, args []string) {
 	mux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
 
 	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(bus, sessions, history)))
-	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth))
+
+	// Daemon-lifetime health monitor: constructed before its /health
+	// registration so the same instance serves both the interval loop and the
+	// on-demand endpoint. This assignment must precede the scheduler block
+	// below because Start is called there alongside scheduler.New(...).Start.
+	healthMonitor := newDefaultHealthMonitor(bus, 30*time.Second)
+	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth(healthMonitor)))
 
 	// Unified Interface Layer: the transport-free Core owns the session-
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
@@ -263,6 +270,11 @@ func runServeCmd(ctx context.Context, args []string) {
 		scheduler.New(schedCfg, firer, log.Default()).Start(ctx)
 		log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
 	}
+
+	// Continuous health monitoring: publishes health-check/health-degraded
+	// events on the same interval as the on-demand /health endpoint. Stops
+	// with the daemon: it runs on the same shutdown ctx as the scheduler above.
+	healthMonitor.Start(ctx)
 
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
@@ -717,15 +729,16 @@ func withWebSocketAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	monitor := newDefaultHealthMonitor(nil, 30*time.Second)
-	report := monitor.RunOnce(r.Context())
+func handleHealth(monitor *healthmon.Monitor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		report := monitor.RunOnceAndPublish(r.Context())
 
-	w.Header().Set("Content-Type", "application/json")
-	if !report.Overall {
-		w.WriteHeader(http.StatusServiceUnavailable)
+		w.Header().Set("Content-Type", "application/json")
+		if !report.Overall {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+		json.NewEncoder(w).Encode(report)
 	}
-	json.NewEncoder(w).Encode(report)
 }
 
 func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history *historydb.Store) http.HandlerFunc {
