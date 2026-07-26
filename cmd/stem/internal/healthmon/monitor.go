@@ -98,12 +98,24 @@ func (m *Monitor) RunOnce(ctx context.Context) HealthReport {
 	return report
 }
 
-func (m *Monitor) runAndPublish(ctx context.Context) {
+func (m *Monitor) runAndPublish(ctx context.Context) HealthReport {
 	report := m.RunOnce(ctx)
 	m.publish(eventbus.EventHealthCheck, report)
 	if !report.Overall {
 		m.publish(eventbus.EventHealthDegraded, report)
 	}
+	return report
+}
+
+// RunOnceAndPublish executes all registered checks exactly once, publishes
+// EventHealthCheck (and EventHealthDegraded when unhealthy) onto the bus, and
+// returns the report. It is the on-demand equivalent of the ticker loop driven
+// by Start: both paths share one set of registered checks and one bus wiring.
+func (m *Monitor) RunOnceAndPublish(ctx context.Context) HealthReport {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return m.runAndPublish(ctx)
 }
 
 func (m *Monitor) publish(eventType eventbus.EventType, report HealthReport) {
