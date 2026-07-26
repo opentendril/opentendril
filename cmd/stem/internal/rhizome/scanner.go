@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,8 @@ import (
 type ScanStats struct {
 	FilesParsed   int
 	FilesSkipped  int
+	FilesFailed   int
+	FilesPurged   int
 	SymbolsStored int
 }
 
@@ -35,6 +38,7 @@ func ScanRepository(ctx context.Context, root string, repositoryName string, sto
 	}
 
 	var stats ScanStats
+	seen := make(map[string]bool)
 	err = filepath.WalkDir(absoluteRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -62,6 +66,8 @@ func ScanRepository(ctx context.Context, root string, repositoryName string, sto
 			return nil
 		}
 
+		seen[relativePath] = true
+
 		parser := parserForPath(relativePath, parsers)
 		if parser == nil {
 			return nil
@@ -88,7 +94,9 @@ func ScanRepository(ctx context.Context, root string, repositoryName string, sto
 
 		parsed, err := parser.Parse(relativePath, content)
 		if err != nil {
-			return err
+			log.Printf("rhizome: skipping %s: parse error: %v", relativePath, err)
+			stats.FilesFailed++
+			return nil
 		}
 		for index := range parsed {
 			parsed[index].RepositoryName = repositoryName
@@ -116,6 +124,19 @@ func ScanRepository(ctx context.Context, root string, repositoryName string, sto
 	})
 	if err != nil {
 		return ScanStats{}, fmt.Errorf("scan repository: %w", err)
+	}
+
+	recordedPaths, err := store.ListFilePaths(ctx, repositoryName)
+	if err != nil {
+		return ScanStats{}, fmt.Errorf("list recorded paths for purge: %w", err)
+	}
+	for _, path := range recordedPaths {
+		if !seen[path] {
+			if err := store.DeleteFile(ctx, repositoryName, path); err != nil {
+				return ScanStats{}, fmt.Errorf("purge deleted file %s: %w", path, err)
+			}
+			stats.FilesPurged++
+		}
 	}
 
 	return stats, nil

@@ -42,8 +42,10 @@ type Memory struct {
 
 type IndexStore interface {
 	Close() error
+	DeleteFile(ctx context.Context, repositoryName string, path string) error
 	DeleteSymbolsForFile(ctx context.Context, repositoryName string, filePath string) error
 	GetFile(ctx context.Context, repositoryName string, path string) (FileRecord, bool, error)
+	ListFilePaths(ctx context.Context, repositoryName string) ([]string, error)
 	SearchSymbols(ctx context.Context, repositoryName string, query string, limit int) ([]Symbol, error)
 	UpsertFile(ctx context.Context, file FileRecord) error
 	UpsertSymbols(ctx context.Context, symbols []Symbol) error
@@ -157,6 +159,41 @@ func (s *SQLiteIndexStore) GetFile(ctx context.Context, repositoryName string, p
 	file.LastModified = parsed
 
 	return file, true, nil
+}
+
+func (s *SQLiteIndexStore) ListFilePaths(ctx context.Context, repositoryName string) ([]string, error) {
+	const query = `SELECT path FROM files WHERE repositoryName = ?`
+
+	rows, err := s.db.QueryContext(ctx, query, repositoryName)
+	if err != nil {
+		return nil, fmt.Errorf("list file paths: %w", err)
+	}
+	defer rows.Close()
+
+	var paths []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, fmt.Errorf("scan path: %w", err)
+		}
+		paths = append(paths, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate file paths: %w", err)
+	}
+	return paths, nil
+}
+
+func (s *SQLiteIndexStore) DeleteFile(ctx context.Context, repositoryName string, path string) error {
+	if err := s.DeleteSymbolsForFile(ctx, repositoryName, path); err != nil {
+		return err
+	}
+
+	const statement = `DELETE FROM files WHERE repositoryName = ? AND path = ?`
+	if _, err := s.db.ExecContext(ctx, statement, repositoryName, path); err != nil {
+		return fmt.Errorf("delete file record: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteIndexStore) UpsertFile(ctx context.Context, file FileRecord) error {

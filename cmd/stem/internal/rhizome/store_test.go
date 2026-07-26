@@ -2,6 +2,7 @@ package rhizome
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -100,6 +101,181 @@ func TestScanRepositorySkipsUnchangedFilesAndUpdatesChangedFiles(t *testing.T) {
 	}
 	if len(results) != 1 || results[0].Name != "Second" {
 		t.Fatalf("expected updated symbol, got %+v", results)
+	}
+}
+
+func TestScanRepositoryPurgesDeletedFiles(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "rhizome.db")
+	repoRoot := filepath.Join(tempDir, "repo")
+	if err := os.Mkdir(repoRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	fileA := filepath.Join(repoRoot, "a.go")
+	fileB := filepath.Join(repoRoot, "b.go")
+	if err := os.WriteFile(fileA, []byte("package repo\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile A returned error: %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("package repo\nfunc B() {}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile B returned error: %v", err)
+	}
+
+	store := openTestStore(t, ctx, dbPath)
+	defer store.Close()
+
+	// Initial scan
+	stats, err := ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{GoParser{}})
+	if err != nil {
+		t.Fatalf("Initial ScanRepository returned error: %v", err)
+	}
+	if stats.FilesParsed != 2 || stats.FilesPurged != 0 {
+		t.Fatalf("unexpected initial scan stats: %+v", stats)
+	}
+
+	// Delete B
+	if err := os.Remove(fileB); err != nil {
+		t.Fatalf("Remove B returned error: %v", err)
+	}
+
+	// Second scan
+	stats, err = ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{GoParser{}})
+	if err != nil {
+		t.Fatalf("Second ScanRepository returned error: %v", err)
+	}
+	if stats.FilesParsed != 0 || stats.FilesSkipped != 1 || stats.FilesPurged != 1 {
+		t.Fatalf("unexpected second scan stats: %+v", stats)
+	}
+
+	// Verify B is purged
+	_, found, err := store.GetFile(ctx, "owner/repo", "b.go")
+	if err != nil {
+		t.Fatalf("GetFile B returned error: %v", err)
+	}
+	if found {
+		t.Fatalf("expected b.go to be purged, but it was found")
+	}
+
+	results, err := store.SearchSymbols(ctx, "owner/repo", "B", 10)
+	if err != nil {
+		t.Fatalf("SearchSymbols B returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("expected b.go symbols to be purged, got %d results", len(results))
+	}
+
+	// Verify A is untouched
+	resultsA, err := store.SearchSymbols(ctx, "owner/repo", "A", 10)
+	if err != nil {
+		t.Fatalf("SearchSymbols A returned error: %v", err)
+	}
+	if len(resultsA) == 0 {
+		t.Fatalf("expected a.go symbols to be present, got 0 results")
+	}
+}
+
+type failingParser struct {
+	failOnPath string
+}
+
+func (f failingParser) Supports(path string) bool {
+	return true
+}
+
+func (f failingParser) Parse(path string, content []byte) ([]Symbol, error) {
+	if path == f.failOnPath {
+		return nil, fmt.Errorf("synthetic parse error for %s", path)
+	}
+	safeName := strings.ReplaceAll(filepath.Base(path), ".", "_")
+	return []Symbol{{Name: "Parsed_" + safeName, Type: "test", StubContent: "stub"}}, nil
+}
+
+func TestScanRepositoryFailSoftAndComposition(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "rhizome.db")
+	repoRoot := filepath.Join(tempDir, "repo")
+	if err := os.Mkdir(repoRoot, 0o755); err != nil {
+		t.Fatalf("Mkdir returned error: %v", err)
+	}
+	fileA := filepath.Join(repoRoot, "a.txt")
+	fileB := filepath.Join(repoRoot, "b.txt")
+	if err := os.WriteFile(fileA, []byte("valid content"), 0o644); err != nil {
+		t.Fatalf("WriteFile A returned error: %v", err)
+	}
+	if err := os.WriteFile(fileB, []byte("failing content"), 0o644); err != nil {
+		t.Fatalf("WriteFile B returned error: %v", err)
+	}
+
+	store := openTestStore(t, ctx, dbPath)
+	defer store.Close()
+
+	parser := failingParser{failOnPath: "b.txt"}
+
+	// First scan: A passes, B fails
+	stats, err := ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{parser})
+	if err != nil {
+		t.Fatalf("First ScanRepository returned error: %v", err)
+	}
+	if stats.FilesParsed != 1 || stats.FilesFailed != 1 || stats.FilesPurged != 0 {
+		t.Fatalf("unexpected first scan stats: %+v", stats)
+	}
+
+	// Verify A was stored
+	_, found, _ := store.GetFile(ctx, "owner/repo", "a.txt")
+	if !found {
+		t.Fatalf("expected a.txt to be recorded")
+	}
+
+	// Verify B was NOT stored
+	_, found, _ = store.GetFile(ctx, "owner/repo", "b.txt")
+	if found {
+		t.Fatalf("expected b.txt hash to NOT be recorded after parse failure")
+	}
+
+	// Second scan: A skipped, B fails again (retried)
+	stats, err = ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{parser})
+	if err != nil {
+		t.Fatalf("Second ScanRepository returned error: %v", err)
+	}
+	if stats.FilesSkipped != 1 || stats.FilesFailed != 1 || stats.FilesPurged != 0 {
+		t.Fatalf("unexpected second scan stats: %+v (expected B to be retried and fail again)", stats)
+	}
+
+	// Now write some valid symbols for B so we can test composition (purge protection)
+	successParser := failingParser{failOnPath: "none"}
+	stats, err = ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{successParser})
+	if err != nil {
+		t.Fatalf("Third ScanRepository returned error: %v", err)
+	}
+	if stats.FilesSkipped != 1 || stats.FilesParsed != 1 || stats.FilesPurged != 0 {
+		t.Fatalf("unexpected third scan stats: %+v", stats)
+	}
+	_, found, _ = store.GetFile(ctx, "owner/repo", "b.txt")
+	if !found {
+		t.Fatalf("expected b.txt to be recorded now")
+	}
+
+	// Make B change on disk so it gets re-read, and switch back to failing parser
+	time.Sleep(10 * time.Millisecond) // Ensure modified time changes slightly or content hash changes
+	if err := os.WriteFile(fileB, []byte("failing content again"), 0o644); err != nil {
+		t.Fatalf("WriteFile B returned error: %v", err)
+	}
+	stats, err = ScanRepository(ctx, repoRoot, "owner/repo", store, []Parser{parser})
+	if err != nil {
+		t.Fatalf("Fourth ScanRepository returned error: %v", err)
+	}
+	if stats.FilesSkipped != 1 || stats.FilesFailed != 1 || stats.FilesPurged != 0 {
+		t.Fatalf("unexpected fourth scan stats: %+v", stats)
+	}
+
+	// B failed to parse this time, but it still exists on disk, so old symbols must NOT be purged.
+	results, err := store.SearchSymbols(ctx, "owner/repo", "Parsed_b_txt", 10)
+	if err != nil {
+		t.Fatalf("SearchSymbols B returned error: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("expected b.txt's previous symbols to survive the failed parse, but they were lost")
 	}
 }
 

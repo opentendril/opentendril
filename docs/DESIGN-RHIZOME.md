@@ -41,7 +41,7 @@
 | `FileRecord` | Indexed file row: repository name, path, content hash, last modified. |
 | `Symbol` | Indexed symbol: name, type, file path, line span, stub content (plaintext in memory; encrypted in SQLite). |
 | `Memory` | Project memory payload (JSON tags camelCase: `repositoryName`, `sessionId`, …). |
-| `IndexStore` | Close, file get/upsert, symbol delete-for-file / upsert / search. |
+| `IndexStore` | Close, list/get/upsert/delete files, symbol delete-for-file / upsert / search. |
 | `MemoryBackend` | Store / list / search / delete memories. |
 | `MemoryConfig` / `LoadMemoryConfig` | Backend name and paths/keys from `TENDRIL_*` env vars. |
 | `OpenMemoryBackend` | Construct SQLite (requires non-nil `heartwood.Cipher`), Pinecone, or Weaviate backend. |
@@ -63,8 +63,8 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 ## Limitations
 
 - **Parser language coverage is narrow.** First-class: Go (`go/ast`); Python, JavaScript, TypeScript, TSX via tree-sitter; regex covers the same non-Go extensions (including `.jsx`/`.mjs`/`.cjs`/`.mts`/`.cts`). No Rust, Java, Ruby, C/C++, etc.
-- **Tree-sitter is size-capped and fail-soft.** Files above 2 MiB, grammar load failures, parse errors, and panics fall back to regex **inside** `TreeSitterParser.Parse` so one bad non-Go file cannot abort the whole scan. **`GoParser` and bare `RegexParser` still return errors**, and `ScanRepository` fails the entire walk on any parser error.
-- **Incremental scan is hash-skip only.** Unchanged content is skipped; changed files are re-parsed. There is **no sweep that removes symbols for deleted paths**, so removed files can leave stale index rows until an external purge.
+- **Tree-sitter is size-capped and fail-soft.** Files above 2 MiB, grammar load failures, parse errors, and panics fall back to regex **inside** `TreeSitterParser.Parse` so one bad non-Go file cannot abort the whole scan. **`GoParser` and bare `RegexParser` still return errors**, but `ScanRepository` fail-softs them as well: it logs a warning, increments `FilesFailed`, skips indexing that file (so its last-known-good index remains, if any, and it is retried next scan), and continues the walk.
+- **Incremental scan skips unchanged files and purges deleted paths.** Unchanged content is skipped; changed files are re-parsed. At the end of a successful scan, any previously indexed files not seen during the walk are swept from the index to remove stale rows (incrementing `FilesPurged`).
 - **SQLite encryption scope is partial.** Only symbol `stubContent` and memory `content` are AES-GCM encrypted. Names, paths, types, tags, categories, and titles are plaintext FTS columns. Remote backends (Pinecone metadata, Weaviate properties) store memory fields **in the clear** over HTTPS. This remote egress is now gated fail-closed behind the explicit `TENDRIL_MEMORY_REMOTE_CLEARTEXT_ACK` acknowledgement (selecting a remote backend without it is a startup error).
 - **Cipher is mandatory for SQLite.** `OpenSQLiteIndexStore` rejects a nil cipher; key lifecycle flows through `heartwood.ResolveKey` (two-tier: `OPEN_TENDRIL_INDEX_KEY` or `.tendril/rhizome.key`), managed by Conductor/CLI adapters, not in this package.
 - **Pinecone is not real semantic embedding.** `textVector` folds lowercase bytes into a small fixed-dimension bag (default dimension 8 from `TENDRIL_PINECONE_DIMENSION`). Useful as a wire-shaped backend, not as quality RAG.
