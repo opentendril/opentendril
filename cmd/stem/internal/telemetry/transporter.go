@@ -145,9 +145,3 @@ func (t *WebhookTransporter) Emit(event eventbus.Event) error {
 	}
 	return nil
 }
-
-func attachHandler(bus *eventbus.Bus, handler func(eventbus.Event)) {
-	for _, eventType := range eventbus.AllEventTypes() {
-		bus.Subscribe(eventType, handler)
-	}
-}

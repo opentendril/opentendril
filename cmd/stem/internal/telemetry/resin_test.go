@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
@@ -26,6 +27,9 @@ func TestInitResinSinkWritesStructuredLog(t *testing.T) {
 
 	bus.Publish(eventbus.Event{Type: eventbus.EventSproutEmerged, Source: "test"})
 
+	// Shutdown drains the sink's goroutine before we assert file contents.
+	bus.Shutdown()
+
 	content, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read resin log: %v", err)
@@ -35,8 +39,7 @@ func TestInitResinSinkWritesStructuredLog(t *testing.T) {
 	}
 }
 
-// publishUntilRotated publishes events until the active log has been rotated
-// (its size drops back below one event) or the safety cap is hit.
+// publishResinEvents publishes n events large enough to trigger amber rotation.
 func publishResinEvents(bus *eventbus.Bus, n int) {
 	for i := 0; i < n; i++ {
 		bus.Publish(eventbus.Event{
@@ -64,6 +67,18 @@ func listAmberArchives(t *testing.T, logPath string) []string {
 	return names
 }
 
+// waitForCondition polls cond every 20 ms until it returns true or the deadline
+// passes. Returns true when the condition was satisfied, false on timeout.
+func waitForCondition(deadline time.Time, cond func() bool) bool {
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return cond()
+}
+
 func TestResinHardensIntoAmber(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "logs", "resin.log")
@@ -80,10 +95,19 @@ func TestResinHardensIntoAmber(t *testing.T) {
 	// ~180 bytes per event: 10 events comfortably exceed the 1 KB threshold.
 	publishResinEvents(bus, 10)
 
-	archives := listAmberArchives(t, logPath)
-	if len(archives) == 0 {
-		t.Fatal("expected resin.log to harden into an amber archive")
+	// Resin now runs on the sink's goroutine — poll until the archive appears
+	// (or Shutdown drains, whichever arrives first). Poll rather than
+	// Shutdown here because we also check mid-sequence state (archive count,
+	// active-log size) that would be obscured if we let all 10 events drain
+	// in a single Shutdown call without the intermediate check.
+	deadline := time.Now().Add(5 * time.Second)
+	if !waitForCondition(deadline, func() bool {
+		return len(listAmberArchives(t, logPath)) > 0
+	}) {
+		t.Fatal("expected resin.log to harden into an amber archive within 5 s")
 	}
+
+	archives := listAmberArchives(t, logPath)
 	for _, name := range archives {
 		if !strings.HasPrefix(name, "resin-") || !strings.HasSuffix(name, ".log.gz") {
 			t.Errorf("archive name %q, want resin-<stamp>.log.gz", name)
@@ -108,6 +132,9 @@ func TestResinHardensIntoAmber(t *testing.T) {
 	if !strings.Contains(string(content), `"type":"stream-token"`) {
 		t.Fatalf("archive content = %q, want structured stream-token events", string(content))
 	}
+
+	// Drain the sink so all 10 events are flushed, then check active log size.
+	bus.Shutdown()
 
 	// The active log restarted after hardening: it must now be smaller than
 	// the rotation threshold.
@@ -136,6 +163,9 @@ func TestResinAmberRetentionPrunesOldest(t *testing.T) {
 	// Enough events for several rotations.
 	publishResinEvents(bus, 50)
 
+	// Drain the sink before asserting archive count.
+	bus.Shutdown()
+
 	archives := listAmberArchives(t, logPath)
 	if len(archives) == 0 {
 		t.Fatal("expected at least one amber archive")
@@ -156,6 +186,9 @@ func TestResinWithoutAmberNeverRotates(t *testing.T) {
 	}
 
 	publishResinEvents(bus, 20)
+
+	// Drain the sink before checking filesystem state.
+	bus.Shutdown()
 
 	if archives := listAmberArchives(t, logPath); len(archives) != 0 {
 		t.Errorf("amber disabled but found archives: %v", archives)
@@ -189,6 +222,9 @@ func TestResinSinkRedaction(t *testing.T) {
 		},
 	}
 
+	// Call handle directly (not via bus) so the result is synchronous and
+	// independent of the sink goroutine. This test exercises the write/redact
+	// logic, not the delivery path.
 	sink.handle(ev)
 
 	content, err := os.ReadFile(logPath)
@@ -224,5 +260,39 @@ func TestResinSinkRedaction(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "sk-abcdefghijklmnopqrstuvwxyz123456") {
 		t.Errorf("log does not contain raw secret when redaction is disabled")
+	}
+}
+
+// TestPublishDoesNotBlockOnSlowResin proves the point of this fix: Publish
+// returns promptly even while Resin is busy with disk I/O. We attach ResinSink
+// normally via AttachSink and then hold its internal mutex from outside
+// (white-box, same package) to simulate a maximally slow write. Publish must
+// complete without waiting for the mutex to be released.
+func TestPublishDoesNotBlockOnSlowResin(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "logs", "resin.log")
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sink, err := InitResinSink(bus, ResinConfig{Enabled: true}, logPath)
+	if err != nil {
+		t.Fatalf("InitResinSink() error = %v", err)
+	}
+
+	// Acquire the sink's mutex to simulate a slow/blocked Resin write.
+	sink.mu.Lock()
+
+	start := time.Now()
+	bus.Publish(eventbus.Event{Type: eventbus.EventSproutEmerged, Source: "non-blocking-test"})
+	elapsed := time.Since(start)
+
+	// Release the mutex so the sink goroutine can eventually drain.
+	sink.mu.Unlock()
+
+	// Publish must return well within 1 s even though Resin is "blocked".
+	// The sink pump's goroutine owns the I/O; Publish only does a non-blocking
+	// channel send and returns immediately.
+	if elapsed > time.Second {
+		t.Errorf("Publish blocked for %v while Resin mutex was held; want < 1 s", elapsed)
 	}
 }
