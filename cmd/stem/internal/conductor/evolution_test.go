@@ -10,7 +10,56 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/opentendril/opentendril/roots/llm"
 )
+
+// TestCallGenomeEvolutionPromptFallsBackThroughSeam proves the
+// TierStandard/TierCheapest fallback loop goes through the injectable
+// newGenomeEvolutionClientFn seam rather than a concrete roots/llm client, so
+// the tier-fallback behavior can be exercised without a real network call.
+func TestCallGenomeEvolutionPromptFallsBackThroughSeam(t *testing.T) {
+	original := newGenomeEvolutionClientFn
+	t.Cleanup(func() { newGenomeEvolutionClientFn = original })
+
+	var seenTiers []llm.ModelTier
+	newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller {
+		seenTiers = append(seenTiers, tier)
+		if tier == llm.TierStandard {
+			return &stubBranchingClient{err: context.DeadlineExceeded}
+		}
+		return &stubBranchingClient{response: "- distilled rule"}
+	}
+
+	content, err := callGenomeEvolutionPrompt(context.Background(), "system prompt", "user prompt")
+	if err != nil {
+		t.Fatalf("callGenomeEvolutionPrompt returned error: %v", err)
+	}
+	if content != "- distilled rule" {
+		t.Fatalf("content = %q, want %q", content, "- distilled rule")
+	}
+
+	wantTiers := []llm.ModelTier{llm.TierStandard, llm.TierCheapest}
+	if len(seenTiers) != len(wantTiers) || seenTiers[0] != wantTiers[0] || seenTiers[1] != wantTiers[1] {
+		t.Fatalf("seenTiers = %v, want %v", seenTiers, wantTiers)
+	}
+}
+
+// TestCallGenomeEvolutionPromptReturnsJoinedErrorsThroughSeam proves that
+// when every tier fails via the seam, the errors are joined and returned
+// rather than swallowed.
+func TestCallGenomeEvolutionPromptReturnsJoinedErrorsThroughSeam(t *testing.T) {
+	original := newGenomeEvolutionClientFn
+	t.Cleanup(func() { newGenomeEvolutionClientFn = original })
+
+	newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller {
+		return &stubBranchingClient{err: context.DeadlineExceeded}
+	}
+
+	if _, err := callGenomeEvolutionPrompt(context.Background(), "system prompt", "user prompt"); err == nil {
+		t.Fatal("expected callGenomeEvolutionPrompt to return an error when every tier fails")
+	}
+}
 
 func TestRecordGenomicFitness(t *testing.T) {
 	workspace := t.TempDir()

@@ -41,6 +41,13 @@ func (f *fakeMeristem) CallStream(ctx context.Context, messages []llm.Message, t
 	return f.Call(ctx, messages)
 }
 
+func (f *fakeMeristem) CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return f.Call(ctx, []llm.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	})
+}
+
 func TestAdaptFromHistoryWritesTraitsToGenome(t *testing.T) {
 	workspace := t.TempDir()
 	fake := &fakeMeristem{

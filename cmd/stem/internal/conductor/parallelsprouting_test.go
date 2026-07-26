@@ -29,6 +29,10 @@ func (s *stubBranchingClient) CallStream(ctx context.Context, messages []llm.Mes
 	return s.response, s.err
 }
 
+func (s *stubBranchingClient) CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return s.response, s.err
+}
+
 func stubParallelWorktrees(t *testing.T) {
 	t.Helper()
 

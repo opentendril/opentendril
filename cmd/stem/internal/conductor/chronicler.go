@@ -36,7 +36,7 @@ const (
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
 type EpigeneticChronicler struct {
 	workspace   string
-	client      *llm.Client
+	client      llmCaller
 	coordinator llmCaller
 }
 
@@ -315,10 +315,15 @@ If no rules remain, return:
 	return systemPrompt, strings.TrimSpace(userPrompt)
 }
 
+// newGenomeEvolutionClientFn is the genome-evolution client seam, injectable
+// for tests that exercise the tier-fallback loop without a real roots/llm
+// call.
+var newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller { return llm.NewClientForTier(tier) }
+
 func callGenomeEvolutionPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	var errs []error
 	for _, tier := range []llm.ModelTier{llm.TierStandard, llm.TierCheapest} {
-		client := llm.NewClientForTier(tier)
+		client := newGenomeEvolutionClientFn(tier)
 		content, err := client.CallPrompt(ctx, systemPrompt, userPrompt)
 		if err == nil {
 			return content, nil
