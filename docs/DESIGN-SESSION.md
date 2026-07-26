@@ -61,7 +61,7 @@ Package-level sentinel errors: None declared at the package level (errors are re
 - **Unbounded growth of in-memory sessions:** The `Manager.sessions` map grows indefinitely; there is no TTL or eviction of idle sessions in memory.
 - **Concurrency:** `Manager` uses a single global `sync.RWMutex` to protect the map of sessions, which could become a contention point under heavy concurrent load.
 - **Preference-merge edge cases:** `Preferences.Merge` copies map values for `Extras` but zero-value overrides (e.g. an empty string for Model) are ignored, meaning it cannot "clear" an existing preference, only overwrite it or inherit.
-- **ID collision and validation:** `ValidID` enforces an alphanumeric start and limited special characters (`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`). `NewID` mints random 12-byte hex IDs, or falls back to a Unix timestamp nano if crypto/rand fails, making collisions practically impossible but theoretically unhandled in `Initiate` if one occurred.
+- **ID validation:** `ValidID` enforces an alphanumeric start and limited special characters (`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`). `NewID` mints random 12-byte hex IDs, or falls back to a Unix timestamp nano if crypto/rand fails, making collisions practically impossible. `Initiate` guards against one anyway: it regenerates the candidate ID under the same lock up to `maxSessionIDCollisionRetries` times rather than overwriting an existing session, and fails closed with an error if retries are exhausted.
 
 ## Design & rationale
 

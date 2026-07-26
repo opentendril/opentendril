@@ -28,6 +28,12 @@ const (
 	// memoryHistoryCap bounds the in-memory per-session message buffer used
 	// when no persistent store is attached (headless / DB logging disabled).
 	memoryHistoryCap = 200
+
+	// maxSessionIDCollisionRetries is the upper bound on how many times
+	// Initiate will regenerate a candidate ID before giving up. A real
+	// collision after even one retry against 96 bits of entropy would
+	// indicate a broken RNG, so failing closed is correct.
+	maxSessionIDCollisionRetries = 5
 )
 
 // Known interaction origins. Origins outside this set are preserved verbatim.
@@ -156,6 +162,11 @@ func NewID() string {
 	return IDPrefix + hex.EncodeToString(buf)
 }
 
+// newSessionID is a package-var seam so tests can force a deterministic
+// ID collision without depending on crypto/rand's astronomically low
+// real-world collision odds.
+var newSessionID = NewID
+
 // ValidID reports whether an externally supplied session ID is acceptable.
 func ValidID(id string) bool {
 	return validIDPattern.MatchString(id)
@@ -169,16 +180,27 @@ func (m *Manager) Initiate(ctx context.Context, origin string, prefs Preferences
 
 	origin = normalizeOrigin(origin)
 	now := time.Now().UTC()
+
+	m.mu.Lock()
+	id := newSessionID()
+	for attempt := 0; ; attempt++ {
+		if _, exists := m.sessions[id]; !exists {
+			break
+		}
+		if attempt >= maxSessionIDCollisionRetries {
+			m.mu.Unlock()
+			return Phytomer{}, fmt.Errorf("session id generation collided %d times consecutively", attempt+1)
+		}
+		id = newSessionID()
+	}
 	s := Phytomer{
-		ID:           NewID(),
+		ID:           id,
 		Origin:       origin,
 		CreatedAt:    now,
 		LastActiveAt: now,
 		Preferences:  prefs,
 	}
-
-	m.mu.Lock()
-	m.sessions[s.ID] = &sessionState{session: s}
+	m.sessions[id] = &sessionState{session: s}
 	m.mu.Unlock()
 
 	if m.store != nil {
