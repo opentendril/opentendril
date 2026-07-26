@@ -23,8 +23,9 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Client represents a connected WebSocket client
-type Client struct {
+// client represents a connected WebSocket client. Unexported: nothing outside
+// this package constructs or calls it — the sole entrypoint is HandleWebSocket.
+type client struct {
 	conn      *websocket.Conn
 	send      chan []byte
 	closeOnce sync.Once
@@ -35,7 +36,7 @@ type Client struct {
 // readPump exits, triggering the deferred unsubscribe loop in HandleWebSocket.
 // closeOnce guarantees at most one close even when Publish delivers two
 // concurrent overflow events from different goroutines simultaneously.
-func (c *Client) dropAndClose(eventType eventbus.EventType) {
+func (c *client) dropAndClose(eventType eventbus.EventType) {
 	c.closeOnce.Do(func() {
 		log.Printf("gateway: closing WS client, send buffer full (256) — event type %q could not be delivered", eventType)
 		c.conn.Close()
@@ -50,7 +51,7 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			return
 		}
 
-		client := &Client{
+		c := &client{
 			conn: conn,
 			send: make(chan []byte, 256),
 		}
@@ -82,9 +83,9 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 				return
 			}
 			select {
-			case client.send <- payload:
+			case c.send <- payload:
 			default:
-				client.dropAndClose(event.Type)
+				c.dropAndClose(event.Type)
 			}
 		}
 
@@ -100,7 +101,7 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 
 		// Send connected message
 		connectedMsg, _ := json.Marshal(map[string]string{"type": "connected"})
-		client.send <- connectedMsg
+		c.send <- connectedMsg
 
 		// Opt-in replay: ?replay=N asks for the bus's recent in-memory event
 		// history before the live feed, so a refreshed client can re-grow
@@ -117,13 +118,13 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 		}
 
 		// Start write pump
-		go client.writePump()
+		go c.writePump()
 		// Start read pump
-		client.readPump()
+		c.readPump()
 	}
 }
 
-func (c *Client) readPump() {
+func (c *client) readPump() {
 	defer func() {
 		c.conn.Close()
 	}()
@@ -137,7 +138,7 @@ func (c *Client) readPump() {
 	}
 }
 
-func (c *Client) writePump() {
+func (c *client) writePump() {
 	ticker := time.NewTicker(50 * time.Second)
 	defer func() {
 		ticker.Stop()
