@@ -77,6 +77,73 @@ func TestPreferencesMergeAndIsolationBetweenSessions(t *testing.T) {
 	}
 }
 
+func TestInitiateRetriesOnCollisionPreservesExistingSession(t *testing.T) {
+	m, err := NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Pre-populate a session with a known colliding ID.
+	collidingID := "tendril-collision-fixture"
+	sentinel := &sessionState{session: Phytomer{ID: collidingID, Origin: OriginCLI}}
+	m.sessions[collidingID] = sentinel
+
+	// Override the seam: first call returns the colliding ID, subsequent
+	// calls produce a real unique ID so the retry succeeds.
+	calls := 0
+	orig := newSessionID
+	t.Cleanup(func() { newSessionID = orig })
+	newSessionID = func() string {
+		calls++
+		if calls == 1 {
+			return collidingID
+		}
+		return NewID()
+	}
+
+	got, err := m.Initiate(context.Background(), OriginREST, Preferences{})
+	if err != nil {
+		t.Fatalf("Initiate should succeed after retry, got error: %v", err)
+	}
+
+	// (a) Returned ID must differ from the pre-existing session.
+	if got.ID == collidingID {
+		t.Fatalf("Initiate returned the colliding ID %q — existing session would have been overwritten", collidingID)
+	}
+
+	// (b) Pre-existing session's in-memory state must be untouched.
+	if m.sessions[collidingID] != sentinel {
+		t.Fatalf("pre-existing session state was overwritten by Initiate")
+	}
+}
+
+func TestInitiateErrorsWhenRetriesExhausted(t *testing.T) {
+	m, err := NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Pre-populate a session with the fixed colliding ID.
+	collidingID := "tendril-always-collides"
+	m.sessions[collidingID] = &sessionState{session: Phytomer{ID: collidingID}}
+
+	// Override the seam to always return the same colliding ID — it will
+	// never resolve within the retry budget.
+	orig := newSessionID
+	t.Cleanup(func() { newSessionID = orig })
+	newSessionID = func() string { return collidingID }
+
+	_, err = m.Initiate(context.Background(), OriginREST, Preferences{})
+	if err == nil {
+		t.Fatal("Initiate should have returned an error after exhausting retries, got nil")
+	}
+
+	// The pre-existing session must still be intact (no silent overwrite).
+	if _, ok := m.sessions[collidingID]; !ok {
+		t.Fatal("pre-existing session was removed from the map during exhausted-retry path")
+	}
+}
+
 func TestRecordMessageAndInMemoryHistory(t *testing.T) {
 	m, err := NewManager(context.Background(), nil)
 	if err != nil {
