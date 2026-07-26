@@ -7,10 +7,61 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitCommandWithEnv(ctx, dir, nil, args...)
+}
+
+// runGitCommandWithEnv runs git with additional environment entries appended to
+// the process environment (e.g. GIT_SSH_COMMAND for SSH-authenticated pushes).
+// The output is whitespace-trimmed; parsers that need byte-exact output (for
+// example NUL-separated porcelain, whose first status byte may itself be a
+// space) must use runGitCommandRawOutput instead.
+func runGitCommandWithEnv(ctx context.Context, dir string, extraEnv []string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Start the fixed git executable directly; args are never interpreted by a
+	// shell. Caller-controlled refs are separated with git's `--` marker or
+	// passed as explicit option values such as `-m`.
+	cmd := exec.CommandContext(ctx, "git")
+	cmd.Args = append([]string{"git"}, args...)
+	cmd.Dir = dir
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
+// runGitCommandRawOutput runs git and returns the output byte-for-byte. Needed
+// wherever the format is positional: trimming a porcelain status listing eats
+// the leading space of an unstaged-modification entry and every fixed-offset
+// slice after it lands one byte into the path.
+func runGitCommandRawOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmdArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return string(output), nil
+}
 
 // Delegated git commit — the lowest rung of the delegated-execution ladder
 // from the Design RFC. RunGitCommit commits the current state of a resolved
