@@ -253,6 +253,7 @@ func IssueToken(privateKey ed25519.PrivateKey, opts TokenOptions) (string, error
 		Subject:       strings.TrimSpace(opts.Subject),
 		Audience:      normalizeAudience(opts.Audience),
 		IssuedAt:      now.Unix(),
+		NotBefore:     now.Unix(),
 		ExpiresAt:     now.Add(ttl).Unix(),
 		ID:            strings.TrimSpace(opts.TokenID),
 		MeshScope:     strings.TrimSpace(opts.MeshScope),

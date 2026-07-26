@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,8 +65,9 @@ func TestIssueAndVerifyTokenRoundTrip(t *testing.T) {
 		t.Fatalf("IssueToken failed: %v", err)
 	}
 
+	// nbf == iat: issue-then-immediately-verify must succeed (happy path).
 	claims, err := VerifyToken(token, pair.PublicKey, TokenValidationOptions{
-		Now:               now.Add(5 * time.Minute),
+		Now:               now,
 		ExpectedIssuer:    defaultIssuer,
 		ExpectedAudience:  defaultAudience,
 		ExpectedScope:     defaultMeshScope,
@@ -86,6 +88,43 @@ func TestIssueAndVerifyTokenRoundTrip(t *testing.T) {
 	}
 	if claims.MeshScope != defaultMeshScope {
 		t.Fatalf("scope = %q, want %q", claims.MeshScope, defaultMeshScope)
+	}
+	if claims.NotBefore == 0 {
+		t.Fatalf("NotBefore = 0, want non-zero nbf claim set on issuance")
+	}
+	if claims.NotBefore != now.Unix() {
+		t.Fatalf("NotBefore = %d, want %d (nbf == iat)", claims.NotBefore, now.Unix())
+	}
+	if claims.IssuedAt != claims.NotBefore {
+		t.Fatalf("IssuedAt = %d, NotBefore = %d, want nbf == iat", claims.IssuedAt, claims.NotBefore)
+	}
+}
+
+func TestVerifyTokenRejectsNotYetValid(t *testing.T) {
+	pair, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatalf("GenerateKeyPair failed: %v", err)
+	}
+
+	now := time.Unix(1000, 0).UTC()
+	token, err := IssueToken(pair.PrivateKey, TokenOptions{
+		Now:       now,
+		ExpiresIn: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("IssueToken failed: %v", err)
+	}
+
+	// Verify one second before issuance: nbf check must reject (proves the
+	// check is live now that IssueToken sets NotBefore).
+	_, err = VerifyToken(token, pair.PublicKey, TokenValidationOptions{
+		Now: now.Add(-1 * time.Second),
+	})
+	if err == nil {
+		t.Fatalf("expected not-yet-valid token to fail verification")
+	}
+	if !errors.Is(err, ErrNotYetValid) {
+		t.Fatalf("VerifyToken error = %v, want ErrNotYetValid", err)
 	}
 }
 

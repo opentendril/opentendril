@@ -63,7 +63,6 @@ Package-level sentinel errors: `ErrMissingPrivateKey`, `ErrMissingPublicKey`, `E
 
 - **Default token TTL is one hour** (`defaultTokenTTL` in `auth.go`). Issuers may override; there is no refresh or revocation list — compromise window is “until exp.”
 - **Graft WebSocket workspace binding** is enforced: `HandleGraftWebSocket` validates the `workspacePath` claim against `s.workspace` via `TokenValidationOptions.ExpectedWorkspace`. Tokens minted for a different workspace are rejected before the upgrade completes. `HandleAdminIssueToken` ignores any caller-supplied `workspacePath` — issued tokens always carry `s.workspace`.
-- **`IssueToken` never sets `nbf`** even though `VerifyToken` honors it — not-before is unused on the happy path.
 - **WebSocket `CheckOrigin` is fail-closed** — `NewServer` rejects any upgrade request that carries an `Origin` header. `Origin` is a browser-set header that legitimate service-to-service callers (`mesh.Client`, CLI, another Stem) never send; rejecting its presence is stricter than a same-host allowlist and requires no configuration knob. There is no opt-out.
 - **No `client_test.go`** and no integration test for the graft WebSocket path; server tests cover admin token issue only.
 - **Trait inbox is memory-only** and lives as a package-global in the Stem process adapter (`meshtraits.go`); `Accept`/`Reject` return an `ErrTraitNotFound`-wrapped error when the supplied trait ID is not present in any bucket (pending, accepted, or rejected), including the empty-string case.
