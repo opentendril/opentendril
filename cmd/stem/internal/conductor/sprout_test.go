@@ -48,6 +48,13 @@ func (f *fakeLLM) CallStream(ctx context.Context, messages []llm.Message, tokenC
 	return response, nil
 }
 
+func (f *fakeLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	return f.Call(ctx, []llm.Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	})
+}
+
 type fakeSession struct {
 	tools      []ToolDefinition
 	calls      []ToolCall

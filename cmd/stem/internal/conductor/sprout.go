@@ -53,6 +53,7 @@ type toolSession interface {
 type llmCaller interface {
 	Call(ctx context.Context, messages []llm.Message) (string, error)
 	CallStream(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (string, error)
+	CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
 type Sprout struct {

@@ -105,6 +105,69 @@ func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
 	}
 }
 
+// TestTranscribeLearningsUsesInjectedClientSeam proves the chronicler's
+// client field is consistently typed as the llmCaller interface, so a fake
+// can be injected directly (no HTTP server, no roots/llm construction) to
+// exercise TranscribeLearnings as a fast unit test.
+func TestTranscribeLearningsUsesInjectedClientSeam(t *testing.T) {
+	workspace := t.TempDir()
+	fake := &fakeLLM{response: "- Fast unit test learning."}
+	chronicler := &EpigeneticChronicler{workspace: workspace, client: fake}
+
+	err := chronicler.TranscribeLearnings(
+		context.Background(),
+		"transcript",
+		"diff --git a/x.go b/x.go\n+x\n",
+		"logs",
+	)
+	if err != nil {
+		t.Fatalf("TranscribeLearnings returned error: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("expected 1 LLM call via the injected seam, got %d", len(fake.calls))
+	}
+
+	genomePath := filepath.Join(workspace, ".tendril", "genome", "epigenetics.md")
+	content, err := os.ReadFile(genomePath)
+	if err != nil {
+		t.Fatalf("read genome: %v", err)
+	}
+	if !strings.Contains(string(content), "- Fast unit test learning.") {
+		t.Fatalf("genome missing learning: %s", content)
+	}
+}
+
+// TestReduceGenomeFileUsesInjectedClientSeam is the ReduceGenomeFile
+// equivalent of TestTranscribeLearningsUsesInjectedClientSeam.
+func TestReduceGenomeFileUsesInjectedClientSeam(t *testing.T) {
+	workspace := t.TempDir()
+	genomePath := filepath.Join(workspace, ".tendril", "genome", "epigenetics.md")
+	if err := os.MkdirAll(filepath.Dir(genomePath), 0o755); err != nil {
+		t.Fatalf("mkdir genome dir: %v", err)
+	}
+	if err := os.WriteFile(genomePath, []byte(epigeneticGenomeHeader+"\n\n- old rule\n"), 0o644); err != nil {
+		t.Fatalf("seed genome: %v", err)
+	}
+
+	fake := &fakeLLM{response: "- reduced rule"}
+	chronicler := &EpigeneticChronicler{workspace: workspace, client: fake}
+
+	if err := chronicler.ReduceGenomeFile(context.Background()); err != nil {
+		t.Fatalf("ReduceGenomeFile returned error: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("expected 1 LLM call via the injected seam, got %d", len(fake.calls))
+	}
+
+	content, err := os.ReadFile(genomePath)
+	if err != nil {
+		t.Fatalf("read genome: %v", err)
+	}
+	if !strings.Contains(string(content), "- reduced rule") {
+		t.Fatalf("genome missing reduced rule: %s", content)
+	}
+}
+
 func TestTranscribeLearningsAppendsToExistingGenome(t *testing.T) {
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_MODEL_NAME", "test-model")

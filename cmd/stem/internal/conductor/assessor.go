@@ -32,9 +32,13 @@ type routerResponse struct {
 	Model    string `json:"model"`
 }
 
+// newAssessorClientFn is the complexity-assessor client seam, injectable for
+// tests that exercise AssessTaskComplexity without a real roots/llm call.
+var newAssessorClientFn = func() llmCaller { return llm.NewClientForTier(llm.TierCheapest) }
+
 // AssessTaskComplexity asks the cheapest configured model to classify the task's model tier.
 func AssessTaskComplexity(ctx context.Context, transcript string) (llm.ModelTier, error) {
-	client := llm.NewClientForTier(llm.TierCheapest)
+	client := newAssessorClientFn()
 	response, err := client.CallPrompt(ctx, complexityAssessorSystemPrompt, strings.TrimSpace(transcript))
 	if err != nil {
 		return "", fmt.Errorf("assess task complexity: %w", err)
@@ -46,6 +50,10 @@ func AssessTaskComplexity(ctx context.Context, transcript string) (llm.ModelTier
 	}
 	return tier, nil
 }
+
+// newRouterClientFn is the dynamic-router client seam, injectable for tests
+// that exercise RouteTask without a real roots/llm call.
+var newRouterClientFn = func() llmCaller { return llm.NewClientForTier(llm.TierCheapest) }
 
 // RouteTask selects the best provider/model pair for a task using the dynamic router.
 func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, registry []llm.ModelDefinition) (llm.RouteSelection, error) {
@@ -62,7 +70,7 @@ func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, re
 		return llm.RouteSelection{Provider: model.Provider, Model: model.Name}, nil
 	}
 
-	client := llm.NewClientForTier(llm.TierCheapest)
+	client := newRouterClientFn()
 	prompt := buildRouterPrompt(strings.TrimSpace(transcript), filtered)
 	response, err := client.CallPrompt(ctx, taskRouterSystemPrompt, prompt)
 	if err != nil {
