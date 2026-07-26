@@ -56,12 +56,20 @@ func InitResinSink(bus *eventbus.Bus, cfg ResinConfig, logPath string) (*ResinSi
 		return nil, err
 	}
 
-	attachHandler(bus, sink.handle)
+	bus.AttachSink(sink, 0)
 	return sink, nil
 }
 
 func (s *ResinSink) ensureLogDir() error {
 	return os.MkdirAll(filepath.Dir(s.logPath), 0o755)
+}
+
+// Consume satisfies the eventbus.Sink interface so ResinSink can be attached
+// to the bus's buffered sink pump via AttachSink rather than the synchronous
+// Subscribe lane. Disk I/O and gzip compression therefore run on the sink's
+// dedicated goroutine and can never block Publish.
+func (s *ResinSink) Consume(event eventbus.Event) {
+	s.handle(event)
 }
 
 func (s *ResinSink) handle(event eventbus.Event) {

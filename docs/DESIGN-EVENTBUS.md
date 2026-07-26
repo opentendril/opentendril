@@ -37,7 +37,7 @@
 | **Hormonal / rhizome / xylem** | `EventHormonalTrigger` (`hormonal-trigger`), `EventRhizomeUpdate` (`rhizome-update`), `EventXylemTransport` (`xylem-transport`). |
 | **Parallel / GA / mesh-ish** | `EventParallelSprouting` (`parallel-sprouting`), `EventMycelialMerge` (`mycelial-merge`), `EventPhenotypicSelection` (`phenotypic-selection`). |
 | **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`). |
-| `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Resin `attachHandler`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
+| `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
 | `Event` | Payload: `Type`, `Timestamp`, `Source`, optional `SessionID` (`json:"sessionId"`), optional `Data` map. |
 | `Handler` | `func(Event)` — typed subscription callback. |
 | `Sink` | `Consume(Event)` — type-agnostic consumer; intended for persistence and remote transporters. |
@@ -63,11 +63,11 @@ Package-level sentinel errors: **none**.
 - **`internal/healthmon`** — publishes `health-check` every interval and `health-degraded` when overall health is false (`monitor.go`). Does not publish `health-recovered`.
 - **`internal/historydb`** — sink: `Store.Consume` persists every event into SQLite (`historydb.go`).
 - **`internal/receptors`** — publishes sequence complete/failure from session sequence runs; `DelegationGate.audit` publishes `delegation-authorized` / `delegation-denied` (`sessions.go`, `config.go`). Threads the ambient bus into sprout handlers for lifecycle visibility.
-- **`internal/telemetry`** — attaches transporters as sinks (`AttachTransporter`); Resin log sink subscribes via `AllEventTypes` (`resin.go`, `transporter.go`); Prometheus counters pre-register from `AllEventTypes()`.
+- **`internal/telemetry`** — attaches transporters as sinks (`AttachTransporter`); Resin log sink attaches via `AttachSink` (`resin.go`, `transporter.go`); Prometheus counters pre-register from `AllEventTypes()`.
 
 ## Limitations
 
-- **Handlers are synchronous on the publish path.** A slow `Subscribe` handler (e.g. Resin's file I/O via `attachHandler`, or a gateway handler that does work beyond a non-blocking channel send) **blocks the publisher** until it returns. Sinks are the non-blocking path; not all consumers use them.
+- **Handlers are synchronous on the publish path.** A slow `Subscribe` handler (e.g. a gateway handler that does work beyond a non-blocking channel send) **blocks the publisher** until it returns. Sinks are the non-blocking path; all durable/slow consumers use them.
 - **Sinks are lossy by design.** When a sink buffer is full, `Publish` drops that event for that sink only (`select` / `default`). Default buffer is 1024. No drop counter, metric, or backpressure signal is exposed by this package.
 - **No unsubscribe.** `Subscribe` only appends. Gateway registers one handler per event type **per WebSocket connection** and never removes them when the client disconnects — handlers keep firing and drop on a full `send` channel. Long-lived daemons can accumulate dead handlers (memory + per-publish cost).
 - **In-memory history only (last 100).** `History` is a process-local ring for `?replay` and tests. Durable retention is entirely sink-side (history.db / Resin / remote). Events published with no attached sink and no live subscriber are gone after the window slides.
@@ -84,7 +84,7 @@ Package-level sentinel errors: **none**.
 
 **Event-taxonomy contract.** Event names are a **cross-package, often persisted** contract: history.db rows store the string type; `/ws` frames forward it; Prometheus labels use it; the Command Center UI maps types to visual weather/tendrils. That is why constants live here rather than in each producer: one registry, kebab-case wire values (`sprout-emerged`, `phenotypic-selection`) matching AGENTS.md domain-enum rules, camelCase only on JSON fields of the envelope (`sessionId`). `AllEventTypes()` exists so broad consumers do not hard-code partial lists and drift when types are added — provided the slice is updated with the const.
 
-**Two delivery lanes.** Typed `Subscribe` is the simple in-process observer API (tests, gateway live feed, Resin). `Sink` is the pluggable transport boundary designed so **slow or disconnected sinks never block Publish** — telemetry is lossy on purpose so the orchestrator hot path stays free. The dual model is deliberate; the sharp edge is that Resin still uses the blocking Subscribe lane while historydb and remote transporters use sinks.
+**Two delivery lanes.** Typed `Subscribe` is the simple in-process observer API reserved for fast, non-blocking handlers — the gateway live feed handler body is just a non-blocking `select { case client.send <- payload: default: }` and never does I/O. `Sink` is the pluggable transport boundary designed so **slow or disconnected sinks never block Publish** — telemetry is lossy on purpose so the orchestrator hot path stays free. All durable or potentially slow consumers (historydb, Resin, and remote transporters) attach as sinks via `AttachSink`; the blocking `Subscribe` lane is reserved for in-process observers whose handlers are guaranteed fast.
 
 **No network bus.** Multi-Stem or multi-process event distribution is out of scope for this leaf; remote Redis/Kafka/WebSocket transporters in `telemetry` are the deliberate exit ramps from the process-local spine.
 
