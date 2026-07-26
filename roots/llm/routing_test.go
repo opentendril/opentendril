@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -273,4 +275,145 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 	if largeBlocks[0].CacheControl == nil || largeBlocks[0].CacheControl.Type != "ephemeral" {
 		t.Fatalf("large message cache_control = %#v, want ephemeral", largeBlocks[0].CacheControl)
 	}
+}
+
+// TestIsRouterConfigOverride exercises the three scenarios described in the
+// task verification plan for the explicit is-router config field.
+//
+// Each sub-test creates a temporary .tendril/config.yaml, chdirs into the
+// temp tree so that loadTendrilConfig picks it up, and restores the original
+// directory on cleanup — the same pattern used by
+// TestResolveLocalProviderSpecUsesTendrilConfig.
+func TestIsRouterConfigOverride(t *testing.T) {
+	// chdir sets up a temp tree with the given YAML and returns to the original
+	// directory when the test ends.
+	chdir := func(t *testing.T, yaml string) {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".tendril"), 0o755); err != nil {
+			t.Fatalf("mkdir .tendril: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".tendril", "config.yaml"), []byte(yaml), 0o644); err != nil {
+			t.Fatalf("write config.yaml: %v", err)
+		}
+		orig, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		if err := os.Chdir(root); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+	}
+
+	// (1) is-router: true bypasses regardless of model name.
+	//     The model name "my-custom-proxy" would never match any existing
+	//     heuristic pattern — proving that the explicit field, not the
+	//     heuristic, drove the bypass decision.
+	t.Run("explicit true bypasses for non-heuristic model name", func(t *testing.T) {
+		clearProviderKeys(t)
+		chdir(t, `
+llm:
+  default-provider: openrouter
+  providers:
+    openrouter:
+      base-url: https://openrouter.ai/api/v1
+      api-key: test-key
+      model: my-custom-proxy
+      is-router: true
+`)
+		t.Setenv("DEFAULT_LLM_PROVIDER", "openrouter")
+		t.Setenv("OPENROUTER_API_KEY", "test-key")
+		clearTierModelEnv(t, "openrouter")
+		t.Setenv("DEFAULT_MODEL_NAME", "")
+
+		if got := ShouldBypassInternalRouter(); !got {
+			t.Fatalf("ShouldBypassInternalRouter() = false, want true (is-router: true must bypass even for non-heuristic model name)")
+		}
+		// Double-check: the model name alone would NOT trigger the heuristic.
+		if IsThirdPartyRouterModel("my-custom-proxy") {
+			t.Fatalf("IsThirdPartyRouterModel(%q) = true, want false (heuristic must not match this name)", "my-custom-proxy")
+		}
+	})
+
+	// (2) is-router: false prevents bypass even when the model name matches an
+	//     existing heuristic pattern. An operator running a self-hosted proxy
+	//     literally named "nvidia/my-router" (contains "router" and "nvidia")
+	//     must be able to opt out, letting the internal dynamic router run.
+	t.Run("explicit false prevents bypass for heuristic-matching model name", func(t *testing.T) {
+		clearProviderKeys(t)
+		chdir(t, `
+llm:
+  default-provider: nvidia
+  providers:
+    nvidia:
+      base-url: https://localproxy.internal/v1
+      api-key: test-key
+      model: nvidia/my-router
+      is-router: false
+`)
+		t.Setenv("DEFAULT_LLM_PROVIDER", "nvidia")
+		t.Setenv("NVIDIA_API_KEY", "test-key")
+		clearTierModelEnv(t, "nvidia")
+		t.Setenv("DEFAULT_MODEL_NAME", "")
+
+		// Sanity: the heuristic alone would say "bypass".
+		if !IsThirdPartyRouterModel("nvidia/my-router") {
+			t.Fatalf("IsThirdPartyRouterModel(%q) = false, want true (pre-condition: heuristic must match)", "nvidia/my-router")
+		}
+		if got := ShouldBypassInternalRouter(); got {
+			t.Fatalf("ShouldBypassInternalRouter() = true, want false (is-router: false must prevent bypass even for heuristic-matching model name)")
+		}
+	})
+
+	// (3) Regression: heuristic-only behavior (no is-router set) is unchanged
+	//     for the two already-detected routers. This guards against accidentally
+	//     breaking zero-config OpenRouter and NVIDIA setups.
+	t.Run("zero-config heuristic still detects openrouter/auto", func(t *testing.T) {
+		clearProviderKeys(t)
+		// Use an empty root (no .tendril/config.yaml) so that loadTendrilConfig
+		// returns a zero tendrilConfig — exactly what a zero-config operator sees.
+		root := t.TempDir()
+		orig, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		if err := os.Chdir(root); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+
+		t.Setenv("DEFAULT_LLM_PROVIDER", "openrouter")
+		t.Setenv("OPENROUTER_API_KEY", "test-key")
+		clearTierModelEnv(t, "openrouter")
+		t.Setenv("DEFAULT_MODEL_NAME", "")
+		t.Setenv("OPENROUTER_MODEL_NAME", "openrouter/auto")
+
+		if got := ShouldBypassInternalRouter(); !got {
+			t.Fatalf("ShouldBypassInternalRouter() = false, want true (zero-config heuristic must still detect openrouter/auto)")
+		}
+	})
+
+	t.Run("zero-config heuristic still detects nvidia router model", func(t *testing.T) {
+		clearProviderKeys(t)
+		root := t.TempDir()
+		orig, err := os.Getwd()
+		if err != nil {
+			t.Fatalf("getwd: %v", err)
+		}
+		if err := os.Chdir(root); err != nil {
+			t.Fatalf("chdir: %v", err)
+		}
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+
+		t.Setenv("DEFAULT_LLM_PROVIDER", "nvidia")
+		t.Setenv("NVIDIA_API_KEY", "test-key")
+		clearTierModelEnv(t, "nvidia")
+		t.Setenv("DEFAULT_MODEL_NAME", "")
+		t.Setenv("NVIDIA_MODEL_NAME", "nvidia/llama-3.3-nemotron-super-49b-v1-router")
+
+		if got := ShouldBypassInternalRouter(); !got {
+			t.Fatalf("ShouldBypassInternalRouter() = false, want true (zero-config heuristic must still detect nvidia router model)")
+		}
+	})
 }

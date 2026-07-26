@@ -40,6 +40,11 @@ type ProviderSpec struct {
 	Endpoint    string
 	Mode        Mode
 	Temperature float64
+	// IsRouter, when true, signals that this provider delegates model selection
+	// to a third-party router (e.g. OpenRouter, NVIDIA NIM router). Set
+	// explicitly via the `is-router` field in .tendril/config.yaml; it
+	// overrides the string-matching heuristic in IsThirdPartyRouterModel.
+	IsRouter bool
 }
 
 type Message struct {
@@ -67,6 +72,13 @@ type tendrilProviderConfig struct {
 	Model       string  `yaml:"model"`
 	Endpoint    string  `yaml:"endpoint"`
 	Temperature float64 `yaml:"temperature"`
+	// IsRouter, when true, marks this provider as a third-party router so that
+	// ShouldBypassInternalRouter returns true regardless of the model name. Set
+	// to false to explicitly prevent bypass even when the model name would match
+	// the string-matching heuristic (e.g. a self-hosted proxy whose model is
+	// coincidentally named "my-router"). Unset (zero value) defers the decision
+	// to the existing string-matching heuristic, preserving zero-config behavior.
+	IsRouter *bool `yaml:"is-router"`
 }
 
 func (c *Client) SetTemperature(temp float64) {
@@ -328,6 +340,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 		model = strings.TrimSpace(providerConfig.Model)
 	}
 	temperature := configuredTemperature(providerConfig, 0.1)
+	isRouter := resolveIsRouter(providerConfig)
 
 	switch provider {
 	case "local":
@@ -344,6 +357,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    endpoint,
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "anthropic":
 		return ProviderSpec{
@@ -354,6 +368,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/v1/messages"),
 			Mode:        ModeAnthropic,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "openai":
 		return ProviderSpec{
@@ -364,6 +379,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "grok":
 		return ProviderSpec{
@@ -374,6 +390,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "google":
 		return ProviderSpec{
@@ -384,6 +401,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "openrouter":
 		return ProviderSpec{
@@ -394,6 +412,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	case "nvidia":
 		return ProviderSpec{
@@ -404,6 +423,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	default:
 		baseURL := localInferenceOverride
@@ -418,8 +438,20 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
 			Mode:        ModeOpenAIish,
 			Temperature: temperature,
+			IsRouter:    isRouter,
 		}
 	}
+}
+
+// resolveIsRouter extracts the optional is-router flag from a provider config.
+// It returns false when the field is not set (nil pointer), preserving the
+// zero-config behaviour where the string-matching heuristic in
+// IsThirdPartyRouterModel is the sole decision maker.
+func resolveIsRouter(cfg tendrilProviderConfig) bool {
+	if cfg.IsRouter == nil {
+		return false
+	}
+	return *cfg.IsRouter
 }
 
 func envOr(key, fallback string) string {
