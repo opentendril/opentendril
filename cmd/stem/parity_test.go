@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1022,6 +1023,66 @@ func TestBehavioralParity(t *testing.T) {
 			cliSubcommand: "history",
 			cliArgs:       []string{sessionID, "--limit", "10"},
 		},
+		{
+			name:   core.CapGenomeView,
+			method: "GenomeView",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/genome")
+				if err != nil {
+					t.Fatalf("REST genome.view: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "view",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapGenomeEvolve,
+			method: "GenomeEvolve",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Post(serverURL+"/v1/genome/evolve", "application/json", nil)
+				if err != nil {
+					t.Fatalf("REST genome.evolve: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "evolve",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapPlasmidList,
+			method: "PlasmidList",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/plasmids")
+				if err != nil {
+					t.Fatalf("REST plasmid.list: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "list",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapSequenceList,
+			method: "SequenceList",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/sequences")
+				if err != nil {
+					t.Fatalf("REST sequence.list: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "list",
+			cliArgs:       []string{},
+		},
 	}
 
 	for _, tc := range cases {
@@ -1089,18 +1150,50 @@ func TestBehavioralParity(t *testing.T) {
 			// the real production functions, substituting only the mock for
 			// the terminal Core.Invoke call.
 			mock.reset()
-			command, ok := lookupSessionCommand(tc.cliSubcommand)
-			if !ok {
-				t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+
+			var commandCapability string
+			var input map[string]any
+
+			switch {
+			case strings.HasPrefix(tc.name, "phytomer."):
+				command, ok := lookupSessionCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parseSessionArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "genome."):
+				command, ok := lookupGenomeCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parseGenomeArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "plasmid."):
+				command, ok := lookupPlasmidCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parsePlasmidArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "sequence."):
+				command, ok := lookupSequenceCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, _, err = parseSequenceArgs(command.capability, tc.cliArgs)
+			default:
+				t.Fatalf("CLI %s: untested capability prefix", tc.name)
 			}
-			if command.capability != tc.name {
-				t.Fatalf("CLI subcommand %q maps to capability %q, want %q", tc.cliSubcommand, command.capability, tc.name)
+
+			if commandCapability != tc.name {
+				t.Fatalf("CLI subcommand %q maps to capability %q, want %q", tc.cliSubcommand, commandCapability, tc.name)
 			}
-			input, err := parseSessionArgs(command.capability, tc.cliArgs)
 			if err != nil {
-				t.Fatalf("CLI %s: parseSessionArgs: %v", tc.name, err)
+				t.Fatalf("CLI %s: parseArgs: %v", tc.name, err)
 			}
-			if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+			if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
 				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
 			}
 			cliCalls := mock.inputsFor(tc.method)
