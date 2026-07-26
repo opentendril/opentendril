@@ -33,7 +33,7 @@ The package exports on the order of **~365** symbols. The load-bearing surface i
 
 | Subsystem | Primary entrypoints |
 | --- | --- |
-| Sequence execution & recovery | `Sequence`, `SequenceStep`, `SelectionConfig`, `SequenceStepRunner`, `SequenceRunOptions`, `LoadSequence`, `SaveSequence`, `ResolveSequencePath`, `ListSequenceFiles`, `RunSequence`, `ErrRequiresReview`; `Orchestrator` (`orchestrator.go`); reclaim: `ReclaimOwnedRef`, `ReclaimOwnedRefs`, `ReclaimUnusedIsolationBranch`, `ReclaimOutcome` |
+| Sequence execution & recovery | `Sequence`, `SequenceStep`, `SelectionConfig`, `SequenceStepRunner`, `SequenceRunOptions`, `LoadSequence`, `SaveSequence`, `ResolveSequencePath`, `ListSequenceFiles`, `RunSequence`, `ErrRequiresReview`; reclaim: `ReclaimOwnedRef`, `ReclaimOwnedRefs`, `ReclaimUnusedIsolationBranch`, `ReclaimOutcome` |
 | Parallel sprouting & phenotypic selection | Step fields and runners invoked from `defaultSequenceStepRunnerWithOpts` (`parallel`, `phenotypesCount`, `Selection`); selection config lives on `SequenceStep`; macrophage fuzz is internal to step post-processing (`macrophage.go`) |
 | Sprout execution & isolation | `Sprout`, `ActionResult`, `SproutRunReport`, `DockerOrchestrator`, `NewDockerOrchestrator`, `(*DockerOrchestrator).RunSprout`, `SeedExecution`, `SeedRunResult`, `RunSeed`, `StomaExecution`, `StomaFetch`, `StomaResult`, `EgressPolicy`, `NewEgressPolicy`, `RunStoma`, `LockWorkspace`, `DelegatedWorkspace`, `ResolveDelegatedWorkspace` |
 | Substrate configuration | `SubstratesConfig`, `SubstrateSpec`, `AuthSpec`, `SignSpec`, `IdentitySpec`, `CheckoutSpec`, `CredentialProfile`, `LoadSubstratesConfig`, `ResolveSubstrate`, `SubstrateConfigCandidates` |
