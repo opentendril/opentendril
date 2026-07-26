@@ -199,12 +199,12 @@ func (s *Service) CreateSession(ctx context.Context, in CreateSessionInput) (ses
 	return s.sessions.Initiate(ctx, in.Origin, in.Preferences)
 }
 
-func (s *Service) ListSessions(_ context.Context) ([]session.Phytomer, error) {
-	return s.sessions.List(), nil
+func (s *Service) ListSessions(ctx context.Context) ([]session.Phytomer, error) {
+	return s.sessions.List(ctx)
 }
 
-func (s *Service) GetSession(_ context.Context, in GetSessionInput) (session.Phytomer, error) {
-	sess, ok := s.sessions.Get(in.SessionID)
+func (s *Service) GetSession(ctx context.Context, in GetSessionInput) (session.Phytomer, error) {
+	sess, ok := s.sessions.Get(ctx, in.SessionID)
 	if !ok {
 		return session.Phytomer{}, ErrNotFound
 	}
@@ -229,7 +229,7 @@ func (s *Service) DeleteSession(ctx context.Context, in DeleteSessionInput) erro
 func (s *Service) SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error) {
 	// Preserve the surfaces' historic behavior: a missing session is a
 	// not-found, distinct from an empty log.
-	if _, ok := s.sessions.Get(in.SessionID); !ok {
+	if _, ok := s.sessions.Get(ctx, in.SessionID); !ok {
 		return nil, ErrNotFound
 	}
 	return s.sessions.History(ctx, in.SessionID, in.Limit)

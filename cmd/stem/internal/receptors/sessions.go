@@ -303,7 +303,7 @@ func (h *SessionsHandler) runSequenceAsync(w http.ResponseWriter, r *http.Reques
 			sessionID = sess.ID
 		}
 	} else {
-		if _, ok := h.manager.Get(sessionID); !ok {
+		if _, ok := h.manager.Get(r.Context(), sessionID); !ok {
 			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}

@@ -349,23 +349,9 @@ func (s *Store) LoadSessions(ctx context.Context) ([]session.Phytomer, error) {
 
 	sessions := make([]session.Phytomer, 0)
 	for rows.Next() {
-		var sess session.Phytomer
-		var createdAt, lastActiveAt, prefs string
-		if err := rows.Scan(&sess.ID, &sess.Origin, &createdAt, &lastActiveAt, &prefs); err != nil {
-			return nil, fmt.Errorf("scan session: %w", err)
-		}
-		if sess.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
-			return nil, fmt.Errorf("parse session createdAt: %w", err)
-		}
-		if sess.LastActiveAt, err = time.Parse(time.RFC3339Nano, lastActiveAt); err != nil {
-			return nil, fmt.Errorf("parse session lastActiveAt: %w", err)
-		}
-		prefsDec, err := s.dec(prefs, "historydb/sessions/preferences")
+		sess, err := s.scanSession(rows)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt session preferences: %w", err)
-		}
-		if err := json.Unmarshal([]byte(prefsDec), &sess.Preferences); err != nil {
-			return nil, fmt.Errorf("decode session preferences: %w", err)
+			return nil, err
 		}
 		sessions = append(sessions, sess)
 	}
@@ -373,6 +359,53 @@ func (s *Store) LoadSessions(ctx context.Context) ([]session.Phytomer, error) {
 		return nil, fmt.Errorf("iterate sessions: %w", err)
 	}
 	return sessions, nil
+}
+
+// LoadSession loads one persisted session by ID. The second return value is
+// false if no such session exists (sql.ErrNoRows is not an error).
+func (s *Store) LoadSession(ctx context.Context, sessionID string) (session.Phytomer, bool, error) {
+	const query = `SELECT sessionId, origin, createdAt, lastActiveAt, preferences FROM sessions WHERE sessionId = ?`
+
+	row := s.db.QueryRowContext(ctx, query, sessionID)
+	sess, err := s.scanSession(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return session.Phytomer{}, false, nil
+		}
+		return session.Phytomer{}, false, err
+	}
+	return sess, true, nil
+}
+
+// sessionRow is the common Scan surface shared by QueryRow and Rows.
+type sessionRow interface {
+	Scan(dest ...any) error
+}
+
+func (s *Store) scanSession(row sessionRow) (session.Phytomer, error) {
+	var sess session.Phytomer
+	var createdAt, lastActiveAt, prefs string
+	if err := row.Scan(&sess.ID, &sess.Origin, &createdAt, &lastActiveAt, &prefs); err != nil {
+		if err == sql.ErrNoRows {
+			return session.Phytomer{}, err
+		}
+		return session.Phytomer{}, fmt.Errorf("scan session: %w", err)
+	}
+	var err error
+	if sess.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return session.Phytomer{}, fmt.Errorf("parse session createdAt: %w", err)
+	}
+	if sess.LastActiveAt, err = time.Parse(time.RFC3339Nano, lastActiveAt); err != nil {
+		return session.Phytomer{}, fmt.Errorf("parse session lastActiveAt: %w", err)
+	}
+	prefsDec, err := s.dec(prefs, "historydb/sessions/preferences")
+	if err != nil {
+		return session.Phytomer{}, fmt.Errorf("decrypt session preferences: %w", err)
+	}
+	if err := json.Unmarshal([]byte(prefsDec), &sess.Preferences); err != nil {
+		return session.Phytomer{}, fmt.Errorf("decode session preferences: %w", err)
+	}
+	return sess, nil
 }
 
 func (s *Store) AppendMessage(ctx context.Context, msg session.Message) error {

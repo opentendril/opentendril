@@ -14,6 +14,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -34,6 +36,21 @@ const (
 	// collision after even one retry against 96 bits of entropy would
 	// indicate a broken RNG, so failing closed is correct.
 	maxSessionIDCollisionRetries = 5
+
+	// EnvSessionTTL configures how long a session may sit idle in the
+	// in-memory cache before the idle-eviction sweep drops it. Only applies
+	// when a Store is attached; no-store Managers never evict. Parsed with
+	// time.ParseDuration (e.g. "24h", "90m"). Defaults to 24h; an invalid
+	// value falls back to the default with a logged warning.
+	EnvSessionTTL = "TENDRIL_SESSION_TTL"
+
+	// defaultSessionTTL is used when TENDRIL_SESSION_TTL is unset or invalid.
+	defaultSessionTTL = 24 * time.Hour
+
+	// idleEvictionInterval is how often the daemon sweeps for idle entries.
+	// Cheap enough not to matter under lock contention; long enough that a
+	// 24h-default TTL is not checked more often than useful.
+	idleEvictionInterval = 5 * time.Minute
 )
 
 // Known interaction origins. Origins outside this set are preserved verbatim.
@@ -115,6 +132,9 @@ type Store interface {
 	SaveSession(ctx context.Context, s Phytomer) error
 	DeleteSession(ctx context.Context, sessionID string) error
 	LoadSessions(ctx context.Context) ([]Phytomer, error)
+	// LoadSession loads one persisted session by ID. The second return value is
+	// false if no such session exists.
+	LoadSession(ctx context.Context, sessionID string) (Phytomer, bool, error)
 	AppendMessage(ctx context.Context, m Message) error
 	LoadMessages(ctx context.Context, sessionID string, limit int) ([]Message, error)
 }
@@ -124,8 +144,10 @@ type sessionState struct {
 	messages []Message
 }
 
-// Manager is the single source of truth for live Phytomer sessions across the
-// CLI, MCP, REST, and WebSocket surfaces.
+// Manager coordinates live Phytomer sessions across the CLI, MCP, REST, and
+// WebSocket surfaces. With a Store attached, m.sessions is a bounded idle-TTL
+// cache over the durable record (lazy-rehydrated on Get/GetOrInitiate); without
+// a store it remains the sole in-memory authority and never evicts.
 type Manager struct {
 	mu       sync.RWMutex
 	sessions map[string]*sessionState
@@ -211,25 +233,59 @@ func (m *Manager) Initiate(ctx context.Context, origin string, prefs Preferences
 	return s, nil
 }
 
-// Get returns a snapshot of the session with the given ID.
-func (m *Manager) Get(id string) (Phytomer, bool) {
+// Get returns a snapshot of the session with the given ID. When a store is
+// attached and the ID is absent from the in-memory cache, Get falls back to
+// LoadSession and rehydrates the cache on a hit so idle eviction is transparent.
+func (m *Manager) Get(ctx context.Context, id string) (Phytomer, bool) {
 	if m == nil {
 		return Phytomer{}, false
 	}
 
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
 	state, ok := m.sessions[id]
-	if !ok {
+	if ok {
+		s := state.session
+		m.mu.RUnlock()
+		return s, true
+	}
+	m.mu.RUnlock()
+
+	return m.rehydrateFromStore(ctx, id)
+}
+
+// rehydrateFromStore loads one session from the durable store into m.sessions.
+// Callers must already have observed a cache miss under their own locking.
+func (m *Manager) rehydrateFromStore(ctx context.Context, id string) (Phytomer, bool) {
+	if m.store == nil {
 		return Phytomer{}, false
 	}
-	return state.session, true
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	loaded, found, err := m.store.LoadSession(ctx, id)
+	if err != nil {
+		log.Printf("⚠️ load session %s from store: %v", id, err)
+		return Phytomer{}, false
+	}
+	if !found {
+		return Phytomer{}, false
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Another goroutine may have won the rehydrate race; prefer the live entry.
+	if existing, ok := m.sessions[id]; ok {
+		return existing.session, true
+	}
+	m.sessions[id] = &sessionState{session: loaded}
+	return loaded, true
 }
 
 // GetOrInitiate resolves an existing session or creates one. An empty ID always
 // initiates a fresh Phytomer; a well-formed unknown ID is adopted so clients can
-// mint IDs offline (e.g. the CLI when the server rotates underneath it).
+// mint IDs offline (e.g. the CLI when the server rotates underneath it). When a
+// store is attached, a cache miss first consults the durable record so an
+// idle-evicted session resumes instead of being silently replaced by a blank one.
 func (m *Manager) GetOrInitiate(ctx context.Context, id, origin string) (Phytomer, error) {
 	if m == nil {
 		return Phytomer{}, fmt.Errorf("session manager is nil")
@@ -243,7 +299,7 @@ func (m *Manager) GetOrInitiate(ctx context.Context, id, origin string) (Phytome
 		return Phytomer{}, fmt.Errorf("invalid session id %q", id)
 	}
 
-	if s, ok := m.Get(id); ok {
+	if s, ok := m.Get(ctx, id); ok {
 		return s, nil
 	}
 
@@ -273,10 +329,26 @@ func (m *Manager) GetOrInitiate(ctx context.Context, id, origin string) (Phytome
 	return s, nil
 }
 
-// List returns all live sessions, most recently active first.
-func (m *Manager) List() []Phytomer {
+// List returns all sessions, most recently active first. When a store is
+// attached it sources from the durable record (the complete set once the
+// in-memory map is a bounded cache); without a store it iterates m.sessions.
+func (m *Manager) List(ctx context.Context) ([]Phytomer, error) {
 	if m == nil {
-		return nil
+		return nil, nil
+	}
+
+	if m.store != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		sessions, err := m.store.LoadSessions(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list persisted sessions: %w", err)
+		}
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].LastActiveAt.After(sessions[j].LastActiveAt)
+		})
+		return sessions, nil
 	}
 
 	m.mu.RLock()
@@ -289,7 +361,90 @@ func (m *Manager) List() []Phytomer {
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].LastActiveAt.After(sessions[j].LastActiveAt)
 	})
-	return sessions
+	return sessions, nil
+}
+
+// StartIdleEviction launches a background sweep that drops idle entries from
+// the in-memory cache. It is a no-op when no store is attached — eviction
+// without a durable reload path would be pure data loss. Only the long-lived
+// daemon (cmdserve) should call this; short-lived CLI/MCP entry points exit
+// long before a default 24h TTL would fire. The sweep never calls
+// store.DeleteSession — that remains Prune's job.
+func (m *Manager) StartIdleEviction(ctx context.Context) {
+	if m == nil || m.store == nil {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ttl := sessionTTLFromEnv()
+
+	go func() {
+		ticker := time.NewTicker(idleEvictionInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.evictIdle(ttl)
+			}
+		}
+	}()
+}
+
+// evictIdle removes in-memory sessions whose LastActiveAt is at least ttl old.
+// It never touches the store. A non-positive ttl evicts every cached entry
+// (useful for tests that force a cache miss). Returns the number removed.
+// No-op when store is nil so ephemeral no-store Managers never lose state.
+func (m *Manager) evictIdle(ttl time.Duration) int {
+	if m == nil || m.store == nil {
+		return 0
+	}
+
+	now := time.Now().UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	evicted := 0
+	for id, state := range m.sessions {
+		if ttl <= 0 || !state.session.LastActiveAt.After(now.Add(-ttl)) {
+			delete(m.sessions, id)
+			evicted++
+		}
+	}
+	return evicted
+}
+
+// sessionTTLFromEnv reads TENDRIL_SESSION_TTL. Empty/invalid values fall back
+// to defaultSessionTTL with a warning — a hygiene knob must not gate startup.
+func sessionTTLFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv(EnvSessionTTL))
+	if raw == "" {
+		return defaultSessionTTL
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("⚠️ invalid %s=%q (want a Go duration like \"24h\"); using default %s: %v",
+			EnvSessionTTL, raw, defaultSessionTTL, err)
+		return defaultSessionTTL
+	}
+	if parsed <= 0 {
+		log.Printf("⚠️ non-positive %s=%q; using default %s", EnvSessionTTL, raw, defaultSessionTTL)
+		return defaultSessionTTL
+	}
+	return parsed
+}
+
+// memoryLen reports how many sessions currently sit in the in-memory cache.
+// Intended for tests asserting eviction; not part of the public surface.
+func (m *Manager) memoryLen() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.sessions)
 }
 
 // UpdatePreferences merges preference overrides into a session.
