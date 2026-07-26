@@ -351,7 +351,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	})
 
 	// Phase 4: Configuration API
-	configHandler := receptors.NewConfigHandler(tendrilDir)
+	configHandler := receptors.NewConfigHandler(coreSvc, tendrilDir).WithDelegation(delegationGate)
 	mux.HandleFunc("/v1/config/triggers", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			configHandler.ListTriggers(w, r)
@@ -359,17 +359,17 @@ func runServeCmd(ctx context.Context, args []string) {
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}))
-	mux.HandleFunc("/v1/config/genotypes", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
-			configHandler.ListGenotypes(w, r)
+			guardedAuth(configHandler.ListGenotypes)(w, r)
 			return
 		}
 		if r.Method == http.MethodPost {
-			configHandler.UploadGenotype(w, r)
+			withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, configHandler.UploadGenotype)(w, r)
 			return
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}))
+	})
 
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
 	// projects the same Core session capabilities as REST and the CLI)

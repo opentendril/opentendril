@@ -108,6 +108,8 @@ type Core interface {
 	// Invoke runs a capability by name with a decoded input map. This is the
 	// uniform projection path used by the MCP and CLI adapters.
 	Invoke(ctx context.Context, name string, input map[string]any) (any, error)
+
+	GenotypeCreate(ctx context.Context, in GenotypeCreateInput) (any, error)
 }
 
 // --- capability input types (plain domain structs) --------------------------
