@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -841,9 +842,27 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	traitRest := receptors.NewTraitHandler(mock)
 	sequenceRest := receptors.NewSequenceHandler(mock)
 	sproutRest := receptors.NewSproutHandler(mock, nil, nil)
-	stomaRest := receptors.NewStomaHandler(mock)
-	seedRest := receptors.NewSeedHandler(mock)
-	gitRest := receptors.NewGitHandler(mock)
+	gate := &receptors.DelegationGate{
+		Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
+			Pollen: "parity-pollen",
+			OperationClasses: []string{
+				core.CapStomaPass,
+				core.CapSeedGrow,
+				core.CapGitCommit,
+				core.CapGitPush,
+				core.CapGitPR,
+				core.CapGitBranch,
+				core.CapGitStatus,
+				core.CapGitBranchList,
+				core.CapGitPrune,
+			},
+			Substrates: []string{"core"},
+		}}),
+	}
+
+	stomaRest := receptors.NewStomaHandler(mock).WithDelegation(gate)
+	seedRest := receptors.NewSeedHandler(mock).WithDelegation(gate)
+	gitRest := receptors.NewGitHandler(mock).WithDelegation(gate)
 	mux := http.NewServeMux()
 	rest.Register(mux, nil)
 	genomeRest.Register(mux, nil)
@@ -852,11 +871,11 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	traitRest.Register(mux, nil)
 	sequenceRest.Register(mux, nil)
 	sproutRest.Register(mux, nil)
-	stomaRest.Register(mux, nil)
-	seedRest.Register(mux, nil)
-	gitRest.Register(mux, nil)
+	stomaRest.Register(mux, gate.Middleware)
+	seedRest.Register(mux, gate.Middleware)
+	gitRest.Register(mux, gate.Middleware)
 
-	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock)
+	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock).WithDelegation(gate, "parity-pollen")
 
 	return mock, mux, mcp
 }
@@ -942,6 +961,128 @@ func TestBehavioralParity(t *testing.T) {
 			cliSubcommand: "delete",
 			cliArgs:       []string{sessionID},
 		},
+		{
+			name:   core.CapListPhytomers,
+			method: "ListSessions",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/sessions")
+				if err != nil {
+					t.Fatalf("REST phytomer.list: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "list",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapUpdatePhytomer,
+			method: "UpdateSessionPreferences",
+			want: core.UpdateSessionInput{
+				SessionID:   sessionID,
+				Preferences: session.Preferences{Model: "claude-sonnet"},
+			},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				body := bytes.NewBufferString(`{"preferences":{"model":"claude-sonnet"}}`)
+				req, err := http.NewRequest(http.MethodPatch, serverURL+"/v1/sessions/"+sessionID, body)
+				if err != nil {
+					t.Fatalf("build REST phytomer.update request: %v", err)
+				}
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatalf("REST phytomer.update: %v", err)
+				}
+				return resp
+			},
+			mcpParams: map[string]any{
+				"sessionId":   sessionID,
+				"preferences": map[string]any{"model": "claude-sonnet"},
+			},
+			cliSubcommand: "update",
+			cliArgs:       []string{sessionID, "--model", "claude-sonnet"},
+		},
+		{
+			name:   core.CapPhytomerHistory,
+			method: "SessionHistory",
+			want: core.SessionHistoryInput{
+				SessionID: sessionID,
+				Limit:     10,
+			},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/sessions/" + sessionID + "/history?limit=10")
+				if err != nil {
+					t.Fatalf("REST phytomer.history: %v", err)
+				}
+				return resp
+			},
+			mcpParams: map[string]any{
+				"sessionId": sessionID,
+				"limit":     10,
+			},
+			cliSubcommand: "history",
+			cliArgs:       []string{sessionID, "--limit", "10"},
+		},
+		{
+			name:   core.CapGenomeView,
+			method: "GenomeView",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/genome")
+				if err != nil {
+					t.Fatalf("REST genome.view: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "view",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapGenomeEvolve,
+			method: "GenomeEvolve",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Post(serverURL+"/v1/genome/evolve", "application/json", nil)
+				if err != nil {
+					t.Fatalf("REST genome.evolve: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "evolve",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapPlasmidList,
+			method: "PlasmidList",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/plasmids")
+				if err != nil {
+					t.Fatalf("REST plasmid.list: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "list",
+			cliArgs:       []string{},
+		},
+		{
+			name:   core.CapSequenceList,
+			method: "SequenceList",
+			want:   struct{}{},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				resp, err := http.Get(serverURL + "/v1/sequences")
+				if err != nil {
+					t.Fatalf("REST sequence.list: %v", err)
+				}
+				return resp
+			},
+			mcpParams:     map[string]any{},
+			cliSubcommand: "list",
+			cliArgs:       []string{},
+		},
 	}
 
 	for _, tc := range cases {
@@ -1009,18 +1150,50 @@ func TestBehavioralParity(t *testing.T) {
 			// the real production functions, substituting only the mock for
 			// the terminal Core.Invoke call.
 			mock.reset()
-			command, ok := lookupSessionCommand(tc.cliSubcommand)
-			if !ok {
-				t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+
+			var commandCapability string
+			var input map[string]any
+
+			switch {
+			case strings.HasPrefix(tc.name, "phytomer."):
+				command, ok := lookupSessionCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parseSessionArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "genome."):
+				command, ok := lookupGenomeCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parseGenomeArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "plasmid."):
+				command, ok := lookupPlasmidCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, err = parsePlasmidArgs(command.capability, tc.cliArgs)
+			case strings.HasPrefix(tc.name, "sequence."):
+				command, ok := lookupSequenceCommand(tc.cliSubcommand)
+				if !ok {
+					t.Fatalf("CLI %s: no subcommand registered for %q", tc.name, tc.cliSubcommand)
+				}
+				commandCapability = command.capability
+				input, _, err = parseSequenceArgs(command.capability, tc.cliArgs)
+			default:
+				t.Fatalf("CLI %s: untested capability prefix", tc.name)
 			}
-			if command.capability != tc.name {
-				t.Fatalf("CLI subcommand %q maps to capability %q, want %q", tc.cliSubcommand, command.capability, tc.name)
+
+			if commandCapability != tc.name {
+				t.Fatalf("CLI subcommand %q maps to capability %q, want %q", tc.cliSubcommand, commandCapability, tc.name)
 			}
-			input, err := parseSessionArgs(command.capability, tc.cliArgs)
 			if err != nil {
-				t.Fatalf("CLI %s: parseSessionArgs: %v", tc.name, err)
+				t.Fatalf("CLI %s: parseArgs: %v", tc.name, err)
 			}
-			if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+			if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
 				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
 			}
 			cliCalls := mock.inputsFor(tc.method)
@@ -1294,33 +1467,90 @@ func TestBehavioralParity_MeshPromote(t *testing.T) {
 	}
 	assertOnePromoteCall(t, "CLI")
 
-	// --- Graft, quickly: same four paths must reach MeshGraft ------------------
+}
+
+// TestBehavioralParity_MeshGraft extends the zero-business-logic proof to
+// the substrate-grafting family's mesh.graft capability.
+func TestBehavioralParity_MeshGraft(t *testing.T) {
+	want := core.MeshGraftInput{Substrate: "core"}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOneGraftCall := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("MeshGraft")
+		if len(calls) != 1 {
+			t.Fatalf("%s mesh.graft: Core.MeshGraft called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s mesh.graft: Core.MeshGraft received %#v, want %#v", surface, calls[0], want)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
 	mock.reset()
-	graftResp, err := http.Post(server.URL+"/v1/mesh/grafts", "application/json",
+	resp, err := http.Post(server.URL+"/v1/mesh/grafts", "application/json",
 		bytes.NewBufferString(`{"substrate":"core"}`))
 	if err != nil {
 		t.Fatalf("REST mesh.graft: %v", err)
 	}
-	defer graftResp.Body.Close()
-	if graftResp.StatusCode >= 300 {
-		body, _ := io.ReadAll(graftResp.Body)
-		t.Fatalf("REST mesh.graft status = %d, body = %s", graftResp.StatusCode, body)
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST mesh.graft status = %d, body = %s", resp.StatusCode, body)
 	}
-	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
-		t.Fatalf("REST mesh.graft: Core.MeshGraft called %d times, want 1", len(calls))
-	}
+	assertOneGraftCall(t, "REST")
 
+	// --- MCP (governed name) --------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
 	mock.reset()
-	graftAlias := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"graftSubstrate","arguments":{"substrate":"core"}}}`))
-	if err := json.Unmarshal(graftAlias, &parsed); err != nil {
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.graft","arguments":{"substrate":"core"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP mesh.graft response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP mesh.graft failed: %s", mcpResp)
+	}
+	assertOneGraftCall(t, "MCP")
+
+	// --- MCP (deprecated graftSubstrate alias) --------------------------------
+	mock.reset()
+	aliasResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"graftSubstrate","arguments":{"substrate":"core"}}}`))
+	if err := json.Unmarshal(aliasResp, &parsed); err != nil {
 		t.Fatalf("parse MCP graftSubstrate response: %v", err)
 	}
 	if parsed.Error != nil || parsed.Result.IsError {
-		t.Fatalf("MCP graftSubstrate alias failed: %s", graftAlias)
+		t.Fatalf("MCP graftSubstrate alias failed: %s", aliasResp)
 	}
-	if calls := mock.inputsFor("MeshGraft"); len(calls) != 1 {
-		t.Fatalf("MCP graftSubstrate alias: Core.MeshGraft called %d times, want 1", len(calls))
+	assertOneGraftCall(t, "MCP alias")
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupMeshCommand("graft")
+	if !ok {
+		t.Fatal("CLI: no mesh subcommand registered for \"graft\"")
 	}
+	if command.capability != core.CapMeshGraft {
+		t.Fatalf("CLI subcommand \"graft\" maps to %q, want %q", command.capability, core.CapMeshGraft)
+	}
+	input, err := parseMeshArgs(command.capability, []string{"core"})
+	if err != nil {
+		t.Fatalf("CLI parseMeshArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI mesh.graft: Core.Invoke: %v", err)
+	}
+	assertOneGraftCall(t, "CLI")
 }
 
 // TestBehavioralParity_MeshTraits extends the zero-business-logic proof to
@@ -1765,4 +1995,307 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 		t.Fatalf("CLI sprout.grow: Core.Invoke: %v", err)
 	}
 	assertOneRunCall(t, "CLI", want)
+}
+
+// TestBehavioralParity_StomaPass extends the zero-business-logic proof to
+// the stoma family.
+func TestBehavioralParity_StomaPass(t *testing.T) {
+	want := core.StomaPassInput{Substrate: "core", Command: []string{"echo", "hello"}, Origin: "parity-origin"}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOnePassCall := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("StomaPass")
+		if len(calls) != 1 {
+			t.Fatalf("%s stoma.pass: Core.StomaPass called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s stoma.pass: Core.StomaPass received %#v, want %#v", surface, calls[0], want)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/stoma/pass", "application/json",
+		bytes.NewBufferString(`{"substrate":"core","command":["echo","hello"],"origin":"parity-origin"}`))
+	if err != nil {
+		t.Fatalf("REST stoma.pass: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST stoma.pass status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOnePassCall(t, "REST")
+
+	// --- MCP ------------------------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stoma.pass","arguments":{"substrate":"core","command":["echo","hello"],"origin":"parity-origin"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP stoma.pass response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP stoma.pass failed: %s", mcpResp)
+	}
+	assertOnePassCall(t, "MCP")
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupStomaCommand("pass")
+	if !ok {
+		t.Fatal("CLI: no stoma subcommand registered for \"pass\"")
+	}
+	if command.capability != core.CapStomaPass {
+		t.Fatalf("CLI subcommand \"pass\" maps to %q, want %q", command.capability, core.CapStomaPass)
+	}
+	input, err := parseStomaArgs(command.capability, []string{"--substrate", "core", "--origin", "parity-origin", "--", "echo", "hello"})
+	if err != nil {
+		t.Fatalf("CLI parseStomaArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI stoma.pass: Core.Invoke: %v", err)
+	}
+	assertOnePassCall(t, "CLI")
+}
+
+// TestBehavioralParity_SeedGrow extends the zero-business-logic proof to
+// the seed family.
+func TestBehavioralParity_SeedGrow(t *testing.T) {
+	want := core.SeedGrowInput{Substrate: "core", Goal: "fix test", Verify: []string{"go", "test", "./..."}, Origin: "parity-origin"}
+
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	ctx := context.Background()
+
+	assertOneGrowCall := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("SeedGrow")
+		if len(calls) != 1 {
+			t.Fatalf("%s seed.grow: Core.SeedGrow called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s seed.grow: Core.SeedGrow received %#v, want %#v", surface, calls[0], want)
+		}
+	}
+
+	// --- REST -----------------------------------------------------------------
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/seeds/grow", "application/json",
+		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}`))
+	if err != nil {
+		t.Fatalf("REST seed.grow: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST seed.grow status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertOneGrowCall(t, "REST")
+
+	// --- MCP ------------------------------------------------------------------
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seed.grow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}}}`))
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP seed.grow response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP seed.grow failed: %s", mcpResp)
+	}
+	assertOneGrowCall(t, "MCP")
+
+	// --- CLI --------------------------------------------------------------------
+	mock.reset()
+	command, ok := lookupSeedCommand("grow")
+	if !ok {
+		t.Fatal("CLI: no seed subcommand registered for \"grow\"")
+	}
+	if command.capability != core.CapSeedGrow {
+		t.Fatalf("CLI subcommand \"grow\" maps to %q, want %q", command.capability, core.CapSeedGrow)
+	}
+	input, err := parseSeedArgs(command.capability, []string{"--substrate", "core", "--goal", "fix test", "--origin", "parity-origin", "--", "go", "test", "./..."})
+	if err != nil {
+		t.Fatalf("CLI parseSeedArgs: %v", err)
+	}
+	if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+		t.Fatalf("CLI seed.grow: Core.Invoke: %v", err)
+	}
+	assertOneGrowCall(t, "CLI")
+}
+
+// TestBehavioralParity_Git extends the zero-business-logic proof to
+// the git family of capabilities.
+func TestBehavioralParity_Git(t *testing.T) {
+	cases := []struct {
+		name          string
+		method        string
+		want          any
+		restPath      string
+		restBody      string
+		mcpArgs       string
+		cliSubcommand string
+		cliArgs       []string
+	}{
+		{
+			name:          core.CapGitCommit,
+			method:        "GitCommit",
+			want:          core.GitCommitInput{Substrate: "core", Message: "hello", Origin: "parity-origin"},
+			restPath:      "/v1/git/commit",
+			restBody:      `{"substrate":"core","message":"hello","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","message":"hello","origin":"parity-origin"}`,
+			cliSubcommand: "commit",
+			cliArgs:       []string{"--substrate", "core", "--message", "hello", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitPush,
+			method:        "GitPush",
+			want:          core.GitPushInput{Substrate: "core", Branch: "feat", Origin: "parity-origin"},
+			restPath:      "/v1/git/push",
+			restBody:      `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
+			cliSubcommand: "push",
+			cliArgs:       []string{"--substrate", "core", "--branch", "feat", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitPR,
+			method:        "GitPR",
+			want:          core.GitPRInput{Substrate: "core", Title: "hello", Head: "feat", Origin: "parity-origin"},
+			restPath:      "/v1/git/pr",
+			restBody:      `{"substrate":"core","title":"hello","head":"feat","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","title":"hello","head":"feat","origin":"parity-origin"}`,
+			cliSubcommand: "pr",
+			cliArgs:       []string{"--substrate", "core", "--title", "hello", "--head", "feat", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitBranch,
+			method:        "GitBranch",
+			want:          core.GitBranchInput{Substrate: "core", Branch: "feat", Origin: "parity-origin"},
+			restPath:      "/v1/git/branch",
+			restBody:      `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","branch":"feat","origin":"parity-origin"}`,
+			cliSubcommand: "branch",
+			cliArgs:       []string{"--substrate", "core", "--branch", "feat", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitStatus,
+			method:        "GitStatus",
+			want:          core.GitStatusInput{Substrate: "core", Origin: "parity-origin"},
+			restPath:      "/v1/git/status",
+			restBody:      `{"substrate":"core","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","origin":"parity-origin"}`,
+			cliSubcommand: "status",
+			cliArgs:       []string{"--substrate", "core", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitBranchList,
+			method:        "GitBranchList",
+			want:          core.GitBranchListInput{Substrate: "core", Origin: "parity-origin"},
+			restPath:      "/v1/git/branches",
+			restBody:      `{"substrate":"core","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","origin":"parity-origin"}`,
+			cliSubcommand: "branches",
+			cliArgs:       []string{"--substrate", "core", "--origin", "parity-origin"},
+		},
+		{
+			name:          core.CapGitPrune,
+			method:        "GitPrune",
+			want:          core.GitPruneInput{Substrate: "core", Confirm: true, Origin: "parity-origin"},
+			restPath:      "/v1/git/prune",
+			restBody:      `{"substrate":"core","confirm":true,"origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","confirm":true,"origin":"parity-origin"}`,
+			cliSubcommand: "prune",
+			cliArgs:       []string{"--substrate", "core", "--confirm", "--origin", "parity-origin"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock, mux, mcp := newMockParityFixture(t)
+			server := httptest.NewServer(mux)
+			defer server.Close()
+			ctx := context.Background()
+
+			assertOneGitCall := func(t *testing.T, surface string) {
+				t.Helper()
+				calls := mock.inputsFor(tc.method)
+				if len(calls) != 1 {
+					t.Fatalf("%s %s: Core.%s called %d times, want 1", surface, tc.name, tc.method, len(calls))
+				}
+				if !reflect.DeepEqual(calls[0], tc.want) {
+					t.Errorf("%s %s: Core.%s received %#v, want %#v", surface, tc.name, tc.method, calls[0], tc.want)
+				}
+			}
+
+			// --- REST -----------------------------------------------------------------
+			mock.reset()
+			resp, err := http.Post(server.URL+tc.restPath, "application/json",
+				bytes.NewBufferString(tc.restBody))
+			if err != nil {
+				t.Fatalf("REST %s: %v", tc.name, err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode >= 300 {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("REST %s status = %d, body = %s", tc.name, resp.StatusCode, body)
+			}
+			assertOneGitCall(t, "REST")
+
+			// --- MCP ------------------------------------------------------------------
+			var parsed struct {
+				Result struct {
+					IsError bool `json:"isError"`
+				} `json:"result"`
+				Error *struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			mock.reset()
+			mcpResp := mcp.ProcessMCPMessage([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, tc.name, tc.mcpArgs)))
+			if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+				t.Fatalf("parse MCP %s response: %v", tc.name, err)
+			}
+			if parsed.Error != nil || parsed.Result.IsError {
+				t.Fatalf("MCP %s failed: %s", tc.name, mcpResp)
+			}
+			assertOneGitCall(t, "MCP")
+
+			// --- CLI --------------------------------------------------------------------
+			mock.reset()
+			command, ok := lookupGitCommand(tc.cliSubcommand)
+			if !ok {
+				t.Fatalf("CLI: no git subcommand registered for %q", tc.cliSubcommand)
+			}
+			if command.capability != tc.name {
+				t.Fatalf("CLI subcommand %q maps to %q, want %q", tc.cliSubcommand, command.capability, tc.name)
+			}
+			input, err := parseGitArgs(command.capability, tc.cliArgs)
+			if err != nil {
+				t.Fatalf("CLI parseGitArgs: %v", err)
+			}
+			if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
+				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
+			}
+			assertOneGitCall(t, "CLI")
+		})
+	}
 }
