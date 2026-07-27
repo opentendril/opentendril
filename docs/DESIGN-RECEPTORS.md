@@ -19,7 +19,7 @@
 - **Plasmid Rule Adapter (`cmd/stem/internal/receptors/plasmid.go`):** Implements `PlasmidHandler`, mapping `GET /v1/plasmids` and `POST /v1/plasmids/inject` to Core plasmid injection.
 - **Mesh Grafting & Trait Adapters (`cmd/stem/internal/receptors/mesh.go`, `cmd/stem/internal/receptors/graft.go`):** Implements `GraftHandler` (`POST /v1/mesh/grafts`, `POST /v1/mesh/promotions`) and `TraitHandler` (`GET /v1/mesh/traits`, `POST /v1/mesh/traits/{id}/accept`, `POST /v1/mesh/traits/{id}/reject`) over Core mesh operations.
 - **Pollinator Token Minting Adapter (`cmd/stem/internal/receptors/pollinatortoken.go`):** Implements `PollinatorTokenHandler` (`POST /v1/pollinator/token`), authenticating durable Pollinator refresh roots to mint short-lived Stem-signed access tokens.
-- **MCP Protocol Surface (`cmd/stem/internal/receptors/mcp.go`):** Implements `MCPHandler`, serving stdio/JSON-RPC protocol initializations (`initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call`), dynamically projecting Core capabilities and deprecated legacy tool aliases (`sproutTendril`, `runSequence`, `viewGenome`, `reduceGenome`, `injectPlasmid`, `graftSubstrate`, `promotePR`), maintaining local genotype index files (`index.yaml`), and enforcing bind-time Pollen delegation authorization (`authorizeDelegatedTool`).
+- **MCP Protocol Surface (`cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance)):** Implements `MCPHandler`, serving stdio/JSON-RPC protocol initializations (`initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call`), dynamically projecting Core capabilities and deprecated legacy tool aliases (`sproutTendril`, `runSequence`, `viewGenome`, `reduceGenome`, `injectPlasmid`, `graftSubstrate`, `promotePR`), maintaining local genotype index files (`index.yaml`), and enforcing bind-time Pollen delegation authorization (`authorizeDelegatedTool`).
 
 **Does not:**
 
@@ -74,7 +74,7 @@ The package exports approximately 108 symbols across exported types, constructor
 
 ## Limitations
 
-- **Monolithic `mcp.go` size and breadth (`cmd/stem/internal/receptors/mcp.go`):** At 1,279 lines, `cmd/stem/internal/receptors/mcp.go` combines JSON-RPC protocol parsing, tool registration, deprecated tool alias adapters, typed parameter conversions (`callStomaPass`, `callSeedGrow`), and disk-based genotype YAML index generation (`syncGenotypeIndex`, `collectGenotypeIndex`, `writeGenotypeIndex`) into a single file.
+- **Monolithic `mcp.go` size and breadth:** (Resolved) The original monolithic file has been split into `cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance) to separate these unrelated concerns.
 - **Surface Asymmetries:**
   - Asynchronous sprout (`POST /v1/phytomers/{sessionId}/sprout/grow`) and seed growth collection (`GET /v1/seeds/runs/{handle}`) exist on REST handlers (`SproutHandler`, `SeedHandler`) but have no corresponding MCP tool equivalents.
 - **Delegation Gate Posture on Tokens:** `AccessTokenVerifier` and `DelegatedPollen` in `cmd/stem/internal/receptors/config.go` fail closed for unverifiable or missing tokens, but a plain bearer request presenting no Pollen marker header bypasses the delegation gate for ungoverned REST routes.
