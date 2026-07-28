@@ -24,7 +24,7 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 
 - Own any CLI, REST, MCP, or WebSocket wiring — surfaces in `cmd/stem` open the store and attach it; this package is storage only.
 - Prune, expire, vacuum, or cap growth — no retention logic exists; the `events` table grows with every published event.
-- Version or migrate the schema beyond `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`; there is no migration table and no `ALTER` path.
+- Migrate the schema. While a version row (`schemaMeta`) now exists to fail-closed against a newer-than-supported version, there is currently no `ALTER` path or actual migration framework since the schema has never changed.
 - Block the orchestrator hot path — as an EventBus sink, persistence failures are counted and logged sparsely, never propagated back to `Publish`.
 - Define or resolve session/event semantics — it stores the `session` and `eventbus` types verbatim and translates none of them.
 
@@ -74,7 +74,7 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 - **Single-writer concurrency ceiling.** `Open` sets `db.SetMaxOpenConns(1)`; the CGO-free driver serializes access per connection, and WAL plus `busy_timeout = 5000` avoids `SQLITE_BUSY` under the concurrent gateway surfaces. All writes funnel through one connection — adequate for a local Stem, not a high-concurrency multi-writer store.
 - **Unbounded growth.** There is no retention, pruning, expiry, or vacuum. Every published event is appended to `events`, and transcripts/diffs/logs are stored in full; the file grows without limit over the life of a workspace.
 - **Encryption scope is payload-only.** Structural and index columns stay plaintext for queries. The Tier-1 auto-key (`.tendril/rhizome.key`) is defense-in-depth, not a boundary against a full `.tendril` read; only `OPEN_TENDRIL_INDEX_KEY` provides a real control (see DESIGN-HEARTWOOD.md). Encryption can be bypassed by setting `TENDRIL_ENCRYPT_AT_REST=false`.
-- **Naive migration handling.** Schema creation is `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` only. There is no schema-version row and no `ALTER TABLE` path, so a column or type change against an existing `.tendril/history.db` is not handled automatically — an old file keeps its old columns.
+- **Naive migration handling.** Schema creation is `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`. A `schemaMeta` version row now exists and is checked on open (a newer-than-supported version fails closed), but no actual migration mechanism exists yet since `currentSchemaVersion` has only ever been `1`. A future schema change still needs to add its own migration step when it happens.
 - **Lossy telemetry, silent by design.** `Consume` never returns an error; failures increment `eventErrors` and log only on every 100th failure. Combined with the bus dropping events on a full sink buffer, some telemetry can be lost without a hard signal.
 - **No exported sentinel errors.** Callers cannot match on typed errors; a missing `seed.grow` handle is disambiguated only by `GetSeedRun`'s `found` boolean.
 - **Store/Manager integration is thin on tests.** The package's own round-trip tests exercise each table directly, but the `session.Store`-through-`Manager` path is covered elsewhere only on the nil-store branch (see Findings / open issue reconciliation).
