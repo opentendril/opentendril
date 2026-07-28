@@ -55,7 +55,7 @@ check "no changes at all runs nothing"                  false  false  ""
 
 # The regression this filter exists to prevent: each of these previously
 # matched no rule, selected no jobs, and let the required gate report green.
-check "verifier image is not silently inert"            true   true   sprouts/go-verifier/Dockerfile
+check "verifier image is not silently inert"            true   true   toolchains/go-verifier/Dockerfile
 check "sprout image is not silently inert"              true   true   sprouts/go/Dockerfile
 check "sequence definitions are not silently inert"     true   true   .tendril/sequences/codex-delegate.yaml
 check "unknown top-level file is not silently inert"    true   true   some-new-thing.yaml

@@ -4,7 +4,7 @@ The polyglot stateless tool-execution container fleet the Stem drives over a std
 
 ## Purpose
 
-This component provides the execution terrariums for OpenTendril's tools. It splits the architecture by moving the LLM ReAct loop entirely to the host (the Stem) while the sprouts act as purely stateless, "dumb" tool executors. The fleet is divided into two distinct categories: protocol executors that speak the JSON tool protocol to run tasks, and toolchain/command images that start idle and allow the Conductor to exec deterministic build/test commands directly.
+This component provides the execution terrariums for OpenTendril's tools. It splits the architecture by moving the LLM ReAct loop entirely to the host (the Stem) while the sprouts act as purely stateless, "dumb" tool executors. The fleet is divided into two distinct categories: protocol executors that speak the JSON tool protocol to run tasks (located in `sprouts/`), and toolchain/command images that start idle and allow the Conductor to exec deterministic build/test commands directly (located in `toolchains/`).
 
 ## Responsibilities
 
@@ -13,7 +13,7 @@ This component provides the execution terrariums for OpenTendril's tools. It spl
 *   **Does:** Run local filesystem, git, and shell command tools (e.g., `readFile`, `writeFile`, `gitCommit`, `execCommand`).
 *   **Does:** Return JSON-formatted execution results to `stdout`.
 
-### Toolchain Images (`sprouts/go-verifier/Dockerfile`, `sprouts/go-fuzz/Dockerfile`)
+### Toolchain Images (`toolchains/go-verifier/Dockerfile`, `toolchains/go-fuzz/Dockerfile`)
 *   **Does:** Provide a complete language toolchain (e.g., the Go compiler) available at container runtime.
 *   **Does:** Start idle (`tail -f /dev/null`) to allow Conductor to exec commands directly into them via `terrarium.Terrarium.Run`.
 
@@ -21,7 +21,7 @@ This component provides the execution terrariums for OpenTendril's tools. It spl
 *   **Does not:** Run the LLM ReAct loop (this is handled by the host).
 *   **Does not:** Import or link any OpenTendril Go package (fully decoupled).
 *   **Does not:** Persist state across invocations.
-*   **Does not:** Speak the tool protocol at all (applies strictly to toolchain images like `go-verifier` and `go-fuzz`).
+*   **Does not:** Speak the tool protocol at all (applies strictly to toolchain images like `toolchains/go-verifier` and `toolchains/go-fuzz`).
 
 ## Public interface
 
@@ -52,12 +52,11 @@ The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `w
 ## Dependencies
 
 *   **Fan-out:** None. Each executor is a standalone program importing no OpenTendril package. They are fully decoupled leaves that rely only on their respective language standard libraries and runtime dependencies (e.g., Node.js for TypeScript/Node).
-*   **Fan-in:** Coupling is entirely via runtime image invocation, not a Go dependency edge. The Conductor's terrarium (`cmd/stem/internal/conductor/docker.go`) builds and invokes the images (`opentendril-go:latest`, `opentendril-typescript:latest`, `opentendril-python:latest`, `opentendril-node:latest`) and execs deterministic commands into `go-verifier` and `go-fuzz` for verifier/Macrophage steps.
+*   **Fan-in:** Coupling is entirely via runtime image invocation, not a Go dependency edge. The Conductor's terrarium (`cmd/stem/internal/conductor/docker.go`) builds and invokes the images (`opentendril-go:latest`, `opentendril-typescript:latest`, `opentendril-python:latest`, `opentendril-node:latest`) and execs deterministic commands into `toolchains/go-verifier` and `toolchains/go-fuzz` for verifier/Macrophage steps.
 
 ## Limitations
 
 *   The tool sets are static and implemented independently per language, and they already diverge: `sprouts/python/src/main.py` exposes a `runPytest` tool that `sprouts/go/main.go` does not. While `listAvailableTools` allows dynamic discovery, keeping the tools and their JSON contracts synchronized across four separate implementations invites further drift.
-*   `sprouts/go-verifier/Dockerfile` and `sprouts/go-fuzz/Dockerfile` are named as "sprouts" and placed in the `sprouts/` directory, but they are toolchain images that do not implement the tool protocol at all, causing a category confusion.
 
 ## Design & rationale
 
