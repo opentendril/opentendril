@@ -2,6 +2,7 @@ package healthmon
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
@@ -28,6 +29,10 @@ type Monitor struct {
 	bus      *eventbus.Bus
 	interval time.Duration
 	checks   []HealthCheck
+
+	mu          sync.Mutex
+	hasRun      bool
+	lastOverall bool
 }
 
 func New(bus *eventbus.Bus, interval time.Duration) *Monitor {
@@ -100,9 +105,20 @@ func (m *Monitor) RunOnce(ctx context.Context) HealthReport {
 
 func (m *Monitor) runAndPublish(ctx context.Context) HealthReport {
 	report := m.RunOnce(ctx)
+
+	m.mu.Lock()
+	hadRun := m.hasRun
+	wasHealthy := m.lastOverall
+	m.hasRun = true
+	m.lastOverall = report.Overall
+	m.mu.Unlock()
+
 	m.publish(eventbus.EventHealthCheck, report)
-	if !report.Overall {
+	switch {
+	case !report.Overall:
 		m.publish(eventbus.EventHealthDegraded, report)
+	case hadRun && !wasHealthy:
+		m.publish(eventbus.EventHealthRecovered, report)
 	}
 	return report
 }
