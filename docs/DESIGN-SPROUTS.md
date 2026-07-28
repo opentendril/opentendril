@@ -58,7 +58,6 @@ The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `w
 
 *   The tool sets are static and implemented independently per language, and they already diverge: `sprouts/python/src/main.py` exposes a `runPytest` tool that `sprouts/go/main.go` does not. While `listAvailableTools` allows dynamic discovery, keeping the tools and their JSON contracts synchronized across four separate implementations invites further drift.
 
-
 ## Design & rationale
 
 This architecture migrates the reasoning loop to the host, ensuring that the containerized execution environments (sprouts) are stateless, fast to start, and easily replaceable. 
