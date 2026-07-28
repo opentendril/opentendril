@@ -27,10 +27,10 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
-	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/cmd/stem/internal/triggers"
 )
 
 type ChatCompletionRequest struct {
@@ -515,13 +515,13 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 	return func(ctx context.Context, name string, e scheduler.Entry) error {
 		// Hormonal Triggers gate every scheduled run pre-fire (mirroring the
 		// chat path in handleChatCompletions).
-		payload := security.TriggerPayload{Genotype: e.Model, Transcript: e.Sequence}
+		payload := triggers.TriggerPayload{Genotype: e.Model, Transcript: e.Sequence}
 		if e.Sprout != nil {
 			payload.Genotype = firstNonEmpty(e.Sprout.Genotype, e.Sprout.Model, e.Model)
 			payload.Transcript = e.Sprout.Transcript
 		}
 		mode, runner := resolveTriggerModeAndRunner(bus)
-		if err := security.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
+		if err := triggers.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
 			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
 			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
 		}
@@ -793,14 +793,14 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		completionID := fmt.Sprintf("chatcmpl-%d", runStamp)
 
 		// Phase 3 Part 2: Hormonal Triggers (Pre-execution Security)
-		payload := security.TriggerPayload{
+		payload := triggers.TriggerPayload{
 			Genotype:   model,
 			Transcript: taskPrompt,
 		}
 
 		triggersDir := getTriggersDir()
 		mode, runner := resolveTriggerModeAndRunner(bus)
-		if err := security.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
+		if err := triggers.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
 			log.Printf("Sprout blocked by Hormonal Triggers: %v", err)
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
@@ -936,7 +936,7 @@ type terrariumRunner struct {
 	bus          *eventbus.Bus
 }
 
-func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payload security.TriggerPayload) error {
+func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payload triggers.TriggerPayload) error {
 	obs := terrarium.ActivationObserver(func(name string) {
 		r.bus.Publish(eventbus.Event{
 			Type:   eventbus.EventHostExecutionActivated,
@@ -1005,13 +1005,13 @@ func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payl
 	return nil
 }
 
-func resolveTriggerModeAndRunner(bus *eventbus.Bus) (security.TriggerMode, security.TriggerRunner) {
+func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, triggers.TriggerRunner) {
 	modeStr := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_TRIGGERS_MODE")))
-	var mode security.TriggerMode
-	if modeStr == string(security.ModeDisabled) {
-		mode = security.ModeDisabled
+	var mode triggers.TriggerMode
+	if modeStr == string(triggers.ModeDisabled) {
+		mode = triggers.ModeDisabled
 	} else {
-		mode = security.ModeEnforce
+		mode = triggers.ModeEnforce
 	}
 
 	providerName := ""
