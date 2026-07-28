@@ -228,3 +228,49 @@ func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 		t.Fatal("expected rawConn.ReadMessage to error after dropAndClose, got nil")
 	}
 }
+
+func TestGatewayPongExtendsReadDeadline(t *testing.T) {
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// Drain the initial "connected" handshake
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read connected message: %v", err)
+	}
+
+	// Send an explicit pong control frame
+	err = conn.WriteControl(websocket.PongMessage, []byte{}, time.Now().Add(time.Second))
+	if err != nil {
+		t.Fatalf("write pong control frame: %v", err)
+	}
+
+	// Publish an event and verify the server still sends it to us,
+	// proving the connection didn't immediately die or error on the pong.
+	bus.Publish(eventbus.Event{
+		Type:   eventbus.EventSproutEmerged,
+		Source: "pong-test",
+	})
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, eventPayload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read event message after pong: %v", err)
+	}
+
+	var eventMsg map[string]interface{}
+	if err := json.Unmarshal(eventPayload, &eventMsg); err != nil {
+		t.Fatalf("decode event message: %v", err)
+	}
+	if eventMsg["source"] != "pong-test" {
+		t.Fatalf("event source = %v, want pong-test", eventMsg["source"])
+	}
+}

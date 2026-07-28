@@ -17,6 +17,17 @@ import (
 // in-memory history window).
 const maxReplay = 100
 
+const (
+	// pingPeriod is how often writePump sends a Ping to keep the connection
+	// alive and detect a dead peer.
+	pingPeriod = 50 * time.Second
+
+	// pongWait is how long the server waits for a pong (or any other client
+	// frame) before treating the connection as dead. It must exceed
+	// pingPeriod so a single round-trip has room to complete.
+	pongWait = 60 * time.Second
+)
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for the gateway
@@ -55,6 +66,12 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			conn: conn,
 			send: make(chan []byte, 256),
 		}
+
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		conn.SetPongHandler(func(string) error {
+			conn.SetReadDeadline(time.Now().Add(pongWait))
+			return nil
+		})
 
 		handler := func(event eventbus.Event) {
 			msg := map[string]interface{}{
@@ -139,7 +156,7 @@ func (c *client) readPump() {
 }
 
 func (c *client) writePump() {
-	ticker := time.NewTicker(50 * time.Second)
+	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
