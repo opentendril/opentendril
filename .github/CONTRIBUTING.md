@@ -140,14 +140,15 @@ OpenTendril is an **AI-SDLC** workspace, meaning you will see issues and draft P
 
 As a human contributor, your workflow is simple and respects the same quality gates:
 1. **Sign your commits.** See the section above. This is not optional — the push is rejected otherwise.
-2. **Create a Branch:** Create a branch from `main` prefixed with `feat/` or `fix/` (e.g., `feat/add-github-provider`).
-3. **Implement Changes:** Stay focused on a single issue/purpose. Keep diffs minimal.
-4. **Verify Locally:** Before pushing, ensure all tests and linters pass:
+2. **Install the git hooks once per clone:** `make hooks`. This catches a gofmt or source-hygiene violation (a banned taxonomy term, a bare GitHub issue reference) at commit time instead of at CI time.
+3. **Create a Branch:** Create a branch from `main` prefixed with `feat/` or `fix/` (e.g., `feat/add-github-provider`).
+4. **Implement Changes:** Stay focused on a single issue/purpose. Keep diffs minimal.
+5. **Verify Locally:** Before pushing, ensure all tests and linters pass:
    ```bash
    make check-all
    ```
-5. **Submit a PR:** Push your branch and open a Pull Request into `main`.
-6. **Review:** A maintainer will review your code. Once approved and the required checks pass, it will be merged.
+6. **Submit a PR:** Push your branch and open a Pull Request into `main`. If your PR description itself needs to avoid a banned taxonomy term, check it first — `bash scripts/check-taxonomy.sh --text <file>` — since a commit-time hook cannot see a PR description.
+7. **Review:** A maintainer will review your code. Once approved and the required checks pass, it will be merged.
 
 ### What the default branch enforces
 
@@ -160,7 +161,7 @@ These are ruleset rules, not conventions — they fail your push or block your m
 * **Review threads must be resolved** before merging.
 * **Required status checks** must pass: `Native PR Gate` (which aggregates the Go and Python suites according to what your change touched), `verify-commits`, and the six Source Hygiene checks — GitHub references, default-branch assumptions, delegated isolation, branch deletion, protected-path ownership, and taxonomy.
 
-`make check-all` covers the language suites locally. The hygiene checks are individual scripts under `scripts/`, and you can run any of them directly — for example `bash scripts/check-taxonomy.sh origin/main`.
+`make check-all` covers the language suites and the taxonomy/issue-ref hygiene checks (`make hygiene`) locally; `make hooks` runs the same two checks on every commit instead of waiting for a push. The remaining hygiene checks (default-branch assumptions, delegated isolation, branch deletion, protected-path ownership) are individual scripts under `scripts/` and can be run directly the same way — for example `bash scripts/check-default-branch-assumptions.sh origin/main`.
 
 ### Changing a protected path
 

@@ -7,10 +7,21 @@
 # lines against a base ref, so pre-existing references never block a PR — it
 # just stops new ones creeping in.
 #
-# Usage: scripts/check-no-issue-refs.sh [base-ref]   (default: origin/main)
+# Usage:
+#   scripts/check-no-issue-refs.sh [base-ref]   lint ADDED lines vs. a base ref (default: origin/main)
+#   scripts/check-no-issue-refs.sh --staged      lint ADDED lines in the staged (not-yet-committed) diff
+#
+# --staged exists for a pre-commit hook: at pre-commit time HEAD is still the
+# previous commit, so a base...HEAD diff cannot see what is about to be
+# committed. Diffing the index against HEAD does.
 set -euo pipefail
 
-base="${1:-origin/main}"
+if [ "${1:-}" = "--staged" ]; then
+  diff_args=(--cached)
+else
+  base="${1:-origin/main}"
+  diff_args=("${base}...HEAD")
+fi
 
 # Forbidden forms: parenthetical issue refs "(#123)"; worded refs like
 # "issue #123", "PR #123", "Design RFC #123", "RFC #123", "impl plan #123";
@@ -20,7 +31,7 @@ pattern='\(#[0-9]+\)|(^|[^[:alnum:]])(issue|issues|PR|pull request|Design RFC|RF
 
 # Excluded: styling/build assets (hex colours), test files (fixtures simulate
 # real GitHub payloads), and this script itself (it names the pattern).
-offenders="$(git diff "${base}...HEAD" -- \
+offenders="$(git diff "${diff_args[@]}" -- \
     ':!*.css' ':!*.scss' ':!ui/**' ':!static/**' ':!*_test.go' \
     ':!scripts/check-no-issue-refs.sh' \
     | grep -E '^\+' | grep -Ev '^\+\+\+' \

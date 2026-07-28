@@ -3,6 +3,12 @@ name: Source Hygiene
 on:
   pull_request:
     branches: [main]
+    # Editing the PR description alone (not pushing a commit) previously never
+    # retriggered this workflow, so a body-only taxonomy/issue-ref fix needed
+    # an empty commit to get a fresh run. `edited` closes that gap; the guards
+    # here are cheap shell scripts, not a build, so re-running on every edit
+    # costs nothing.
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read

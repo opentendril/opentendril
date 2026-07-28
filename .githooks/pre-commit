@@ -2,19 +2,40 @@
 # Auto-format staged Go files with gofmt so a commit can never fail CI's
 # gofmt gate (which runs before the test suite and blocks the whole run).
 #
-# Enable once per clone:  git config core.hooksPath .githooks
+# Enable once per clone:  make hooks   (or: git config core.hooksPath .githooks)
 set -eu
 
 staged_go="$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)"
-[ -z "$staged_go" ] && exit 0
+if [ -n "$staged_go" ]; then
+  # shellcheck disable=SC2086
+  unformatted="$(gofmt -l $staged_go || true)"
+  if [ -n "$unformatted" ]; then
+    echo "pre-commit: gofmt-formatting staged Go files:"
+    echo "$unformatted" | sed 's/^/  /'
+    # shellcheck disable=SC2086
+    gofmt -w $unformatted
+    # shellcheck disable=SC2086
+    git add $unformatted
+  fi
+fi
 
-# shellcheck disable=SC2086
-unformatted="$(gofmt -l $staged_go || true)"
-[ -z "$unformatted" ] && exit 0
-
-echo "pre-commit: gofmt-formatting staged Go files:"
-echo "$unformatted" | sed 's/^/  /'
-# shellcheck disable=SC2086
-gofmt -w $unformatted
-# shellcheck disable=SC2086
-git add $unformatted
+# Source-hygiene guards, run locally instead of only at CI time. CI has
+# caught the same two mistakes repeatedly (a banned taxonomy term, or a bare
+# GitHub issue reference, landing in a repo file) — CI was never wrong to
+# catch them, but every occurrence cost a push-wait-fail-fix-push round-trip
+# this makes unnecessary for the file-diff half of the problem. Neither guard
+# can see a violation typed only into a PR description (that never touches a
+# commit) — see `scripts/check-taxonomy.sh --text` for that half, which stays
+# a manual step before opening a PR.
+failed=0
+if ! bash scripts/check-taxonomy.sh; then
+  failed=1
+fi
+if ! bash scripts/check-no-issue-refs.sh --staged; then
+  failed=1
+fi
+if [ "$failed" -ne 0 ]; then
+  echo
+  echo "pre-commit: hygiene check failed — fix the above, or bypass with 'git commit --no-verify' for a genuine reason."
+  exit 1
+fi
