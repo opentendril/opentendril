@@ -1,6 +1,6 @@
 # Declared phony so the committed root `stem`/`tendril` binaries don't make
 # these targets look "up to date" and get skipped (which broke `make install`).
-.PHONY: stem install stem-all build up down health test-stem test-all clean check-all help
+.PHONY: stem install stem-all build up down health test-stem test-all hooks hygiene clean check-all help
 
 # --- Stem Binaries ---
 STEM_VERSION := 0.2.0
@@ -58,9 +58,19 @@ test-stem: ## Run Go tests in a sterile Docker container
 
 test-all: test-stem ## Run all tests
 
-check-all: ## Full pre-merge gate: clean build + all tests (see .github/CONTRIBUTING.md / TESTING.md)
+hooks: ## Install the repo's git hooks (gofmt-on-commit + source-hygiene guards)
+	git config core.hooksPath .githooks
+	@echo "✅ core.hooksPath set to .githooks — pre-commit now runs gofmt + the taxonomy/issue-ref guards."
+
+hygiene: ## Run the source-hygiene guards locally, mirroring what CI enforces on a PR
+	@git fetch --no-tags origin main
+	bash scripts/check-taxonomy.sh
+	bash scripts/check-no-issue-refs.sh origin/main
+
+check-all: ## Full pre-merge gate: clean build + all tests + source hygiene (see .github/CONTRIBUTING.md / TESTING.md)
 	$(MAKE) stem
 	$(MAKE) test-all
+	$(MAKE) hygiene
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST_DIR) cmd/stem/tendril
