@@ -2,6 +2,8 @@ package healthmon
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,4 +79,121 @@ func TestStartPublishesEvents(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for degraded event")
 	}
+}
+
+// toggleCheck returns whatever *healthy currently points to, letting a test
+// change the value between calls to simulate a real degraded→recovered cycle.
+type toggleCheck struct {
+	name    string
+	healthy *atomic.Bool
+}
+
+func (c toggleCheck) Name() string { return c.name }
+func (c toggleCheck) Check(ctx context.Context) CheckResult {
+	return CheckResult{Healthy: c.healthy.Load(), Message: "toggle"}
+}
+
+func TestRecoveryPublishesAfterObservedDegradedCycle(t *testing.T) {
+	bus := eventbus.New()
+	monitor := New(bus, time.Hour)
+
+	healthy := &atomic.Bool{}
+	healthy.Store(false)
+	monitor.RegisterCheck(toggleCheck{name: "toggle", healthy: healthy})
+
+	degradedEvents := make(chan eventbus.Event, 1)
+	recoveredEvents := make(chan eventbus.Event, 1)
+	bus.Subscribe(eventbus.EventHealthDegraded, func(event eventbus.Event) {
+		degradedEvents <- event
+	})
+	bus.Subscribe(eventbus.EventHealthRecovered, func(event eventbus.Event) {
+		recoveredEvents <- event
+	})
+
+	monitor.RunOnceAndPublish(context.Background())
+
+	select {
+	case <-degradedEvents:
+	default:
+		t.Fatal("expected degraded event")
+	}
+
+	select {
+	case <-recoveredEvents:
+		t.Fatal("did not expect recovered event yet")
+	default:
+	}
+
+	healthy.Store(true)
+	monitor.RunOnceAndPublish(context.Background())
+
+	select {
+	case <-recoveredEvents:
+	default:
+		t.Fatal("expected recovered event")
+	}
+
+	select {
+	case <-degradedEvents:
+		t.Fatal("did not expect another degraded event")
+	default:
+	}
+}
+
+func TestFirstHealthyCycleNeverPublishesRecovered(t *testing.T) {
+	bus := eventbus.New()
+	monitor := New(bus, time.Hour)
+
+	healthy := &atomic.Bool{}
+	healthy.Store(true)
+	monitor.RegisterCheck(toggleCheck{name: "toggle", healthy: healthy})
+
+	recoveredEvents := make(chan eventbus.Event, 1)
+	bus.Subscribe(eventbus.EventHealthRecovered, func(event eventbus.Event) {
+		recoveredEvents <- event
+	})
+
+	monitor.RunOnceAndPublish(context.Background())
+
+	select {
+	case <-recoveredEvents:
+		t.Fatal("did not expect recovered event on first cycle")
+	default:
+	}
+}
+
+func TestRecoveryStateIsRaceSafeAcrossConcurrentCalls(t *testing.T) {
+	bus := eventbus.New()
+	monitor := New(bus, time.Hour)
+
+	healthy := &atomic.Bool{}
+	healthy.Store(true)
+	monitor.RegisterCheck(toggleCheck{name: "toggle", healthy: healthy})
+
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	wg.Add(3)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			monitor.RunOnceAndPublish(ctx)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			monitor.RunOnceAndPublish(ctx)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			healthy.Store(!healthy.Load())
+		}
+	}()
+
+	wg.Wait()
 }
