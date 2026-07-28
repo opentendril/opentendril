@@ -9,7 +9,7 @@
 **Does:**
 
 - Define the `HealthCheck` contract (`Name()` + `Check(ctx) CheckResult`) so probes are pluggable and order-preserving (`monitor.go`).
-- Provide `DefaultChecks()` — the shipped probe set: `DockerDaemonCheck`, `APIKeyCheck`, `DiskSpaceCheck`, `MemoryCheck`, `WorkspaceCheck` (`checks.go`).
+- Provide `DefaultChecks()` — the shipped probe set: `DockerDaemonCheck`, `APIKeyCheck`, `DiskSpaceCheck`, `MemoryCheck`, `WorkspaceCheck` (`checks.go`, `checks_linux.go`, `checks_darwin.go`).
 - Aggregate probe results into a `HealthReport` (`RunOnce`): a UTC timestamp, an `Overall` boolean, and a name-keyed map of every `CheckResult`. `Overall` is false if **any** probe reports `Healthy: false`.
 - Optionally run the probe set on a `time.Ticker` interval in a background goroutine (`Start`), publishing after each cycle and stopping on context cancellation.
 - Publish `health-check` every cycle, `health-degraded` when the report's `Overall` is false, and `health-recovered` on a degraded→healthy transition (`runAndPublish` / `publish`).
@@ -19,8 +19,8 @@
 - Own CLI or HTTP surface wiring — `cmd/stem` (`cmdhealth.go`, `cmdserve.go`) constructs the monitor, registers `DefaultChecks()`, and renders/serves the report.
 - Remediate, retry, or restart anything on a failing probe — a red check only changes what is reported and published.
 - Suppress flaps with debounce or hysteresis: there is no memory beyond the immediate previous cycle to detect a transition, so a flapping probe will emit `health-degraded` and `health-recovered` repeatedly.
-- Configure thresholds or intervals from outside — thresholds are package constants and the interval is a `New` argument (see Limitations).
-- Guarantee cross-platform probing — `MemoryCheck` and `DiskSpaceCheck` are Linux-specific (see Limitations).
+- Configure intervals from outside — the interval is a `New` argument. Thresholds are configurable via environment variables (see Limitations).
+- Guarantee cross-platform probing on all operating systems — `MemoryCheck` and `DiskSpaceCheck` work on Linux and Darwin, but lack Windows support (not a shipped target).
 
 ## Public interface
 
@@ -65,9 +65,9 @@ Package-level sentinel errors: **none.** Probe failures are conveyed as data (`C
 
 - **`Start` and eventbus publishing are wired in production.** `cmdserve.go` calls `healthMonitor.Start(ctx)` to drive the periodic loop and emit events alongside the on-demand `GET /health` path (via `RunOnceAndPublish`). Both paths share one `Monitor` instance.
 - **Transition-based degraded→recovered model.** The monitor keeps track of the previous overall health state. `health-recovered` is published when a genuinely degraded monitor recovers (it is never published on the very first cycle). There is no debounce or hysteresis; this is a deliberate scope decision, not an oversight — a naive transition-based signal is correct for a flapping probe (each real transition is real information), and a probe that jitters every cycle indicates a broken check, better fixed at the check level than papered over with a timer here. A probe that flaps healthy/unhealthy re-emits `health-degraded` and `health-recovered` on every transition with no dedup.
-- **Thresholds are hard-coded package constants** (`checks.go`), not configurable: disk critical `< 100MB` (`Healthy: false`), disk warning `< 1GB` (`Healthy: true`, `severity: warning`), memory warning `< ~500MB` (`Healthy: true`, `severity: warning`). Only the interval is an argument, and a non-positive value is silently coerced to 30s.
+- **Thresholds are configurable via environment variables.** `TENDRIL_HEALTH_DISK_CRITICAL_MB` (default 100), `TENDRIL_HEALTH_DISK_WARNING_MB` (default 1024), and `TENDRIL_HEALTH_MEM_WARNING_MB` (default 500). Invalid or missing values fall back to defaults with a warning. Only the interval is an argument, and a non-positive value is silently coerced to 30s.
 - **`severity` is advisory and decoupled from health.** A `warning` result is still `Healthy: true` and does not move `Overall`; only a `false` `Healthy` degrades the report. `severity` surfaces in the CLI icon and in `Data`, nothing more. `Overall` is a hard AND of booleans — a single red probe degrades the whole report regardless of severity weighting.
-- **Platform-bound probes.** `DiskSpaceCheck` uses `syscall.Statfs` and `MemoryCheck` parses `/proc/meminfo` — both are Linux-only. `DockerDaemonCheck` shells out to a `docker` binary on `PATH`. `WorkspaceCheck` targets a `.tendril` path relative to the current working directory.
+- **Platform-bound probes.** `DiskSpaceCheck` uses `syscall.Statfs` and is portable between Linux and Darwin. `MemoryCheck` has platform-specific implementations: Linux parses `/proc/meminfo` and Darwin shells out to `vm_stat` and `sysctl` (using a free+inactive approximation, not an exact figure like Linux's `MemAvailable`). Neither has Windows support (not a shipped target). `DockerDaemonCheck` shells out to a `docker` binary on `PATH`. `WorkspaceCheck` targets a `.tendril` path relative to the current working directory.
 - **No remediation and no alerting escalation.** A failing probe reports and (when wired) publishes; it never restarts a daemon, frees disk, or rotates a key.
 - **Probes run sequentially in registration order** within a single `RunOnce`; a slow probe (e.g. `docker info` under a stalled daemon) blocks the whole cycle, bounded only by the caller's context.
 - **Interval trade-off.** The 30s default trades detection latency against probe cost (a `docker info` fork and a filesystem write each cycle); faster detection means more churn, and there is no jitter or backoff.
