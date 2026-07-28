@@ -186,28 +186,3 @@ func resolveRepoRoot(path string) string {
 
 	return root
 }
-
-func samePath(a, b string) bool {
-	if a == "" || b == "" {
-		return false
-	}
-
-	aAbs, err := filepath.Abs(a)
-	if err != nil {
-		aAbs = filepath.Clean(a)
-	}
-	bAbs, err := filepath.Abs(b)
-	if err != nil {
-		bAbs = filepath.Clean(b)
-	}
-
-	return filepath.Clean(aAbs) == filepath.Clean(bAbs)
-}
-
-func mustRel(root, target string) string {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return target
-	}
-	return rel
-}
