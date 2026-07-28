@@ -9,7 +9,7 @@
 **Does:**
 
 - Define the `HealthCheck` contract (`Name()` + `Check(ctx) CheckResult`) so probes are pluggable and order-preserving (`monitor.go`).
-- Provide `DefaultChecks()` — the shipped probe set: `DockerDaemonCheck`, `APIKeyCheck`, `DiskSpaceCheck`, `MemoryCheck`, `WorkspaceCheck` (`checks.go`, plus the per-OS `MemoryCheck` backend split across `checks_linux.go`, `checks_darwin.go`, and the platform-agnostic `vm_stat` parser in `checks_vmstat.go`).
+- Provide `DefaultChecks()` — the shipped probe set: `DockerDaemonCheck`, `APIKeyCheck`, `DiskSpaceCheck`, `MemoryCheck`, `WorkspaceCheck` (`checks.go`, plus the per-OS `MemoryCheck` backend split across `checks_linux.go`, `checks_darwin.go`, and the platform-agnostic `vm_stat` parser in `checksvmstat.go`).
 - Aggregate probe results into a `HealthReport` (`RunOnce`): a UTC timestamp, an `Overall` boolean, and a name-keyed map of every `CheckResult`. `Overall` is false if **any** probe reports `Healthy: false`.
 - Optionally run the probe set on a `time.Ticker` interval in a background goroutine (`Start`), publishing after each cycle and stopping on context cancellation.
 - Publish `health-check` every cycle, `health-degraded` when the report's `Overall` is false, and `health-recovered` on a degraded→healthy transition (`runAndPublish` / `publish`).
