@@ -1,8 +1,8 @@
-# Component: Security — the pre-run policy gate.
+# Component: Triggers — the pre-run policy gate.
 
 ## Purpose
 
-`cmd/stem/internal/security` is the self-contained leaf that implements the pre-run policy gate. It implements Hormonal Triggers — a blocked run never grows. The gate evaluates trigger scripts in a directory before a run proceeds.
+`cmd/stem/internal/triggers` is the self-contained leaf that implements the pre-run policy gate. It implements Hormonal Triggers — a blocked run never grows. The gate evaluates trigger scripts in a directory before a run proceeds.
 
 ## Responsibilities
 

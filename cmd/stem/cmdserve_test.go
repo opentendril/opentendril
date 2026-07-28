@@ -14,8 +14,8 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
-	"github.com/opentendril/opentendril/cmd/stem/internal/security"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/triggers"
 )
 
 // Issue finding 1: the Stem must never serve its API unauthenticated.
@@ -359,7 +359,7 @@ func TestTerrariumRunnerPublishesHostActivationEvent(t *testing.T) {
 	// RunTrigger with a non-existent script: the error from the provider itself
 	// won't happen (the host provider is allowed), but the script-exec will fail.
 	// We just need to verify the event fired before the post-activation error.
-	_ = runner.RunTrigger(context.Background(), "/dev/null/no-such-script", security.TriggerPayload{})
+	_ = runner.RunTrigger(context.Background(), "/dev/null/no-such-script", triggers.TriggerPayload{})
 
 	if len(received) != 1 {
 		t.Fatalf("expected exactly 1 %s event, got %d", eventbus.EventHostExecutionActivated, len(received))
@@ -381,7 +381,7 @@ func TestTerrariumRunnerNoEventForDockerProvider(t *testing.T) {
 	// Docker is the default when TENDRIL_ALLOW_HOST_EXECUTION is unset.
 	_, runner := resolveTriggerModeAndRunner(bus)
 	// The script path is irrelevant; we only check the event count.
-	_ = runner.RunTrigger(context.Background(), "/nonexistent", security.TriggerPayload{})
+	_ = runner.RunTrigger(context.Background(), "/nonexistent", triggers.TriggerPayload{})
 
 	if received != 0 {
 		t.Fatalf("expected no host-activation events for docker provider, got %d", received)
