@@ -25,7 +25,6 @@ const (
 	// package free of an eventbus dependency; callers with bus access pass a
 	// closure that publishes this event.
 	EventHostExecutionActivated EventType = "host-execution-activated"
-	EventAPIKeyInvalid          EventType = "api-key-invalid"
 	EventSequenceFailure        EventType = "sequence-failure"
 	EventSequenceComplete       EventType = "sequence-complete"
 	EventStreamToken            EventType = "stream-token"
@@ -50,9 +49,6 @@ const (
 	EventSproutEmerged     EventType = "sprout-emerged"
 	EventSproutMatured     EventType = "sprout-matured"
 	EventSproutWithered    EventType = "sprout-withered"
-	EventHormonalTrigger   EventType = "hormonal-trigger"
-	EventRhizomeUpdate     EventType = "rhizome-update"
-	EventXylemTransport    EventType = "xylem-transport"
 	EventParallelSprouting EventType = "parallel-sprouting"
 	EventMycelialMerge     EventType = "mycelial-merge"
 	// EventPhenotypicSelection reports Genetic Algorithm progress (start,
@@ -76,7 +72,6 @@ func AllEventTypes() []EventType {
 		EventTerrariumOOM,
 		EventTerrariumTimeout,
 		EventHostExecutionActivated,
-		EventAPIKeyInvalid,
 		EventSequenceFailure,
 		EventSequenceComplete,
 		EventStreamToken,
@@ -86,9 +81,6 @@ func AllEventTypes() []EventType {
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,
-		EventHormonalTrigger,
-		EventRhizomeUpdate,
-		EventXylemTransport,
 		EventParallelSprouting,
 		EventMycelialMerge,
 		EventPhenotypicSelection,
