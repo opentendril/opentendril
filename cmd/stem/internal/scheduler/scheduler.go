@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -63,6 +64,9 @@ type Scheduler struct {
 
 	entries []*scheduledEntry
 
+	configPath        string
+	lastConfigModTime time.Time
+
 	// mu guards inFlight and pending. inFlight is the per-entry
 	// one-run-at-a-time latch: concurrent runs of the same sequence corrupt
 	// its YAML step-state, so a fire that lands while the previous run is
@@ -95,16 +99,26 @@ func New(cfg Config, firer Firer, logger *log.Logger) *Scheduler {
 		inFlight: make(map[string]bool),
 		pending:  make(map[string]bool),
 	}
-	if !cfg.Enabled {
-		return s
-	}
+	s.entries = buildEntries(cfg, logger)
+	return s
+}
 
+// buildEntries constructs the runtime entry list from cfg, in sorted name
+// order for deterministic logging/fire order. A disabled config (or one with
+// no schedules) yields an empty slice. Invalid cron expressions are skipped
+// with a warning rather than failing the whole build — LoadConfig already
+// validates every cron up front, so this only guards a hand-built Config.
+func buildEntries(cfg Config, logger *log.Logger) []*scheduledEntry {
+	if !cfg.Enabled {
+		return nil
+	}
 	names := make([]string, 0, len(cfg.Schedules))
 	for name := range cfg.Schedules {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
+	var entries []*scheduledEntry
 	for _, name := range names {
 		entry := cfg.Schedules[name]
 		schedule, err := Parse(entry.Cron)
@@ -114,20 +128,70 @@ func New(cfg Config, firer Firer, logger *log.Logger) *Scheduler {
 			logger.Printf("⚠️ Schedule %q: invalid cron %q: %v (entry ignored)", name, entry.Cron, err)
 			continue
 		}
-		s.entries = append(s.entries, &scheduledEntry{
+		entries = append(entries, &scheduledEntry{
 			name:     name,
 			entry:    entry,
 			schedule: schedule,
 		})
 	}
-	return s
+	return entries
+}
+
+// EnableHotReload arms the scheduler to re-read path on its own ticker (the
+// same 30s interval that checks for due entries — no separate file watcher).
+// Call before Start. A reload that fails (bad YAML, invalid cron) logs
+// loudly and leaves the previously-loaded entries running unchanged; it
+// never blanks out a working schedule on a bad edit.
+func (s *Scheduler) EnableHotReload(path string) {
+	if s == nil {
+		return
+	}
+	s.configPath = path
+	if info, err := os.Stat(path); err == nil {
+		s.lastConfigModTime = info.ModTime()
+	}
+}
+
+// maybeReloadConfig re-reads configPath if its mtime advanced since the last
+// check. Runs on the same ticker goroutine that calls checkAndFire — no
+// additional locking needed for entries, matching the existing invariant
+// that only the ticker goroutine touches it.
+func (s *Scheduler) maybeReloadConfig() {
+	if s.configPath == "" {
+		return
+	}
+	info, err := os.Stat(s.configPath)
+	if err != nil {
+		return
+	}
+	if !info.ModTime().After(s.lastConfigModTime) {
+		return
+	}
+	s.lastConfigModTime = info.ModTime()
+
+	cfg, err := LoadConfig(s.configPath)
+	if err != nil {
+		s.logger.Printf("⚠️ Schedule config %s changed but failed to reload: %v (keeping previous schedules active)", s.configPath, err)
+		return
+	}
+
+	now := s.now()
+	entries := buildEntries(cfg, s.logger)
+	for _, entry := range entries {
+		s.advance(entry, now)
+	}
+	s.entries = entries
+	s.logger.Printf("✅ Schedule config reloaded from %s: %d schedule(s) active", s.configPath, len(entries))
 }
 
 // Start primes each entry's next fire time and launches the ticker goroutine.
 // The loop stops when ctx is cancelled, so wiring it to the daemon's shutdown
 // context stops scheduling with the daemon.
 func (s *Scheduler) Start(ctx context.Context) {
-	if s == nil || s.firer == nil || len(s.entries) == 0 {
+	if s == nil || s.firer == nil {
+		return
+	}
+	if s.configPath == "" && len(s.entries) == 0 {
 		return
 	}
 	if ctx == nil {
@@ -144,6 +208,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				s.maybeReloadConfig()
 				s.checkAndFire(ctx)
 			}
 		}
