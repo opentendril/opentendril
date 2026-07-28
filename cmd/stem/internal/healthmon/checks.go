@@ -1,9 +1,9 @@
 package healthmon
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,12 +15,52 @@ import (
 )
 
 const (
-	bytesInGB       = uint64(1024 * 1024 * 1024)
-	bytesInMB       = uint64(1024 * 1024)
-	diskCriticalMin = uint64(100) * bytesInMB
-	diskWarningMin  = bytesInGB
-	memWarningMin   = uint64(500) * 1024
+	bytesInGB = uint64(1024 * 1024 * 1024)
+	bytesInMB = uint64(1024 * 1024)
+
+	EnvHealthDiskCriticalMB = "TENDRIL_HEALTH_DISK_CRITICAL_MB"
+	EnvHealthDiskWarningMB  = "TENDRIL_HEALTH_DISK_WARNING_MB"
+	EnvHealthMemWarningMB   = "TENDRIL_HEALTH_MEM_WARNING_MB"
 )
+
+func healthDiskCriticalMBFromEnv() uint64 {
+	raw := strings.TrimSpace(os.Getenv(EnvHealthDiskCriticalMB))
+	if raw == "" {
+		return 100
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || parsed == 0 {
+		log.Printf("⚠️ invalid %s=%q (want a positive integer); using default 100: %v", EnvHealthDiskCriticalMB, raw, err)
+		return 100
+	}
+	return parsed
+}
+
+func healthDiskWarningMBFromEnv() uint64 {
+	raw := strings.TrimSpace(os.Getenv(EnvHealthDiskWarningMB))
+	if raw == "" {
+		return 1024
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || parsed == 0 {
+		log.Printf("⚠️ invalid %s=%q (want a positive integer); using default 1024: %v", EnvHealthDiskWarningMB, raw, err)
+		return 1024
+	}
+	return parsed
+}
+
+func healthMemWarningMBFromEnv() uint64 {
+	raw := strings.TrimSpace(os.Getenv(EnvHealthMemWarningMB))
+	if raw == "" {
+		return 500
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || parsed == 0 {
+		log.Printf("⚠️ invalid %s=%q (want a positive integer); using default 500: %v", EnvHealthMemWarningMB, raw, err)
+		return 500
+	}
+	return parsed
+}
 
 func DefaultChecks() []HealthCheck {
 	return []HealthCheck{
@@ -109,13 +149,17 @@ func (DiskSpaceCheck) Check(ctx context.Context) CheckResult {
 
 	available := stat.Bavail * uint64(stat.Bsize)
 	data := map[string]interface{}{"availableBytes": available}
+
+	diskCriticalMin := healthDiskCriticalMBFromEnv() * bytesInMB
+	diskWarningMin := healthDiskWarningMBFromEnv() * bytesInMB
+
 	switch {
 	case available < diskCriticalMin:
 		data["severity"] = "critical"
-		return CheckResult{Healthy: false, Message: "Available disk space is below 100MB", Data: data}
+		return CheckResult{Healthy: false, Message: fmt.Sprintf("Available disk space is below %dMB", diskCriticalMin/bytesInMB), Data: data}
 	case available < diskWarningMin:
 		data["severity"] = "warning"
-		return CheckResult{Healthy: true, Message: "Available disk space is below 1GB", Data: data}
+		return CheckResult{Healthy: true, Message: fmt.Sprintf("Available disk space is below %dMB", diskWarningMin/bytesInMB), Data: data}
 	default:
 		data["severity"] = "info"
 		return CheckResult{Healthy: true, Message: "Disk space is sufficient", Data: data}
@@ -136,38 +180,16 @@ func (MemoryCheck) Check(ctx context.Context) CheckResult {
 	}
 
 	data := map[string]interface{}{"availableKB": availableKB}
+
+	memWarningMin := healthMemWarningMBFromEnv() * 1024
+
 	if availableKB < memWarningMin {
 		data["severity"] = "warning"
-		return CheckResult{Healthy: true, Message: "Available memory is below 500MB", Data: data}
+		return CheckResult{Healthy: true, Message: fmt.Sprintf("Available memory is below %dMB", memWarningMin/1024), Data: data}
 	}
 
 	data["severity"] = "info"
 	return CheckResult{Healthy: true, Message: "Memory is sufficient", Data: data}
-}
-
-func readMemAvailableKB(path string) (uint64, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "MemAvailable:") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			return 0, fmt.Errorf("malformed MemAvailable line")
-		}
-		return strconv.ParseUint(fields[1], 10, 64)
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, err
-	}
-	return 0, fmt.Errorf("MemAvailable not found")
 }
 
 type WorkspaceCheck struct{}
