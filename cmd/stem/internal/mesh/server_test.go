@@ -1,9 +1,13 @@
 package mesh
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +274,228 @@ func TestHandleAdminIssueToken_WorkspaceOverrideIgnored(t *testing.T) {
 	}
 	if claims.WorkspacePath != workspace {
 		t.Errorf("workspacePath = %q, want %q", claims.WorkspacePath, workspace)
+	}
+}
+
+func TestCreateAndRemoveGraftTerrarium(t *testing.T) {
+	repo := initTestGitRepo(t)
+	commitTestFile(t, repo, "file.txt", "content")
+
+	terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("createGraftTerrarium failed: %v", err)
+	}
+
+	cmd := exec.Command("git", "-C", terrariumPath, "rev-parse", "HEAD")
+	terrariumHead, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD in terrarium failed: %v", err)
+	}
+
+	cmd = exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+	sourceHead, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD in source failed: %v", err)
+	}
+
+	if strings.TrimSpace(string(terrariumHead)) != strings.TrimSpace(string(sourceHead)) {
+		t.Errorf("terrarium HEAD %q does not match source HEAD %q", string(terrariumHead), string(sourceHead))
+	}
+
+	removeGraftTerrarium(repo, terrariumPath)
+
+	if _, err := os.Stat(terrariumPath); !os.IsNotExist(err) {
+		t.Errorf("terrarium path %q still exists after remove", terrariumPath)
+	}
+
+	cmd = exec.Command("git", "-C", repo, "worktree", "list")
+	listOut, _ := cmd.CombinedOutput()
+	if strings.Contains(string(listOut), terrariumPath) {
+		t.Errorf("terrarium path %q still in worktree list", terrariumPath)
+	}
+}
+
+func TestApplyPatchToTerrarium(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		repo := initTestGitRepo(t)
+		commitTestFile(t, repo, "file.txt", "content1")
+
+		cmd := exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+		out, _ := cmd.CombinedOutput()
+		parentCommit := strings.TrimSpace(string(out))
+
+		commitTestFile(t, repo, "file.txt", "content2")
+
+		cmd = exec.Command("git", "-C", repo, "diff-tree", "--root", "--binary", "--no-commit-id", "-p", "HEAD")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git diff-tree failed: %v", err)
+		}
+		patch := strings.TrimSpace(string(out))
+
+		terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("createGraftTerrarium failed: %v", err)
+		}
+		defer removeGraftTerrarium(repo, terrariumPath)
+
+		cmd = exec.Command("git", "-C", terrariumPath, "reset", "--hard", parentCommit)
+		_ = cmd.Run()
+
+		err = applyPatchToTerrarium(context.Background(), terrariumPath, patch)
+		if err != nil {
+			t.Fatalf("applyPatchToTerrarium failed: %v", err)
+		}
+
+		content, err := os.ReadFile(filepath.Join(terrariumPath, "file.txt"))
+		if err != nil {
+			t.Fatalf("ReadFile failed: %v", err)
+		}
+		if string(content) != "content2" {
+			t.Errorf("got %q, want content2", string(content))
+		}
+	})
+
+	t.Run("malformed patch", func(t *testing.T) {
+		repo := initTestGitRepo(t)
+		commitTestFile(t, repo, "file.txt", "content")
+
+		terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("createGraftTerrarium failed: %v", err)
+		}
+		defer removeGraftTerrarium(repo, terrariumPath)
+
+		err = applyPatchToTerrarium(context.Background(), terrariumPath, "this is not a valid patch")
+		if err == nil {
+			t.Errorf("expected error for malformed patch, got nil")
+		}
+	})
+}
+
+func TestCommitAndPushValidatedTerrarium(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		bareRemote := t.TempDir()
+		cmd := exec.Command("git", "init", "--bare")
+		cmd.Dir = bareRemote
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git init --bare failed: %v", err)
+		}
+
+		repo := initTestGitRepo(t)
+		commitTestFile(t, repo, "file.txt", "initial content")
+
+		cmd = exec.Command("git", "-C", repo, "remote", "add", "origin", bareRemote)
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("git remote add failed: %v", err)
+		}
+
+		terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("createGraftTerrarium failed: %v", err)
+		}
+		defer removeGraftTerrarium(repo, terrariumPath)
+
+		err = os.WriteFile(filepath.Join(terrariumPath, "file.txt"), []byte("modified content"), 0644)
+		if err != nil {
+			t.Fatalf("WriteFile failed: %v", err)
+		}
+
+		cmd = exec.Command("git", "-C", terrariumPath, "rev-parse", "HEAD")
+		out, _ := cmd.CombinedOutput()
+		startingHead := strings.TrimSpace(string(out))
+
+		hash, err := commitAndPushValidatedTerrarium(context.Background(), terrariumPath, "test-branch", "test commit", startingHead)
+		if err != nil {
+			t.Fatalf("commitAndPushValidatedTerrarium failed: %v", err)
+		}
+
+		cmd = exec.Command("git", "-C", bareRemote, "rev-parse", "refs/heads/test-branch")
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git rev-parse in bare remote failed: %v, output: %s", err, string(out))
+		}
+		remoteHash := strings.TrimSpace(string(out))
+
+		if hash != remoteHash {
+			t.Errorf("pushed hash %q does not match remote hash %q", hash, remoteHash)
+		}
+	})
+
+	t.Run("no material change", func(t *testing.T) {
+		repo := initTestGitRepo(t)
+		commitTestFile(t, repo, "file.txt", "initial content")
+
+		terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("createGraftTerrarium failed: %v", err)
+		}
+		defer removeGraftTerrarium(repo, terrariumPath)
+
+		cmd := exec.Command("git", "-C", terrariumPath, "rev-parse", "HEAD")
+		out, _ := cmd.CombinedOutput()
+		startingHead := strings.TrimSpace(string(out))
+
+		_, err = commitAndPushValidatedTerrarium(context.Background(), terrariumPath, "test-branch", "test commit", startingHead)
+		if err == nil {
+			t.Errorf("expected error for no material change, got nil")
+		} else if !strings.Contains(err.Error(), "mesh validation completed without material changes to push") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+}
+
+func TestResolveSequenceRelativePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"empty", "", filepath.Join(".tendril", "mesh-governance.yaml"), false},
+		{"absolute", "/absolute/path", "", true},
+		{"traversal", "../escape", "", true},
+		{"valid", "custom-gov.yaml", "custom-gov.yaml", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveSequenceRelativePath(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("resolveSequenceRelativePath() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("resolveSequenceRelativePath() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMeshBranchName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"empty", "", true},
+		{"too long", strings.Repeat("a", 201), true},
+		{"leading dash", "-branch", true},
+		{"leading slash", "/branch", true},
+		{"trailing slash", "branch/", true},
+		{"trailing dot", "branch.", true},
+		{"dot dot", "br..anch", true},
+		{"slash slash", "br//anch", true},
+		{"at brace", "br@{anch", true},
+		{"space", "br anch", true},
+		{"backslash", "br\\anch", true},
+		{"valid", "mesh-graft-abc12345", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateMeshBranchName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateMeshBranchName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
 	}
 }
