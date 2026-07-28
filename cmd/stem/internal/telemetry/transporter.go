@@ -17,6 +17,23 @@ type Transporter interface {
 	Emit(event eventbus.Event) error
 }
 
+// telemetryRetryAttempts is the total number of Emit attempts (including the
+// first) before a failed emission is counted and dropped. A small fixed
+// number, not exponential backoff — this handles a transient blip (a
+// dropped connection, a momentary 5xx), not a sustained outage; a sustained
+// outage still drops, same as today, after these attempts are exhausted.
+const telemetryRetryAttempts = 3
+
+// telemetryRetryBackoff is the fixed pause between retry attempts. Fixed,
+// not exponential, matching this codebase's existing scheduler retry
+// convention (see retryBackoff in cmd/stem/internal/scheduler/scheduler.go)
+// — a coarse safety net does not need exponential cleverness.
+const telemetryRetryBackoff = 2 * time.Second
+
+// retrySleep is a package-var seam so tests never wait on the real wall
+// clock for backoff between retry attempts.
+var retrySleep = time.Sleep
+
 // WebhookTransporter POSTs JSON event payloads to a remote endpoint.
 type WebhookTransporter struct {
 	endpoint string
@@ -103,10 +120,18 @@ type transporterSink struct {
 }
 
 func (s *transporterSink) Consume(event eventbus.Event) {
-	if err := s.transporter.Emit(event); err != nil {
-		if s.failures.Add(1)%100 == 1 {
-			log.Printf("⚠️ telemetry: remote transporter emit failed: %v", err)
+	var err error
+	for attempt := 1; attempt <= telemetryRetryAttempts; attempt++ {
+		err = s.transporter.Emit(event)
+		if err == nil {
+			return
 		}
+		if attempt < telemetryRetryAttempts {
+			retrySleep(telemetryRetryBackoff)
+		}
+	}
+	if s.failures.Add(1)%100 == 1 {
+		log.Printf("⚠️ telemetry: remote transporter emit failed after %d attempt(s): %v", telemetryRetryAttempts, err)
 	}
 }
 

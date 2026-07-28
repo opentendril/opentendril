@@ -20,8 +20,8 @@
 **Does not:**
 
 - Emit or originate events — it is purely a consumer of the EventBus.
-- Guarantee delivery. Sink attachment is lossy by design (a full sink buffer drops the event for that sink only); transporter emit failures are counted and log-sampled, never retried durably.
-- Buffer or spool remote sinks to disk — Resin is the only persistent record.
+- Guarantee delivery. Sink attachment is lossy by design (a full sink buffer drops the event for that sink only); transporter emit failures are counted and log-sampled. A bounded retry now happens for transient failures, while sustained failures (or a full sink buffer) still drop, same as before.
+- Buffer or spool remote sinks to disk — Resin is the only persistent record (retry is in-memory-only).
 - Carry an external Kafka/Redis client dependency: every transporter is stdlib-only except the WebSocket path, which reuses `gorilla/websocket`.
 
 ## Public interface
@@ -51,7 +51,7 @@
 
 **Fan-out — `internal/eventbus` (how it consumes):** Telemetry attaches to the bus two different ways, and the difference matters.
 
-- **Transporters attach as sinks.** `AttachTransporter` calls `bus.AttachSink`, which drains a per-sink buffered channel on a dedicated goroutine. Emission runs off the publish path; when the buffer is full the event is dropped for that sink only, so a slow or disconnected remote can never block the orchestrator. Emit failures increment an atomic counter and are log-sampled (1 in 100).
+- **Transporters attach as sinks.** `AttachTransporter` calls `bus.AttachSink`, which drains a per-sink buffered channel on a dedicated goroutine. Emission runs off the publish path; when the buffer is full the event is dropped for that sink only, so a slow or disconnected remote can never block the orchestrator. Emit failures undergo a bounded in-memory retry, after which they increment an atomic counter and are log-sampled (1 in 100).
 - **The Resin sink subscribes as a handler.** `InitResinSink` calls `attachHandler`, which `Subscribe`s the sink to every `eventbus.AllEventTypes()`. Handlers run **synchronously on the Publish goroutine** (`Publish` invokes each handler inline before fanning out to sinks). Resin therefore writes on the caller's path, guarded by its own mutex; write and hardening errors are swallowed so telemetry never fails the bus.
 - The Prometheus transporter reads `eventbus.AllEventTypes()` to pre-register series and switches on `EventStreamToken` / `EventSproutEmerged` / `EventSproutMatured` / `EventSproutWithered` to derive LLM-token and active-sprout metrics.
 
@@ -59,7 +59,7 @@
 
 ## Limitations
 
-- **Delivery is best-effort and lossy.** Sink buffers drop events when full; there is no ack, retry queue, or disk spool for remote transporters. Under bus pressure or a stalled remote, exported telemetry is incomplete by construction. Resin (synchronous handler) is the only path that does not silently drop, but it too swallows write errors.
+- **Delivery is best-effort and lossy.** Sink buffers drop events when full; there is no ack, durable retry queue, or disk spool for remote transporters. A bounded in-memory retry (3 attempts, fixed 2s backoff) covers transient failures, but there is still no disk spool for a sustained outage. Remote sinks export data that already has a durable local copy via Resin/historydb when enabled; a sustained-outage guarantee belongs in front of the specific external platform, not reinvented here. **Also note the shutdown-latency tradeoff**: a `Consume` call mid-retry can delay `bus.Shutdown()` by up to ~4s in the worst case. Under bus pressure or a stalled remote, exported telemetry is incomplete by construction. Resin (synchronous handler) is the only path that does not silently drop, but it too swallows write errors.
 - **Transporter maturity varies.** Resin and Prometheus are production-grade and directly tested (event counting, all-types pre-registration, LLM token/character counting, sprouts-active gauge, config validation, loopback bind). Webhook, Redis (raw RESP), and remote WebSocket are functional but thinner. **Kafka is a first slice**: it supports only a Kafka REST Proxy endpoint — a brokers-only config is rejected loudly rather than silently dropping telemetry, and native broker wire protocol is explicitly deferred.
 - **Config validation is shallow.** `LoadConfig` normalizes Resin/Amber defaults but does not validate transporter entries; a bad `Type`, missing `Endpoint`, or unbindable Prometheus port surfaces only later at `NewTransporter`/attach time, where `cmdserve.go` logs and continues. There is no schema check that a transporter block is coherent before serve.
 - **Resin redaction is best-effort and API keys remain in cleartext.** Off-box payloads are minimized and the Resin log is scrubbed by default, but the on-disk Resin scrub is a best-effort deny-list heuristic. API keys for transporters still live in `telemetry.yaml` / `TENDRIL_REMOTE_SINKS` in cleartext.
