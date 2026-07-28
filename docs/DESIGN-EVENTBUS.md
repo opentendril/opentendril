@@ -35,7 +35,7 @@
 | **Tool / transcript** | `EventToolInvoked` (`tool-invoked`), `EventSproutTranscript` (`sprout-transcript`; historical persisted name `Pollinator-transcript` may still exist in old history rows). |
 | **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`). |
 | **Parallel / GA / mesh-ish** | `EventParallelSprouting` (`parallel-sprouting`), `EventMycelialMerge` (`mycelial-merge`), `EventPhenotypicSelection` (`phenotypic-selection`). |
-| **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`). |
+| **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`), `EventTriggerBlocked` (`hormonal-trigger-blocked`). |
 | `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
 | `Event` | Payload: `Type`, `Timestamp`, `Source`, optional `SessionID` (`json:"sessionId"`), optional `Data` map. |
 | `Handler` | `func(Event)` — typed subscription callback. |

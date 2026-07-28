@@ -450,3 +450,131 @@ func TestHandleHealthStatusCodes(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want application/json", rec.Header().Get("Content-Type"))
 	}
 }
+
+func TestScheduledRunFirerPublishesTriggerBlockedEvent(t *testing.T) {
+	bus := eventbus.New()
+	var received []eventbus.Event
+	bus.Subscribe(eventbus.EventTriggerBlocked, func(e eventbus.Event) {
+		received = append(received, e)
+	})
+
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	svc := core.NewService(manager)
+
+	// ModeEnforce ensures that a nonexistent triggers directory causes a block
+	t.Setenv("TENDRIL_TRIGGERS_MODE", "enforce")
+
+	firer := scheduledRunFirer(svc, manager, "/nonexistent-dir-blocks-run", bus)
+	entry := scheduler.Entry{
+		Model: "some-model",
+	}
+
+	err = firer(context.Background(), "my-schedule", entry)
+	if err == nil || !strings.Contains(err.Error(), "blocked by Hormonal Triggers") {
+		t.Fatalf("expected blocked by Hormonal Triggers error, got: %v", err)
+	}
+
+	if len(received) != 1 {
+		t.Fatalf("expected exactly 1 %s event, got %d", eventbus.EventTriggerBlocked, len(received))
+	}
+	if received[0].Source != "scheduler" {
+		t.Errorf("Source = %q, want scheduler", received[0].Source)
+	}
+	data := received[0].Data
+	if data["schedule"] != "my-schedule" {
+		t.Errorf("data.schedule = %v, want my-schedule", data["schedule"])
+	}
+	if data["genotype"] != "some-model" {
+		t.Errorf("data.genotype = %v, want some-model", data["genotype"])
+	}
+	if data["reason"] == nil || data["reason"] == "" {
+		t.Error("data.reason is empty")
+	}
+}
+
+func TestHandleChatCompletionsPublishesTriggerBlockedEvent(t *testing.T) {
+	t.Setenv("TENDRIL_ALLOW_HOST_EXECUTION", "true")
+	t.Setenv("TENDRIL_TRIGGERS_MODE", "enforce")
+
+	// Chdir to temp dir so getTriggersDir() looks in an empty directory and blocks
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(cwd)
+
+	bus := eventbus.New()
+	var received []eventbus.Event
+	bus.Subscribe(eventbus.EventTriggerBlocked, func(e eventbus.Event) {
+		received = append(received, e)
+	})
+
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	handler := handleChatCompletions(bus, manager, nil)
+
+	body := `{"model": "test-model", "messages": [{"role": "user", "content": "hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("X-Phytomer", "test-session")
+
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+
+	if len(received) != 1 {
+		t.Fatalf("expected exactly 1 %s event, got %d", eventbus.EventTriggerBlocked, len(received))
+	}
+
+	ev := received[0]
+	if ev.Source != "chat" {
+		t.Errorf("Source = %q, want chat", ev.Source)
+	}
+	if ev.SessionID == "" {
+		t.Error("SessionID is empty")
+	}
+
+	data := ev.Data
+	if data["genotype"] != "test-model" {
+		t.Errorf("data.genotype = %v, want test-model", data["genotype"])
+	}
+	if data["reason"] == nil || data["reason"] == "" {
+		t.Error("data.reason is empty")
+	}
+}
+
+func TestTriggersModeFromEnv(t *testing.T) {
+	cases := []struct {
+		env  string
+		want triggers.TriggerMode
+	}{
+		{"", triggers.ModeEnforce},
+		{"   ", triggers.ModeEnforce},
+		{"enforce", triggers.ModeEnforce},
+		{"disabled", triggers.ModeDisabled},
+		{"DISABLED", triggers.ModeDisabled},
+		{"Disabled ", triggers.ModeDisabled},
+		{"unknown", triggers.ModeEnforce},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Setenv("TENDRIL_TRIGGERS_MODE", tc.env)
+			got := triggersModeFromEnv()
+			if got != tc.want {
+				t.Errorf("env %q: got %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}
