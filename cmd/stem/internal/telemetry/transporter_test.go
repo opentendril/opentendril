@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -101,5 +102,90 @@ func TestPrometheusNotWrapped(t *testing.T) {
 		t.Errorf("Expected *PrometheusTransporter, got %T", transporter)
 	} else {
 		prom.Close() // Clean up listener
+	}
+}
+
+type flakyTransporter struct {
+	failFirst int // this many Emit calls fail, then succeed
+	calls     int
+	lastEvent eventbus.Event
+}
+
+func (m *flakyTransporter) Emit(event eventbus.Event) error {
+	m.calls++
+	if m.calls <= m.failFirst {
+		return errors.New("transient failure")
+	}
+	m.lastEvent = event
+	return nil
+}
+
+func TestTransporterSinkRetriesOnTransientFailure(t *testing.T) {
+	oldSleep := retrySleep
+	t.Cleanup(func() { retrySleep = oldSleep })
+	retrySleep = func(time.Duration) {} // no-op
+
+	flaky := &flakyTransporter{failFirst: 1}
+	sink := &transporterSink{transporter: flaky}
+
+	event := eventbus.Event{Type: "test"}
+	sink.Consume(event)
+
+	if flaky.calls != 2 {
+		t.Errorf("Expected 2 calls, got %d", flaky.calls)
+	}
+	if sink.failures.Load() != 0 {
+		t.Errorf("Expected 0 failures, got %d", sink.failures.Load())
+	}
+}
+
+func TestTransporterSinkDropsAfterExhaustingRetries(t *testing.T) {
+	oldSleep := retrySleep
+	t.Cleanup(func() { retrySleep = oldSleep })
+	retrySleep = func(time.Duration) {} // no-op
+
+	flaky := &flakyTransporter{failFirst: telemetryRetryAttempts}
+	sink := &transporterSink{transporter: flaky}
+
+	event := eventbus.Event{Type: "test"}
+	sink.Consume(event)
+
+	if flaky.calls != telemetryRetryAttempts {
+		t.Errorf("Expected %d calls, got %d", telemetryRetryAttempts, flaky.calls)
+	}
+	if sink.failures.Load() != 1 {
+		t.Errorf("Expected 1 failure, got %d", sink.failures.Load())
+	}
+}
+
+func TestTransporterSinkRetrySleepsBetweenAttempts(t *testing.T) {
+	oldSleep := retrySleep
+	t.Cleanup(func() { retrySleep = oldSleep })
+
+	var sleeps []time.Duration
+	retrySleep = func(d time.Duration) {
+		sleeps = append(sleeps, d)
+	}
+
+	flaky := &flakyTransporter{failFirst: telemetryRetryAttempts}
+	sink := &transporterSink{transporter: flaky}
+
+	event := eventbus.Event{Type: "test"}
+	sink.Consume(event)
+
+	if flaky.calls != telemetryRetryAttempts {
+		t.Errorf("Expected %d calls, got %d", telemetryRetryAttempts, flaky.calls)
+	}
+	if sink.failures.Load() != 1 {
+		t.Errorf("Expected 1 failure, got %d", sink.failures.Load())
+	}
+	expectedSleeps := telemetryRetryAttempts - 1
+	if len(sleeps) != expectedSleeps {
+		t.Errorf("Expected %d sleeps, got %d", expectedSleeps, len(sleeps))
+	}
+	for i, d := range sleeps {
+		if d != telemetryRetryBackoff {
+			t.Errorf("Expected sleep %d to be %v, got %v", i, telemetryRetryBackoff, d)
+		}
 	}
 }
