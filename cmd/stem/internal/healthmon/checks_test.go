@@ -127,11 +127,9 @@ func TestMemoryCheckUsesThreshold(t *testing.T) {
 	t.Setenv(EnvHealthMemWarningMB, "999999999") // Almost 1 PiB
 	check := MemoryCheck{}
 	res := check.Check(context.Background())
-	// Might fail entirely if it can't read meminfo (e.g. on non-Linux in standard check path without Darwin build tag)
-	// But assuming it reads it, it should return warning severity.
-	if errStr, ok := res.Message, true; ok && strings.Contains(errStr, "read memory info") {
-		// Can't run memory check successfully if /proc/meminfo or sysctl isn't available (e.g. running Linux tests in a weird environment)
-		// We'll skip if the check fundamentally failed to read.
+	// Skip if the environment itself can't read memory info (e.g. /proc/meminfo
+	// missing in a stripped container) rather than failing on an unrelated gap.
+	if strings.Contains(res.Message, "read memory info") {
 		t.Skipf("skipping due to env limitation: %v", res.Message)
 	}
 	if !res.Healthy {
