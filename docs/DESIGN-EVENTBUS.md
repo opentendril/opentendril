@@ -29,12 +29,11 @@
 | --- | --- |
 | `EventType` | String enum for event names. **Wire values are kebab-case** (domain enums per GUARDRAILS / AGENTS.md), e.g. `sprout-emerged`. |
 | **Health** | `EventHealthCheck` (`health-check`), `EventHealthDegraded` (`health-degraded`), `EventHealthRecovered` (`health-recovered`). |
-| **Terrarium / infra** | `EventTerrariumOOM` (`terrarium-oom`), `EventTerrariumTimeout` (`terrarium-timeout`), `EventAPIKeyInvalid` (`api-key-invalid`). |
+| **Terrarium / infra** | `EventTerrariumOOM` (`terrarium-oom`), `EventTerrariumTimeout` (`terrarium-timeout`). |
 | **Sequence** | `EventSequenceFailure` (`sequence-failure`), `EventSequenceComplete` (`sequence-complete`). |
 | **Stream / thought** | `EventStreamToken` (`stream-token`), `EventThoughtBranch` (`thought-branch`). |
 | **Tool / transcript** | `EventToolInvoked` (`tool-invoked`), `EventSproutTranscript` (`sprout-transcript`; historical persisted name `Pollinator-transcript` may still exist in old history rows). |
 | **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`). |
-| **Hormonal / rhizome / xylem** | `EventHormonalTrigger` (`hormonal-trigger`), `EventRhizomeUpdate` (`rhizome-update`), `EventXylemTransport` (`xylem-transport`). |
 | **Parallel / GA / mesh-ish** | `EventParallelSprouting` (`parallel-sprouting`), `EventMycelialMerge` (`mycelial-merge`), `EventPhenotypicSelection` (`phenotypic-selection`). |
 | **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`). |
 | `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
@@ -73,7 +72,7 @@ Package-level sentinel errors: **none**.
 - **In-memory history only (last 100).** `History` is a process-local ring for `?replay` and tests. Durable retention is entirely sink-side (history.db / Resin / remote). Events published with no attached sink and no live subscriber are gone after the window slides.
 - **No ordering guarantees across concurrent publishers** beyond mutex-protected history append and sequential handler invocation per single `Publish` call. Concurrent `Publish` calls interleave freely.
 - **Publish after `Shutdown` still mutates history and runs handlers** but skips sinks. Callers that only attach sinks and shut down early will miss post-shutdown publishes for those sinks; handlers remain active forever.
-- **Several declared event types have no in-repo publisher today:** `health-recovered`, `api-key-invalid`, `hormonal-trigger`, `rhizome-update`, `xylem-transport`. They appear in `AllEventTypes()` (so gateway/telemetry listen for them) but are reserved / ambient-UI names without Stem producers.
+- **`health-recovered` has no in-repo publisher today.** It appears in `AllEventTypes()` (so gateway/telemetry listen for it) but healthmon never publishes it — tracked separately by issue #481. (Four sibling reserved-but-unused types — `api-key-invalid`, `hormonal-trigger`, `rhizome-update`, `xylem-transport` — were pruned entirely rather than left as dead contract entries; see issue #439.)
 - **`AllEventTypes` is a manual registry.** Adding a const without updating the slice silently omits the type from broad subscriptions (gateway, Resin, Prometheus pre-reg). Tests cover sink delivery of the listed set, not compile-time exhaustiveness against the const block.
 - **`Event` data is untyped `map[string]interface{}`.** Schema discipline lives at each publisher; consumers must type-assert. Observation payloads on `tool-invoked` are truncated by the Conductor, not by the bus.
 - **No package-level sentinel errors** for closed bus, drop, or invalid type — nil bus methods are silent no-ops.
