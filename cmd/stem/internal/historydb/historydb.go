@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -42,6 +43,12 @@ const (
 	// plaintext. Reads still decrypt any pre-existing ciphertext.
 	EnvEncryptAtRest = "TENDRIL_ENCRYPT_AT_REST"
 )
+
+// currentSchemaVersion is the history database's current schema generation.
+// Bump this and add a migration step in migrateSchema when a future change
+// needs to alter existing tables rather than just adding new IF NOT EXISTS
+// ones.
+const currentSchemaVersion = 1
 
 // SproutRun is one Sprout execution history record.
 type SproutRun struct {
@@ -287,10 +294,43 @@ CREATE TABLE IF NOT EXISTS seedruns (
 	startedAt TEXT NOT NULL,
 	finishedAt TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);`
+CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);
+
+CREATE TABLE IF NOT EXISTS schemaMeta (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	version INTEGER NOT NULL
+);`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize history schema: %w", err)
+	}
+	return s.migrateSchema(ctx)
+}
+
+func (s *Store) migrateSchema(ctx context.Context) error {
+	var version int
+	err := s.db.QueryRowContext(ctx, `SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		// Fresh database, or an existing pre-versioning .tendril/history.db
+		// opened for the first time after this change shipped. Either way,
+		// its current tables already match currentSchemaVersion — stamp it
+		// without touching any data.
+		_, err := s.db.ExecContext(ctx, `INSERT INTO schemaMeta (id, version) VALUES (1, ?)`, currentSchemaVersion)
+		if err != nil {
+			return fmt.Errorf("stamp initial schema version: %w", err)
+		}
+		return nil
+	case err != nil:
+		return fmt.Errorf("read history schema version: %w", err)
+	case version > currentSchemaVersion:
+		return fmt.Errorf("history database schema version %d is newer than this binary supports (%d) — refusing to open with an older binary", version, currentSchemaVersion)
+	case version < currentSchemaVersion:
+		// No migrations exist yet (currentSchemaVersion has only ever been 1).
+		// When a future schema change bumps currentSchemaVersion, add the
+		// actual ALTER/migration steps here, keyed by version, then update
+		// the stored row to currentSchemaVersion.
+		return fmt.Errorf("history database schema version %d predates a migration path that does not exist yet", version)
 	}
 	return nil
 }

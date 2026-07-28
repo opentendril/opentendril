@@ -340,3 +340,145 @@ func TestTelemetryRedactThenEncrypt(t *testing.T) {
 		t.Fatalf("expected token to be [REDACTED], got: %v", token)
 	}
 }
+
+func TestSchemaVersionStampedOnFreshDatabase(t *testing.T) {
+	store := openTestStore(t)
+
+	var version int
+	err := store.db.QueryRow(`SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version)
+	if err != nil {
+		t.Fatalf("QueryRow version: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Errorf("expected version %d, got %d", currentSchemaVersion, version)
+	}
+}
+
+func TestSchemaVersionBackstampsPreVersioningDatabase(t *testing.T) {
+	dbDir := t.TempDir()
+	path := filepath.Join(dbDir, "history.db")
+
+	// Create database with original 5 tables and no schemaMeta
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	const oldSchema = `
+CREATE TABLE IF NOT EXISTS sessions (
+	sessionId TEXT PRIMARY KEY,
+	origin TEXT NOT NULL,
+	createdAt TEXT NOT NULL,
+	lastActiveAt TEXT NOT NULL,
+	preferences TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	sessionId TEXT NOT NULL,
+	role TEXT NOT NULL,
+	content TEXT NOT NULL,
+	model TEXT NOT NULL DEFAULT '',
+	createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS messagesBySession ON messages(sessionId, id);
+
+CREATE TABLE IF NOT EXISTS events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	sessionId TEXT NOT NULL DEFAULT '',
+	type TEXT NOT NULL,
+	source TEXT NOT NULL DEFAULT '',
+	data TEXT NOT NULL DEFAULT '{}',
+	createdAt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS eventsBySession ON events(sessionId, id);
+CREATE INDEX IF NOT EXISTS eventsByType ON events(type, id);
+
+CREATE TABLE IF NOT EXISTS sproutruns (
+	runId TEXT PRIMARY KEY,
+	sessionId TEXT NOT NULL DEFAULT '',
+	stepId TEXT NOT NULL DEFAULT '',
+	origin TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	genotype TEXT NOT NULL DEFAULT '',
+	transcript TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL,
+	output TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	startedAt TEXT NOT NULL,
+	finishedAt TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);
+
+CREATE TABLE IF NOT EXISTS seedruns (
+	handle TEXT PRIMARY KEY,
+	pollen TEXT NOT NULL DEFAULT '',
+	substrate TEXT NOT NULL DEFAULT '',
+	goal TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL,
+	iterations INTEGER NOT NULL DEFAULT 0,
+	branch TEXT NOT NULL DEFAULT '',
+	diff TEXT NOT NULL DEFAULT '',
+	logs TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	startedAt TEXT NOT NULL,
+	finishedAt TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);`
+	if _, err := db.Exec(oldSchema); err != nil {
+		t.Fatalf("Exec oldSchema: %v", err)
+	}
+	db.Close()
+
+	keyPath := filepath.Join(dbDir, "rhizome.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	// Open via Open/initSchema
+	store, err := Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	var version int
+	if err := store.db.QueryRow(`SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatalf("QueryRow version: %v", err)
+	}
+	if version != currentSchemaVersion {
+		t.Errorf("expected backstamped version %d, got %d", currentSchemaVersion, version)
+	}
+}
+
+func TestSchemaVersionRejectsNewerVersion(t *testing.T) {
+	dbDir := t.TempDir()
+	path := filepath.Join(dbDir, "history.db")
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	const schemaWithNewerVersion = `
+CREATE TABLE schemaMeta (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL);
+INSERT INTO schemaMeta (id, version) VALUES (1, 999);`
+	if _, err := db.Exec(schemaWithNewerVersion); err != nil {
+		t.Fatalf("Exec schema: %v", err)
+	}
+	db.Close()
+
+	keyPath := filepath.Join(dbDir, "rhizome.key")
+	if err := os.WriteFile(keyPath, []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	store, err := Open(context.Background(), path)
+	if err == nil {
+		if store != nil {
+			store.Close()
+		}
+		t.Fatalf("expected error opening database with newer schema version, got nil")
+	}
+	if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Errorf("expected error about newer version, got: %v", err)
+	}
+}
