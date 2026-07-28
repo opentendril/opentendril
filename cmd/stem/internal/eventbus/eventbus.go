@@ -61,6 +61,10 @@ const (
 	// durable record.
 	EventDelegationAuthorized EventType = "delegation-authorized"
 	EventDelegationDenied     EventType = "delegation-denied"
+	// EventTriggerBlocked audits one run refused by the Hormonal Trigger gate —
+	// the observability counterpart to EventDelegationDenied. It does not change
+	// enforcement; the gate already blocked the run before this fires.
+	EventTriggerBlocked EventType = "hormonal-trigger-blocked"
 )
 
 // AllEventTypes returns every registered event type for broad telemetry subscriptions.
@@ -86,6 +90,7 @@ func AllEventTypes() []EventType {
 		EventPhenotypicSelection,
 		EventDelegationAuthorized,
 		EventDelegationDenied,
+		EventTriggerBlocked,
 	}
 }
 

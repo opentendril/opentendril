@@ -97,6 +97,11 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	bus := eventbus.New()
+
+	if triggersModeFromEnv() == triggers.ModeDisabled {
+		log.Printf("⚠️ Hormonal Trigger gate is DISABLED (TENDRIL_TRIGGERS_MODE=disabled) — runs are not screened before growing")
+	}
+
 	repoRoot := resolveRepoRoot("")
 
 	// Persistent state layer (.tendril/history.db). TENDRIL_DB_LOGGING=false
@@ -532,6 +537,15 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 		mode, runner := resolveTriggerModeAndRunner(bus)
 		if err := triggers.EvaluateTriggers(ctx, mode, runner, triggersDir, payload); err != nil {
 			log.Printf("🚫 Schedule %q: scheduled run blocked by Hormonal Triggers: %v", name, err)
+			bus.Publish(eventbus.Event{
+				Type:   eventbus.EventTriggerBlocked,
+				Source: "scheduler",
+				Data: map[string]interface{}{
+					"schedule": name,
+					"genotype": payload.Genotype,
+					"reason":   err.Error(),
+				},
+			})
 			return fmt.Errorf("blocked by Hormonal Triggers: %w", err)
 		}
 
@@ -811,6 +825,15 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		mode, runner := resolveTriggerModeAndRunner(bus)
 		if err := triggers.EvaluateTriggers(r.Context(), mode, runner, triggersDir, payload); err != nil {
 			log.Printf("Sprout blocked by Hormonal Triggers: %v", err)
+			bus.Publish(eventbus.Event{
+				Type:      eventbus.EventTriggerBlocked,
+				Source:    "chat",
+				SessionID: sess.ID,
+				Data: map[string]interface{}{
+					"genotype": payload.Genotype,
+					"reason":   err.Error(),
+				},
+			})
 			http.Error(w, err.Error(), http.StatusForbidden)
 			return
 		}
@@ -1014,19 +1037,20 @@ func (r terrariumRunner) RunTrigger(ctx context.Context, scriptPath string, payl
 	return nil
 }
 
-func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, triggers.TriggerRunner) {
+func triggersModeFromEnv() triggers.TriggerMode {
 	modeStr := strings.ToLower(strings.TrimSpace(os.Getenv("TENDRIL_TRIGGERS_MODE")))
-	var mode triggers.TriggerMode
 	if modeStr == string(triggers.ModeDisabled) {
-		mode = triggers.ModeDisabled
-	} else {
-		mode = triggers.ModeEnforce
+		return triggers.ModeDisabled
 	}
+	return triggers.ModeEnforce
+}
+
+func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, triggers.TriggerRunner) {
 
 	providerName := ""
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("TENDRIL_ALLOW_HOST_EXECUTION")), "true") {
 		providerName = terrarium.ProviderHost
 	}
 
-	return mode, terrariumRunner{providerName: providerName, bus: bus}
+	return triggersModeFromEnv(), terrariumRunner{providerName: providerName, bus: bus}
 }

@@ -12,6 +12,7 @@
 - Serialize the `TriggerPayload` containing the genotype and transcript into a temporary JSON file.
 - Execute each valid script, passing the JSON payload file path as an argument.
 - Fail closed by blocking the run if any script returns a non-zero exit code, returning the script's stderr as the error message.
+- Emit an `EventTriggerBlocked` audit event to the EventBus whenever a run is blocked by a trigger.
 
 **Does not:**
 - Run scripts that are not marked as executable, or scripts named `README.md`.
@@ -35,7 +36,7 @@
 ## Limitations
 
 - **Execution environment:** Triggers run isolated inside an `alpine:3.20` Terrarium (NetworkMode: None, read-only mount, non-root, resource-capped, 30s timeout) and must be POSIX-sh compliant.
-- **Gate mode and failure-mode:** Controlled via `TENDRIL_TRIGGERS_MODE`. Under `enforce` (the default), the gate fails closed (blocks) if a script returns a non-zero exit code, or if the triggers directory is missing or unreadable. `disabled` allows all sprouts. Any invalid value falls back to `enforce`.
+- **Gate mode and failure-mode:** Controlled via `TENDRIL_TRIGGERS_MODE`. Under `enforce` (the default), the gate fails closed (blocks) if a script returns a non-zero exit code, or if the triggers directory is missing or unreadable. `disabled` allows all sprouts and logs a startup notice. Any invalid value falls back to `enforce`.
 - **Host execution override:** By setting `TENDRIL_ALLOW_HOST_EXECUTION=true`, operators can explicitly bypass isolation and execute triggers directly on the host.
 - **Ordering:** Scripts are evaluated in the order returned by `os.ReadDir` (lexicographical order), meaning naming conventions dictate the execution sequence.
 
