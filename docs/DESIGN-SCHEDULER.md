@@ -50,7 +50,7 @@ Package-level sentinel errors: none exported.
 ## Limitations
 
 - **Cron dialect limits**: Only standard 5-field specs are supported; alphabetic names like `mon-fri` or `jan` are not supported.
-- **No missed-run persistence**: It computes future fire times from startup; if the daemon is down, missed runs are not caught up on restart.
+- **No missed-run persistence, by design**: It computes future fire times from startup; if the daemon is down, missed runs are not caught up on restart. This is a deliberate fire-and-forget choice, not an unaddressed gap: catching up means firing a burst of possibly-many stale runs back-to-back against whatever the *current* repo state is, with no operator visibility into why they're running late — a worse failure mode than a known skip. An operator who needs guaranteed delivery across downtime should drive one-shot `tendril` invocations from an OS-level scheduler (cron/systemd-timer) instead.
 - **Single-process only**: The in-flight latching (`inFlight` / `pending`) is in-memory only; it does not coordinate across multiple daemon instances.
 - **Config reload behavior**: There is no hot-reload; the daemon must be restarted to pick up changes to the config file.
 - **Timezone handling**: Evaluates cron expressions in the local wall-clock location matching the reference time passed to `Next`.
