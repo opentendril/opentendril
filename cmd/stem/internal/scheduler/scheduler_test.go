@@ -567,7 +567,19 @@ schedules:
 	}
 }
 
-func TestStartRunsWithHotReloadEvenFromZeroEntries(t *testing.T) {
+// TestHotReloadFromZeroEntries proves maybeReloadConfig itself correctly
+// builds a fresh entry list when the scheduler started with none (an
+// empty/disabled initial config). It drives maybeReloadConfig directly,
+// like every other test in this file, rather than Start's real background
+// ticker goroutine: entries is documented as touched only by that goroutine,
+// so a test reading it concurrently from the outside while the goroutine
+// might also be writing it (on a short tick) would itself be a data race
+// under -race, and adding a mutex just to make this one edge case racily
+// testable would be new locking this package's design deliberately avoids.
+// Start's own early-return guard (configPath != "" keeps the goroutine
+// alive even from zero entries) is a one-line boolean condition, verified
+// by direct inspection rather than a live concurrent test for that reason.
+func TestHotReloadFromZeroEntries(t *testing.T) {
 	firer := &fakeFirer{}
 	path := filepath.Join(t.TempDir(), "schedules.yaml")
 	initialYAML := `enabled: false`
@@ -577,15 +589,10 @@ func TestStartRunsWithHotReloadEvenFromZeroEntries(t *testing.T) {
 	s := New(cfg, firer, log.New(io.Discard, "", 0))
 	s.EnableHotReload(path)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	if len(s.entries) != 0 {
+		t.Fatalf("want 0 initial entries from a disabled config, got %d", len(s.entries))
+	}
 
-	// If Start returns immediately because len(entries) == 0, the goroutine won't launch.
-	// But it shouldn't.
-	s.Start(ctx)
-
-	// Since we can't reliably wait for the goroutine, we simulate the ticker firing
-	// by directly calling maybeReloadConfig after a change.
 	time.Sleep(10 * time.Millisecond)
 	updatedYAML := `
 enabled: true
