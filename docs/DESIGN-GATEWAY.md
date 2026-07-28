@@ -32,8 +32,8 @@
 | `Client` | Exported struct for a connected peer (`conn`, buffered `send` channel). Fields and methods are unexported — the type is exported-but-opaque and is not constructed outside the package. |
 | `maxReplay` | Unexported const (`100`): hard cap on `?replay=N`. |
 | `upgrader` | Unexported package `websocket.Upgrader` with `CheckOrigin` always true. |
-| `(*Client).readPump` | Unexported: reads until error, discards inbound messages, closes the connection. |
-| `(*Client).writePump` | Unexported: drains `send` as text frames; pings every 50s with a 10s write deadline on ping. |
+| `(*Client).readPump` | Unexported: reads until error (e.g., read deadline exceeded), discards inbound messages, closes the connection. |
+| `(*Client).writePump` | Unexported: drains `send` as text frames; pings every 50s with a 10s write deadline on ping. The connection uses a 60s read deadline extended by pongs. |
 
 Package-level sentinel errors: **none**.
 
@@ -50,7 +50,6 @@ Package-level sentinel errors: **none**.
 
 - **Overflow closes the connection.** When the 256-slot `send` buffer is full and an event cannot be enqueued, the handler calls `dropAndClose` (guarded by `sync.Once` against concurrent overflow from simultaneous `Publish` calls). This logs once — `"gateway: closing WS client, send buffer full (256) — event type %q could not be delivered"` — then closes `conn`. `readPump`'s blocked `ReadMessage` immediately errors and returns, running the deferred unsubscribe loop that removes all per-connection handlers; `writePump` errors on its next write and exits too. Both pumps already `defer conn.Close()`, and gorilla's `Conn.Close` wraps `net.Conn.Close`, which is safe to call multiple times. Both real clients (`StemSocket` in `ui/src/lib/ws.ts`, `initWebSocket` in `static/app.js`) reconnect automatically on `onclose`; a reconnecting client may use `?replay=N` to backfill the gap from `bus.History`.
 - **`CheckOrigin` always returns true.** Origin trust is delegated entirely to outer middleware in `cmdserve.go`; the gateway package itself accepts any Origin header on upgrade.
-- **Weak dead-peer detection.** `writePump` sends Ping frames every 50s but does not register a pong handler or set a read deadline on the connection. `readPump` only exits when `ReadMessage` returns an error; half-open peers can linger until the next write fails.
 - **Replayed events look identical to live ones.** `?replay=N` invokes the same handler used for live `Subscribe` delivery; frames carry no replay marker, sequence number, or "historical" flag. Clients cannot tell catch-up from real-time without their own heuristics.
 - **`Client` is exported but opaque.** External packages can name the type but cannot construct it or call its methods; the export is vestigial relative to the single-entry public API.
 
