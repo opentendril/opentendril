@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -42,7 +43,29 @@ const (
 	// EnvEncryptAtRest, when off/false/0/no/disabled, writes payload columns in
 	// plaintext. Reads still decrypt any pre-existing ciphertext.
 	EnvEncryptAtRest = "TENDRIL_ENCRYPT_AT_REST"
+
+	// EnvHistoryRetentionDays configures age-based pruning of messages, events,
+	// sproutruns, and seedruns. Unset, empty, non-numeric, or non-positive means
+	// retention is disabled — the default is today's unbounded growth, unchanged.
+	EnvHistoryRetentionDays = "TENDRIL_HISTORY_RETENTION_DAYS"
 )
+
+// historyRetentionDaysFromEnv reads EnvHistoryRetentionDays. Returns 0
+// (disabled) when unset; logs a warning and also returns 0 for a
+// present-but-invalid value, so a typo fails safe (no pruning) rather than
+// pruning on some unintended default.
+func historyRetentionDaysFromEnv() int {
+	raw := strings.TrimSpace(os.Getenv(EnvHistoryRetentionDays))
+	if raw == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		log.Printf("⚠️ invalid %s=%q (want a positive integer number of days); retention disabled: %v", EnvHistoryRetentionDays, raw, err)
+		return 0
+	}
+	return parsed
+}
 
 // currentSchemaVersion is the history database's current schema generation.
 // Bump this and add a migration step in migrateSchema when a future change
@@ -868,4 +891,94 @@ WHERE handle = ?`
 		}
 	}
 	return run, true, nil
+}
+
+// PruneOlderThan deletes rows from messages, events, sproutruns, and
+// seedruns whose timestamp column is older than cutoff, then VACUUMs if
+// anything was actually deleted (skipped on a no-op sweep to avoid the cost
+// of rewriting the whole file for nothing). Never touches sessions — session
+// lifecycle is session.Manager's own Prune/DeleteSession path, not this
+// package's. Returns the total row count deleted across all four tables.
+func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
+	if s == nil {
+		return 0, nil
+	}
+	cutoffStr := cutoff.UTC().Format(time.RFC3339Nano)
+
+	var total int64
+	for _, q := range []struct {
+		table  string
+		column string
+	}{
+		{"messages", "createdAt"},
+		{"events", "createdAt"},
+		{"sproutruns", "startedAt"},
+		{"seedruns", "startedAt"},
+	} {
+		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s < ?", q.table, q.column), cutoffStr)
+		if err != nil {
+			return total, fmt.Errorf("prune %s older than %s: %w", q.table, cutoffStr, err)
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("count pruned rows in %s: %w", q.table, err)
+		}
+		total += n
+	}
+
+	if total > 0 {
+		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+			return total, fmt.Errorf("vacuum after pruning %d row(s): %w", total, err)
+		}
+	}
+	return total, nil
+}
+
+// retentionSweepInterval is how often StartRetentionSweep re-checks and
+// prunes. Fixed, not configurable — only the retention window itself
+// (EnvHistoryRetentionDays) is an operator-facing knob; the sweep cadence is
+// an implementation detail.
+const retentionSweepInterval = 24 * time.Hour
+
+// StartRetentionSweep launches a background loop that prunes rows older
+// than the configured retention window, once immediately and then every
+// retentionSweepInterval. No-op when retention is disabled (the default).
+// Stops when ctx is cancelled — wire it to the daemon's shutdown ctx.
+func (s *Store) StartRetentionSweep(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	days := historyRetentionDaysFromEnv()
+	if days <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	sweep := func() {
+		cutoff := time.Now().UTC().AddDate(0, 0, -days)
+		n, err := s.PruneOlderThan(ctx, cutoff)
+		if err != nil {
+			log.Printf("⚠️ historydb retention sweep failed: %v", err)
+			return
+		}
+		if n > 0 {
+			log.Printf("🧹 historydb retention: pruned %d row(s) older than %d day(s)", n, days)
+		}
+	}
+
+	sweep()
+	go func() {
+		ticker := time.NewTicker(retentionSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
 }

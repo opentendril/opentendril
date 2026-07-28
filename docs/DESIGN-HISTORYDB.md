@@ -23,7 +23,7 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 **Does not:**
 
 - Own any CLI, REST, MCP, or WebSocket wiring — surfaces in `cmd/stem` open the store and attach it; this package is storage only.
-- Prune, expire, vacuum, or cap growth — no retention logic exists; the `events` table grows with every published event.
+- Automatically prune, expire, vacuum, or cap growth by default. Age-based retention exists but is disabled by default (opt-in via `TENDRIL_HISTORY_RETENTION_DAYS`); without it, the `events` table grows with every published event.
 - Migrate the schema. While a version row (`schemaMeta`) now exists to fail-closed against a newer-than-supported version, there is currently no `ALTER` path or actual migration framework since the schema has never changed.
 - Block the orchestrator hot path — as an EventBus sink, persistence failures are counted and logged sparsely, never propagated back to `Publish`.
 - Define or resolve session/event semantics — it stores the `session` and `eventbus` types verbatim and translates none of them.
@@ -48,6 +48,8 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 | `RecordEvent` / `LoadEvents` | Write one telemetry event / load recent rows, optionally filtered by session (default limit 100). |
 | `RecordSproutRun` / `LoadSproutRuns` | Upsert a Sprout run by `runId` / load recent, optionally by session (default limit 50). |
 | `RecordSeedRun` / `GetSeedRun` | Upsert a seed run by `handle` / fetch one by handle (returns `found bool`; a missing handle is not an error). |
+| `PruneOlderThan` | Delete rows from messages, events, sproutruns, and seedruns older than a cutoff, then `VACUUM` if any were deleted. |
+| `StartRetentionSweep` | Launch a background loop that prunes rows older than `TENDRIL_HISTORY_RETENTION_DAYS`. |
 
 **Sentinel errors:** none. The package exports no error values; validation returns dynamically formatted errors (for example, `RecordSproutRun` requires `runId`, `RecordSeedRun` requires a non-empty `handle`, `GetSeedRun` requires a handle), and all storage failures are wrapped with `fmt.Errorf(... %w ...)`. A not-found `GetSeedRun` is signalled by a `false` boolean rather than a sentinel.
 
@@ -72,7 +74,7 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 
 - **`TENDRIL_DB_LOGGING=false` disables all persistence.** `OpenFromEnv` returns `(nil, nil)`, so the `SessionManager` runs in-memory and receptor record calls short-circuit on their nil guard. Nothing is written and nothing survives a restart. This is the intended fail-safe posture: an open failure in `cmdserve.go` is also downgraded to a nil store with a warning rather than aborting startup — the Stem always keeps running, persistence is best-effort.
 - **Single-writer concurrency ceiling.** `Open` sets `db.SetMaxOpenConns(1)`; the CGO-free driver serializes access per connection, and WAL plus `busy_timeout = 5000` avoids `SQLITE_BUSY` under the concurrent gateway surfaces. All writes funnel through one connection — adequate for a local Stem, not a high-concurrency multi-writer store.
-- **Unbounded growth.** There is no retention, pruning, expiry, or vacuum. Every published event is appended to `events`, and transcripts/diffs/logs are stored in full; the file grows without limit over the life of a workspace.
+- **Unbounded growth by default.** By default there is no retention, pruning, expiry, or vacuum. Every published event is appended to `events`, and transcripts/diffs/logs are stored in full. Opt-in age-based retention can be enabled via the `TENDRIL_HISTORY_RETENTION_DAYS` environment variable, which prunes messages, events, sproutruns, and seedruns (deliberately excluding `sessions`). **Security tradeoff:** Enabling retention prunes audit-relevant events (e.g. delegation-authorized/denied, host-execution-activated) along with everything else — there is no per-event-type carve-out. Operators who need long-term audit retention should leave retention disabled or set a suitably long window. Additionally, pruning triggers a `VACUUM` which briefly holds the single DB connection (`SetMaxOpenConns(1)`), momentarily blocking other concurrent history writes on a large database.
 - **Encryption scope is payload-only.** Structural and index columns stay plaintext for queries. The Tier-1 auto-key (`.tendril/rhizome.key`) is defense-in-depth, not a boundary against a full `.tendril` read; only `OPEN_TENDRIL_INDEX_KEY` provides a real control (see DESIGN-HEARTWOOD.md). Encryption can be bypassed by setting `TENDRIL_ENCRYPT_AT_REST=false`.
 - **Naive migration handling.** Schema creation is `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`. A `schemaMeta` version row now exists and is checked on open (a newer-than-supported version fails closed), but no actual migration mechanism exists yet since `currentSchemaVersion` has only ever been `1`. A future schema change still needs to add its own migration step when it happens.
 - **Lossy telemetry, silent by design.** `Consume` never returns an error; failures increment `eventErrors` and log only on every 100th failure. Combined with the bus dropping events on a full sink buffer, some telemetry can be lost without a hard signal.

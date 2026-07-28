@@ -482,3 +482,126 @@ INSERT INTO schemaMeta (id, version) VALUES (1, 999);`
 		t.Errorf("expected error about newer version, got: %v", err)
 	}
 }
+
+func TestPruneOlderThanDeletesOldRows(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	newTime := time.Now().UTC()
+
+	// 1. messages
+	_ = store.AppendMessage(ctx, session.Message{SessionID: "s1", Role: "user", Content: "old", CreatedAt: oldTime})
+	_ = store.AppendMessage(ctx, session.Message{SessionID: "s1", Role: "user", Content: "new", CreatedAt: newTime})
+
+	// 2. events
+	_ = store.RecordEvent(ctx, eventbus.Event{SessionID: "s1", Type: "old_event", Timestamp: oldTime})
+	_ = store.RecordEvent(ctx, eventbus.Event{SessionID: "s1", Type: "new_event", Timestamp: newTime})
+
+	// 3. sproutruns
+	_ = store.RecordSproutRun(ctx, SproutRun{RunID: "old-sprout", SessionID: "s1", Status: "running", StartedAt: oldTime})
+	_ = store.RecordSproutRun(ctx, SproutRun{RunID: "new-sprout", SessionID: "s1", Status: "running", StartedAt: newTime})
+
+	// 4. seedruns
+	_ = store.RecordSeedRun(ctx, SeedRun{Handle: "old-seed", Status: "running", StartedAt: oldTime})
+	_ = store.RecordSeedRun(ctx, SeedRun{Handle: "new-seed", Status: "running", StartedAt: newTime})
+
+	cutoff := time.Now().UTC().Add(-50 * 24 * time.Hour)
+	n, err := store.PruneOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if n != 4 {
+		t.Fatalf("expected 4 rows deleted, got %d", n)
+	}
+
+	msgs, _ := store.LoadMessages(ctx, "s1", 10)
+	if len(msgs) != 1 || msgs[0].Content != "new" {
+		t.Fatalf("expected 1 new message, got %+v", msgs)
+	}
+
+	events, _ := store.LoadEvents(ctx, "s1", 10)
+	if len(events) != 1 || events[0].Type != string("new_event") {
+		t.Fatalf("expected 1 new event, got %+v", events)
+	}
+
+	sprouts, _ := store.LoadSproutRuns(ctx, "s1", 10)
+	if len(sprouts) != 1 || sprouts[0].RunID != "new-sprout" {
+		t.Fatalf("expected 1 new sprout run, got %+v", sprouts)
+	}
+
+	_, okOld, _ := store.GetSeedRun(ctx, "old-seed")
+	if okOld {
+		t.Fatalf("expected old seed run to be deleted")
+	}
+	_, okNew, _ := store.GetSeedRun(ctx, "new-seed")
+	if !okNew {
+		t.Fatalf("expected new seed run to remain")
+	}
+}
+
+func TestPruneOlderThanNeverTouchesSessions(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	sess := session.Phytomer{
+		ID:           "s-old",
+		Origin:       session.OriginCLI,
+		CreatedAt:    oldTime,
+		LastActiveAt: oldTime,
+	}
+	if err := store.SaveSession(ctx, sess); err != nil {
+		t.Fatalf("SaveSession: %v", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-50 * 24 * time.Hour)
+	n, err := store.PruneOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 rows deleted, got %d", n)
+	}
+
+	_, ok, _ := store.LoadSession(ctx, "s-old")
+	if !ok {
+		t.Fatalf("expected session to remain")
+	}
+}
+
+func TestPruneOlderThanSkipsVacuumOnNoOp(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	cutoff := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	n, err := store.PruneOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 rows deleted, got %d", n)
+	}
+}
+
+func TestHistoryRetentionDaysFromEnv(t *testing.T) {
+	t.Setenv(EnvHistoryRetentionDays, "")
+	if got := historyRetentionDaysFromEnv(); got != 0 {
+		t.Errorf("unset expected 0, got %d", got)
+	}
+
+	t.Setenv(EnvHistoryRetentionDays, "30")
+	if got := historyRetentionDaysFromEnv(); got != 30 {
+		t.Errorf("valid '30' expected 30, got %d", got)
+	}
+
+	t.Setenv(EnvHistoryRetentionDays, "invalid")
+	if got := historyRetentionDaysFromEnv(); got != 0 {
+		t.Errorf("invalid string expected 0, got %d", got)
+	}
+
+	t.Setenv(EnvHistoryRetentionDays, "-5")
+	if got := historyRetentionDaysFromEnv(); got != 0 {
+		t.Errorf("non-positive expected 0, got %d", got)
+	}
+}
