@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -407,5 +409,202 @@ func TestDisabledConfigAndNilSchedulerAreNoOps(t *testing.T) {
 	nilSched.Start(context.Background())
 	if firer.count() != 0 {
 		t.Fatalf("disabled config must never fire, got %d", firer.count())
+	}
+}
+
+func TestHotReloadPicksUpNewSchedule(t *testing.T) {
+	firer := &fakeFirer{}
+	path := filepath.Join(t.TempDir(), "schedules.yaml")
+	initialYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+`
+	if err := os.WriteFile(path, []byte(initialYAML), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, _ := LoadConfig(path)
+	s := New(cfg, firer, log.New(io.Discard, "", 0))
+	s.EnableHotReload(path)
+
+	if len(s.entries) != 1 {
+		t.Fatalf("want 1 initial entry, got %d", len(s.entries))
+	}
+
+	// Wait a moment so the next write definitely advances mtime.
+	time.Sleep(10 * time.Millisecond)
+
+	updatedYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+  midnight:
+    cron: "0 0 * * *"
+    sequence: "seq2"
+`
+	if err := os.WriteFile(path, []byte(updatedYAML), 0644); err != nil {
+		t.Fatalf("update config: %v", err)
+	}
+
+	s.maybeReloadConfig()
+
+	if len(s.entries) != 2 {
+		t.Fatalf("want 2 entries after reload, got %d", len(s.entries))
+	}
+	if s.entries[0].name != "midnight" && s.entries[1].name != "midnight" {
+		t.Fatalf("new entry not found")
+	}
+}
+
+func TestHotReloadRemovesSchedule(t *testing.T) {
+	firer := &fakeFirer{}
+	path := filepath.Join(t.TempDir(), "schedules.yaml")
+	initialYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+  midnight:
+    cron: "0 0 * * *"
+    sequence: "seq2"
+`
+	os.WriteFile(path, []byte(initialYAML), 0644)
+
+	cfg, _ := LoadConfig(path)
+	s := New(cfg, firer, log.New(io.Discard, "", 0))
+	s.EnableHotReload(path)
+
+	time.Sleep(10 * time.Millisecond)
+
+	updatedYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+`
+	os.WriteFile(path, []byte(updatedYAML), 0644)
+
+	s.maybeReloadConfig()
+
+	if len(s.entries) != 1 {
+		t.Fatalf("want 1 entry after reload, got %d", len(s.entries))
+	}
+	if s.entries[0].name != "noon" {
+		t.Fatalf("want noon entry, got %s", s.entries[0].name)
+	}
+}
+
+func TestHotReloadKeepsOldEntriesOnBadReload(t *testing.T) {
+	firer := &fakeFirer{}
+	path := filepath.Join(t.TempDir(), "schedules.yaml")
+	initialYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+`
+	os.WriteFile(path, []byte(initialYAML), 0644)
+
+	cfg, _ := LoadConfig(path)
+	s := New(cfg, firer, log.New(io.Discard, "", 0))
+	s.EnableHotReload(path)
+
+	time.Sleep(10 * time.Millisecond)
+
+	badYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "NOT A CRON"
+    sequence: "seq"
+`
+	os.WriteFile(path, []byte(badYAML), 0644)
+
+	s.maybeReloadConfig()
+
+	if len(s.entries) != 1 {
+		t.Fatalf("want 1 entry kept on bad reload, got %d", len(s.entries))
+	}
+	if s.entries[0].entry.Cron != "0 12 * * *" {
+		t.Fatalf("want original cron kept, got %s", s.entries[0].entry.Cron)
+	}
+}
+
+func TestHotReloadNoOpWhenFileUnchanged(t *testing.T) {
+	firer := &fakeFirer{}
+	path := filepath.Join(t.TempDir(), "schedules.yaml")
+	initialYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+`
+	os.WriteFile(path, []byte(initialYAML), 0644)
+
+	cfg, _ := LoadConfig(path)
+	s := New(cfg, firer, log.New(io.Discard, "", 0))
+	s.EnableHotReload(path)
+
+	entriesPtr := s.entries
+
+	// Call it without modifying the file.
+	s.maybeReloadConfig()
+
+	// Since slice headers are equal only if elements, length and capacity match,
+	// but rebuilding reallocates the slice, comparing the pointer of the first
+	// element is a good way to check if it was rebuilt.
+	if len(s.entries) == 0 || s.entries[0] != entriesPtr[0] {
+		t.Fatalf("entries slice elements were replaced despite unchanged file")
+	}
+}
+
+// TestHotReloadFromZeroEntries proves maybeReloadConfig itself correctly
+// builds a fresh entry list when the scheduler started with none (an
+// empty/disabled initial config). It drives maybeReloadConfig directly,
+// like every other test in this file, rather than Start's real background
+// ticker goroutine: entries is documented as touched only by that goroutine,
+// so a test reading it concurrently from the outside while the goroutine
+// might also be writing it (on a short tick) would itself be a data race
+// under -race, and adding a mutex just to make this one edge case racily
+// testable would be new locking this package's design deliberately avoids.
+// Start's own early-return guard (configPath != "" keeps the goroutine
+// alive even from zero entries) is a one-line boolean condition, verified
+// by direct inspection rather than a live concurrent test for that reason.
+func TestHotReloadFromZeroEntries(t *testing.T) {
+	firer := &fakeFirer{}
+	path := filepath.Join(t.TempDir(), "schedules.yaml")
+	initialYAML := `enabled: false`
+	os.WriteFile(path, []byte(initialYAML), 0644)
+
+	cfg, _ := LoadConfig(path)
+	s := New(cfg, firer, log.New(io.Discard, "", 0))
+	s.EnableHotReload(path)
+
+	if len(s.entries) != 0 {
+		t.Fatalf("want 0 initial entries from a disabled config, got %d", len(s.entries))
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	updatedYAML := `
+enabled: true
+schedules:
+  noon:
+    cron: "0 12 * * *"
+    sequence: "seq"
+`
+	os.WriteFile(path, []byte(updatedYAML), 0644)
+
+	s.maybeReloadConfig()
+	if len(s.entries) != 1 {
+		t.Fatalf("want 1 entry after hot-reload from zero, got %d", len(s.entries))
 	}
 }

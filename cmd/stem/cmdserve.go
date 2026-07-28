@@ -266,10 +266,16 @@ func runServeCmd(ctx context.Context, args []string) {
 	schedulesPath := filepath.Join(tendrilDir, "schedules.yaml")
 	if schedCfg, err := scheduler.LoadConfig(schedulesPath); err != nil {
 		log.Printf("⚠️ Failed to load scheduler config: %v (scheduling disabled)", err)
-	} else if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
+	} else {
 		firer := scheduledRunFirer(coreSvc, sessions, getTriggersDir(), bus)
-		scheduler.New(schedCfg, firer, log.Default()).Start(ctx)
-		log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
+		sched := scheduler.New(schedCfg, firer, log.Default())
+		sched.EnableHotReload(schedulesPath)
+		sched.Start(ctx)
+		if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
+			log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
+		} else {
+			log.Printf("Scheduler armed with hot-reload, watching %s (no schedules active yet)", schedulesPath)
+		}
 	}
 
 	// Continuous health monitoring: publishes health-check/health-degraded
