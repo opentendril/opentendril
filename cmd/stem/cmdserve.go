@@ -289,6 +289,9 @@ func runServeCmd(ctx context.Context, args []string) {
 	// same daemon shutdown ctx as healthmon and the scheduler. TTL via
 	// TENDRIL_SESSION_TTL (default 24h).
 	sessions.StartIdleEviction(ctx)
+	if history != nil {
+		history.StartRetentionSweep(ctx)
+	}
 
 	// Tendril session REST API (adapter).
 	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
