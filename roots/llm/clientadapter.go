@@ -62,6 +62,9 @@ func (anthropicAdapter) ModelsPath() string {
 }
 
 func (anthropicAdapter) SetModelsAuthHeaders(req *http.Request, apiKey string) {
+	if apiKey == "" {
+		return
+	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 }

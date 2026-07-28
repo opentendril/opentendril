@@ -169,6 +169,41 @@ func TestListModelsUsesAnthropicVersionedEndpoint(t *testing.T) {
 	}
 }
 
+// TestListModelsAnthropicEmptyAPIKeySetsNoAuthHeaders proves that an
+// Anthropic client with no API key sends neither x-api-key nor
+// anthropic-version on the models-list request — matching the pre-adapter
+// behavior, which gated both headers behind a single non-empty-key check.
+// A caught-in-review regression made anthropicAdapter set both
+// unconditionally, including an empty x-api-key header, when the API key
+// was empty.
+func TestListModelsAnthropicEmptyAPIKeySetsNoAuthHeaders(t *testing.T) {
+	var apiKeySet, versionSet bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, apiKeySet = r.Header["X-Api-Key"]
+		_, versionSet = r.Header["Anthropic-Version"]
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "claude-test"}}})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "anthropic",
+		BaseURL:  server.URL,
+		Endpoint: "/v1/messages",
+		Mode:     ModeAnthropic,
+		APIKey:   "",
+	})
+
+	if _, err := client.ListModels(context.Background()); err != nil {
+		t.Fatalf("ListModels failed: %v", err)
+	}
+	if apiKeySet {
+		t.Errorf("x-api-key header was set with an empty API key, want absent entirely")
+	}
+	if versionSet {
+		t.Errorf("anthropic-version header was set with an empty API key, want absent entirely")
+	}
+}
+
 func TestResolveLocalProviderSpecUsesTendrilConfig(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "")
