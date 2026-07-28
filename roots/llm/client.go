@@ -55,6 +55,7 @@ type Message struct {
 type Client struct {
 	httpClient *http.Client
 	spec       ProviderSpec
+	adapter    providerAdapter
 }
 
 type tendrilConfig struct {
@@ -91,6 +92,7 @@ func NewClient(spec ProviderSpec) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
 		spec:       spec,
+		adapter:    adapterForMode(spec.Mode),
 	}
 }
 
@@ -628,23 +630,12 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 	// Anthropic discovery hit api.anthropic.com/models (a 404) and silently fell
 	// back to the static registry on every call, making that registry the only
 	// source of Anthropic model selection.
-	modelsPath := "/models"
-	if c.spec.Mode == ModeAnthropic {
-		modelsPath = "/v1/models"
-	}
-	url := strings.TrimRight(baseURL, "/") + modelsPath
+	url := strings.TrimRight(baseURL, "/") + c.adapter.ModelsPath()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create models request: %w", err)
 	}
-	if c.spec.APIKey != "" {
-		if c.spec.Mode == ModeAnthropic {
-			req.Header.Set("x-api-key", c.spec.APIKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
-		} else {
-			req.Header.Set("Authorization", "Bearer "+c.spec.APIKey)
-		}
-	}
+	c.adapter.SetModelsAuthHeaders(req, c.spec.APIKey)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -684,78 +675,22 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 
 func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, stream bool, tokenChan chan<- string) (string, error) {
 	var (
-		payload []byte
-		url     = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
-		req     *http.Request
-		err     error
+		url = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
+		req *http.Request
 	)
 
-	switch c.spec.Mode {
-	case ModeAnthropic:
-		systemParts := make([]string, 0, 2)
-		anthropicMessages := make([]map[string]any, 0, len(messages))
-		for _, message := range messages {
-			role := strings.ToLower(strings.TrimSpace(message.Role))
-			content := message.Content
-			trimmedContent := strings.TrimSpace(content)
-			switch role {
-			case "system":
-				if trimmedContent != "" {
-					systemParts = append(systemParts, trimmedContent)
-				}
-			case "assistant", "user":
-				anthropicMessages = append(anthropicMessages, anthropicMessagePayload(role, content))
-			default:
-				anthropicMessages = append(anthropicMessages, anthropicMessagePayload("user", content))
-			}
-		}
+	payload, err := c.adapter.BuildChatRequest(c.spec, messages, stream)
+	if err != nil {
+		return "", err
+	}
 
-		payloadBody := map[string]any{
-			"model":       c.spec.Model,
-			"max_tokens":  2048,
-			"temperature": c.spec.Temperature,
-			"messages":    anthropicMessages,
-			"stream":      stream,
-		}
-		if len(systemParts) > 0 {
-			payloadBody["system"] = []map[string]any{
-				anthropicTextBlock(strings.Join(systemParts, "\n\n"), true),
-			}
-		}
-
-		payload, err = json.Marshal(payloadBody)
-		if err != nil {
-			return "", fmt.Errorf("marshal anthropic request: %w", err)
-		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return "", fmt.Errorf("create anthropic request: %w", err)
-		}
-		req.Header.Set("x-api-key", c.spec.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	default:
-		payload, err = json.Marshal(map[string]any{
-			"model":       c.spec.Model,
-			"temperature": c.spec.Temperature,
-			"stream":      stream,
-			"messages":    messages,
-		})
-		if err != nil {
-			return "", fmt.Errorf("marshal chat request: %w", err)
-		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return "", fmt.Errorf("create chat request: %w", err)
-		}
-		if c.spec.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.spec.APIKey)
-		}
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("create chat request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	if c.spec.Mode == ModeAnthropic {
-		req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
-	}
+	c.adapter.SetChatHeaders(req, c.spec)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -779,41 +714,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				break
 			}
 
-			if c.spec.Mode == ModeAnthropic {
-				var event struct {
-					Type  string `json:"type"`
-					Delta struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					} `json:"delta"`
-				}
-				if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
-					if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
-						text := event.Delta.Text
-						fullContent.WriteString(text)
-						if tokenChan != nil {
-							tokenChan <- text
-						}
-					}
-				}
-			} else {
-				var chunk struct {
-					Choices []struct {
-						Delta struct {
-							Content string `json:"content"`
-						} `json:"delta"`
-					} `json:"choices"`
-				}
-				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
-					if len(chunk.Choices) > 0 {
-						text := chunk.Choices[0].Delta.Content
-						if text != "" {
-							fullContent.WriteString(text)
-							if tokenChan != nil {
-								tokenChan <- text
-							}
-						}
-					}
+			if text, ok := c.adapter.ParseStreamChunk(dataStr); ok {
+				fullContent.WriteString(text)
+				if tokenChan != nil {
+					tokenChan <- text
 				}
 			}
 		}
@@ -831,43 +735,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	switch c.spec.Mode {
-	case ModeAnthropic:
-		var decoded struct {
-			Content []struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-		}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			return "", fmt.Errorf("decode anthropic response: %w", err)
-		}
-		for _, block := range decoded.Content {
-			if strings.TrimSpace(block.Text) != "" {
-				return strings.TrimSpace(block.Text), nil
-			}
-		}
-		return "", fmt.Errorf("anthropic response contained no text")
-	default:
-		var decoded struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal(body, &decoded); err != nil {
-			return "", fmt.Errorf("decode chat response: %w", err)
-		}
-		if len(decoded.Choices) == 0 {
-			return "", fmt.Errorf("chat response contained no choices")
-		}
-		content := strings.TrimSpace(decoded.Choices[0].Message.Content)
-		if content == "" {
-			return "", fmt.Errorf("chat response contained no content")
-		}
-		return content, nil
-	}
+	return c.adapter.ParseResponse(body)
 }
 
 func anthropicTextBlock(text string, cache bool) map[string]any {

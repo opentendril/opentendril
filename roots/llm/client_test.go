@@ -3,10 +3,13 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -214,5 +217,278 @@ llm:
 	}
 	if spec.Temperature != 0.2 {
 		t.Fatalf("spec.Temperature = %v, want 0.2", spec.Temperature)
+	}
+}
+
+func TestCallSendsAnthropicShapedRequestWithCaching(t *testing.T) {
+	var (
+		bodyData          []byte
+		apiKeyHeader      string
+		versionHeader     string
+		betaHeader        string
+		contentTypeHeader string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		apiKeyHeader = r.Header.Get("x-api-key")
+		versionHeader = r.Header.Get("anthropic-version")
+		betaHeader = r.Header.Get("anthropic-beta")
+		contentTypeHeader = r.Header.Get("Content-Type")
+		var err error
+		bodyData, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"content": []map[string]any{
+				{"type": "text", "text": "mock response text"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider:    "anthropic",
+		BaseURL:     server.URL,
+		Endpoint:    "/v1/messages",
+		Mode:        ModeAnthropic,
+		APIKey:      "test-key",
+		Model:       "claude-test",
+		Temperature: 0.5,
+	})
+
+	messages := []Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "user prompt that is very very long " + strings.Repeat("a", 1000)},
+	}
+
+	res, err := client.Call(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+	if res != "mock response text" {
+		t.Fatalf("response = %q, want %q", res, "mock response text")
+	}
+
+	if apiKeyHeader != "test-key" {
+		t.Fatalf("x-api-key = %q, want test-key", apiKeyHeader)
+	}
+	if versionHeader != "2023-06-01" {
+		t.Fatalf("anthropic-version = %q, want 2023-06-01", versionHeader)
+	}
+	if betaHeader != "prompt-caching-2024-07-31" {
+		t.Fatalf("anthropic-beta = %q, want prompt-caching-2024-07-31", betaHeader)
+	}
+	if contentTypeHeader != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", contentTypeHeader)
+	}
+
+	var parsedBody map[string]any
+	if err := json.Unmarshal(bodyData, &parsedBody); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+
+	if parsedBody["model"] != "claude-test" {
+		t.Fatalf("model = %v, want claude-test", parsedBody["model"])
+	}
+
+	systemObj, ok := parsedBody["system"].([]any)
+	if !ok || len(systemObj) == 0 {
+		t.Fatalf("system is missing or empty")
+	}
+	sysBlock := systemObj[0].(map[string]any)
+	if sysBlock["text"] != "system prompt" {
+		t.Fatalf("system text = %v", sysBlock["text"])
+	}
+
+	messagesArr, ok := parsedBody["messages"].([]any)
+	if !ok || len(messagesArr) == 0 {
+		t.Fatalf("messages is missing or empty")
+	}
+	msg1 := messagesArr[0].(map[string]any)
+	if msg1["role"] != "user" {
+		t.Fatalf("message 1 role = %v", msg1["role"])
+	}
+	contentArr := msg1["content"].([]any)
+	contentBlock := contentArr[0].(map[string]any)
+	if _, hasCache := contentBlock["cache_control"]; !hasCache {
+		t.Fatalf("message 1 is missing cache_control block")
+	}
+}
+
+func TestCallSendsOpenAIShapedRequestWithoutCaching(t *testing.T) {
+	var (
+		bodyData          []byte
+		authHeader        string
+		betaHeader        string
+		contentTypeHeader string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		authHeader = r.Header.Get("Authorization")
+		betaHeader = r.Header.Get("anthropic-beta")
+		contentTypeHeader = r.Header.Get("Content-Type")
+		var err error
+		bodyData, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "mock openai response"}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider:    "openai",
+		BaseURL:     server.URL,
+		Endpoint:    "/chat/completions",
+		Mode:        ModeOpenAIish,
+		APIKey:      "test-key-openai",
+		Model:       "gpt-test",
+		Temperature: 0.5,
+	})
+
+	messages := []Message{
+		{Role: "system", Content: "system prompt"},
+		{Role: "user", Content: "user prompt " + strings.Repeat("a", 1000)},
+	}
+
+	res, err := client.Call(context.Background(), messages)
+	if err != nil {
+		t.Fatalf("Call failed: %v", err)
+	}
+	if res != "mock openai response" {
+		t.Fatalf("response = %q, want %q", res, "mock openai response")
+	}
+
+	if authHeader != "Bearer test-key-openai" {
+		t.Fatalf("Authorization = %q, want Bearer test-key-openai", authHeader)
+	}
+	if betaHeader != "" {
+		t.Fatalf("anthropic-beta = %q, want empty", betaHeader)
+	}
+	if contentTypeHeader != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", contentTypeHeader)
+	}
+
+	var parsedBody map[string]any
+	if err := json.Unmarshal(bodyData, &parsedBody); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+
+	if parsedBody["model"] != "gpt-test" {
+		t.Fatalf("model = %v, want gpt-test", parsedBody["model"])
+	}
+
+	if _, ok := parsedBody["system"]; ok {
+		t.Fatalf("expected no top-level system field")
+	}
+
+	messagesArr, ok := parsedBody["messages"].([]any)
+	if !ok || len(messagesArr) != 2 {
+		t.Fatalf("messages length = %d, want 2", len(messagesArr))
+	}
+	sysMsg := messagesArr[0].(map[string]any)
+	if sysMsg["role"] != "system" || sysMsg["content"] != "system prompt" {
+		t.Fatalf("unexpected system message inside messages array: %v", sysMsg)
+	}
+}
+
+func TestCallStreamParsesAnthropicChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`{"type":"message_start","message":{}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		}
+		for _, ev := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "anthropic",
+		BaseURL:  server.URL,
+		Endpoint: "/v1/messages",
+		Mode:     ModeAnthropic,
+		APIKey:   "key",
+		Model:    "claude-test",
+	})
+
+	tokenChan := make(chan string, 10)
+	res, err := client.CallStream(context.Background(), []Message{{Role: "user", Content: "hi"}}, tokenChan)
+	if err != nil {
+		t.Fatalf("CallStream failed: %v", err)
+	}
+	if res != "hello world" {
+		t.Fatalf("response = %q, want 'hello world'", res)
+	}
+
+	var received []string
+	for tItem := range tokenChan {
+		received = append(received, tItem)
+	}
+	if len(received) != 2 || received[0] != "hello" || received[1] != " world" {
+		t.Fatalf("tokens = %v, want ['hello', ' world']", received)
+	}
+}
+
+func TestCallStreamParsesOpenAIChunks(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		events := []string{
+			`{"id":"1","choices":[{"delta":{"role":"assistant"}}]}`,
+			`{"id":"1","choices":[{"delta":{"content":"hello"}}]}`,
+			`{"id":"1","choices":[{"delta":{"content":" world"}}]}`,
+			`{"id":"1","choices":[{"delta":{}}]}`,
+		}
+		for _, ev := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+
+	tokenChan := make(chan string, 10)
+	res, err := client.CallStream(context.Background(), []Message{{Role: "user", Content: "hi"}}, tokenChan)
+	if err != nil {
+		t.Fatalf("CallStream failed: %v", err)
+	}
+	if res != "hello world" {
+		t.Fatalf("response = %q, want 'hello world'", res)
+	}
+
+	var received []string
+	for tItem := range tokenChan {
+		received = append(received, tItem)
+	}
+	if len(received) != 2 || received[0] != "hello" || received[1] != " world" {
+		t.Fatalf("tokens = %v, want ['hello', ' world']", received)
 	}
 }
