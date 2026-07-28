@@ -474,3 +474,161 @@ func TestEvictIdleRespectsTTL(t *testing.T) {
 		t.Fatalf("eviction deleted from store: ok=%v err=%v", ok, err)
 	}
 }
+
+// TestRecordMessagePersistsToStore proves RecordMessage writes through to
+// Store.AppendMessage and Store.SaveSession — not just the in-memory buffer.
+// Assertions read the store directly, bypassing Manager, so a pure memory-path
+// implementation would fail them.
+func TestRecordMessagePersistsToStore(t *testing.T) {
+	store := newMemStore()
+	m, err := NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	s, err := m.Initiate(context.Background(), OriginREST, Preferences{})
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+	before, ok, err := store.LoadSession(context.Background(), s.ID)
+	if err != nil || !ok {
+		t.Fatalf("store missing session after Initiate: ok=%v err=%v", ok, err)
+	}
+
+	// Advance wall clock so LastActiveAt must move when RecordMessage saves.
+	time.Sleep(2 * time.Millisecond)
+
+	for _, content := range []string{"alpha", "beta"} {
+		if err := m.RecordMessage(context.Background(), Message{
+			SessionID: s.ID,
+			Role:      "user",
+			Content:   content,
+		}); err != nil {
+			t.Fatalf("RecordMessage: %v", err)
+		}
+	}
+
+	// (a) Messages landed in the store — not only in Manager memory.
+	stored, err := store.LoadMessages(context.Background(), s.ID, 10)
+	if err != nil {
+		t.Fatalf("store.LoadMessages: %v", err)
+	}
+	if len(stored) != 2 || stored[0].Content != "alpha" || stored[1].Content != "beta" {
+		t.Fatalf("store did not receive AppendMessage writes: %+v", stored)
+	}
+
+	// (b) SaveSession inside RecordMessage advanced LastActiveAt on the store copy.
+	after, ok, err := store.LoadSession(context.Background(), s.ID)
+	if err != nil || !ok {
+		t.Fatalf("store.LoadSession after RecordMessage: ok=%v err=%v", ok, err)
+	}
+	if !after.LastActiveAt.After(before.LastActiveAt) {
+		t.Fatalf("store LastActiveAt did not advance via SaveSession: before=%v after=%v",
+			before.LastActiveAt, after.LastActiveAt)
+	}
+}
+
+// TestHistoryReadsFromStoreWhenAttached proves History prefers Store.LoadMessages
+// over the in-memory buffer when a store is attached. Messages seeded directly
+// into the store (never through Manager.RecordMessage) must still surface.
+func TestHistoryReadsFromStoreWhenAttached(t *testing.T) {
+	store := newMemStore()
+	m, err := NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	s, err := m.Initiate(context.Background(), OriginCLI, Preferences{})
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+
+	// Seed the store only — Manager's in-memory buffer never sees this message.
+	seeded := Message{
+		SessionID: s.ID,
+		Role:      "assistant",
+		Content:   "store-only payload",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := store.AppendMessage(context.Background(), seeded); err != nil {
+		t.Fatalf("store.AppendMessage seed: %v", err)
+	}
+
+	history, err := m.History(context.Background(), s.ID, 10)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history) != 1 || history[0].Content != "store-only payload" {
+		t.Fatalf("History did not read store-seeded messages (memory path?): %+v", history)
+	}
+}
+
+// TestUpdatePreferencesPersistsToStore proves UpdatePreferences calls
+// Store.SaveSession with the merged preferences — verified by reading the
+// store copy directly, not the Manager return value.
+func TestUpdatePreferencesPersistsToStore(t *testing.T) {
+	store := newMemStore()
+	m, err := NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	s, err := m.Initiate(context.Background(), OriginREST, Preferences{
+		Model: "claude-fable-5",
+	})
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+
+	if _, err := m.UpdatePreferences(context.Background(), s.ID, Preferences{
+		Genotype: "go-dev",
+		Extras:   map[string]string{"tone": "terse"},
+	}); err != nil {
+		t.Fatalf("UpdatePreferences: %v", err)
+	}
+
+	stored, ok, err := store.LoadSession(context.Background(), s.ID)
+	if err != nil || !ok {
+		t.Fatalf("store.LoadSession after UpdatePreferences: ok=%v err=%v", ok, err)
+	}
+	if stored.Preferences.Model != "claude-fable-5" {
+		t.Fatalf("store lost original Model after merge: %+v", stored.Preferences)
+	}
+	if stored.Preferences.Genotype != "go-dev" {
+		t.Fatalf("store missing Genotype override: %+v", stored.Preferences)
+	}
+	if stored.Preferences.Extras["tone"] != "terse" {
+		t.Fatalf("store missing Extras override: %+v", stored.Preferences)
+	}
+}
+
+// TestTouchPersistsToStore proves Touch writes the refreshed LastActiveAt
+// through Store.SaveSession — verified against the store copy, not memory.
+func TestTouchPersistsToStore(t *testing.T) {
+	store := newMemStore()
+	m, err := NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	s, err := m.Initiate(context.Background(), OriginMCP, Preferences{})
+	if err != nil {
+		t.Fatalf("Initiate: %v", err)
+	}
+	before, ok, err := store.LoadSession(context.Background(), s.ID)
+	if err != nil || !ok {
+		t.Fatalf("store missing session after Initiate: ok=%v err=%v", ok, err)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	m.Touch(context.Background(), s.ID)
+
+	after, ok, err := store.LoadSession(context.Background(), s.ID)
+	if err != nil || !ok {
+		t.Fatalf("store.LoadSession after Touch: ok=%v err=%v", ok, err)
+	}
+	if !after.LastActiveAt.After(before.LastActiveAt) {
+		t.Fatalf("store LastActiveAt did not advance via Touch SaveSession: before=%v after=%v",
+			before.LastActiveAt, after.LastActiveAt)
+	}
+}
