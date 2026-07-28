@@ -1215,7 +1215,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	// workspace) to write the fuzz test file via the normal tool-call
 	// protocol. The deterministic fuzz-*execution* half after the Sprout turn
 	// runs in a separate, Go-toolchain-enabled terrarium (macrophageFuzzImage,
-	// sprouts/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
+	// toolchains/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
 	imageName := orch.resolveImageName(mountPath)
 	result.ImageName = imageName
 	if err := ensureSproutImage(ctx, imageName); err != nil {

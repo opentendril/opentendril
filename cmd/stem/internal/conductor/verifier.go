@@ -23,7 +23,7 @@ var ErrVerifierBlocked = errors.New("blocked")
 // verifierImage is the toolchain-bearing image used for deterministic verifier
 // (CI) command steps. Unlike opentendril-go:latest it keeps the full Go
 // toolchain at runtime so `go build` / `go test` can execute. See
-// sprouts/go-verifier/Dockerfile.
+// toolchains/go-verifier/Dockerfile.
 const verifierImage = "opentendril-go-verifier:latest"
 
 // verifierContainerTimeout bounds a single verifier command exec.
