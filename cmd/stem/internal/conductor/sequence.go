@@ -826,7 +826,7 @@ func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step 
 	// exec it directly in the toolchain terrarium (read-only, no LLM, no
 	// merge-back). Its exit code is the verdict.
 	if len(step.Command) > 0 {
-		return runVerifierCommandFn(ctx, resolveTerrariumProviderName(nil), repoRoot(substratePath), step.Command)
+		return runVerifierCommandFn(ctx, resolveTerrariumProviderName(ctx, nil), repoRoot(substratePath), step.Command)
 	}
 
 	genotype := stepGenotype(step.ID)
@@ -1225,7 +1225,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	substratesConfig, _ := LoadSubstratesConfig("")
 	sequencePlan, planErr := resolveSubstrateExecutionPlan(orch, substratesConfig)
 
-	providerName := resolveTerrariumProviderName(orch)
+	providerName := resolveTerrariumProviderName(ctx, orch)
 	if planErr == nil && sequencePlan != nil && sequencePlan.provider != "" {
 		providerName = sequencePlan.provider
 	}

@@ -241,7 +241,7 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 		return StomaResult{}, fmt.Errorf("build stoma image: %w", err)
 	}
 
-	provider, err := terrarium.NewProvider(ctx, resolveTerrariumProviderName(nil))
+	provider, err := terrarium.NewProvider(ctx, resolveTerrariumProviderName(ctx, nil))
 	if err != nil {
 		return StomaResult{}, fmt.Errorf("resolve terrarium provider for stoma: %w", err)
 	}
