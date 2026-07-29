@@ -53,6 +53,7 @@ type sequenceRunner struct {
 	queued        map[string]bool
 	retriesLeft   map[string]int
 	ready         []string
+	completed     int
 }
 
 type sequenceStepResult struct {
@@ -134,6 +135,9 @@ func newSequenceRunner(path string, seq *Sequence, opts SequenceRunOptions) (*se
 		step := &seq.Steps[i]
 		runner.stepByID[step.ID] = step
 		runner.stepIndex[step.ID] = i
+		if step.Status == sequenceStatusComplete {
+			runner.completed++
+		}
 	}
 
 	for _, step := range seq.Steps {
@@ -194,12 +198,6 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 
 	resultCh := make(chan sequenceStepResult, len(r.seq.Steps))
 	running := 0
-	completed := 0
-	for _, step := range r.seq.Steps {
-		if step.Status == sequenceStatusComplete {
-			completed++
-		}
-	}
 
 	dispatch := func(stepID string) {
 		step := r.stepByID[stepID]
@@ -224,7 +222,7 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			dispatch(nextID)
 		}
 
-		if completed == len(r.seq.Steps) {
+		if r.completed == len(r.seq.Steps) {
 			fmt.Fprintf(r.opts.Stdout, "✅ Sequence %s complete\n", r.seq.Name)
 			if err := SaveSequence(r.path, r.seq); err != nil {
 				return r.seq, err
@@ -265,8 +263,6 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			delete(r.queued, result.stepID)
 
 			if result.err == nil {
-				step.Status = sequenceStatusComplete
-				completed++
 				if output := strings.TrimSpace(result.output); output != "" {
 					fmt.Fprintln(r.opts.Stdout, output)
 				}
@@ -281,17 +277,9 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 					}
 				}
 				fmt.Fprintf(r.opts.Stdout, "✓ [%s] complete\n", result.stepID)
-				if err := SaveSequence(r.path, r.seq); err != nil {
+				if err := r.completeStep(result.stepID); err != nil {
 					return r.seq, err
 				}
-				for _, dependentID := range r.dependents[result.stepID] {
-					r.remainingDeps[dependentID]--
-					if r.remainingDeps[dependentID] <= 0 && r.stepByID[dependentID].Status != sequenceStatusComplete && !r.queued[dependentID] {
-						r.ready = append(r.ready, dependentID)
-						r.queued[dependentID] = true
-					}
-				}
-				r.sortReady()
 				continue
 			}
 
@@ -318,19 +306,9 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 					r.sortReady()
 					continue
 				case "completed":
-					step.Status = sequenceStatusComplete
-					completed++
-					if err := SaveSequence(r.path, r.seq); err != nil {
+					if err := r.completeStep(result.stepID); err != nil {
 						return r.seq, err
 					}
-					for _, dependentID := range r.dependents[result.stepID] {
-						r.remainingDeps[dependentID]--
-						if r.remainingDeps[dependentID] <= 0 && r.stepByID[dependentID].Status != sequenceStatusComplete && !r.queued[dependentID] {
-							r.ready = append(r.ready, dependentID)
-							r.queued[dependentID] = true
-						}
-					}
-					r.sortReady()
 					continue
 				case "halt":
 					return r.seq, fmt.Errorf("step %s halted after review requirement: %w", result.stepID, result.err)
@@ -370,23 +348,25 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 				return r.seq, err
 			}
 
-			switch strings.ToLower(strings.TrimSpace(r.seq.OnFailure)) {
-			case sequenceOnFailureRetry:
-				if r.retriesLeft[result.stepID] > 0 {
-					r.retriesLeft[result.stepID]--
-					step.Status = sequenceStatusPending
-					if err := SaveSequence(r.path, r.seq); err != nil {
-						return r.seq, err
-					}
-					r.ready = append(r.ready, result.stepID)
-					r.queued[result.stepID] = true
-					r.sortReady()
-					fmt.Fprintf(r.opts.Stderr, "↺ [%s] retrying, %d retries left\n", result.stepID, r.retriesLeft[result.stepID])
-					continue
-				}
+			action, actionErr := decideFailureAction(strings.ToLower(strings.TrimSpace(r.seq.OnFailure)), r.retriesLeft[result.stepID])
+			if actionErr != nil {
 				return r.seq, fmt.Errorf("step %s failed after %d retries: %w", result.stepID, r.retriesLeft[result.stepID], result.err)
+			}
 
-			case sequenceOnFailurePause:
+			switch action {
+			case failureActionRetry:
+				r.retriesLeft[result.stepID]--
+				step.Status = sequenceStatusPending
+				if err := SaveSequence(r.path, r.seq); err != nil {
+					return r.seq, err
+				}
+				r.ready = append(r.ready, result.stepID)
+				r.queued[result.stepID] = true
+				r.sortReady()
+				fmt.Fprintf(r.opts.Stderr, "↺ [%s] retrying, %d retries left\n", result.stepID, r.retriesLeft[result.stepID])
+				continue
+
+			case failureActionPause:
 				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err)
 				if pauseErr != nil {
 					return r.seq, pauseErr
@@ -402,19 +382,9 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 					r.sortReady()
 					continue
 				case "completed":
-					step.Status = sequenceStatusComplete
-					completed++
-					if err := SaveSequence(r.path, r.seq); err != nil {
+					if err := r.completeStep(result.stepID); err != nil {
 						return r.seq, err
 					}
-					for _, dependentID := range r.dependents[result.stepID] {
-						r.remainingDeps[dependentID]--
-						if r.remainingDeps[dependentID] <= 0 && r.stepByID[dependentID].Status != sequenceStatusComplete && !r.queued[dependentID] {
-							r.ready = append(r.ready, dependentID)
-							r.queued[dependentID] = true
-						}
-					}
-					r.sortReady()
 					continue
 				case "halt":
 					return r.seq, fmt.Errorf("step %s halted after failure: %w", result.stepID, result.err)
@@ -422,7 +392,7 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 					return r.seq, fmt.Errorf("step %s returned unknown pause decision %q", result.stepID, decision)
 				}
 
-			case sequenceOnFailureHalt:
+			case failureActionHalt:
 				return r.seq, fmt.Errorf("step %s failed: %w", result.stepID, result.err)
 
 			default:
