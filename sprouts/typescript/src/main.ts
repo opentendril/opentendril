@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 import { execaCommand } from 'execa';
 import { simpleGit } from 'simple-git';
@@ -104,7 +105,7 @@ async function main(): Promise<void> {
   }
 }
 
-async function executeTool(workspaceRoot: string, call: ToolCall): Promise<ToolResponse> {
+export async function executeTool(workspaceRoot: string, call: ToolCall): Promise<ToolResponse> {
   const toolName = call.tool.trim();
   if (!toolName) {
     return { status: 'error', error: 'tool name is required' };
@@ -130,7 +131,7 @@ async function executeTool(workspaceRoot: string, call: ToolCall): Promise<ToolR
   }
 }
 
-function availableTools(): ToolDefinition[] {
+export function availableTools(): ToolDefinition[] {
   return [
     {
       name: 'readFile',
@@ -250,7 +251,7 @@ function availableTools(): ToolDefinition[] {
   ];
 }
 
-async function readFileTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function readFileTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const rawPath = stringArg(args, 'path');
   if (!rawPath) {
     return { status: 'error', error: 'readFile requires a path' };
@@ -269,7 +270,7 @@ async function readFileTool(workspaceRoot: string, args: Record<string, unknown>
   }
 }
 
-async function writeFileTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function writeFileTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const rawPath = stringArg(args, 'path');
   const content = stringArg(args, 'content');
   if (!rawPath) {
@@ -301,7 +302,7 @@ async function writeFileTool(workspaceRoot: string, args: Record<string, unknown
   }
 }
 
-async function listFilesTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function listFilesTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const rawPath = stringArg(args, 'path') ?? '.';
   const { absPath, relPath, error } = resolveWorkspacePath(workspaceRoot, rawPath);
   if (error) {
@@ -334,7 +335,7 @@ async function listFilesTool(workspaceRoot: string, args: Record<string, unknown
   }
 }
 
-async function gitCommitTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function gitCommitTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const message = stringArg(args, 'message');
   if (!message) {
     return { status: 'error', error: 'gitCommit requires a message' };
@@ -393,7 +394,7 @@ async function gitCommitTool(workspaceRoot: string, args: Record<string, unknown
   }
 }
 
-async function gitDiffTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function gitDiffTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const cached = booleanArg(args, 'cached') ?? false;
   const paths = stringArrayArg(args, 'paths') ?? [];
   const git = simpleGit(workspaceRoot);
@@ -421,7 +422,7 @@ async function gitDiffTool(workspaceRoot: string, args: Record<string, unknown>)
   }
 }
 
-async function execCommandTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
+export async function execCommandTool(workspaceRoot: string, args: Record<string, unknown>): Promise<ToolResponse> {
   const command = stringArg(args, 'command');
   if (!command) {
     return { status: 'error', error: 'execCommand requires a command' };
@@ -615,4 +616,6 @@ function stringArrayArg(args: Record<string, unknown>, key: string): string[] | 
   return undefined;
 }
 
-void main();
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+  void main();
+}

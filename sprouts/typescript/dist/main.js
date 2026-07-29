@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { execaCommand } from 'execa';
 import { simpleGit } from 'simple-git';
 const skipDirs = new Set(['.git', 'node_modules', 'vendor', '.venv', 'venv', 'dist', 'build', '__pycache__']);
@@ -26,7 +27,7 @@ async function main() {
         process.stdout.write(`${JSON.stringify(response)}\n`);
     }
 }
-async function executeTool(workspaceRoot, call) {
+export async function executeTool(workspaceRoot, call) {
     const toolName = call.tool.trim();
     if (!toolName) {
         return { status: 'error', error: 'tool name is required' };
@@ -50,7 +51,7 @@ async function executeTool(workspaceRoot, call) {
             return { status: 'error', error: `unsupported tool "${toolName}"` };
     }
 }
-function availableTools() {
+export function availableTools() {
     return [
         {
             name: 'readFile',
@@ -169,7 +170,7 @@ function availableTools() {
         },
     ];
 }
-async function readFileTool(workspaceRoot, args) {
+export async function readFileTool(workspaceRoot, args) {
     const rawPath = stringArg(args, 'path');
     if (!rawPath) {
         return { status: 'error', error: 'readFile requires a path' };
@@ -186,7 +187,7 @@ async function readFileTool(workspaceRoot, args) {
         return { status: 'error', error: error_ instanceof Error ? error_.message : String(error_) };
     }
 }
-async function writeFileTool(workspaceRoot, args) {
+export async function writeFileTool(workspaceRoot, args) {
     const rawPath = stringArg(args, 'path');
     const content = stringArg(args, 'content');
     if (!rawPath) {
@@ -216,7 +217,7 @@ async function writeFileTool(workspaceRoot, args) {
         return { status: 'error', error: error_ instanceof Error ? error_.message : String(error_) };
     }
 }
-async function listFilesTool(workspaceRoot, args) {
+export async function listFilesTool(workspaceRoot, args) {
     const rawPath = stringArg(args, 'path') ?? '.';
     const { absPath, relPath, error } = resolveWorkspacePath(workspaceRoot, rawPath);
     if (error) {
@@ -247,7 +248,7 @@ async function listFilesTool(workspaceRoot, args) {
         return { status: 'error', error: error_ instanceof Error ? error_.message : String(error_) };
     }
 }
-async function gitCommitTool(workspaceRoot, args) {
+export async function gitCommitTool(workspaceRoot, args) {
     const message = stringArg(args, 'message');
     if (!message) {
         return { status: 'error', error: 'gitCommit requires a message' };
@@ -302,7 +303,7 @@ async function gitCommitTool(workspaceRoot, args) {
         return { status: 'error', error: error_ instanceof Error ? error_.message : String(error_) };
     }
 }
-async function gitDiffTool(workspaceRoot, args) {
+export async function gitDiffTool(workspaceRoot, args) {
     const cached = booleanArg(args, 'cached') ?? false;
     const paths = stringArrayArg(args, 'paths') ?? [];
     const git = simpleGit(workspaceRoot);
@@ -328,7 +329,7 @@ async function gitDiffTool(workspaceRoot, args) {
         return { status: 'error', error: error_ instanceof Error ? error_.message : String(error_) };
     }
 }
-async function execCommandTool(workspaceRoot, args) {
+export async function execCommandTool(workspaceRoot, args) {
     const command = stringArg(args, 'command');
     if (!command) {
         return { status: 'error', error: 'execCommand requires a command' };
@@ -496,4 +497,6 @@ function stringArrayArg(args, key) {
     }
     return undefined;
 }
-void main();
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
+    void main();
+}
