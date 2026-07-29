@@ -3,8 +3,11 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func mkArgs(kvs ...any) map[string]any {
@@ -302,9 +305,15 @@ func TestExecCommandTool(t *testing.T) {
 	})
 
 	t.Run("timeout", func(t *testing.T) {
+		start := time.Now()
 		res := execCommandTool(ws, mkArgs("command", "echo partial; sleep 5", "timeoutSeconds", 1))
+		elapsed := time.Since(start)
+
 		if res.Status != "error" {
 			t.Fatalf("expected error status, got success")
+		}
+		if elapsed > 2*time.Second {
+			t.Errorf("expected timeout to occur promptly, but it took %v", elapsed)
 		}
 		out := res.Output.(commandOutput)
 		if out.ExitCode != -1 {
@@ -312,6 +321,42 @@ func TestExecCommandTool(t *testing.T) {
 		}
 		if strings.TrimSpace(out.Stdout) != "partial" {
 			t.Errorf("expected stdout 'partial', got %q", out.Stdout)
+		}
+	})
+
+	t.Run("timeout process group kill", func(t *testing.T) {
+		pidFile := filepath.Join(ws, "marker.pid")
+		// Start a process in the background of the shell script, but still in the same process group.
+		// We use a simple marker that saves its PID and sleeps.
+		cmdStr := "sleep 5 & echo $! > " + filepath.ToSlash(pidFile) + "; sleep 5"
+
+		start := time.Now()
+		res := execCommandTool(ws, mkArgs("command", cmdStr, "timeoutSeconds", 1))
+		elapsed := time.Since(start)
+
+		if res.Status != "error" {
+			t.Fatalf("expected error status, got success")
+		}
+		if elapsed > 2*time.Second {
+			t.Errorf("expected timeout to happen quickly, but it took %v", elapsed)
+		}
+
+		pidBytes, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatalf("failed to read marker pid: %v", err)
+		}
+
+		pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+		if err != nil {
+			t.Fatalf("invalid marker pid: %v", err)
+		}
+
+		// Give the OS a tiny bit of time to complete process cleanup
+		time.Sleep(100 * time.Millisecond)
+
+		err = syscall.Kill(pid, 0)
+		if err == nil {
+			t.Errorf("process %d is still alive after timeout, process group was not killed", pid)
 		}
 	})
 
