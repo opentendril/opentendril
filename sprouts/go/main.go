@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -460,6 +461,14 @@ func execCommandTool(workspaceRoot string, args map[string]any) toolResponse {
 
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command)
 	cmd.Dir = cwdAbs
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 5 * time.Second
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
