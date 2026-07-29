@@ -47,7 +47,7 @@ Because the protocol executors are fully decoupled leaf programs without Go expo
 ```
 
 **Standard Tool Set:**
-The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `writeFile`, `listFiles`, `gitCommit`, `gitDiff`, `execCommand`, and `listAvailableTools`. This base set is not uniform across executors — `sprouts/python/src/main.py` additionally implements a Python-specific `runPytest` tool. Callers can enumerate an executor's actual tools at runtime via `listAvailableTools`; the per-language divergence is called out under Limitations.
+The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `writeFile`, `listFiles`, `gitCommit`, `gitDiff`, `execCommand`, and `listAvailableTools`. `sprouts/typescript/src/main.ts` (shared source for both the TypeScript and Node images) implements the identical set. This base set is not uniform across executors — `sprouts/python/src/main.py` additionally implements two Python-specific tools, `runPytest` and `runPip`. Callers can enumerate an executor's actual tools at runtime via `listAvailableTools`; the per-language divergence is called out under Limitations.
 
 ## Dependencies
 
@@ -56,7 +56,7 @@ The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `w
 
 ## Limitations
 
-*   The tool sets are static and implemented independently per language, and they already diverge: `sprouts/python/src/main.py` exposes a `runPytest` tool that `sprouts/go/main.go` does not. While `listAvailableTools` allows dynamic discovery, keeping the tools and their JSON contracts synchronized across four separate implementations invites further drift.
+*   The tool sets are static and implemented independently per language (three source implementations today — Go, Python, and the shared TypeScript/Node source), and they already diverge: `sprouts/python/src/main.py` exposes `runPytest` and `runPip` tools that `sprouts/go/main.go` and `sprouts/typescript/src/main.ts` do not. While `listAvailableTools` allows dynamic discovery, this divergence is intentional where a tool is genuinely language-specific (Python sprouts run Python test/dependency tooling that a Go or TypeScript sprout has no use for) — the risk is drift in the *shared* tools' argument/response semantics across languages, not in tool-set membership itself. No executor has any unit test coverage today, in any language.
 
 ## Design & rationale
 
