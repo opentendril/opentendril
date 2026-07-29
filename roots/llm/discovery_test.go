@@ -200,9 +200,19 @@ llm:
 			t.Fatalf("got context size %d, want 500", m1.ContextSize)
 		}
 
-		m2 := enrichModelDefinition("anthropic", "claude-3-5-sonnet-latest")
-		if m2.ContextSize != 200000 {
+		// claude-opus-4-8 is a real compiled-in FallbackModels entry
+		// (registry.go), not just a name inferCapabilitiesFromName would
+		// recognize — asserting DrivesTools/ContextSize=1000000 here proves
+		// the compiled-in table lookup itself fired. The heuristic never sets
+		// DrivesTools and would infer ContextSize=200000 for any Claude name,
+		// so a name it could also match (e.g. claude-3-5-sonnet-latest, not in
+		// the compiled table) can't tell the two paths apart.
+		m2 := enrichModelDefinition("anthropic", "claude-opus-4-8")
+		if m2.ContextSize != 1000000 {
 			t.Fatalf("expected compiled-in fallback context size, got %d", m2.ContextSize)
+		}
+		if !m2.DrivesTools {
+			t.Fatalf("expected compiled-in fallback DrivesTools=true, got false")
 		}
 		if m2.Family != ModelFamilyClaude {
 			t.Fatalf("expected family claude, got %q", m2.Family)
