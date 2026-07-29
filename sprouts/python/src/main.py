@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -430,37 +431,47 @@ def exec_command_tool(workspace_root: Path, args: dict[str, Any]) -> ToolRespons
     timeout_seconds = number_arg(args, "timeoutSeconds") or 120
     timeout = max(1, int(timeout_seconds))
 
+    proc = subprocess.Popen(
+        command,
+        shell=True,
+        cwd=resolved_cwd.abs_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            cwd=resolved_cwd.abs_path,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        payload = {
-            "command": command,
-            "cwd": resolved_cwd.rel_path,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "exitCode": result.returncode,
-        }
-        if result.returncode != 0:
-            return ToolResponse(status="error", output=payload, error=f"command exited with code {result.returncode}")
-        return ToolResponse(status="success", output=payload)
-    except subprocess.TimeoutExpired as exc:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = "", ""
         return ToolResponse(
             status="error",
             error=f"command timed out after {timeout} seconds",
             output={
                 "command": command,
                 "cwd": resolved_cwd.rel_path,
-                "stdout": exc.stdout or "",
-                "stderr": exc.stderr or "",
+                "stdout": stdout,
+                "stderr": stderr,
                 "exitCode": -1,
             },
         )
+
+    payload = {
+        "command": command,
+        "cwd": resolved_cwd.rel_path,
+        "stdout": stdout,
+        "stderr": stderr,
+        "exitCode": exit_code,
+    }
+    if exit_code != 0:
+        return ToolResponse(status="error", output=payload, error=f"command exited with code {exit_code}")
+    return ToolResponse(status="success", output=payload)
 
 
 def run_pytest_tool(workspace_root: Path, args: dict[str, Any]) -> ToolResponse:
