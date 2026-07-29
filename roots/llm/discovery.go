@@ -126,8 +126,48 @@ func discoveryProviderSpec(provider string) ProviderSpec {
 	return spec
 }
 
+// configuredModelsForProvider converts an operator's .tendril/config.yaml
+// model declarations for provider into ModelDefinitions, filling in any
+// field left unset via the same heuristic used for an unmatched
+// live-discovered name. Returns nil if the provider has no configured
+// models, which callers treat as "no override" (fall through to
+// FallbackModels/heuristic inference as today).
+func configuredModelsForProvider(provider string) []ModelDefinition {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	configured := configuredProvider(provider).Models
+	if len(configured) == 0 {
+		return nil
+	}
+
+	definitions := make([]ModelDefinition, 0, len(configured))
+	for _, m := range configured {
+		name := strings.TrimSpace(m.Name)
+		if name == "" {
+			continue
+		}
+		definition := ModelDefinition{
+			Provider:     provider,
+			Name:         name,
+			Family:       m.Family,
+			ContextSize:  m.ContextSize,
+			HasVision:    m.HasVision,
+			HasReasoning: m.HasReasoning,
+			DrivesTools:  m.DrivesTools,
+			CostTier:     m.CostTier,
+		}
+		inferCapabilitiesFromName(&definition)
+		definitions = append(definitions, definition)
+	}
+	return definitions
+}
+
 func fallbackModelsForProvider(provider string) []ModelDefinition {
 	provider = strings.ToLower(strings.TrimSpace(provider))
+
+	if configured := configuredModelsForProvider(provider); len(configured) > 0 {
+		return configured
+	}
+
 	matches := make([]ModelDefinition, 0)
 	for _, model := range FallbackModels {
 		if strings.EqualFold(model.Provider, provider) {
@@ -144,6 +184,12 @@ func modelRegistryKey(provider, name string) string {
 func enrichModelDefinition(provider, name string) ModelDefinition {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	name = strings.TrimSpace(name)
+
+	for _, configured := range configuredModelsForProvider(provider) {
+		if strings.EqualFold(configured.Name, name) {
+			return configured
+		}
+	}
 
 	for _, fallback := range FallbackModels {
 		if strings.EqualFold(fallback.Provider, provider) && strings.EqualFold(fallback.Name, name) {
@@ -165,17 +211,19 @@ func inferCapabilitiesFromName(definition *ModelDefinition) {
 	}
 
 	normalized := strings.ToLower(definition.Name)
-	switch {
-	case strings.Contains(normalized, "claude"):
-		definition.Family = ModelFamilyClaude
-	case strings.Contains(normalized, "gemini"):
-		definition.Family = ModelFamilyGemini
-	case strings.Contains(normalized, "llama"):
-		definition.Family = ModelFamilyLlama
-	case strings.Contains(normalized, "qwen"):
-		definition.Family = ModelFamilyQwen
-	default:
-		definition.Family = ModelFamilyGPT
+	if definition.Family == "" {
+		switch {
+		case strings.Contains(normalized, "claude"):
+			definition.Family = ModelFamilyClaude
+		case strings.Contains(normalized, "gemini"):
+			definition.Family = ModelFamilyGemini
+		case strings.Contains(normalized, "llama"):
+			definition.Family = ModelFamilyLlama
+		case strings.Contains(normalized, "qwen"):
+			definition.Family = ModelFamilyQwen
+		default:
+			definition.Family = ModelFamilyGPT
+		}
 	}
 
 	if definition.ContextSize == 0 {

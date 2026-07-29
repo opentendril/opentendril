@@ -79,7 +79,24 @@ type tendrilProviderConfig struct {
 	// the string-matching heuristic (e.g. a self-hosted proxy whose model is
 	// coincidentally named "my-router"). Unset (zero value) defers the decision
 	// to the existing string-matching heuristic, preserving zero-config behavior.
-	IsRouter *bool `yaml:"is-router"`
+	IsRouter *bool                `yaml:"is-router"`
+	Models   []tendrilModelConfig `yaml:"models"`
+}
+
+// tendrilModelConfig declares one model's fallback/capability metadata for a
+// provider in .tendril/config.yaml, overriding the compiled-in
+// FallbackModels table for that provider. Only Name is required — any other
+// field left at its zero value is filled in by inferCapabilitiesFromName
+// (registry.go), the same heuristic used to enrich a live-discovered name
+// with no compiled-in match.
+type tendrilModelConfig struct {
+	Name         string      `yaml:"name"`
+	Family       ModelFamily `yaml:"family"`
+	ContextSize  int         `yaml:"context-size"`
+	HasVision    bool        `yaml:"has-vision"`
+	HasReasoning bool        `yaml:"has-reasoning"`
+	DrivesTools  bool        `yaml:"drives-tools"`
+	CostTier     ModelTier   `yaml:"cost-tier"`
 }
 
 func (c *Client) SetTemperature(temp float64) {
