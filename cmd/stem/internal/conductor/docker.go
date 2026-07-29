@@ -384,7 +384,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	// Use the substrate-configured provider if set, otherwise fall back to env/default.
-	providerName := resolveTerrariumProviderName(d)
+	providerName := resolveTerrariumProviderName(ctx, d)
 	if plan.provider != "" {
 		providerName = plan.provider
 	}
@@ -701,20 +701,30 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 	return &terrariumToolSession{terrarium: instance}, nil
 }
 
-func resolveTerrariumProviderName(d *DockerOrchestrator) string {
+// checkGVisorReadinessFn is a test seam over terrarium.CheckGVisorReadiness.
+var checkGVisorReadinessFn = terrarium.CheckGVisorReadiness
+
+func resolveTerrariumProviderName(ctx context.Context, d *DockerOrchestrator) string {
 	if providerName := strings.TrimSpace(os.Getenv(terrariumProviderEnvKey)); providerName != "" {
 		return providerName
 	}
-	if d == nil {
-		return terrarium.ProviderDocker
+
+	if d != nil {
+		switch strings.ToLower(strings.TrimSpace(d.Substrate)) {
+		case terrarium.ProviderDocker, terrarium.ProviderGVisor, terrarium.ProviderFirecracker, terrarium.ProviderHost:
+			return strings.ToLower(strings.TrimSpace(d.Substrate))
+		}
 	}
 
-	switch strings.ToLower(strings.TrimSpace(d.Substrate)) {
-	case terrarium.ProviderDocker, terrarium.ProviderGVisor, terrarium.ProviderFirecracker, terrarium.ProviderHost:
-		return strings.ToLower(strings.TrimSpace(d.Substrate))
-	default:
-		return terrarium.ProviderDocker
+	// No explicit preference from the env var or Substrate: prefer gVisor's
+	// added syscall-filtering isolation over plain Docker when the host's
+	// Docker daemon has the runsc runtime registered, falling back to Docker
+	// when it doesn't. An explicit choice above is always honored verbatim
+	// and never overridden by this check.
+	if checkGVisorReadinessFn(ctx) == nil {
+		return terrarium.ProviderGVisor
 	}
+	return terrarium.ProviderDocker
 }
 
 func (s *terrariumToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {

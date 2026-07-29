@@ -7,7 +7,9 @@ This architecture is colloquially known as **Terrarium**, providing isolated soi
 ## Supported Isolation Tiers
 
 ### 1. Docker (Default)
-The Docker provider is the default execution environment. It offers strong container-level isolation using standard Linux namespaces and cgroups.
+The Docker provider is the default execution environment for the low-level `terrarium` package. It offers strong container-level isolation using standard Linux namespaces and cgroups.
+
+> **Note on Conductor Defaults:** While Docker is the low-level factory default, the Conductor orchestration engine automatically prefers **gVisor** if the host's Docker daemon has the `runsc` runtime registered (see [DESIGN-CONDUCTOR.md](DESIGN-CONDUCTOR.md)). It falls back to plain Docker only when gVisor is unavailable. An explicit `TENDRIL_TERRARIUM_PROVIDER` env var or `Substrate` configuration (including an explicit `docker` value) is always honored as-is and will never be automatically upgraded.
 
 - **Use Case**: Local development, trusted private repositories.
 - **Provider Name**: `docker`

@@ -1,6 +1,8 @@
 package conductor
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -38,8 +40,18 @@ func TestMain(m *testing.M) {
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
 
+	// Stub checkGVisorReadinessFn to prevent tests that don't specify a Substrate
+	// from accidentally spawning a real `docker info` subprocess just to resolve
+	// the default terrarium provider name. This satisfies the implicit assumption
+	// of tests written before the gVisor preference was added (that the default
+	// resolves purely via strings to "docker"). Tests that actually want to
+	// exercise the gVisor logic save and restore this seam themselves.
+	originalGVisorReadyFn := checkGVisorReadinessFn
+	checkGVisorReadinessFn = func(context.Context) error { return errors.New("stubbed unready") }
+
 	code := m.Run()
 
+	checkGVisorReadinessFn = originalGVisorReadyFn
 	os.RemoveAll(home)
 	os.Exit(code)
 }
