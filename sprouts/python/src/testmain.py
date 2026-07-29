@@ -233,19 +233,19 @@ def test_run_pytest_tool_and_pip(tmp_path: Path):
     assert resp.status == "error"
     assert resp.output["exitCode"] != 0
 
-def test_execute_tool_dispatch():
+def test_execute_tool_dispatch(tmp_path: Path):
     # Empty tool
-    resp = main.execute_tool(Path("."), {})
+    resp = main.execute_tool(tmp_path, {})
     assert resp.status == "error"
     assert "tool name is required" in resp.error
 
     # Unknown tool
-    resp = main.execute_tool(Path("."), {"tool": "doesNotExist"})
+    resp = main.execute_tool(tmp_path, {"tool": "doesNotExist"})
     assert resp.status == "error"
     assert 'unsupported tool "doesNotExist"' in resp.error
 
     # listAvailableTools
-    resp = main.execute_tool(Path("."), {"tool": "listAvailableTools"})
+    resp = main.execute_tool(tmp_path, {"tool": "listAvailableTools"})
     assert resp.status == "success"
     assert isinstance(resp.output["tools"], list)
     assert len(resp.output["tools"]) > 0
@@ -254,7 +254,7 @@ def test_execute_tool_dispatch():
     tools = main.available_tools()
     for t in tools:
         name = t["name"]
-        resp = main.execute_tool(Path("."), {"tool": name})
+        resp = main.execute_tool(tmp_path, {"tool": name})
         # It may return an error for missing args, but must not be unsupported
         if resp.status == "error":
             assert f'unsupported tool "{name}"' not in resp.error
