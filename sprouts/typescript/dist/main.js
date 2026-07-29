@@ -365,15 +365,16 @@ async function execCommandTool(workspaceRoot, args) {
     }
     catch (error_) {
         const message = error_ instanceof Error ? error_.message : String(error_);
+        const partial = error_;
         return {
             status: 'error',
             error: message,
             output: {
                 command,
                 cwd: cwdRel,
-                stdout: '',
-                stderr: message,
-                exitCode: -1,
+                stdout: partial.stdout ?? '',
+                stderr: partial.stderr ?? message,
+                exitCode: partial.exitCode ?? -1,
             },
         };
     }
