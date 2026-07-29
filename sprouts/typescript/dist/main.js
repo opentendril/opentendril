@@ -340,30 +340,46 @@ async function execCommandTool(workspaceRoot, args) {
     }
     const timeoutSeconds = numberArg(args, 'timeoutSeconds') ?? 120;
     const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
+    const subprocess = execaCommand(command, {
+        cwd: cwdAbs,
+        shell: true,
+        detached: true,
+        reject: false,
+        all: true,
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+        timedOut = true;
+        if (subprocess.pid !== undefined) {
+            try {
+                process.kill(-subprocess.pid, 'SIGKILL');
+            }
+            catch {
+                // Process group may already be gone.
+            }
+        }
+    }, timeoutMs);
     try {
-        const result = await execaCommand(command, {
-            cwd: cwdAbs,
-            timeout: timeoutMs,
-            reject: false,
-            all: true,
-        });
+        const result = await subprocess;
+        clearTimeout(timer);
+        const exitCode = result.exitCode ?? -1;
         const response = {
             command,
             cwd: cwdRel,
             stdout: result.stdout ?? '',
             stderr: result.stderr ?? '',
-            exitCode: result.exitCode ?? 0,
+            exitCode,
         };
-        if ((result.exitCode ?? 0) !== 0) {
-            return {
-                status: 'error',
-                output: response,
-                error: `command exited with code ${result.exitCode ?? 0}`,
-            };
+        if (timedOut) {
+            return { status: 'error', output: response, error: `command timed out after ${timeoutSeconds} seconds` };
+        }
+        if (exitCode !== 0) {
+            return { status: 'error', output: response, error: `command exited with code ${exitCode}` };
         }
         return { status: 'success', output: response };
     }
     catch (error_) {
+        clearTimeout(timer);
         const message = error_ instanceof Error ? error_.message : String(error_);
         const partial = error_;
         return {
