@@ -57,6 +57,7 @@ Sentinel errors: None explicitly exported; returns wrapped `fmt.Errorf`s.
   - `HostProvider` is dangerously permissive. It bypasses all isolation, ignores mounts and network sealing, and runs with full host-user privileges. It is disabled by default and gated by `TENDRIL_ALLOW_HOST_EXECUTION=true` (`factory.go`).
 - **Network Default Posture**: `DockerProvider` enforces `--network none` unless explicitly overridden. `FirecrackerProvider` strictly only supports `none`. The isolation design aims for a sealed box, but `HostProvider` silently permits host network usage.
 - **Validation**: Capability enforcement in `validate.go` prevents silent downgrades (e.g., asking for an image in Firecracker, which boots a pre-baked kernel/rootfs), but it relies on provider capability declarations rather than deep structural checks.
+- **Firecracker test coverage is CI-only**: the `Native PR Gate` CI job bootstraps a real kernel/rootfs and runs the six Firecracker integration tests as genuine microVM boots, and that gate is skip-aware — a Firecracker regression cannot merge silently. A contributor's local machine (and the local sealed verifier) generally lacks `/dev/kvm` plus a bootstrapped kernel/rootfs, so `CheckFirecrackerReadiness` fails there and these tests self-skip pre-push. Accepted as an inherent limitation of an opt-in, KVM-dependent provider rather than fixed, since the actual regression risk is already guarded by the required CI gate.
 
 ## Design & rationale
 
