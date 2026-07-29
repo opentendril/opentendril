@@ -21,6 +21,7 @@ set -euo pipefail
 
 sprout_python=false
 stem_go=false
+sprout_typescript=false
 
 while IFS= read -r path; do
     [ -n "$path" ] || continue
@@ -35,12 +36,18 @@ while IFS= read -r path; do
         .github/workflows/ci.yml|scripts/ci-path-filter.sh|scripts/ci-path-filter-test.sh|Makefile)
             sprout_python=true
             stem_go=true
+            sprout_typescript=true
             ;;
 
         # The Python sprout, including its image and packaging: the audit job
         # installs this lock file and scans it.
         sprouts/python/*)
             sprout_python=true
+            ;;
+
+        # The TypeScript/Node sprouts.
+        sprouts/typescript/*|sprouts/node/*)
+            sprout_typescript=true
             ;;
 
         # The Go kernel. `cmd/*` (not `cmd/stem/*`) so cmd/stoma — the
@@ -53,9 +60,11 @@ while IFS= read -r path; do
         *)
             sprout_python=true
             stem_go=true
+            sprout_typescript=true
             ;;
     esac
 done
 
 echo "sprout-python=$sprout_python"
 echo "stem-go=$stem_go"
+echo "sprout-typescript=$sprout_typescript"
