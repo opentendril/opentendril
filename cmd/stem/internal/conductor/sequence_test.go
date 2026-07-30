@@ -1480,6 +1480,66 @@ func TestRunSequenceExhaustionReportsSpentCountRetryMode(t *testing.T) {
 	}
 }
 
+func TestRunSequenceRetryCountdownCountsDown(t *testing.T) {
+	// Guards against inverting spent and remaining. The exhaustion error now
+	// reports the retries spent, while this line reports what is left — and the
+	// message assertions elsewhere cannot tell the two apart, because they only
+	// read the error. An implementation that printed the spent count here would
+	// satisfy every other test in this file.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "countdown.yaml")
+
+	seq := &Sequence{
+		Name:             "countdown",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureRetry,
+		MaxRetries:       3,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var stderr strings.Builder
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             &stderr,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatalf("expected exhaustion error, got nil")
+	}
+
+	out := stderr.String()
+
+	// Descending, in order. An ascending sequence would mean the countdown is
+	// printing what was spent.
+	wantOrder := []string{"2 retries left", "1 retries left", "0 retries left"}
+	at := 0
+	for _, want := range wantOrder {
+		idx := strings.Index(out[at:], want)
+		if idx < 0 {
+			t.Fatalf("stderr missing %q in descending order; got:\n%s", want, out)
+		}
+		at += idx + len(want)
+	}
+
+	if got := strings.Count(out, "retries left"); got != len(wantOrder) {
+		t.Errorf("countdown printed %d times, want %d; got:\n%s", got, len(wantOrder), out)
+	}
+}
+
 func TestRunSequenceExhaustionDefaultRetriesWhenUnset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exhaust-unset.yaml")
