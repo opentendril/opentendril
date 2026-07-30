@@ -571,6 +571,8 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 	ticker := time.NewTicker(r.opts.ResumePollInterval)
 	defer ticker.Stop()
 
+	var lastWarnedDiffKey string
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -584,6 +586,17 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 			if latest == nil {
 				continue
 			}
+
+			diffs := unhonouredSequenceDiff(r.seq, latest, stepID)
+			if len(diffs) > 0 {
+				sort.Strings(diffs)
+				diffKey := strings.Join(diffs, ",")
+				if diffKey != lastWarnedDiffKey {
+					fmt.Fprintf(r.opts.Stderr, "⚠️ Ignored edits to paused sequence: %s. Only onFailure and the paused step's status are read while paused.\n", strings.Join(diffs, ", "))
+					lastWarnedDiffKey = diffKey
+				}
+			}
+
 			if step := latestStepByID(latest.Steps, stepID); step != nil {
 				switch step.Status {
 				case sequenceStatusComplete:
@@ -600,6 +613,104 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 			}
 		}
 	}
+}
+
+func unhonouredSequenceDiff(base, latest *Sequence, pausedStepID string) []string {
+	var diffs []string
+	if base.Name != latest.Name {
+		diffs = append(diffs, "name")
+	}
+	if base.System != latest.System {
+		diffs = append(diffs, "system")
+	}
+	if base.Substrate != latest.Substrate {
+		diffs = append(diffs, "substrate")
+	}
+	if base.Branch != latest.Branch {
+		diffs = append(diffs, "branch")
+	}
+	if base.ConcurrencyLimit != latest.ConcurrencyLimit {
+		diffs = append(diffs, "concurrencyLimit")
+	}
+	if base.MaxRetries != latest.MaxRetries {
+		diffs = append(diffs, "maxRetries")
+	}
+
+	if len(base.Steps) != len(latest.Steps) {
+		diffs = append(diffs, "steps length")
+	} else {
+		for i := range base.Steps {
+			b := &base.Steps[i]
+			l := &latest.Steps[i]
+			if b.ID != l.ID {
+				diffs = append(diffs, fmt.Sprintf("step[%d].id", i))
+				continue
+			}
+			if b.ID != pausedStepID && b.Status != l.Status {
+				diffs = append(diffs, fmt.Sprintf("step[%s].status", b.ID))
+			}
+			if strings.Join(b.DependsOn, ",") != strings.Join(l.DependsOn, ",") {
+				diffs = append(diffs, fmt.Sprintf("step[%s].dependsOn", b.ID))
+			}
+			if b.Transcript != l.Transcript {
+				diffs = append(diffs, fmt.Sprintf("step[%s].transcript", b.ID))
+			}
+			if strings.Join(b.Command, ",") != strings.Join(l.Command, ",") {
+				diffs = append(diffs, fmt.Sprintf("step[%s].command", b.ID))
+			}
+			if b.Parallel != l.Parallel {
+				diffs = append(diffs, fmt.Sprintf("step[%s].parallel", b.ID))
+			}
+			if b.SproutCount != l.SproutCount {
+				diffs = append(diffs, fmt.Sprintf("step[%s].sproutCount", b.ID))
+			}
+			if b.MergeTranscript != l.MergeTranscript {
+				diffs = append(diffs, fmt.Sprintf("step[%s].mergeTranscript", b.ID))
+			}
+			if b.PhenotypesCount != l.PhenotypesCount {
+				diffs = append(diffs, fmt.Sprintf("step[%s].phenotypesCount", b.ID))
+			}
+			if b.FitnessTest != l.FitnessTest {
+				diffs = append(diffs, fmt.Sprintf("step[%s].fitnessTest", b.ID))
+			}
+			if b.RequiresReasoning != l.RequiresReasoning {
+				diffs = append(diffs, fmt.Sprintf("step[%s].requiresReasoning", b.ID))
+			}
+			if b.RequiresVision != l.RequiresVision {
+				diffs = append(diffs, fmt.Sprintf("step[%s].requiresVision", b.ID))
+			}
+			if b.ModelProvider != l.ModelProvider {
+				diffs = append(diffs, fmt.Sprintf("step[%s].modelProvider", b.ID))
+			}
+			if b.ModelName != l.ModelName {
+				diffs = append(diffs, fmt.Sprintf("step[%s].modelName", b.ID))
+			}
+			if b.ModelBaseURL != l.ModelBaseURL {
+				diffs = append(diffs, fmt.Sprintf("step[%s].modelBaseURL", b.ID))
+			}
+			if (b.Selection == nil) != (l.Selection == nil) {
+				diffs = append(diffs, fmt.Sprintf("step[%s].selection", b.ID))
+			} else if b.Selection != nil && l.Selection != nil {
+				if b.Selection.PopulationSize != l.Selection.PopulationSize ||
+					b.Selection.MaxGenerations != l.Selection.MaxGenerations ||
+					b.Selection.FitnessTest != l.Selection.FitnessTest ||
+					b.Selection.FitnessPattern != l.Selection.FitnessPattern ||
+					b.Selection.FitnessGoal != l.Selection.FitnessGoal ||
+					b.Selection.SurvivorFraction != l.Selection.SurvivorFraction ||
+					b.Selection.MutationTemperature != l.Selection.MutationTemperature ||
+					b.Selection.TemperatureSpread != l.Selection.TemperatureSpread {
+					diffs = append(diffs, fmt.Sprintf("step[%s].selection", b.ID))
+				} else {
+					if (b.Selection.FitnessThreshold == nil) != (l.Selection.FitnessThreshold == nil) {
+						diffs = append(diffs, fmt.Sprintf("step[%s].selection.fitnessThreshold", b.ID))
+					} else if b.Selection.FitnessThreshold != nil && *b.Selection.FitnessThreshold != *l.Selection.FitnessThreshold {
+						diffs = append(diffs, fmt.Sprintf("step[%s].selection.fitnessThreshold", b.ID))
+					}
+				}
+			}
+		}
+	}
+	return diffs
 }
 
 func latestStepByID(steps []SequenceStep, id string) *SequenceStep {
