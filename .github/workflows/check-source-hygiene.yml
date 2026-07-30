@@ -102,6 +102,49 @@ jobs:
       - name: Relative markdown links resolve
         run: bash scripts/check-doc-links.sh
 
+  test-sleep:
+    name: Test sleeps are declared
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A sleep in a test is either a poll interval or a stand-in for
+      # synchronisation, and only the first is acceptable — the second makes an
+      # assertion able to pass because nothing has happened yet, which is a
+      # silent false pass rather than a flake. Telling them apart from the source
+      # is not reliably decidable, so the guard asks the author to declare which
+      # it is. Diff-based: the sleeps already in the tree never block a pull
+      # request.
+      - name: No undeclared time.Sleep added to tests
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/check-test-sleep.sh "origin/${{ github.base_ref }}"
+
+  doc-prose-deletions:
+    name: Removed documentation prose is acknowledged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Replacing a paragraph to record new behaviour has twice taken an
+      # adjacent, still-accurate sentence with it. The loss is invisible in a
+      # diff that looks like one line for one line. This names removed sentences
+      # that nothing added reproduces, and asks for a sentence of
+      # acknowledgement in the description — which is where an author notices
+      # the removal they did not mean to make. The body is untrusted input, so it
+      # travels through the environment and is never interpolated into the shell.
+      - name: Removed prose is acknowledged
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.md"
+          bash scripts/check-doc-prose-deletions.sh "origin/${{ github.base_ref }}" --body "${RUNNER_TEMP}/pr-body.md"
+
   taxonomy:
     name: Taxonomy is used inside the organism
     runs-on: ubuntu-latest
