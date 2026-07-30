@@ -37,6 +37,7 @@ type SequenceRunOptions struct {
 	BaseURL            string
 	StepRunner         SequenceStepRunner
 	ResumePollInterval time.Duration
+	CleanupGracePeriod time.Duration
 	EventBus           *eventbus.Bus
 }
 
@@ -95,6 +96,9 @@ func normalizeSequenceRunOptions(opts SequenceRunOptions) SequenceRunOptions {
 	}
 	if opts.ResumePollInterval <= 0 {
 		opts.ResumePollInterval = time.Second
+	}
+	if opts.CleanupGracePeriod <= 0 {
+		opts.CleanupGracePeriod = 30 * time.Second
 	}
 	if opts.StepRunner == nil {
 		bus := opts.EventBus
@@ -181,7 +185,7 @@ func newSequenceRunner(path string, seq *Sequence, opts SequenceRunOptions) (*se
 	return runner, nil
 }
 
-func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
+func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -197,7 +201,12 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 	}
 
 	resultCh := make(chan sequenceStepResult, len(r.seq.Steps))
-	running := 0
+	inFlight := make(map[string]struct{})
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer func() {
+		cancelRun()
+		r.drainInFlight(inFlight, resultCh)
+	}()
 
 	dispatch := func(stepID string) {
 		step := r.stepByID[stepID]
@@ -205,15 +214,15 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			return
 		}
 		r.queued[stepID] = false
-		running++
+		inFlight[stepID] = struct{}{}
 		go func(id string, snapshot SequenceStep) {
-			output, err := r.opts.StepRunner(ctx, r.seq, &snapshot, r.substratePath)
+			output, err := r.opts.StepRunner(runCtx, r.seq, &snapshot, r.substratePath)
 			resultCh <- sequenceStepResult{stepID: id, output: output, err: err}
 		}(stepID, *step)
 	}
 
 	for {
-		for running < concurrencyLimit {
+		for len(inFlight) < concurrencyLimit {
 			nextID, ok := r.popReady()
 			if !ok {
 				break
@@ -233,7 +242,7 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			return r.seq, nil
 		}
 
-		if running == 0 && len(r.ready) == 0 {
+		if len(inFlight) == 0 && len(r.ready) == 0 {
 			msg := r.describeStall()
 			if msg == "" {
 				msg = fmt.Sprintf("sequence %s stalled", r.seq.Name)
@@ -243,19 +252,9 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 
 		select {
 		case <-ctx.Done():
-			// Drain in-flight step workers before returning. Each worker runs
-			// StepRunner's deferred host-stash restore (through a WithoutCancel
-			// cleanup context) and only then sends its result, so waiting for
-			// those sends guarantees a cancelled run never strands the user's
-			// stashed workspace. The docker steps are ctx-bound and unwind
-			// promptly; the CLI's signal handler force-quits as a backstop.
-			for running > 0 {
-				<-resultCh
-				running--
-			}
 			return r.seq, ctx.Err()
 		case result := <-resultCh:
-			running--
+			delete(inFlight, result.stepID)
 			step := r.stepByID[result.stepID]
 			if step == nil {
 				continue
@@ -398,6 +397,43 @@ func (r *sequenceRunner) run(ctx context.Context) (*Sequence, error) {
 			default:
 				return r.seq, fmt.Errorf("sequence %s has unknown onFailure mode %q", r.seq.Name, r.seq.OnFailure)
 			}
+		}
+	}
+}
+
+// Drain in-flight step workers before returning. Each worker runs
+// StepRunner's deferred host-stash restore (through a WithoutCancel
+// cleanup context) and only then sends its result, so waiting for
+// those sends guarantees a cancelled run never strands the user's
+// stashed workspace. The docker steps are ctx-bound and unwind
+// promptly; the CLI's signal handler force-quits as a backstop.
+// Draining runs on every exit path to ensure cleanup finishes.
+func (r *sequenceRunner) drainInFlight(inFlight map[string]struct{}, resultCh <-chan sequenceStepResult) {
+	if len(inFlight) == 0 {
+		return
+	}
+
+	timer := time.NewTimer(r.opts.CleanupGracePeriod)
+	defer timer.Stop()
+
+	for len(inFlight) > 0 {
+		select {
+		case result := <-resultCh:
+			delete(inFlight, result.stepID)
+			if result.err != nil {
+				fmt.Fprintf(r.opts.Stderr, "⚠️ Step [%s] cleanup error: %v\n", result.stepID, result.err)
+			}
+		case <-timer.C:
+			var remaining []string
+			for id := range inFlight {
+				remaining = append(remaining, id)
+			}
+			sort.Strings(remaining)
+			fmt.Fprintf(r.opts.Stderr, "⚠️ Timed out waiting for in-flight steps to clean up: %s. You may need to check 'git stash list' for unrestored work.\n", strings.Join(remaining, ", "))
+			r.publishSequenceEvent(eventbus.EventSequenceCleanupIncomplete, "", nil, map[string]interface{}{
+				"stepIds": remaining,
+			})
+			return
 		}
 	}
 }
