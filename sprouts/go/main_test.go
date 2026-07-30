@@ -10,6 +10,51 @@ import (
 	"time"
 )
 
+// processState returns the single-letter state from /proc/<pid>/stat, or "" if it
+// cannot be read. The comm field is parenthesised and may itself contain spaces
+// and parentheses, so the state is taken from after the final ")".
+func processState(pid int) string {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return ""
+	}
+	stat := string(data)
+	lastParen := strings.LastIndex(stat, ")")
+	if lastParen < 0 {
+		return ""
+	}
+	fields := strings.Fields(stat[lastParen+1:])
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
+}
+
+// waitUntilNotRunning reports whether pid stops running before the timeout.
+//
+// Killing a process group is asynchronous, and a killed process stays in the
+// process table as a zombie until its parent reaps it. Here the orphan's parent
+// was killed too, so the orphan is reparented to init and its entry disappears
+// only once init reaps it — which is why checking once, or after a fixed sleep,
+// races. A zombie satisfies what is actually being asserted (the orphan is
+// dead), and accepting it also keeps this honest in a container with no reaping
+// init, where an orphan can stay a zombie indefinitely.
+func waitUntilNotRunning(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return true
+		}
+		if processState(pid) == "Z" {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func mkArgs(kvs ...any) map[string]any {
 	m := make(map[string]any)
 	for i := 0; i < len(kvs); i += 2 {
@@ -351,12 +396,8 @@ func TestExecCommandTool(t *testing.T) {
 			t.Fatalf("invalid marker pid: %v", err)
 		}
 
-		// Give the OS a tiny bit of time to complete process cleanup
-		time.Sleep(100 * time.Millisecond)
-
-		err = syscall.Kill(pid, 0)
-		if err == nil {
-			t.Errorf("process %d is still alive after timeout, process group was not killed", pid)
+		if !waitUntilNotRunning(pid, 5*time.Second) {
+			t.Errorf("process %d is still running after the timeout, process group was not killed", pid)
 		}
 	})
 

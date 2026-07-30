@@ -8,6 +8,44 @@ from pathlib import Path
 import pytest
 import main
 
+def _process_state(pid: int) -> str:
+    """The single-letter state from /proc/<pid>/stat, or "" if unreadable.
+
+    The comm field is parenthesised and may itself contain spaces and
+    parentheses, so the state is taken from after the final ")".
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            stat = handle.read()
+        return stat[stat.rindex(")") + 1:].split()[0]
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
+def _wait_until_not_running(pid: int, timeout_seconds: float = 5.0) -> bool:
+    """True once pid is no longer running.
+
+    Killing a process group is asynchronous, and a killed process stays in the
+    process table as a zombie until its parent reaps it. Here the orphan's
+    parent was killed too, so the orphan is reparented to init and its entry
+    disappears only once init reaps it — which is why checking once, or after a
+    fixed sleep, races. A zombie satisfies what is actually being asserted (the
+    orphan is dead), and accepting it also keeps this honest in a container with
+    no reaping init, where an orphan can stay a zombie indefinitely.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        if _process_state(pid) == "Z":
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
 def test_read_file_tool(tmp_path: Path):
     file_path = tmp_path / "test.txt"
     file_path.write_text("hello world", encoding="utf-8")
@@ -199,8 +237,10 @@ def test_exec_command_tool(tmp_path: Path):
     pid_str = marker_path.read_text(encoding="utf-8").strip()
     assert pid_str, "marker pid not found"
     pid = int(pid_str)
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    assert _wait_until_not_running(pid), (
+        f"orphaned process {pid} still running after the timeout; "
+        "the process group was not killed"
+    )
 
     # cwd argument
     subdir = tmp_path / "subdir"

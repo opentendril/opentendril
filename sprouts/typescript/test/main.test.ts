@@ -14,6 +14,49 @@ import {
   availableTools,
 } from '../src/main.js';
 
+
+/**
+ * The single-letter state from /proc/<pid>/stat, or '' if it cannot be read. The
+ * comm field is parenthesised and may itself contain spaces and parentheses, so
+ * the state is taken from after the final ')'.
+ */
+async function processState(pid: number): Promise<string> {
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
+    const lastParen = stat.lastIndexOf(')');
+    if (lastParen < 0) return '';
+    return stat.slice(lastParen + 1).trim().split(/\s+/)[0] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Whether pid stops running before the timeout.
+ *
+ * Killing a process group is asynchronous, and a killed process stays in the
+ * process table as a zombie until its parent reaps it. Here the orphan's parent
+ * was killed too, so the orphan is reparented to init and its entry disappears
+ * only once init reaps it — which is why checking once races. A zombie satisfies
+ * what is actually being asserted (the orphan is dead), and accepting it also
+ * keeps this honest in a container with no reaping init, where an orphan can stay
+ * a zombie indefinitely.
+ */
+async function waitUntilNotRunning(pid: number, timeoutMs = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    if ((await processState(pid)) === 'Z') return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+}
+
+
 describe('Sprout Executor Tools', () => {
   let workspaceRoot: string;
 
@@ -261,8 +304,8 @@ describe('Sprout Executor Tools', () => {
       
       const pidStr = await fs.readFile(markerPath, 'utf8');
       const pid = parseInt(pidStr.trim(), 10);
-      
-      expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
+
+      expect(await waitUntilNotRunning(pid)).toBe(true);
     });
 
     it('respects cwd argument', async () => {
