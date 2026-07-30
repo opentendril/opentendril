@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -1558,6 +1559,43 @@ func TestRunSequenceRetriesThroughFullBudgetAfterResume(t *testing.T) {
 	}
 }
 
+// lockedBuffer is a Stderr sink that can be read while the runner is still
+// writing to it. The pause tests need that: they have to observe one warning
+// before making the next edit, because two edits collapsing into a single poll
+// would produce one combined warning instead of two.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// awaitStderr waits until want appears in the sink, so an edit is known to have
+// been polled before the next one is written.
+func awaitStderr(t *testing.T, sink *lockedBuffer, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if strings.Contains(sink.String(), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stderr never contained %q within the deadline; got:\n%s", want, sink.String())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 func TestRunSequenceHeadlessPauseWarningContract(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "warning-contract.yaml")
@@ -1691,7 +1729,7 @@ func TestRunSequenceHeadlessPauseMultipleWarnings(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var buf strings.Builder
+	var buf lockedBuffer
 
 	done := make(chan struct{})
 	go func() {
@@ -1712,14 +1750,22 @@ func TestRunSequenceHeadlessPauseMultipleWarnings(t *testing.T) {
 	loaded.MaxRetries = 5
 	_ = SaveSequence(path, loaded)
 
-	time.Sleep(100 * time.Millisecond) // Let it poll
+	// Wait for the edit to actually be polled before writing the next one. If
+	// both landed in one poll the runner would emit a single combined warning
+	// and the count below would be wrong for a reason unrelated to the code.
+	awaitStderr(t, &buf, "Ignored edits to paused sequence: maxRetries.")
+
+	// Dwell so that several further polls see the same unchanged difference.
+	// This widens a detection window rather than synchronising anything: too
+	// short only makes the not-once-per-tick assertion weaker, never wrong.
+	time.Sleep(60 * time.Millisecond)
 
 	// Edit 2: change branch, leaving maxRetries changed too
 	loaded, _ = LoadSequence(path)
 	loaded.Branch = "new-branch"
 	_ = SaveSequence(path, loaded)
 
-	time.Sleep(100 * time.Millisecond) // Let it poll
+	awaitStderr(t, &buf, "Ignored edits to paused sequence: branch, maxRetries.")
 
 	// Resume via step status
 	loaded, _ = LoadSequence(path)
@@ -1744,5 +1790,76 @@ func TestRunSequenceHeadlessPauseMultipleWarnings(t *testing.T) {
 	totalWarnings := strings.Count(output, "⚠️ Ignored edits to paused sequence")
 	if totalWarnings != 2 {
 		t.Fatalf("expected exactly 2 total warnings, got %d. Output:\n%s", totalWarnings, output)
+	}
+}
+
+func TestRunSequenceHeadlessPauseDoesNotWarnOnHonouredEdits(t *testing.T) {
+	// The false-positive guard. Changing only an honoured field must produce no
+	// warning at all -- if the comparison included onFailure, or reported a
+	// difference created by the runner's own save, every ordinary resume would
+	// warn. The resume itself proves a poll read the file, so this cannot pass
+	// by never looking.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "no-false-warning.yaml")
+
+	seq := &Sequence{
+		Name:             "no-false-warning",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "initial"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return "", fmt.Errorf("initial failure to trigger pause")
+		}
+		return "success", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var buf lockedBuffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:             io.Discard,
+			Stderr:             &buf,
+			Interactive:        false,
+			StepRunner:         stepRunner,
+			ResumePollInterval: 10 * time.Millisecond,
+		})
+	}()
+
+	_ = awaitStepStatus(t, path, "step-1", sequenceStatusFailed)
+
+	// Let several polls run against the runner's own saved file before touching
+	// it, so a comparison that reported spurious differences would have shown up.
+	time.Sleep(60 * time.Millisecond)
+
+	loaded, err := LoadSequence(path)
+	if err != nil {
+		t.Fatalf("LoadSequence failed: %v", err)
+	}
+	loaded.OnFailure = sequenceOnFailureHalt
+	if err := SaveSequence(path, loaded); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for resume: %v", ctx.Err())
+	}
+
+	if got := strings.Count(buf.String(), "Ignored edits to paused sequence"); got != 0 {
+		t.Errorf("expected no ignored-edit warning, got %d:\n%s", got, buf.String())
 	}
 }
