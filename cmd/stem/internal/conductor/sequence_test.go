@@ -1428,8 +1428,8 @@ func TestRunSequenceExhaustionReportsSpentCount(t *testing.T) {
 		t.Fatalf("expected exhaustion error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "failed after 1 retries") {
-		t.Fatalf("error = %q, want it to contain 'failed after 1 retries'", err.Error())
+	if !strings.Contains(err.Error(), "failed after 1 retry") {
+		t.Fatalf("error = %q, want it to contain 'failed after 1 retry'", err.Error())
 	}
 }
 
@@ -1480,6 +1480,22 @@ func TestRunSequenceExhaustionReportsSpentCountRetryMode(t *testing.T) {
 	}
 }
 
+func TestPluralRetries(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{0, "0 retries"},
+		{1, "1 retry"},
+		{2, "2 retries"},
+		{3, "3 retries"},
+	} {
+		if got := pluralRetries(tc.n); got != tc.want {
+			t.Errorf("pluralRetries(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
 func TestRunSequenceRetryCountdownCountsDown(t *testing.T) {
 	// Guards against inverting spent and remaining. The exhaustion error now
 	// reports the retries spent, while this line reports what is left — and the
@@ -1525,7 +1541,7 @@ func TestRunSequenceRetryCountdownCountsDown(t *testing.T) {
 
 	// Descending, in order. An ascending sequence would mean the countdown is
 	// printing what was spent.
-	wantOrder := []string{"2 retries left", "1 retries left", "0 retries left"}
+	wantOrder := []string{"2 retries left", "1 retry left", "0 retries left"}
 	at := 0
 	for _, want := range wantOrder {
 		idx := strings.Index(out[at:], want)
@@ -1535,7 +1551,7 @@ func TestRunSequenceRetryCountdownCountsDown(t *testing.T) {
 		at += idx + len(want)
 	}
 
-	if got := strings.Count(out, "retries left"); got != len(wantOrder) {
+	if got := strings.Count(out, "retries left") + strings.Count(out, "retry left"); got != len(wantOrder) {
 		t.Errorf("countdown printed %d times, want %d; got:\n%s", got, len(wantOrder), out)
 	}
 }
