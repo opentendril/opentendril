@@ -1140,3 +1140,149 @@ func TestRunSequenceMeristemCycleFailsRun(t *testing.T) {
 		t.Errorf("meristem step was marked complete despite rejection")
 	}
 }
+
+func TestRunSequenceReviewPauseDoesNotRewriteAuthoredMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "review-pause.yaml")
+
+	seq := &Sequence{
+		Name:             "review-pause",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureHalt, // authored as halt
+		Steps: []SequenceStep{
+			{ID: "review-step", Status: sequenceStatusPending, Transcript: "generate a thing"},
+			{ID: "next-step", Status: sequenceStatusPending, Transcript: "fail", DependsOn: []string{"review-step"}},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var stepCalls int32
+	var mu sync.Mutex
+	var runErr error
+
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		calls := atomic.AddInt32(&stepCalls, 1)
+		if step.ID == "review-step" && calls == 1 {
+			return "", ErrRequiresReview
+		}
+		if step.ID == "next-step" {
+			return "", fmt.Errorf("ordinary failure")
+		}
+		return "ok", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		_, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:             io.Discard,
+			Stderr:             io.Discard,
+			Interactive:        false,
+			StepRunner:         stepRunner,
+			ResumePollInterval: 10 * time.Millisecond,
+		})
+	}()
+
+	// Wait a moment to ensure it's polling
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify the file on disk STILL says halt
+	mu.Lock()
+	loaded, err := LoadSequence(path)
+	mu.Unlock()
+	if err != nil {
+		t.Fatalf("LoadSequence failed: %v", err)
+	}
+	if loaded.OnFailure != sequenceOnFailureHalt {
+		t.Errorf("file on disk has OnFailure = %q, want %q. The review verdict permanently rewrote the authored policy.", loaded.OnFailure, sequenceOnFailureHalt)
+	}
+
+	// Unpause it by setting status to complete
+	mu.Lock()
+	loaded.Steps[0].Status = sequenceStatusComplete
+	if err := SaveSequence(path, loaded); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+	mu.Unlock()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for resume")
+	}
+
+	// Verify it eventually failed at next-step, and didn't pause again
+	if runErr == nil {
+		t.Fatalf("expected sequence to fail at next-step, got nil error")
+	}
+	if !strings.Contains(runErr.Error(), "step next-step failed") {
+		t.Errorf("expected failure at next-step, got %v", runErr)
+	}
+}
+
+func TestRunSequenceAuthoredPauseBehaviorUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "authored-pause.yaml")
+
+	seq := &Sequence{
+		Name:             "authored-pause",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause, // authored as pause
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "fail"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("ordinary failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	var runErr error
+
+	go func() {
+		defer close(done)
+		_, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:             io.Discard,
+			Stderr:             io.Discard,
+			Interactive:        false,
+			StepRunner:         stepRunner,
+			ResumePollInterval: 10 * time.Millisecond,
+		})
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Unpause by changing mode to halt
+	loaded, err := LoadSequence(path)
+	if err != nil {
+		t.Fatalf("LoadSequence failed: %v", err)
+	}
+	loaded.OnFailure = sequenceOnFailureHalt
+	if err := SaveSequence(path, loaded); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for resume")
+	}
+
+	if runErr == nil {
+		t.Fatalf("expected sequence to fail, got nil error")
+	}
+	if !strings.Contains(runErr.Error(), "step step-a halted after failure") {
+		t.Errorf("expected halt after failure, got %v", runErr)
+	}
+}
