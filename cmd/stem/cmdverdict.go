@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,15 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 )
+
+type inoculateReport struct {
+	Total      int `json:"Total"`
+	Detected   int `json:"Detected"`
+	Undetected int `json:"Undetected"`
+	Inert      int `json:"Inert"`
+	Uncovered  int `json:"Uncovered"`
+	Skipped    int `json:"Skipped"`
+}
 
 // runVerdictCmd is the CLI adapter for the shared skip-aware test judgement.
 // It exists so the remote tier (GitHub Actions) and the local sealed verifier
@@ -29,6 +39,8 @@ func runVerdictCmd(args []string) {
 	switch strings.ToLower(args[0]) {
 	case "go-test":
 		os.Exit(runVerdictGoTestCmd(args[1:]))
+	case "inoculate":
+		os.Exit(runVerdictInoculateCmd(args[1:]))
 	case "-h", "--help", "help":
 		printVerdictUsage()
 	default:
@@ -161,8 +173,66 @@ func renderGoTestVerdict(out, errOut io.Writer, exitCode int, stream, capturedSt
 	}
 }
 
+// runVerdictInoculateCmd judges an inoculation report.
+func runVerdictInoculateCmd(args []string) int {
+	reportPath := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-h" || args[i] == "--help" || args[i] == "help" {
+			printVerdictUsage()
+			return 0
+		}
+		if strings.HasPrefix(args[i], "-") {
+			fmt.Fprintf(os.Stderr, "❌ unknown argument %q for verdict inoculate\n", args[i])
+			return 1
+		}
+		if reportPath != "" {
+			fmt.Fprintf(os.Stderr, "❌ unexpected extra argument %q: verdict inoculate reads one report\n", args[i])
+			return 1
+		}
+		reportPath = args[i]
+	}
+
+	var stream []byte
+	var err error
+	if reportPath == "" {
+		stream, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to read the report stream from stdin: %v\n", err)
+			return 1
+		}
+	} else {
+		stream, err = os.ReadFile(reportPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to read the report: %v\n", err)
+			return 1
+		}
+	}
+
+	return renderInoculateVerdict(os.Stdout, os.Stderr, string(stream))
+}
+
+func renderInoculateVerdict(out, errOut io.Writer, report string) int {
+	var r inoculateReport
+	err := json.Unmarshal([]byte(report), &r)
+	if err != nil {
+		fmt.Fprintf(errOut, "❌ inoculate verdict: FAILED — could not parse JSON report: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(out, "--- Inoculation Report ---\n")
+	fmt.Fprintf(out, "Total: %d | Detected: %d | Undetected: %d | Inert: %d | Uncovered: %d | Skipped: %d\n", r.Total, r.Detected, r.Undetected, r.Inert, r.Uncovered, r.Skipped)
+
+	if r.Undetected == 0 {
+		fmt.Fprintln(out, "✅ inoculate verdict: GREEN — no undetected challenges")
+		return 0
+	}
+	fmt.Fprintf(errOut, "❌ inoculate verdict: FAILED — %d undetected challenges exist\n", r.Undetected)
+	return 1
+}
+
 func printVerdictUsage() {
 	fmt.Println("Usage: tendril verdict go-test --exit-code <n> [--stderr-file <path>] [stream-file]")
+	fmt.Println("       tendril verdict inoculate [report-file]")
 	fmt.Println("  Judge a completed `go test -json` run with the same skip-aware verdict")
 	fmt.Println("  the sealed local verifier applies: a skipped test is BLOCKED, never green.")
 	fmt.Println("  The event stream is read from stream-file, or from stdin when omitted.")
