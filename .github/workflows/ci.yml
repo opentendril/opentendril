@@ -323,6 +323,19 @@ jobs:
           set -e
           go run ./cmd/stem verdict go-test --exit-code="$test_exit" --stderr-file=gotest.stderr gotest.json
 
+      # Scope the race detector to the concurrency-bearing packages rather than
+      # the full suite to bound the blast radius of latent races to known-risky
+      # areas. If a race fails here, it is legible in its own stream. As new
+      # concurrent subsystems are added, their packages should be appended here.
+      - name: Run Race Detector
+        shell: bash
+        run: |
+          set -uo pipefail
+          go test -race -json ./cmd/stem/internal/conductor ./cmd/stem/internal/eventbus ./cmd/stem/internal/gateway ./cmd/stem/internal/session >gotest-race.json 2>gotest-race.stderr
+          test_exit=$?
+          set -e
+          go run ./cmd/stem verdict go-test --exit-code="$test_exit" --stderr-file=gotest-race.stderr gotest-race.json
+
       # The raw stream, kept only when the verdict is not green. The report
       # names what failed or skipped; this is for reading the output of the
       # test that did it.
@@ -334,6 +347,16 @@ jobs:
           path: |
             gotest.json
             gotest.stderr
+          retention-days: 7
+
+      - name: Upload race stream
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotest-race-json
+          path: |
+            gotest-race.json
+            gotest-race.stderr
           retention-days: 7
 
       # The live GitHub App check is excluded from the default build (see
