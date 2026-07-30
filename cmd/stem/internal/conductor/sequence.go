@@ -219,10 +219,14 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 		}
 		r.queued[stepID] = false
 		inFlight[stepID] = struct{}{}
-		go func(id string, snapshot SequenceStep) {
-			output, err := r.opts.StepRunner(runCtx, r.seq, &snapshot, r.substratePath)
+		go func(id string, stepSnapshot SequenceStep, seqSnapshot Sequence) {
+			// This shallow copy is safe because no step-path code writes to seq,
+			// and no step-path code reads seq.Steps (which still shares its backing
+			// array). If a dispatched step ever needs to read reference-typed
+			// fields like Steps, this will reintroduce the race.
+			output, err := r.opts.StepRunner(runCtx, &seqSnapshot, &stepSnapshot, r.substratePath)
 			resultCh <- sequenceStepResult{stepID: id, output: output, err: err}
-		}(stepID, *step)
+		}(stepID, *step, *r.seq)
 	}
 
 	for {
