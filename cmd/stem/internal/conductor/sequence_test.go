@@ -940,3 +940,203 @@ func TestRunSequenceSproutFailClosedIsolation(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendDynamicStepsDependencyCycle(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cycle.yaml")
+	seq := &Sequence{
+		Name: "cycle-test",
+		Steps: []SequenceStep{
+			{ID: "static-1", Status: sequenceStatusComplete},
+		},
+	}
+	SaveSequence(path, seq)
+
+	runner, err := newSequenceRunner(path, seq, SequenceRunOptions{})
+	if err != nil {
+		t.Fatalf("newSequenceRunner failed: %v", err)
+	}
+
+	stepsBefore := len(runner.seq.Steps)
+	readyBefore := len(runner.ready)
+	queuedBefore := len(runner.queued)
+	remDepsBefore := len(runner.remainingDeps)
+	depBefore := len(runner.dependents)
+	mapBefore := len(runner.stepByID)
+
+	dynamic := []SequenceStep{
+		{ID: "a", DependsOn: []string{"b"}, Transcript: "a"},
+		{ID: "b", DependsOn: []string{"a"}, Transcript: "b"},
+	}
+
+	err = runner.appendDynamicSteps(dynamic)
+	if err == nil {
+		t.Fatal("expected cycle error, got nil")
+	}
+
+	// The reported path is deterministic: traversal starts from the first
+	// declared step, so accepting either orientation would let a regression to
+	// map-order iteration pass unnoticed.
+	if !strings.Contains(err.Error(), "forms a dependency cycle: a -> b -> a") {
+		t.Errorf("error did not name cycle correctly: %v", err)
+	}
+
+	if len(runner.seq.Steps) != stepsBefore {
+		t.Errorf("Steps mutated: got %d, want %d", len(runner.seq.Steps), stepsBefore)
+	}
+	if len(runner.ready) != readyBefore {
+		t.Errorf("ready mutated: got %d, want %d", len(runner.ready), readyBefore)
+	}
+	if len(runner.queued) != queuedBefore {
+		t.Errorf("queued mutated: got %d, want %d", len(runner.queued), queuedBefore)
+	}
+	if len(runner.remainingDeps) != remDepsBefore {
+		t.Errorf("remainingDeps mutated: got %d, want %d", len(runner.remainingDeps), remDepsBefore)
+	}
+	if len(runner.dependents) != depBefore {
+		t.Errorf("dependents mutated: got %d, want %d", len(runner.dependents), depBefore)
+	}
+	if len(runner.stepByID) != mapBefore {
+		t.Errorf("stepByID mutated: got %d, want %d", len(runner.stepByID), mapBefore)
+	}
+}
+
+func TestAppendDynamicStepsForwardReferences(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fwd.yaml")
+	seq := &Sequence{
+		Name: "fwd-test",
+		Steps: []SequenceStep{
+			{ID: "static-1", Status: sequenceStatusComplete},
+		},
+	}
+	SaveSequence(path, seq)
+
+	runner, err := newSequenceRunner(path, seq, SequenceRunOptions{})
+	if err != nil {
+		t.Fatalf("newSequenceRunner failed: %v", err)
+	}
+
+	dynamic := []SequenceStep{
+		{ID: "a", DependsOn: []string{"b"}, Transcript: "a"},
+		{ID: "b", Transcript: "b"},
+	}
+
+	if err := runner.appendDynamicSteps(dynamic); err != nil {
+		t.Fatalf("unexpected error on valid forward reference: %v", err)
+	}
+
+	if runner.remainingDeps["a"] != 1 {
+		t.Errorf("expected step a to have 1 remaining dep, got %d", runner.remainingDeps["a"])
+	}
+	if runner.remainingDeps["b"] != 0 {
+		t.Errorf("expected step b to have 0 remaining deps, got %d", runner.remainingDeps["b"])
+	}
+	if len(runner.ready) != 1 || runner.ready[0] != "b" {
+		t.Errorf("expected only step b to be ready, got %v", runner.ready)
+	}
+}
+
+func TestDependencyCyclePathFormat(t *testing.T) {
+	steps := []SequenceStep{
+		{ID: "a", DependsOn: []string{"b"}, Transcript: "a"},
+		{ID: "b", DependsOn: []string{"c"}, Transcript: "b"},
+		{ID: "c", DependsOn: []string{"a"}, Transcript: "c"},
+	}
+
+	cycle := findDependencyCycle(steps)
+	if cycle == nil {
+		t.Fatal("expected to find cycle, got nil")
+	}
+
+	want := "a -> b -> c -> a"
+	got := strings.Join(cycle, " -> ")
+	if got != want {
+		t.Errorf("cycle path = %q, want %q", got, want)
+	}
+}
+
+func TestAppendDynamicStepsExistingErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "errors.yaml")
+	seq := &Sequence{Name: "errors", Steps: []SequenceStep{{ID: "s1", Status: sequenceStatusComplete}}}
+	SaveSequence(path, seq)
+	runner, _ := newSequenceRunner(path, seq, SequenceRunOptions{})
+
+	errSelf := runner.appendDynamicSteps([]SequenceStep{
+		{ID: "a", DependsOn: []string{"a"}, Transcript: "a"},
+	})
+	wantSelf := `dynamic sequence step a cannot depend on itself`
+	if errSelf == nil || errSelf.Error() != wantSelf {
+		t.Errorf("self dependency error = %v, want %q", errSelf, wantSelf)
+	}
+
+	errUnknown := runner.appendDynamicSteps([]SequenceStep{
+		{ID: "a", DependsOn: []string{"missing"}, Transcript: "a"},
+	})
+	wantUnknown := `dynamic sequence step a depends on unknown step "missing"`
+	if errUnknown == nil || errUnknown.Error() != wantUnknown {
+		t.Errorf("unknown dependency error = %v, want %q", errUnknown, wantUnknown)
+	}
+}
+
+func TestNewSequenceRunnerCycle(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "static-cycle.yaml")
+	seq := &Sequence{
+		Name: "static-cycle",
+		Steps: []SequenceStep{
+			{ID: "x", DependsOn: []string{"y"}},
+			{ID: "y", DependsOn: []string{"x"}},
+		},
+	}
+	SaveSequence(path, seq)
+
+	_, err := newSequenceRunner(path, seq, SequenceRunOptions{})
+	if err == nil {
+		t.Fatal("expected cycle error, got nil")
+	}
+	if !strings.Contains(err.Error(), "forms a dependency cycle: x -> y -> x") {
+		t.Errorf("error did not name cycle correctly: %v", err)
+	}
+}
+
+func TestRunSequenceMeristemCycleFailsRun(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "meristem-cycle.yaml")
+	seq := &Sequence{
+		Name: "meristem-cycle",
+		Steps: []SequenceStep{
+			{ID: "meristem-plan", Status: sequenceStatusPending, Transcript: "plan"},
+		},
+	}
+	SaveSequence(path, seq)
+
+	var stderr strings.Builder
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "```json\n[{\"id\":\"m1\",\"dependsOn\":[\"m2\"],\"transcript\":\"m1\"},{\"id\":\"m2\",\"dependsOn\":[\"m1\"],\"transcript\":\"m2\"}]\n```", nil
+	}
+
+	result, err := RunSequence(context.Background(), path, SequenceRunOptions{
+		Stdout:      io.Discard,
+		Stderr:      &stderr,
+		Interactive: false,
+		StepRunner:  stepRunner,
+	})
+
+	if err == nil {
+		t.Fatal("expected sequence to fail on rejected meristem plan, got nil error")
+	}
+
+	if !strings.Contains(err.Error(), "forms a dependency cycle: m1 -> m2 -> m1") {
+		t.Errorf("error did not name cycle correctly: %v", err)
+	}
+
+	if strings.Contains(stderr.String(), "Failed to append dynamic steps from") {
+		t.Errorf("stderr contained the old warn-and-continue message:\n%s", stderr.String())
+	}
+
+	if result.Steps[0].Status == sequenceStatusComplete {
+		t.Errorf("meristem step was marked complete despite rejection")
+	}
+}

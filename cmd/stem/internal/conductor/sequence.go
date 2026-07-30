@@ -167,6 +167,10 @@ func newSequenceRunner(path string, seq *Sequence, opts SequenceRunOptions) (*se
 		}
 	}
 
+	if cycle := findDependencyCycle(seq.Steps); cycle != nil {
+		return nil, fmt.Errorf("sequence %s step %s forms a dependency cycle: %s", path, cycle[0], strings.Join(cycle, " -> "))
+	}
+
 	if len(runner.ready) == 0 {
 		allDone := true
 		for _, step := range seq.Steps {
@@ -271,7 +275,7 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 						fmt.Fprintf(r.opts.Stderr, "⚠️ Failed to parse dynamic steps from %s: %v\n", result.stepID, parseErr)
 					} else if len(dynamicSteps) > 0 {
 						if err := r.appendDynamicSteps(dynamicSteps); err != nil {
-							fmt.Fprintf(r.opts.Stderr, "⚠️ Failed to append dynamic steps from %s: %v\n", result.stepID, err)
+							return r.seq, err
 						}
 					}
 				}
@@ -727,6 +731,12 @@ func (r *sequenceRunner) appendDynamicSteps(steps []SequenceStep) error {
 		validated = append(validated, step)
 	}
 
+	allSteps := append([]SequenceStep(nil), r.seq.Steps...)
+	allSteps = append(allSteps, validated...)
+	if cycle := findDependencyCycle(allSteps); cycle != nil {
+		return fmt.Errorf("dynamic sequence step %s forms a dependency cycle: %s", cycle[0], strings.Join(cycle, " -> "))
+	}
+
 	baseIndex := len(r.seq.Steps)
 	r.seq.Steps = append(r.seq.Steps, validated...)
 	r.rebuildStepIndexes()
@@ -792,6 +802,56 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 		r.stepByID[step.ID] = step
 		r.stepIndex[step.ID] = i
 	}
+}
+
+func findDependencyCycle(steps []SequenceStep) []string {
+	stepMap := make(map[string]*SequenceStep, len(steps))
+	for i := range steps {
+		stepMap[steps[i].ID] = &steps[i]
+	}
+
+	visited := make(map[string]bool)
+	onStack := make(map[string]bool)
+	var path []string
+
+	var dfs func(stepID string) []string
+	dfs = func(stepID string) []string {
+		visited[stepID] = true
+		onStack[stepID] = true
+		path = append(path, stepID)
+
+		if step, ok := stepMap[stepID]; ok {
+			for _, dep := range step.DependsOn {
+				if !visited[dep] {
+					if cycle := dfs(dep); cycle != nil {
+						return cycle
+					}
+				} else if onStack[dep] {
+					var cycle []string
+					for i, id := range path {
+						if id == dep {
+							cycle = append([]string(nil), path[i:]...)
+							cycle = append(cycle, dep)
+							return cycle
+						}
+					}
+				}
+			}
+		}
+
+		onStack[stepID] = false
+		path = path[:len(path)-1]
+		return nil
+	}
+
+	for _, step := range steps {
+		if !visited[step.ID] {
+			if cycle := dfs(step.ID); cycle != nil {
+				return cycle
+			}
+		}
+	}
+	return nil
 }
 
 var (
