@@ -92,6 +92,8 @@ The package exports on the order of **~365** symbols. The load-bearing surface i
 
 **Phenotypic “first success wins” vs generational selection.** The older `phenotypesCount` race cancels siblings on first fitness pass; `SelectionConfig` runs a full generational GA. Both coexist; operators must know which step field they set.
 
+**In-flight drain residual** (`sequence.go`). `run()` now cancels and drains in-flight steps on every exit, and the residual is the grace period: if a step's cleanup wedges past `CleanupGracePeriod` the runner reports the affected steps and gives up rather than blocking forever, so a stash can still be left behind in that case.
+
 ## Design & rationale
 
 Conductor exists because OpenTendril keeps **state in git** and **execution in terraria**, with the host Stem owning the ReAct loop. The package is the place where those choices meet: a Sequence YAML (or dynamically appended steps) names work; the runner schedules it; each step grows one or more sprouts against a substrate; outcomes are committed, selected, verified, and chronicled.

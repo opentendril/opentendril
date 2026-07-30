@@ -27,8 +27,14 @@ const (
 	EventHostExecutionActivated EventType = "host-execution-activated"
 	EventSequenceFailure        EventType = "sequence-failure"
 	EventSequenceComplete       EventType = "sequence-complete"
-	EventStreamToken            EventType = "stream-token"
-	EventThoughtBranch          EventType = "thought-branch"
+	// EventSequenceCleanupIncomplete is published when the sequence runner
+	// stops waiting for in-flight steps to finish cleaning up. It forms the
+	// structured audit trail for a potentially unrestored workspace: if a
+	// step's cleanup wedges past the grace period, the runner reports the
+	// affected steps and gives up, so a stashed workspace may be left behind.
+	EventSequenceCleanupIncomplete EventType = "sequence-cleanup-incomplete"
+	EventStreamToken               EventType = "stream-token"
+	EventThoughtBranch             EventType = "thought-branch"
 	// EventToolInvoked reports one tool call the Pollinator made during a run — the
 	// tool name, its arguments, the resulting status, and a truncated
 	// observation. Without it a run's actual actions are invisible: a
@@ -78,6 +84,7 @@ func AllEventTypes() []EventType {
 		EventHostExecutionActivated,
 		EventSequenceFailure,
 		EventSequenceComplete,
+		EventSequenceCleanupIncomplete,
 		EventStreamToken,
 		EventThoughtBranch,
 		EventToolInvoked,

@@ -30,7 +30,7 @@
 | `EventType` | String enum for event names. **Wire values are kebab-case** (domain enums per GUARDRAILS / AGENTS.md), e.g. `sprout-emerged`. |
 | **Health** | `EventHealthCheck` (`health-check`), `EventHealthDegraded` (`health-degraded`), `EventHealthRecovered` (`health-recovered`). |
 | **Terrarium / infra** | `EventTerrariumOOM` (`terrarium-oom`), `EventTerrariumTimeout` (`terrarium-timeout`). |
-| **Sequence** | `EventSequenceFailure` (`sequence-failure`), `EventSequenceComplete` (`sequence-complete`). |
+| **Sequence** | `EventSequenceFailure` (`sequence-failure`), `EventSequenceComplete` (`sequence-complete`), `EventSequenceCleanupIncomplete` (`sequence-cleanup-incomplete`). |
 | **Stream / thought** | `EventStreamToken` (`stream-token`), `EventThoughtBranch` (`thought-branch`). |
 | **Tool / transcript** | `EventToolInvoked` (`tool-invoked`), `EventSproutTranscript` (`sprout-transcript`; historical persisted name `Pollinator-transcript` may still exist in old history rows). |
 | **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`). |
