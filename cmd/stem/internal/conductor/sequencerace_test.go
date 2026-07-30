@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -29,6 +31,13 @@ func TestSequenceDispatchDataRace(t *testing.T) {
 	releaseB := make(chan struct{})
 	stepBReady := make(chan struct{})
 
+	// step-b spins reading the sequence until released, so every early failure
+	// path below has to release it too — otherwise a failing run leaves a
+	// goroutine burning a core for the rest of the test binary's life, which
+	// would make unrelated tests look flaky and mask the real failure.
+	releaseStepB := sync.OnceFunc(func() { close(releaseB) })
+	t.Cleanup(releaseStepB)
+
 	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
 		if step.ID == "step-a" {
 			// step-a completes immediately, triggering a SaveSequence on the scheduler thread
@@ -51,6 +60,11 @@ func TestSequenceDispatchDataRace(t *testing.T) {
 				default:
 					name = s.Name
 					branch = s.Branch
+					// Yield between reads. The race window is bounded by the
+					// poll below, so thousands of reads still land inside it;
+					// spinning without yielding only starves the scheduler
+					// goroutine this test is racing against.
+					runtime.Gosched()
 				}
 			}
 		}
@@ -103,7 +117,7 @@ func TestSequenceDispatchDataRace(t *testing.T) {
 		t.Fatalf("timed out waiting to observe step-a complete status on disk")
 	}
 
-	close(releaseB)
+	releaseStepB()
 
 	select {
 	case <-done:
