@@ -1557,3 +1557,192 @@ func TestRunSequenceRetriesThroughFullBudgetAfterResume(t *testing.T) {
 		t.Fatalf("step ran %d times, want 4 (1 pause + 2 funded retries + 1 exhausting failure); Stderr: %s", calls, buf.String())
 	}
 }
+
+func TestRunSequenceHeadlessPauseWarningContract(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "warning-contract.yaml")
+
+	originalSeq := &Sequence{
+		Name:             "warning-contract",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		MaxRetries:       0,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "initial"},
+			{ID: "step-2", Status: sequenceStatusPending, Transcript: "untouched"},
+		},
+	}
+	if err := SaveSequence(path, originalSeq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return "", fmt.Errorf("initial failure to trigger pause")
+		}
+		return "success", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var buf strings.Builder
+
+	done := make(chan struct{})
+	var result *Sequence
+	var runErr error
+	go func() {
+		defer close(done)
+		result, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:             io.Discard,
+			Stderr:             &buf,
+			Interactive:        false,
+			StepRunner:         stepRunner,
+			ResumePollInterval: 10 * time.Millisecond,
+		})
+	}()
+
+	// Wait for runner to pause
+	_ = awaitStepStatus(t, path, "step-1", sequenceStatusFailed)
+
+	// The resume interval is short (10ms). Wait for many ticks to elapse to ensure
+	// the false-positive guard holds (no warnings emitted when only honoured fields change,
+	// or when nothing has changed).
+	time.Sleep(100 * time.Millisecond)
+
+	// Now introduce an unhonoured edit along with a mode change, simulating a single save.
+	loaded, err := LoadSequence(path)
+	if err != nil {
+		t.Fatalf("LoadSequence failed: %v", err)
+	}
+
+	// Unhonoured edit
+	loaded.Steps[1].Transcript = "operator discarded edit"
+	// Honoured edit (trigger resume)
+	loaded.OnFailure = sequenceOnFailureHalt
+
+	if err := SaveSequence(path, loaded); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for resume: %v", ctx.Err())
+	}
+
+	if runErr == nil || !strings.Contains(runErr.Error(), "halted after failure") {
+		t.Fatalf("expected RunSequence to fail with halt, got %v", runErr)
+	}
+
+	// Assert the resume worked
+	if result.OnFailure != sequenceOnFailureHalt {
+		t.Fatalf("expected resumed sequence to have onFailure %q, got %q", sequenceOnFailureHalt, result.OnFailure)
+	}
+
+	// The unrelated edit is discarded in the result
+	if result.Steps[1].Transcript != "untouched" {
+		t.Fatalf("expected unrelated edit to be discarded, got %q", result.Steps[1].Transcript)
+	}
+
+	output := buf.String()
+
+	// Assert the warning fired exactly once for the distinct edit
+	warningCount := strings.Count(output, "⚠️ Ignored edits to paused sequence: step[step-2].transcript.")
+	if warningCount != 1 {
+		t.Fatalf("expected exactly 1 warning about step-2.transcript, got %d. Output:\n%s", warningCount, output)
+	}
+
+	// Verify no other warnings (the false-positive guard)
+	totalWarnings := strings.Count(output, "⚠️ Ignored edits to paused sequence")
+	if totalWarnings != 1 {
+		t.Fatalf("expected exactly 1 total warning about ignored edits, got %d. Output:\n%s", totalWarnings, output)
+	}
+}
+
+func TestRunSequenceHeadlessPauseMultipleWarnings(t *testing.T) {
+	// Tests that multiple distinct edits across separate saves warn correctly,
+	// but the same unchanged difference does not re-report.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "multi-warning.yaml")
+
+	originalSeq := &Sequence{
+		Name:             "multi-warning",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		MaxRetries:       0,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "initial"},
+		},
+	}
+	if err := SaveSequence(path, originalSeq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return "", fmt.Errorf("initial failure to trigger pause")
+		}
+		return "success", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var buf strings.Builder
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:             io.Discard,
+			Stderr:             &buf,
+			Interactive:        false,
+			StepRunner:         stepRunner,
+			ResumePollInterval: 10 * time.Millisecond,
+		})
+	}()
+
+	_ = awaitStepStatus(t, path, "step-1", sequenceStatusFailed)
+
+	// Edit 1: change maxRetries
+	loaded, _ := LoadSequence(path)
+	loaded.MaxRetries = 5
+	_ = SaveSequence(path, loaded)
+
+	time.Sleep(100 * time.Millisecond) // Let it poll
+
+	// Edit 2: change branch, leaving maxRetries changed too
+	loaded, _ = LoadSequence(path)
+	loaded.Branch = "new-branch"
+	_ = SaveSequence(path, loaded)
+
+	time.Sleep(100 * time.Millisecond) // Let it poll
+
+	// Resume via step status
+	loaded, _ = LoadSequence(path)
+	loaded.Steps[0].Status = sequenceStatusPending
+	_ = SaveSequence(path, loaded)
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("timed out waiting for resume: %v", ctx.Err())
+	}
+
+	output := buf.String()
+
+	// Should see a warning for maxRetries, then a warning for branch, maxRetries
+	if !strings.Contains(output, "⚠️ Ignored edits to paused sequence: maxRetries.") {
+		t.Errorf("missing first warning. Output:\n%s", output)
+	}
+	if !strings.Contains(output, "⚠️ Ignored edits to paused sequence: branch, maxRetries.") {
+		t.Errorf("missing second warning. Output:\n%s", output)
+	}
+	totalWarnings := strings.Count(output, "⚠️ Ignored edits to paused sequence")
+	if totalWarnings != 2 {
+		t.Fatalf("expected exactly 2 total warnings, got %d. Output:\n%s", totalWarnings, output)
+	}
+}
