@@ -521,8 +521,8 @@ func shouldBudRecursiveDebugger(step *SequenceStep) bool {
 
 	stepID := strings.ToLower(strings.TrimSpace(step.ID))
 	// Verifier: LLM-interpreted compiler/test failures. Macrophage: the
-	// deterministic fuzz-crash failures from runMacrophageFuzzCheck (issue
-	//) — both loop back to the same recursive Debugger.
+	// deterministic fuzz-crash failures from runMacrophageFuzzCheck — both
+	// loop back to the same recursive Debugger.
 	if !strings.Contains(stepID, "verifier") && !strings.Contains(stepID, "macrophage") {
 		return false
 	}
