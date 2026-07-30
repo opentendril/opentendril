@@ -294,11 +294,10 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 			r.publishStepFailure(result.stepID, result.err)
 
 			if errors.Is(result.err, ErrRequiresReview) {
-				r.seq.OnFailure = sequenceOnFailurePause
 				if err := SaveSequence(r.path, r.seq); err != nil {
 					return r.seq, err
 				}
-				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err)
+				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err, strings.ToLower(strings.TrimSpace(r.seq.OnFailure)))
 				if pauseErr != nil {
 					return r.seq, pauseErr
 				}
@@ -374,7 +373,7 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 				continue
 
 			case failureActionPause:
-				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err)
+				decision, pauseErr := r.handlePause(ctx, result.stepID, result.err, sequenceOnFailurePause)
 				if pauseErr != nil {
 					return r.seq, pauseErr
 				}
@@ -549,7 +548,7 @@ func debuggerDependencyCount(dependsOn []string) int {
 	return count
 }
 
-func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr error) (string, error) {
+func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr error, pausedUnderMode string) (string, error) {
 	if r.opts.Interactive {
 		fmt.Fprintf(r.opts.Stderr, "⚠️ Step %s failed. [R]etry or [H]alt? ", stepID)
 		reader := bufio.NewReader(r.opts.Stdin)
@@ -573,7 +572,7 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 		}
 	}
 
-	fmt.Fprintf(r.opts.Stderr, "⚠️ Step %s failed in headless mode. Edit the sequence to switch onFailure to retry or halt.\n", stepID)
+	fmt.Fprintf(r.opts.Stderr, "⚠️ Step %s failed in headless mode. Edit the sequence to change onFailure away from %q, or set the step status to pending or complete.\n", stepID, pausedUnderMode)
 	ticker := time.NewTicker(r.opts.ResumePollInterval)
 	defer ticker.Stop()
 
@@ -598,9 +597,10 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 					return "retry", nil
 				}
 			}
-			if latest.OnFailure != sequenceOnFailurePause {
+			latestMode := strings.ToLower(strings.TrimSpace(latest.OnFailure))
+			if latestMode != pausedUnderMode {
 				r.seq.OnFailure = latest.OnFailure
-				return strings.ToLower(strings.TrimSpace(latest.OnFailure)), nil
+				return latestMode, nil
 			}
 		}
 	}
