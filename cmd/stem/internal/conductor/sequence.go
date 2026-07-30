@@ -351,7 +351,9 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 
 			action, actionErr := decideFailureAction(strings.ToLower(strings.TrimSpace(r.seq.OnFailure)), r.retriesLeft[result.stepID])
 			if actionErr != nil {
-				return r.seq, fmt.Errorf("step %s failed after %d retries: %w", result.stepID, r.retriesLeft[result.stepID], result.err)
+				// spent = resolved budget - remaining (remaining is zero at this point)
+				spent := r.resolveRetryBudget() - r.retriesLeft[result.stepID]
+				return r.seq, fmt.Errorf("step %s failed after %d retries: %w", result.stepID, spent, result.err)
 			}
 
 			switch action {
@@ -935,14 +937,19 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 	}
 }
 
-func (r *sequenceRunner) seedRetryBudgets() {
-	if strings.ToLower(strings.TrimSpace(r.seq.OnFailure)) != sequenceOnFailureRetry {
-		return
-	}
+func (r *sequenceRunner) resolveRetryBudget() int {
 	retries := r.seq.MaxRetries
 	if retries <= 0 {
 		retries = defaultSequenceRetryLimit
 	}
+	return retries
+}
+
+func (r *sequenceRunner) seedRetryBudgets() {
+	if strings.ToLower(strings.TrimSpace(r.seq.OnFailure)) != sequenceOnFailureRetry {
+		return
+	}
+	retries := r.resolveRetryBudget()
 	for i := range r.seq.Steps {
 		stepID := r.seq.Steps[i].ID
 		if _, exists := r.retriesLeft[stepID]; !exists {

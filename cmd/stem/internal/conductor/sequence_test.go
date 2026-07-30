@@ -1372,7 +1372,7 @@ func TestRunSequenceResumePauseToRetrySeedsBudget(t *testing.T) {
 	}
 }
 
-func TestRunSequenceExhaustionReportsRemainingCount(t *testing.T) {
+func TestRunSequenceExhaustionReportsSpentCount(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exhaust.yaml")
 
@@ -1428,8 +1428,96 @@ func TestRunSequenceExhaustionReportsRemainingCount(t *testing.T) {
 		t.Fatalf("expected exhaustion error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "failed after 0 retries") {
-		t.Fatalf("error = %q, want it to contain 'failed after 0 retries'", err.Error())
+	if !strings.Contains(err.Error(), "failed after 1 retries") {
+		t.Fatalf("error = %q, want it to contain 'failed after 1 retries'", err.Error())
+	}
+}
+
+func TestRunSequenceExhaustionReportsSpentCountRetryMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exhaust-retry.yaml")
+
+	seq := &Sequence{
+		Name:             "exhaust-retry",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureRetry,
+		MaxRetries:       3,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             io.Discard,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+
+	if err == nil {
+		t.Fatalf("expected exhaustion error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "failed after 3 retries") {
+		t.Fatalf("error = %q, want it to contain 'failed after 3 retries'", err.Error())
+	}
+
+	if atomic.LoadInt32(&calls) != 4 {
+		t.Fatalf("expected step to run 4 times, ran %d times", calls)
+	}
+}
+
+func TestRunSequenceExhaustionDefaultRetriesWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exhaust-unset.yaml")
+
+	seq := &Sequence{
+		Name:             "exhaust-unset",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureRetry,
+		MaxRetries:       0,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             io.Discard,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+
+	if err == nil {
+		t.Fatalf("expected exhaustion error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "failed after 3 retries") {
+		t.Fatalf("error = %q, want it to contain 'failed after 3 retries'", err.Error())
 	}
 }
 
