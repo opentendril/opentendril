@@ -1302,3 +1302,233 @@ func TestRunSequenceAuthoredPauseBehaviorUnchanged(t *testing.T) {
 		t.Errorf("expected halt after failure, got %v", runErr)
 	}
 }
+
+func TestRunSequenceResumePauseToRetrySeedsBudget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resume.yaml")
+
+	seq := &Sequence{
+		Name:             "pause-to-retry",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		MaxRetries:       2,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		count := atomic.AddInt32(&calls, 1)
+		if count < 3 {
+			return "", fmt.Errorf("simulated failure %d", count)
+		}
+		return "ok", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				loaded, err := LoadSequence(path)
+				if err == nil && loaded != nil && len(loaded.Steps) > 0 {
+					if loaded.Steps[0].Status == sequenceStatusFailed && loaded.OnFailure == sequenceOnFailurePause {
+						loaded.OnFailure = sequenceOnFailureRetry
+						SaveSequence(path, loaded)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	var buf strings.Builder
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             &buf,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+
+	if err != nil {
+		t.Fatalf("RunSequence failed: %v\nStderr: %s", err, buf.String())
+	}
+
+	if atomic.LoadInt32(&calls) != 3 {
+		t.Fatalf("step runner calls = %d, want 3", atomic.LoadInt32(&calls))
+	}
+}
+
+func TestRunSequenceExhaustionReportsRealCount(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "exhaust.yaml")
+
+	seq := &Sequence{
+		Name:             "exhaust",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		MaxRetries:       1,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				loaded, err := LoadSequence(path)
+				if err == nil && loaded != nil && len(loaded.Steps) > 0 {
+					if loaded.Steps[0].Status == sequenceStatusFailed && loaded.OnFailure == sequenceOnFailurePause {
+						loaded.OnFailure = sequenceOnFailureRetry
+						SaveSequence(path, loaded)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             io.Discard,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+
+	if err == nil {
+		t.Fatalf("expected exhaustion error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "failed after 0 retries") {
+		t.Fatalf("error = %q, want it to contain 'failed after 0 retries'", err.Error())
+	}
+}
+
+func TestRunSequencePreservesSpentBudget(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "preserve-budget.yaml")
+
+	seq := &Sequence{
+		Name:             "preserve-budget",
+		ConcurrencyLimit: 3,
+		OnFailure:        sequenceOnFailurePause,
+		MaxRetries:       2,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "fail"},
+			{ID: "step-b", Status: sequenceStatusPending, Transcript: "dynamic"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var stepACalls int32
+	var mu sync.Mutex
+	stepBStarted := false
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		if step.ID == "step-a" {
+			atomic.AddInt32(&stepACalls, 1)
+			return "", fmt.Errorf("persistent failure")
+		}
+		if step.ID == "step-b" {
+			mu.Lock()
+			started := stepBStarted
+			stepBStarted = true
+			mu.Unlock()
+
+			if !started {
+				ticker := time.NewTicker(5 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return "", ctx.Err()
+					case <-ticker.C:
+						if atomic.LoadInt32(&stepACalls) >= 2 {
+							return "```json\n[{\"id\":\"step-c\",\"dependsOn\":[],\"transcript\":\"c\"}]\n```", nil
+						}
+					}
+				}
+			}
+			return "ok", nil
+		}
+		if step.ID == "step-c" {
+			return "ok", nil
+		}
+		return "", fmt.Errorf("unknown step %s", step.ID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				loaded, err := LoadSequence(path)
+				if err == nil && loaded != nil && len(loaded.Steps) > 0 {
+					a := latestStepByID(loaded.Steps, "step-a")
+					if a != nil && a.Status == sequenceStatusFailed && loaded.OnFailure == sequenceOnFailurePause {
+						loaded.OnFailure = sequenceOnFailureRetry
+						SaveSequence(path, loaded)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	var buf strings.Builder
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:             io.Discard,
+		Stderr:             &buf,
+		Interactive:        false,
+		StepRunner:         stepRunner,
+		ResumePollInterval: 10 * time.Millisecond,
+	})
+
+	if err == nil {
+		t.Fatalf("expected step-a to halt, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "step-a failed after 0 retries") {
+		t.Fatalf("expected error for step-a 0 retries, got %q", err.Error())
+	}
+
+	calls := atomic.LoadInt32(&stepACalls)
+	if calls != 4 {
+		t.Fatalf("expected step-a to fail exactly 4 times, got %d. This means budget was reset or mismanaged!", calls)
+	}
+}

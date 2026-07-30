@@ -158,14 +158,9 @@ func newSequenceRunner(path string, seq *Sequence, opts SequenceRunOptions) (*se
 			runner.ready = append(runner.ready, step.ID)
 			runner.queued[step.ID] = true
 		}
-		if seq.OnFailure == sequenceOnFailureRetry {
-			retries := seq.MaxRetries
-			if retries <= 0 {
-				retries = defaultSequenceRetryLimit
-			}
-			runner.retriesLeft[step.ID] = retries
-		}
 	}
+
+	runner.seedRetryBudgets()
 
 	if cycle := findDependencyCycle(seq.Steps); cycle != nil {
 		return nil, fmt.Errorf("sequence %s step %s forms a dependency cycle: %s", path, cycle[0], strings.Join(cycle, " -> "))
@@ -600,6 +595,7 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 			latestMode := strings.ToLower(strings.TrimSpace(latest.OnFailure))
 			if latestMode != pausedUnderMode {
 				r.seq.OnFailure = latest.OnFailure
+				r.seedRetryBudgets()
 				return latestMode, nil
 			}
 		}
@@ -748,13 +744,6 @@ func (r *sequenceRunner) appendDynamicSteps(steps []SequenceStep) error {
 	for i := range validated {
 		step := &r.seq.Steps[baseIndex+i]
 		r.remainingDeps[step.ID] = 0
-		if r.seq.OnFailure == sequenceOnFailureRetry {
-			retries := r.seq.MaxRetries
-			if retries <= 0 {
-				retries = defaultSequenceRetryLimit
-			}
-			r.retriesLeft[step.ID] = retries
-		}
 		for _, dep := range step.DependsOn {
 			depStep, ok := r.stepByID[dep]
 			if !ok {
@@ -771,6 +760,7 @@ func (r *sequenceRunner) appendDynamicSteps(steps []SequenceStep) error {
 		}
 	}
 
+	r.seedRetryBudgets()
 	r.sortReady()
 	return nil
 }
@@ -805,6 +795,22 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 		step := &r.seq.Steps[i]
 		r.stepByID[step.ID] = step
 		r.stepIndex[step.ID] = i
+	}
+}
+
+func (r *sequenceRunner) seedRetryBudgets() {
+	if strings.ToLower(strings.TrimSpace(r.seq.OnFailure)) != sequenceOnFailureRetry {
+		return
+	}
+	retries := r.seq.MaxRetries
+	if retries <= 0 {
+		retries = defaultSequenceRetryLimit
+	}
+	for i := range r.seq.Steps {
+		stepID := r.seq.Steps[i].ID
+		if _, exists := r.retriesLeft[stepID]; !exists {
+			r.retriesLeft[stepID] = retries
+		}
 	}
 }
 
