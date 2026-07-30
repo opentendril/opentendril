@@ -40,7 +40,6 @@ func TestRunSequence_DrainWaitsForInFlight(t *testing.T) {
 
 	bStarted := make(chan struct{})
 	bRelease := make(chan struct{})
-	bFinished := make(chan struct{})
 	aFailed := make(chan struct{})
 
 	bus.Subscribe(eventbus.EventSequenceFailure, func(e eventbus.Event) {
@@ -60,7 +59,6 @@ func TestRunSequence_DrainWaitsForInFlight(t *testing.T) {
 			close(bStarted)
 			<-bRelease
 			bFlag.Store(true)
-			close(bFinished)
 			return "", nil
 		}
 		return "", nil
@@ -175,6 +173,12 @@ func TestRunSequence_DrainCleanupErrorDoesNotShadowRunError(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), errA.Error()) {
 			t.Fatalf("expected halt error %v, got %v", errA, err)
 		}
+		// The drain reports a step's unwind error; it must not fold it into
+		// the run's own error. Asserting the halt error is present is not
+		// enough — a joined error would contain it too.
+		if strings.Contains(err.Error(), errB.Error()) {
+			t.Errorf("B's cleanup error leaked into the run error: %v", err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunSequence failed to return")
 	}
@@ -267,8 +271,9 @@ func TestRunSequence_DrainBackstopFires(t *testing.T) {
 		t.Errorf("stderr does not contain expected backstop message: %q", out)
 	}
 
-	// Bounded wait for event publication (which runs async in EventBus)
-	time.Sleep(100 * time.Millisecond)
+	// No wait is needed before this assertion: Bus.Publish invokes subscriber
+	// handlers synchronously in the publishing goroutine, so the counter is
+	// already incremented by the time RunSequence returns.
 	if atomic.LoadInt32(&incompleteEvents) != 1 {
 		t.Errorf("expected exactly 1 EventSequenceCleanupIncomplete event, got %d", atomic.LoadInt32(&incompleteEvents))
 	}
