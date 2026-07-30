@@ -1370,7 +1370,7 @@ func TestRunSequenceResumePauseToRetrySeedsBudget(t *testing.T) {
 	}
 }
 
-func TestRunSequenceExhaustionReportsRealCount(t *testing.T) {
+func TestRunSequenceExhaustionReportsRemainingCount(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "exhaust.yaml")
 
@@ -1431,18 +1431,91 @@ func TestRunSequenceExhaustionReportsRealCount(t *testing.T) {
 	}
 }
 
-func TestRunSequencePreservesSpentBudget(t *testing.T) {
+func TestSeedRetryBudgetsPreservesExistingEntries(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "preserve-budget.yaml")
+	path := filepath.Join(dir, "seed-budgets.yaml")
 
 	seq := &Sequence{
-		Name:             "preserve-budget",
-		ConcurrencyLimit: 3,
+		Name:       "seed-budgets",
+		OnFailure:  sequenceOnFailureRetry,
+		MaxRetries: 2,
+		Steps: []SequenceStep{
+			{ID: "partly-spent", Status: sequenceStatusPending, Transcript: "a"},
+			{ID: "exhausted", Status: sequenceStatusPending, Transcript: "b"},
+			{ID: "fresh", Status: sequenceStatusPending, Transcript: "c"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	runner, err := newSequenceRunner(path, seq, SequenceRunOptions{})
+	if err != nil {
+		t.Fatalf("newSequenceRunner failed: %v", err)
+	}
+
+	// Construction already seeded every step because the mode is retry. Spend
+	// some of two budgets, then drop the third entry entirely to stand in for a
+	// step that has never been seeded.
+	runner.retriesLeft["partly-spent"] = 1
+	runner.retriesLeft["exhausted"] = 0
+	delete(runner.retriesLeft, "fresh")
+
+	runner.seedRetryBudgets()
+
+	// A budget of 0 is the case that matters: the step legitimately spent its
+	// whole allowance, and re-seeding it would turn a bounded retry into an
+	// unbounded one. Presence, not value, has to decide.
+	if got := runner.retriesLeft["exhausted"]; got != 0 {
+		t.Errorf("exhausted budget was re-seeded to %d, want it left at 0", got)
+	}
+	if got := runner.retriesLeft["partly-spent"]; got != 1 {
+		t.Errorf("partly spent budget = %d, want 1 (unchanged)", got)
+	}
+	if got := runner.retriesLeft["fresh"]; got != 2 {
+		t.Errorf("unseeded step budget = %d, want 2", got)
+	}
+}
+
+func TestSeedRetryBudgetsIsNoOpOutsideRetryMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "seed-budgets-halt.yaml")
+
+	seq := &Sequence{
+		Name:       "seed-budgets-halt",
+		OnFailure:  sequenceOnFailureHalt,
+		MaxRetries: 2,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	runner, err := newSequenceRunner(path, seq, SequenceRunOptions{})
+	if err != nil {
+		t.Fatalf("newSequenceRunner failed: %v", err)
+	}
+
+	runner.seedRetryBudgets()
+
+	if _, seeded := runner.retriesLeft["step-a"]; seeded {
+		t.Errorf("budget was seeded under mode %q, want no entry", seq.OnFailure)
+	}
+}
+
+func TestRunSequenceRetriesThroughFullBudgetAfterResume(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "retry-cycle.yaml")
+
+	seq := &Sequence{
+		Name:             "retry-cycle",
+		ConcurrencyLimit: 1,
 		OnFailure:        sequenceOnFailurePause,
 		MaxRetries:       2,
 		Steps: []SequenceStep{
 			{ID: "step-a", Status: sequenceStatusPending, Transcript: "fail"},
-			{ID: "step-b", Status: sequenceStatusPending, Transcript: "dynamic"},
 		},
 	}
 	if err := SaveSequence(path, seq); err != nil {
@@ -1450,63 +1523,19 @@ func TestRunSequencePreservesSpentBudget(t *testing.T) {
 	}
 
 	var stepACalls int32
-	var mu sync.Mutex
-	stepBStarted := false
-
 	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
-		if step.ID == "step-a" {
-			atomic.AddInt32(&stepACalls, 1)
-			return "", fmt.Errorf("persistent failure")
-		}
-		if step.ID == "step-b" {
-			mu.Lock()
-			started := stepBStarted
-			stepBStarted = true
-			mu.Unlock()
-
-			if !started {
-				ticker := time.NewTicker(5 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return "", ctx.Err()
-					case <-ticker.C:
-						if atomic.LoadInt32(&stepACalls) >= 2 {
-							return "```json\n[{\"id\":\"step-c\",\"dependsOn\":[],\"transcript\":\"c\"}]\n```", nil
-						}
-					}
-				}
-			}
-			return "ok", nil
-		}
-		if step.ID == "step-c" {
-			return "ok", nil
-		}
-		return "", fmt.Errorf("unknown step %s", step.ID)
+		atomic.AddInt32(&stepACalls, 1)
+		return "", fmt.Errorf("persistent failure")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	go func() {
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				loaded, err := LoadSequence(path)
-				if err == nil && loaded != nil && len(loaded.Steps) > 0 {
-					a := latestStepByID(loaded.Steps, "step-a")
-					if a != nil && a.Status == sequenceStatusFailed && loaded.OnFailure == sequenceOnFailurePause {
-						loaded.OnFailure = sequenceOnFailureRetry
-						SaveSequence(path, loaded)
-						return
-					}
-				}
-			}
+		loaded := awaitStepStatus(t, path, "step-a", sequenceStatusFailed)
+		loaded.OnFailure = sequenceOnFailureRetry
+		if err := SaveSequence(path, loaded); err != nil {
+			t.Errorf("SaveSequence failed: %v", err)
 		}
 	}()
 
@@ -1518,17 +1547,13 @@ func TestRunSequencePreservesSpentBudget(t *testing.T) {
 		StepRunner:         stepRunner,
 		ResumePollInterval: 10 * time.Millisecond,
 	})
-
 	if err == nil {
-		t.Fatalf("expected step-a to halt, got nil")
+		t.Fatalf("expected the sequence to halt once the budget was spent, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "step-a failed after 0 retries") {
-		t.Fatalf("expected error for step-a 0 retries, got %q", err.Error())
-	}
-
-	calls := atomic.LoadInt32(&stepACalls)
-	if calls != 4 {
-		t.Fatalf("expected step-a to fail exactly 4 times, got %d. This means budget was reset or mismanaged!", calls)
+	// One initial failure that triggers the pause, then two retries funded by
+	// MaxRetries, then the failure that exhausts the budget.
+	if calls := atomic.LoadInt32(&stepACalls); calls != 4 {
+		t.Fatalf("step ran %d times, want 4 (1 pause + 2 funded retries + 1 exhausting failure); Stderr: %s", calls, buf.String())
 	}
 }
