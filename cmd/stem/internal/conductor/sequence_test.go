@@ -3,6 +3,7 @@ package conductor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1861,5 +1862,197 @@ func TestRunSequenceHeadlessPauseDoesNotWarnOnHonouredEdits(t *testing.T) {
 
 	if got := strings.Count(buf.String(), "Ignored edits to paused sequence"); got != 0 {
 		t.Errorf("expected no ignored-edit warning, got %d:\n%s", got, buf.String())
+	}
+}
+
+func TestRunSequenceInteractiveClosedStdinHalts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "interactive-closed.yaml")
+
+	seq := &Sequence{
+		Name:             "interactive-closed",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "fail"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	pr, pw := io.Pipe()
+	pw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var buf strings.Builder
+	result, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:      io.Discard,
+		Stderr:      &buf,
+		Interactive: true,
+		Stdin:       pr,
+		StepRunner:  stepRunner,
+	})
+
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "halted after failure") {
+		t.Fatalf("expected sequence to halt due to closed stdin, got: %v", err)
+	}
+	if result != nil && result.Steps[0].Status != sequenceStatusFailed {
+		t.Errorf("expected step to remain failed, got %s", result.Steps[0].Status)
+	}
+}
+
+func TestRunSequenceInteractiveEmptyLineRetries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "interactive-empty.yaml")
+
+	seq := &Sequence{
+		Name:             "interactive-empty",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "fail"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return "", fmt.Errorf("first failure")
+		}
+		return "success", nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stdin := strings.NewReader("\n")
+
+	var buf strings.Builder
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:      io.Discard,
+		Stderr:      &buf,
+		Interactive: true,
+		Stdin:       stdin,
+		StepRunner:  stepRunner,
+	})
+
+	if err != nil {
+		t.Fatalf("expected success on retry, got error: %v", err)
+	}
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", atomic.LoadInt32(&calls))
+	}
+}
+
+func TestRunSequenceInteractiveDataAtEOF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "interactive-eof-data.yaml")
+
+	seq := &Sequence{
+		Name:             "interactive-eof-data",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "fail"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stdin := strings.NewReader("h")
+
+	var buf strings.Builder
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:      io.Discard,
+		Stderr:      &buf,
+		Interactive: true,
+		Stdin:       stdin,
+		StepRunner:  stepRunner,
+	})
+
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "halted after failure") {
+		t.Fatalf("expected sequence to halt due to 'h' at EOF, got: %v", err)
+	}
+}
+
+func TestRunSequenceInteractiveCancellation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "interactive-cancel.yaml")
+
+	seq := &Sequence{
+		Name:             "interactive-cancel",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailurePause,
+		Steps: []SequenceStep{
+			{ID: "step-1", Status: sequenceStatusPending, Transcript: "fail"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	stepRunner := func(ctx context.Context, s *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		return "", fmt.Errorf("persistent failure")
+	}
+
+	pr, pw := io.Pipe()
+	defer pw.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var buf lockedBuffer
+	done := make(chan struct{})
+	var runErr error
+
+	go func() {
+		defer close(done)
+		_, runErr = RunSequence(ctx, path, SequenceRunOptions{
+			Stdout:      io.Discard,
+			Stderr:      &buf,
+			Interactive: true,
+			Stdin:       pr,
+			StepRunner:  stepRunner,
+		})
+	}()
+
+	awaitStderr(t, &buf, "⚠️ Step step-1 failed. [R]etry or [H]alt?")
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for RunSequence to return on cancellation")
+	}
+
+	if runErr == nil {
+		t.Fatalf("expected context cancellation error, got nil")
+	}
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", runErr)
 	}
 }

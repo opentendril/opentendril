@@ -547,22 +547,48 @@ func (r *sequenceRunner) handlePause(ctx context.Context, stepID string, stepErr
 	if r.opts.Interactive {
 		fmt.Fprintf(r.opts.Stderr, "⚠️ Step %s failed. [R]etry or [H]alt? ", stepID)
 		reader := bufio.NewReader(r.opts.Stdin)
+
+		type readResult struct {
+			line string
+			err  error
+		}
+		resultCh := make(chan readResult, 1)
+
+		// On cancellation the reading goroutine stays parked until stdin yields.
+		// This is a deliberate trade-off since reading from os.Stdin cannot be
+		// interrupted safely. It is acceptable since the process is unwinding.
+		readNext := func() {
+			go func() {
+				line, err := reader.ReadString('\n')
+				resultCh <- readResult{line, err}
+			}()
+		}
+		readNext()
+
 		for {
-			line, err := reader.ReadString('\n')
-			if err != nil && !errors.Is(err, io.EOF) {
-				return "", fmt.Errorf("read pause decision: %w", err)
-			}
-			choice := strings.ToLower(strings.TrimSpace(line))
-			switch choice {
-			case "", "r", "retry":
-				return "retry", nil
-			case "h", "halt":
-				return "halt", nil
-			default:
-				fmt.Fprintf(r.opts.Stderr, "Please enter R or H: ")
-			}
-			if errors.Is(err, io.EOF) {
-				return "retry", nil
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case res := <-resultCh:
+				if res.err != nil && !errors.Is(res.err, io.EOF) {
+					return "", fmt.Errorf("read pause decision: %w", res.err)
+				}
+				if res.line == "" && errors.Is(res.err, io.EOF) {
+					return "halt", nil
+				}
+				choice := strings.ToLower(strings.TrimSpace(res.line))
+				switch choice {
+				case "", "r", "retry":
+					return "retry", nil
+				case "h", "halt":
+					return "halt", nil
+				default:
+					fmt.Fprintf(r.opts.Stderr, "Please enter R or H: ")
+				}
+				if errors.Is(res.err, io.EOF) {
+					return "retry", nil
+				}
+				readNext()
 			}
 		}
 	}
