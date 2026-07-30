@@ -974,8 +974,10 @@ func TestAppendDynamicStepsDependencyCycle(t *testing.T) {
 		t.Fatal("expected cycle error, got nil")
 	}
 
-	if !strings.Contains(err.Error(), "forms a dependency cycle: a -> b -> a") &&
-		!strings.Contains(err.Error(), "forms a dependency cycle: b -> a -> b") {
+	// The reported path is deterministic: traversal starts from the first
+	// declared step, so accepting either orientation would let a regression to
+	// map-order iteration pass unnoticed.
+	if !strings.Contains(err.Error(), "forms a dependency cycle: a -> b -> a") {
 		t.Errorf("error did not name cycle correctly: %v", err)
 	}
 
@@ -1094,8 +1096,7 @@ func TestNewSequenceRunnerCycle(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cycle error, got nil")
 	}
-	if !strings.Contains(err.Error(), "forms a dependency cycle: x -> y -> x") &&
-		!strings.Contains(err.Error(), "forms a dependency cycle: y -> x -> y") {
+	if !strings.Contains(err.Error(), "forms a dependency cycle: x -> y -> x") {
 		t.Errorf("error did not name cycle correctly: %v", err)
 	}
 }
@@ -1127,8 +1128,7 @@ func TestRunSequenceMeristemCycleFailsRun(t *testing.T) {
 		t.Fatal("expected sequence to fail on rejected meristem plan, got nil error")
 	}
 
-	if !strings.Contains(err.Error(), "forms a dependency cycle: m1 -> m2 -> m1") &&
-		!strings.Contains(err.Error(), "forms a dependency cycle: m2 -> m1 -> m2") {
+	if !strings.Contains(err.Error(), "forms a dependency cycle: m1 -> m2 -> m1") {
 		t.Errorf("error did not name cycle correctly: %v", err)
 	}
 
