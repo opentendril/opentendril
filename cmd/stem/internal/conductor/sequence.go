@@ -353,7 +353,7 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 			if actionErr != nil {
 				// spent = resolved budget - remaining (remaining is zero at this point)
 				spent := r.resolveRetryBudget() - r.retriesLeft[result.stepID]
-				return r.seq, fmt.Errorf("step %s failed after %d retries: %w", result.stepID, spent, result.err)
+				return r.seq, fmt.Errorf("step %s failed after %s: %w", result.stepID, pluralRetries(spent), result.err)
 			}
 
 			switch action {
@@ -366,7 +366,7 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 				r.ready = append(r.ready, result.stepID)
 				r.queued[result.stepID] = true
 				r.sortReady()
-				fmt.Fprintf(r.opts.Stderr, "↺ [%s] retrying, %d retries left\n", result.stepID, r.retriesLeft[result.stepID])
+				fmt.Fprintf(r.opts.Stderr, "↺ [%s] retrying, %s left\n", result.stepID, pluralRetries(r.retriesLeft[result.stepID]))
 				continue
 
 			case failureActionPause:
@@ -935,6 +935,16 @@ func (r *sequenceRunner) rebuildStepIndexes() {
 		r.stepByID[step.ID] = step
 		r.stepIndex[step.ID] = i
 	}
+}
+
+// pluralRetries renders a retry count with its noun agreeing, so an operator
+// reading a failure does not see "after 1 retries". Both the exhaustion error
+// and the countdown line go through it, so the two cannot drift apart.
+func pluralRetries(n int) string {
+	if n == 1 {
+		return "1 retry"
+	}
+	return fmt.Sprintf("%d retries", n)
 }
 
 func (r *sequenceRunner) resolveRetryBudget() int {
