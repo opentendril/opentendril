@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -76,10 +78,15 @@ func setupTestMCPTransport(t *testing.T) (*httptest.Server, string, string, *cor
 			},
 		})
 
-	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, nil).WithCore(coreSvc).WithDelegation(delegationGate, "")
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(botanistKey, creds, nil, false, mcpHandler.HandleMCP))
+	deps := serveDependencies{
+		APIKey:                botanistKey,
+		PollinatorCredentials: creds,
+		DelegationGate:        delegationGate,
+		EventBus:              bus,
+		Sessions:              sessions,
+		CoreService:           coreSvc,
+	}
+	mux := buildServeMux(deps)
 
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -106,7 +113,8 @@ func invokeMCPTool(t *testing.T, srv *httptest.Server, token string, name string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", false, nil // let caller check status code if they want, but MCP should return 200 with JSONRPC error if auth passed
+		body, _ := io.ReadAll(resp.Body)
+		return "", false, fmt.Errorf("unexpected HTTP status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var response struct {

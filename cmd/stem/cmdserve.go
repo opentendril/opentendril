@@ -222,38 +222,17 @@ func runServeCmd(ctx context.Context, args []string) {
 	listenHost := serveListenHost()
 	networked := isNetworkedBindHost(listenHost)
 
-	// guardedAuth authenticates with the bearer key and default-denies
-	// delegated-marked requests: in this slice only the sprout routes consult
-	// the delegation authorizer per-invocation, so every other surface refuses
-	// a delegated invocation rather than silently running it as plain traffic.
-	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, delegationGate.Middleware(next))
-	}
-
 	if substratesConfig, err := conductor.LoadSubstratesConfig(""); err != nil {
 		log.Printf("⚠️ Failed to load substrates config for startup materialization: %v", err)
 	} else {
 		conductor.MaterializeManagedCheckouts(ctx, substratesConfig)
 	}
 
-	mux := http.NewServeMux()
-
-	// Access-token mint: a durable Pollinator credential (the refresh root) is
-	// exchanged here for a short-lived signed token. Self-authenticating on the
-	// presented credential, so it takes no outer bearer wrapper; a token cannot
-	// mint another token, and a plain bearer key cannot mint for a named identity.
-	receptors.NewPollinatorTokenHandler(stemSigner, pollinatorCredentials).Register(mux)
-
-	mux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
-
-	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(bus, sessions, history)))
-
 	// Daemon-lifetime health monitor: constructed before its /health
 	// registration so the same instance serves both the interval loop and the
 	// on-demand endpoint. This assignment must precede the scheduler block
 	// below because Start is called there alongside scheduler.New(...).Start.
 	healthMonitor := newDefaultHealthMonitor(bus, 30*time.Second)
-	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth(healthMonitor, networked)))
 
 	// Unified Interface Layer: the transport-free Core owns the session-
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
@@ -270,149 +249,32 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithSeed(seedOperations()).
 		WithGit(gitOperations())
 
-	// Native scheduled sequences: cron entries from
-	// .tendril/schedules.yaml grow Sequences and Sprouts inside this daemon,
-	// through the same governed Core capabilities every other surface uses.
-	// The scheduler stops with the daemon: it runs on the same shutdown ctx.
-	schedulesPath := filepath.Join(tendrilDir, "schedules.yaml")
-	if schedCfg, err := scheduler.LoadConfig(schedulesPath); err != nil {
-		log.Printf("⚠️ Failed to load scheduler config: %v (scheduling disabled)", err)
-	} else {
-		firer := scheduledRunFirer(coreSvc, sessions, getTriggersDir(), bus)
-		sched := scheduler.New(schedCfg, firer, log.Default())
-		sched.EnableHotReload(schedulesPath)
-		sched.Start(ctx)
-		if schedCfg.Enabled && len(schedCfg.Schedules) > 0 {
-			log.Printf("Scheduler enabled: %d schedule(s) loaded from %s", len(schedCfg.Schedules), schedulesPath)
-		} else {
-			log.Printf("Scheduler armed with hot-reload, watching %s (no schedules active yet)", schedulesPath)
-		}
-	}
-
-	// Continuous health monitoring: publishes health-check/health-degraded
-	// events on the same interval as the on-demand /health endpoint. Stops
-	// with the daemon: it runs on the same shutdown ctx as the scheduler above.
-	healthMonitor.Start(ctx)
-
-	// Idle-session cache eviction: drops idle entries from the in-memory map
-	// when a store is attached (no-op otherwise). Lazy Get/GetOrInitiate resume
-	// from the durable record; List sources from the store. Stops with the
-	// same daemon shutdown ctx as healthmon and the scheduler. TTL via
-	// TENDRIL_SESSION_TTL (default 24h).
-	sessions.StartIdleEviction(ctx)
-	if history != nil {
-		history.StartRetentionSweep(ctx)
-	}
-
-	// Tendril session REST API (adapter).
-	sessionsHandler := receptors.NewSessionsHandler(coreSvc, sessions, history, bus)
-	sessionsHandler.Register(mux, guardedAuth)
-
-	// Genome REST API (adapter, slice 1).
-	genomeHandler := receptors.NewGenomeHandler(coreSvc)
-	genomeHandler.Register(mux, guardedAuth)
-
-	// Plasmid REST API (adapter, slice 2).
-	plasmidHandler := receptors.NewPlasmidHandler(coreSvc)
-	plasmidHandler.Register(mux, guardedAuth)
-
-	// Substrate-grafting REST API (adapter, slice 3). Distinct from
-	// the mesh *server* endpoints mounted below: these are the client-side
-	// delegation commands.
-	graftHandler := receptors.NewGraftHandler(coreSvc)
-	graftHandler.Register(mux, guardedAuth)
-
-	// Mesh trait governance REST API (adapter). These routes
-	// expose the pending-trait inbox to the Command Center and CLI.
-	traitHandler := receptors.NewTraitHandler(coreSvc)
-	traitHandler.Register(mux, guardedAuth)
-
-	// Sequence REST API (adapter, slice 4).
-	sequenceHandler := receptors.NewSequenceHandler(coreSvc)
-	sequenceHandler.Register(mux, guardedAuth)
-
-	// Sprout REST API (adapter, final family). Detached
-	// POST /v1/sessions/{sessionId}/sprout/grow is registered outside the
-	// parity registry inside SproutHandler.Register. Both sprout routes
-	// consult the delegation gate per-invocation (with the decoded substrate
-	// in hand), so they take the bare bearer auth rather than guardedAuth's
-	// blanket delegated-request denial.
-	sproutHandler := receptors.NewSproutHandler(coreSvc, history, bus).WithDelegation(delegationGate)
-	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
-	})
-
-	// Stoma REST API (adapter): one bounded command in a
-	// network-sealed terrarium, the minimal delegable operation-class. Like
-	// the sprout routes it consults the delegation gate per-invocation (the
-	// matching grant supplies the egress allow-list), so it takes the bare
-	// bearer auth rather than guardedAuth's blanket delegated-request denial.
-	stomaHandler := receptors.NewStomaHandler(coreSvc).WithDelegation(delegationGate)
-	stomaHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
-	})
-
-	// Git REST API (adapter): commit a substrate's workspace under its
-	// configured commit identity, the lowest rung of the delegated-execution
-	// ladder. Like the stoma route it consults the delegation gate
-	// per-invocation, so it takes the bare bearer auth rather than
-	// guardedAuth's blanket delegated-request denial.
-	// Seed REST API (adapter): grow a Seed (a bounded intent) to Fruit. Like the
-	// stoma route it consults the delegation gate per-invocation (the
-	// matching grant supplies the egress allow-list), so it takes the bare
-	// bearer auth rather than guardedAuth's blanket delegated-request denial.
-	seedHandler := receptors.NewSeedHandler(coreSvc).WithDelegation(delegationGate).WithHistory(history)
-	seedHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
-	})
-
-	gitHandler := receptors.NewGitHandler(coreSvc).WithDelegation(delegationGate)
-	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, next)
-	})
-
-	// Phase 4: Configuration API
-	configHandler := receptors.NewConfigHandler(coreSvc, tendrilDir).WithDelegation(delegationGate)
-	mux.HandleFunc("/v1/config/triggers", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			configHandler.ListTriggers(w, r)
-			return
-		}
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}))
-	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			guardedAuth(configHandler.ListGenotypes)(w, r)
-			return
-		}
-		if r.Method == http.MethodPost {
-			withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, configHandler.UploadGenotype)(w, r)
-			return
-		}
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	})
-
-	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
-	// projects the same Core session capabilities as REST and the CLI)
-	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc).WithDelegation(delegationGate, "")
-	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, mcpHandler.HandleMCP))
-
-	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
+
 	// Mesh admin uses the same Botanist-key chain as the Stem bearer; never
 	// fail open when no dedicated secret is configured.
 	adminKey := resolveServeAPIKey()
 	if adminKey == "" {
 		adminKey = apiKey
 	}
-	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(adminKey, delegationGate.Middleware(meshServer.HandleAdminIssueToken)))
-	mux.HandleFunc("/v1/mesh/graft", delegationGate.Middleware(meshServer.HandleGraftWebSocket))
 
-	// Phase 7: Delegation Pending Confirmations API
-	pendingHandler := receptors.NewDelegationPendingHandler(pendingStore)
-	pendingHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(adminKey, delegationGate.Middleware(next))
-	})
+	deps := serveDependencies{
+		APIKey:                apiKey,
+		PollinatorCredentials: pollinatorCredentials,
+		StemSigner:            stemSigner,
+		Networked:             networked,
+		DelegationGate:        delegationGate,
+		EventBus:              bus,
+		Sessions:              sessions,
+		History:               history,
+		CoreService:           coreSvc,
+		HealthMonitor:         healthMonitor,
+		TendrilDir:            tendrilDir,
+		MeshServer:            meshServer,
+		PendingStore:          pendingStore,
+		AdminKey:              adminKey,
+	}
+	mux := buildServeMux(deps)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -1072,4 +934,153 @@ func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, trigg
 	}
 
 	return triggersModeFromEnv(), terrariumRunner{providerName: providerName, bus: bus}
+}
+
+type serveDependencies struct {
+	APIKey                string
+	PollinatorCredentials []core.PollinatorCredential
+	StemSigner            *core.StemSigner
+	Networked             bool
+	DelegationGate        *receptors.DelegationGate
+	EventBus              *eventbus.Bus
+	Sessions              *session.Manager
+	History               *historydb.Store
+	CoreService           *core.Service
+	HealthMonitor         *healthmon.Monitor
+	TendrilDir            string
+	MeshServer            *mesh.Server
+	PendingStore          *core.PendingConfirmationStore
+	AdminKey              string
+}
+
+func buildServeMux(deps serveDependencies) *http.ServeMux {
+	mux := http.NewServeMux()
+
+	// guardedAuth authenticates with the bearer key and default-denies
+	// delegated-marked requests: in this slice only the sprout routes consult
+	// the delegation authorizer per-invocation, so every other surface refuses
+	// a delegated invocation rather than silently running it as plain traffic.
+	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, deps.DelegationGate.Middleware(next))
+	}
+
+	// Access-token mint: a durable Pollinator credential (the refresh root) is
+	// exchanged here for a short-lived signed token. Self-authenticating on the
+	// presented credential, so it takes no outer bearer wrapper; a token cannot
+	// mint another token, and a plain bearer key cannot mint for a named identity.
+	receptors.NewPollinatorTokenHandler(deps.StemSigner, deps.PollinatorCredentials).Register(mux)
+
+	mux.HandleFunc("/ws", withWebSocketAuth(deps.APIKey, deps.DelegationGate.Middleware(gateway.HandleWebSocket(deps.EventBus))))
+
+	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(deps.EventBus, deps.Sessions, deps.History)))
+
+	// Daemon-lifetime health monitor: constructed before its /health
+	// registration so the same instance serves both the interval loop and the
+	// on-demand endpoint.
+	mux.HandleFunc("GET /health", deps.DelegationGate.Middleware(handleHealth(deps.HealthMonitor, deps.Networked)))
+
+	// Tendril session REST API (adapter).
+	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus)
+	sessionsHandler.Register(mux, guardedAuth)
+
+	// Genome REST API (adapter, slice 1).
+	genomeHandler := receptors.NewGenomeHandler(deps.CoreService)
+	genomeHandler.Register(mux, guardedAuth)
+
+	// Plasmid REST API (adapter, slice 2).
+	plasmidHandler := receptors.NewPlasmidHandler(deps.CoreService)
+	plasmidHandler.Register(mux, guardedAuth)
+
+	// Substrate-grafting REST API (adapter, slice 3). Distinct from
+	// the mesh *server* endpoints mounted below: these are the client-side
+	// delegation commands.
+	graftHandler := receptors.NewGraftHandler(deps.CoreService)
+	graftHandler.Register(mux, guardedAuth)
+
+	// Mesh trait governance REST API (adapter). These routes
+	// expose the pending-trait inbox to the Command Center and CLI.
+	traitHandler := receptors.NewTraitHandler(deps.CoreService)
+	traitHandler.Register(mux, guardedAuth)
+
+	// Sequence REST API (adapter, slice 4).
+	sequenceHandler := receptors.NewSequenceHandler(deps.CoreService)
+	sequenceHandler.Register(mux, guardedAuth)
+
+	// Sprout REST API (adapter, final family). Detached
+	// POST /v1/sessions/{sessionId}/sprout/grow is registered outside the
+	// parity registry inside SproutHandler.Register. Both sprout routes
+	// consult the delegation gate per-invocation (with the decoded substrate
+	// in hand), so they take the bare bearer auth rather than guardedAuth's
+	// blanket delegated-request denial.
+	sproutHandler := receptors.NewSproutHandler(deps.CoreService, deps.History, deps.EventBus).WithDelegation(deps.DelegationGate)
+	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+	})
+
+	// Stoma REST API (adapter): one bounded command in a
+	// network-sealed terrarium, the minimal delegable operation-class. Like
+	// the sprout routes it consults the delegation gate per-invocation (the
+	// matching grant supplies the egress allow-list), so it takes the bare
+	// bearer auth rather than guardedAuth's blanket delegated-request denial.
+	stomaHandler := receptors.NewStomaHandler(deps.CoreService).WithDelegation(deps.DelegationGate)
+	stomaHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+	})
+
+	// Git REST API (adapter): commit a substrate's workspace under its
+	// configured commit identity, the lowest rung of the delegated-execution
+	// ladder. Like the stoma route it consults the delegation gate
+	// per-invocation, so it takes the bare bearer auth rather than
+	// guardedAuth's blanket delegated-request denial.
+	// Seed REST API (adapter): grow a Seed (a bounded intent) to Fruit. Like the
+	// stoma route it consults the delegation gate per-invocation (the
+	// matching grant supplies the egress allow-list), so it takes the bare
+	// bearer auth rather than guardedAuth's blanket delegated-request denial.
+	seedHandler := receptors.NewSeedHandler(deps.CoreService).WithDelegation(deps.DelegationGate).WithHistory(deps.History)
+	seedHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+	})
+
+	gitHandler := receptors.NewGitHandler(deps.CoreService).WithDelegation(deps.DelegationGate)
+	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+	})
+
+	// Phase 4: Configuration API
+	configHandler := receptors.NewConfigHandler(deps.CoreService, deps.TendrilDir).WithDelegation(deps.DelegationGate)
+	mux.HandleFunc("/v1/config/triggers", guardedAuth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			configHandler.ListTriggers(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}))
+	mux.HandleFunc("/v1/config/genotypes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			guardedAuth(configHandler.ListGenotypes)(w, r)
+			return
+		}
+		if r.Method == http.MethodPost {
+			withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, configHandler.UploadGenotype)(w, r)
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	})
+
+	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
+	// projects the same Core session capabilities as REST and the CLI)
+	mcpHandler := receptors.NewMCPHandler().WithSessions(deps.Sessions, deps.History).WithCore(deps.CoreService).WithDelegation(deps.DelegationGate, "")
+	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
+
+	// Phase 6: Mesh Grafting API
+	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(deps.AdminKey, deps.DelegationGate.Middleware(deps.MeshServer.HandleAdminIssueToken)))
+	mux.HandleFunc("/v1/mesh/graft", deps.DelegationGate.Middleware(deps.MeshServer.HandleGraftWebSocket))
+
+	// Phase 7: Delegation Pending Confirmations API
+	pendingHandler := receptors.NewDelegationPendingHandler(deps.PendingStore)
+	pendingHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyAuth(deps.AdminKey, deps.DelegationGate.Middleware(next))
+	})
+
+	return mux
 }
