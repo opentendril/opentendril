@@ -168,6 +168,46 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	equalSets(t, "CLI adapter (registered subcommands) vs canonical", cliCaps, canonical)
 }
 
+// TestControlPlaneCapabilitiesExcluded asserts that core.CapabilityNames() contains no
+// control-plane verb.
+//
+// Why it matters: Control-plane operations — issuing or revoking a Pollinator credential,
+// git setup, writing grants — are deliberately not capabilities. That is what keeps
+// setting the Stem up reachable only as a subcommand run as the Stem's own
+// principal, where file ownership confines it, and off both Pollinator-facing
+// surfaces.
+//
+// We use a prefix list derived from the CLI's control-plane and local-only
+// subcommands (minus those that map to governed capabilities). While this is still
+// an enumeration (of families rather than verbs), checking by prefix guarantees
+// that if a developer adds a new verb under an existing control-plane family
+// (e.g., adding `delegation.approve` when `delegation.` is denied), the test will
+// correctly catch and block it without needing a reflexive golden-list update.
+//
+// Criterion for inclusion: a family belongs here when mounting it on a
+// Pollinator-facing surface would be a privilege escalation, not merely
+// because it is currently command-line only (e.g., memory. or chat.).
+func TestControlPlaneCapabilitiesExcluded(t *testing.T) {
+	denyPrefixes := []string{
+		"setup.",
+		"init.",
+		"serve.",
+		"pollinator.",
+		"delegation.",
+		"hardiness.",
+		"git.setup.",
+		"mcp.",
+	}
+
+	for _, name := range core.CapabilityNames() {
+		for _, prefix := range denyPrefixes {
+			if strings.HasPrefix(name, prefix) {
+				t.Errorf("capability %q matches control-plane deny-list prefix %q", name, prefix)
+			}
+		}
+	}
+}
+
 // Behavioral parity: the same input yields the same result via the Core
 // directly, via REST (httptest), and via MCP for the create-session capability.
 func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
