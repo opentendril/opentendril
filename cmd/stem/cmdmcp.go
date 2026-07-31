@@ -27,6 +27,15 @@ const envPollen = "TENDRIL_POLLEN"
 func runMCPCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, "🚀 OpenTendril MCP Stdio Server initializing...")
 
+	// Intake the durable root credential if configured (consumed in slice 2).
+	// A malformed or over-permissive credential file is a startup failure, not
+	// a silent downgrade, so a user trying to configure one is told why it failed.
+	_, credErr := loadMCPCredential()
+	if credErr != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", credErr)
+		os.Exit(1)
+	}
+
 	tendrilDir := "./.tendril"
 	handler := receptors.NewMCPHandler()
 
