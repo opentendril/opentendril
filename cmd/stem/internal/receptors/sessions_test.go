@@ -1,6 +1,7 @@
 package receptors
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,13 +11,17 @@ import (
 )
 
 func TestWriteCoreErr_ConductorWorkspaceAbsentMapsTo409(t *testing.T) {
-	err := conductor.ErrWorkspaceAbsent
+	// The resolver never returns the bare sentinel — it always wraps it with the
+	// Substrate name. Asserting against the wrapped form is what pins the
+	// unwrapping: a mapping written as `err == ErrWorkspaceAbsent` passes for the
+	// sentinel alone and returns 500 for every value production actually produces.
+	err := fmt.Errorf("%w: managed checkout for substrate %q is missing", conductor.ErrWorkspaceAbsent, "demo")
 	w := httptest.NewRecorder()
 
 	writeCoreErr(w, err)
 
 	if w.Code != http.StatusConflict {
-		t.Errorf("writeCoreErr(ErrWorkspaceAbsent) got status %d, want %d", w.Code, http.StatusConflict)
+		t.Errorf("writeCoreErr(wrapped ErrWorkspaceAbsent) got status %d, want %d", w.Code, http.StatusConflict)
 	}
 
 	body := w.Body.String()
