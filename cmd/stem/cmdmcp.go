@@ -36,6 +36,21 @@ func runMCPCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
+	decision := detectMCPMode(ctx, rootCred != "")
+
+	if decision.Message != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", decision.Message)
+	}
+
+	if decision.Mode == mcpModeRefuse {
+		os.Exit(1)
+	}
+
+	var forwarder *MCPForwarder
+	if decision.Mode == mcpModeForward {
+		forwarder = NewMCPForwarder(rootCred)
+	}
+
 	tendrilDir := "./.tendril"
 	handler := receptors.NewMCPHandler()
 
@@ -139,13 +154,6 @@ func runMCPCmd(ctx context.Context, args []string) {
 	scanner.Buffer(buf, maxCapacity)
 
 	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
-
-	var forwarder *MCPForwarder
-	// TENDRIL_TEST_MCP_FORWARD is a temporary seam for testing slice 2.
-	// Slice 3 replaces this with mode selection logic based on Stem identity.
-	if os.Getenv("TENDRIL_TEST_MCP_FORWARD") == "1" && rootCred != "" {
-		forwarder = NewMCPForwarder(rootCred)
-	}
 
 	for scanner.Scan() {
 		reqBytes := scanner.Bytes()
