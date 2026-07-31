@@ -24,9 +24,9 @@ func loadMCPCredential() (string, error) {
 		return "", fmt.Errorf("credential file %s: %w", path, err)
 	}
 
-	// Refuse an over-permissive file. It must not be group- or world-readable.
-	// 0o044 checks the read bits for group (0o040) and other (0o004).
-	if info.Mode().Perm()&0o044 != 0 {
+	// Refuse an over-permissive file. It must not be group- or world-readable or writable.
+	// 0o077 checks all bits for group (0o070) and other (0o007).
+	if info.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("credential file %s is too permissive (mode %04o); must be 0600 or stricter", path, info.Mode().Perm())
 	}
 

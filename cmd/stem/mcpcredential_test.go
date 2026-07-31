@@ -86,11 +86,6 @@ func runTendrilMCP(t *testing.T, env map[string]string) (string, string, int) {
 func TestMCPCredential_Unconfigured(t *testing.T) {
 	// "With no credential configured, startup is unchanged. Compare the actual
 	// emitted startup sequence against today's, not merely that the process did not error."
-	_, stderrBaseline, codeBaseline := runTendrilMCP(t, nil)
-	if codeBaseline != 0 {
-		t.Fatalf("expected baseline to exit 0 on EOF, got %d. stderr: %s", codeBaseline, stderrBaseline)
-	}
-
 	_, stderrWithEmpty, codeWithEmpty := runTendrilMCP(t, map[string]string{
 		"TENDRIL_MCP_CREDENTIAL": "",
 	})
@@ -98,16 +93,35 @@ func TestMCPCredential_Unconfigured(t *testing.T) {
 		t.Fatalf("expected empty credential to exit 0 on EOF, got %d", codeWithEmpty)
 	}
 
-	sanitize2 := func(s string) string {
+	sanitize := func(s string) string {
 		importRegexp := regexp.MustCompile(`tendril-[a-f0-9]{24,}`)
 		s = importRegexp.ReplaceAllString(s, "tendril-<ID>")
 		timeRegexp := regexp.MustCompile(`\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}`)
 		s = timeRegexp.ReplaceAllString(s, "<TIME>")
-		return s
+		// The `Loaded substrates config` line is generated dynamically, so filter it out to
+		// make the golden assertion completely deterministic against the core start lines.
+		lines := strings.Split(s, "\n")
+		var out []string
+		for _, line := range lines {
+			if !strings.Contains(line, "Loaded substrates config") && line != "" {
+				out = append(out, strings.TrimSpace(line))
+			}
+		}
+		return strings.Join(out, "\n")
 	}
 
-	if sanitize2(stderrBaseline) != sanitize2(stderrWithEmpty) {
-		t.Fatalf("Startup sequence changed with empty credential.\nWant:\n%s\nGot:\n%s", sanitize2(stderrBaseline), sanitize2(stderrWithEmpty))
+	got := sanitize(stderrWithEmpty)
+	want := strings.Join([]string{
+		"🚀 OpenTendril MCP Stdio Server initializing...",
+		"🪴 MCP interactions bound to Tendril session tendril-<ID>",
+		"🔏 No delegation grants configured: every delegated invocation is denied (secure default)",
+		"🔏 No Pollen bound (TENDRIL_POLLEN is unset): delegated capabilities are denied over MCP (deny-closed)",
+		"🟢 OpenTendril MCP Server ready. Listening on stdio.",
+		"🛑 OpenTendril MCP Stdio Server exiting.",
+	}, "\n")
+
+	if got != want {
+		t.Fatalf("Startup sequence changed with empty credential.\nWant:\n%s\nGot:\n%s", want, got)
 	}
 }
 
@@ -151,6 +165,20 @@ func TestMCPCredential_ModeCheck(t *testing.T) {
 		t.Errorf("expected error to name the required mode. stderr: %s", stderr644)
 	}
 
+	// 0620 should be refused (group writable)
+	if err := os.Chmod(credPath, 0620); err != nil {
+		t.Fatal(err)
+	}
+	_, stderr620, code620 := runTendrilMCP(t, map[string]string{
+		"TENDRIL_MCP_CREDENTIAL": credPath,
+	})
+	if code620 == 0 {
+		t.Fatalf("expected 0620 file to fail but it succeeded")
+	}
+	if !strings.Contains(stderr620, "too permissive") || !strings.Contains(stderr620, "0600") {
+		t.Errorf("expected error to name the required mode. stderr: %s", stderr620)
+	}
+
 	// 0600 should succeed
 	if err := os.Chmod(credPath, 0600); err != nil {
 		t.Fatal(err)
@@ -169,9 +197,4 @@ func TestMCPCredential_ModeCheck(t *testing.T) {
 	if strings.Contains(stderr600, secret) {
 		t.Errorf("secret leaked into stderr")
 	}
-}
-
-func TestMCPCredential_SecretLeakOnCorruptFile(t *testing.T) {
-	// Make sure we test that an error in reading or something doesn't leak the secret.
-	// e.g. if the secret doesn't have the tendril_ prefix, it's not checked yet in slice 1.
 }
