@@ -141,10 +141,17 @@ func runMCPCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
 
 	var forwarder *MCPForwarder
-	// TENDRIL_TEST_MCP_FORWARD is a temporary seam for testing slice 2.
-	// Slice 3 replaces this with mode selection logic based on Stem identity.
-	if os.Getenv("TENDRIL_TEST_MCP_FORWARD") == "1" && rootCred != "" {
+	decision := detectMCPMode(ctx, rootCred != "")
+	if decision.Message != "" {
+		fmt.Fprintln(os.Stderr, decision.Message)
+	}
+	switch decision.Mode {
+	case mcpModeRefuse:
+		os.Exit(1)
+	case mcpModeForward:
 		forwarder = NewMCPForwarder(rootCred)
+	case mcpModeInProcess:
+		// unchanged
 	}
 
 	for scanner.Scan() {

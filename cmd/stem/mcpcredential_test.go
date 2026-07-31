@@ -88,6 +88,7 @@ func TestMCPCredential_Unconfigured(t *testing.T) {
 	// emitted startup sequence against today's, not merely that the process did not error."
 	_, stderrWithEmpty, codeWithEmpty := runTendrilMCP(t, map[string]string{
 		"TENDRIL_MCP_CREDENTIAL": "",
+		"PORT":                   "65534", // Isolate from any live Stem on host
 	})
 	if codeWithEmpty != 0 {
 		t.Fatalf("expected empty credential to exit 0 on EOF, got %d", codeWithEmpty)

@@ -27,7 +27,11 @@ type MCPForwarder struct {
 	expiresAt time.Time
 }
 
-func NewMCPForwarder(rootCred string) *MCPForwarder {
+// A forwarded frame may be a long-running invocation, so the budget is
+// generous by intent rather than by coincidence.
+const mcpForwardingTimeout = 15 * time.Minute
+
+func resolveStemAddress() string {
 	host := strings.TrimSpace(os.Getenv(EnvTerroirHost))
 	if host == "" {
 		host = "127.0.0.1"
@@ -39,12 +43,14 @@ func NewMCPForwarder(rootCred string) *MCPForwarder {
 	if port == "" {
 		port = "8080"
 	}
-	addr := net.JoinHostPort(host, port)
+	return net.JoinHostPort(host, port)
+}
 
+func NewMCPForwarder(rootCred string) *MCPForwarder {
 	return &MCPForwarder{
-		BaseURL:    "http://" + addr,
+		BaseURL:    "http://" + resolveStemAddress(),
 		RootCred:   rootCred,
-		HTTPClient: &http.Client{Timeout: 15 * time.Minute},
+		HTTPClient: &http.Client{Timeout: mcpForwardingTimeout},
 	}
 }
 
