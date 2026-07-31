@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -28,8 +28,8 @@ func TestWorkspaceResolutionConsistency(t *testing.T) {
 
 	config := conductor.SubstratesConfig{
 		Substrates: map[string]conductor.SubstrateSpec{
-			"missing_path": {
-				Checkout: conductor.CheckoutSpec{Mode: "path", Path: "/path/does/not/exist"},
+			"missing_managed": {
+				Checkout: conductor.CheckoutSpec{Mode: "managed"},
 			},
 		},
 	}
@@ -44,27 +44,27 @@ func TestWorkspaceResolutionConsistency(t *testing.T) {
 		t.Helper()
 		if err == nil {
 			t.Errorf("%s: expected error, got nil", name)
-		} else if !strings.Contains(err.Error(), "does not resolve to a local workspace directory") {
-			t.Errorf("%s: got unexpected error: %v", name, err)
+		} else if !errors.Is(err, conductor.ErrWorkspaceAbsent) {
+			t.Errorf("%s: got unexpected error: %v, want conductor.ErrWorkspaceAbsent", name, err)
 		}
 	}
 
 	// 1. Git (via resolveGitWorkspace)
-	_, _, errGit := resolveGitWorkspace(ctx, "missing_path", cfg)
+	_, _, errGit := resolveGitWorkspace(ctx, "missing_managed", cfg)
 	expectError("Git", errGit)
 
 	// 2. Stoma (via stomaOperations)
 	stoma := stomaOperations()
-	_, errStoma := stoma.Run(ctx, core.StomaSpec{Substrate: "missing_path"})
+	_, errStoma := stoma.Run(ctx, core.StomaSpec{Substrate: "missing_managed"})
 	expectError("Stoma", errStoma)
 
 	// 3. Seed (via seedOperations)
 	seed := seedOperations()
-	_, errSeed := seed.Run(ctx, core.SeedSpec{Substrate: "missing_path"})
+	_, errSeed := seed.Run(ctx, core.SeedSpec{Substrate: "missing_managed"})
 	expectError("Seed", errSeed)
 
 	// 4. Sprout (via sproutOperations)
 	sprout := sproutOperations(nil, nil)
-	_, errSprout := sprout.Run(ctx, core.SproutSpec{Substrate: "missing_path"})
+	_, errSprout := sprout.Run(ctx, core.SproutSpec{Substrate: "missing_managed"})
 	expectError("Sprout", errSprout)
 }

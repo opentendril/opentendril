@@ -1,7 +1,6 @@
 package conductor
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -219,15 +218,15 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		plan.hostPath = getEnvOrDefault("TENDRIL_SUBSTRATE", mustGetwd())
 	}
 
+	var resolutionErr error
 	if spec, isName := ResolveSubstrate(plan.name, config); isName && spec != nil {
 		plan.named = true
 		plan.readOnly = spec.ReadOnly
 
 		resolvedPath, err := ResolveSubstrateWorkspace(plan.name, spec)
-		if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
-			return nil, err
-		}
-		if resolvedPath != "" {
+		if err != nil {
+			resolutionErr = err
+		} else if resolvedPath != "" {
 			plan.hostPath = resolvedPath
 		}
 		if plan.cloneURL == "" {
@@ -270,6 +269,9 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 
 	if !plan.remoteClone {
 		if !localPathExists {
+			if resolutionErr != nil {
+				return nil, resolutionErr
+			}
 			return nil, fmt.Errorf("substrate path %s does not exist", plan.hostPath)
 		}
 		plan.hostPath = repoRoot(plan.hostPath)

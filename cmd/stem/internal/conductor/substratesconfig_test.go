@@ -32,3 +32,29 @@ func TestAuthSpecUnmarshalExposeToken(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveSubstrateExecutionPlan_CloneOnDemand(t *testing.T) {
+	config := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"ondemand": {
+				URL: "https://github.com/opentendril/opentendril.git",
+			},
+		},
+	}
+
+	d := &DockerOrchestrator{
+		Substrate: "ondemand",
+	}
+
+	plan, err := resolveSubstrateExecutionPlan(d, config)
+	if err != nil {
+		t.Fatalf("resolveSubstrateExecutionPlan failed for clone-on-demand: %v", err)
+	}
+
+	if !plan.remoteClone {
+		t.Errorf("expected plan to specify remoteClone = true")
+	}
+	if plan.cloneURL != "https://github.com/opentendril/opentendril.git" {
+		t.Errorf("got cloneURL %q, want https://github.com/opentendril/opentendril.git", plan.cloneURL)
+	}
+}
