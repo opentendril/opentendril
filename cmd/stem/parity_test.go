@@ -177,8 +177,7 @@ func TestInterfaceParityCoverage(t *testing.T) {
 // principal, where file ownership confines it, and off both Pollinator-facing
 // surfaces.
 //
-// We use a prefix list derived from the CLI's control-plane and local-only
-// subcommands (minus those that map to governed capabilities). While this is still
+// We use a prefix list of control-plane families. While this is still
 // an enumeration (of families rather than verbs), checking by prefix guarantees
 // that if a developer adds a new verb under an existing control-plane family
 // (e.g., adding `delegation.approve` when `delegation.` is denied), the test will
