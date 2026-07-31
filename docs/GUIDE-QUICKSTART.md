@@ -1,7 +1,7 @@
 # OpenTendril Quick Start — your first session
 
 This covers what to do **once OpenTendril is installed**: confirming the Stem is
-live, and the four ways to talk to it.
+live, obtaining a credential, and making your first governed call.
 
 > [!IMPORTANT]
 > **Installation is not here.** It lives in
@@ -9,128 +9,265 @@ live, and the four ways to talk to it.
 > sound installation is — the properties that decide whether the delegation
 > boundary is enforced by the operating system or merely recorded, and the
 > configurations that satisfy them.
->
-> Install first, then come back. Run `tendril hardiness` at any point to see
-> which configuration you are actually running.
 
 ---
 
-## Before you start
+## Which installation do you have?
 
-| Requirement | Check |
-|---|---|
-| A working install | `tendril --help` |
-| Docker | `docker --version` |
-| An LLM | Local [Ollama](https://ollama.ai) (default) — or a cloud provider key |
-
-Confirm the Stem is running:
+This matters more than anything else on this page, and the two shapes need
+different instructions.
 
 ```bash
+command -v tendril
+```
+
+- **Nothing on your path** — you have a **governed** installation. The binary
+  belongs to the Stem's own account, at mode 750, so that you cannot run or
+  replace it. That is the design working. Continue below.
+- **A path is printed** — you have a **single-user** installation. Skip to
+  [Single-user installations](#single-user-installations).
+
+If you are unsure which you built, `docs/GUIDE-INSTALL.md` describes both.
+
+---
+
+# Governed installations
+
+The Stem runs as its own operating-system principal. You talk to it over the
+transport surface, holding a credential it issued you.
+
+## 1. Confirm the Stem is running
+
+```bash
+systemctl status tendril
 curl -s localhost:8080/health
 ```
 
-If it is not, start it the way your installation calls for — a service, or
-`tendril serve` from the Stem's working directory. Both are covered in the
-installation guide.
+A healthy Stem answers with a report naming each check:
+
+```json
+{"overall":true,"results":{"api-key":{"healthy":true,"message":"At least one LLM provider is available"},
+ "docker-daemon":{"healthy":true},"workspace":{"healthy":true,"message":".tendril workspace is writable"}}}
+```
+
+The startup log states the bind and what it means for credentials:
+
+```
+Starting Go Stem API on 127.0.0.1:8080 (loopback: durable Pollinator credentials
+still accepted on data routes)...
+```
+
+Loopback is the default. To reach the Stem from another host, set
+`TERROIR_HOST=0.0.0.0`; data routes then refuse durable credentials and require a
+short-lived access token, which is what step 3 mints anyway.
+
+## 2. Read what the installation actually is
+
+```bash
+sudo -u tendril -i tendril hardiness
+```
+
+**This reports and never gates — its exit status is always zero.** The output is
+the point, not the exit code:
+
+```
+✅  Running as the Stem (tendril), which owns ./.tendril
+✅  3 credential file(s) readable — this is the Stem's own material
+✅  The Stem's binary: Nothing on its resolution chain is writable by others
+✅  The control plane is outside any repository
+✅  1 active Pollinator credential(s) — those callers PROVE their Pollen
+✅  1 grant(s) configured
+
+HARDY — no weak conditions and nothing unestablished.
+```
+
+Run it a second time **from your own account**. It answers the other side of the
+boundary: from there, none of the Stem's credential files may be readable.
+
+> [!NOTE]
+> `hardiness` measures the binary **on disk**. If you have installed a new binary
+> and not yet restarted the service, the running Stem may be executing a
+> different image. Restart before trusting the reading.
+
+## 3. Get a credential
+
+A Pollinator is a caller. Each one holds its own credential and is constrained by
+its own grant. See what already exists:
+
+```bash
+sudo -u tendril -i tendril pollinator list
+```
+
+```
+POLLEN  STATUS  ISSUED      DIGEST         NOTE
+claude  active  2026-07-22  38c3089267f7…  laptop
+```
+
+If yours is not listed, issue one — as the Stem, in its own home:
+
+```bash
+sudo -u tendril -i tendril pollinator issue --pollen claude --note "laptop"
+```
+
+The secret prints **once** and is never stored; only its digest is kept. It begins
+`tendril_` and is the **durable refresh root** for that Pollinator.
+
+> [!IMPORTANT]
+> **Credentials and grants are read at startup.** One issued while the Stem is
+> running is refused with `401` until it restarts. Issue everything first, then
+> restart once.
+
+Then mint a short-lived access token to actually use:
+
+```bash
+sudo -u tendril -i tendril pollinator token --pollen claude > ~/.tendril-token
+chmod 600 ~/.tendril-token
+```
+
+Minting is the right habit for two reasons: it works on both loopback and
+off-host binds, and it does not require still holding a root that printed once.
+Tokens last at most 15 minutes; mint another when one expires. Revoking the root
+stops further minting, and outstanding tokens age out.
+
+The redirect keeps the secret out of your terminal history and off your screen.
+Use it without printing it:
+
+```bash
+-H "Authorization: Bearer $(cat ~/.tendril-token)"
+```
+
+## 4. Understand your grant
+
+A credential proves *who* you are. A grant decides *what* you may do. No grant
+means every delegated invocation is denied — the secure default.
+
+```bash
+sudo -u tendril -i cat .tendril/grants.yaml
+```
+
+```yaml
+grants:
+  claude:
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
+    substrates: [opentendril]
+```
+
+Read it as a sentence: *the Pollen `claude` may run these operation classes, on
+this Substrate, and nothing else.* Note `git.prune` is absent — it deletes
+branches, and every other operation here is recoverable.
+
+## 5. Make your first governed call
+
+```bash
+TOKEN=$(cat ~/.tendril-token)
+curl -s -X POST localhost:8080/v1/git/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"substrate":"opentendril"}'
+```
+
+```json
+{"branch":"tendril/claude/work","head":"bb63c9f…","defaultBranch":"main",
+ "clean":true,"onDefaultBranch":false,"commitAllowed":true,
+ "workspace":"/home/tendril/.tendril/workspaces/opentendril/claude",
+ "isolated":true,"pollen":"claude"}
+```
+
+Three things in that response are worth reading closely:
+
+- **`"pollen":"claude"`** — the Stem *derived* your Pollen from the credential you
+  presented. A Pollen claimed in a header is ignored for credential-bearing
+  callers, so a caller cannot assert someone else's identity.
+- **`"isolated":true`** and the `workspace` path — you get your own worktree,
+  under your own Pollen. Two Pollinators never share a tree, so they cannot stage
+  each other's files.
+- **`"branch":"tendril/claude/work"`** — work you do here happens on a branch the
+  Stem owns and can later reclaim. Branches made by hand in a shell are invisible
+  to it.
+
+## 6. Learn what a refusal looks like
+
+A refusal is not a fault. Knowing the difference between these three saves an
+afternoon:
+
+| What you did | Response | Meaning |
+|---|---|---|
+| Sent no credential | `401` | The route is authenticated. |
+| Sent an unrecognised bearer | `401 Unauthorized` | Unknown, revoked, expired or forged — all refused the same way. |
+| Asked for something outside your grant | `403` | Authenticated fine; not permitted. |
+
+The `403` names all three things it checked, so you know which to change:
+
+```
+delegation denied: no active grant covers Pollen "claude",
+operation-class "git.prune", substrate "opentendril"
+```
+
+If a Substrate is configured but its managed checkout has not been materialized,
+an in-grant call returns `409` — a configuration state you fix on the host, not a
+server fault.
+
+## 7. Two credential systems, not one
+
+A frequent confusion, worth stating plainly:
+
+| | Held by | Used for |
+|---|---|---|
+| **`BOTANIST_KEY`** | the operator | the gate, and management routes such as delegation approvals |
+| **Pollinator credential** (`tendril_…`) | each caller | delegated data routes, constrained by that caller's grant |
+
+They are separate on purpose. It is why a Pollinator cannot approve its own
+pending confirmation.
 
 ---
 
-## Talking to the Stem
+# Single-user installations
 
-Choose **any one** of these to interact with the running kernel:
+The binary is on your own path and the Stem runs as you. There is no boundary to
+cross, so the credential steps above do not apply.
+
+```bash
+tendril --help          # confirm the install
+tendril serve           # start the Stem
+curl -s localhost:8080/health
+tendril chat            # interactive session
+```
+
+`tendril chat` resolves its key from `BOTANIST_KEY`, then from
+`./.tendril/api-key` in the working directory.
 
 ---
 
-### Option A — Model Context Protocol over stdio (Claude Desktop / IDE)
+# Model Context Protocol over stdio
 
-OpenTendril integrates natively with Claude Desktop or Cursor/VS Code as an MCP server. Add this config to your MCP settings file:
+> [!CAUTION]
+> **Read this before configuring it.** `tendril mcp` starts an **in-process Stem
+> as whoever runs it**, reading its control plane from that caller's working
+> directory. On a host where a governed Stem already runs, this creates a second
+> Stem belonging to your account — governed by a control plane you own and can
+> edit, which is the arrangement the governed installation exists to prevent. It
+> does not connect to the Stem running as another user.
+>
+> On a governed installation, use the transport surface with a Pollinator
+> credential, as above.
+
+For a single-user installation it is the natural editor integration:
 
 ```json
 {
   "mcpServers": {
-    "opentendril": {
-      "command": "tendril",
-      "args": ["mcp"]
-    }
+    "opentendril": { "command": "tendril", "args": ["mcp"] }
   }
 }
 ```
 
-Restart your IDE or Claude Desktop. The OpenTendril tools (`sproutTendril`, `createGenotype`) will now be active in your client.
-
-> [!CAUTION]
-> `tendril mcp` starts an **in-process Stem as whoever runs it**, reading its
-> control plane from that caller's working directory. It does not connect to a
-> Stem running as another user. If you installed the Stem under its own
-> principal, this bypasses that boundary — see
-> [docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md) for the surface a credential-bearing
-> Pollinator uses instead.
+Bind one Pollen with `TENDRIL_POLLEN`. Unset, every delegated capability is
+denied.
 
 ---
 
-### Option B — Interactive Terminal Chat
+## Where to go next
 
-You can chat with OpenTendril directly in your terminal using the WebSocket CLI wrapper:
-
-```bash
-tendril chat
-```
-
-Expected interface:
-```
-🌱 OpenTendril CLI Chat
-Connecting to ws://localhost:8080/ws...
-✅ Connected (session: cli-default, provider: default)
-
-you ›
-```
-
-Type your first instruction:
-```
-you › read cmd/main.go and describe what it does
-```
-
----
-
-### Option C — Curl Command Execution
-
-Verify the server REST endpoint directly using curl:
-
-```bash
-curl -s -X POST http://localhost:8080/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What files are in this project?"}'
-```
-
----
-
-### Option D — Session Management CLI
-
-Manage Tendril sessions directly from the terminal. These commands project the same Core capabilities as the MCP and REST surfaces:
-
-```bash
-# Create a new session
-tendril phytomer create --provider anthropic --model claude-sonnet-4-20250514
-
-# List active sessions
-tendril phytomer list
-
-# View session history
-tendril phytomer history <session-id> --limit 20
-
-# Delete a session
-tendril phytomer delete <session-id>
-```
-
----
-
-## Running the Test Suite
-
-To verify the orchestrator internals and API routing:
-
-```bash
-cd cmd/stem
-go test -v ./...
-```
-
-All tests (API, Docker terrarium stashing, sequence conductors, and coordinator routing) should build and pass cleanly.
+- **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
+- **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
+- `tendril --help` (or `sudo -u tendril -i tendril --help`) — every command
