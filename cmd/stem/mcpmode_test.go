@@ -48,7 +48,7 @@ func TestMCPModeSelection(t *testing.T) {
 			healthOwner:    nil,
 			hasCredential:  true,
 			expectedMode:   mcpModeInProcess,
-			expectedMsgStr: "⚠️ A Stem is serving",
+			expectedMsgStr: "⚠️ A Stem is serving on this address, but its ownership could not be established. Assuming this is a local environment and starting an in-process Stem beside it. To forward requests to the running Stem, it must be governed (have an owner configured).",
 		},
 		{
 			name:          "override forces in-process despite differing owner and credential",

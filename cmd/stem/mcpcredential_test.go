@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +91,8 @@ func TestMCPCredential_Unconfigured(t *testing.T) {
 	// emitted startup sequence against today's, not merely that the process did not error."
 	_, stderrWithEmpty, codeWithEmpty := runTendrilMCP(t, map[string]string{
 		"TENDRIL_MCP_CREDENTIAL": "",
+		"TERROIR_HOST":           "127.0.0.1",
+		"PORT":                   "65534",
 	})
 	if codeWithEmpty != 0 {
 		t.Fatalf("expected empty credential to exit 0 on EOF, got %d", codeWithEmpty)
@@ -196,5 +201,43 @@ func TestMCPCredential_ModeCheck(t *testing.T) {
 	}
 	if strings.Contains(stderr600, secret) {
 		t.Errorf("secret leaked into stderr")
+	}
+}
+
+func TestMCPCredential_RefusalOutput(t *testing.T) {
+	otherUID := os.Getuid() + 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		report := struct {
+			Owner *int `json:"owner,omitempty"`
+		}{
+			Owner: &otherUID,
+		}
+		json.NewEncoder(w).Encode(report)
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	hostPart, portPart := "", ""
+	parts := strings.Split(host, ":")
+	if len(parts) == 2 {
+		hostPart = parts[0]
+		portPart = parts[1]
+	}
+
+	_, stderr, code := runTendrilMCP(t, map[string]string{
+		"TENDRIL_MCP_CREDENTIAL": "",
+		"TERROIR_HOST":           hostPart,
+		"PORT":                   portPart,
+	})
+
+	if code == 0 {
+		t.Fatalf("expected refusal to exit non-zero, got 0")
+	}
+
+	if strings.Contains(stderr, "OpenTendril MCP Server ready") {
+		t.Fatalf("startup sequence printed readiness line before refusing. stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "Stem is owned by another user") {
+		t.Fatalf("expected refusal message in stderr, got:\n%s", stderr)
 	}
 }

@@ -36,6 +36,21 @@ func runMCPCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
+	decision := detectMCPMode(ctx, rootCred != "")
+
+	if decision.Message != "" {
+		fmt.Fprintf(os.Stderr, "%s\n", decision.Message)
+	}
+
+	if decision.Mode == mcpModeRefuse {
+		os.Exit(1)
+	}
+
+	var forwarder *MCPForwarder
+	if decision.Mode == mcpModeForward {
+		forwarder = NewMCPForwarder(rootCred)
+	}
+
 	tendrilDir := "./.tendril"
 	handler := receptors.NewMCPHandler()
 
@@ -139,21 +154,6 @@ func runMCPCmd(ctx context.Context, args []string) {
 	scanner.Buffer(buf, maxCapacity)
 
 	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
-
-	decision := detectMCPMode(ctx, rootCred != "")
-
-	if decision.Message != "" {
-		fmt.Fprintf(os.Stderr, "%s\n", decision.Message)
-	}
-
-	if decision.Mode == mcpModeRefuse {
-		os.Exit(1)
-	}
-
-	var forwarder *MCPForwarder
-	if decision.Mode == mcpModeForward {
-		forwarder = NewMCPForwarder(rootCred)
-	}
 
 	for scanner.Scan() {
 		reqBytes := scanner.Bytes()

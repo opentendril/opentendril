@@ -50,7 +50,10 @@ func detectMCPMode(ctx context.Context, hasCredential bool) mcpModeDecision {
 	}
 
 	if report.Owner == nil {
-		return mcpModeDecision{Mode: mcpModeInProcess, Message: "⚠️ A Stem is serving"}
+		return mcpModeDecision{
+			Mode:    mcpModeInProcess,
+			Message: "⚠️ A Stem is serving on this address, but its ownership could not be established. Assuming this is a local environment and starting an in-process Stem beside it. To forward requests to the running Stem, it must be governed (have an owner configured).",
+		}
 	}
 
 	callerUID := os.Getuid()

@@ -46,13 +46,17 @@ func resolveStemAddress(fallbackHost string) string {
 	return net.JoinHostPort(host, port)
 }
 
+// mcpForwardingTimeout is generous because a forwarded frame may be a long-running invocation.
+// It is deliberately not linked to the access-token lifetime.
+const mcpForwardingTimeout = 15 * time.Minute
+
 func NewMCPForwarder(rootCred string) *MCPForwarder {
 	addr := resolveStemAddress("")
 
 	return &MCPForwarder{
 		BaseURL:    "http://" + addr,
 		RootCred:   rootCred,
-		HTTPClient: &http.Client{Timeout: 15 * time.Minute},
+		HTTPClient: &http.Client{Timeout: mcpForwardingTimeout},
 	}
 }
 
