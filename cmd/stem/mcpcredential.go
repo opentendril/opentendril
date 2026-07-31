@@ -11,7 +11,7 @@ const envMCPCredential = "TENDRIL_MCP_CREDENTIAL"
 // loadMCPCredential reads a durable root credential from the file named by
 // TENDRIL_MCP_CREDENTIAL. If the variable is unset, it returns an empty string
 // and no error (the ordinary, unconfigured case). It refuses files that are
-// missing or too permissive (group- or world-readable), returning a safe error
+// missing or too permissive (any group or other permission), returning a safe error
 // that names the path and mode but never the secret.
 func loadMCPCredential() (string, error) {
 	path := strings.TrimSpace(os.Getenv(envMCPCredential))
