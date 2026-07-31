@@ -394,8 +394,8 @@ func runServeCmd(ctx context.Context, args []string) {
 
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
 	// projects the same Core session capabilities as REST and the CLI)
-	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc)
-	mux.HandleFunc("/v1", guardedAuth(mcpHandler.HandleMCP))
+	mcpHandler := receptors.NewMCPHandler().WithSessions(sessions, history).WithCore(coreSvc).WithDelegation(delegationGate, "")
+	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
