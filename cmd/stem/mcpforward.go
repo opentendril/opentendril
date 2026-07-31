@@ -27,10 +27,14 @@ type MCPForwarder struct {
 	expiresAt time.Time
 }
 
-func NewMCPForwarder(rootCred string) *MCPForwarder {
-	host := strings.TrimSpace(os.Getenv(EnvTerroirHost))
+func resolveStemAddress(fallbackHost string) string {
+	host := strings.TrimSpace(os.Getenv("TERROIR_HOST"))
 	if host == "" {
-		host = "127.0.0.1"
+		if fallbackHost != "" {
+			host = fallbackHost
+		} else {
+			host = "127.0.0.1"
+		}
 	} else if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
@@ -39,7 +43,11 @@ func NewMCPForwarder(rootCred string) *MCPForwarder {
 	if port == "" {
 		port = "8080"
 	}
-	addr := net.JoinHostPort(host, port)
+	return net.JoinHostPort(host, port)
+}
+
+func NewMCPForwarder(rootCred string) *MCPForwarder {
+	addr := resolveStemAddress("")
 
 	return &MCPForwarder{
 		BaseURL:    "http://" + addr,
