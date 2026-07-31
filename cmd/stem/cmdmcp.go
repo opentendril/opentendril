@@ -112,6 +112,15 @@ func runMCPCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "🔏 %d Pollinator credential(s) loaded (%d active): a presented credential DERIVES its Pollen; the header claim is ignored for those callers\n", len(pollinatorCredentials), active)
 	}
 
+	// Intake the durable root credential if configured (consumed in slice 2).
+	// A malformed or over-permissive credential file is a startup failure, not
+	// a silent downgrade, so a user trying to configure one is told why it failed.
+	_, credErr := loadMCPCredential()
+	if credErr != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", credErr)
+		os.Exit(1)
+	}
+
 	// The Pollen is bound once, at startup, as a property of this
 	// trusted stdio connection — a tool argument can never self-declare it.
 	pollen := strings.TrimSpace(os.Getenv(envPollen))
