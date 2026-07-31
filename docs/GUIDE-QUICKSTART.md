@@ -12,6 +12,21 @@ live, obtaining a credential, and making your first governed call.
 
 ---
 
+## Before you start
+
+Both installation shapes need these:
+
+| Requirement | Check |
+|---|---|
+| Docker | `docker --version` |
+| An LLM | Local [Ollama](https://ollama.ai) (default) — or a cloud provider key |
+
+A governed installation runs Docker rootless, under the Stem's own account, so
+check it as the Stem: `sudo -u tendril -i docker --version`. The Stem's health
+report names both, so step 1 confirms them either way.
+
+---
+
 ## Which installation do you have?
 
 This matters more than anything else on this page, and the two shapes need
@@ -267,6 +282,11 @@ denied.
 ---
 
 ## Where to go next
+
+Every capability is reachable from the command line, the transport surface and
+the Model Context Protocol surface alike — they project the same set, and a test
+enforces that they stay identical. So `tendril phytomer create|list|get|history`
+manages sessions from a terminal exactly as the transport routes do.
 
 - **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
 - **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
