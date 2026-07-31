@@ -25,6 +25,21 @@ A governed installation runs Docker rootless, under the Stem's own account, so
 check it as the Stem: `sudo -u tendril -i docker --version`. The Stem's health
 report names both, so step 1 confirms them either way.
 
+**Which runtime actually isolates your code.** Docker is the requirement, but it
+is not necessarily what runs a Terrarium. Given no explicit choice, the conductor
+prefers **gVisor** when the host supports it, and falls back to Docker's default
+runtime otherwise. gVisor is not an alternative to Docker — it is a runtime
+*within* it, selected as `--runtime=runsc`, which is why the daemon is required
+either way. Ask the daemon what it has:
+
+```bash
+sudo -u tendril -i docker info -f '{{.Runtimes.runsc}}'
+```
+
+An empty result means gVisor is unavailable and Terraria run under Docker's
+default runtime. `TENDRIL_TERRARIUM_PROVIDER` overrides the choice, and an
+explicit selection is always honoured rather than second-guessed.
+
 ---
 
 ## Which installation do you have?
