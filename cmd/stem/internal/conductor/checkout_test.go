@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,5 +180,60 @@ func TestManagedCheckoutIsTendrilOwned(t *testing.T) {
 	}
 	if pathMode.tendrilOwned {
 		t.Error("path checkout marked Tendril-owned — a hard reset would then discard the operator's work")
+	}
+}
+
+func TestMaterializeManagedCheckoutsFailureTolerance(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	mustGit := func(args ...string) {
+		t.Helper()
+		if _, err := runGitCommand(ctx, src, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	mustGit("init")
+	mustGit("config", "user.email", "t@example.com")
+	mustGit("config", "user.name", "Tester")
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mustGit("add", "-A")
+	mustGit("commit", "-m", "init")
+
+	root := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+
+	config := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"valid": {
+				URL:      src,
+				Checkout: CheckoutSpec{Mode: "managed"},
+			},
+			"broken": {
+				URL:      "http://127.0.0.1:9999/invalid.git", // deliberately broken URL
+				Checkout: CheckoutSpec{Mode: "managed"},
+			},
+		},
+	}
+
+	// This should not panic or return error, despite "broken" failing to clone.
+	MaterializeManagedCheckouts(ctx, config)
+
+	// Valid should resolve
+	validSpec := config.Substrates["valid"]
+	validPath, err := ResolveSubstrateWorkspace("valid", &validSpec)
+	if err != nil {
+		t.Errorf("valid substrate failed to resolve: %v", err)
+	}
+	if validPath != filepath.Join(root, "valid") {
+		t.Errorf("valid path = %q", validPath)
+	}
+
+	// Broken should return ErrWorkspaceAbsent (mapped to 409 Conflict at transport)
+	brokenSpec := config.Substrates["broken"]
+	_, errBroken := ResolveSubstrateWorkspace("broken", &brokenSpec)
+	if !errors.Is(errBroken, ErrWorkspaceAbsent) {
+		t.Errorf("broken substrate got err %v, want ErrWorkspaceAbsent", errBroken)
 	}
 }

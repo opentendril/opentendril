@@ -3,7 +3,6 @@ package conductor
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -210,19 +209,13 @@ func resolveSeedWorkspace(substrate string) (string, error) {
 	if substrate == "" {
 		return "", fmt.Errorf("substrate is required")
 	}
-	workspace := substrate
+	var spec *SubstrateSpec
 	if config, err := LoadSubstratesConfig(""); err == nil {
-		if spec, isName := ResolveSubstrate(substrate, config); isName && spec != nil {
-			if path := strings.TrimSpace(spec.Path); path != "" {
-				workspace = path
-			}
+		if s, isName := ResolveSubstrate(substrate, config); isName && s != nil {
+			spec = s
 		}
 	}
-	info, err := os.Stat(workspace)
-	if err != nil || !info.IsDir() {
-		return "", fmt.Errorf("substrate %q does not resolve to a local workspace directory (seed.grow builds against a local checkout)", substrate)
-	}
-	return workspace, nil
+	return ResolveSubstrateWorkspace(substrate, spec)
 }
 
 // seedGoalPrompt composes the Sprout's task prompt: the goal, the verify

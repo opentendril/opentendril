@@ -376,16 +376,10 @@ func gitOperations() core.GitOperations {
 // one operation quietly doing its own resolution. TestDelegatedOperationsAreIsolated
 // pins that.
 func resolveGitWorkspace(ctx context.Context, substrate string, substratesConfig *conductor.SubstratesConfig) (conductor.DelegatedWorkspace, *conductor.SubstrateSpec, error) {
-	workspace := substrate
-	substrateSpec, isName := conductor.ResolveSubstrate(substrate, substratesConfig)
-	if isName && substrateSpec != nil {
-		if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-			workspace = trimmedPath
-		}
-	}
-	info, statErr := os.Stat(workspace)
-	if statErr != nil || !info.IsDir() {
-		return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("substrate %q does not resolve to a local workspace directory (the delegated git ladder runs against a local checkout)", substrate)
+	substrateSpec, _ := conductor.ResolveSubstrate(substrate, substratesConfig)
+	workspace, err := conductor.ResolveSubstrateWorkspace(substrate, substrateSpec)
+	if err != nil {
+		return conductor.DelegatedWorkspace{}, nil, err
 	}
 
 	// The credential is resolved before the workspace because workspace
