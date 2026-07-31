@@ -80,6 +80,10 @@ func writeCoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, conductor.ErrWorkspaceAbsent) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 

@@ -4,11 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// ErrWorkspaceAbsent is returned when a managed substrate's checkout directory does not exist.
+// This allows adapters to map it to a 409 Conflict instead of a 500 Server Error.
+var ErrWorkspaceAbsent = errors.New("managed checkout is absent")
 
 // checkoutPlan is the resolved destination for a foreign substrate clone.
 // Design RFC / implementation plan, slice 4.
@@ -42,6 +48,59 @@ func resolveCheckoutPlan(name string, checkout CheckoutSpec) (checkoutPlan, erro
 		return checkoutPlan{dir: p, persistent: true}, nil
 	default:
 		return checkoutPlan{}, fmt.Errorf("unknown checkout mode %q", checkout.Mode)
+	}
+}
+
+// ResolveSubstrateWorkspace returns the directory the operation runs in for the given Substrate.
+// It resolves the path by consulting the checkout plan.
+func ResolveSubstrateWorkspace(substrate string, spec *SubstrateSpec) (string, error) {
+	workspace := strings.TrimSpace(substrate)
+	if workspace == "" {
+		return "", fmt.Errorf("substrate is required")
+	}
+
+	if spec != nil {
+		if trimmed := strings.TrimSpace(spec.Path); trimmed != "" {
+			workspace = trimmed
+		}
+		if mode := strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)); mode != "" && mode != "path" {
+			plan, err := resolveCheckoutPlan(substrate, spec.Checkout)
+			if err != nil {
+				return "", err
+			}
+			if plan.dir != "" {
+				workspace = plan.dir
+			}
+		}
+	}
+
+	info, err := os.Stat(workspace)
+	if err != nil || !info.IsDir() {
+		// Distinguish a missing managed checkout (409) from a bad path (500)
+		if spec != nil && strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed" {
+			return "", fmt.Errorf("%w: managed checkout for substrate %q is missing", ErrWorkspaceAbsent, substrate)
+		}
+		return "", fmt.Errorf("substrate %q does not resolve to a local workspace directory (operations run against a local checkout)", substrate)
+	}
+
+	return workspace, nil
+}
+
+// MaterializeManagedCheckouts clones or refreshes all managed substrates on startup.
+// A clone failure is logged but does not prevent startup.
+func MaterializeManagedCheckouts(ctx context.Context, config *SubstratesConfig) {
+	for name, spec := range config.Substrates {
+		if strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed" {
+			cred, err := resolveSubstrateCredential(spec, config.Credentials)
+			if err != nil {
+				log.Printf("⚠️ Managed checkout materialization for substrate %q failed to resolve credentials: %v", name, err)
+				continue
+			}
+			_, _, err = cloneNamedForeignSubstrate(name, spec.URL, spec.Branch, cred)
+			if err != nil {
+				log.Printf("⚠️ Managed checkout materialization for substrate %q failed: %v", name, err)
+			}
+		}
 	}
 }
 

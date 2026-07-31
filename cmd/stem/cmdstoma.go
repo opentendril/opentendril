@@ -99,15 +99,10 @@ func stomaOperations() core.StomaOperations {
 
 	return core.StomaOperations{
 		Run: func(ctx context.Context, spec core.StomaSpec) (core.StomaPassResult, error) {
-			workspace := spec.Substrate
-			if substrateSpec, isName := conductor.ResolveSubstrate(spec.Substrate, substratesConfig); isName && substrateSpec != nil {
-				if trimmedPath := strings.TrimSpace(substrateSpec.Path); trimmedPath != "" {
-					workspace = trimmedPath
-				}
-			}
-			info, statErr := os.Stat(workspace)
-			if statErr != nil || !info.IsDir() {
-				return core.StomaPassResult{}, fmt.Errorf("substrate %q does not resolve to a local workspace directory (a stoma passs against a local checkout)", spec.Substrate)
+			substrateSpec, _ := conductor.ResolveSubstrate(spec.Substrate, substratesConfig)
+			workspace, err := conductor.ResolveSubstrateWorkspace(spec.Substrate, substrateSpec)
+			if err != nil {
+				return core.StomaPassResult{}, err
 			}
 
 			fetches := make([]conductor.StomaFetch, 0, len(spec.Fetch))

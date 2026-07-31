@@ -230,6 +230,12 @@ func runServeCmd(ctx context.Context, args []string) {
 		return withAPIKeyOrPollinatorAuth(apiKey, pollinatorCredentials, stemSigner, networked, delegationGate.Middleware(next))
 	}
 
+	if substratesConfig, err := conductor.LoadSubstratesConfig(""); err != nil {
+		log.Printf("⚠️ Failed to load substrates config for startup materialization: %v", err)
+	} else {
+		conductor.MaterializeManagedCheckouts(ctx, substratesConfig)
+	}
+
 	mux := http.NewServeMux()
 
 	// Access-token mint: a durable Pollinator credential (the refresh root) is

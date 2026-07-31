@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -222,8 +223,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		plan.named = true
 		plan.readOnly = spec.ReadOnly
 
-		if trimmed := strings.TrimSpace(spec.Path); trimmed != "" {
-			plan.hostPath = trimmed
+		resolvedPath, err := ResolveSubstrateWorkspace(plan.name, spec)
+		if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
+			return nil, err
+		}
+		if resolvedPath != "" {
+			plan.hostPath = resolvedPath
 		}
 		if plan.cloneURL == "" {
 			plan.cloneURL = strings.TrimSpace(spec.URL)

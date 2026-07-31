@@ -1480,6 +1480,14 @@ func cloneForeignSubstrate(url, branch string) (string, error) {
 // path plus whether that path is persistent (managed/path checkout) — the caller
 // removes only non-persistent (ephemeral) checkouts.
 func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredential) (string, bool, error) {
+	dest, err := ResolveSubstrateWorkspace(name, &SubstrateSpec{Checkout: cred.Checkout})
+	if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
+		mode := strings.ToLower(strings.TrimSpace(cred.Checkout.Mode))
+		if mode != "" && mode != "ephemeral" {
+			return "", false, err
+		}
+	}
+
 	checkout, err := resolveCheckoutPlan(name, cred.Checkout)
 	if err != nil {
 		return "", false, err
@@ -1494,11 +1502,12 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		return "", false, err
 	}
 
-	dest := checkout.dir
-	if dest == "" {
+	if !checkout.persistent {
 		if dest, err = ephemeralCheckoutPath(name); err != nil {
 			return "", false, err
 		}
+	} else if dest == "" {
+		dest = checkout.dir
 	}
 
 	// Reuse a persistent checkout that already exists: refresh it to a clean,
