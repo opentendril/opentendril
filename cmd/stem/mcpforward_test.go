@@ -171,7 +171,18 @@ func TestMCPForwarder(t *testing.T) {
 		f.BaseURL = srv2.URL
 
 		req := []byte(`{"jsonrpc":"2.0","id":2}`)
-		resp := f.Forward(req)
+
+		done := make(chan struct{})
+		var resp []byte
+		go func() {
+			resp = f.Forward(req)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Test timed out: infinite loop detected on consecutive 401s")
+		}
 
 		if mintCount != 1 {
 			t.Errorf("Expected exactly 1 re-mint, got %d", mintCount)
@@ -280,7 +291,7 @@ func TestMCPForwarder(t *testing.T) {
 		f := NewMCPForwarder("valid-root")
 		f.BaseURL = server.URL
 
-		largeStr := strings.Repeat("a", 1024*1024*4) // 4MB
+		largeStr := strings.Repeat("a", 1024*1024*5) // 5MB
 		req := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":7,"method":"large","params":"%s"}`, largeStr))
 
 		v1ReturnBytes = req // Return the exact same large frame

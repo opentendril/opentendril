@@ -44,7 +44,7 @@ func NewMCPForwarder(rootCred string) *MCPForwarder {
 	return &MCPForwarder{
 		BaseURL:    "http://" + addr,
 		RootCred:   rootCred,
-		HTTPClient: &http.Client{},
+		HTTPClient: &http.Client{Timeout: 15 * time.Minute},
 	}
 }
 
@@ -162,7 +162,9 @@ func (f *MCPForwarder) doRequest(reqBytes []byte, token string) ([]byte, bool, e
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Return it anyway, it's what the Stem sent
+		var minimal minimalMCPRequest
+		_ = json.Unmarshal(reqBytes, &minimal)
+		return f.formatError(minimal.ID, -32000, strings.TrimSpace(string(body))), false, nil
 	}
 
 	return body, false, nil
