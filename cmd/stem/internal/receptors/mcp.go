@@ -133,8 +133,22 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	handler := h
+	if h.delegation != nil {
+		pollen, credentialOK := h.delegation.PollenFor(r)
+		if !credentialOK {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if pollen != "" {
+			hCopy := *h
+			hCopy.pollen = pollen
+			handler = &hCopy
+		}
+	}
+
 	reqBytes, _ := json.Marshal(req)
-	respBytes := h.ProcessMCPMessage(reqBytes)
+	respBytes := handler.ProcessMCPMessage(reqBytes)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
