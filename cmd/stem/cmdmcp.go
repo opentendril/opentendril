@@ -30,7 +30,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 	// Intake the durable root credential if configured (consumed in slice 2).
 	// A malformed or over-permissive credential file is a startup failure, not
 	// a silent downgrade, so a user trying to configure one is told why it failed.
-	_, credErr := loadMCPCredential()
+	rootCred, credErr := loadMCPCredential()
 	if credErr != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", credErr)
 		os.Exit(1)
@@ -140,13 +140,23 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
 
+	var forwarder *MCPForwarder
+	if os.Getenv("TENDRIL_TEST_MCP_FORWARD") == "1" && rootCred != "" {
+		forwarder = NewMCPForwarder(rootCred)
+	}
+
 	for scanner.Scan() {
 		reqBytes := scanner.Bytes()
 		if len(reqBytes) == 0 {
 			continue
 		}
 
-		respBytes := handler.ProcessMCPMessage(reqBytes)
+		var respBytes []byte
+		if forwarder != nil {
+			respBytes = forwarder.Forward(reqBytes)
+		} else {
+			respBytes = handler.ProcessMCPMessage(reqBytes)
+		}
 
 		if len(respBytes) > 0 {
 			// Write response exactly as one line to stdout
