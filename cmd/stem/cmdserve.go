@@ -253,7 +253,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// on-demand endpoint. This assignment must precede the scheduler block
 	// below because Start is called there alongside scheduler.New(...).Start.
 	healthMonitor := newDefaultHealthMonitor(bus, 30*time.Second)
-	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth(healthMonitor)))
+	mux.HandleFunc("GET /health", delegationGate.Middleware(handleHealth(healthMonitor, networked)))
 
 	// Unified Interface Layer: the transport-free Core owns the session-
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
@@ -766,15 +766,28 @@ func withWebSocketAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func handleHealth(monitor *healthmon.Monitor) http.HandlerFunc {
+func handleHealth(monitor *healthmon.Monitor, networked bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		report := monitor.RunOnceAndPublish(r.Context())
+
+		// Compose the response rather than widening healthmon.HealthReport, which
+		// is purely for liveness checks. The numeric owner is only disclosed on
+		// loopback binds, where it is not new information to the caller.
+		type extendedReport struct {
+			healthmon.HealthReport
+			Owner *int `json:"owner,omitempty"`
+		}
+		resp := extendedReport{HealthReport: report}
+		if !networked {
+			uid := os.Getuid()
+			resp.Owner = &uid
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		if !report.Overall {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		json.NewEncoder(w).Encode(report)
+		json.NewEncoder(w).Encode(resp)
 	}
 }
 
