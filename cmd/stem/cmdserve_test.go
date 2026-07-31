@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -405,7 +406,7 @@ func TestHandleHealthPublishesToBus(t *testing.T) {
 	})
 
 	monitor := newDefaultHealthMonitor(bus, 30*time.Second)
-	handler := handleHealth(monitor)
+	handler := handleHealth(monitor, false)
 
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -433,7 +434,7 @@ func TestHandleHealthPublishesToBus(t *testing.T) {
 func TestHandleHealthStatusCodes(t *testing.T) {
 	bus := eventbus.New()
 	monitor := newDefaultHealthMonitor(bus, 30*time.Second)
-	handler := handleHealth(monitor)
+	handler := handleHealth(monitor, false)
 
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -448,6 +449,77 @@ func TestHandleHealthStatusCodes(t *testing.T) {
 	}
 	if rec.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestHandleHealthOwnerPublication(t *testing.T) {
+	bus := eventbus.New()
+	monitor := newDefaultHealthMonitor(bus, 30*time.Second)
+
+	cases := []struct {
+		name      string
+		networked bool
+		wantOwner bool
+	}{
+		{"loopback publishes owner", false, true},
+		{"networked withholds owner", true, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := handleHealth(monitor, tc.networked)
+			rec := httptest.NewRecorder()
+			handler(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+			var payload map[string]interface{}
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("parse response: %v", err)
+			}
+
+			// 1. Existing fields are unchanged
+			if _, ok := payload["timestamp"]; !ok {
+				t.Error("timestamp is missing")
+			}
+			if _, ok := payload["overall"]; !ok {
+				t.Error("overall is missing")
+			}
+			if _, ok := payload["results"]; !ok {
+				t.Error("results is missing")
+			}
+
+			// 2. Minimum disclosure: no other fields are present (e.g. no account name, no executable)
+			allowedKeys := map[string]bool{
+				"timestamp": true,
+				"overall":   true,
+				"results":   true,
+			}
+			if tc.wantOwner {
+				allowedKeys["owner"] = true
+			}
+			for k := range payload {
+				if !allowedKeys[k] {
+					t.Errorf("unexpected field in response: %q", k)
+				}
+			}
+
+			owner, hasOwner := payload["owner"]
+			if tc.wantOwner {
+				if !hasOwner {
+					t.Fatal("owner is absent on loopback bind")
+				}
+				uid, ok := owner.(float64)
+				if !ok {
+					t.Fatalf("owner is not a number: %T", owner)
+				}
+				if int(uid) != os.Getuid() {
+					t.Errorf("owner = %v, want %d", int(uid), os.Getuid())
+				}
+			} else {
+				if hasOwner {
+					t.Errorf("owner is present on networked bind: %v", owner)
+				}
+			}
+		})
 	}
 }
 
