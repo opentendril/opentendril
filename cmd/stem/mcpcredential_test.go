@@ -154,7 +154,7 @@ func TestMCPCredential_ModeCheck(t *testing.T) {
 	tempDir := t.TempDir()
 	credPath := filepath.Join(tempDir, "cred")
 
-	secret := "tendril_mysecret"
+	secret := "tendril_root_mysecret"
 	if err := os.WriteFile(credPath, []byte(secret), 0644); err != nil {
 		t.Fatal(err)
 	}

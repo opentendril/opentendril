@@ -214,6 +214,37 @@ func TestSigningKeyIsPersistedAndReused(t *testing.T) {
 	}
 }
 
+// TestBearerPrefixesAreDisjoint pins the structural invariant that
+// AccessTokenPrefix and pollinatorTokenPrefix share no prefix relationship:
+// neither is a prefix of the other. This is what lets surfaces route a bearer
+// to exactly one path. It asserts on the package constants so a change to
+// either literal that introduces overlap fails here before anything else runs.
+func TestBearerPrefixesAreDisjoint(t *testing.T) {
+	at := AccessTokenPrefix
+	root := pollinatorTokenPrefix
+
+	if strings.HasPrefix(at, root) {
+		t.Errorf("AccessTokenPrefix %q begins with pollinatorTokenPrefix %q — a bearer matching the access-token prefix would also satisfy the Pollinator-credential check", at, root)
+	}
+	if strings.HasPrefix(root, at) {
+		t.Errorf("pollinatorTokenPrefix %q begins with AccessTokenPrefix %q — a bearer matching the Pollinator-credential prefix would also satisfy the access-token check", root, at)
+	}
+
+	// Demonstrate the mutual-exclusivity that follows: a value that passes
+	// LooksLikeAccessToken must not pass LooksLikePollinatorCredential, and
+	// vice versa. We construct minimal prefix-matching values rather than
+	// real secrets so this sub-check remains meaningful even if the mint
+	// functions are not available.
+	atBearer := at + "body"
+	if LooksLikePollinatorCredential(atBearer) {
+		t.Errorf("LooksLikePollinatorCredential(%q) = true for an access-token-shaped bearer", atBearer)
+	}
+	rootBearer := root + "body"
+	if LooksLikeAccessToken(rootBearer) {
+		t.Errorf("LooksLikeAccessToken(%q) = true for a Pollinator-credential-shaped bearer", rootBearer)
+	}
+}
+
 // TestAccessTokenAndCredentialPrefixesAreMutuallyExclusive: a bearer is at most
 // one of the two, so surfaces route it unambiguously.
 func TestAccessTokenAndCredentialPrefixesAreMutuallyExclusive(t *testing.T) {

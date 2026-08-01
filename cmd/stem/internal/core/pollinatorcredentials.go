@@ -36,8 +36,8 @@ const PollinatorCredentialsFilename = "pollinators.json"
 // configuration file, so a leaked one can be identified and revoked.
 //
 // It is functional, not decorative: it discriminates a Pollinator credential
-// from the Botanist's key. Changing it invalidates every credential issued.
-const pollinatorTokenPrefix = "tendril_"
+// from an access token. Changing it invalidates every credential issued.
+const pollinatorTokenPrefix = "tendril_root_"
 
 var pollinatorStoreMu sync.Mutex
 

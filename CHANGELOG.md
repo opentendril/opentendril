@@ -11,8 +11,8 @@ where versions are cut.
 ### Added
 
 - **Two-tier Pollinator REST auth.** A durable Pollinator credential
-  (`tendril_…`, issued by `tendril pollinator issue`) is the **refresh root**.
-  Callers mint short-lived, Stem-signed **access tokens** (`tendrilat_…`, hard-capped
+  (`tendril_root_…`, issued by `tendril pollinator issue`) is the **refresh root**.
+  Callers mint short-lived, Stem-signed **access tokens** (`tendril_access_…`, hard-capped
   at ≤15 minutes) from that root and present the token on data routes:
   - `POST /v1/pollinator/token` (durable root in `Authorization: Bearer`)
   - `tendril pollinator token --pollen <name> [--ttl <dur>]`

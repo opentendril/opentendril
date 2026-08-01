@@ -207,11 +207,11 @@ The `confirmAbove` bound on a delegation grant ensures that high-impact operatio
 
 Pollinator REST access is **two-tier**:
 
-1. **Durable refresh root** — a Pollinator credential (`tendril_…`) issued by
+1. **Durable refresh root** — a Pollinator credential (`tendril_root_…`) issued by
    `tendril pollinator issue`. Digest-stored, revocable by Pollen, no inherent
    lifetime. Presented **only to mint** (CLI `tendril pollinator token`, or
    `POST /v1/pollinator/token`).
-2. **Short-lived access token** — a Stem-signed bearer (`tendrilat_…`) carrying
+2. **Short-lived access token** — a Stem-signed bearer (`tendril_access_…`) carrying
    a Pollen and an expiry, hard-capped at **≤15 minutes**. Surfaces accept it
    per request. Verification is **stateless** (signature against the Stem public
    key); there is no per-token store or denylist.

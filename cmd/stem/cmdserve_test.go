@@ -65,15 +65,22 @@ func TestWithAPIKeyAuthRequiresMatchingBearer(t *testing.T) {
 	}
 }
 
-// A credential issued under the superseded "otp_" prefix must be refused
-// outright once the prefix changes.
+// A credential issued under any superseded prefix — "otp_", and the bare
+// "tendril_" namespace that preceded the two-segment kind prefixes — must be
+// refused outright.
 //
-// This is the one behaviour worth pinning about that rename. The prefix is the
-// discriminator that routes a presented bearer to credential resolution, so an
-// old value no longer looks credential-shaped and falls through to the
+// This is the one behaviour worth pinning about a prefix rename. The prefix is
+// the discriminator that routes a presented bearer to credential resolution, so
+// an old value no longer looks credential-shaped and falls through to the
 // Botanist-key comparison instead. It must fail there. The forbidden outcome is
 // that it is accepted — either by matching the Botanist key or by being treated
 // as an ordinary unauthenticated request that proceeds anyway.
+//
+// The refusal of a "tendril_" bearer is over-determined here — the digest never
+// matches either — so this covers the surface outcome rather than the prefix
+// check itself. Prefix discrimination is pinned in the core package, by
+// TestBearerPrefixesAreDisjoint and
+// TestAccessTokenAndCredentialPrefixesAreMutuallyExclusive.
 func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	secret, _, err := core.IssuePollinatorCredential(dir, "claude", "")
@@ -91,28 +98,39 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// The same secret carrying the superseded prefix: what a Pollinator issued
-	// before the rename would still be presenting.
-	superseded := "otp_" + strings.TrimPrefix(secret, "tendril_")
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
-	req.Header.Set("Authorization", "Bearer "+superseded)
-	rec := httptest.NewRecorder()
-	handler(rec, req)
-
-	if reached {
-		t.Fatal("a credential with the superseded prefix reached the handler")
-	}
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want %d for a superseded-prefix credential", rec.Code, http.StatusUnauthorized)
+	// The same secret body carrying each superseded prefix: what a Pollinator
+	// issued before that rename would still be presenting. The current prefix is
+	// unexported, so it is spelled out here and guarded — the guard fires on the
+	// next rename, which is the reminder to add the outgoing prefix below.
+	const currentPrefix = "tendril_root_"
+	body := strings.TrimPrefix(secret, currentPrefix)
+	if body == secret {
+		t.Fatalf("issued secret does not carry %q; add the outgoing prefix to the superseded list", currentPrefix)
 	}
 
-	// The current prefix still works, so the refusal above is about the prefix
+	// Only the prefix is ever named in a failure — never the value, which
+	// carries the secret body.
+	for _, superseded := range []string{"otp_", "tendril_"} {
+		reached = false
+		req := httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
+		req.Header.Set("Authorization", "Bearer "+superseded+body)
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+
+		if reached {
+			t.Fatalf("a credential carrying the superseded prefix %q reached the handler", superseded)
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want %d for a credential carrying superseded prefix %q", rec.Code, http.StatusUnauthorized, superseded)
+		}
+	}
+
+	// The current prefix still works, so the refusals above are about the prefix
 	// rather than a broken fixture.
 	reached = false
-	req = httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
-	rec = httptest.NewRecorder()
+	rec := httptest.NewRecorder()
 	handler(rec, req)
 
 	if !reached || rec.Code != http.StatusOK {
