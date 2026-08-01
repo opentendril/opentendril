@@ -140,7 +140,7 @@ sudo -u tendril -i tendril pollinator issue --pollen claude --note "laptop"
 ```
 
 The secret prints **once** and is never stored; only its digest is kept. It begins
-`tendril_` and is the **durable refresh root** for that Pollinator.
+`tendril_root_` and is the **durable refresh root** for that Pollinator.
 
 > [!IMPORTANT]
 > **Credentials and grants are read at startup.** One issued while the Stem is
@@ -244,7 +244,7 @@ A frequent confusion, worth stating plainly:
 | | Held by | Used for |
 |---|---|---|
 | **`BOTANIST_KEY`** | the operator | the gate, and management routes such as delegation approvals |
-| **Pollinator credential** (`tendril_…`) | each caller | delegated data routes, constrained by that caller's grant |
+| **Pollinator credential** (`tendril_root_…`) | each caller | delegated data routes, constrained by that caller's grant |
 
 They are separate on purpose. It is why a Pollinator cannot approve its own
 pending confirmation.

@@ -292,17 +292,17 @@ tendril pollinator token --pollen claude --ttl 5m   # shorter; over 15m is refus
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/v1/pollinator/token \
-  -H "Authorization: Bearer tendril_..." \
+  -H "Authorization: Bearer tendril_root_..." \
   -H "Content-Type: application/json" \
   -d '{}'
-# → { "token": "tendrilat_...", "pollen": "claude", "expiresAt": "..." }
+# → { "token": "tendril_access_...", "pollen": "claude", "expiresAt": "..." }
 ```
 
 Then call data routes with the access token:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/v1/git/status \
-  -H "Authorization: Bearer tendrilat_..." -d '{"substrate":"myrepo"}'
+  -H "Authorization: Bearer tendril_access_..." -d '{"substrate":"myrepo"}'
 ```
 
 On **loopback** binds, presenting the durable root on a data route still works
@@ -320,8 +320,8 @@ says *what that identity may do*.
 
 | How the Pollen is established | What it is |
 |---|---|
-| Issued credential (`tendril_...`) | **proven** refresh root — mint only (or data routes on loopback) |
-| Access token (`tendrilat_...`) | **proven** short-lived — signature-verified per request |
+| Issued credential (`tendril_root_...`) | **proven** refresh root — mint only (or data routes on loopback) |
+| Access token (`tendril_access_...`) | **proven** short-lived — signature-verified per request |
 | `X-OpenTendril-Pollen` header, or `TENDRIL_POLLEN` at a terminal | **declared** — an audit control, not a boundary |
 
 ## Is the boundary actually real here?
