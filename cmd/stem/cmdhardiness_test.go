@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Executable-integrity findings. Exposures are constructed directly so these
@@ -473,8 +475,16 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
+
+	pid := os.Getpid()
+	var start time.Time
+	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+		start = info.ModTime()
+	}
+	startJSON, _ := json.Marshal(start)
+
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o600); err != nil {
+		[]byte(fmt.Sprintf(`{"executable":%q,"uid":1001,"pid":%d,"starttime":%s}`+"\n", stemBinary, pid, string(startJSON))), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
@@ -555,10 +565,18 @@ func TestExecutableOwnedByAnotherPrincipalIsWeak(t *testing.T) {
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
+
+	pid := os.Getpid()
+	var start time.Time
+	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+		start = info.ModTime()
+	}
+	startJSON, _ := json.Marshal(start)
+
 	// The record claims a Stem uid this test's files do not belong to.
 	foreign := os.Getuid() + 1
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o600); err != nil {
+		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d,"pid":%d,"starttime":%s}`+"\n", stemBinary, foreign, pid, string(startJSON))), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 

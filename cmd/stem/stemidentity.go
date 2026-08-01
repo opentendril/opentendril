@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 )
 
 // The Stem's executable identity, recorded so another account can measure it.
@@ -29,6 +31,10 @@ type stemIdentity struct {
 	Executable string `json:"executable"`
 	// UID is the user the Stem runs as.
 	UID int `json:"uid"`
+	// PID is the process identifier of the Stem.
+	PID int `json:"pid"`
+	// StartTime is when the process started.
+	StartTime time.Time `json:"starttime"`
 }
 
 func stemIdentityPath(tendrilDir string) string {
@@ -49,7 +55,20 @@ func recordStemIdentity(tendrilDir string) error {
 		executable = resolved
 	}
 
-	payload, err := json.MarshalIndent(stemIdentity{Executable: executable, UID: os.Getuid()}, "", "  ")
+	pid := os.Getpid()
+	var startTime time.Time
+	if runtime.GOOS == "linux" {
+		if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+			startTime = info.ModTime()
+		}
+	}
+
+	payload, err := json.MarshalIndent(stemIdentity{
+		Executable: executable,
+		UID:        os.Getuid(),
+		PID:        pid,
+		StartTime:  startTime,
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode stem identity: %w", err)
 	}

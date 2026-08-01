@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ type hardinessFinding struct {
 	Severity string
 	Title    string
 	Detail   string
+	Diverged bool
 }
 
 func runHardinessCmd(ctx context.Context, args []string) {
@@ -65,6 +67,7 @@ func runHardinessCmd(ctx context.Context, args []string) {
 	fmt.Println(strings.Repeat("─", 72))
 
 	weak, notes := 0, 0
+	diverged := false
 	for _, finding := range findings {
 		icon := map[string]string{"ok": "✅", "note": "ℹ️", "weak": "⚠️"}[finding.Severity]
 		fmt.Printf("\n%s  %s\n", icon, finding.Title)
@@ -79,6 +82,9 @@ func runHardinessCmd(ctx context.Context, args []string) {
 		case "note":
 			notes++
 		}
+		if finding.Diverged {
+			diverged = true
+		}
 	}
 
 	fmt.Println()
@@ -89,16 +95,28 @@ func runHardinessCmd(ctx context.Context, args []string) {
 			fmt.Println("Nothing measurable is wrong from this account. A note means something is")
 			fmt.Println("not configured yet or could not be established, so this is not the same")
 			fmt.Println("as a boundary proven sound. Re-run once the notes are resolved.")
+			if diverged {
+				fmt.Println("\nNOTE: The running Stem process is executing a different binary")
+				fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
+			}
 			return
 		}
 		fmt.Println("HARDY — no weak conditions and nothing unestablished. The delegation")
 		fmt.Println("boundary is enforced by the operating system, as measured from this account.")
+		if diverged {
+			fmt.Println("\nNOTE: The running Stem process is executing a different binary")
+			fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
+		}
 		return
 	}
 	fmt.Printf("ADVISORY — %d weak condition(s), %d note(s).\n\n", weak, notes)
 	fmt.Println("A Pollinator running as this user can read what the Stem holds and act")
 	fmt.Println("outside the governed path. Grants and audit still record intent and catch")
 	fmt.Println("accidents — they do not constrain a caller that chooses otherwise.")
+	if diverged {
+		fmt.Println("\nNOTE: The running Stem process is executing a different binary")
+		fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
+	}
 }
 
 // collectHardinessFindings measures the conditions that decide whether delegation
@@ -326,6 +344,40 @@ func executableIntegrityFinding(tendrilDir string) hardinessFinding {
 	if identity, ok := readStemIdentity(tendrilDir); ok {
 		finding := executableIntegrityFindingOwnedBy(identity.Executable, identity.UID)
 		finding.Title = "The Stem's binary: " + finding.Title
+
+		var established bool
+		var exe string
+		if runtime.GOOS == "linux" && identity.PID != 0 && !identity.StartTime.IsZero() {
+			if info, err := os.Stat(fmt.Sprintf("/proc/%d", identity.PID)); err == nil && info.ModTime().Unix() == identity.StartTime.Unix() {
+				if link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", identity.PID)); err == nil {
+					exe = link
+					established = true
+				}
+			}
+		}
+
+		if finding.Detail != "" {
+			finding.Detail += "\n\n"
+		}
+
+		if !established {
+			finding.Detail += "What the Stem's running image is has not been established here."
+			if finding.Severity == "weak" {
+				finding.Severity = "note"
+			}
+			return finding
+		}
+
+		finding.Detail += fmt.Sprintf("The image the running Stem started from is:\n  %s", exe)
+		if exe != identity.Executable {
+			age := time.Since(identity.StartTime).Truncate(time.Second)
+			finding.Detail += fmt.Sprintf("\n\nNOTE: The running image diverges from the binary on disk.\nThe Stem has been running %s for %s.", exe, age)
+			finding.Title += " (NOTE: running image diverges)"
+			finding.Diverged = true
+		} else {
+			finding.Detail += "\n\nThe running image matches the binary on disk."
+		}
+
 		return finding
 	}
 
