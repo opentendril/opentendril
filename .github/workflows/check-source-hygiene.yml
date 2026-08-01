@@ -172,3 +172,23 @@ jobs:
         run: |
           printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.md"
           bash scripts/check-taxonomy.sh --text "${RUNNER_TEMP}/pr-body.md"
+
+  cited-tests:
+    name: Cited tests must exist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A pull request description quoting a test function or file that does not exist
+      # in the repository is usually hallucinated mutation output or an uncommitted test.
+      # The body is untrusted input, so it travels through the environment and is never
+      # interpolated into the shell.
+      - name: Cited tests exist
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.md"
+          bash scripts/check-cited-tests.sh "origin/${{ github.base_ref }}" --body "${RUNNER_TEMP}/pr-body.md"
