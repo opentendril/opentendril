@@ -1079,7 +1079,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
-	registerBotanistRoute(mux, deps, "POST /v1/mesh/admin/issue-token", deps.MeshServer.HandleAdminIssueToken)
+	registerBotanistRoute(mux, deps, "/v1/mesh/admin/issue-token", deps.MeshServer.HandleAdminIssueToken)
 	mux.HandleFunc("/v1/mesh/graft", deps.DelegationGate.Middleware(deps.MeshServer.HandleGraftWebSocket))
 
 	// Phase 7: Delegation Pending Confirmations API
