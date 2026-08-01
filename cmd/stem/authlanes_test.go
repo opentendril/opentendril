@@ -221,3 +221,83 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 		}
 	})
 }
+
+// TestRegisterBotanistRoute ensures that registerBotanistRoute puts the route
+// securely on the Botanist lane and refuses Pollinator credentials.
+func TestRegisterBotanistRoute(t *testing.T) {
+	dir := t.TempDir()
+
+	stemSigner, err := core.LoadOrCreateStemSigner(dir)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+
+	credSecret, _, err := core.IssuePollinatorCredential(dir, "tester", "")
+	if err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+	creds, err := core.LoadPollinatorCredentials(dir)
+	if err != nil {
+		t.Fatalf("load credentials: %v", err)
+	}
+
+	apiKey := "test-api-key"
+	adminKey := "test-admin-key"
+
+	bus := eventbus.New()
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
+	pendingStore := core.NewPendingConfirmationStore()
+	delegationGate := &receptors.DelegationGate{
+		Pollinators: creds,
+		Signer:      stemSigner,
+		Authorizer:  core.NewDelegationAuthorizer(nil).WithPendingStore(pendingStore, time.Hour),
+		Bus:         bus,
+	}
+
+	deps := serveDependencies{
+		APIKey:                apiKey,
+		PollinatorCredentials: creds,
+		StemSigner:            stemSigner,
+		Networked:             false,
+		DelegationGate:        delegationGate,
+		EventBus:              bus,
+		Sessions:              manager,
+		History:               nil,
+		CoreService:           core.NewService(manager),
+		HealthMonitor:         newDefaultHealthMonitor(bus, time.Hour),
+		TendrilDir:            dir,
+		MeshServer:            mesh.NewServer(dir),
+		PendingStore:          pendingStore,
+		AdminKey:              adminKey,
+	}
+
+	mux := http.NewServeMux()
+
+	// Mount a dummy handler via the new helper
+	dummyHandler := func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}
+	registerBotanistRoute(mux, deps, "GET /v1/dummy/botanist/route", dummyHandler)
+
+	// Assert Pollinator is refused
+	req := httptest.NewRequest(http.MethodGet, "/v1/dummy/botanist/route", nil)
+	req.Header.Set("Authorization", "Bearer "+credSecret)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("registerBotanistRoute did not refuse Pollinator credential, got %d", rec.Code)
+	}
+
+	// Assert AdminKey gets the status the route really returns
+	reqAdmin := httptest.NewRequest(http.MethodGet, "/v1/dummy/botanist/route", nil)
+	reqAdmin.Header.Set("Authorization", "Bearer "+adminKey)
+	recAdmin := httptest.NewRecorder()
+	mux.ServeHTTP(recAdmin, reqAdmin)
+	if recAdmin.Code != http.StatusNoContent {
+		t.Fatalf("registerBotanistRoute returned %d to AdminKey, want %d", recAdmin.Code, http.StatusNoContent)
+	}
+}

@@ -15,10 +15,10 @@ func TestDelegationPendingEndpointsRequireAuth(t *testing.T) {
 	mux := http.NewServeMux()
 
 	apiKey := "secret-botanist-key"
-	handler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
+	for _, route := range handler.Routes() {
 		// Mock the exact wrapping used in cmdserve.go
-		return withAPIKeyAuth(apiKey, next)
-	})
+		mux.HandleFunc(route.Pattern, withAPIKeyAuth(apiKey, route.Handler))
+	}
 
 	endpoints := []struct {
 		method string

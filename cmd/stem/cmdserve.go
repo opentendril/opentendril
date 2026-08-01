@@ -537,6 +537,12 @@ func withAPIKeyAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
 	return withAPIKeyOrPollinatorAuth(apiKey, nil, nil, false, next)
 }
 
+// registerBotanistRoute mounts a management route. The lane is not a parameter:
+// a route mounted here is on the Botanist lane and cannot be on any other.
+func registerBotanistRoute(mux *http.ServeMux, deps serveDependencies, pattern string, handler http.HandlerFunc) {
+	mux.HandleFunc(pattern, withAPIKeyAuth(deps.AdminKey, deps.DelegationGate.Middleware(handler)))
+}
+
 // withAPIKeyOrPollinatorAuth authenticates a caller as EITHER the Botanist
 // (the Stem's own bearer key) or a Pollinator (an issued credential or a
 // short-lived access token).
@@ -1073,14 +1079,14 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
-	mux.HandleFunc("/v1/mesh/admin/issue-token", withAPIKeyAuth(deps.AdminKey, deps.DelegationGate.Middleware(deps.MeshServer.HandleAdminIssueToken)))
+	registerBotanistRoute(mux, deps, "/v1/mesh/admin/issue-token", deps.MeshServer.HandleAdminIssueToken)
 	mux.HandleFunc("/v1/mesh/graft", deps.DelegationGate.Middleware(deps.MeshServer.HandleGraftWebSocket))
 
 	// Phase 7: Delegation Pending Confirmations API
 	pendingHandler := receptors.NewDelegationPendingHandler(deps.PendingStore)
-	pendingHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyAuth(deps.AdminKey, deps.DelegationGate.Middleware(next))
-	})
+	for _, route := range pendingHandler.Routes() {
+		registerBotanistRoute(mux, deps, route.Pattern, route.Handler)
+	}
 
 	return mux
 }
