@@ -25,18 +25,19 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(tempDir)
-
 	binaryPath = filepath.Join(tempDir, "tendril")
 	cmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/stem")
 	// Build from the package root
 	cmd.Dir = "../.."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to build tendril: %v\n%s\n", err, out)
+		os.RemoveAll(tempDir)
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	exitCode := m.Run()
+	os.RemoveAll(tempDir)
+	os.Exit(exitCode)
 }
 
 // runTendrilMCP runs the compiled tendril binary with the "mcp" subcommand
