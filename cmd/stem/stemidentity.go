@@ -14,9 +14,10 @@ import (
 // from an account hosting Pollinators — the account that most needs to know —
 // there is nothing to inspect, because that account runs a different binary.
 //
-// So the Stem writes down which binary it is. The record carries no secret and
-// is world-readable by design; it names a path and an owner, both of which are
-// already visible to anyone who can list the directory the binary sits in.
+// So the Stem writes down which binary it is. The record exists because tendril
+// hardiness typed at a shell measures the binary that invocation resolved, which
+// need not be the one ExecStart names. It is read by the Stem's own account.
+// Ownership for outside callers is published on the health surface instead.
 
 // stemIdentityFilename is the record, in the Stem's control-plane directory.
 const stemIdentityFilename = "stem.json"
@@ -55,9 +56,11 @@ func recordStemIdentity(tendrilDir string) error {
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", tendrilDir, err)
 	}
-	// 0644: this is the one file in the control plane meant to be read from
-	// outside it. Every secret beside it stays 0600.
-	if err := os.WriteFile(stemIdentityPath(tendrilDir), append(payload, '\n'), 0o644); err != nil {
+	// The record exists because tendril hardiness typed at a shell measures the
+	// binary that invocation resolved, which need not be the one ExecStart names.
+	// It is read by the Stem's own account. Ownership for outside callers is
+	// published on the health surface instead.
+	if err := os.WriteFile(stemIdentityPath(tendrilDir), append(payload, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write stem identity: %w", err)
 	}
 	return nil

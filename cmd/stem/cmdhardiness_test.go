@@ -474,7 +474,7 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o644); err != nil {
+		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
@@ -526,8 +526,8 @@ func TestRecordedIdentityRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("mode = %v, want 0644 — the record must be readable from outside the control plane", info.Mode().Perm())
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 
@@ -558,7 +558,7 @@ func TestExecutableOwnedByAnotherPrincipalIsWeak(t *testing.T) {
 	// The record claims a Stem uid this test's files do not belong to.
 	foreign := os.Getuid() + 1
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o644); err != nil {
+		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
