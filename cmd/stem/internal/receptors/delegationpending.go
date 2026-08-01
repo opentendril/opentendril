@@ -16,16 +16,20 @@ func NewDelegationPendingHandler(store *core.PendingConfirmationStore) *Delegati
 	return &DelegationPendingHandler{store: store}
 }
 
-// Register mounts the delegation pending routes onto the mux, wrapping each handler with the
-// provided auth middleware. These routes require Botanist auth.
-func (h *DelegationPendingHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
-	if auth == nil {
-		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
-	}
+// Route describes a single HTTP route exposed by the handler.
+type Route struct {
+	Pattern string
+	Handler http.HandlerFunc
+}
 
-	mux.HandleFunc("GET /v1/delegation/pending", auth(h.list))
-	mux.HandleFunc("POST /v1/delegation/pending/{id}/approve", auth(h.approve))
-	mux.HandleFunc("POST /v1/delegation/pending/{id}/deny", auth(h.deny))
+// Routes returns the delegation pending routes that this handler exposes.
+// These routes require Botanist auth, which the caller is responsible for applying.
+func (h *DelegationPendingHandler) Routes() []Route {
+	return []Route{
+		{"GET /v1/delegation/pending", h.list},
+		{"POST /v1/delegation/pending/{id}/approve", h.approve},
+		{"POST /v1/delegation/pending/{id}/deny", h.deny},
+	}
 }
 
 type pendingResponse struct {

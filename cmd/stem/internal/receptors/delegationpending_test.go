@@ -14,7 +14,9 @@ func TestDelegationPendingHandler_RoundTripAnd404(t *testing.T) {
 	store := core.NewPendingConfirmationStore()
 	handler := NewDelegationPendingHandler(store)
 	mux := http.NewServeMux()
-	handler.Register(mux, nil) // no auth for this test
+	for _, route := range handler.Routes() {
+		mux.HandleFunc(route.Pattern, route.Handler)
+	}
 
 	// Create a pending confirmation
 	grant := core.DelegationGrant{
@@ -87,7 +89,9 @@ func TestDelegationPendingHandler_IntegrationProof(t *testing.T) {
 	store := core.NewPendingConfirmationStore()
 	handler := NewDelegationPendingHandler(store)
 	mux := http.NewServeMux()
-	handler.Register(mux, nil)
+	for _, route := range handler.Routes() {
+		mux.HandleFunc(route.Pattern, route.Handler)
+	}
 
 	grant := core.DelegationGrant{
 		Pollen:             "int-pollen",
