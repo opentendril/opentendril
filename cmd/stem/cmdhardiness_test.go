@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // Executable-integrity findings. Exposures are constructed directly so these
@@ -818,5 +819,47 @@ func TestIsolationTierFallenBackIsNote(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(finding.Title), "docker") || !strings.Contains(strings.ToLower(finding.Title), "fell back") {
 		t.Errorf("title should report docker as a fallback, got: %s", finding.Title)
+	}
+}
+
+// TestIsolationTierExplicitHostIsWeak: the host provider puts no Terrarium
+// between a Sprout and the machine. Selecting it through the environment is not
+// covered by the substrate-configuration host finding, which reads the
+// configuration file, so without this the report grades it sound.
+func TestIsolationTierExplicitHostIsWeak(t *testing.T) {
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", terrarium.ProviderHost)
+	original := conductor.CheckGVisorReadinessFn
+	conductor.CheckGVisorReadinessFn = func(context.Context) error { return errors.New("not found") }
+	t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+	finding := isolationTierFinding(context.Background())
+	if finding.Severity != "weak" {
+		t.Fatalf("severity = %q, want weak — the host tier has no isolation to report on", finding.Severity)
+	}
+	if !strings.Contains(strings.ToLower(finding.Detail+finding.Title), "host") {
+		t.Errorf("neither title nor detail names the host tier: %s / %s", finding.Title, finding.Detail)
+	}
+}
+
+// TestIsolationTierExplicitUnprobedIsNote: only gVisor has a readiness probe.
+// For any other explicit choice the report has established nothing, so it must
+// not grade the tier ok or claim the host can satisfy it — the failure this
+// guards is an affirmative assurance about something never measured.
+func TestIsolationTierExplicitUnprobedIsNote(t *testing.T) {
+	for _, provider := range []string{terrarium.ProviderFirecracker, terrarium.ProviderDocker, "unknown-provider"} {
+		t.Run(provider, func(t *testing.T) {
+			t.Setenv("TENDRIL_TERRARIUM_PROVIDER", provider)
+			original := conductor.CheckGVisorReadinessFn
+			conductor.CheckGVisorReadinessFn = func(context.Context) error { return errors.New("not found") }
+			t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+			finding := isolationTierFinding(context.Background())
+			if finding.Severity != "note" {
+				t.Fatalf("severity = %q, want note — nothing probed %s", finding.Severity, provider)
+			}
+			if strings.Contains(strings.ToLower(finding.Title+finding.Detail), "can satisfy") {
+				t.Errorf("report claims the host can satisfy %s, which nothing established: %s / %s", provider, finding.Title, finding.Detail)
+			}
+		})
 	}
 }
