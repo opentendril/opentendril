@@ -41,11 +41,11 @@ func TestMain(m *testing.M) {
 	os.Setenv("USERPROFILE", home)
 
 	// Stub CheckGVisorReadinessFn to prevent tests that don't specify a Substrate
-	// from attempting to shell out to `docker info` to resolve the fallback
-	// tier (gvisor or docker) when run on a host without Docker running.
-	// Individual tests that need to exercise that logic restore it locally.
-	//
-	// Done in TestMain so it covers every test cleanly without init() races.
+	// from accidentally spawning a real `docker info` subprocess just to resolve
+	// the default terrarium provider name. This satisfies the implicit assumption
+	// of tests written before the gVisor preference was added (that the default
+	// resolves purely via strings to "docker"). Tests that actually want to
+	// exercise the gVisor logic save and restore this seam themselves.
 	originalGVisorReadyFn := CheckGVisorReadinessFn
 	CheckGVisorReadinessFn = func(context.Context) error { return errors.New("stubbed unready") }
 	exitCode := m.Run()

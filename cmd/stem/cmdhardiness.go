@@ -13,6 +13,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // `tendril hardiness` — what this Terroir can actually withstand.
@@ -687,16 +688,32 @@ func isolationTierFinding(ctx context.Context) hardinessFinding {
 	resolved, explicit, runscPresent := conductor.TerrariumProviderStatus(ctx)
 
 	if explicit {
-		if strings.EqualFold(resolved, "gvisor") && !runscPresent {
+		if strings.EqualFold(resolved, terrarium.ProviderGVisor) {
+			if !runscPresent {
+				return hardinessFinding{
+					Severity: "weak",
+					Title:    fmt.Sprintf("Isolation tier explicitly selected as %s, but the host cannot satisfy it", resolved),
+					Detail:   fmt.Sprintf("The operator asked for %s, but runsc is absent. The host offers Docker.", resolved),
+				}
+			}
 			return hardinessFinding{
-				Severity: "weak",
-				Title:    fmt.Sprintf("Isolation tier explicitly selected as %s, but the host cannot satisfy it", resolved),
-				Detail:   fmt.Sprintf("The operator asked for %s, but runsc is absent. The host offers Docker.", resolved),
+				Severity: "ok",
+				Title:    fmt.Sprintf("Isolation tier explicitly selected as %s (host can satisfy it)", resolved),
 			}
 		}
+
+		if strings.EqualFold(resolved, terrarium.ProviderHost) {
+			return hardinessFinding{
+				Severity: "weak",
+				Title:    fmt.Sprintf("Isolation tier explicitly selected as %s", resolved),
+				Detail:   "Sprouts execute directly on the host with no Terrarium between them and it.",
+			}
+		}
+
 		return hardinessFinding{
-			Severity: "ok",
-			Title:    fmt.Sprintf("Isolation tier explicitly selected as %s (host can satisfy it)", resolved),
+			Severity: "note",
+			Title:    fmt.Sprintf("Isolation tier explicitly selected as %s", resolved),
+			Detail:   "Readiness for this tier has not been established here.",
 		}
 	}
 
