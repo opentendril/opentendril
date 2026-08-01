@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 )
 
 // Executable-integrity findings. Exposures are constructed directly so these
@@ -758,5 +761,62 @@ func TestStaleRecordedProcessIsNotTrusted(t *testing.T) {
 	}
 	if finding.Diverged {
 		t.Error("Diverged = true from a comparison against an unrelated process")
+	}
+}
+
+func TestIsolationTierExplicitAndUnsatisfiableIsWeak(t *testing.T) {
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "gvisor")
+	original := conductor.CheckGVisorReadinessFn
+	conductor.CheckGVisorReadinessFn = func(context.Context) error { return errors.New("not found") }
+	t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+	finding := isolationTierFinding(context.Background())
+	if finding.Severity != "weak" {
+		t.Fatalf("severity = %q, want weak", finding.Severity)
+	}
+	if !strings.Contains(finding.Detail, "gvisor") || !strings.Contains(finding.Detail, "Docker") {
+		t.Errorf("detail should name both what was asked for and what the host offers, got: %s", finding.Detail)
+	}
+}
+
+func TestIsolationTierExplicitAndSatisfiableIsOK(t *testing.T) {
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "gvisor")
+	original := conductor.CheckGVisorReadinessFn
+	conductor.CheckGVisorReadinessFn = func(context.Context) error { return nil }
+	t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+	finding := isolationTierFinding(context.Background())
+	if finding.Severity == "weak" {
+		t.Fatalf("severity = %q, want ok/note (not weak)", finding.Severity)
+	}
+}
+
+func TestIsolationTierPreferredAndAvailableIsOK(t *testing.T) {
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "") // Ensure no explicit choice
+	original := conductor.CheckGVisorReadinessFn
+	conductor.CheckGVisorReadinessFn = func(context.Context) error { return nil }
+	t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+	finding := isolationTierFinding(context.Background())
+	if finding.Severity != "ok" {
+		t.Fatalf("severity = %q, want ok", finding.Severity)
+	}
+	if !strings.Contains(strings.ToLower(finding.Title), "gvisor") || !strings.Contains(strings.ToLower(finding.Title), "preferred and available") {
+		t.Errorf("title should report gvisor as preferred and available, got: %s", finding.Title)
+	}
+}
+
+func TestIsolationTierFallenBackIsNote(t *testing.T) {
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "")
+	original := conductor.CheckGVisorReadinessFn
+	conductor.CheckGVisorReadinessFn = func(context.Context) error { return errors.New("not found") }
+	t.Cleanup(func() { conductor.CheckGVisorReadinessFn = original })
+
+	finding := isolationTierFinding(context.Background())
+	if finding.Severity != "note" {
+		t.Fatalf("severity = %q, want note", finding.Severity)
+	}
+	if !strings.Contains(strings.ToLower(finding.Title), "docker") || !strings.Contains(strings.ToLower(finding.Title), "fell back") {
+		t.Errorf("title should report docker as a fallback, got: %s", finding.Title)
 	}
 }
