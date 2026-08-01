@@ -89,8 +89,33 @@ func ResolveSubstrateWorkspace(substrate string, spec *SubstrateSpec) (string, e
 // MaterializeManagedCheckouts clones or refreshes all managed substrates on startup.
 // A clone failure is logged but does not prevent startup.
 func MaterializeManagedCheckouts(ctx context.Context, config *SubstratesConfig) {
+	if config == nil {
+		log.Printf("0 managed Substrates configured")
+		return
+	}
+
+	var managedCount int
+	for _, spec := range config.Substrates {
+		if strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed" {
+			managedCount++
+		}
+	}
+
+	if managedCount == 0 {
+		log.Printf("0 managed Substrates configured")
+		return
+	}
+
+	log.Printf("Materializing %d managed Substrates", managedCount)
+
 	for name, spec := range config.Substrates {
 		if strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed" {
+			log.Printf("Materializing managed Substrate %q", name)
+
+			dir := managedCheckoutDir(name)
+			_, err := os.Stat(dir)
+			isRefresh := (err == nil)
+
 			cred, err := resolveSubstrateCredential(spec, config.Credentials)
 			if err != nil {
 				log.Printf("⚠️ Managed checkout materialization for substrate %q failed to resolve credentials: %v", name, err)
@@ -99,6 +124,12 @@ func MaterializeManagedCheckouts(ctx context.Context, config *SubstratesConfig) 
 			_, _, err = cloneNamedForeignSubstrate(name, spec.URL, spec.Branch, cred)
 			if err != nil {
 				log.Printf("⚠️ Managed checkout materialization for substrate %q failed: %v", name, err)
+			} else {
+				if isRefresh {
+					log.Printf("Substrate %q refreshed", name)
+				} else {
+					log.Printf("Substrate %q cloned", name)
+				}
 			}
 		}
 	}

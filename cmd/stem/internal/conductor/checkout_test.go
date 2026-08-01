@@ -1,8 +1,10 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,5 +237,87 @@ func TestMaterializeManagedCheckoutsFailureTolerance(t *testing.T) {
 	_, errBroken := ResolveSubstrateWorkspace("broken", &brokenSpec)
 	if !errors.Is(errBroken, ErrWorkspaceAbsent) {
 		t.Errorf("broken substrate got err %v, want ErrWorkspaceAbsent", errBroken)
+	}
+}
+
+func TestMaterializeManagedCheckoutsLogging(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	mustGit := func(args ...string) {
+		t.Helper()
+		if _, err := runGitCommand(ctx, src, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	mustGit("init")
+	mustGit("config", "user.email", "t@example.com")
+	mustGit("config", "user.name", "Tester")
+	if err := os.WriteFile(filepath.Join(src, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	mustGit("add", "-A")
+	mustGit("commit", "-m", "init")
+
+	root := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	config0 := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"unmanaged": {URL: src, Checkout: CheckoutSpec{Mode: "path", Path: "/tmp/foo"}},
+		},
+	}
+	buf.Reset()
+	MaterializeManagedCheckouts(ctx, config0)
+	out0 := buf.String()
+	if !strings.Contains(out0, "0 managed Substrates") {
+		t.Errorf("expected 0 managed Substrates line, got: %s", out0)
+	}
+	if strings.Contains(out0, "Materializing managed Substrate") {
+		t.Errorf("expected no per-Substrate lines, got: %s", out0)
+	}
+
+	config1 := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"valid1":    {URL: src, Checkout: CheckoutSpec{Mode: "managed"}},
+			"broken":    {URL: "http://127.0.0.1:9999/invalid.git", Checkout: CheckoutSpec{Mode: "managed"}},
+			"unmanaged": {URL: src, Checkout: CheckoutSpec{Mode: "path", Path: "/tmp/foo"}},
+		},
+	}
+
+	buf.Reset()
+	MaterializeManagedCheckouts(ctx, config1)
+	out1 := buf.String()
+
+	if !strings.Contains(out1, "Materializing 2 managed Substrates") {
+		t.Errorf("expected count line for 2 managed Substrates, got: %s", out1)
+	}
+
+	if !strings.Contains(out1, "Materializing managed Substrate \"valid1\"") {
+		t.Errorf("expected before-work line for valid1, got: %s", out1)
+	}
+	if !strings.Contains(out1, "Substrate \"valid1\" cloned") {
+		t.Errorf("expected cloned line for valid1, got: %s", out1)
+	}
+	if strings.Contains(out1, "Substrate \"valid1\" refreshed") {
+		t.Errorf("expected cloned, not refreshed, for valid1, got: %s", out1)
+	}
+
+	if !strings.Contains(out1, "⚠️ Managed checkout materialization for substrate \"broken\" failed") {
+		t.Errorf("expected failure line for broken, got: %s", out1)
+	}
+
+	buf.Reset()
+	MaterializeManagedCheckouts(ctx, config1)
+	out2 := buf.String()
+
+	if !strings.Contains(out2, "Substrate \"valid1\" refreshed") {
+		t.Errorf("expected refreshed line for valid1 on second run, got: %s", out2)
+	}
+	if strings.Contains(out2, "Substrate \"valid1\" cloned") {
+		t.Errorf("expected refreshed, not cloned, for valid1 on second run, got: %s", out2)
 	}
 }
