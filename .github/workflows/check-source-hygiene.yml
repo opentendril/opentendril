@@ -122,6 +122,21 @@ jobs:
           git fetch --no-tags origin "${{ github.base_ref }}"
           bash scripts/check-test-sleep.sh "origin/${{ github.base_ref }}"
 
+  testmain-cleanup:
+    name: TestMain cleanup is explicit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # os.Exit bypasses deferred functions. This enforces that TestMain does not
+      # combine defer and os.Exit, ensuring that temporary directories do not leak.
+      - name: No TestMain combines defer and os.Exit
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/check-testmain-cleanup.sh "origin/${{ github.base_ref }}"
+
   doc-prose-deletions:
     name: Removed documentation prose is acknowledged
     runs-on: ubuntu-latest
