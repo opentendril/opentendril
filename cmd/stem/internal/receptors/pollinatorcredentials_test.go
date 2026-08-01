@@ -131,7 +131,7 @@ func TestUnresolvableCredentialDeniesRatherThanFallingThrough(t *testing.T) {
 	_, credentials := credentialFixture(t, "claude")
 	mux, executed := newCredentialGate(t, credentials, nil)
 
-	for _, presented := range []string{"tendril_revoked-or-unknown", "tendril_"} {
+	for _, presented := range []string{"tendril_root_revoked-or-unknown", "tendril_root_"} {
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, statusRequest(presented, ""))
 		if recorder.Code != http.StatusForbidden {

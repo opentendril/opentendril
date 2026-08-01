@@ -95,8 +95,8 @@ func TestUnknownAndMalformedCredentialsResolveToNothing(t *testing.T) {
 	}
 
 	for _, presented := range []string{
-		"", "   ", "not-a-credential", "tendril_", "tendril_wrong",
-		"Bearer tendril_wrong", "TENDRIL_uppercase",
+		"", "   ", "not-a-credential", "tendril_root_", "tendril_root_wrong",
+		"Bearer tendril_root_wrong", "TENDRIL_uppercase",
 		// A value carrying any other prefix must not resolve.
 		"otp_wrong",
 	} {
@@ -155,7 +155,7 @@ func TestMissingStoreIsTheSecureDefault(t *testing.T) {
 	if len(credentials) != 0 {
 		t.Fatalf("loaded %d credential(s) from an empty directory", len(credentials))
 	}
-	if got := ResolvePollenFromCredential(credentials, "tendril_anything"); got != "" {
+	if got := ResolvePollenFromCredential(credentials, "tendril_root_anything"); got != "" {
 		t.Fatalf("resolved %q with no credentials issued", got)
 	}
 }

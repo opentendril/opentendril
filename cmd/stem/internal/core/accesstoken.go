@@ -28,11 +28,12 @@ import (
 // AccessTokenPrefix tags a bearer as an access token so a surface routes it to
 // signature verification rather than to the digest resolver.
 //
-// It is deliberately distinct from pollinatorTokenPrefix ("tendril_") and shares
-// no prefix relationship with it, so LooksLikeAccessToken and
-// LooksLikePollinatorCredential are mutually exclusive: a bearer is at most one
-// of the two.
-const AccessTokenPrefix = "tendrilat_"
+// Both kinds share the "tendril_" namespace; the full two-segment prefix —
+// "tendril_access_" here and "tendril_root_" for Pollinator credentials — is
+// what discriminates them. Every check must use the full prefix, never the
+// namespace alone. LooksLikeAccessToken and LooksLikePollinatorCredential are
+// mutually exclusive: a bearer is at most one of the two.
+const AccessTokenPrefix = "tendril_access_"
 
 // StemSigningKeyFilename holds the Stem's ed25519 signing key, alongside the
 // credential store in the Stem's control-plane directory. Deleting it rotates
