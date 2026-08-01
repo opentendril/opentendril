@@ -2220,3 +2220,122 @@ func TestRunSequenceInteractiveCancellation(t *testing.T) {
 		t.Fatalf("expected context.Canceled, got: %v", runErr)
 	}
 }
+
+// TestTimedOutStepIsNotRetried: a step killed by a timeout must not spend the
+// retry budget, because a retry against the same ceiling cannot change the
+// outcome — it only multiplies the wall clock already spent waiting.
+//
+// A timeout reaches the runner in two unrelated shapes, and classifying only
+// one leaves the other retried exactly as before. Both are driven here:
+// ErrSproutTimedOut travels as a wrapped sentinel carrying no command result,
+// while the terrarium's own timeout arrives as a result whose TimedOut is set.
+//
+// The step-runner call count is what proves no retry was attempted. Halting
+// alone would not: the runner also halts when the budget is exhausted, which is
+// the outcome this change exists to avoid reaching.
+func TestTimedOutStepIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "sprout timeout arrives as a wrapped sentinel",
+			err:  fmt.Errorf("tool call %q was cut off: %w", "run", ErrSproutTimedOut),
+		},
+		{
+			name: "terrarium timeout arrives as a command result",
+			err: sequenceCommandResultError{
+				err:    errors.New("command cut off"),
+				result: terrarium.CommandResult{TimedOut: true},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "timeout.yaml")
+			seq := &Sequence{
+				Name:             "timeout",
+				ConcurrencyLimit: 1,
+				OnFailure:        sequenceOnFailureRetry,
+				MaxRetries:       2,
+				Steps: []SequenceStep{
+					{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+				},
+			}
+			if err := SaveSequence(path, seq); err != nil {
+				t.Fatalf("SaveSequence failed: %v", err)
+			}
+
+			var calls int32
+			stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+				atomic.AddInt32(&calls, 1)
+				return "", tc.err
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			_, err := RunSequence(ctx, path, SequenceRunOptions{
+				Stdout:     io.Discard,
+				Stderr:     io.Discard,
+				StepRunner: stepRunner,
+			})
+			if err == nil {
+				t.Fatal("RunSequence returned no error for a step that timed out")
+			}
+
+			if got := atomic.LoadInt32(&calls); got != 1 {
+				t.Errorf("step runner calls = %d, want 1: the budget was spent re-running work that timed out", got)
+			}
+
+			// The halt must be reported as a timeout, not in the words used for a
+			// step that failed on its merits or one that ran out of retries.
+			if !strings.Contains(err.Error(), "time limit") {
+				t.Errorf("error does not report a time limit, so a timeout reads as an ordinary failure: %v", err)
+			}
+			if strings.Contains(err.Error(), "retries") {
+				t.Errorf("error reports retry exhaustion for a step that was never retried: %v", err)
+			}
+		})
+	}
+}
+
+// TestOrdinaryFailureStillSpendsRetries is the control for the test above: if
+// the runner stopped retrying anything, that test would pass for the wrong
+// reason. TestRunSequenceRetry covers the success path; this covers the
+// exhaustion path against the same budget the timeout cases use.
+func TestOrdinaryFailureStillSpendsRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ordinary.yaml")
+	seq := &Sequence{
+		Name:             "ordinary",
+		ConcurrencyLimit: 1,
+		OnFailure:        sequenceOnFailureRetry,
+		MaxRetries:       2,
+		Steps: []SequenceStep{
+			{ID: "step-a", Status: sequenceStatusPending, Transcript: "a"},
+		},
+	}
+	if err := SaveSequence(path, seq); err != nil {
+		t.Fatalf("SaveSequence failed: %v", err)
+	}
+
+	var calls int32
+	stepRunner := func(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string) (string, error) {
+		atomic.AddInt32(&calls, 1)
+		return "", errors.New("failed on its merits")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := RunSequence(ctx, path, SequenceRunOptions{
+		Stdout:     io.Discard,
+		Stderr:     io.Discard,
+		StepRunner: stepRunner,
+	})
+	if err == nil {
+		t.Fatal("RunSequence returned no error for a step that kept failing")
+	}
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Fatalf("step runner calls = %d, want 3 (initial attempt plus a budget of 2)", got)
+	}
+}
