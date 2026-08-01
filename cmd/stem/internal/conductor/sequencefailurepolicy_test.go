@@ -10,6 +10,7 @@ func TestDecideFailureAction(t *testing.T) {
 		name          string
 		onFailureMode string
 		retriesLeft   int
+		kind          failureKind
 		wantAction    failureAction
 		wantErr       error
 	}{
@@ -17,6 +18,7 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "retry mode with retries remaining",
 			onFailureMode: sequenceOnFailureRetry,
 			retriesLeft:   3,
+			kind:          failureKindStandard,
 			wantAction:    failureActionRetry,
 			wantErr:       nil,
 		},
@@ -24,6 +26,7 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "retry mode exhausted (0 left)",
 			onFailureMode: sequenceOnFailureRetry,
 			retriesLeft:   0,
+			kind:          failureKindStandard,
 			wantAction:    failureActionRetry,
 			wantErr:       errRetryExhausted,
 		},
@@ -31,6 +34,7 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "retry mode exhausted (negative left)",
 			onFailureMode: sequenceOnFailureRetry,
 			retriesLeft:   -1,
+			kind:          failureKindStandard,
 			wantAction:    failureActionRetry,
 			wantErr:       errRetryExhausted,
 		},
@@ -38,6 +42,7 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "pause mode",
 			onFailureMode: sequenceOnFailurePause,
 			retriesLeft:   0,
+			kind:          failureKindStandard,
 			wantAction:    failureActionPause,
 			wantErr:       nil,
 		},
@@ -45,6 +50,7 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "halt mode",
 			onFailureMode: sequenceOnFailureHalt,
 			retriesLeft:   0,
+			kind:          failureKindStandard,
 			wantAction:    failureActionHalt,
 			wantErr:       nil,
 		},
@@ -52,14 +58,39 @@ func TestDecideFailureAction(t *testing.T) {
 			name:          "unknown garbage mode string",
 			onFailureMode: "garbage",
 			retriesLeft:   0,
+			kind:          failureKindStandard,
 			wantAction:    failureActionUnknownMode,
+			wantErr:       nil,
+		},
+		{
+			name:          "timeout under retry returns halt with budget intact",
+			onFailureMode: sequenceOnFailureRetry,
+			retriesLeft:   3,
+			kind:          failureKindTimeout,
+			wantAction:    failureActionHalt,
+			wantErr:       nil,
+		},
+		{
+			name:          "timeout under pause still pauses",
+			onFailureMode: sequenceOnFailurePause,
+			retriesLeft:   0,
+			kind:          failureKindTimeout,
+			wantAction:    failureActionPause,
+			wantErr:       nil,
+		},
+		{
+			name:          "timeout under halt still halts",
+			onFailureMode: sequenceOnFailureHalt,
+			retriesLeft:   0,
+			kind:          failureKindTimeout,
+			wantAction:    failureActionHalt,
 			wantErr:       nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotAction, gotErr := decideFailureAction(tt.onFailureMode, tt.retriesLeft)
+			gotAction, gotErr := decideFailureAction(tt.onFailureMode, tt.retriesLeft, tt.kind)
 			if gotAction != tt.wantAction {
 				t.Errorf("decideFailureAction() gotAction = %v, want %v", gotAction, tt.wantAction)
 			}

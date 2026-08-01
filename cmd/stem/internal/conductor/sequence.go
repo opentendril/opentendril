@@ -349,7 +349,12 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 				return r.seq, err
 			}
 
-			action, actionErr := decideFailureAction(strings.ToLower(strings.TrimSpace(r.seq.OnFailure)), r.retriesLeft[result.stepID])
+			kind := failureKindStandard
+			if stepTimedOut(result.err) {
+				kind = failureKindTimeout
+			}
+
+			action, actionErr := decideFailureAction(strings.ToLower(strings.TrimSpace(r.seq.OnFailure)), r.retriesLeft[result.stepID], kind)
 			if actionErr != nil {
 				// spent = resolved budget - remaining (remaining is zero at this point)
 				spent := r.resolveRetryBudget() - r.retriesLeft[result.stepID]
@@ -396,6 +401,9 @@ func (r *sequenceRunner) run(ctx context.Context) (resultSeq *Sequence, runErr e
 				}
 
 			case failureActionHalt:
+				if kind == failureKindTimeout && strings.ToLower(strings.TrimSpace(r.seq.OnFailure)) == sequenceOnFailureRetry {
+					return r.seq, fmt.Errorf("step %s exceeded its time limit; not retrying because a timeout cannot be resolved by repetition. Raise the ceiling or choose a faster model: %w", result.stepID, result.err)
+				}
 				return r.seq, fmt.Errorf("step %s failed: %w", result.stepID, result.err)
 
 			default:
@@ -507,6 +515,16 @@ func commandResultFromError(err error) (terrarium.CommandResult, bool) {
 		return carrier.CommandResult(), true
 	}
 	return terrarium.CommandResult{}, false
+}
+
+func stepTimedOut(err error) bool {
+	if errors.Is(err, ErrSproutTimedOut) {
+		return true
+	}
+	if result, ok := commandResultFromError(err); ok {
+		return result.TimedOut
+	}
+	return false
 }
 
 func shouldBudRecursiveDebugger(step *SequenceStep) bool {

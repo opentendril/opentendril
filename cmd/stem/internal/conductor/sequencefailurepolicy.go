@@ -11,11 +11,21 @@ const (
 	failureActionUnknownMode
 )
 
+type failureKind string
+
+const (
+	failureKindStandard failureKind = "standard"
+	failureKindTimeout  failureKind = "timeout"
+)
+
 var errRetryExhausted = errors.New("retries exhausted")
 
-func decideFailureAction(onFailureMode string, retriesLeft int) (failureAction, error) {
+func decideFailureAction(onFailureMode string, retriesLeft int, kind failureKind) (failureAction, error) {
 	switch onFailureMode {
 	case sequenceOnFailureRetry:
+		if kind == failureKindTimeout {
+			return failureActionHalt, nil
+		}
 		if retriesLeft > 0 {
 			return failureActionRetry, nil
 		}
