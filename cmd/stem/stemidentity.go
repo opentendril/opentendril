@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 )
 
 // The Stem's executable identity, recorded so another account can measure it.
@@ -14,9 +16,10 @@ import (
 // from an account hosting Pollinators — the account that most needs to know —
 // there is nothing to inspect, because that account runs a different binary.
 //
-// So the Stem writes down which binary it is. The record carries no secret and
-// is world-readable by design; it names a path and an owner, both of which are
-// already visible to anyone who can list the directory the binary sits in.
+// So the Stem writes down which binary it is. The record exists because tendril
+// hardiness typed at a shell measures the binary that invocation resolved, which
+// need not be the one ExecStart names. It is read by the Stem's own account.
+// Ownership for outside callers is published on the health surface instead.
 
 // stemIdentityFilename is the record, in the Stem's control-plane directory.
 const stemIdentityFilename = "stem.json"
@@ -28,6 +31,10 @@ type stemIdentity struct {
 	Executable string `json:"executable"`
 	// UID is the user the Stem runs as.
 	UID int `json:"uid"`
+	// PID is the process identifier of the Stem.
+	PID int `json:"pid"`
+	// StartTime is when the process started.
+	StartTime time.Time `json:"starttime"`
 }
 
 func stemIdentityPath(tendrilDir string) string {
@@ -48,16 +55,31 @@ func recordStemIdentity(tendrilDir string) error {
 		executable = resolved
 	}
 
-	payload, err := json.MarshalIndent(stemIdentity{Executable: executable, UID: os.Getuid()}, "", "  ")
+	pid := os.Getpid()
+	var startTime time.Time
+	if runtime.GOOS == "linux" {
+		if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
+			startTime = info.ModTime()
+		}
+	}
+
+	payload, err := json.MarshalIndent(stemIdentity{
+		Executable: executable,
+		UID:        os.Getuid(),
+		PID:        pid,
+		StartTime:  startTime,
+	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode stem identity: %w", err)
 	}
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", tendrilDir, err)
 	}
-	// 0644: this is the one file in the control plane meant to be read from
-	// outside it. Every secret beside it stays 0600.
-	if err := os.WriteFile(stemIdentityPath(tendrilDir), append(payload, '\n'), 0o644); err != nil {
+	// The record exists because tendril hardiness typed at a shell measures the
+	// binary that invocation resolved, which need not be the one ExecStart names.
+	// It is read by the Stem's own account. Ownership for outside callers is
+	// published on the health surface instead.
+	if err := os.WriteFile(stemIdentityPath(tendrilDir), append(payload, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write stem identity: %w", err)
 	}
 	return nil

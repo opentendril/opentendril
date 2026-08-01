@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Executable-integrity findings. Exposures are constructed directly so these
@@ -473,12 +476,13 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
+
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o644); err != nil {
+		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if !strings.Contains(finding.Title, "The Stem's binary") {
 		t.Errorf("finding should say it measured the Stem's binary, got %q", finding.Title)
@@ -495,7 +499,7 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 func TestExecutableIntegritySaysWhenItCouldNotReadTheRecord(t *testing.T) {
 	tendrilDir := filepath.Join(cleanTempRoot(t), ".tendril")
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if strings.Contains(finding.Title, "The Stem's binary") {
 		t.Error("no record exists, so the finding must not claim to have measured the Stem's binary")
@@ -526,8 +530,8 @@ func TestRecordedIdentityRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("mode = %v, want 0644 — the record must be readable from outside the control plane", info.Mode().Perm())
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
 	}
 }
 
@@ -555,14 +559,15 @@ func TestExecutableOwnedByAnotherPrincipalIsWeak(t *testing.T) {
 	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
+
 	// The record claims a Stem uid this test's files do not belong to.
 	foreign := os.Getuid() + 1
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o644); err != nil {
+		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if finding.Severity != "weak" {
 		t.Fatalf("severity = %q, want weak — the binary belongs to another principal", finding.Severity)
@@ -578,5 +583,180 @@ func TestOwnershipUnknownJudgesModesOnly(t *testing.T) {
 	finding := executableIntegrityFindingFor(executable)
 	if finding.Severity != "ok" {
 		t.Fatalf("severity = %q, want ok when ownership cannot be compared", finding.Severity)
+	}
+}
+
+// Running-image findings. The Stem records which process it is; the report
+// resolves that process's image and compares it to the binary on disk. These
+// build a stand-in procfs tree so the comparison is exercised without depending
+// on a live process.
+
+// newProcfs builds a stand-in procfs holding one process directory whose exe
+// link points at image, and returns the tree root and the directory's mtime.
+//
+// The link is created before the mtime is read: writing inside the directory
+// updates it, so reading first would record a value the report never sees.
+func newProcfs(t *testing.T, pid int, image string) (root string, start time.Time) {
+	t.Helper()
+
+	root = t.TempDir()
+	procDir := filepath.Join(root, fmt.Sprintf("%d", pid))
+	if err := os.MkdirAll(procDir, 0o755); err != nil {
+		t.Fatalf("create process dir: %v", err)
+	}
+	if err := os.Symlink(image, filepath.Join(procDir, "exe")); err != nil {
+		t.Fatalf("link exe: %v", err)
+	}
+	info, err := os.Stat(procDir)
+	if err != nil {
+		t.Fatalf("stat process dir: %v", err)
+	}
+	return root, info.ModTime()
+}
+
+// writeIdentity records an identity naming executable, uid, pid and start.
+func writeIdentity(t *testing.T, tendrilDir, executable string, uid, pid int, start time.Time) {
+	t.Helper()
+
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		t.Fatalf("mkdir control plane: %v", err)
+	}
+	payload, err := json.Marshal(stemIdentity{Executable: executable, UID: uid, PID: pid, StartTime: start})
+	if err != nil {
+		t.Fatalf("encode identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename), append(payload, '\n'), 0o600); err != nil {
+		t.Fatalf("write identity: %v", err)
+	}
+}
+
+// requireProcfsSupport skips where the running image cannot be resolved at all.
+// The report only attempts it on Linux, so elsewhere there is no behaviour here
+// to measure — as distinct from a behaviour that passes.
+func requireProcfsSupport(t *testing.T) {
+	t.Helper()
+
+	if runtime.GOOS != "linux" {
+		t.Skip("the running image is resolved through procfs, which this platform does not provide")
+	}
+}
+
+// TestRunningImageDivergenceIsReported: a Stem still executing a replaced
+// binary is the state this finding exists to surface. Naming only the path on
+// disk would describe a file nothing is running.
+func TestRunningImageDivergenceIsReported(t *testing.T) {
+	requireProcfsSupport(t)
+
+	_, onDisk := newExecutable(t)
+	running := onDisk + ".previous"
+	const pid = 4242
+	procfs, start := newProcfs(t, pid, running)
+
+	tendrilDir := filepath.Join(filepath.Dir(filepath.Dir(onDisk)), ".tendril")
+	writeIdentity(t, tendrilDir, onDisk, os.Getuid(), pid, start)
+
+	finding := executableIntegrityFinding(tendrilDir, procfs)
+
+	if !finding.Diverged {
+		t.Errorf("Diverged = false while the running image %q differs from the binary on disk %q", running, onDisk)
+	}
+	if !strings.Contains(finding.Detail, running) {
+		t.Errorf("detail does not name the running image %q, so the report describes only the file on disk:\n%s", running, finding.Detail)
+	}
+	if !strings.Contains(finding.Title, "diverges") {
+		t.Errorf("title does not carry the divergence, so a reader scanning titles misses it: %q", finding.Title)
+	}
+}
+
+// TestRunningImageAgreementIsReported: the ordinary state must not be flagged,
+// or the divergence note stops meaning anything.
+func TestRunningImageAgreementIsReported(t *testing.T) {
+	requireProcfsSupport(t)
+
+	_, onDisk := newExecutable(t)
+	const pid = 4243
+	procfs, start := newProcfs(t, pid, onDisk)
+
+	tendrilDir := filepath.Join(filepath.Dir(filepath.Dir(onDisk)), ".tendril")
+	writeIdentity(t, tendrilDir, onDisk, os.Getuid(), pid, start)
+
+	finding := executableIntegrityFinding(tendrilDir, procfs)
+
+	if finding.Diverged {
+		t.Errorf("Diverged = true while the running image and the binary on disk are both %q", onDisk)
+	}
+	if !strings.Contains(finding.Detail, "matches the binary on disk") {
+		t.Errorf("detail does not state that the images agree:\n%s", finding.Detail)
+	}
+}
+
+// TestUnestablishedRunningImageLeavesSeverityAlone: whether the running image
+// could be resolved says nothing about whether another account can replace the
+// binary on disk. Coupling them reported a proven exposure as a note, and a
+// report with no weak findings states that nothing measurable is wrong.
+//
+// A record carrying no process at all is not a corner case: it is what every
+// installation holds until the Stem restarts after an upgrade.
+func TestUnestablishedRunningImageLeavesSeverityAlone(t *testing.T) {
+	requireProcfsSupport(t)
+
+	dir, onDisk := newExecutable(t)
+	if err := os.Chmod(dir, 0o775); err != nil {
+		t.Fatalf("widen bin dir: %v", err)
+	}
+	tendrilDir := filepath.Join(filepath.Dir(dir), ".tendril")
+	foreign := os.Getuid() + 1
+
+	// An empty tree resolves no process, whichever identifier is recorded.
+	empty := t.TempDir()
+
+	for _, tc := range []struct {
+		name  string
+		pid   int
+		start time.Time
+	}{
+		{"record predates the running-image fields", 0, time.Time{}},
+		{"recorded process is gone", 4244, time.Now()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writeIdentity(t, tendrilDir, onDisk, foreign, tc.pid, tc.start)
+
+			finding := executableIntegrityFinding(tendrilDir, empty)
+
+			if finding.Severity != "weak" {
+				t.Errorf("severity = %q, want weak: the binary belongs to another principal and that was established, "+
+					"whatever the running image turned out to be", finding.Severity)
+			}
+			if !strings.Contains(finding.Detail, "has not been established") {
+				t.Errorf("detail does not say the running image is unestablished:\n%s", finding.Detail)
+			}
+		})
+	}
+}
+
+// TestStaleRecordedProcessIsNotTrusted: an identifier outlives the process that
+// held it. Comparing against whatever holds it now would attribute a stranger's
+// image to the Stem, so a start time that disagrees must read as unestablished.
+func TestStaleRecordedProcessIsNotTrusted(t *testing.T) {
+	requireProcfsSupport(t)
+
+	_, onDisk := newExecutable(t)
+	stranger := onDisk + ".stranger"
+	const pid = 4245
+	procfs, start := newProcfs(t, pid, stranger)
+
+	tendrilDir := filepath.Join(filepath.Dir(filepath.Dir(onDisk)), ".tendril")
+	writeIdentity(t, tendrilDir, onDisk, os.Getuid(), pid, start.Add(-time.Hour))
+
+	finding := executableIntegrityFinding(tendrilDir, procfs)
+
+	if !strings.Contains(finding.Detail, "has not been established") {
+		t.Errorf("a start time that disagrees with the recorded one must read as unestablished:\n%s", finding.Detail)
+	}
+	if strings.Contains(finding.Detail, stranger) {
+		t.Errorf("detail names %q, the image of whatever now holds the recorded identifier:\n%s", stranger, finding.Detail)
+	}
+	if finding.Diverged {
+		t.Error("Diverged = true from a comparison against an unrelated process")
 	}
 }
