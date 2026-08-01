@@ -84,6 +84,52 @@ run_test "Non-existing test file in fenced block" "\`\`\`
 go test fake_missing_test.go
 \`\`\`" "true" 'Test file "fake_missing_test.go" does not exist'
 
+# 6. A body citing a test that exists at base but not at HEAD -> passes (deleted test)
+# Set up a temporary git repository to simulate this state reliably
+script_abs="$(cd "$(dirname "${script}")" && pwd)/$(basename "${script}")"
+mock_repo="${temp_dir}/mock_repo"
+mkdir -p "${mock_repo}"
+(
+  cd "${mock_repo}"
+  git init -b main
+  git config user.email "test@example.com"
+  git config user.name "Test"
+  
+  # Create a test file at base
+  printf "package main\nfunc TestDeletedBehaviour(t *testing.T) {}\n" > fake_test.go
+  git add fake_test.go
+  git commit -m "Initial commit with test"
+  
+  # Set base ref
+  git branch base_branch
+  
+  # Delete the test at HEAD
+  git rm fake_test.go
+  git commit -m "Delete test"
+  
+  # Run the script inside the mock repo
+  body_file="body.md"
+  echo "Removes TestDeletedBehaviour" > "$body_file"
+  
+  set +e
+  out=$("${script_abs}" "base_branch" --body "${body_file}" 2>&1)
+  status=$?
+  set -e
+  
+  if [ $status -ne 0 ]; then
+    echo "❌ FAIL: Deleted test (expected success, got failure)"
+    echo "Output:"
+    echo "$out"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  echo "✅ PASS: Deleted test"
+  pass=$((pass + 1))
+else
+  fail=$((fail + 1))
+fi
+
 echo "=================="
 echo "Tests Passed: $pass"
 echo "Tests Failed: $fail"

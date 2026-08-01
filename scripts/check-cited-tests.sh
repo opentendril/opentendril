@@ -3,10 +3,11 @@
 # that does not exist in the repository at HEAD.
 #
 # A citation is treated as satisfied if the named test exists anywhere in the
-# tree at HEAD, not only if the diff adds it. This prevents false positives
-# when a description names a pre-existing test that the change must keep
+# tree at HEAD or at the base ref, not only if the diff adds it. This prevents false
+# positives when a description names a pre-existing test that the change must keep
 # passing, a test being modified rather than added, a test being cited as
-# absent ("no test covers this yet"), or a deleted test.
+# absent ("no test covers this yet"), or a deleted test (which exists at base
+# but not at HEAD).
 #
 # The body is read exactly as given, including fenced blocks, because a quoted
 # mutation output with a fabricated test name looks exactly like a pasted
@@ -39,20 +40,22 @@ cited_files=$(grep -oE '[A-Za-z0-9_/.-]+_test\.go\b' "${body_file}" | sort -u ||
 status=0
 
 for func in $cited_funcs; do
-  # Search for the function anywhere in the tree at HEAD
-  if ! git grep -qE "^func ${func}\b" -- '*_test.go'; then
+  # Search for the function anywhere in the tree at HEAD or base
+  if ! git grep -qE "^func ${func}\b" HEAD -- '*_test.go' \
+     && ! git grep -qE "^func ${func}\b" "${base}" -- '*_test.go'; then
     status=1
     echo "::error::The description cites a test function that the change does not add."
-    echo "Test function \"${func}\" was not found in any *_test.go file at HEAD."
+    echo "Test function \"${func}\" was not found in any *_test.go file at HEAD or base."
   fi
 done
 
 for file in $cited_files; do
-  # Search for tracked files ending with the cited file name
-  if ! git ls-files | grep -qE "(^|/)${file}$"; then
+  # Search for files ending with the cited file name at HEAD or base
+  if ! git ls-tree -r --name-only HEAD | grep -E "(^|/)${file}$" >/dev/null \
+     && ! git ls-tree -r --name-only "${base}" | grep -E "(^|/)${file}$" >/dev/null; then
     status=1
     echo "::error::The description cites a test file that the change does not add."
-    echo "Test file \"${file}\" does not exist at HEAD."
+    echo "Test file \"${file}\" does not exist at HEAD or base."
   fi
 done
 
