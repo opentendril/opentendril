@@ -95,24 +95,17 @@ func runHardinessCmd(ctx context.Context, args []string) {
 			fmt.Println("Nothing measurable is wrong from this account. A note means something is")
 			fmt.Println("not configured yet or could not be established, so this is not the same")
 			fmt.Println("as a boundary proven sound. Re-run once the notes are resolved.")
-			if diverged {
-				fmt.Println("\nNOTE: The running Stem process is executing a different binary")
-				fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
-			}
-			return
+		} else {
+			fmt.Println("HARDY — no weak conditions and nothing unestablished. The delegation")
+			fmt.Println("boundary is enforced by the operating system, as measured from this account.")
 		}
-		fmt.Println("HARDY — no weak conditions and nothing unestablished. The delegation")
-		fmt.Println("boundary is enforced by the operating system, as measured from this account.")
-		if diverged {
-			fmt.Println("\nNOTE: The running Stem process is executing a different binary")
-			fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
-		}
-		return
+	} else {
+		fmt.Printf("ADVISORY — %d weak condition(s), %d note(s).\n\n", weak, notes)
+		fmt.Println("A Pollinator running as this user can read what the Stem holds and act")
+		fmt.Println("outside the governed path. Grants and audit still record intent and catch")
+		fmt.Println("accidents — they do not constrain a caller that chooses otherwise.")
 	}
-	fmt.Printf("ADVISORY — %d weak condition(s), %d note(s).\n\n", weak, notes)
-	fmt.Println("A Pollinator running as this user can read what the Stem holds and act")
-	fmt.Println("outside the governed path. Grants and audit still record intent and catch")
-	fmt.Println("accidents — they do not constrain a caller that chooses otherwise.")
+
 	if diverged {
 		fmt.Println("\nNOTE: The running Stem process is executing a different binary")
 		fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
@@ -151,7 +144,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 	// 4. Can somebody else rewrite what the Stem runs? Ownership of the
 	//    credentials is pointless if the binary that enforces the boundary can
 	//    be replaced by the accounts it is meant to constrain.
-	findings = append(findings, executableIntegrityFinding(tendrilDir))
+	findings = append(findings, executableIntegrityFinding(tendrilDir, "/proc"))
 
 	// 5. Can somebody else rewrite the configuration that decides whether a
 	//    Sprout may escape its Terrarium onto the host?
@@ -340,7 +333,7 @@ const maxExecutableLinkHops = 40
 // executableIntegrityFinding measures the binary this process is running from.
 // Run as the Stem it names the Stem's binary; run as another account it names
 // that account's. The finding states which it answered.
-func executableIntegrityFinding(tendrilDir string) hardinessFinding {
+func executableIntegrityFinding(tendrilDir, procfsPath string) hardinessFinding {
 	if identity, ok := readStemIdentity(tendrilDir); ok {
 		finding := executableIntegrityFindingOwnedBy(identity.Executable, identity.UID)
 		finding.Title = "The Stem's binary: " + finding.Title
@@ -348,8 +341,8 @@ func executableIntegrityFinding(tendrilDir string) hardinessFinding {
 		var established bool
 		var exe string
 		if runtime.GOOS == "linux" && identity.PID != 0 && !identity.StartTime.IsZero() {
-			if info, err := os.Stat(fmt.Sprintf("/proc/%d", identity.PID)); err == nil && info.ModTime().Unix() == identity.StartTime.Unix() {
-				if link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", identity.PID)); err == nil {
+			if info, err := os.Stat(filepath.Join(procfsPath, fmt.Sprintf("%d", identity.PID))); err == nil && info.ModTime().Unix() == identity.StartTime.Unix() {
+				if link, err := os.Readlink(filepath.Join(procfsPath, fmt.Sprintf("%d/exe", identity.PID))); err == nil {
 					exe = link
 					established = true
 				}
@@ -362,9 +355,6 @@ func executableIntegrityFinding(tendrilDir string) hardinessFinding {
 
 		if !established {
 			finding.Detail += "What the Stem's running image is has not been established here."
-			if finding.Severity == "weak" {
-				finding.Severity = "note"
-			}
 			return finding
 		}
 

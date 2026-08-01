@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Executable-integrity findings. Exposures are constructed directly so these
@@ -476,19 +474,12 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
 
-	pid := os.Getpid()
-	var start time.Time
-	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
-		start = info.ModTime()
-	}
-	startJSON, _ := json.Marshal(start)
-
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(fmt.Sprintf(`{"executable":%q,"uid":1001,"pid":%d,"starttime":%s}`+"\n", stemBinary, pid, string(startJSON))), 0o600); err != nil {
+		[]byte(`{"executable":"`+stemBinary+`","uid":1001}`+"\n"), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if !strings.Contains(finding.Title, "The Stem's binary") {
 		t.Errorf("finding should say it measured the Stem's binary, got %q", finding.Title)
@@ -505,7 +496,7 @@ func TestExecutableIntegrityUsesTheRecordedStemBinary(t *testing.T) {
 func TestExecutableIntegritySaysWhenItCouldNotReadTheRecord(t *testing.T) {
 	tendrilDir := filepath.Join(cleanTempRoot(t), ".tendril")
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if strings.Contains(finding.Title, "The Stem's binary") {
 		t.Error("no record exists, so the finding must not claim to have measured the Stem's binary")
@@ -566,21 +557,14 @@ func TestExecutableOwnedByAnotherPrincipalIsWeak(t *testing.T) {
 		t.Fatalf("mkdir control plane: %v", err)
 	}
 
-	pid := os.Getpid()
-	var start time.Time
-	if info, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); err == nil {
-		start = info.ModTime()
-	}
-	startJSON, _ := json.Marshal(start)
-
 	// The record claims a Stem uid this test's files do not belong to.
 	foreign := os.Getuid() + 1
 	if err := os.WriteFile(filepath.Join(tendrilDir, stemIdentityFilename),
-		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d,"pid":%d,"starttime":%s}`+"\n", stemBinary, foreign, pid, string(startJSON))), 0o600); err != nil {
+		[]byte(fmt.Sprintf(`{"executable":%q,"uid":%d}`+"\n", stemBinary, foreign)), 0o600); err != nil {
 		t.Fatalf("write identity: %v", err)
 	}
 
-	finding := executableIntegrityFinding(tendrilDir)
+	finding := executableIntegrityFinding(tendrilDir, "/proc")
 
 	if finding.Severity != "weak" {
 		t.Fatalf("severity = %q, want weak — the binary belongs to another principal", finding.Severity)
