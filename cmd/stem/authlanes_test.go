@@ -81,7 +81,12 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// Reached-Spy: Verify the mechanism explicitly on the middleware.
+	// Reached-Spy: withAPIKeyAuth's own behaviour, in isolation.
+	//
+	// This calls the middleware directly, not through the mux, so it pins what
+	// withAPIKeyAuth does with a Pollinator bearer and nothing about how routes
+	// are registered. A route moved to the wrong lane leaves this green — the
+	// route table below is what catches that.
 	// -------------------------------------------------------------------------
 	reached := false
 	spyHandler := withAPIKeyAuth(adminKey, func(w http.ResponseWriter, r *http.Request) {
@@ -179,4 +184,40 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 			}
 		})
 	}
+
+	// The property the lane separation exists for, stated as an effect rather
+	// than a status code: a confirmation held against a Pollen must still be
+	// held after that Pollen's own bearers have tried to release it.
+	//
+	// The assertions above observe which layer refused. This one observes
+	// whether anything moved, so it still means something if both the lane and
+	// the gate are removed — the case where the status codes stop differing.
+	t.Run("a Pollinator cannot release a confirmation held against it", func(t *testing.T) {
+		held := pendingStore.Create(
+			"tester", "git.push", "myrepo", core.DelegationImpactHigh,
+			core.DelegationGrant{Pollen: "tester", OperationClasses: []string{"git.push"}},
+			time.Hour,
+		)
+
+		for _, bearerCase := range bearers {
+			for _, verb := range []string{"approve", "deny"} {
+				req := httptest.NewRequest(http.MethodPost, "/v1/delegation/pending/"+held.ID+"/"+verb, nil)
+				req.Header.Set("Authorization", bearerCase.bearer)
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, req)
+				// Errorf, not Fatalf: the effect check below is the one that
+				// still means something when the status codes stop differing,
+				// so it must run even after this fails.
+				if rec.Code != http.StatusUnauthorized {
+					t.Errorf("%s reached %s on a real held confirmation (got %d)", bearerCase.name, verb, rec.Code)
+				}
+			}
+		}
+
+		// Approve succeeds only on a record that is still open, so it fails here
+		// if any attempt above approved or denied the confirmation.
+		if err := pendingStore.Approve(held.ID); err != nil {
+			t.Fatalf("confirmation held against Pollen %q no longer open after Pollinator attempts: %v", held.Pollen, err)
+		}
+	})
 }
