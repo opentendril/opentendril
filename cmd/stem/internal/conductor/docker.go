@@ -701,8 +701,8 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 	return &terrariumToolSession{terrarium: instance}, nil
 }
 
-// checkGVisorReadinessFn is a test seam over terrarium.CheckGVisorReadiness.
-var checkGVisorReadinessFn = terrarium.CheckGVisorReadiness
+// CheckGVisorReadinessFn is a test seam over terrarium.CheckGVisorReadiness.
+var CheckGVisorReadinessFn = terrarium.CheckGVisorReadiness
 
 func resolveTerrariumProviderName(ctx context.Context, d *DockerOrchestrator) string {
 	if providerName := strings.TrimSpace(os.Getenv(terrariumProviderEnvKey)); providerName != "" {
@@ -721,10 +721,20 @@ func resolveTerrariumProviderName(ctx context.Context, d *DockerOrchestrator) st
 	// Docker daemon has the runsc runtime registered, falling back to Docker
 	// when it doesn't. An explicit choice above is always honored verbatim
 	// and never overridden by this check.
-	if checkGVisorReadinessFn(ctx) == nil {
+	if CheckGVisorReadinessFn(ctx) == nil {
 		return terrarium.ProviderGVisor
 	}
 	return terrarium.ProviderDocker
+}
+
+// TerrariumProviderStatus returns the resolved terrarium provider name, whether it was
+// explicitly selected via the environment, and whether the preferred gVisor runtime
+// (runsc) is available on the host. This accessor is exported for hardiness reporting.
+func TerrariumProviderStatus(ctx context.Context) (resolved string, explicit bool, runscPresent bool) {
+	explicit = strings.TrimSpace(os.Getenv(terrariumProviderEnvKey)) != ""
+	runscPresent = CheckGVisorReadinessFn(ctx) == nil
+	resolved = resolveTerrariumProviderName(ctx, nil)
+	return resolved, explicit, runscPresent
 }
 
 func (s *terrariumToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {

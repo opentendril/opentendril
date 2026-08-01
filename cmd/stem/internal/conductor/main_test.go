@@ -40,20 +40,20 @@ func TestMain(m *testing.M) {
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
 
-	// Stub checkGVisorReadinessFn to prevent tests that don't specify a Substrate
+	// Stub CheckGVisorReadinessFn to prevent tests that don't specify a Substrate
 	// from accidentally spawning a real `docker info` subprocess just to resolve
 	// the default terrarium provider name. This satisfies the implicit assumption
 	// of tests written before the gVisor preference was added (that the default
 	// resolves purely via strings to "docker"). Tests that actually want to
 	// exercise the gVisor logic save and restore this seam themselves.
-	originalGVisorReadyFn := checkGVisorReadinessFn
-	checkGVisorReadinessFn = func(context.Context) error { return errors.New("stubbed unready") }
+	originalGVisorReadyFn := CheckGVisorReadinessFn
+	CheckGVisorReadinessFn = func(context.Context) error { return errors.New("stubbed unready") }
+	exitCode := m.Run()
 
-	code := m.Run()
-
-	checkGVisorReadinessFn = originalGVisorReadyFn
+	// Restore so the process leaves global state as it found it.
+	CheckGVisorReadinessFn = originalGVisorReadyFn
 	os.RemoveAll(home)
-	os.Exit(code)
+	os.Exit(exitCode)
 }
 
 // pinGoEnvironment resolves the go toolchain's home-relative locations and

@@ -13,6 +13,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // `tendril hardiness` — what this Terroir can actually withstand.
@@ -206,6 +207,9 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 	default:
 		findings = append(findings, hardinessFinding{Severity: "ok", Title: fmt.Sprintf("%d grant(s) configured", len(grants))})
 	}
+
+	// 9. Does the isolation tier actually provide the separation it was designed for?
+	findings = append(findings, isolationTierFinding(ctx))
 
 	return findings
 }
@@ -676,6 +680,55 @@ func hostProviderDeclared() bool {
 		}
 	}
 	return false
+}
+
+// isolationTierFinding measures the isolation tier that stands between a Sprout
+// and the host, reporting whether the host can actually satisfy the requested tier.
+func isolationTierFinding(ctx context.Context) hardinessFinding {
+	resolved, explicit, runscPresent := conductor.TerrariumProviderStatus(ctx)
+
+	if explicit {
+		if strings.EqualFold(resolved, terrarium.ProviderGVisor) {
+			if !runscPresent {
+				return hardinessFinding{
+					Severity: "weak",
+					Title:    fmt.Sprintf("Isolation tier explicitly selected as %s, but the host cannot satisfy it", resolved),
+					Detail:   fmt.Sprintf("The operator asked for %s, but runsc is absent. The host offers Docker.", resolved),
+				}
+			}
+			return hardinessFinding{
+				Severity: "ok",
+				Title:    fmt.Sprintf("Isolation tier explicitly selected as %s (host can satisfy it)", resolved),
+			}
+		}
+
+		if strings.EqualFold(resolved, terrarium.ProviderHost) {
+			return hardinessFinding{
+				Severity: "weak",
+				Title:    fmt.Sprintf("Isolation tier explicitly selected as %s", resolved),
+				Detail:   "Sprouts execute directly on the host with no Terrarium between them and it.",
+			}
+		}
+
+		return hardinessFinding{
+			Severity: "note",
+			Title:    fmt.Sprintf("Isolation tier explicitly selected as %s", resolved),
+			Detail:   "Readiness for this tier has not been established here.",
+		}
+	}
+
+	if runscPresent {
+		return hardinessFinding{
+			Severity: "ok",
+			Title:    fmt.Sprintf("Isolation tier resolved to %s (preferred and available)", resolved),
+		}
+	}
+
+	return hardinessFinding{
+		Severity: "note",
+		Title:    fmt.Sprintf("Isolation tier fell back to %s (runsc absent)", resolved),
+		Detail:   "No explicit preference was set and runsc is absent on the host, so the tier fell back to Docker.",
+	}
 }
 
 // mustGetwdOrDot names the directory the report measured, since the control

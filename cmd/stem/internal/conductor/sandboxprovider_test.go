@@ -33,9 +33,9 @@ func TestResolveTerrariumProviderName(t *testing.T) {
 	})
 
 	t.Run("prefers gvisor when ready and nothing explicit is set", func(t *testing.T) {
-		original := checkGVisorReadinessFn
-		checkGVisorReadinessFn = func(context.Context) error { return nil }
-		t.Cleanup(func() { checkGVisorReadinessFn = original })
+		original := CheckGVisorReadinessFn
+		CheckGVisorReadinessFn = func(context.Context) error { return nil }
+		t.Cleanup(func() { CheckGVisorReadinessFn = original })
 
 		got := resolveTerrariumProviderName(context.Background(), &DockerOrchestrator{})
 		if got != terrarium.ProviderGVisor {
@@ -44,9 +44,9 @@ func TestResolveTerrariumProviderName(t *testing.T) {
 	})
 
 	t.Run("falls back to docker when gvisor is not ready", func(t *testing.T) {
-		original := checkGVisorReadinessFn
-		checkGVisorReadinessFn = func(context.Context) error { return errors.New("runsc not registered") }
-		t.Cleanup(func() { checkGVisorReadinessFn = original })
+		original := CheckGVisorReadinessFn
+		CheckGVisorReadinessFn = func(context.Context) error { return errors.New("runsc not registered") }
+		t.Cleanup(func() { CheckGVisorReadinessFn = original })
 
 		got := resolveTerrariumProviderName(context.Background(), &DockerOrchestrator{})
 		if got != terrarium.ProviderDocker {
@@ -55,9 +55,9 @@ func TestResolveTerrariumProviderName(t *testing.T) {
 	})
 
 	t.Run("explicit docker substrate is never upgraded to gvisor", func(t *testing.T) {
-		original := checkGVisorReadinessFn
-		checkGVisorReadinessFn = func(context.Context) error { return nil } // gVisor IS ready
-		t.Cleanup(func() { checkGVisorReadinessFn = original })
+		original := CheckGVisorReadinessFn
+		CheckGVisorReadinessFn = func(context.Context) error { return nil } // gVisor IS ready
+		t.Cleanup(func() { CheckGVisorReadinessFn = original })
 
 		got := resolveTerrariumProviderName(context.Background(), &DockerOrchestrator{Substrate: "docker"})
 		if got != terrarium.ProviderDocker {
