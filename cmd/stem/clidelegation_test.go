@@ -9,26 +9,24 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
-// writeGrants puts a grants file where newCLIDelegation looks for it, and
-// moves the working directory there.
+// writeGrants puts a grants file in the control plane newCLIDelegation reads,
+// and moves the working directory somewhere else entirely.
+//
+// The working directory is deliberately NOT where the file lands. Every test
+// using this helper therefore also demonstrates that grants are anchored to the
+// control plane rather than to wherever the invocation happens to run — the
+// property that stops a Substrate checkout supplying its own grants.
 func writeGrants(t *testing.T, body string) {
 	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".tendril"), 0o755); err != nil {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".tendril"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".tendril", "grants.yaml"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".tendril", "grants.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write grants: %v", err)
 	}
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(previous) })
-	t.Setenv("HOME", t.TempDir())
+	t.Setenv("HOME", home)
+	t.Chdir(t.TempDir())
 }
 
 const cliGrants = `grants:

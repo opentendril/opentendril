@@ -171,7 +171,14 @@ instead of a path. **That `.pem` + App ID is the whole per-machine setup.**
 Access is **two keys**: the Pollinator must (a) be *connected* to Tendril and (b)
 have a *grant*. Missing either → denied.
 
-### 1. Authorise the Pollinator — `.tendril/grants.yaml` (Stem-owned, never inside a repo checkout)
+### 1. Authorise the Pollinator — `~/.tendril/grants.yaml` (Stem-owned, never inside a repo checkout)
+
+Grants are read from the control plane under the Stem's own home, whatever
+directory a command is run from. A `grants.yaml` inside a repository is ignored
+and named on stderr, so a cloned Substrate cannot widen what its own Pollen may
+do. This is the only control-plane file anchored that way: `substrates.yaml` is
+deliberately searched across locations.
+
 
 ```yaml
 grants:

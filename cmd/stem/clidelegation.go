@@ -50,7 +50,18 @@ func newCLIDelegation(ctx context.Context) *cliDelegation {
 
 	delegation := &cliDelegation{Pollen: pollen}
 
-	tendrilDir := "./.tendril"
+	// Grants are anchored to the control plane, never the directory this
+	// invocation happens to run in — a command line run inside a checkout must
+	// not be authorised by that checkout's own grants file.
+	tendrilDir, dirErr := resolveGrantsDir()
+	if dirErr != nil {
+		// Denying is the safe outcome and reading the working directory is not,
+		// so an unresolvable control plane refuses rather than falls back.
+		fmt.Fprintf(os.Stderr, "❌ Delegation control plane could not be located: %v\n", dirErr)
+		os.Exit(1)
+	}
+	warnIfWorkingDirectoryGrantsIgnored(os.Stderr, tendrilDir)
+
 	grants, err := core.LoadDelegationGrants(tendrilDir)
 	if err != nil {
 		// A malformed grants file must never degrade into "no grants, so

@@ -99,16 +99,31 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 	// Delegated-execution control plane (mirroring the REST server): grants
 	// load from the Stem's own .tendril/grants.yaml — never from a Substrate
-	// checkout. With zero grants every delegated invocation is denied and all
+	// checkout. An editor starts this server in whatever repository it has open,
+	// so the working directory is incidental here and cannot be the anchor; a
+	// cloned repository must not be able to widen what its own Pollen may do.
+	// With zero grants every delegated invocation is denied and all
 	// non-delegated behavior is untouched; a malformed grants file degrades
 	// the same way, never open.
-	delegationGrants, grantsErr := core.LoadDelegationGrants(tendrilDir)
+	grantsDir, grantsDirErr := resolveGrantsDir()
+	if grantsDirErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Delegation control plane could not be located: %v (delegation disabled — every delegated invocation is denied)\n", grantsDirErr)
+		grantsDir = ""
+	} else {
+		warnIfWorkingDirectoryGrantsIgnored(os.Stderr, grantsDir)
+	}
+
+	var delegationGrants []core.DelegationGrant
+	var grantsErr error
+	if grantsDir != "" {
+		delegationGrants, grantsErr = core.LoadDelegationGrants(grantsDir)
+	}
 	if grantsErr != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to load delegation grants: %v (delegation disabled — every delegated invocation is denied)\n", grantsErr)
 		delegationGrants = nil
 	}
 	if len(delegationGrants) > 0 {
-		fmt.Fprintf(os.Stderr, "🔏 Delegation enabled: %d grant(s) loaded from %s\n", len(delegationGrants), filepath.Join(tendrilDir, core.DelegationGrantsFilename))
+		fmt.Fprintf(os.Stderr, "🔏 Delegation enabled: %d grant(s) loaded from %s\n", len(delegationGrants), filepath.Join(grantsDir, core.DelegationGrantsFilename))
 	} else {
 		fmt.Fprintln(os.Stderr, "🔏 No delegation grants configured: every delegated invocation is denied (secure default)")
 	}
