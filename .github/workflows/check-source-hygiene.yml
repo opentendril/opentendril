@@ -207,3 +207,30 @@ jobs:
           git fetch --no-tags origin "${{ github.base_ref }}"
           printf '%s' "$PR_BODY" > "${RUNNER_TEMP}/pr-body.md"
           bash scripts/check-cited-tests.sh "origin/${{ github.base_ref }}" --body "${RUNNER_TEMP}/pr-body.md"
+
+  test-runtime-floor:
+    name: Reported test runtimes are plausible
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Verification claims are made in the review conversation as often as in
+      # the description, so the comment stream is read too. Measured: the one
+      # true finding in the last twenty pull requests was in comments, not a body.
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # Some packages have no skips to hide behind, so their runtime is bimodal
+      # and a reported time below the floor means the suite skipped rather than
+      # ran. That is decidable from the number alone, without re-running
+      # anything. Both surfaces are untrusted input, so they travel through the
+      # environment or a file and are never interpolated into the shell.
+      - name: Reported runtimes clear their package floor
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          printf '%s\n' "$PR_BODY" > "${RUNNER_TEMP}/claims.md"
+          gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate --jq '.[].body' >> "${RUNNER_TEMP}/claims.md" || true
+          bash scripts/check-test-runtime-floor.sh --body "${RUNNER_TEMP}/claims.md"
