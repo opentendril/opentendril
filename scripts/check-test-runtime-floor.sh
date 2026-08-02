@@ -54,7 +54,7 @@ fi
 #
 # The floor sits between the two modes rather than just under the slow one, so
 # an unusually quick real run cannot trip it.
-readonly FLOORS="cmd/stem/internal/conductor|60|measured 10-15s with no Docker daemon (the suite skips) and 320-515s with one (it does not); no skips exist between those modes"
+readonly FLOORS="cmd/stem/internal/conductor|60|measured 10-15s with no Docker daemon (the suite skips) and 86-515s with one (483 tests, zero skips); the spread with a daemon is image-cache warmth, and even the fastest real run is well clear of the floor"
 
 # A sub-floor time is accepted when the same line says the run skipped. An
 # accurate report of a skipped run is the desired behaviour, not a violation.

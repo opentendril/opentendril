@@ -247,11 +247,22 @@ func rotateFinishedWorkspaceBranch(ctx context.Context, base, workspacePath, bra
 // substrate, removes the ambiguity before the value travels anywhere.
 func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 	resolution := ResolveDefaultBranchLocal(ctx, base, "")
+
+	refreshRemoteDefaultBranch(ctx, base, resolution)
+
 	candidates := []string{}
 	if resolution.Known() {
 		candidates = append(candidates, "origin/"+resolution.Branch, resolution.Branch)
 	}
-	candidates = append(candidates, "HEAD")
+	// The protection floor, for the same reason IsProtected applies it: an
+	// undetermined default branch is a real outcome — a clone without an
+	// origin/HEAD record resolves to nothing — and without these the next
+	// candidate is HEAD, which is whatever the checkout was last left on. A
+	// sibling branch still carrying another change's commits is exactly what
+	// this start point exists to avoid inheriting.
+	for _, floor := range defaultBranchProtectionFloorNames {
+		candidates = append(candidates, "origin/"+floor, floor)
+	}
 
 	for _, candidate := range candidates {
 		commit, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", candidate)
@@ -262,8 +273,49 @@ func workspaceStartPoint(ctx context.Context, base string) (string, error) {
 			return trimmed, nil
 		}
 	}
+
+	// HEAD is the last resort rather than a silent one. A repository with no
+	// default branch and no floor name is usually a fresh single-branch one,
+	// where HEAD is correct — but it is also how work would be cut from a
+	// sibling in-flight branch, so the caller is told which branch it inherited.
+	commit, err := runGitCommitCommandFn(ctx, base, "rev-parse", "--verify", "--quiet", "HEAD")
+	if err == nil && strings.TrimSpace(commit) != "" {
+		current := "a detached HEAD"
+		if out, branchErr := runGitCommitCommandFn(ctx, base, "branch", "--show-current"); branchErr == nil {
+			if trimmed := strings.TrimSpace(out); trimmed != "" {
+				current = fmt.Sprintf("branch %q", trimmed)
+			}
+		}
+		fmt.Fprintf(os.Stderr, "⚠️ No default branch could be established for %s, so this workspace starts from %s. Anything already committed there is inherited by the new branch.\n", base, current)
+		return strings.TrimSpace(commit), nil
+	}
+
 	return "", fmt.Errorf("substrate %q has no commits to start a workspace from", base)
 }
+
+// refreshRemoteDefaultBranch updates the remote-tracking ref the start point is
+// cut from, so a workspace begins at the default branch as it is now rather than
+// as it was whenever the substrate was last fetched.
+//
+// Deliberately best-effort and never fatal. Starting from a slightly stale
+// default branch produces a clean merge later; starting from a sibling in-flight
+// branch does not, and that is the failure this whole function guards. Refusing
+// to create a workspace because a fetch could not run would trade the harmless
+// problem for a worse one.
+//
+// GIT_TERMINAL_PROMPT=0 is what makes "best effort" true. Without it a private
+// substrate with no usable credential leaves git waiting on a terminal that is
+// not there, turning workspace creation into a hang rather than a fast failure.
+func refreshRemoteDefaultBranch(ctx context.Context, base string, resolution DefaultBranchResolution) {
+	if !resolution.Known() {
+		return
+	}
+	_, _ = runGitFetchCommandFn(ctx, base, []string{"GIT_TERMINAL_PROMPT=0"}, "fetch", "origin", resolution.Branch)
+}
+
+// runGitFetchCommandFn is the seam for the start-point refresh, so a test can
+// observe whether the fetch was attempted without reaching a network.
+var runGitFetchCommandFn = runGitCommandWithEnv
 
 // ownedWorkspaceBranchName builds the branch a Pollinator works on. The shape is
 // uniform and machine-generated on purpose: consistent names are what make the
