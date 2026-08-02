@@ -37,5 +37,14 @@ After merge, reconcile the living core docs with reality. Update the affected co
 ## Validation and Evidence
 Keep validation close to the PR and the issue. Use the repo's guardrails for exact commands, and keep evidence in the review trail unless a higher-level policy requires durable records.
 
+## Handing Over a Brief
+A brief that points at code by path and line goes stale silently, and the cost lands on whoever builds from it: a stale anchor is edited confidently and costs a whole build-and-review cycle. Before handing one over, resolve its citations against the branch the builder will start from:
+
+```bash
+scripts/check-prompt-anchors.sh <brief-file> [ref]   # ref defaults to origin/main
+```
+
+It fails on a file that does not exist and on a line past the end of one. Neither of those is the common case. **The common case is a citation still in range and no longer describing what the brief says it does**, which no number can detect — so every resolvable citation is printed with the line it now lands on, and reading them is the check. Addressing by symbol and content excerpt is the durable form; a line number is a hint.
+
 ## Stop Conditions
 Stop and ask for alignment if the target model is unclear, if documents conflict, or if a slice would blur policy, contract, or lifecycle boundaries.
