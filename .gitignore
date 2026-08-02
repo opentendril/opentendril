@@ -86,7 +86,27 @@ substrates.yaml
 .tendril/dreamer.db
 .tendril/dreamer.key
 .tendril/genome/fitness.json
-.tendril/
+# A control plane holds the Botanist key, grants, issued credentials, workspaces
+# and history. Every one of them is ignored, at any depth — test fixtures and
+# substrate checkouts carry their own.
+**/.tendril/
+
+# The repository's OWN control plane is the exception, and only for the genome
+# beneath it. Genome seeds are repository content rather than control-plane
+# state: they are concatenated into every Sprout's system prompt, so they belong
+# to the repository the Sprout works on.
+#
+# It takes three lines because git cannot re-include anything beneath an excluded
+# DIRECTORY. So the directory is un-excluded, its contents are excluded instead,
+# and the genome is re-included through that gap. Without this a new seed is
+# silently untracked; the seeds that predate the rule survive only because they
+# were already tracked when it landed.
+!/.tendril/
+/.tendril/*
+!/.tendril/genome/
+
+# Fitness is measured state, not authored content, so it stays out.
+/.tendril/genome/fitness.json
 
 # Private keys / secrets (e.g. GitHub App .pem) — never commit
 *.pem
