@@ -47,10 +47,75 @@ func runMCPCmd(ctx context.Context, args []string) {
 	}
 
 	var forwarder *MCPForwarder
+	var handler *receptors.MCPHandler
+
 	if decision.Mode == mcpModeForward {
 		forwarder = NewMCPForwarder(rootCred)
+
+		// Nothing below is constructed, so nothing below is announced. The Stem
+		// being forwarded to is the control plane for this connection: it loads
+		// its own grants, derives the Pollen from the presented credential and
+		// records the decision in its own audit lane. A second control plane
+		// built here would govern none of the forwarded frames, and describing
+		// one would assert an authorization this surface does not perform.
+		fmt.Fprintf(os.Stderr, "🔏 Delegation is governed by the Stem at %s: a presented credential derives its Pollen there. Local grants and %s do not affect this connection.\n",
+			resolveStemAddress(""), envPollen)
+	} else {
+		var release func()
+		handler, release = newInProcessMCPHandler(ctx)
+		defer release()
 	}
 
+	scanner := bufio.NewScanner(os.Stdin)
+
+	// Increase buffer size to handle large MCP schemas
+	const maxCapacity = 1024 * 1024 * 5 // 5MB
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
+
+	for scanner.Scan() {
+		reqBytes := scanner.Bytes()
+		if len(reqBytes) == 0 {
+			continue
+		}
+
+		var respBytes []byte
+		if forwarder != nil {
+			respBytes = forwarder.Forward(reqBytes)
+		} else {
+			respBytes = handler.ProcessMCPMessage(reqBytes)
+		}
+
+		if len(respBytes) > 0 {
+			// Write response exactly as one line to stdout
+			fmt.Fprintln(os.Stdout, string(respBytes))
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ MCP Stdio Error: %v\n", err)
+	}
+
+	fmt.Fprintln(os.Stderr, "🛑 OpenTendril MCP Stdio Server exiting.")
+}
+
+// newInProcessMCPHandler builds the Stem this surface serves from when no
+// governed Stem is being forwarded to, and returns the handler with a release
+// function for the resources it opened.
+//
+// It exists as a function so that forwarding mode can decline to call it. When
+// this surface forwards, every frame goes to the governed Stem and the handler
+// built here is never consulted — so constructing it would open a history store
+// and an event bus for nothing, read a control plane that governs nothing, and
+// print several startup lines describing an authorization that is not the one in
+// force.
+//
+// Release order is the reason this returns a function rather than leaving the
+// caller to close two things: the bus must drain its sink BEFORE the history
+// store is released, or queued audit records are written to a closed database.
+func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func()) {
 	tendrilDir := "./.tendril"
 	handler := receptors.NewMCPHandler()
 
@@ -64,18 +129,25 @@ func runMCPCmd(ctx context.Context, args []string) {
 	var sessionStore session.Store
 	if history != nil {
 		sessionStore = history
-		defer history.Close()
 	}
 
 	// Delegation audit lane: the same EventBus + history.db sink wiring the
 	// REST server uses, so every delegation decision made on this surface is
-	// audited to history.db. The deferred Shutdown drains the sink before the
-	// deferred history.Close above releases the database.
+	// audited to history.db.
 	bus := eventbus.New()
 	if history != nil {
 		bus.AttachSink(history, 0, "historydb")
 	}
-	defer bus.Shutdown()
+
+	// Shutdown drains the sink before Close releases the database. The order is
+	// load-bearing, which is why it is expressed here rather than left to two
+	// deferred statements whose relative order a later edit could reverse.
+	release := func() {
+		bus.Shutdown()
+		if history != nil {
+			history.Close()
+		}
+	}
 
 	if manager, err := session.NewManager(ctx, sessionStore); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Session manager unavailable: %v (continuing without sessions)\n", err)
@@ -161,37 +233,5 @@ func runMCPCmd(ctx context.Context, args []string) {
 	}
 	handler = handler.WithDelegation(delegationGate, pollen)
 
-	scanner := bufio.NewScanner(os.Stdin)
-
-	// Increase buffer size to handle large MCP schemas
-	const maxCapacity = 1024 * 1024 * 5 // 5MB
-	buf := make([]byte, maxCapacity)
-	scanner.Buffer(buf, maxCapacity)
-
-	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")
-
-	for scanner.Scan() {
-		reqBytes := scanner.Bytes()
-		if len(reqBytes) == 0 {
-			continue
-		}
-
-		var respBytes []byte
-		if forwarder != nil {
-			respBytes = forwarder.Forward(reqBytes)
-		} else {
-			respBytes = handler.ProcessMCPMessage(reqBytes)
-		}
-
-		if len(respBytes) > 0 {
-			// Write response exactly as one line to stdout
-			fmt.Fprintln(os.Stdout, string(respBytes))
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ MCP Stdio Error: %v\n", err)
-	}
-
-	fmt.Fprintln(os.Stderr, "🛑 OpenTendril MCP Stdio Server exiting.")
+	return handler, release
 }
