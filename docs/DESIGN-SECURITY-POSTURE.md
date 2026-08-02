@@ -235,9 +235,29 @@ the bind is the only opt-out of the hardened posture.
 
 ### MCP
 
-MCP stays **personal-stdio** (`tendril serve mcp stdio` + `TENDRIL_POLLEN`). Scoped
-access tokens are a **REST** surface; networked MCP is a deferred consumer of the
-same gate.
+MCP has no networked ingress. Scoped access tokens are a **REST** surface;
+networked MCP is a deferred consumer of the same gate.
+
+The stdio surface (`tendril mcp`) selects its control plane at startup, because
+**personal-stdio is only sound where one principal owns the host.** Where a Stem
+owned by another principal is present, a surface building its own control plane
+from the caller's working directory would let the caller rewrite the grants that
+gate it — the condition `docs/GUIDE-INSTALL.md` forbids. Ownership is established
+by comparing the owner published on the Stem's health surface against the
+caller's own, so a single-principal installation running its own Stem is
+unaffected.
+
+| Condition | Control plane | Pollen |
+| --- | --- | --- |
+| **No governed Stem** | in-process, from the working directory | bound from `TENDRIL_POLLEN` |
+| **Governed Stem, credential configured** | the governed Stem's, reached over loopback | derived there from the presented credential |
+| **Governed Stem, no credential** | refuses, naming the command that issues one | — |
+
+The credential is a durable root, read from the file named by
+`TENDRIL_MCP_CREDENTIAL`; access tokens are minted from it on demand because
+their ≤15-minute cap is shorter than a working session. `TENDRIL_POLLEN` binds a
+Pollen on the in-process path only — where the surface forwards, the presented
+credential derives the Pollen and the variable has no effect.
 
 ## References
 
