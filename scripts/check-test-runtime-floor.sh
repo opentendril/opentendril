@@ -60,6 +60,22 @@ readonly FLOORS="cmd/stem/internal/conductor|60|measured 10-15s with no Docker d
 # accurate report of a skipped run is the desired behaviour, not a violation.
 readonly SKIP_ACK='skip|skipped|skipping|docker (was )?(un)?available|no docker|without docker|daemon (un)?available'
 
+# Writing ABOUT a past runtime claim is indistinguishable from making one: a
+# description discussing why "10.041s" was wrong contains the same characters as
+# a description asserting it. Nothing in the text separates the two, so the
+# author declares — the same resolution check-test-sleep.sh reached for polls
+# and dwells.
+#
+# The declaration names the durations rather than exempting the description,
+# because a blanket escape would also excuse a genuine false claim standing
+# beside the quotation. Any sub-floor duration NOT named here still fails.
+#
+#   Runtime quoted: 10.041s, 15.246s — historical claims under discussion.
+readonly QUOTE_ACK='^[[:space:]]*Runtime quoted:'
+
+quoted_durations="$(grep -E "${QUOTE_ACK}" "${body_file}" \
+  | grep -oE '[0-9]+(\.[0-9]+)?s\b' | sort -u || true)"
+
 status=0
 
 while IFS='|' read -r pkg floor evidence; do
@@ -81,6 +97,12 @@ while IFS='|' read -r pkg floor evidence; do
     while IFS= read -r duration; do
       [ -n "${duration}" ] || continue
       seconds="${duration%s}"
+
+      # A duration the description declared as quoted is under discussion, not
+      # claimed. Matched exactly, so an undeclared number beside it still fails.
+      if printf '%s\n' "${quoted_durations}" | grep -qxF "${duration}"; then
+        continue
+      fi
 
       # Integer comparison against the floor; the fractional part cannot change
       # the verdict because the two modes are hundreds of seconds apart.
