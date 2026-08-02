@@ -234,3 +234,65 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
             --paginate --jq '.[].body' >> "${RUNNER_TEMP}/claims.md" || true
           bash scripts/check-test-runtime-floor.sh --body "${RUNNER_TEMP}/claims.md"
+
+  # This job's NAME is the one required status check covering every guard in this
+  # workflow, modelled on "Native PR Gate" in ci.yml. Renaming it makes the
+  # required context never report and leaves every pull request unmergeable.
+  #
+  # It exists because a guard only blocks a merge when its name is required by the
+  # branch-protection ruleset, and adding each new guard's name was a manual,
+  # administrator-only step that was silently missed six times. Depending on all
+  # of them and requiring one name moves that from an out-of-band chore to a line
+  # in the same pull request that adds the guard.
+  hygiene-gate:
+    name: Source Hygiene Gate
+    runs-on: ubuntu-latest
+    needs:
+      - no-issue-refs
+      - no-default-branch-assumptions
+      - delegated-workspace-isolation
+      - branch-deletion-guard
+      - protected-paths
+      - doc-links
+      - test-sleep
+      - testmain-cleanup
+      - doc-prose-deletions
+      - taxonomy
+      - cited-tests
+      - test-runtime-floor
+    # always() so a failed dependency still reports through this gate rather than
+    # skipping it — a skipped required check is not a failed one.
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # An aggregate is only as complete as its dependency list, so a guard nobody
+      # adds here is a guard that does not gate. Checked in the gate itself, which
+      # means forgetting fails the pull request that forgot.
+      - name: Every hygiene job is wired into this gate
+        run: bash scripts/check-hygiene-gate-complete.sh
+
+      # Unlike ci.yml's gate these jobs are unconditional, so there is no
+      # "not required by the changed paths" case: anything other than success —
+      # including skipped or cancelled — fails closed.
+      - name: Finalize required check
+        shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          failed=false
+          while IFS=$'\t' read -r job result; do
+            [ -n "${job}" ] || continue
+            if [ "${result}" = "success" ]; then
+              echo "${job}: passed."
+            else
+              echo "${job}: finished with result ${result:-<empty>}."
+              failed=true
+            fi
+          done < <(printf '%s' "$RESULTS" | jq -r 'to_entries[] | "\(.key)\t\(.value.result)"')
+
+          if [ "${failed}" = "true" ]; then
+            echo "::error::A source-hygiene guard did not pass."
+            exit 1
+          fi
+          echo "Every source-hygiene guard passed."
