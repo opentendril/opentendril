@@ -287,6 +287,14 @@ Running more than one Stem on a host is possible today by giving each its own
 `PORT`, but it is neither discoverable nor enforced, and Stem discovery resolves
 a single address per host.
 
+`tendril hardiness` reports a Stem owned by another principal when it finds one,
+**below the verdict and without changing it.** The five invariants are properties
+of an installation; a second Stem is a property of the host, and grading it would
+claim this installation is weaker when it is not. The report is there because the
+verdict is otherwise read as a promise about the machine: a caller can hold a
+control plane it fully owns without violating P1 through P5 as they are measured,
+by simply declining to involve the Stem being measured.
+
 ### MCP
 
 MCP has no networked ingress. Scoped access tokens are a **REST** surface;

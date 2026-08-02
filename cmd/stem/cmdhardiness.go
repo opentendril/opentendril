@@ -52,6 +52,11 @@ func runHardinessCmd(ctx context.Context, args []string) {
 			fmt.Println("  (which is `tendril health`):")
 			fmt.Println("  whether the Stem has its own principal, whether its credentials are")
 			fmt.Println("  readable by the Pollinators it serves, and how it is reachable.")
+			fmt.Println()
+			fmt.Println("  The verdict describes this installation. A Stem owned by another")
+			fmt.Println("  principal serving on the same host is reported separately, below the")
+			fmt.Println("  verdict, because it is a property of the machine rather than of what")
+			fmt.Println("  was measured.")
 			return
 		}
 	}
@@ -111,6 +116,54 @@ func runHardinessCmd(ctx context.Context, args []string) {
 		fmt.Println("\nNOTE: The running Stem process is executing a different binary")
 		fmt.Println("from the one on disk. Restart the Stem to run the installed version.")
 	}
+
+	if observation := coResidentStemObservation(ctx); observation != "" {
+		fmt.Print("\n" + observation)
+	}
+}
+
+// coResidentStemObservation reports a Stem owned by a principal other than the
+// caller, serving on this host. Empty when there is none, or when none could be
+// established.
+//
+// This is printed outside the graded findings, and deliberately does not touch
+// the weak or note counts, so a HARDY verdict stays HARDY.
+//
+// The reason is that the five invariants are properties of an INSTALLATION —
+// whether this Stem's control plane, credentials and binary are protected from
+// the accounts it serves. A second Stem is a property of the HOST. It does not
+// make this installation weaker, and grading it would say that it does.
+//
+// It is worth saying at all because the verdict is otherwise read as a promise
+// about the machine rather than about the installation measured. A caller can
+// obtain a control plane it fully owns without violating any of P1 through P5 as
+// they are measured here: it does not read this Stem's credentials, does not
+// escalate to its principal, and does not write its binary. It simply declines
+// to involve it — and nothing in the graded output would mention that.
+func coResidentStemObservation(ctx context.Context) string {
+	probe := probeStemOwner(ctx)
+	if !probe.Reached || probe.Owner == nil {
+		// Nothing answering, or answering without publishing an owner, does not
+		// establish a second principal. Silence beats a guess.
+		return ""
+	}
+	if *probe.Owner == os.Getuid() {
+		// The Stem serving here is this account's own — the ordinary case both
+		// for a single-principal installation and for hardiness run as the Stem.
+		return ""
+	}
+
+	owner := fmt.Sprintf("uid %d", *probe.Owner)
+	if resolved, err := user.LookupId(fmt.Sprintf("%d", *probe.Owner)); err == nil {
+		owner = fmt.Sprintf("%s (uid %d)", resolved.Username, *probe.Owner)
+	}
+
+	return fmt.Sprintf(""+
+		"ALSO ON THIS HOST: a Stem owned by %s is serving at %s.\n\n"+
+		"The verdict above measures this installation, not the machine. Work done\n"+
+		"through that Stem is governed by its control plane and recorded in its audit\n"+
+		"lane, not the ones measured here — so neither report describes the whole host.\n",
+		owner, probe.Address)
 }
 
 // collectHardinessFindings measures the conditions that decide whether delegation
