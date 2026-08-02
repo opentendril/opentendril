@@ -233,6 +233,60 @@ Pollinator credential and is not exchanged for access tokens.
 Exposure is self-declaring: there is no separate “require tokens” flag. Narrowing
 the bind is the only opt-out of the hardened posture.
 
+### The three surfaces, and which of them is a boundary
+
+Capability parity means the command line, REST and the Model Context Protocol
+expose the same operations (`cmd/stem/parity_test.go`). **It does not mean they
+establish identity the same way**, and conflating the two is the mistake this
+section exists to prevent.
+
+| Surface | How a Pollen is established | Trust level |
+| --- | --- | --- |
+| **REST** | issued credential or Stem-signed access token | **proven** — signature or digest verified per request |
+| **Model Context Protocol**, forwarding | credential presented to the governed Stem, which derives the Pollen | **proven** — it is the REST path underneath |
+| **Model Context Protocol**, in-process | `TENDRIL_POLLEN` | **declared** |
+| **Command line** | `TENDRIL_POLLEN` | **declared** |
+
+A **declared** Pollen is an audit control and accident prevention, not a security
+boundary — a caller owning its own environment can declare any Pollen it likes.
+This is stated at the constructor itself (`cmd/stem/clidelegation.go`) and in the
+trust table at `docs/GUIDE-GIT-CONNECTION.md`. It is the **P4** invariant, and
+the declared rows above are the paths that deliberately do not meet it.
+
+### Why a declared Pollen is nevertheless sound
+
+Because the paths that accept one are unreachable by any account the boundary
+would need to constrain.
+
+On the recommended installation the binary is mode `0750` owned by the Stem and
+its home is mode `750`, so no Pollinator-hosting account can execute `tendril` at
+all — the reasoning is written out at the install step itself. That is the **P5**
+invariant doing the work: the boundary is enforced by the operating system before
+any check inside the binary is reached.
+
+So a declared Pollen is only ever accepted where **one principal owns the host**,
+and there the caller *is* the Botanist. There is no boundary to cross, and the
+declaration buys real value — every delegated operation is authorised against the
+grants, audited to `history.db`, and run in that Pollinator's own workspace.
+
+**The consequence worth carrying forward:** adding identity checks to the
+declared paths would defend a boundary that does not exist on the installation
+where those paths run, while adding a mode and a refusal path to the
+installation that works today. The enforcement belongs at the operating system,
+which is where P1 through P5 put it. `tendril hardiness` reports whether that
+enforcement is real on a given host, in those words.
+
+### A single principal is the assumption, not an accident
+
+Every surface above assumes one Stem per host. Where that assumption breaks —
+a governed Stem beside an account that can run its own — the stdio surface
+detects it and changes behaviour, described below. The command line does not need
+to, because P5 denies it the binary.
+
+Running more than one Stem on a host is possible today by giving each its own
+`PORT`, but it is neither discoverable nor enforced, and Stem discovery resolves
+a single address per host.
+
 ### MCP
 
 MCP has no networked ingress. Scoped access tokens are a **REST** surface;
