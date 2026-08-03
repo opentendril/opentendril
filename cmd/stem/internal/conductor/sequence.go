@@ -1497,7 +1497,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	})
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, command, nil, obs)
+	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, command, nil, deriveWatchdogTimeout(ctx), obs)
 	if err != nil {
 		return result, err
 	}

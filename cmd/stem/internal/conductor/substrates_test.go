@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
@@ -280,7 +281,7 @@ substrates:
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error {
 		return nil
 	}
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		capturedExtraEnv = append([]string{}, extraEnv...)
 		repoMapPath := filepath.Join(mountPath, ".tendril", "genome", "repomap.md")
 		content, err := os.ReadFile(repoMapPath)

@@ -29,6 +29,13 @@ const (
 	// EnvAllowHostWorkspace opts into running on the active host workspace when
 	// shadow-worktree isolation cannot be established. Default (unset) is fail-closed.
 	EnvAllowHostWorkspace = "TENDRIL_ALLOW_HOST_WORKSPACE"
+
+	// terrariumWatchdogFallback is the terrarium watchdog timeout used when the
+	// caller's context carries no deadline. It is a backstop against a hung
+	// container, not a statement about how long work should take — callers that
+	// set their own deadline govern the run duration and the watchdog will never
+	// fire before them.
+	terrariumWatchdogFallback = 10 * time.Minute
 )
 
 // allowHostWorkspace reports whether the operator explicitly opted into the
@@ -69,8 +76,8 @@ type sproutRunner interface {
 
 var (
 	ensureSproutImageFn     = ensureSproutImage
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
-		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv, observers...)
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv, timeout, observers...)
 	}
 	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
@@ -404,7 +411,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 	})
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv, obs)
+	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv, deriveWatchdogTimeout(ctx), obs)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -669,7 +676,23 @@ type terrariumToolSession struct {
 	terrarium terrarium.Terrarium
 }
 
-func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
+// deriveWatchdogTimeout computes the terrarium watchdog duration from the
+// caller's context. When the context has a deadline, the watchdog is set to
+// the remaining time plus a grace margin so the context deadline governs the
+// run and the watchdog fires only if the context is not cancelled cleanly.
+// When there is no deadline, the fallback constant applies — it is a backstop
+// against a hung container, not a policy on how long work may take.
+func deriveWatchdogTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 {
+			return remaining + time.Minute
+		}
+	}
+	return terrariumWatchdogFallback
+}
+
+func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 	provider, err := terrarium.NewProvider(ctx, providerName, observers...)
 	if err != nil {
 		return nil, err
@@ -684,7 +707,7 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 		MemoryLimitMB:  2048,
 		ReadOnlyRootFS: false,
 		PidsLimit:      512,
-		Timeout:        10 * time.Minute,
+		Timeout:        timeout,
 		Mounts: []terrarium.MountSpec{
 			{
 				Source: mountPath,
