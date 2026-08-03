@@ -12,15 +12,12 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
-// configuredPatienceBudget is the value the call-site tests below configure,
-// written as a duration and as the string an operator would put in the file. It
-// is a literal the tests own, never a value read back from the code under test,
-// so an implementation that resolved the wrong duration — or the wrong unit —
-// cannot agree with it.
-const (
-	configuredPatienceBudget     = 300 * time.Millisecond
-	configuredPatienceBudgetText = "300ms"
-)
+// configuredPatienceBudgetText is the value the call-site tests below configure,
+// written exactly as an operator would put it in the file. It is a literal the
+// tests own, never a value read back from the code under test, so an
+// implementation that resolved the wrong duration — or the wrong unit — cannot
+// agree with it.
+const configuredPatienceBudgetText = "300ms"
 
 // writePatienceSubstrate writes a substrates.yaml in the working directory
 // naming one substrate that points at workspace, with the given patience block
