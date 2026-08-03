@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"gopkg.in/yaml.v3"
@@ -56,6 +57,41 @@ type SubstrateSpec struct {
 	Provider string `yaml:"provider,omitempty"`
 	// Command overrides the container entrypoint when provider is "host".
 	Command []string `yaml:"command,omitempty"`
+	// Patience bounds how long the Stem gives this substrate's work.
+	Patience PatienceSpec `yaml:"patience,omitempty"`
+}
+
+// PatienceSpec bounds how long the Stem waits on work for one substrate.
+// Values are Go duration strings ("20m", "1h30m").
+type PatienceSpec struct {
+	// Growth bounds one growth. It is applied as a deadline on the context
+	// that governs the run, never as a watchdog value handed to the
+	// terrarium: the watchdog is derived from the context deadline, so the
+	// deadline is the single place the bound is expressed. Empty leaves the
+	// run governed by whatever deadline the caller already carries.
+	Growth string `yaml:"growth,omitempty"`
+}
+
+// GrowthBudget parses Growth into a duration. An empty value yields zero and no
+// error — an unconfigured patience leaves the run bounded by the caller alone.
+// A value that does not parse, or that is not positive, is an error rather than
+// a silent zero: a zero budget would bound the run to nothing and abandon it
+// the instant it started, which is never what an operator wrote a value to mean.
+func (p PatienceSpec) GrowthBudget() (time.Duration, error) {
+	trimmed := strings.TrimSpace(p.Growth)
+	if trimmed == "" {
+		return 0, nil
+	}
+
+	budget, err := time.ParseDuration(trimmed)
+	if err != nil {
+		return 0, fmt.Errorf("patience.growth %q is not a duration: %w", trimmed, err)
+	}
+	if budget <= 0 {
+		return 0, fmt.Errorf("patience.growth %q must be greater than zero", trimmed)
+	}
+
+	return budget, nil
 }
 
 // AuthSpec describes a substrate's authentication method. Design RFC.
@@ -145,6 +181,9 @@ type substrateExecutionPlan struct {
 	remoteClone bool
 	provider    string
 	command     []string
+	// growthBudget is the resolved patience.growth for this substrate, zero
+	// when unconfigured. Callers apply it to the context that governs the run.
+	growthBudget time.Duration
 }
 
 // LoadSubstratesConfig searches for the active substrates.yaml and parses it.
@@ -177,6 +216,9 @@ func LoadSubstratesConfig(root string) (*SubstratesConfig, error) {
 		}
 
 		normalizeSubstratesConfig(&config)
+		if err := validateSubstratePatience(candidate, &config); err != nil {
+			return nil, err
+		}
 		validateSubstratesConfig(candidate, &config)
 
 		return &config, nil
@@ -249,6 +291,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		plan.authRef = credential.TokenEnv
 		plan.provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 		plan.command = spec.Command
+
+		growthBudget, err := spec.Patience.GrowthBudget()
+		if err != nil {
+			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
+		}
+		plan.growthBudget = growthBudget
 	}
 
 	if plan.hostPath == "" {
@@ -387,6 +435,26 @@ func trimIdentitySpec(identity *IdentitySpec) {
 	identity.Email = strings.TrimSpace(identity.Email)
 }
 
+// validateSubstratePatience rejects a configuration whose patience cannot be
+// honoured. It is an error rather than a warning because the alternative is a
+// bound the operator asked for and did not get: a warning scrolls past and the
+// run proceeds under the default, which is indistinguishable from the setting
+// having worked.
+func validateSubstratePatience(sourcePath string, config *SubstratesConfig) error {
+	if config == nil {
+		return nil
+	}
+
+	for _, name := range substrateConfigNames(config) {
+		spec := config.Substrates[name]
+		if _, err := spec.Patience.GrowthBudget(); err != nil {
+			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
+		}
+	}
+
+	return nil
+}
+
 func validateSubstratesConfig(sourcePath string, config *SubstratesConfig) {
 	if config == nil {
 		return
@@ -418,6 +486,7 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	spec.Commit = strings.ToLower(strings.TrimSpace(spec.Commit))
 	spec.Profile = strings.TrimSpace(spec.Profile)
 	spec.Provider = strings.ToLower(strings.TrimSpace(spec.Provider))
+	spec.Patience.Growth = strings.TrimSpace(spec.Patience.Growth)
 }
 
 func pathExists(path string) bool {
