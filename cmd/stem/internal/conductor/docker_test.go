@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
@@ -789,7 +790,23 @@ func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
 	generateRepoMapFn = func(c context.Context, d string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(c context.Context, i string) error { return nil }
 
-	_, _ = orch.RunSprout(context.Background(), "test prompt")
+	// The terrarium session is deliberately NOT stubbed: the activation
+	// decision this test asserts on is made inside terrarium.NewProvider, so a
+	// stubbed session would report zero events because nothing capable of
+	// publishing one ever ran — a vacuous pass.
+	//
+	// Running for real means the Sprout's first tool call blocks reading the
+	// container's stdout, and with an unbounded context the only thing that
+	// releases it is the terrarium's own watchdog minutes later. That single
+	// wait was most of this package's test runtime and all of its variance,
+	// measured between 47s and beyond 300s for this test alone. The deadline
+	// below bounds the wait without weakening the assertion: provider
+	// selection has already happened by the time the call blocks, so the event
+	// count is settled either way.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, _ = orch.RunSprout(ctx, "test prompt")
 
 	if received != 0 {
 		t.Fatalf("expected 0 host execution events for docker provider, got %d", received)
