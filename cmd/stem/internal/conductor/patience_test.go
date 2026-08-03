@@ -12,10 +12,12 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
-// configuredPatienceBudget is the value the call-site tests below configure. It
-// is a literal the tests own, never a value read back from the code under test,
-// so an implementation that resolved the wrong duration cannot agree with it.
-const configuredPatienceBudget = 2 * time.Minute
+// configuredPatienceBudgetText is the value the call-site tests below configure,
+// written exactly as an operator would put it in the file. It is a literal the
+// tests own, never a value read back from the code under test, so an
+// implementation that resolved the wrong duration — or the wrong unit — cannot
+// agree with it.
+const configuredPatienceBudgetText = "300ms"
 
 // writePatienceSubstrate writes a substrates.yaml in the working directory
 // naming one substrate that points at workspace, with the given patience block
@@ -198,35 +200,29 @@ func captureTerrariumSessionPatience(t *testing.T) *patienceCapture {
 	return capture
 }
 
-// assertBoundedByConfiguredPatience checks the properties that only hold when
-// the call site wrapped the context with the configured budget:
+// assertGrowthBudgetStaysOffTheTerrarium replaces the assertion this file used
+// to make. It asserted that the configured growth budget reached the terrarium
+// — that the container's context carried the budget's deadline and the watchdog
+// was derived from it. That was correct when the budget bounded the work. It is
+// now the defect: the budget bounds how long the STEM WAITS, and a container
+// whose clock is the wait's clock dies the moment the Stem stops waiting, which
+// makes detaching a kill with a nicer name.
 //
-//   - the context reaching the session carries a deadline at all (the caller
-//     passed one without a deadline, so it can only have come from the wrap);
-//   - that deadline is inside the configured budget and not trivially small,
-//     so a wrap with the wrong duration or the wrong unit still fails;
-//   - the derived watchdog exceeds the remaining time and is not the fallback,
-//     so the bound genuinely reached the terrarium.
-func assertBoundedByConfiguredPatience(t *testing.T, label string, capture *patienceCapture) {
+// The old assertion's positive half — that the configured value is applied
+// exactly, with the unit written — has not been dropped. It moved to the
+// mechanism the budget now drives, and is asserted on the sprout-detached event
+// in the call-site tests below.
+func assertGrowthBudgetStaysOffTheTerrarium(t *testing.T, label string, capture *patienceCapture) {
 	t.Helper()
 
 	if !capture.called {
 		t.Fatalf("%s: startTerrariumSessionFn was never called; nothing was measured", label)
 	}
-	if !capture.hasDeadline {
-		t.Fatalf("%s: context reaching the session carries no deadline; the configured patience was not applied", label)
+	if capture.hasDeadline {
+		t.Fatalf("%s: the context that owns the container carries a deadline (%s remaining) though only a growth budget is configured; the budget would stop the terrarium the moment the Stem stopped waiting", label, capture.remaining)
 	}
-	if capture.remaining <= 0 || capture.remaining > configuredPatienceBudget {
-		t.Fatalf("%s: remaining %s outside (0, %s]; the applied bound is not the configured one", label, capture.remaining, configuredPatienceBudget)
-	}
-	if capture.remaining < time.Minute {
-		t.Fatalf("%s: remaining %s is far below the configured %s; a different duration was applied", label, capture.remaining, configuredPatienceBudget)
-	}
-	if capture.timeout <= capture.remaining {
-		t.Fatalf("%s: watchdog %s <= remaining %s; the context would not expire first", label, capture.timeout, capture.remaining)
-	}
-	if capture.timeout == terrariumWatchdogFallback {
-		t.Fatalf("%s: watchdog == terrariumWatchdogFallback (%s); the bound never reached the terrarium", label, capture.timeout)
+	if capture.timeout != terrariumWatchdogFallback {
+		t.Fatalf("%s: watchdog = %s, want the fallback %s; a watchdog derived from the growth budget fires shortly after a detach and ends the run the detach was meant to preserve", label, capture.timeout, terrariumWatchdogFallback)
 	}
 }
 
@@ -247,25 +243,45 @@ func assertUnbounded(t *testing.T, label string, capture *patienceCapture) {
 }
 
 // TestRunSproutAppliesConfiguredPatience covers the RunSprout path. The caller's
-// context deliberately carries NO deadline, so any deadline observed at the
-// session seam can only have come from the configured patience.
+// context deliberately carries NO deadline, so any bound observed can only have
+// come from the configured patience — and the point of each assertion is WHICH
+// clock the configured value became.
 func TestRunSproutAppliesConfiguredPatience(t *testing.T) {
-	t.Run("configured patience bounds the run", func(t *testing.T) {
+	t.Run("configured patience bounds the wait, not the terrarium", func(t *testing.T) {
 		root := newOutcomeTestRepo(t)
 		cwd := chdirToTempDir(t)
-		writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 2m\n")
+		writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: "+configuredPatienceBudgetText+"\n")
 
-		stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done"}, []string{"pkg/thing.go"})
+		runner := newHeldSproutRunner("done")
+		stubRunSproutCollaborators(t, root, runner, []string{"pkg/thing.go"})
 		capture := captureTerrariumSessionPatience(t)
+
+		bus := eventbus.New()
+		recorder := recordSproutEvents(bus)
 
 		orch := &DockerOrchestrator{
 			Substrate:        "bounded",
 			StepID:           "patience-runsprout-configured",
+			EventBus:         bus,
 			DisableMergeBack: true,
 		}
-		orch.RunSprout(context.Background(), "patience probe") //nolint:errcheck
+		report, err := orch.RunSprout(context.Background(), "patience probe")
 
-		assertBoundedByConfiguredPatience(t, "RunSprout", capture)
+		// The configured budget bounded the wait: the run is still going and
+		// the Stem has stopped waiting for it. Without the bound this call
+		// would not have returned at all.
+		if err != nil {
+			t.Fatalf("RunSprout returned %v, want a clean detach", err)
+		}
+		if report.Outcome != SproutOutcomeDetached {
+			t.Fatalf("report.Outcome = %q, want %q; the configured patience did not bound the wait", report.Outcome, SproutOutcomeDetached)
+		}
+		// Exactly the value written, unit included.
+		assertDetachedEvent(t, "RunSprout", recorder, configuredPatienceBudgetText)
+		assertGrowthBudgetStaysOffTheTerrarium(t, "RunSprout", capture)
+
+		runner.release()
+		recorder.awaitTerminal(t, "RunSprout")
 	})
 
 	t.Run("unset patience leaves the run unbounded", func(t *testing.T) {
@@ -318,22 +334,38 @@ func TestRunSequenceSproutAtPathAppliesConfiguredPatience(t *testing.T) {
 		}
 	}
 
-	t.Run("configured patience bounds the run", func(t *testing.T) {
+	t.Run("configured patience bounds the wait, not the terrarium", func(t *testing.T) {
 		root := newOutcomeTestRepo(t)
 		cwd := chdirToTempDir(t)
-		writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 2m\n")
+		writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: "+configuredPatienceBudgetText+"\n")
 
 		stubSequenceCollaborators(t, root)
+		runner := newHeldSproutRunner("done")
+		stubSequenceRunner(t, runner)
 		capture := captureTerrariumSessionPatience(t)
+
+		bus := eventbus.New()
+		recorder := recordSproutEvents(bus)
 
 		orch := &DockerOrchestrator{
 			Substrate:        "bounded",
 			StepID:           "patience-seqpath-configured",
+			EventBus:         bus,
 			DisableMergeBack: true,
 		}
-		runSequenceSproutAtPath(context.Background(), orch, "patience probe", root, root) //nolint:errcheck
+		result, err := runSequenceSproutAtPath(context.Background(), orch, "patience probe", root, root)
 
-		assertBoundedByConfiguredPatience(t, "runSequenceSproutAtPath", capture)
+		if err != nil {
+			t.Fatalf("runSequenceSproutAtPath returned %v, want a clean detach", err)
+		}
+		if result.Outcome != SproutOutcomeDetached {
+			t.Fatalf("result.Outcome = %q, want %q; the configured patience did not bound the wait", result.Outcome, SproutOutcomeDetached)
+		}
+		assertDetachedEvent(t, "runSequenceSproutAtPath", recorder, configuredPatienceBudgetText)
+		assertGrowthBudgetStaysOffTheTerrarium(t, "runSequenceSproutAtPath", capture)
+
+		runner.release()
+		recorder.awaitTerminal(t, "runSequenceSproutAtPath")
 	})
 
 	t.Run("unset patience leaves the run unbounded", func(t *testing.T) {

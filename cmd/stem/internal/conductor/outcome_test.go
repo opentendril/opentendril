@@ -15,6 +15,11 @@ import (
 
 func TestClassifySproutOutcome(t *testing.T) {
 	timedOut := fmt.Errorf("tool call cut off: %w", ErrSproutTimedOut)
+	// The reaper's ending wraps the cancellation it caused, which is how it
+	// reaches the classifier in production. If reaped were checked after the
+	// clock branches it would be read as an ordinary deadline, and "nobody was
+	// waiting" would be filed as "the work ran out of time".
+	reaped := fmt.Errorf("%w: %w", ErrSproutReaped, context.DeadlineExceeded)
 	cases := []struct {
 		name       string
 		runErr     error
@@ -29,6 +34,8 @@ func TestClassifySproutOutcome(t *testing.T) {
 		{"failed", errors.New("Sprout exploded"), nil, true, "", SproutOutcomeFailed},
 		{"timed out", timedOut, nil, true, "", SproutOutcomeTimedOut},
 		{"timed out beats file evidence", timedOut, []string{"main.go"}, true, "", SproutOutcomeTimedOut},
+		{"reaped at the backstop", reaped, nil, true, "", SproutOutcomeReaped},
+		{"reaped beats the deadline it wraps", reaped, []string{"main.go"}, true, "", SproutOutcomeReaped},
 		{"empty response, no files, is no-engagement", nil, []string{}, true, "", SproutOutcomeNoEngagement},
 		{"whitespace response, no files, is no-engagement", nil, []string{}, true, "  \n\t ", SproutOutcomeNoEngagement},
 		{"empty response, unmeasurable, is no-engagement", nil, nil, false, "", SproutOutcomeNoEngagement},
@@ -169,6 +176,11 @@ func recordSproutLifecycle(bus *eventbus.Bus) *[]eventbus.Event {
 		eventbus.EventSproutEmerged,
 		eventbus.EventSproutMatured,
 		eventbus.EventSproutWithered,
+		// Recorded alongside the terminals rather than separately, so a test
+		// that counts terminals can also see a detachment that was published
+		// instead of one — the two are only distinguishable when both are in
+		// the same record.
+		eventbus.EventSproutDetached,
 	} {
 		bus.Subscribe(eventType, func(event eventbus.Event) {
 			*events = append(*events, event)

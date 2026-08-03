@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
@@ -31,6 +32,19 @@ const (
 	// conflating the two once sent a diagnosis chasing a model that was working
 	// fine.
 	SproutOutcomeTimedOut = "timed-out"
+	// SproutOutcomeDetached: the Stem stopped waiting; the Sprout is still
+	// growing. The configured growth budget bounds attention, not work, so its
+	// expiry ends the wait and nothing else. This is NOT an ending, and it is
+	// the one outcome that carries no terminal lifecycle event: the run's
+	// matured or withered event arrives later, when the work actually
+	// finishes.
+	SproutOutcomeDetached = "detached"
+	// SproutOutcomeReaped: the orphan reaper's backstop clock stopped a
+	// terrarium nothing was waiting on any more. It answers "is anyone still
+	// waiting?", never "is this going well?", so it is dressed neither as a
+	// matured run nor as an ordinary failure — the run was ended by a wall
+	// clock, and the name says which one.
+	SproutOutcomeReaped = "reaped"
 	// SproutOutcomeSkipped: a resumed step that had already completed; no run
 	// happened.
 	SproutOutcomeSkipped = "skipped"
@@ -48,6 +62,13 @@ const (
 // is killed under it, so every layer up to the surface can tell a timeout from
 // a failure with errors.Is.
 var ErrSproutTimedOut = errors.New("sprout terrarium timed out before the run could finish")
+
+// ErrSproutReaped marks a sprout run stopped by the orphan reaper: the backstop
+// wall clock that ends a terrarium nothing is waiting on any more. It wraps the
+// cancellation the run observes when the reaper cancels its context, so every
+// layer up to the surface can tell "nobody was waiting" from "the work broke"
+// and from "a growth budget expired" with errors.Is.
+var ErrSproutReaped = errors.New("sprout reaped at the backstop: nothing was waiting on it")
 
 // SproutRunReport is what a finished sprout run actually did: the model's
 // answer plus the evidence-backed verdict on the work itself.
@@ -75,10 +96,22 @@ type SproutRunReport struct {
 // "no-changes" there would be its own kind of lie.
 func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string) string {
 	if runErr != nil {
+		// The reaper is checked first because its error deliberately wraps the
+		// cancellation it caused: a run ended for want of anyone waiting is
+		// named after that, not after the deadline mechanics underneath it.
+		if errors.Is(runErr, ErrSproutReaped) {
+			return SproutOutcomeReaped
+		}
 		// Two clocks produce the same ending. ErrSproutTimedOut is the
 		// terrarium watchdog killing the container; context.DeadlineExceeded is
-		// the caller's growth budget expiring first, which is now the ordinary
-		// case rather than the unreachable one. Both cut the work off.
+		// a deadline the caller itself carried expiring under the run. Both cut
+		// the work off with nothing left to finish it.
+		//
+		// The configured growth budget is deliberately absent from this list.
+		// It bounds how long the Stem waits, not how long the work may take, so
+		// its expiry detaches rather than ends — and that decision is made
+		// where the budget is known, not here, because an error alone cannot
+		// say whose clock produced it.
 		//
 		// context.Canceled is deliberately absent: an operator interrupting a
 		// run is not a budget expiring, and this vocabulary has no name for it
@@ -119,10 +152,34 @@ func publishSproutEmerged(bus *eventbus.Bus, stepID, sessionID, substrate string
 	})
 }
 
+// publishSproutDetached announces that the Stem has stopped waiting on a run
+// that is still growing, and carries the budget it waited so a consumer can say
+// how long attention lasted rather than guessing.
+//
+// It sits alongside the run's terminal event rather than replacing it: the
+// matured or withered event is published later, by whatever outlives the call,
+// when the work actually ends. Spending the terminal here would announce an
+// ending that has not happened.
+func publishSproutDetached(bus *eventbus.Bus, stepID, sessionID string, budget time.Duration) {
+	if bus == nil {
+		return
+	}
+	bus.Publish(eventbus.Event{
+		Type:      eventbus.EventSproutDetached,
+		Source:    stepID,
+		SessionID: sessionID,
+		Data: map[string]interface{}{
+			"stepId":  stepID,
+			"outcome": SproutOutcomeDetached,
+			"budget":  budget.String(),
+		},
+	})
+}
+
 // publishSproutTerminal publishes the single terminal lifecycle event for a
 // sprout run: matured when the run finished (with or without changes, or was
-// skipped as already complete), withered when it failed, timed out, or never
-// engaged the task. The
+// skipped as already complete), withered when it failed, timed out, was reaped,
+// or never engaged the task. The
 // event carries enough for a consumer to act on: the step, the outcome, the
 // files changed (or why they could not be measured), and the failure reason
 // when there is one.
@@ -132,7 +189,7 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string,
 	}
 
 	eventType := eventbus.EventSproutMatured
-	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut || outcome == SproutOutcomeNoEngagement {
+	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut || outcome == SproutOutcomeNoEngagement || outcome == SproutOutcomeReaped {
 		eventType = eventbus.EventSproutWithered
 	}
 

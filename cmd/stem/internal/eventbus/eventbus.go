@@ -51,10 +51,19 @@ const (
 	// NOTE: renaming this value renames a PERSISTED event type. Rows written
 	// before the rename keep "Pollinator-transcript", so a reader that must span both
 	// eras should accept either.
-	EventSproutTranscript  EventType = "sprout-transcript"
-	EventSproutEmerged     EventType = "sprout-emerged"
-	EventSproutMatured     EventType = "sprout-matured"
-	EventSproutWithered    EventType = "sprout-withered"
+	EventSproutTranscript EventType = "sprout-transcript"
+	EventSproutEmerged    EventType = "sprout-emerged"
+	EventSproutMatured    EventType = "sprout-matured"
+	EventSproutWithered   EventType = "sprout-withered"
+	// EventSproutDetached reports that the Stem stopped waiting on a run that
+	// is still growing: the configured growth budget bounds attention, not
+	// work, so its expiry ends the wait and leaves the Sprout alive.
+	//
+	// It is NOT a terminal event and must never be counted as one. The run
+	// still gets exactly one matured/withered event, published later, when the
+	// work actually ends — a consumer that treats this as an ending will
+	// report a run as finished while it is still writing files.
+	EventSproutDetached    EventType = "sprout-detached"
 	EventParallelSprouting EventType = "parallel-sprouting"
 	EventMycelialMerge     EventType = "mycelial-merge"
 	// EventPhenotypicSelection reports Genetic Algorithm progress (start,
@@ -92,6 +101,7 @@ func AllEventTypes() []EventType {
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,
+		EventSproutDetached,
 		EventParallelSprouting,
 		EventMycelialMerge,
 		EventPhenotypicSelection,

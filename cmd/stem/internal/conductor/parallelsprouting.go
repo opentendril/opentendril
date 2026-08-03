@@ -274,7 +274,7 @@ func growParallelSprout(ctx context.Context, step *SequenceStep, sourcePath, bra
 	}
 	applyStepLLMSelection(orch, llmSelection)
 
-	runResult, runErr := runSequenceSproutAtPathFn(sproutCtx, orch, subTask.Transcript, sourcePath, shadowPath)
+	runResult, runErr := awaitDetachedRun(runSequenceSproutAtPathFn(sproutCtx, orch, subTask.Transcript, sourcePath, shadowPath))
 	if runErr != nil {
 		if errors.Is(runErr, context.DeadlineExceeded) && ctx.Err() == nil {
 			result.err = fmt.Errorf("sprout %d (%s) withered: growth timed out after %s: %w", index, branchName, sproutGrowthTimeout, runErr)

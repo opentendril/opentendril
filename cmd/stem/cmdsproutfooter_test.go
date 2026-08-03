@@ -29,6 +29,25 @@ func TestSproutRunFooterReportsOutcome(t *testing.T) {
 			forbid:      "matured",
 		},
 		{
+			// A detached run has not ended. Reporting it as matured claims a
+			// finish that has not happened; reporting it as failed claims a
+			// breakage that has not happened either. It has to say the work
+			// continues, because that is the only true thing about it.
+			name:        "detached",
+			result:      core.SproutRunResult{StepID: "step-1", SessionID: "session-1", Outcome: "detached"},
+			wantContain: "still growing",
+			forbid:      "matured",
+		},
+		{
+			// Reaped is an ending, but not a verdict on the work: the run was
+			// stopped because nothing was waiting for it. The seedling glyph
+			// the default line uses would read as a healthy finish.
+			name:        "reaped",
+			result:      core.SproutRunResult{StepID: "step-1", SessionID: "session-1", Outcome: "reaped"},
+			wantContain: "reaped at the backstop",
+			forbid:      "matured",
+		},
+		{
 			name:        "skipped",
 			result:      core.SproutRunResult{StepID: "step-1", SessionID: "session-1", Outcome: "skipped"},
 			wantContain: "already completed",
