@@ -36,6 +36,19 @@ const (
 	// set their own deadline govern the run duration and the watchdog will never
 	// fire before them.
 	terrariumWatchdogFallback = 10 * time.Minute
+
+	// sproutPostMortemBudget bounds what happens after the Sprout loop returns:
+	// measuring what changed, classifying the outcome, and writing the record.
+	// It is deliberately independent of the growth budget, because a budget
+	// bounds the work and never the account of the work — a run whose growth
+	// budget expired hands its post-mortem an already-spent context, and the
+	// evidence dies with the clock that ended the run.
+	//
+	// It stays finite rather than unbounded: a git call issued after a stalled
+	// run is exactly the shape that turned a waiting suite into an apparent
+	// hang. Sized for git work (staging and committing a large change), not for
+	// a status listing alone, because the record is written by the commit path.
+	sproutPostMortemBudget = 60 * time.Second
 )
 
 // allowHostWorkspace reports whether the operator explicitly opted into the
@@ -155,7 +168,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if err != nil {
 			reason = err.Error()
 		}
-		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, reason)
+		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, report.FilesUnmeasured, reason)
 	}()
 
 	if err := runSproutPreflightChecksFn(ctx); err != nil {
@@ -444,6 +457,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
 
+	// Everything below measures, classifies and records what the run did, and
+	// it runs on its own clock. ctx may be spent — a growth budget that expired
+	// is now the ordinary way a run ends — and handing the post-mortem an
+	// already-expired context makes the clock that ended the run also destroy
+	// the account of it. cleanupCtx carries no deadline (it is taken from the
+	// unbounded parent above the growth budget), so the post-mortem bound below
+	// is its own, and finite.
+	postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
+	defer cancelPostMortem()
+
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
@@ -468,30 +491,37 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 	}
 
-	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, statusRelPath)
+	// A measurement that fails is not a run that failed. Losing the file list
+	// costs the evidence behind the verdict; returning here would additionally
+	// lose the verdict, the status file, and the run's own error — replaced by
+	// the measurement's. Record why the evidence is missing and carry on.
+	modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, statusRelPath)
 	if diffErr != nil {
-		return report, diffErr
+		report.FilesUnmeasured = diffErr.Error()
+		fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
+	} else {
+		report.FilesModified = modifiedFiles
+		filesKnown = true
 	}
-	report.FilesModified = modifiedFiles
-	filesKnown = true
 
-	gitDiff, diffErr := collectGitDiffFn(ctx, mountPath)
+	gitDiff, diffErr := collectGitDiffFn(postMortemCtx, mountPath)
 	if diffErr != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
 	}
 
 	executionStatus := sproutExecutionStatus{
-		StepID:        stepID,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
-		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true, sproutResult.Response),
+		StepID:          stepID,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+		FilesModified:   modifiedFiles,
+		FilesUnmeasured: report.FilesUnmeasured,
+		Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
 	}
 	report.Outcome = executionStatus.Status
 
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
+	commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
 	if commitErr != nil {
 		report.Outcome = ""
 		if runErr != nil {
@@ -506,7 +536,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	if plan.remoteClone {
-		if pushErr := pushTerrariumCommitFn(ctx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
+		if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
 			report.Outcome = ""
 			if runErr != nil {
 				return report, errors.Join(runErr, pushErr)
@@ -514,7 +544,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			return report, pushErr
 		}
 	} else {
-		mergeErr := mergeTerrariumCommitFn(ctx, sourcePath, commitHash)
+		mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
 		if mergeErr != nil {
 			report.Outcome = ""
 			if runErr != nil {
@@ -1080,11 +1110,14 @@ func collectGitDiff(ctx context.Context, mountPath string) (string, error) {
 }
 
 type sproutExecutionStatus struct {
-	StepID        string   `json:"stepId"`
-	Status        string   `json:"status"`
-	Error         string   `json:"error,omitempty"`
-	Timestamp     string   `json:"timestamp"`
-	FilesModified []string `json:"filesModified"`
+	StepID string `json:"stepId"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// FilesUnmeasured explains a null filesModified that a reader would
+	// otherwise have to interpret. Absent when the measurement succeeded.
+	FilesUnmeasured string   `json:"filesUnmeasured,omitempty"`
+	Timestamp       string   `json:"timestamp"`
+	FilesModified   []string `json:"filesModified"`
 }
 
 func newSproutExecutionID(prefix string) string {
