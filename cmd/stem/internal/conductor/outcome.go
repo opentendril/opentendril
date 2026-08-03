@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -24,10 +25,11 @@ const (
 	SproutOutcomeNoChanges = "no-changes"
 	// SproutOutcomeFailed: the run errored before finishing.
 	SproutOutcomeFailed = "failed"
-	// SproutOutcomeTimedOut: the terrarium watchdog killed the run before it
-	// could finish. Distinct from failed because the work was cut off, not
-	// broken — conflating the two once sent a diagnosis chasing a model that
-	// was working fine.
+	// SproutOutcomeTimedOut: a clock ended the run before it could finish —
+	// either the configured growth budget or the terrarium watchdog behind it.
+	// Distinct from failed because the work was cut off, not broken —
+	// conflating the two once sent a diagnosis chasing a model that was working
+	// fine.
 	SproutOutcomeTimedOut = "timed-out"
 	// SproutOutcomeSkipped: a resumed step that had already completed; no run
 	// happened.
@@ -58,6 +60,13 @@ type SproutRunReport struct {
 	// happened in a git repository where that is measurable. Nil when unknown
 	// (non-git or readonly substrates).
 	FilesModified []string
+	// FilesUnmeasured explains why FilesModified is unknown on a run that
+	// should have been able to measure it. Empty when the measurement
+	// succeeded, and empty when it was never applicable — a substrate that
+	// cannot measure has nothing to explain. It exists so "changed nothing"
+	// and "could not be measured" stay distinguishable at the surfaces, which
+	// a bare nil cannot express.
+	FilesUnmeasured string
 }
 
 // classifySproutOutcome names what a run actually did. filesKnown reports
@@ -66,7 +75,15 @@ type SproutRunReport struct {
 // "no-changes" there would be its own kind of lie.
 func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string) string {
 	if runErr != nil {
-		if errors.Is(runErr, ErrSproutTimedOut) {
+		// Two clocks produce the same ending. ErrSproutTimedOut is the
+		// terrarium watchdog killing the container; context.DeadlineExceeded is
+		// the caller's growth budget expiring first, which is now the ordinary
+		// case rather than the unreachable one. Both cut the work off.
+		//
+		// context.Canceled is deliberately absent: an operator interrupting a
+		// run is not a budget expiring, and this vocabulary has no name for it
+		// yet — inventing one here would be the same conflation in reverse.
+		if errors.Is(runErr, ErrSproutTimedOut) || errors.Is(runErr, context.DeadlineExceeded) {
 			return SproutOutcomeTimedOut
 		}
 		return SproutOutcomeFailed
@@ -107,8 +124,9 @@ func publishSproutEmerged(bus *eventbus.Bus, stepID, sessionID, substrate string
 // skipped as already complete), withered when it failed, timed out, or never
 // engaged the task. The
 // event carries enough for a consumer to act on: the step, the outcome, the
-// files changed, and the failure reason when there is one.
-func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string, filesModified []string, reason string) {
+// files changed (or why they could not be measured), and the failure reason
+// when there is one.
+func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string, filesModified []string, filesUnmeasured, reason string) {
 	if bus == nil {
 		return
 	}
@@ -130,6 +148,12 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string,
 		copied := make([]string, len(filesModified))
 		copy(copied, filesModified)
 		data["filesModified"] = copied
+	}
+	if filesUnmeasured != "" {
+		// An absent filesModified says nothing about why. A consumer that
+		// cannot tell a substrate which never measures from a measurement that
+		// was cut off has to guess, and the guess it made was "the run failed".
+		data["filesUnmeasured"] = filesUnmeasured
 	}
 	if reason != "" {
 		data["error"] = reason

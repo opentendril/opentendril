@@ -1052,6 +1052,10 @@ type sproutExecutionResult struct {
 	// non-git workspace).
 	Outcome       string
 	FilesModified []string
+	// FilesUnmeasured explains why FilesModified is unknown on a run that
+	// should have been able to measure it, so an unmeasurable substrate and a
+	// measurement cut short stay distinguishable.
+	FilesUnmeasured string
 }
 
 type phenotypeRunResult struct {
@@ -1329,6 +1333,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	// their own status channel, so publishing here cannot double-emit them.
 	var executionOutcome string
 	var executionFiles []string
+	var executionFilesUnmeasured string
 	defer func() {
 		outcome := executionOutcome
 		// A failure anywhere (including commit or merge-back after a clean
@@ -1341,7 +1346,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		if err != nil {
 			reason = err.Error()
 		}
-		publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, executionFiles, reason)
+		publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, executionFiles, executionFilesUnmeasured, reason)
 	}()
 	publishSproutEmerged(orch.EventBus, stepID, orch.SessionID, orch.Substrate)
 
@@ -1398,6 +1403,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	executionResult, err := runSequenceSproutAtPathFn(ctx, orch, taskPrompt, sourcePath, mountPath)
 	executionOutcome = executionResult.Outcome
 	executionFiles = executionResult.FilesModified
+	executionFilesUnmeasured = executionResult.FilesUnmeasured
 	if err != nil {
 		if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
 			return executionResult.CommitHash, err
@@ -1525,6 +1531,13 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 
 	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
+
+	// The post-mortem runs on its own clock, for the reason given at the
+	// equivalent point in RunSprout: this is the path that actually carries the
+	// growth budget, so it is the path where a spent ctx would otherwise take
+	// the run's evidence down with it.
+	postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
+	defer cancelPostMortem()
 	if err := session.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 	}
@@ -1565,24 +1578,32 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, nil
 	}
 
-	modifiedFiles, diffErr := collectStageableFilesFn(ctx, mountPath, "tendril-status.json")
+	// A measurement that fails is not a run that failed — see the equivalent
+	// point in RunSprout. Record why the evidence is missing and carry on to
+	// the record-keeping rather than returning and losing all of it.
+	filesKnown := false
+	modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, "tendril-status.json")
 	if diffErr != nil {
-		return result, diffErr
+		result.FilesUnmeasured = diffErr.Error()
+		fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
+	} else {
+		filesKnown = true
 	}
 
 	var gitDiff string
 	if !orch.DisableMergeBack {
-		gitDiff, diffErr = collectGitDiffFn(ctx, mountPath)
+		gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
 		if diffErr != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
 		}
 	}
 
 	executionStatus := sproutExecutionStatus{
-		StepID:        stepID,
-		Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
-		FilesModified: modifiedFiles,
-		Status:        classifySproutOutcome(runErr, modifiedFiles, true, sproutResult.Response),
+		StepID:          stepID,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+		FilesModified:   modifiedFiles,
+		FilesUnmeasured: result.FilesUnmeasured,
+		Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
 	}
 	if runErr != nil {
 		executionStatus.Error = runErr.Error()
@@ -1594,7 +1615,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	if sequencePlan != nil {
 		sequenceCredential = sequencePlan.credential
 	}
-	commitHash, commitErr := commitTerrariumExecutionFn(ctx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
+	commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
 	if commitErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, commitErr)
@@ -1608,7 +1629,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, runErr
 	}
 
-	mergeErr := mergeSequenceTerrariumCommit(ctx, sourcePath, commitHash)
+	mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
 	if mergeErr != nil {
 		if runErr != nil {
 			return result, errors.Join(runErr, mergeErr)
