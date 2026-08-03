@@ -110,6 +110,7 @@ var (
 	generateMemoryMapFn        = GenerateMemoryMap
 	runSproutPreflightChecksFn = runSproutPreflightChecks
 	runVerifierCommandFn       = runVerifierCommand
+	sproutBuildSpecFn          = sproutBuildSpec
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -599,15 +600,21 @@ func (d *DockerOrchestrator) resolveImageName(workspace string) string {
 }
 
 func ensureSproutImage(ctx context.Context, imageName string) error {
-	buildContext, dockerfile, err := sproutBuildSpec(imageName)
+	// An image already present needs no build context, so it must not need one
+	// to be resolvable either. Asking first is what lets an installed Stem grow
+	// a Sprout at all: sproutBuildSpec locates the Dockerfiles from the path
+	// this file was COMPILED at, which exists only in the tree the binary was
+	// built in, so resolving it up front failed every run of a deployed binary
+	// — including the runs that had nothing to build.
+	if err := exec.CommandContext(ctx, "docker", "image", "inspect", imageName).Run(); err == nil {
+		return nil
+	}
+
+	buildContext, dockerfile, err := sproutBuildSpecFn(imageName)
 	if err != nil {
 		return err
 	}
 	if buildContext == "" || dockerfile == "" {
-		return nil
-	}
-
-	if err := exec.CommandContext(ctx, "docker", "image", "inspect", imageName).Run(); err == nil {
 		return nil
 	}
 
@@ -656,15 +663,30 @@ func repoSourceRoot() (string, error) {
 		file = absFile
 	}
 
-	current := filepath.Dir(file)
+	return locateModuleRoot(filepath.Dir(file), file)
+}
+
+// locateModuleRoot walks upward from startDir looking for the go.mod that marks
+// a module root. origin names where the walk came from, so a failure says what
+// was being resolved rather than only where it gave up.
+func locateModuleRoot(startDir, origin string) (string, error) {
+	current := startDir
 	for {
-		if _, err := os.Stat(filepath.Join(current, "go.mod")); err == nil {
+		_, statErr := os.Stat(filepath.Join(current, "go.mod"))
+		if statErr == nil {
 			return current, nil
+		}
+		// "I may not look here" is not "there is nothing here". Treating the
+		// two alike walks straight past the directory that does hold go.mod and
+		// then reports it as missing — which is what a deployed binary does
+		// when the tree it was built in belongs to another account.
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", fmt.Errorf("could not read %s while locating the repository root from %s: %w", current, origin, statErr)
 		}
 
 		parent := filepath.Dir(current)
 		if parent == current {
-			return "", fmt.Errorf("could not locate repository root from %s", file)
+			return "", fmt.Errorf("could not locate repository root from %s", origin)
 		}
 		current = parent
 	}
