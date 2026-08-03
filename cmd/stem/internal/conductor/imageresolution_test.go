@@ -4,169 +4,242 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// fakeDockerOnPath puts a `docker` ahead of any real one on PATH. It answers
-// `image inspect` with inspectExit and records every invocation, so a test can
-// say what the caller asked docker and in what order.
-func fakeDockerOnPath(t *testing.T, inspectExit int) *[]string {
+// imagePresence is how the fake docker below answers `image inspect`.
+type imagePresence int
+
+const (
+	imageAbsent imagePresence = iota
+	imagePresent
+)
+
+// fakeDockerOnPath puts a `docker` ahead of any real one on PATH, answering
+// `image inspect` according to presence. Any real build attempt would need a
+// daemon, so the tests below must never reach one.
+func fakeDockerOnPath(t *testing.T, presence imagePresence) {
 	t.Helper()
 
+	inspectExit := "1"
+	if presence == imagePresent {
+		inspectExit = "0"
+	}
+
 	binDir := t.TempDir()
-	logPath := filepath.Join(binDir, "invocations.log")
 	script := "#!/usr/bin/env bash\n" +
-		"echo \"$@\" >> " + logPath + "\n" +
-		"if [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then exit " + itoa(inspectExit) + "; fi\n" +
+		"if [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then exit " + inspectExit + "; fi\n" +
 		"exit 0\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	invocations := &[]string{}
-	t.Cleanup(func() {
-		payload, err := os.ReadFile(logPath)
-		if err != nil {
-			return
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(payload)), "\n") {
-			if line != "" {
-				*invocations = append(*invocations, line)
-			}
-		}
-	})
-
-	return invocations
 }
 
-func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	return string(rune('0' + value))
-}
-
-// TestEnsureSproutImageDoesNotResolveBuildContextForAPresentImage is the
-// regression for a governed install being unable to grow any Sprout.
+// TestEnsureSproutImageDoesNotMaterializeForAPresentImage is the regression for
+// a governed install being unable to grow any Sprout.
 //
-// sproutBuildSpec locates the Dockerfiles from the path this package was
-// COMPILED at, which exists only inside the tree the binary was built in. It
-// was called before the presence check, so a deployed Stem failed even when it
-// had nothing to build. The fix is an ordering one, and the assertion has to be
-// about ordering: a present image must be satisfied without the build spec
-// being consulted at all.
-func TestEnsureSproutImageDoesNotResolveBuildContextForAPresentImage(t *testing.T) {
-	fakeDockerOnPath(t, 0) // inspect succeeds: the image is present
+// The build inputs used to be located from the path this package was COMPILED
+// at, and that resolution ran before the presence check — so a deployed Stem
+// failed even with nothing to build. The inputs are embedded now, but the
+// ordering still matters: an image already present must be satisfied without
+// the build inputs being touched at all.
+func TestEnsureSproutImageDoesNotMaterializeForAPresentImage(t *testing.T) {
+	fakeDockerOnPath(t, imagePresent)
 
-	original := sproutBuildSpecFn
-	t.Cleanup(func() { sproutBuildSpecFn = original })
+	original := materializeSproutBuildInputsFn
+	t.Cleanup(func() { materializeSproutBuildInputsFn = original })
 
-	// Stands in for what a deployed binary actually gets back: the source tree
-	// it was compiled in is not there to be read.
-	consulted := false
-	sproutBuildSpecFn = func(imageName string) (string, string, error) {
-		consulted = true
-		return "", "", errors.New("could not locate repository root from /elsewhere/docker.go")
+	materialized := false
+	materializeSproutBuildInputsFn = func() (string, func(), error) {
+		materialized = true
+		return "", func() {}, errors.New("build inputs should not have been materialized")
 	}
 
 	if err := ensureSproutImage(context.Background(), "opentendril-go:latest"); err != nil {
 		t.Fatalf("ensureSproutImage failed for a present image: %v", err)
 	}
-	if consulted {
-		t.Fatal("the build spec was resolved for an image that is already present; a deployed Stem fails here even with nothing to build")
+	if materialized {
+		t.Fatal("build inputs were materialized for an image that is already present")
 	}
 }
 
-// TestEnsureSproutImageStillReportsBuildSpecFailureWhenABuildIsNeeded is the
-// other side of the ordering: the resolution failure must still surface when it
-// genuinely blocks a build. Without this, moving the presence check could
-// silently swallow the error instead of narrowing when it applies.
-func TestEnsureSproutImageStillReportsBuildSpecFailureWhenABuildIsNeeded(t *testing.T) {
-	fakeDockerOnPath(t, 1) // inspect fails: the image is absent
+// TestEnsureSproutImageDoesNotMaterializeForAnImageItDoesNotBuild guards the
+// other early exit: an unrecognised image is not the Stem's to build, so it must
+// not pay for the inputs either.
+func TestEnsureSproutImageDoesNotMaterializeForAnImageItDoesNotBuild(t *testing.T) {
+	fakeDockerOnPath(t, imageAbsent)
 
-	original := sproutBuildSpecFn
-	t.Cleanup(func() { sproutBuildSpecFn = original })
-	sproutBuildSpecFn = func(imageName string) (string, string, error) {
-		return "", "", errors.New("could not locate repository root from /elsewhere/docker.go")
+	original := materializeSproutBuildInputsFn
+	t.Cleanup(func() { materializeSproutBuildInputsFn = original })
+
+	materialized := false
+	materializeSproutBuildInputsFn = func() (string, func(), error) {
+		materialized = true
+		return "", func() {}, nil
 	}
 
-	err := ensureSproutImage(context.Background(), "opentendril-go:latest")
-	if err == nil {
-		t.Fatal("ensureSproutImage succeeded though the image is absent and its build context is unresolvable")
+	if err := ensureSproutImage(context.Background(), "postgres:16"); err != nil {
+		t.Fatalf("ensureSproutImage failed for an image it does not build: %v", err)
 	}
-	if !strings.Contains(err.Error(), "could not locate repository root") {
-		t.Fatalf("error %q does not carry the resolution failure", err)
+	if materialized {
+		t.Fatal("build inputs were materialized for an image the Stem does not build")
 	}
 }
 
-// TestLocateModuleRootDistinguishesUnreadableFromAbsent pins the second defect.
-// The walk treated every os.Stat failure as "no go.mod here", so it stepped
-// past the directory that held one and reported it missing. A permission denial
-// and an absent file are different answers.
-func TestLocateModuleRootDistinguishesUnreadableFromAbsent(t *testing.T) {
-	t.Run("absent walks up and reports not located", func(t *testing.T) {
-		root := t.TempDir()
-		start := filepath.Join(root, "a", "b", "c")
-		if err := os.MkdirAll(start, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
+// TestSproutBuildLayoutIsPure pins the mapping, and pins that it asks nothing of
+// the filesystem — the property that lets the presence check above stay free.
+func TestSproutBuildLayoutIsPure(t *testing.T) {
+	testCases := []struct {
+		image          string
+		wantContext    string
+		wantDockerfile string
+	}{
+		{"opentendril-go:latest", ".", "sprouts/go/Dockerfile"},
+		{"opentendril-typescript:latest", ".", "sprouts/typescript/Dockerfile"},
+		{"opentendril-node:latest", ".", "sprouts/node/Dockerfile"},
+		// The Python image copies relative to its own directory, so its context
+		// is that directory rather than the root. Getting this wrong builds an
+		// image whose COPY paths cannot resolve.
+		{"opentendril-python:latest", "sprouts/python", "sprouts/python/Dockerfile"},
+		{verifierImage, ".", "toolchains/go-verifier/Dockerfile"},
+		{macrophageFuzzImage, ".", "toolchains/go-fuzz/Dockerfile"},
+		{"postgres:16", "", ""},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.image, func(t *testing.T) {
+			gotContext, gotDockerfile := sproutBuildLayout(testCase.image)
+			if gotContext != testCase.wantContext || gotDockerfile != testCase.wantDockerfile {
+				t.Fatalf("sproutBuildLayout(%q) = (%q, %q), want (%q, %q)",
+					testCase.image, gotContext, gotDockerfile, testCase.wantContext, testCase.wantDockerfile)
+			}
+		})
+	}
+}
+
+// TestMaterializeSproutBuildInputsProducesEveryBuildsInputs is the assertion
+// that the embedded set is actually sufficient. A missing embed directive is
+// invisible until a build fails on a machine that has no checkout — which is
+// exactly the failure this whole change exists to remove — so the check is
+// derived from the Dockerfiles rather than from a list written beside them.
+func TestMaterializeSproutBuildInputsProducesEveryBuildsInputs(t *testing.T) {
+	root, cleanup, err := materializeSproutBuildInputs()
+	if err != nil {
+		t.Fatalf("materializeSproutBuildInputs failed: %v", err)
+	}
+	defer cleanup()
+
+	for _, image := range []string{
+		"opentendril-go:latest",
+		"opentendril-typescript:latest",
+		"opentendril-node:latest",
+		"opentendril-python:latest",
+		verifierImage,
+		macrophageFuzzImage,
+	} {
+		buildContext, dockerfile := sproutBuildLayout(image)
+		dockerfilePath := filepath.Join(root, filepath.FromSlash(dockerfile))
+
+		payload, readErr := os.ReadFile(dockerfilePath)
+		if readErr != nil {
+			t.Fatalf("%s: Dockerfile not materialized: %v", image, readErr)
 		}
 
-		_, err := locateModuleRoot(start, "origin.go")
-		if err == nil {
-			t.Fatal("expected a failure walking a tree with no go.mod")
+		// Every COPY source that comes from the build context (rather than from
+		// an earlier build stage) must exist under the context directory.
+		for _, source := range dockerfileContextSources(string(payload)) {
+			resolved := filepath.Join(root, filepath.FromSlash(buildContext), filepath.FromSlash(source))
+			if _, statErr := os.Stat(resolved); statErr != nil {
+				t.Fatalf("%s: COPY %s is not in the embedded build inputs (%v)", image, source, statErr)
+			}
 		}
-		if !strings.Contains(err.Error(), "could not locate repository root") {
-			t.Fatalf("error %q is not the not-located failure", err)
-		}
-	})
+	}
+}
 
-	t.Run("found is reported before the walk exhausts", func(t *testing.T) {
-		root := t.TempDir()
-		start := filepath.Join(root, "a", "b")
-		if err := os.MkdirAll(start, 0o755); err != nil {
-			t.Fatalf("mkdir: %v", err)
+// dockerfileContextSources returns the COPY sources a Dockerfile takes from its
+// build context, skipping `--from=` copies, which come from an earlier stage and
+// are not context inputs. The final argument of a COPY is its destination.
+func dockerfileContextSources(dockerfile string) []string {
+	var sources []string
+	for _, line := range strings.Split(dockerfile, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 || !strings.EqualFold(fields[0], "COPY") {
+			continue
 		}
-		if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644); err != nil {
-			t.Fatalf("write go.mod: %v", err)
+		arguments := fields[1:]
+		if strings.HasPrefix(arguments[0], "--from=") {
+			continue
 		}
+		sources = append(sources, arguments[:len(arguments)-1]...)
+	}
+	return sources
+}
 
-		got, err := locateModuleRoot(start, "origin.go")
-		if err != nil {
-			t.Fatalf("locateModuleRoot failed: %v", err)
-		}
-		if got != root {
-			t.Fatalf("locateModuleRoot = %q, want %q", got, root)
-		}
-	})
+// TestMaterializeSproutBuildInputsCleansUp keeps the temporary tree from
+// outliving the build it was written for.
+func TestMaterializeSproutBuildInputsCleansUp(t *testing.T) {
+	root, cleanup, err := materializeSproutBuildInputs()
+	if err != nil {
+		t.Fatalf("materializeSproutBuildInputs failed: %v", err)
+	}
+	if _, statErr := os.Stat(root); statErr != nil {
+		t.Fatalf("materialized root is not there: %v", statErr)
+	}
 
-	t.Run("unreadable stops the walk and names the reason", func(t *testing.T) {
-		root := t.TempDir()
-		// A regular file used as a directory component makes os.Stat return
-		// ENOTDIR — a non-ErrNotExist failure, the same branch a permission
-		// denial takes, without depending on the test's own uid. Running as
-		// root would defeat a chmod-based fixture; this holds for any uid.
-		barrier := filepath.Join(root, "barrier")
-		if err := os.WriteFile(barrier, []byte("not a directory\n"), 0o644); err != nil {
-			t.Fatalf("write barrier: %v", err)
-		}
-		// A go.mod above the barrier, so a walk that treats the failure as
-		// "absent" would sail past it and succeed — which is the defect.
-		if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module x\n"), 0o644); err != nil {
-			t.Fatalf("write go.mod: %v", err)
-		}
+	cleanup()
 
-		got, err := locateModuleRoot(filepath.Join(barrier, "inner"), "origin.go")
-		if err == nil {
-			t.Fatalf("locateModuleRoot returned %q; an unreadable component was treated as absent and the walk continued past it", got)
+	if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("materialized root survived cleanup: stat error = %v", statErr)
+	}
+}
+
+// TestMaterializeSproutBuildInputsCarriesTheModuleFiles pins the reason this
+// package sits at the module root: the Go Sprout image builds against the
+// module, so go.mod and go.sum have to travel with it, and only a root package
+// can embed them.
+func TestMaterializeSproutBuildInputsCarriesTheModuleFiles(t *testing.T) {
+	root, cleanup, err := materializeSproutBuildInputs()
+	if err != nil {
+		t.Fatalf("materializeSproutBuildInputs failed: %v", err)
+	}
+	defer cleanup()
+
+	for _, name := range []string{"go.mod", "go.sum"} {
+		if _, statErr := os.Stat(filepath.Join(root, name)); statErr != nil {
+			t.Fatalf("%s missing from the materialized inputs: %v", name, statErr)
 		}
-		if !strings.Contains(err.Error(), "could not read") {
-			t.Fatalf("error %q does not report the failure as unreadable", err)
+	}
+
+	payload, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatalf("read materialized go.mod: %v", err)
+	}
+	if !strings.Contains(string(payload), "module github.com/opentendril/opentendril") {
+		t.Fatalf("materialized go.mod is not this module's: %q", string(payload))
+	}
+}
+
+// TestSproutBuildLayoutPathsAreSlashed keeps the layout in the embedded FS's
+// own vocabulary. io/fs paths are always slash-separated; a backslash here would
+// resolve on Linux and silently miss on Windows.
+func TestSproutBuildLayoutPathsAreSlashed(t *testing.T) {
+	for _, image := range []string{
+		"opentendril-go:latest",
+		"opentendril-python:latest",
+		verifierImage,
+	} {
+		buildContext, dockerfile := sproutBuildLayout(image)
+		for _, candidate := range []string{buildContext, dockerfile} {
+			if strings.Contains(candidate, "\\") {
+				t.Fatalf("%s: layout path %q is not slash-separated", image, candidate)
+			}
+			if path.IsAbs(candidate) {
+				t.Fatalf("%s: layout path %q is absolute; it must be relative to the materialized root", image, candidate)
+			}
 		}
-		if strings.Contains(err.Error(), "could not locate repository root") {
-			t.Fatalf("error %q reports 'not located' for a directory that could not be read", err)
-		}
-	})
+	}
 }
