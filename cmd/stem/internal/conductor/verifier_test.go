@@ -2,7 +2,7 @@ package conductor
 
 import (
 	"context"
-	"path/filepath"
+	"path"
 	"strings"
 	"testing"
 
@@ -63,15 +63,12 @@ func TestShouldBudRecursiveDebuggerSkipsCommandSteps(t *testing.T) {
 	}
 }
 
-func TestSproutBuildSpecVerifierImage(t *testing.T) {
-	context, dockerfile, err := sproutBuildSpec(verifierImage)
-	if err != nil {
-		t.Fatalf("sproutBuildSpec(%q) error: %v", verifierImage, err)
+func TestSproutBuildLayoutVerifierImage(t *testing.T) {
+	buildContext, dockerfile := sproutBuildLayout(verifierImage)
+	if buildContext == "" || dockerfile == "" {
+		t.Fatalf("verifier image not mapped: context=%q dockerfile=%q", buildContext, dockerfile)
 	}
-	if context == "" || dockerfile == "" {
-		t.Fatalf("verifier image not mapped: context=%q dockerfile=%q", context, dockerfile)
-	}
-	if filepath.Base(filepath.Dir(dockerfile)) != "go-verifier" {
+	if path.Base(path.Dir(dockerfile)) != "go-verifier" {
 		t.Fatalf("unexpected dockerfile path %q", dockerfile)
 	}
 }

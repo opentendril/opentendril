@@ -7,17 +7,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"syscall"
 	"time"
 
+	opentendril "github.com/opentendril/opentendril"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
@@ -95,22 +96,22 @@ var (
 	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
 	}
-	stashHostWorkspaceFn       = stashHostWorkspace
-	restoreHostStashFn         = restoreHostStash
-	createShadowWorktreeFn     = createShadowWorktree
-	removeShadowWorktreeFn     = removeShadowWorktree
-	injectMycorrhizalCacheFn   = injectMycorrhizalCache
-	collectStageableFilesFn    = collectStageableFiles
-	collectGitDiffFn           = collectGitDiff
-	commitTerrariumExecutionFn = commitTerrariumExecution
-	mergeTerrariumCommitFn     = mergeTerrariumCommit
-	pushTerrariumCommitFn      = pushTerrariumCommit
-	runContainerFitnessTestFn  = runContainerFitnessTest
-	generateRepoMapFn          = GenerateRepoMap
-	generateMemoryMapFn        = GenerateMemoryMap
-	runSproutPreflightChecksFn = runSproutPreflightChecks
-	runVerifierCommandFn       = runVerifierCommand
-	sproutBuildSpecFn          = sproutBuildSpec
+	stashHostWorkspaceFn           = stashHostWorkspace
+	restoreHostStashFn             = restoreHostStash
+	createShadowWorktreeFn         = createShadowWorktree
+	removeShadowWorktreeFn         = removeShadowWorktree
+	injectMycorrhizalCacheFn       = injectMycorrhizalCache
+	collectStageableFilesFn        = collectStageableFiles
+	collectGitDiffFn               = collectGitDiff
+	commitTerrariumExecutionFn     = commitTerrariumExecution
+	mergeTerrariumCommitFn         = mergeTerrariumCommit
+	pushTerrariumCommitFn          = pushTerrariumCommit
+	runContainerFitnessTestFn      = runContainerFitnessTest
+	generateRepoMapFn              = GenerateRepoMap
+	generateMemoryMapFn            = GenerateMemoryMap
+	runSproutPreflightChecksFn     = runSproutPreflightChecks
+	runVerifierCommandFn           = runVerifierCommand
+	materializeSproutBuildInputsFn = materializeSproutBuildInputs
 )
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
@@ -600,25 +601,28 @@ func (d *DockerOrchestrator) resolveImageName(workspace string) string {
 }
 
 func ensureSproutImage(ctx context.Context, imageName string) error {
-	// An image already present needs no build context, so it must not need one
-	// to be resolvable either. Asking first is what lets an installed Stem grow
-	// a Sprout at all: sproutBuildSpec locates the Dockerfiles from the path
-	// this file was COMPILED at, which exists only in the tree the binary was
-	// built in, so resolving it up front failed every run of a deployed binary
-	// — including the runs that had nothing to build.
+	// An image already present needs no build inputs, so it must not need them
+	// to be resolvable either. Asking first also keeps the common case free of
+	// the materialisation below.
 	if err := exec.CommandContext(ctx, "docker", "image", "inspect", imageName).Run(); err == nil {
 		return nil
 	}
 
-	buildContext, dockerfile, err := sproutBuildSpecFn(imageName)
-	if err != nil {
-		return err
-	}
-	if buildContext == "" || dockerfile == "" {
+	contextPath, dockerfilePath := sproutBuildLayout(imageName)
+	if contextPath == "" || dockerfilePath == "" {
 		return nil
 	}
 
-	fmt.Fprintf(os.Stderr, "🧱 Building %s from %s\n", imageName, dockerfile)
+	root, cleanup, err := materializeSproutBuildInputsFn()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	buildContext := filepath.Join(root, filepath.FromSlash(contextPath))
+	dockerfile := filepath.Join(root, filepath.FromSlash(dockerfilePath))
+
+	fmt.Fprintf(os.Stderr, "🧱 Building %s from %s\n", imageName, dockerfilePath)
 	args := []string{"build", "-f", dockerfile, "-t", imageName, buildContext}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	output, err := cmd.CombinedOutput()
@@ -629,67 +633,75 @@ func ensureSproutImage(ctx context.Context, imageName string) error {
 	return nil
 }
 
-func sproutBuildSpec(imageName string) (string, string, error) {
-	coreRoot, err := repoSourceRoot()
-	if err != nil {
-		return "", "", err
-	}
-
+// sproutBuildLayout names where an image's build context and Dockerfile sit
+// within the embedded build inputs, as slash-separated paths relative to their
+// root. "." is the root itself. Both are empty for an image the Stem does not
+// build.
+//
+// It is deliberately a pure function of the name: nothing about which image
+// maps to which Dockerfile depends on the filesystem, and keeping it that way
+// is what lets the presence check above run without touching the disk.
+func sproutBuildLayout(imageName string) (string, string) {
 	switch imageName {
 	case "opentendril-go:latest":
-		return coreRoot, filepath.Join(coreRoot, "sprouts", "go", "Dockerfile"), nil
+		return ".", "sprouts/go/Dockerfile"
 	case macrophageFuzzImage:
-		return coreRoot, filepath.Join(coreRoot, "toolchains", "go-fuzz", "Dockerfile"), nil
+		return ".", "toolchains/go-fuzz/Dockerfile"
 	case verifierImage:
-		return coreRoot, filepath.Join(coreRoot, "toolchains", "go-verifier", "Dockerfile"), nil
+		return ".", "toolchains/go-verifier/Dockerfile"
 	case "opentendril-typescript:latest":
-		return coreRoot, filepath.Join(coreRoot, "sprouts", "typescript", "Dockerfile"), nil
+		return ".", "sprouts/typescript/Dockerfile"
 	case "opentendril-node:latest":
-		return coreRoot, filepath.Join(coreRoot, "sprouts", "node", "Dockerfile"), nil
+		return ".", "sprouts/node/Dockerfile"
 	case "opentendril-python:latest":
-		return filepath.Join(coreRoot, "sprouts", "python"), filepath.Join(coreRoot, "sprouts", "python", "Dockerfile"), nil
+		// The Python image copies its inputs relative to its own directory
+		// rather than the root, so its context is that directory.
+		return "sprouts/python", "sprouts/python/Dockerfile"
 	default:
-		return "", "", nil
+		return "", ""
 	}
 }
 
-func repoSourceRoot() (string, error) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("unable to determine source root")
+// materializeSproutBuildInputs writes the embedded build inputs into a
+// temporary directory and returns its root, laid out at the paths the
+// Dockerfiles expect. The caller must invoke cleanup.
+//
+// The directory is what the build context used to be taken from a repository
+// checkout for. Writing it fresh per build keeps the inputs the binary's own,
+// rather than whatever happens to be on disk near it.
+func materializeSproutBuildInputs() (string, func(), error) {
+	root, err := os.MkdirTemp("", "opentendril-sprout-build-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create sprout build inputs directory: %w", err)
 	}
-	absFile, err := filepath.Abs(file)
-	if err == nil {
-		file = absFile
-	}
+	cleanup := func() { _ = os.RemoveAll(root) }
 
-	return locateModuleRoot(filepath.Dir(file), file)
-}
-
-// locateModuleRoot walks upward from startDir looking for the go.mod that marks
-// a module root. origin names where the walk came from, so a failure says what
-// was being resolved rather than only where it gave up.
-func locateModuleRoot(startDir, origin string) (string, error) {
-	current := startDir
-	for {
-		_, statErr := os.Stat(filepath.Join(current, "go.mod"))
-		if statErr == nil {
-			return current, nil
+	walkErr := fs.WalkDir(opentendril.SproutBuildInputs, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		// "I may not look here" is not "there is nothing here". Treating the
-		// two alike walks straight past the directory that does hold go.mod and
-		// then reports it as missing — which is what a deployed binary does
-		// when the tree it was built in belongs to another account.
-		if !errors.Is(statErr, os.ErrNotExist) {
-			return "", fmt.Errorf("could not read %s while locating the repository root from %s: %w", current, origin, statErr)
+		target := filepath.Join(root, filepath.FromSlash(path))
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
 		}
 
-		parent := filepath.Dir(current)
-		if parent == current {
-			return "", fmt.Errorf("could not locate repository root from %s", origin)
+		payload, readErr := opentendril.SproutBuildInputs.ReadFile(path)
+		if readErr != nil {
+			return readErr
 		}
-		current = parent
+		if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o755); mkdirErr != nil {
+			return mkdirErr
+		}
+		// 0o644 throughout: every Dockerfile that needs a file executable sets
+		// that itself, and an embedded file carries no mode of its own.
+		return os.WriteFile(target, payload, 0o644)
+	})
+	if walkErr != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("write sprout build inputs: %w", walkErr)
 	}
+
+	return root, cleanup, nil
 }
 
 func workspaceHasExtension(workspace string, extensions ...string) bool {
