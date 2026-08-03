@@ -24,6 +24,10 @@ substrates:
     branch: main
     auth: GITHUB_TOKEN
     readonly: false
+    patience:
+      growth: 20m                    # how long the Stem keeps its attention on
+                                     # one growth. Unset means no bound of its
+                                     # own — whatever the caller already set.
 
   # Foreign read-only substrate: no local `path`, so the Stem clones `url` with
   # the PAT named by `auth`. `readonly: true` discards edits — nothing is pushed
@@ -81,3 +85,9 @@ substrates:
 #   dir under ~/.tendril/substrates/<name>), or `path` (explicit `checkout.path`).
 # - `readonly: true` keeps the terrarium's edits discarded — no host or remote writeback.
 # - `path` is optional; if set and present on disk, the local checkout is used in place.
+# - `patience.growth`: a Go duration ("20m", "1h30m") bounding how long the Stem keeps
+#   its attention on one growth of this substrate. Unset (the default) means the
+#   substrate adds no bound of its own. A caller that already set a shorter budget
+#   still governs — this only ever tightens. A malformed or non-positive value is a
+#   load error, not a silent default: a bound you asked for and did not get is worse
+#   than none. Raise it for a slower model; lower it to stop waiting sooner.

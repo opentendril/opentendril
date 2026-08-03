@@ -172,6 +172,20 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, err
 	}
 
+	// The configured patience bounds the run by bounding the CONTEXT, never by
+	// handing the terrarium a watchdog value directly. The watchdog is derived
+	// from the context deadline, so a deadline set here reaches the session
+	// start on its own and stays the single expression of the bound.
+	// context.WithTimeout never extends an existing parent deadline, so a
+	// caller that already set a tighter budget still governs. cleanupCtx above
+	// is taken from the unbounded parent, so teardown still runs once the
+	// budget is spent.
+	if plan.growthBudget > 0 {
+		var cancelGrowth context.CancelFunc
+		ctx, cancelGrowth = context.WithTimeout(ctx, plan.growthBudget)
+		defer cancelGrowth()
+	}
+
 	if plan.readOnly {
 		fmt.Fprintln(os.Stderr, "⚠️ Substrate is configured as READONLY. Discarding terrarium modifications.")
 	}

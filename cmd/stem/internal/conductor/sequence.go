@@ -1473,6 +1473,18 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	substratesConfig, _ := LoadSubstratesConfig("")
 	sequencePlan, planErr := resolveSubstrateExecutionPlan(orch, substratesConfig)
 
+	// Bound the run by bounding the CONTEXT, not by passing a watchdog value:
+	// the terrarium watchdog is derived from the context deadline, so setting
+	// the deadline here is what reaches the session start. context.WithTimeout
+	// never extends an existing parent deadline, so this path's own tighter
+	// budget still wins when it has one. cleanupCtx above stays unbounded so
+	// the host stash is restored even after the budget is spent.
+	if planErr == nil && sequencePlan != nil && sequencePlan.growthBudget > 0 {
+		var cancelGrowth context.CancelFunc
+		ctx, cancelGrowth = context.WithTimeout(ctx, sequencePlan.growthBudget)
+		defer cancelGrowth()
+	}
+
 	providerName := resolveTerrariumProviderName(ctx, orch)
 	if planErr == nil && sequencePlan != nil && sequencePlan.provider != "" {
 		providerName = sequencePlan.provider
