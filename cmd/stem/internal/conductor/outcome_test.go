@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
@@ -132,7 +133,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	}
 	removeShadowWorktreeFn = func(sourcePath, shadowPath string) { _ = os.RemoveAll(shadowPath) }
 	injectMycorrhizalCacheFn = func(sourcePath, shadowPath string) {}
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
 	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
