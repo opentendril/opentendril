@@ -70,6 +70,14 @@ type PatienceSpec struct {
 	// deadline is the single place the bound is expressed. Empty leaves the
 	// run governed by whatever deadline the caller already carries.
 	Growth string `yaml:"growth,omitempty"`
+	// Reap bounds how long the work itself may keep going, which is a
+	// different question from Growth: once the Stem stops waiting, nothing is
+	// listening to the terrarium and only a wall clock can end it. This is the
+	// backstop that ends one, and it is deliberately much longer than Growth —
+	// an absence of signs of life is never itself evidence that a run is dead,
+	// so the reaper answers "is anyone still waiting?" and nothing else.
+	// Empty leaves the terrarium's own watchdog as the only backstop.
+	Reap string `yaml:"reap,omitempty"`
 }
 
 // GrowthBudget parses Growth into a duration. An empty value yields zero and no
@@ -78,17 +86,33 @@ type PatienceSpec struct {
 // a silent zero: a zero budget would bound the run to nothing and abandon it
 // the instant it started, which is never what an operator wrote a value to mean.
 func (p PatienceSpec) GrowthBudget() (time.Duration, error) {
-	trimmed := strings.TrimSpace(p.Growth)
+	return parsePatienceBudget("patience.growth", p.Growth)
+}
+
+// ReapBudget parses Reap into a duration, on the same terms as GrowthBudget: an
+// empty value yields zero and no error, and anything that cannot be honoured
+// fails the load by name. A zero reaper would end every run the instant it
+// started, which is the opposite of a backstop.
+func (p PatienceSpec) ReapBudget() (time.Duration, error) {
+	return parsePatienceBudget("patience.reap", p.Reap)
+}
+
+// parsePatienceBudget parses one patience field, naming the field and the
+// offending value in any error. Both fields share it so a value that cannot be
+// honoured fails the load identically wherever it was written — the two clocks
+// differ in what they bound, never in how strictly they are read.
+func parsePatienceBudget(field, value string) (time.Duration, error) {
+	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return 0, nil
 	}
 
 	budget, err := time.ParseDuration(trimmed)
 	if err != nil {
-		return 0, fmt.Errorf("patience.growth %q is not a duration: %w", trimmed, err)
+		return 0, fmt.Errorf("%s %q is not a duration: %w", field, trimmed, err)
 	}
 	if budget <= 0 {
-		return 0, fmt.Errorf("patience.growth %q must be greater than zero", trimmed)
+		return 0, fmt.Errorf("%s %q must be greater than zero", field, trimmed)
 	}
 
 	return budget, nil
@@ -182,8 +206,13 @@ type substrateExecutionPlan struct {
 	provider    string
 	command     []string
 	// growthBudget is the resolved patience.growth for this substrate, zero
-	// when unconfigured. Callers apply it to the context that governs the run.
+	// when unconfigured. Callers apply it to the context that bounds how long
+	// they wait for the run.
 	growthBudget time.Duration
+	// reapBudget is the resolved patience.reap for this substrate, zero when
+	// unconfigured. Callers apply it to the context that bounds the work
+	// itself, which outlives the wait.
+	reapBudget time.Duration
 }
 
 // LoadSubstratesConfig searches for the active substrates.yaml and parses it.
@@ -297,6 +326,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
 		}
 		plan.growthBudget = growthBudget
+
+		reapBudget, err := spec.Patience.ReapBudget()
+		if err != nil {
+			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
+		}
+		plan.reapBudget = reapBudget
 	}
 
 	if plan.hostPath == "" {
@@ -450,6 +485,9 @@ func validateSubstratePatience(sourcePath string, config *SubstratesConfig) erro
 		if _, err := spec.Patience.GrowthBudget(); err != nil {
 			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
 		}
+		if _, err := spec.Patience.ReapBudget(); err != nil {
+			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
+		}
 	}
 
 	return nil
@@ -487,6 +525,7 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	spec.Profile = strings.TrimSpace(spec.Profile)
 	spec.Provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 	spec.Patience.Growth = strings.TrimSpace(spec.Patience.Growth)
+	spec.Patience.Reap = strings.TrimSpace(spec.Patience.Reap)
 }
 
 func pathExists(path string) bool {

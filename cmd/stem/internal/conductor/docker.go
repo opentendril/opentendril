@@ -158,11 +158,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		d.StepID = stepID
 	}
 
-	// Every return path below leaves through this one publisher, so every
-	// surface — command line, sequence, MCP, daemon — sees exactly one terminal
-	// lifecycle event per run, with the honest outcome and the evidence for it.
+	// Every ENDING below leaves through this one publisher, so every surface —
+	// command line, sequence, MCP, daemon — sees exactly one terminal lifecycle
+	// event per run, with the honest outcome and the evidence for it. A detach
+	// is not an ending: it hands the same publisher to the goroutine that
+	// outlives this call, which fires it when the work does end.
 	filesKnown := false
-	defer func() {
+	detached := false
+	publishTerminal := func(report *SproutRunReport, filesKnown bool, err error) {
 		if report.Outcome == "" {
 			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown, report.Output)
 		}
@@ -171,6 +174,32 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			reason = err.Error()
 		}
 		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, report.FilesUnmeasured, reason)
+	}
+	defer func() {
+		if detached {
+			return
+		}
+		publishTerminal(&report, filesKnown, err)
+	}()
+
+	// Teardown a detached run must NOT take with it: the terrarium it is still
+	// growing in, the worktree it is still writing to, and the host workspace
+	// state it still owns. Collected here rather than deferred one by one so
+	// the goroutine that outlives a detached call runs exactly the same
+	// sequence, in the same order, once the work has actually ended.
+	var teardown []func()
+	var teardownErr error
+	runTeardown := func() {
+		for index := len(teardown) - 1; index >= 0; index-- {
+			teardown[index]()
+		}
+	}
+	defer func() {
+		if detached {
+			return
+		}
+		runTeardown()
+		err = errors.Join(err, teardownErr)
 	}()
 
 	if err := runSproutPreflightChecksFn(ctx); err != nil {
@@ -187,17 +216,24 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, err
 	}
 
-	// The configured patience bounds the run by bounding the CONTEXT, never by
-	// handing the terrarium a watchdog value directly. The watchdog is derived
-	// from the context deadline, so a deadline set here reaches the session
-	// start on its own and stays the single expression of the bound.
-	// context.WithTimeout never extends an existing parent deadline, so a
-	// caller that already set a tighter budget still governs. cleanupCtx above
-	// is taken from the unbounded parent, so teardown still runs once the
-	// budget is spent.
+	// The caller's own context, kept before the growth budget narrows ctx. The
+	// growth budget bounds how long the STEM WAITS, so the work hangs off the
+	// caller's context instead and outlives the wait — while a caller that
+	// cancels still reaches the work, which is the difference between a run
+	// nobody is waiting for and a run nobody wants.
+	callerCtx := ctx
+
+	// The configured patience bounds the WAIT by bounding the CONTEXT this
+	// function blocks on. context.WithTimeoutCause never extends an existing
+	// parent deadline, so a caller that already set a tighter budget still
+	// governs — and the cause records whose clock expired, because only the
+	// growth budget's own expiry may detach: an inherited deadline ends the
+	// work too, and reporting that as "still growing" would be a lie about a
+	// run that has stopped. cleanupCtx above is taken from the unbounded
+	// parent, so teardown still runs once the budget is spent.
 	if plan.growthBudget > 0 {
 		var cancelGrowth context.CancelFunc
-		ctx, cancelGrowth = context.WithTimeout(ctx, plan.growthBudget)
+		ctx, cancelGrowth = context.WithTimeoutCause(ctx, plan.growthBudget, errGrowthBudgetSpent)
 		defer cancelGrowth()
 	}
 
@@ -213,14 +249,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var hostRestorePath string
 	var cleanup func()
 
-	defer func() {
+	teardown = append(teardown, func() {
 		if !hostStashed || strings.TrimSpace(hostRestorePath) == "" {
 			return
 		}
 		if restoreErr := restoreHostStashFn(cleanupCtx, hostRestorePath); restoreErr != nil {
-			err = errors.Join(err, restoreErr)
+			teardownErr = errors.Join(teardownErr, restoreErr)
 		}
-	}()
+	})
 	extraEnv := make([]string, 0, 2)
 	if plan.readOnly {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
@@ -327,11 +363,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					// to the branch it started on. A run that produced commits
 					// keeps both — that branch is the work.
 					returnTo := currentBranch
-					defer func() {
+					teardown = append(teardown, func() {
 						if ReclaimUnusedIsolationBranch(cleanupCtx, sourcePath, newBranch, returnTo, plan.credential) {
 							fmt.Fprintf(os.Stderr, "🧹 Reclaimed empty isolation branch %s; back on %s\n", newBranch, returnTo)
 						}
-					}()
+					})
 				}
 			}
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
@@ -440,7 +476,22 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 	})
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, plan.command, extraEnv, deriveWatchdogTimeout(ctx), obs)
+	// The terrarium belongs to the WORK, not to the wait, so it is created on
+	// the work's own context: the container process lives for as long as that
+	// context does, and starting it on the growth budget would kill the
+	// container the moment the Stem stopped waiting — a kill wearing the word
+	// detach. The reaper, when configured, is the wall clock behind the work,
+	// and the terrarium watchdog is derived from it for the same reason it
+	// always was: the context expires first, the watchdog is the backstop.
+	workCtx, releaseWork := newSproutWorkContext(callerCtx, plan.reapBudget)
+	defer func() {
+		if detached {
+			return
+		}
+		releaseWork(nil)
+	}()
+
+	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, plan.command, extraEnv, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -448,127 +499,189 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, err
 	}
 	if cleanup != nil {
-		defer cleanup()
+		teardown = append(teardown, cleanup)
 	}
-	defer session.Close()
+	teardown = append(teardown, func() { _ = session.Close() })
 
-	sprout, err := newSproutFn(ctx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
+	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
 	if err != nil {
 		return report, err
 	}
 
-	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
+	// completeRun measures, classifies and records what the run did. It is a
+	// closure rather than the tail of this function because a detached call
+	// reaches it from the goroutine below, long after RunSprout returned — so
+	// it owns every value it touches and shares nothing with the caller's
+	// report, which by then belongs to somebody else.
+	completeRun := func(sproutResult sproutResult, runErr error) (report SproutRunReport, filesKnown bool, err error) {
+		// Everything here runs on its own clock. The work's context may be
+		// spent — that is the ordinary way a run ends — and handing the
+		// post-mortem an already-expired context makes the clock that ended the
+		// run also destroy the account of it. cleanupCtx carries no deadline
+		// (it is taken from the unbounded parent above every budget), so the
+		// post-mortem bound below is its own, and finite.
+		postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
+		defer cancelPostMortem()
 
-	// Everything below measures, classifies and records what the run did, and
-	// it runs on its own clock. ctx may be spent — a growth budget that expired
-	// is now the ordinary way a run ends — and handing the post-mortem an
-	// already-expired context makes the clock that ended the run also destroy
-	// the account of it. cleanupCtx carries no deadline (it is taken from the
-	// unbounded parent above the growth budget), so the post-mortem bound below
-	// is its own, and finite.
-	postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
-	defer cancelPostMortem()
-
-	if err := session.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
-	}
-
-	// Non-git and readonly substrates cannot measure what changed, so their
-	// successful runs report SproutOutcomeComplete with FilesModified unknown
-	// (nil) rather than claiming a no-changes verdict nothing measured.
-	if !gitRepo || plan.readOnly {
-		if runErr != nil {
-			return report, runErr
+		if err := session.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 		}
+
+		// Non-git and readonly substrates cannot measure what changed, so their
+		// successful runs report SproutOutcomeComplete with FilesModified unknown
+		// (nil) rather than claiming a no-changes verdict nothing measured.
+		if !gitRepo || plan.readOnly {
+			if runErr != nil {
+				return report, filesKnown, runErr
+			}
+			report.Output = sproutResult.Response
+			return report, filesKnown, nil
+		}
+
+		var statusRelPath string
+		if statusPath != "" {
+			var err error
+			statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
+			if err != nil {
+				return report, filesKnown, err
+			}
+		}
+
+		// A measurement that fails is not a run that failed. Losing the file list
+		// costs the evidence behind the verdict; returning here would additionally
+		// lose the verdict, the status file, and the run's own error — replaced by
+		// the measurement's. Record why the evidence is missing and carry on.
+		modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, statusRelPath)
+		if diffErr != nil {
+			report.FilesUnmeasured = diffErr.Error()
+			fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
+		} else {
+			report.FilesModified = modifiedFiles
+			filesKnown = true
+		}
+
+		gitDiff, diffErr := collectGitDiffFn(postMortemCtx, mountPath)
+		if diffErr != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+		}
+
+		executionStatus := sproutExecutionStatus{
+			StepID:          stepID,
+			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+			FilesModified:   modifiedFiles,
+			FilesUnmeasured: report.FilesUnmeasured,
+			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
+		}
+		if runErr != nil {
+			executionStatus.Error = runErr.Error()
+		}
+		report.Outcome = executionStatus.Status
+
+		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
+		if commitErr != nil {
+			report.Outcome = ""
+			if runErr != nil {
+				return report, filesKnown, errors.Join(runErr, commitErr)
+			}
+			return report, filesKnown, commitErr
+		}
+
+		if d.DisableMergeBack {
+			report.Output = commitHash
+			return report, filesKnown, runErr
+		}
+
+		if plan.remoteClone {
+			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
+				report.Outcome = ""
+				if runErr != nil {
+					return report, filesKnown, errors.Join(runErr, pushErr)
+				}
+				return report, filesKnown, pushErr
+			}
+		} else {
+			mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
+			if mergeErr != nil {
+				report.Outcome = ""
+				if runErr != nil {
+					return report, filesKnown, errors.Join(runErr, mergeErr)
+				}
+				return report, filesKnown, mergeErr
+			}
+		}
+
+		if runErr != nil {
+			return report, filesKnown, runErr
+		}
+
+		if gitDiff != "" {
+			// On the post-mortem's clock, not the wait's: transcribing what a
+			// run learned is part of the account of the run, and a detached
+			// call has long since let go of the context it waited on.
+			chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
+			if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+			}
+		}
+
 		report.Output = sproutResult.Response
-		return report, nil
+		return report, filesKnown, nil
 	}
 
-	var statusRelPath string
-	if statusPath != "" {
-		var err error
-		statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
-		if err != nil {
-			return report, err
+	// The Sprout turn runs on the work's clock, in its own goroutine, so this
+	// function can stop waiting without stopping it. That separation is the
+	// whole of the change: patience.growth bounds attention, and attention
+	// running out has never been evidence that work has stopped.
+	turns := make(chan sproutTurn, 1)
+	go func() {
+		result, runErr := sprout.Run(workCtx, taskPrompt)
+		turns <- sproutTurn{result: result, err: runErr}
+	}()
+
+	var turn sproutTurn
+	select {
+	case turn = <-turns:
+	case <-ctx.Done():
+		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) {
+			// The Stem stops waiting; the Sprout keeps growing. Nothing here
+			// closes the session, removes the worktree or restores the host
+			// stash — the run still owns all three — and no terminal event is
+			// published, because the run has not ended. The goroutine below
+			// finishes the job when the work does.
+			detached = true
+			publishSproutDetached(d.EventBus, stepID, d.SessionID, plan.growthBudget)
+			fmt.Fprintf(os.Stderr, "🌿 Growth budget %s spent; detaching from %s. The Sprout keeps growing.\n", plan.growthBudget, stepID)
+			go func() {
+				finished := <-turns
+				// Named before the work's context is released: the cause is
+				// what says which clock ended the run, and releasing overwrites
+				// it with a bare cancellation.
+				runErr := attributeSproutEnding(workCtx, finished.err)
+				detachedReport, detachedFilesKnown, detachedErr := completeRun(finished.result, runErr)
+				releaseWork(nil)
+				runTeardown()
+				publishTerminal(&detachedReport, detachedFilesKnown, errors.Join(detachedErr, teardownErr))
+			}()
+			report.Outcome = SproutOutcomeDetached
+			return report, nil
 		}
+		// Not the growth budget: the caller's own deadline expired or the
+		// caller cancelled, and nothing else will carry the work on. End it
+		// here and account for it here — detaching would report a run as still
+		// growing when nothing is growing it.
+		releaseWork(context.Cause(ctx))
+		turn = <-turns
 	}
 
-	// A measurement that fails is not a run that failed. Losing the file list
-	// costs the evidence behind the verdict; returning here would additionally
-	// lose the verdict, the status file, and the run's own error — replaced by
-	// the measurement's. Record why the evidence is missing and carry on.
-	modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, statusRelPath)
-	if diffErr != nil {
-		report.FilesUnmeasured = diffErr.Error()
-		fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
-	} else {
-		report.FilesModified = modifiedFiles
-		filesKnown = true
-	}
+	report, filesKnown, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
+	return report, err
+}
 
-	gitDiff, diffErr := collectGitDiffFn(postMortemCtx, mountPath)
-	if diffErr != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
-	}
-
-	executionStatus := sproutExecutionStatus{
-		StepID:          stepID,
-		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
-		FilesModified:   modifiedFiles,
-		FilesUnmeasured: report.FilesUnmeasured,
-		Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
-	}
-	if runErr != nil {
-		executionStatus.Error = runErr.Error()
-	}
-	report.Outcome = executionStatus.Status
-
-	commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
-	if commitErr != nil {
-		report.Outcome = ""
-		if runErr != nil {
-			return report, errors.Join(runErr, commitErr)
-		}
-		return report, commitErr
-	}
-
-	if d.DisableMergeBack {
-		report.Output = commitHash
-		return report, runErr
-	}
-
-	if plan.remoteClone {
-		if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
-			report.Outcome = ""
-			if runErr != nil {
-				return report, errors.Join(runErr, pushErr)
-			}
-			return report, pushErr
-		}
-	} else {
-		mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
-		if mergeErr != nil {
-			report.Outcome = ""
-			if runErr != nil {
-				return report, errors.Join(runErr, mergeErr)
-			}
-			return report, mergeErr
-		}
-	}
-
-	if runErr != nil {
-		return report, runErr
-	}
-
-	if gitDiff != "" {
-		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-		if err := chronicler.TranscribeLearnings(ctx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
-		}
-	}
-
-	report.Output = sproutResult.Response
-	return report, nil
+// sproutTurn is one completed Sprout loop, carried off the goroutine that ran
+// it. It exists so the turn can outlive the wait for it.
+type sproutTurn struct {
+	result sproutResult
+	err    error
 }
 
 func (d *DockerOrchestrator) resolveImageName(workspace string) string {
@@ -760,6 +873,67 @@ type terrariumToolSession struct {
 // run and the watchdog fires only if the context is not cancelled cleanly.
 // When there is no deadline, the fallback constant applies — it is a backstop
 // against a hung container, not a policy on how long work may take.
+// errGrowthBudgetSpent is the cause recorded when the configured growth budget
+// — and only that budget — ends the Stem's wait. Detaching is correct solely
+// when something else will still carry the work: a deadline the caller already
+// held, or a cancelled parent, ends the work as well, and matching on
+// context.DeadlineExceeded alone cannot tell those apart. The cause can.
+var errGrowthBudgetSpent = errors.New("growth budget spent; the Stem stopped waiting")
+
+// errReapBudgetSpent is the cause recorded when the orphan reaper's backstop
+// clock ends a run. It is what turns a bare cancellation into a named ending,
+// so a terrarium stopped for want of anyone waiting is never filed as a run
+// that broke.
+var errReapBudgetSpent = errors.New("reap budget spent; nothing was waiting on the run")
+
+// newSproutWorkContext derives the context the Sprout turn and its terrarium
+// run on. It deliberately does not inherit the growth budget: that budget
+// bounds how long the Stem waits, and the work outlives the wait. The reaper,
+// when configured, is the wall clock behind the work — the backstop that ends a
+// terrarium nothing is waiting on any more.
+//
+// The returned release must be called exactly once, by whichever goroutine ends
+// up owning the run. A non-nil cause names the clock that ended it.
+func newSproutWorkContext(parent context.Context, reapBudget time.Duration) (context.Context, context.CancelCauseFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	workCtx, cancelWork := context.WithCancelCause(parent)
+	if reapBudget <= 0 {
+		return workCtx, cancelWork
+	}
+
+	reapedCtx, cancelReap := context.WithTimeoutCause(workCtx, reapBudget, errReapBudgetSpent)
+	return reapedCtx, func(cause error) {
+		cancelReap()
+		cancelWork(cause)
+	}
+}
+
+// attributeSproutEnding names the clock that ended a Sprout turn. The turn
+// reports the cancellation it observed, which for a context cancelled on its
+// behalf is a bare context.Canceled — true, uninformative, and enough to file
+// an expired deadline as an ordinary failure. The context's cause records which
+// clock cancelled the work, so the ending is named after that instead.
+func attributeSproutEnding(workCtx context.Context, runErr error) error {
+	if runErr == nil || workCtx == nil {
+		return runErr
+	}
+
+	cause := context.Cause(workCtx)
+	switch {
+	case cause == nil:
+		return runErr
+	case errors.Is(cause, errReapBudgetSpent):
+		return fmt.Errorf("%w: %w", ErrSproutReaped, runErr)
+	case errors.Is(cause, context.DeadlineExceeded) && !errors.Is(runErr, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", context.DeadlineExceeded, runErr)
+	}
+
+	return runErr
+}
+
 func deriveWatchdogTimeout(ctx context.Context) time.Duration {
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -1535,9 +1709,15 @@ func runContainerFitnessTest(ctx context.Context, imageName, shadowPath, fitness
 	return nil
 }
 
+// buildSproutCommitMessage names what is being committed. SproutOutcomeDetached
+// is deliberately absent: a detached run has produced no result to commit and
+// never reaches this path, because the commit happens after the work ends and a
+// detached run has not ended. A reaped one has — cut short at the backstop —
+// so its partial work is committed and marked incomplete, like any other run a
+// clock ended.
 func buildSproutCommitMessage(stepID, taskPrompt, status, failureError string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case SproutOutcomeFailed, SproutOutcomeTimedOut:
+	case SproutOutcomeFailed, SproutOutcomeTimedOut, SproutOutcomeReaped:
 		return fmt.Sprintf("tendril(%s) [INCOMPLETE]: %s", strings.TrimSpace(stepID), summarizeSproutFailureError(failureError))
 	}
 

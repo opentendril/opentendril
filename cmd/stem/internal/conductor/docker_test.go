@@ -129,6 +129,14 @@ func TestBuildSproutCommitMessage(t *testing.T) {
 	if !strings.Contains(failure, "[INCOMPLETE]: pytest: 3 tests failed") {
 		t.Fatalf("unexpected failure message: %s", failure)
 	}
+
+	// A run the reaper stopped was cut short, so what it produced is partial.
+	// Committing it under the ordinary message would present a backstop
+	// stoppage as a finished piece of work.
+	reaped := buildSproutCommitMessage("step-3", "ignored", SproutOutcomeReaped, "nothing was waiting on the run")
+	if !strings.Contains(reaped, "[INCOMPLETE]: nothing was waiting on the run") {
+		t.Fatalf("unexpected reaped message: %s", reaped)
+	}
 }
 
 func TestCollectStageableFilesKeepsFullPathOfUnstagedModification(t *testing.T) {

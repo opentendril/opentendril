@@ -21,8 +21,8 @@ import (
 const expiringPatienceBudget = 300 * time.Millisecond
 
 // budgetWaitingRunner returns whatever the run's context returns when it
-// expires — the shape a real Sprout turn produces when the growth budget ends
-// it. It never sleeps: the budget itself is the clock.
+// expires — the shape a real Sprout turn produces when a clock ends it. It
+// never sleeps: the clock itself is the clock.
 type budgetWaitingRunner struct{}
 
 func (budgetWaitingRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
@@ -92,16 +92,16 @@ func assertPostMortemHasItsOwnClock(t *testing.T, label string, capture *postMor
 	if capture.remaining > sproutPostMortemBudget {
 		t.Fatalf("%s: the tail's context has %s remaining, more than the post-mortem budget %s; it is bounded by something else", label, capture.remaining, sproutPostMortemBudget)
 	}
-	// The growth budget expired to get here, so anything close to it is that
-	// clock rather than a fresh one.
+	// A deadline expired to get here, so anything close to it is that clock
+	// rather than a fresh one.
 	if capture.remaining <= expiringPatienceBudget {
-		t.Fatalf("%s: the tail's context has %s remaining, within the growth budget %s; it did not get its own clock", label, capture.remaining, expiringPatienceBudget)
+		t.Fatalf("%s: the tail's context has %s remaining, within the expired run budget %s; it did not get its own clock", label, capture.remaining, expiringPatienceBudget)
 	}
 }
 
 // TestBudgetExpiryIsTimedOutNotFailed pins the classification. A run cut off by
-// its growth budget surfaces as context.DeadlineExceeded, and calling that
-// "failed" is the conflation the timed-out outcome exists to prevent.
+// a deadline surfaces as context.DeadlineExceeded, and calling that "failed" is
+// the conflation the timed-out outcome exists to prevent.
 func TestBudgetExpiryIsTimedOutNotFailed(t *testing.T) {
 	// The wrapped case is the one observed live: the deadline surfaces from
 	// whatever git call the tail made, not as a bare sentinel.
@@ -131,14 +131,24 @@ func TestBudgetExpiryIsTimedOutNotFailed(t *testing.T) {
 	}
 }
 
-// TestRunSproutPostMortemOutlivesExpiredBudget drives a real budget expiry
+// TestRunSproutPostMortemOutlivesExpiredBudget drives a real deadline expiry
 // through RunSprout and asserts the run still produces an account of itself:
-// its own clock for the tail, the honest outcome, and the status record. Before
-// this slice all three were lost together, because one early return took them.
+// its own clock for the tail, the honest outcome, and the status record.
+//
+// The expiring clock here is the CALLER'S own deadline, not the configured
+// growth budget. That is a deliberate re-pointing: a growth budget expiring no
+// longer ends a run at all, it detaches from one, so it can no longer stand for
+// "a clock ended this run" — while an inherited deadline still does, and the
+// post-mortem must still outlive it. The substrate below therefore configures
+// no patience at all.
+//
+// It doubles as the proof that a context.DeadlineExceeded which is NOT the
+// growth budget must not quietly become a detach: nothing else would carry the
+// work on, so the run ends, is classified, and is recorded.
 func TestRunSproutPostMortemOutlivesExpiredBudget(t *testing.T) {
 	root := newOutcomeTestRepo(t)
 	cwd := chdirToTempDir(t)
-	writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 300ms\n")
+	writePatienceSubstrate(t, cwd, "bounded", root, "")
 
 	stubRunSproutCollaborators(t, root, budgetWaitingRunner{}, nil)
 	// Replaces the commit seam the helper above installed, so the assertions
@@ -155,7 +165,9 @@ func TestRunSproutPostMortemOutlivesExpiredBudget(t *testing.T) {
 		EventBus:         bus,
 		DisableMergeBack: true,
 	}
-	report, err := orch.RunSprout(context.Background(), "post-mortem probe")
+	ctx, cancel := context.WithTimeout(context.Background(), expiringPatienceBudget)
+	defer cancel()
+	report, err := orch.RunSprout(ctx, "post-mortem probe")
 
 	assertPostMortemHasItsOwnClock(t, "RunSprout", capture)
 
@@ -182,6 +194,13 @@ func TestRunSproutPostMortemOutlivesExpiredBudget(t *testing.T) {
 	}
 
 	assertTerminalOutcome(t, events, eventbus.EventSproutWithered, SproutOutcomeTimedOut)
+
+	// A deadline nobody else will carry on from is an ending, not a detach.
+	// Detaching here would report a run as still growing when the very clock
+	// that governs the work has expired.
+	if detachedEvents := filterEvents(*events, eventbus.EventSproutDetached); len(detachedEvents) != 0 {
+		t.Fatalf("got %d sprout-detached events for an inherited deadline, want 0; an expired caller deadline was mistaken for a spent growth budget", len(detachedEvents))
+	}
 }
 
 // TestRunSproutReportsUnmeasurableEvidence covers the other half: when the
@@ -245,10 +264,14 @@ func TestRunSproutReportsUnmeasurableEvidence(t *testing.T) {
 // TestRunSequenceSproutAtPathPostMortemOutlivesExpiredBudget covers the other
 // call site. This is the path the parallel budget actually flows through, so
 // fixing only RunSprout would leave the observed defect exactly where it was.
+//
+// Re-pointed at the caller's own deadline for the reason given on the RunSprout
+// case above: a growth budget no longer ends a run, so it can no longer stand
+// for a clock that does.
 func TestRunSequenceSproutAtPathPostMortemOutlivesExpiredBudget(t *testing.T) {
 	root := newOutcomeTestRepo(t)
 	cwd := chdirToTempDir(t)
-	writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 300ms\n")
+	writePatienceSubstrate(t, cwd, "bounded", root, "")
 
 	stubSequencePostMortemCollaborators(t, root)
 	captured := stubSequenceCommit(t)
@@ -259,7 +282,9 @@ func TestRunSequenceSproutAtPathPostMortemOutlivesExpiredBudget(t *testing.T) {
 		StepID:           "postmortem-seqpath",
 		DisableMergeBack: true,
 	}
-	result, err := runSequenceSproutAtPath(context.Background(), orch, "post-mortem probe", root, root)
+	ctx, cancel := context.WithTimeout(context.Background(), expiringPatienceBudget)
+	defer cancel()
+	result, err := runSequenceSproutAtPath(ctx, orch, "post-mortem probe", root, root)
 
 	assertPostMortemHasItsOwnClock(t, "runSequenceSproutAtPath", capture)
 

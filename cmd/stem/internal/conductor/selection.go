@@ -305,7 +305,7 @@ func growPhenotype(ctx context.Context, step *SequenceStep, cfg *SelectionConfig
 	}
 	applyStepLLMSelection(orch, llmSelection)
 
-	runResult, runErr := runSequenceSproutAtPathFn(ctx, orch, genotype.transcript, sourcePath, shadowPath)
+	runResult, runErr := awaitDetachedRun(runSequenceSproutAtPathFn(ctx, orch, genotype.transcript, sourcePath, shadowPath))
 	if runErr != nil {
 		candidate.err = fmt.Errorf("phenotype %d (%s) sprout failed: %w", index, branchName, runErr)
 		return candidate

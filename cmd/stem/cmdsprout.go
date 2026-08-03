@@ -88,16 +88,22 @@ func runSproutCmd(ctx context.Context, args []string) {
 	fmt.Fprintln(os.Stderr, sproutRunFooter(runResult))
 }
 
-// sproutRunFooter renders the command line's closing verdict for a finished
-// sprout run. It reports the actual outcome — a run that changed nothing must
-// say so instead of being dressed as "matured", which is how a run that never
-// touched its target file once reported success.
+// sproutRunFooter renders the command line's closing line for a sprout run. It
+// reports the actual outcome — a run that changed nothing must say so instead
+// of being dressed as "matured", which is how a run that never touched its
+// target file once reported success. Not every outcome is a verdict on the
+// work: a detached run has not ended at all, and saying so is the difference
+// between "your Sprout is still working" and "your Sprout gave up".
 func sproutRunFooter(result core.SproutRunResult) string {
 	switch result.Outcome {
 	case conductor.SproutOutcomeNoChanges:
 		return fmt.Sprintf("🌾 Sprout %s finished without changing any files (session %s). This can be legitimate for investigate-and-report tasks; if files were expected to change, the task did not happen.", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeNoEngagement:
 		return fmt.Sprintf("🥀 Sprout %s withered: the Sprout produced no response and changed nothing — the Mycorrhizal Network never engaged the task (session %s). This is not a successful run; verify the configured model can drive tools.", result.StepID, result.SessionID)
+	case conductor.SproutOutcomeDetached:
+		return fmt.Sprintf("🌿 Sprout %s is still growing; the Stem stopped waiting after its configured patience (session %s). This is not a finished run and not a failed one: the work continues, and the run reports its ending when it reaches one.", result.StepID, result.SessionID)
+	case conductor.SproutOutcomeReaped:
+		return fmt.Sprintf("🥀 Sprout %s was reaped at the backstop: nothing was waiting on it any more, so its terrarium was stopped (session %s). Any work it had already done is committed as incomplete.", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeSkipped:
 		return fmt.Sprintf("⏭️ Sprout %s skipped: this step already completed in a previous run (session %s)", result.StepID, result.SessionID)
 	case conductor.SproutOutcomeComplete:

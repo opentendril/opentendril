@@ -1056,6 +1056,36 @@ type sproutExecutionResult struct {
 	// should have been able to measure it, so an unmeasurable substrate and a
 	// measurement cut short stay distinguishable.
 	FilesUnmeasured string
+	// DetachedEnd delivers what a detached run finally did, once it has
+	// actually ended, and is non-nil only when Outcome is
+	// SproutOutcomeDetached. The caller still holds teardown the run needs —
+	// above all the worktree the Sprout is still writing to — so it waits on
+	// this rather than undoing that work from under a run that has not
+	// finished. It carries one value and is then closed, so a caller that only
+	// needs the moment can wait without reading the result.
+	DetachedEnd <-chan detachedRunEnding
+}
+
+// detachedRunEnding is what a detached run reports when it finally ends: the
+// same pair the call would have returned had anyone still been waiting for it.
+type detachedRunEnding struct {
+	result sproutExecutionResult
+	err    error
+}
+
+// awaitDetachedRun turns a detached run back into a finished one for a caller
+// that cannot leave it alone. Most of this package's sprout call sites own the
+// worktree the Sprout is still writing to and remove it the moment they return,
+// so detaching from them would tear the run down anyway — waiting is what
+// honesty costs there, and what comes back is the run's real result rather than
+// an empty one dressed as matured.
+func awaitDetachedRun(result sproutExecutionResult, err error) (sproutExecutionResult, error) {
+	if result.DetachedEnd == nil {
+		return result, err
+	}
+
+	ending := <-result.DetachedEnd
+	return ending.result, ending.err
 }
 
 type phenotypeRunResult struct {
@@ -1149,7 +1179,7 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 	}
 	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
 
-	result, err := runSequenceSproutAtPathFn(ctx, orch, step.Transcript, substratePath, shadowPath)
+	result, err := awaitDetachedRun(runSequenceSproutAtPathFn(ctx, orch, step.Transcript, substratePath, shadowPath))
 	if err != nil {
 		return result.Response, err
 	}
@@ -1246,7 +1276,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 			}
 			applyStepLLMSelection(orch, llmSelection)
 
-			runResult, runErr := runSequenceSproutAtPathFn(selectionCtx, orch, step.Transcript, sourcePath, shadowPath)
+			runResult, runErr := awaitDetachedRun(runSequenceSproutAtPathFn(selectionCtx, orch, step.Transcript, sourcePath, shadowPath))
 			if runErr != nil {
 				resultsCh <- phenotypeRunResult{
 					index:      index,
@@ -1336,6 +1366,13 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	var executionFilesUnmeasured string
 	defer func() {
 		outcome := executionOutcome
+		// A detached run has not ended, so it has no terminal event yet. The
+		// goroutine still holding the run publishes it when the work ends;
+		// publishing here would spend the run's one terminal event announcing
+		// an ending that has not happened.
+		if outcome == SproutOutcomeDetached && err == nil {
+			return
+		}
 		// A failure anywhere (including commit or merge-back after a clean
 		// Sprout turn) must reclassify: the run's provisional verdict cannot
 		// stand once its results failed to land.
@@ -1396,11 +1433,26 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		}
 	}
 
+	var detachedEnd <-chan detachedRunEnding
 	if cleanup != nil {
-		defer cleanup()
+		defer func() {
+			if detachedEnd != nil {
+				// The Sprout is still growing in this worktree. Removing it now
+				// would delete the work out from under a run that has not
+				// finished, so the removal waits for the run to end — on a
+				// goroutine, because this call is no longer waiting either.
+				go func() {
+					<-detachedEnd
+					cleanup()
+				}()
+				return
+			}
+			cleanup()
+		}()
 	}
 
 	executionResult, err := runSequenceSproutAtPathFn(ctx, orch, taskPrompt, sourcePath, mountPath)
+	detachedEnd = executionResult.DetachedEnd
 	executionOutcome = executionResult.Outcome
 	executionFiles = executionResult.FilesModified
 	executionFilesUnmeasured = executionResult.FilesUnmeasured
@@ -1442,20 +1494,42 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	}
 	gitRepo := isGitRepo(sourcePath)
 	cleanupCtx := context.WithoutCancel(ctx)
+
+	// Teardown a detached run must NOT take with it — the terrarium it is still
+	// growing in and the host workspace state it still owns. Collected rather
+	// than deferred one by one so the goroutine that outlives a detached call
+	// runs the same sequence, in the same order, once the work has ended. Same
+	// shape as RunSprout, for the same reason.
+	detached := false
+	var teardown []func()
+	var teardownErr error
+	runTeardown := func() {
+		for index := len(teardown) - 1; index >= 0; index-- {
+			teardown[index]()
+		}
+	}
+	defer func() {
+		if detached {
+			return
+		}
+		runTeardown()
+		err = errors.Join(err, teardownErr)
+	}()
+
 	hostStashed := false
 	if gitRepo && !orch.DisableMergeBack {
 		hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 		if err != nil {
 			return result, err
 		}
-		defer func() {
+		teardown = append(teardown, func() {
 			if !hostStashed {
 				return
 			}
 			if restoreErr := restoreHostStashFn(cleanupCtx, sourcePath); restoreErr != nil {
-				err = errors.Join(err, restoreErr)
+				teardownErr = errors.Join(teardownErr, restoreErr)
 			}
-		}()
+		})
 	}
 
 	if orch.Genotype != "" {
@@ -1479,15 +1553,23 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	substratesConfig, _ := LoadSubstratesConfig("")
 	sequencePlan, planErr := resolveSubstrateExecutionPlan(orch, substratesConfig)
 
-	// Bound the run by bounding the CONTEXT, not by passing a watchdog value:
-	// the terrarium watchdog is derived from the context deadline, so setting
-	// the deadline here is what reaches the session start. context.WithTimeout
-	// never extends an existing parent deadline, so this path's own tighter
-	// budget still wins when it has one. cleanupCtx above stays unbounded so
-	// the host stash is restored even after the budget is spent.
-	if planErr == nil && sequencePlan != nil && sequencePlan.growthBudget > 0 {
+	// The caller's own context, kept before the growth budget narrows ctx: the
+	// work below hangs off it and outlives the wait, exactly as in RunSprout.
+	callerCtx := ctx
+
+	// Bound the WAIT by bounding the CONTEXT this function blocks on.
+	// context.WithTimeoutCause never extends an existing parent deadline, so
+	// this path's own tighter budget still wins when it has one, and the cause
+	// records whose clock expired — only the growth budget's own expiry may
+	// detach. cleanupCtx above stays unbounded so the host stash is restored
+	// even after the budget is spent.
+	growthBudget := time.Duration(0)
+	if planErr == nil && sequencePlan != nil {
+		growthBudget = sequencePlan.growthBudget
+	}
+	if growthBudget > 0 {
 		var cancelGrowth context.CancelFunc
-		ctx, cancelGrowth = context.WithTimeout(ctx, sequencePlan.growthBudget)
+		ctx, cancelGrowth = context.WithTimeoutCause(ctx, growthBudget, errGrowthBudgetSpent)
 		defer cancelGrowth()
 	}
 
@@ -1515,144 +1597,234 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 	})
 
-	session, err := startTerrariumSessionFn(ctx, providerName, imageName, mountPath, command, nil, deriveWatchdogTimeout(ctx), obs)
+	// The terrarium belongs to the WORK, not to the wait, so it is created on
+	// the work's own context — see the equivalent point in RunSprout. Starting
+	// it on the growth budget would kill the container the moment the Stem
+	// stopped waiting, which is a kill wearing the word detach.
+	reapBudget := time.Duration(0)
+	if planErr == nil && sequencePlan != nil {
+		reapBudget = sequencePlan.reapBudget
+	}
+	workCtx, releaseWork := newSproutWorkContext(callerCtx, reapBudget)
+	defer func() {
+		if detached {
+			return
+		}
+		releaseWork(nil)
+	}()
+
+	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, command, nil, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
 		return result, err
 	}
-	defer session.Close()
+	teardown = append(teardown, func() { _ = session.Close() })
 
 	// The orchestrator's bus, not nil: the Sprout streams only when it has one
 	// to publish to, so passing nil made every sequence sprout step — a
 	// delegated Codex run among them — silent for its whole duration, leaving a
 	// wall clock as the only way to judge it.
-	sprout, err := newSproutFn(ctx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session, orch.EventBus, orch.StepID, orch.SessionID)
+	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, orch.Genotype, orch.resolveLLMClient(), session, orch.EventBus, orch.StepID, orch.SessionID)
 	if err != nil {
 		return result, err
 	}
 
-	sproutResult, runErr := sprout.Run(ctx, taskPrompt)
+	// completeRun measures, classifies and records what the run did. It is a
+	// closure rather than the tail of this function because a detached call
+	// reaches it from the goroutine below, long after this function returned —
+	// so it owns every value it touches and shares nothing with the caller's
+	// result, which by then belongs to somebody else.
+	completeRun := func(sproutResult sproutResult, runErr error) (result sproutExecutionResult, filesKnown bool, err error) {
+		result.ImageName = imageName
 
-	// The post-mortem runs on its own clock, for the reason given at the
-	// equivalent point in RunSprout: this is the path that actually carries the
-	// growth budget, so it is the path where a spent ctx would otherwise take
-	// the run's evidence down with it.
-	postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
-	defer cancelPostMortem()
-	if err := session.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
-	}
+		// The post-mortem runs on its own clock, for the reason given at the
+		// equivalent point in RunSprout: this is the path that actually carries
+		// the growth budget, so it is the path where a spent context would
+		// otherwise take the run's evidence down with it.
+		postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
+		defer cancelPostMortem()
+		if err := session.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
+		}
 
-	result.Response = sproutResult.Response
-	if sproutResult.ActionResult != nil {
-		verdict := strings.ToUpper(strings.TrimSpace(sproutResult.ActionResult.Verdict))
-		switch verdict {
-		case "DANGEROUS":
-			if quarantineErr := quarantineScriptPrompt(stepID, taskPrompt); quarantineErr != nil {
-				return result, errors.Join(fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks), quarantineErr)
+		result.Response = sproutResult.Response
+		if sproutResult.ActionResult != nil {
+			verdict := strings.ToUpper(strings.TrimSpace(sproutResult.ActionResult.Verdict))
+			switch verdict {
+			case "DANGEROUS":
+				if quarantineErr := quarantineScriptPrompt(stepID, taskPrompt); quarantineErr != nil {
+					return result, filesKnown, errors.Join(fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks), quarantineErr)
+				}
+				return result, filesKnown, fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks)
+			case "REVIEW":
+				return result, filesKnown, ErrRequiresReview
+			case "SAFE":
+			case "":
+			default:
+				return result, filesKnown, fmt.Errorf("unknown script review verdict %q", sproutResult.ActionResult.Verdict)
 			}
-			return result, fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks)
-		case "REVIEW":
-			return result, ErrRequiresReview
-		case "SAFE":
-		case "":
-		default:
-			return result, fmt.Errorf("unknown script review verdict %q", sproutResult.ActionResult.Verdict)
 		}
-	}
 
-	// Symbiotic Immune System: once the Macrophage's Sprout turn
-	// has written its fuzz test, deterministically run it — no LLM judgment
-	// call — and treat a crash exactly like a Verifier compiler/test failure,
-	// so shouldBudRecursiveDebugger sprouts a Debugger to fix it and retries.
-	// Skipped if the Sprout turn itself already failed; nothing to fuzz.
-	if runErr == nil && orch.Genotype == "macrophage" {
-		if fuzzErr := runMacrophageFuzzCheckFn(ctx, providerName, mountPath); fuzzErr != nil {
-			runErr = fuzzErr
+		// Symbiotic Immune System: once the Macrophage's Sprout turn
+		// has written its fuzz test, deterministically run it — no LLM judgment
+		// call — and treat a crash exactly like a Verifier compiler/test failure,
+		// so shouldBudRecursiveDebugger sprouts a Debugger to fix it and retries.
+		// Skipped if the Sprout turn itself already failed; nothing to fuzz.
+		if runErr == nil && orch.Genotype == "macrophage" {
+			if fuzzErr := runMacrophageFuzzCheckFn(workCtx, providerName, mountPath); fuzzErr != nil {
+				runErr = fuzzErr
+			}
 		}
-	}
 
-	if !gitRepo {
-		if runErr != nil {
-			return result, runErr
+		if !gitRepo {
+			if runErr != nil {
+				return result, filesKnown, runErr
+			}
+			return result, filesKnown, nil
 		}
-		return result, nil
-	}
 
-	// A measurement that fails is not a run that failed — see the equivalent
-	// point in RunSprout. Record why the evidence is missing and carry on to
-	// the record-keeping rather than returning and losing all of it.
-	filesKnown := false
-	modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, "tendril-status.json")
-	if diffErr != nil {
-		result.FilesUnmeasured = diffErr.Error()
-		fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
-	} else {
-		filesKnown = true
-	}
-
-	var gitDiff string
-	if !orch.DisableMergeBack {
-		gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
+		// A measurement that fails is not a run that failed — see the equivalent
+		// point in RunSprout. Record why the evidence is missing and carry on to
+		// the record-keeping rather than returning and losing all of it.
+		modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, "tendril-status.json")
 		if diffErr != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+			result.FilesUnmeasured = diffErr.Error()
+			fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
+		} else {
+			filesKnown = true
 		}
-	}
 
-	executionStatus := sproutExecutionStatus{
-		StepID:          stepID,
-		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
-		FilesModified:   modifiedFiles,
-		FilesUnmeasured: result.FilesUnmeasured,
-		Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
-	}
-	if runErr != nil {
-		executionStatus.Error = runErr.Error()
-	}
-	result.Outcome = executionStatus.Status
-	result.FilesModified = modifiedFiles
+		var gitDiff string
+		if !orch.DisableMergeBack {
+			gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
+			if diffErr != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+			}
+		}
 
-	var sequenceCredential ResolvedCredential
-	if sequencePlan != nil {
-		sequenceCredential = sequencePlan.credential
-	}
-	commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
-	if commitErr != nil {
+		executionStatus := sproutExecutionStatus{
+			StepID:          stepID,
+			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+			FilesModified:   modifiedFiles,
+			FilesUnmeasured: result.FilesUnmeasured,
+			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
+		}
 		if runErr != nil {
-			return result, errors.Join(runErr, commitErr)
+			executionStatus.Error = runErr.Error()
 		}
-		return result, commitErr
-	}
+		result.Outcome = executionStatus.Status
+		result.FilesModified = modifiedFiles
 
-	result.CommitHash = commitHash
+		var sequenceCredential ResolvedCredential
+		if sequencePlan != nil {
+			sequenceCredential = sequencePlan.credential
+		}
+		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
+		if commitErr != nil {
+			if runErr != nil {
+				return result, filesKnown, errors.Join(runErr, commitErr)
+			}
+			return result, filesKnown, commitErr
+		}
 
-	if orch.DisableMergeBack {
-		return result, runErr
-	}
+		result.CommitHash = commitHash
 
-	mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
-	if mergeErr != nil {
+		if orch.DisableMergeBack {
+			return result, filesKnown, runErr
+		}
+
+		mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
+		if mergeErr != nil {
+			if runErr != nil {
+				return result, filesKnown, errors.Join(runErr, mergeErr)
+			}
+			return result, filesKnown, mergeErr
+		}
+
+		if gitDiff != "" && runErr == nil {
+			chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
+			if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+			}
+		}
+
+		if fitErr := RecordGenomicFitness(sourcePath, runErr == nil); fitErr != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Genome fitness record skipped: %v\n", fitErr)
+		}
+
 		if runErr != nil {
-			return result, errors.Join(runErr, mergeErr)
+			return result, filesKnown, runErr
 		}
-		return result, mergeErr
+
+		return result, filesKnown, nil
 	}
 
-	if gitDiff != "" && runErr == nil {
-		chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-		if err := chronicler.TranscribeLearnings(ctx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+	// The Sprout turn runs on the work's clock, in its own goroutine, so this
+	// function can stop waiting without stopping it — the same separation
+	// RunSprout makes, and the one this path needs most, because this is where
+	// the parallel budget actually flows.
+	turns := make(chan sproutTurn, 1)
+	go func() {
+		sproutResult, runErr := sprout.Run(workCtx, taskPrompt)
+		turns <- sproutTurn{result: sproutResult, err: runErr}
+	}()
+
+	var turn sproutTurn
+	select {
+	case turn = <-turns:
+	case <-ctx.Done():
+		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) {
+			// The Stem stops waiting; the Sprout keeps growing. Nothing here
+			// closes the session or restores the host stash — the run still
+			// owns both — and the caller is told to hold its own teardown too,
+			// through the channel below, because the worktree it would remove
+			// is the one the Sprout is still writing to.
+			detached = true
+			detachedEnd := make(chan detachedRunEnding, 1)
+			publishSproutDetached(orch.EventBus, stepID, orch.SessionID, growthBudget)
+			fmt.Fprintf(os.Stderr, "🌿 Growth budget %s spent; detaching from %s. The Sprout keeps growing.\n", growthBudget, stepID)
+			go func() {
+				defer close(detachedEnd)
+				finished := <-turns
+				// Named before the work's context is released: the cause is
+				// what says which clock ended the run, and releasing overwrites
+				// it with a bare cancellation.
+				runErr := attributeSproutEnding(workCtx, finished.err)
+				detachedResult, detachedFilesKnown, detachedErr := completeRun(finished.result, runErr)
+				releaseWork(nil)
+				runTeardown()
+				detachedErr = errors.Join(detachedErr, teardownErr)
+				// The single terminal event for a detached run is published
+				// here rather than by runSequenceSprout, which returned long
+				// ago. That caller skips its own publish for exactly this
+				// outcome, so the run still gets one terminal event and gets it
+				// when the work actually ended.
+				outcome := detachedResult.Outcome
+				if detachedErr != nil || outcome == "" {
+					outcome = classifySproutOutcome(detachedErr, detachedResult.FilesModified, detachedFilesKnown, detachedResult.Response)
+				}
+				reason := ""
+				if detachedErr != nil {
+					reason = detachedErr.Error()
+				}
+				detachedResult.Outcome = outcome
+				publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, detachedResult.FilesModified, detachedResult.FilesUnmeasured, reason)
+				detachedEnd <- detachedRunEnding{result: detachedResult, err: detachedErr}
+			}()
+			result.ImageName = imageName
+			result.Outcome = SproutOutcomeDetached
+			result.DetachedEnd = detachedEnd
+			return result, nil
 		}
+		// Not the growth budget: the caller's own deadline expired or the
+		// caller cancelled, and nothing else will carry the work on. End it
+		// here and account for it here — detaching would report a run as still
+		// growing when nothing is growing it.
+		releaseWork(context.Cause(ctx))
+		turn = <-turns
 	}
 
-	if fitErr := RecordGenomicFitness(sourcePath, runErr == nil); fitErr != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Genome fitness record skipped: %v\n", fitErr)
-	}
-
-	if runErr != nil {
-		return result, runErr
-	}
-
-	return result, nil
+	result, _, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
+	return result, err
 }
 
 func quarantineScriptPrompt(stepID, taskPrompt string) error {
