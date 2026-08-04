@@ -55,6 +55,30 @@ func (f *fakeLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt strin
 	})
 }
 
+type nativeFakeLLM struct {
+	fakeLLM
+	nativeCalls     [][]llm.Message
+	nativeResponses []llm.Result
+	nativeResponse  llm.Result
+}
+
+func (f *nativeFakeLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error) {
+	callCopy := make([]llm.Message, len(messages))
+	copy(callCopy, messages)
+	f.nativeCalls = append(f.nativeCalls, callCopy)
+
+	response := f.nativeResponse
+	if len(f.nativeResponses) > 0 {
+		response = f.nativeResponses[0]
+		f.nativeResponses = f.nativeResponses[1:]
+	}
+	if tokenChan != nil {
+		tokenChan <- response.Text
+		close(tokenChan)
+	}
+	return response, nil
+}
+
 type fakeSession struct {
 	tools      []ToolDefinition
 	calls      []ToolCall
@@ -673,5 +697,210 @@ func TestAgentWithoutABusIsSilent(t *testing.T) {
 	}
 	if _, err := sprout.Run(context.Background(), "do the thing"); err != nil {
 		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+}
+
+func TestAgentRunsNativeToolLoop(t *testing.T) {
+	workspace := t.TempDir()
+
+	client := &nativeFakeLLM{
+		nativeResponses: []llm.Result{
+			{
+				Text: "<thought>reading file</thought>",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: llm.ToolCallFunction{
+							Name:      "readFile",
+							Arguments: `{"path":"README.md"}`,
+						},
+					},
+				},
+			},
+			{
+				Text: "<thought>done</thought>\ndone",
+			},
+		},
+	}
+	session := &fakeSession{
+		tools: []ToolDefinition{
+			{
+				Name:        "readFile",
+				Description: "Read a file",
+				Arguments: []ToolArgument{
+					{Name: "path", Type: "string", Required: true},
+				},
+			},
+		},
+	}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout returned error: %v", err)
+	}
+
+	result, err := sprout.Run(context.Background(), "read the README")
+	if err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+
+	if result.Response != "done" {
+		t.Fatalf("expected final response done, got %q", result.Response)
+	}
+	if len(session.calls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(session.calls))
+	}
+	if session.calls[0].Tool != "readFile" {
+		t.Fatalf("expected readFile tool call, got %q", session.calls[0].Tool)
+	}
+
+	if len(client.nativeCalls) != 2 {
+		t.Fatalf("expected 2 native calls, got %d", len(client.nativeCalls))
+	}
+	lastCall := client.nativeCalls[1]
+
+	// Natively, assistant message has the tool call, and a tool message answers it.
+	assistantMsg := lastCall[len(lastCall)-2]
+	if assistantMsg.Role != "assistant" || len(assistantMsg.ToolCalls) != 1 {
+		t.Fatalf("expected assistant message with tool calls, got %#v", assistantMsg)
+	}
+
+	toolMsg := lastCall[len(lastCall)-1]
+	if toolMsg.Role != "tool" || toolMsg.ToolCallID != "call_1" {
+		t.Fatalf("expected tool message with call_1, got %#v", toolMsg)
+	}
+	if !strings.Contains(toolMsg.Content, "README contents") {
+		t.Fatalf("tool message missing contents: %s", toolMsg.Content)
+	}
+
+	// Check transcript
+	if !strings.Contains(sprout.transcript.String(), "<thought>reading file</thought>") {
+		t.Fatalf("transcript missing thought block")
+	}
+
+	var thoughtEvents []eventbus.Event
+	for _, event := range bus.History(100) {
+		if event.Type == eventbus.EventThoughtBranch {
+			thoughtEvents = append(thoughtEvents, event)
+		}
+	}
+	if len(thoughtEvents) != 2 {
+		t.Fatalf("expected 2 thought events, got %d", len(thoughtEvents))
+	}
+}
+
+func TestNativeSystemPrompt(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{
+		nativeResponse: llm.Result{Text: "done"},
+	}
+	session := &fakeSession{
+		tools: []ToolDefinition{{Name: "readFile"}},
+	}
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	if _, err := sprout.Run(context.Background(), "test"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	prompt := client.nativeCalls[0][0].Content
+	if strings.Contains(prompt, "Protocol Rules:") {
+		t.Fatalf("native prompt must not contain prose protocol rules")
+	}
+}
+
+func TestProseSystemPrompt(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		response: "done",
+	}
+	session := &fakeSession{
+		tools: []ToolDefinition{{Name: "readFile"}},
+	}
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	if _, err := sprout.Run(context.Background(), "test"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	prompt := client.calls[0][0].Content
+	if !strings.Contains(prompt, "Protocol Rules:") {
+		t.Fatalf("prose prompt must contain prose protocol rules")
+	}
+}
+
+func TestMapToolsToNative(t *testing.T) {
+	tools := []ToolDefinition{
+		{
+			Name: "testTool",
+			Arguments: []ToolArgument{
+				{Name: "reqArg", Type: "string", Required: true},
+				{Name: "optArg", Type: "integer", Required: false},
+			},
+		},
+	}
+
+	mapped := mapToolsToNative(tools)
+	if len(mapped) != 1 {
+		t.Fatalf("expected 1 mapped tool")
+	}
+
+	params := mapped[0].Function.Parameters.(map[string]any)
+	req := params["required"].([]string)
+	if len(req) != 1 || req[0] != "reqArg" {
+		t.Fatalf("expected required array to contain [reqArg], got %v", req)
+	}
+}
+
+func TestMalformedArguments(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{
+		nativeResponses: []llm.Result{
+			{
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: llm.ToolCallFunction{
+							Name:      "readFile",
+							Arguments: `{malformed}`,
+						},
+					},
+				},
+			},
+			{
+				Text: "done",
+			},
+		},
+	}
+	session := &fakeSession{
+		tools: []ToolDefinition{{Name: "readFile"}},
+	}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	if _, err := sprout.Run(context.Background(), "test"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(session.calls) != 0 {
+		t.Fatalf("expected 0 tool calls in session due to malformed arguments, got %d", len(session.calls))
+	}
+
+	toolMsg := client.nativeCalls[1][3]
+	if toolMsg.Role != "tool" || !strings.Contains(toolMsg.Content, "failed to parse arguments JSON") {
+		t.Fatalf("expected tool error observation for malformed JSON, got %v", toolMsg.Content)
 	}
 }

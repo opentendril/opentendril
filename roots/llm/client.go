@@ -249,6 +249,15 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan chan<- string) (string, error) {
+	result, err := c.callInternal(ctx, messages, nil, tokenChan)
+	return result.Text, err
+}
+
+func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
+	return c.callInternal(ctx, messages, tools, tokenChan)
+}
+
+func (c *Client) callInternal(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
 	// Closing the channel is this function's job, on every path. It used to
 	// close only where it streamed or exhausted its candidates, so returning
 	// early — a missing model, an absent key — left a caller ranging over the
@@ -260,20 +269,20 @@ func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan c
 	}
 
 	if c == nil {
-		return "", fmt.Errorf("llm client is nil")
+		return Result{}, fmt.Errorf("llm client is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	if c.spec.BaseURL == "" {
-		return "", fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
+		return Result{}, fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
 	}
 	if c.spec.Model == "" {
-		return "", fmt.Errorf("no LLM model configured for provider %q", c.spec.Provider)
+		return Result{}, fmt.Errorf("no LLM model configured for provider %q", c.spec.Provider)
 	}
 	if c.spec.Provider != "local" && strings.TrimSpace(c.spec.APIKey) == "" {
-		return "", fmt.Errorf("no API key configured for provider %q", c.spec.Provider)
+		return Result{}, fmt.Errorf("no API key configured for provider %q", c.spec.Provider)
 	}
 
 	candidates := c.spec.BaseURLs
@@ -283,9 +292,9 @@ func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan c
 
 	var lastErr error
 	for _, baseURL := range candidates {
-		result, err := c.doCall(ctx, baseURL, messages, tokenChan != nil, tokenChan)
+		result, err := c.doCall(ctx, baseURL, messages, tools, tokenChan != nil, tokenChan)
 		if err == nil {
-			return result.Text, nil
+			return result, nil
 		}
 		lastErr = err
 	}
@@ -294,7 +303,7 @@ func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan c
 		lastErr = fmt.Errorf("llm request failed for provider %q", c.spec.Provider)
 	}
 
-	return "", lastErr
+	return Result{}, lastErr
 }
 
 func ResolveProviderSpec() ProviderSpec {
@@ -692,7 +701,7 @@ func LocalInferenceBaseURLs(baseURL string) []string {
 }
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
-	result, err := c.doCall(ctx, baseURL, messages, false, nil)
+	result, err := c.doCall(ctx, baseURL, messages, nil, false, nil)
 	return result.Text, err
 }
 
@@ -747,13 +756,13 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 	return models, nil
 }
 
-func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, stream bool, tokenChan chan<- string) (Result, error) {
+func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, tools []ToolDefinition, stream bool, tokenChan chan<- string) (Result, error) {
 	var (
 		url = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
 		req *http.Request
 	)
 
-	payload, err := c.adapter.BuildChatRequest(c.spec, messages, nil, stream)
+	payload, err := c.adapter.BuildChatRequest(c.spec, messages, tools, stream)
 	if err != nil {
 		return Result{}, err
 	}
