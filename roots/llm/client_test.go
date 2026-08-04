@@ -616,3 +616,39 @@ func TestCallStreamAdvancesCandidateLoopOnNon200(t *testing.T) {
 		t.Errorf("server2 was not called")
 	}
 }
+
+// The status check guards both branches from one place, so the branch that no
+// longer carries its own check needs its own assertion. Without this, narrowing
+// the check to the streaming path leaves the whole package green and a
+// non-streaming refusal surfaces as a JSON decode complaint about the refusal
+// text rather than as the provider's own explanation.
+func TestCallReturnsErrorOnNon200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("incorrect api key provided"))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+
+	res, err := client.Call(context.Background(), []Message{{Role: "user", Content: "hi"}})
+	if err == nil {
+		t.Fatalf("Call returned nil error, want 401 error")
+	}
+	if !strings.Contains(err.Error(), "llm returned 401") {
+		t.Errorf("error = %v, want to contain 'llm returned 401'", err)
+	}
+	if !strings.Contains(err.Error(), "incorrect api key provided") {
+		t.Errorf("error = %v, want to contain the provider's explanation", err)
+	}
+	if res != "" {
+		t.Errorf("res = %q, want empty", res)
+	}
+}
