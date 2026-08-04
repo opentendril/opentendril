@@ -1,0 +1,1 @@
+{"messages":[{"role":"system","content":"system instruction"},{"role":"user","content":"hello"},{"role":"assistant","content":"hi"},{"role":"user","content":"how are you?"}],"model":"gpt-4","stream":false,"temperature":0.5}
