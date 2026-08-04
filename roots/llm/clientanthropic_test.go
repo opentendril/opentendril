@@ -315,3 +315,26 @@ func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A response may carry prose, then a tool call, then more prose. Keeping only
+// one text block silently discards what the mind said — and the discard is
+// invisible, because the turn still returns text and still returns the call.
+// The block order is deliberate: a defect that keeps the last block and one that
+// keeps the first both pass a fixture with a single text block.
+func TestParseResponseKeepsEveryAnthropicTextBlock(t *testing.T) {
+	body := []byte(`{"content":[
+		{"type":"text","text":"before the call"},
+		{"type":"tool_use","id":"t1","name":"readFile","input":{"path":"x"}},
+		{"type":"text","text":"after the call"}]}`)
+
+	res, err := anthropicAdapter{}.ParseResponse(body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Text != "before the call\nafter the call" {
+		t.Errorf("Text = %q, want both blocks joined", res.Text)
+	}
+	if len(res.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls = %d, want 1", len(res.ToolCalls))
+	}
+}

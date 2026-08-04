@@ -215,9 +215,14 @@ func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 	}
 
 	var res Result
+	var texts []string
 	for _, block := range decoded.Content {
 		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
-			res.Text = strings.TrimSpace(block.Text)
+			// Every text block, joined. A response may carry prose before a tool
+			// call and more after it; keeping only one of them silently discards
+			// what the mind said, and which one is kept is not a choice worth
+			// having.
+			texts = append(texts, strings.TrimSpace(block.Text))
 		} else if block.Type == "tool_use" {
 			inputBytes, _ := json.Marshal(block.Input)
 			res.ToolCalls = append(res.ToolCalls, ToolCall{
@@ -230,6 +235,8 @@ func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 			})
 		}
 	}
+
+	res.Text = strings.Join(texts, "\n")
 
 	if res.Text == "" && len(res.ToolCalls) == 0 {
 		return Result{}, fmt.Errorf("anthropic response contained no text or tool calls")
