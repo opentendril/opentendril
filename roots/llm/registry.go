@@ -16,7 +16,7 @@ type ModelDefinition struct {
 	HasVision    bool
 	HasReasoning bool
 	// DrivesTools marks a model that reliably follows the tool-calling
-	// protocol an autonomous sprout depends on. Frontier hosted models and
+	// protocol on the fallback (prose) path. Frontier hosted models and
 	// large instruct models do; small local models (e.g. a 3B llama3.2) and
 	// code-completion-tuned models do not — measured, they return prose or an
 	// empty completion and the sprout matures having done nothing.
@@ -81,10 +81,14 @@ func activeModelRegistry() []ModelDefinition {
 }
 
 func SelectBestModel(caps Capabilities) (ModelDefinition, error) {
-	return SelectBestModelFromRegistry(caps, activeModelRegistry())
+	providerAcceptsTools := func(provider string) bool {
+		cfg := configuredProvider(provider)
+		return resolveAcceptsToolDefinitions(cfg) == nil || *resolveAcceptsToolDefinitions(cfg)
+	}
+	return SelectBestModelFromRegistry(caps, activeModelRegistry(), providerAcceptsTools)
 }
 
-func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) (ModelDefinition, error) {
+func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition, providerAcceptsTools func(provider string) bool) (ModelDefinition, error) {
 	providers := AvailableProviders()
 	available := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -103,7 +107,9 @@ func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) 
 			continue
 		}
 		if caps.RequiresToolUse && !model.DrivesTools {
-			continue
+			if providerAcceptsTools == nil || !providerAcceptsTools(model.Provider) {
+				continue
+			}
 		}
 		if caps.MinContextSize > 0 && model.ContextSize < caps.MinContextSize {
 			continue

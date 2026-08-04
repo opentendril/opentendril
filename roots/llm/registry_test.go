@@ -115,9 +115,9 @@ func TestFallbackRegistryServesCurrentGenerationAnthropic(t *testing.T) {
 
 // With only the always-available local provider, the cheapest model is
 // llama3.2 — which cannot drive tools. RequiresToolUse must skip it (and the
-// coder models) and select the one local model that can. This is the fix for a
-// no-session sprout silently landing on a model that returns empty completions.
-func TestSelectBestModelRequiresToolUseSkipsNonDrivers(t *testing.T) {
+// coder models) and select the one local model that can WHEN using the prose
+// path. On the native path, RequiresToolUse does not filter out models.
+func TestSelectBestModelRequiresToolUseSkipsNonDriversOnProsePath(t *testing.T) {
 	clearProviderKeys(t)
 
 	generic, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium})
@@ -128,14 +128,24 @@ func TestSelectBestModelRequiresToolUseSkipsNonDrivers(t *testing.T) {
 		t.Fatalf("without RequiresToolUse, cheapest local = %q, want llama3.2 (documents the default that was broken)", generic.Name)
 	}
 
-	toolCapable, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true})
+	prosePathPredicate := func(provider string) bool { return false }
+	toolCapable, err := SelectBestModelFromRegistry(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true}, activeModelRegistry(), prosePathPredicate)
 	if err != nil {
-		t.Fatalf("SelectBestModel(RequiresToolUse) failed: %v", err)
+		t.Fatalf("SelectBestModelFromRegistry(RequiresToolUse, prose) failed: %v", err)
 	}
 	if !toolCapable.DrivesTools {
 		t.Fatalf("selected model %#v does not drive tools", toolCapable)
 	}
 	if toolCapable.Provider != "local" || toolCapable.Name != "qwen3.5:9b" {
 		t.Fatalf("tool-capable local selection = %s/%s, want local/qwen3.5:9b", toolCapable.Provider, toolCapable.Name)
+	}
+
+	nativePathPredicate := func(provider string) bool { return true }
+	nativeCapable, err := SelectBestModelFromRegistry(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true}, activeModelRegistry(), nativePathPredicate)
+	if err != nil {
+		t.Fatalf("SelectBestModelFromRegistry(RequiresToolUse, native) failed: %v", err)
+	}
+	if nativeCapable.Name != "llama3.2" {
+		t.Fatalf("native path with RequiresToolUse = %q, want llama3.2 (since native path ignores DrivesTools)", nativeCapable.Name)
 	}
 }

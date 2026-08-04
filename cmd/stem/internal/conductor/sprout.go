@@ -58,7 +58,8 @@ type llmCaller interface {
 }
 
 type nativeCaller interface {
-	CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error)
+	CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, observer llm.ToolDowngradeObserver, tokenChan chan<- string) (llm.Result, error)
+	ToolDefinitionsCapable() bool
 }
 
 type Sprout struct {
@@ -82,6 +83,7 @@ type Sprout struct {
 	// persisted with an empty sessionId and orphaned from the run they belong
 	// to — present in the table, invisible to the surface meant to show them.
 	sessionID string
+	protocol  string
 }
 
 type ActionResult struct {
@@ -97,6 +99,7 @@ type sproutResult struct {
 	Response     string
 	Transcript   string
 	ActionResult *ActionResult
+	Protocol     string
 }
 
 func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
@@ -179,6 +182,7 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 		eventBus:        eventBus,
 		stepID:          stepID,
 		sessionID:       sessionID,
+		protocol:        "native",
 	}, nil
 }
 
@@ -192,9 +196,32 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	// after the fact as a single transcript, not only as a token stream.
 	defer a.publishTranscript()
 
+	if a.nativeClient != nil {
+		if !a.nativeClient.ToolDefinitionsCapable() {
+			fmt.Fprintln(os.Stderr, "warning: endpoint does not support tool definitions, falling back to prose protocol")
+			if a.eventBus != nil {
+				a.eventBus.Publish(eventbus.Event{
+					Type:      eventbus.EventSproutDowngraded,
+					Source:    a.stepID,
+					SessionID: a.sessionID,
+					Data: map[string]interface{}{
+						"reason": "declared incapable by configuration",
+					},
+				})
+			}
+			a.msgMu.Lock()
+			a.protocol = "prose"
+			a.msgMu.Unlock()
+			a.nativeClient = nil
+		}
+	}
+
 	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext)
 	if a.nativeClient == nil {
 		systemPrompt += "\n\n" + buildProseProtocolRules(a.tools)
+		a.msgMu.Lock()
+		a.protocol = "prose"
+		a.msgMu.Unlock()
 	}
 	a.msgMu.Lock()
 	a.messages = []llm.Message{
@@ -210,6 +237,26 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	if a.nativeClient != nil {
 		mappedTools = mapToolsToNative(a.tools)
 	}
+
+	var downgradeOnce sync.Once
+	observer := llm.ToolDowngradeObserver(func() {
+		downgradeOnce.Do(func() {
+			fmt.Fprintln(os.Stderr, "warning: endpoint rejected tool definitions, falling back to prose protocol")
+			if a.eventBus != nil {
+				a.eventBus.Publish(eventbus.Event{
+					Type:      eventbus.EventSproutDowngraded,
+					Source:    a.stepID,
+					SessionID: a.sessionID,
+					Data: map[string]interface{}{
+						"reason": "detected rejection by endpoint",
+					},
+				})
+			}
+			a.msgMu.Lock()
+			a.protocol = "prose"
+			a.msgMu.Unlock()
+		})
+	})
 
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
 		var tokenChan chan string
@@ -242,7 +289,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			}()
 
 			if a.nativeClient != nil {
-				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, tokenChan)
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, observer, tokenChan)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
 				err = errCall
@@ -252,7 +299,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			<-tokensPublished
 		} else {
 			if a.nativeClient != nil {
-				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, nil)
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, observer, nil)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
 				err = errCall
@@ -332,18 +379,26 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		if strings.TrimSpace(finalResponse) != "" {
+			a.msgMu.RLock()
+			reportedProtocol := a.protocol
+			a.msgMu.RUnlock()
 			return sproutResult{
 				Response:     strings.TrimSpace(finalResponse),
 				Transcript:   a.transcript.String(),
 				ActionResult: actionResult,
+				Protocol:     reportedProtocol,
 			}, nil
 		}
 
 		if !isToolCall {
+			a.msgMu.RLock()
+			reportedProtocol := a.protocol
+			a.msgMu.RUnlock()
 			return sproutResult{
 				Response:     strings.TrimSpace(response),
 				Transcript:   a.transcript.String(),
 				ActionResult: actionResult,
+				Protocol:     reportedProtocol,
 			}, nil
 		}
 

@@ -167,7 +167,7 @@ func TestCallStreamParsesAnthropicToolCall(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
 
 	tokenChan := make(chan string, 10)
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, tokenChan)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, tokenChan)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestCallStreamParsesAnthropicInterleavedToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestCallStreamParsesAnthropicTextAndToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestCallStreamReturnsErrorOnTruncatedToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	_, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "truncated tool call") {
 		t.Fatalf("expected truncated tool call error, got %v", err)
 	}
@@ -316,7 +316,7 @@ func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+			res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
 			if err != nil {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return
@@ -356,5 +356,79 @@ func TestParseResponseKeepsEveryAnthropicTextBlock(t *testing.T) {
 	}
 	if len(res.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls = %d, want 1", len(res.ToolCalls))
+	}
+}
+
+func TestDoCallAnthropicDowngradesOn400(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"content":[{"type":"text","text":"downgraded answer"}]}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunction{
+			Name: "test",
+		},
+	}}
+
+	observedError := false
+	observer := func() { observedError = true }
+
+	res, err := client.doCall(context.Background(), server.URL, nil, tools, observer, new(bool), false, nil)
+	if err != nil {
+		t.Fatalf("expected successful retry, got error: %v", err)
+	}
+
+	if requests != 2 {
+		t.Errorf("expected exactly 2 requests (1 failure, 1 retry), got %d", requests)
+	}
+	if !observedError {
+		t.Errorf("expected observer to be called on downgrade, but it wasn't")
+	}
+	if res.Text != "downgraded answer" {
+		t.Errorf("expected downgraded answer, got %q", res.Text)
+	}
+}
+
+func TestDoCallAnthropicFailsImmediatelyIfRequiresToolUse(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic, RequiresToolUse: true})
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunction{
+			Name: "test",
+		},
+	}}
+
+	observedError := false
+	observer := func() { observedError = true }
+
+	_, err := client.doCall(context.Background(), server.URL, nil, tools, observer, new(bool), false, nil)
+	if err == nil {
+		t.Fatalf("expected error due to RequiresToolUse=true, got success")
+	}
+
+	if requests != 1 {
+		t.Errorf("expected exactly 1 request, got %d", requests)
+	}
+	if observedError {
+		t.Errorf("expected observer NOT to be called when RequiresToolUse=true")
 	}
 }

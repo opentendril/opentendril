@@ -45,6 +45,13 @@ type ProviderSpec struct {
 	// explicitly via the `is-router` field in .tendril/config.yaml; it
 	// overrides the string-matching heuristic in IsThirdPartyRouterModel.
 	IsRouter bool
+	// AcceptsToolDefinitions, when explicitly false, signals that this
+	// endpoint cannot accept the native tool-calling protocol and should be
+	// driven with the prose protocol instead. Unset (nil) means attempt native.
+	AcceptsToolDefinitions *bool
+	// RequiresToolUse prevents the client from falling back to a tool-less
+	// protocol if native tool usage is rejected.
+	RequiresToolUse bool
 }
 
 type Message struct {
@@ -53,6 +60,11 @@ type Message struct {
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
+
+// ToolDowngradeObserver is notified exactly once when a security-relevant
+// fallback to the prose protocol happens because an endpoint is incapable of
+// native tool calling.
+type ToolDowngradeObserver func()
 
 // ToolDefinition declares one tool to a provider. The shape is the OpenAI
 // family's, because Message is marshalled straight onto that family's wire and
@@ -135,8 +147,11 @@ type tendrilProviderConfig struct {
 	// the string-matching heuristic (e.g. a self-hosted proxy whose model is
 	// coincidentally named "my-router"). Unset (zero value) defers the decision
 	// to the existing string-matching heuristic, preserving zero-config behavior.
-	IsRouter *bool                `yaml:"is-router"`
-	Models   []tendrilModelConfig `yaml:"models"`
+	IsRouter *bool `yaml:"is-router"`
+	// AcceptsToolDefinitions, when explicitly false, signals that this
+	// endpoint cannot accept native tool definitions. Unset defers to an attempt.
+	AcceptsToolDefinitions *bool                `yaml:"accepts-tool-definitions"`
+	Models                 []tendrilModelConfig `yaml:"models"`
 }
 
 // tendrilModelConfig declares one model's fallback/capability metadata for a
@@ -159,6 +174,19 @@ func (c *Client) SetTemperature(temp float64) {
 	if c != nil {
 		c.spec.Temperature = temp
 	}
+}
+
+// ToolDefinitionsCapable returns true if the endpoint can accept native tool
+// definitions. It is a pure query; if explicitly false, the conductor decides
+// how to announce the fallback.
+func (c *Client) ToolDefinitionsCapable() bool {
+	if c == nil {
+		return false
+	}
+	if c.spec.AcceptsToolDefinitions != nil && !*c.spec.AcceptsToolDefinitions {
+		return false
+	}
+	return true
 }
 
 func NewClient(spec ProviderSpec) *Client {
@@ -249,15 +277,15 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan chan<- string) (string, error) {
-	result, err := c.callInternal(ctx, messages, nil, tokenChan)
+	result, err := c.callInternal(ctx, messages, nil, nil, tokenChan)
 	return result.Text, err
 }
 
-func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
-	return c.callInternal(ctx, messages, tools, tokenChan)
+func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, tokenChan chan<- string) (Result, error) {
+	return c.callInternal(ctx, messages, tools, observer, tokenChan)
 }
 
-func (c *Client) callInternal(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
+func (c *Client) callInternal(ctx context.Context, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, tokenChan chan<- string) (Result, error) {
 	// Closing the channel is this function's job, on every path. It used to
 	// close only where it streamed or exhausted its candidates, so returning
 	// early — a missing model, an absent key — left a caller ranging over the
@@ -291,12 +319,20 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 	}
 
 	var lastErr error
+	downgraded := false
 	for _, baseURL := range candidates {
-		result, err := c.doCall(ctx, baseURL, messages, tools, tokenChan != nil, tokenChan)
-		if err == nil {
+		// If a previous candidate rejected tools and we downgraded, apply that
+		// memory to all subsequent candidates on this turn so we don't spam them.
+		reqTools := tools
+		if downgraded {
+			reqTools = nil
+		}
+
+		result, doErr := c.doCall(ctx, baseURL, messages, reqTools, observer, &downgraded, tokenChan != nil, tokenChan)
+		if doErr == nil {
 			return result, nil
 		}
-		lastErr = err
+		lastErr = doErr
 	}
 
 	if lastErr == nil {
@@ -334,14 +370,20 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 		provider = detectProviderFallback()
 	}
 	if model, ok := explicitModelForTier(provider, tier); ok {
-		return providerSpecForModel(provider, tier, model, "")
+		spec := providerSpecForModel(provider, tier, model, "")
+		spec.RequiresToolUse = requireTools
+		return spec
 	}
 	if model := configuredModelForProvider(provider); model != "" {
-		return providerSpecForModel(provider, tier, model, "")
+		spec := providerSpecForModel(provider, tier, model, "")
+		spec.RequiresToolUse = requireTools
+		return spec
 	}
 
 	if model, err := SelectBestModel(Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}); err == nil {
-		return providerSpecForModel(model.Provider, tier, model.Name, "")
+		spec := providerSpecForModel(model.Provider, tier, model.Name, "")
+		spec.RequiresToolUse = requireTools
+		return spec
 	}
 
 	// A tool-capable model was required but none matched (e.g. only small local
@@ -350,11 +392,15 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 	// instead of silently maturing on nothing.
 	if requireTools {
 		if model, err := SelectBestModel(Capabilities{MaxCostTier: tier}); err == nil {
-			return providerSpecForModel(model.Provider, tier, model.Name, "")
+			spec := providerSpecForModel(model.Provider, tier, model.Name, "")
+			spec.RequiresToolUse = requireTools
+			return spec
 		}
 	}
 
-	return providerSpecForModel(provider, tier, "", "")
+	spec := providerSpecForModel(provider, tier, "", "")
+	spec.RequiresToolUse = requireTools
+	return spec
 }
 
 func ResolveCoordinatorProviderSpec() ProviderSpec {
@@ -425,6 +471,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	}
 	temperature := configuredTemperature(providerConfig, 0.1)
 	isRouter := resolveIsRouter(providerConfig)
+	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
 
 	switch provider {
 	case "local":
@@ -434,80 +481,87 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 		}
 		endpoint := configOrDefault(providerConfig.Endpoint, "/chat/completions")
 		return ProviderSpec{
-			Provider:    "local",
-			BaseURL:     baseURL,
-			BaseURLs:    LocalInferenceBaseURLs(baseURL),
-			Model:       model,
-			Endpoint:    endpoint,
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "local",
+			BaseURL:                baseURL,
+			BaseURLs:               LocalInferenceBaseURLs(baseURL),
+			Model:                  model,
+			Endpoint:               endpoint,
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "anthropic":
 		return ProviderSpec{
-			Provider:    "anthropic",
-			BaseURL:     envOrConfig("ANTHROPIC_BASE_URL", providerConfig.BaseURL, "https://api.anthropic.com"),
-			APIKey:      envOrConfig("ANTHROPIC_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/v1/messages"),
-			Mode:        ModeAnthropic,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "anthropic",
+			BaseURL:                envOrConfig("ANTHROPIC_BASE_URL", providerConfig.BaseURL, "https://api.anthropic.com"),
+			APIKey:                 envOrConfig("ANTHROPIC_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/v1/messages"),
+			Mode:                   ModeAnthropic,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "openai":
 		return ProviderSpec{
-			Provider:    "openai",
-			BaseURL:     envOrConfig("OPENAI_BASE_URL", providerConfig.BaseURL, "https://api.openai.com/v1"),
-			APIKey:      envOrConfig("OPENAI_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "openai",
+			BaseURL:                envOrConfig("OPENAI_BASE_URL", providerConfig.BaseURL, "https://api.openai.com/v1"),
+			APIKey:                 envOrConfig("OPENAI_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "grok":
 		return ProviderSpec{
-			Provider:    "grok",
-			BaseURL:     envOrConfig("GROK_BASE_URL", providerConfig.BaseURL, "https://api.x.ai/v1"),
-			APIKey:      envOrConfig("GROK_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "grok",
+			BaseURL:                envOrConfig("GROK_BASE_URL", providerConfig.BaseURL, "https://api.x.ai/v1"),
+			APIKey:                 envOrConfig("GROK_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "google":
 		return ProviderSpec{
-			Provider:    "google",
-			BaseURL:     envOrConfig("GOOGLE_BASE_URL", providerConfig.BaseURL, "https://generativelanguage.googleapis.com/v1beta/openai"),
-			APIKey:      envOrConfig("GOOGLE_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "google",
+			BaseURL:                envOrConfig("GOOGLE_BASE_URL", providerConfig.BaseURL, "https://generativelanguage.googleapis.com/v1beta/openai"),
+			APIKey:                 envOrConfig("GOOGLE_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "openrouter":
 		return ProviderSpec{
-			Provider:    "openrouter",
-			BaseURL:     envOrConfig("OPENROUTER_BASE_URL", providerConfig.BaseURL, "https://openrouter.ai/api/v1"),
-			APIKey:      envOrConfig("OPENROUTER_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "openrouter",
+			BaseURL:                envOrConfig("OPENROUTER_BASE_URL", providerConfig.BaseURL, "https://openrouter.ai/api/v1"),
+			APIKey:                 envOrConfig("OPENROUTER_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	case "nvidia":
 		return ProviderSpec{
-			Provider:    "nvidia",
-			BaseURL:     envOrConfig("NVIDIA_BASE_URL", providerConfig.BaseURL, "https://integrate.api.nvidia.com/v1"),
-			APIKey:      envOrConfig("NVIDIA_API_KEY", providerConfig.APIKey, ""),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "nvidia",
+			BaseURL:                envOrConfig("NVIDIA_BASE_URL", providerConfig.BaseURL, "https://integrate.api.nvidia.com/v1"),
+			APIKey:                 envOrConfig("NVIDIA_API_KEY", providerConfig.APIKey, ""),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	default:
 		baseURL := localInferenceOverride
@@ -515,14 +569,15 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			baseURL = envOrConfig("LOCAL_INFERENCE_URL", providerConfig.BaseURL, "http://host.docker.internal:11434/v1")
 		}
 		return ProviderSpec{
-			Provider:    "local",
-			BaseURL:     baseURL,
-			BaseURLs:    LocalInferenceBaseURLs(baseURL),
-			Model:       model,
-			Endpoint:    configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:        ModeOpenAIish,
-			Temperature: temperature,
-			IsRouter:    isRouter,
+			Provider:               "local",
+			BaseURL:                baseURL,
+			BaseURLs:               LocalInferenceBaseURLs(baseURL),
+			Model:                  model,
+			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
+			Mode:                   ModeOpenAIish,
+			Temperature:            temperature,
+			IsRouter:               isRouter,
+			AcceptsToolDefinitions: acceptsToolDefs,
 		}
 	}
 }
@@ -536,6 +591,10 @@ func resolveIsRouter(cfg tendrilProviderConfig) bool {
 		return false
 	}
 	return *cfg.IsRouter
+}
+
+func resolveAcceptsToolDefinitions(cfg tendrilProviderConfig) *bool {
+	return cfg.AcceptsToolDefinitions
 }
 
 func envOr(key, fallback string) string {
@@ -701,7 +760,7 @@ func LocalInferenceBaseURLs(baseURL string) []string {
 }
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
-	result, err := c.doCall(ctx, baseURL, messages, nil, false, nil)
+	result, err := c.doCall(ctx, baseURL, messages, nil, nil, nil, false, nil)
 	return result.Text, err
 }
 
@@ -756,7 +815,7 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 	return models, nil
 }
 
-func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, tools []ToolDefinition, stream bool, tokenChan chan<- string) (Result, error) {
+func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, downgraded *bool, stream bool, tokenChan chan<- string) (Result, error) {
 	var (
 		url = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
 		req *http.Request
@@ -788,7 +847,26 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		if err != nil {
 			return Result{}, fmt.Errorf("read llm response: %w", err)
 		}
-		return Result{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+
+		rejectionErr := fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+
+		// If tools were sent and rejected, try exactly once without tools.
+		// We flag the downgrade so subsequent candidates on this call also drop tools.
+		if len(tools) > 0 && downgraded != nil && !*downgraded && !c.spec.RequiresToolUse {
+			*downgraded = true
+			if observer != nil {
+				observer()
+			}
+			retryRes, retryErr := c.doCall(ctx, baseURL, messages, nil, nil, downgraded, stream, tokenChan)
+			if retryErr != nil {
+				// If the retry also fails, report the original rejection rather
+				// than the retry's error.
+				return Result{}, rejectionErr
+			}
+			return retryRes, nil
+		}
+
+		return Result{}, rejectionErr
 	}
 
 	if stream {

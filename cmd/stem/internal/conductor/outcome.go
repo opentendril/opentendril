@@ -81,6 +81,8 @@ type SproutRunReport struct {
 	Output string
 	// Outcome is one of the SproutOutcome* values.
 	Outcome string
+	// Protocol is the tool-calling protocol the run used ("native" or "prose").
+	Protocol string
 	// FilesModified lists the workspace files the run changed, when the run
 	// happened in a git repository where that is measurable. Nil when unknown
 	// (non-git or readonly substrates).

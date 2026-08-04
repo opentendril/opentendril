@@ -566,6 +566,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				}
 			}
 			report.Output = sproutResult.Response
+			report.Protocol = sproutResult.Protocol
 			return report, filesKnown, nil
 		}
 
@@ -607,6 +608,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			executionStatus.Error = runErr.Error()
 		}
 		report.Outcome = executionStatus.Status
+		report.Protocol = sproutResult.Protocol
 
 		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
 		if commitErr != nil {
