@@ -244,6 +244,20 @@ jobs:
   # administrator-only step that was silently missed six times. Depending on all
   # of them and requiring one name moves that from an out-of-band chore to a line
   # in the same pull request that adds the guard.
+  filename-conventions:
+    name: Filenames are kebab-case
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The rule is in the genome every Sprout is given, and it drifted anyway:
+      # eight fixture files arrived underscored, past a builder holding the rule
+      # and a review that read those files byte-for-byte without reading their
+      # names. Whole-tree rather than diff-based, because the backlog is empty
+      # and a diff cannot see a name returning to a file nobody touched.
+      - name: No underscored filenames
+        run: bash scripts/check-filename-conventions.sh
+
   hygiene-gate:
     name: Source Hygiene Gate
     runs-on: ubuntu-latest
@@ -260,6 +274,7 @@ jobs:
       - taxonomy
       - cited-tests
       - test-runtime-floor
+      - filename-conventions
     # always() so a failed dependency still reports through this gate rather than
     # skipping it — a skipped required check is not a failed one.
     if: ${{ always() }}

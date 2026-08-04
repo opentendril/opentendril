@@ -668,17 +668,17 @@ func TestByteIdentity(t *testing.T) {
 		messages []Message
 		stream   bool
 	}{
-		{"system_user_assistant", []Message{
+		{"system-user-assistant", []Message{
 			{Role: "system", Content: "system instruction"},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "hi"},
 			{Role: "user", Content: "how are you?"},
 		}, false},
-		{"long_caching", []Message{
+		{"long-caching", []Message{
 			{Role: "system", Content: "system instruction"},
 			{Role: "user", Content: "A long message to trigger caching: " + strings.Repeat("X", 1005)},
 		}, false},
-		{"repomap_caching", []Message{
+		{"repomap-caching", []Message{
 			{Role: "system", Content: "system instruction"},
 			{Role: "user", Content: "Please review repomap.md"},
 		}, false},
@@ -689,13 +689,13 @@ func TestByteIdentity(t *testing.T) {
 
 	for _, ad := range adapters {
 		for _, sc := range scenarios {
-			t.Run(ad.name+"_"+sc.name, func(t *testing.T) {
+			t.Run(ad.name+"-"+sc.name, func(t *testing.T) {
 				actual, err := ad.adapter.BuildChatRequest(ad.spec, sc.messages, nil, sc.stream)
 				if err != nil {
 					t.Fatalf("BuildChatRequest failed: %v", err)
 				}
 
-				fixturePath := filepath.Join("testdata", ad.name+"_"+sc.name+".json")
+				fixturePath := filepath.Join("testdata", ad.name+"-"+sc.name+".json")
 				expected, err := os.ReadFile(fixturePath)
 				if err != nil {
 					t.Fatalf("Failed to read fixture %s: %v", fixturePath, err)
