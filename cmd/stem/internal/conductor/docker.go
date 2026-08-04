@@ -79,6 +79,10 @@ type DockerOrchestrator struct {
 	// SessionID attributes the run's lifecycle events to the session (Phytomer)
 	// it belongs to; empty for sessionless runs.
 	SessionID string
+	// AwaitsRunEnding declares that the caller will block until the run finishes,
+	// rather than carrying it on asynchronously. When true, a spent growth
+	// budget ends the run as timed-out instead of detaching.
+	AwaitsRunEnding bool
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -981,6 +985,8 @@ func attributeSproutEnding(workCtx context.Context, runErr error) error {
 	case errors.Is(cause, errReapBudgetSpent):
 		return fmt.Errorf("%w: %w", ErrSproutReaped, runErr)
 	case errors.Is(cause, context.DeadlineExceeded) && !errors.Is(runErr, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %w", context.DeadlineExceeded, runErr)
+	case errors.Is(cause, errGrowthBudgetSpent):
 		return fmt.Errorf("%w: %w", context.DeadlineExceeded, runErr)
 	}
 
