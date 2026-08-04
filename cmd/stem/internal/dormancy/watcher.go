@@ -486,18 +486,27 @@ func (w *Watcher) evaluate(now time.Time) {
 	w.mu.Unlock()
 
 	for _, d := range dormant {
-		w.bus.Publish(d.event)
-		// Capture runs after the report is published so a subscriber that reads
-		// the bus event cannot observe an empty artifact directory. Errors from
-		// capture are non-fatal: the report already landed, and "could not be
-		// taken" is itself evidence, recorded by the implementation.
+		// Capture runs BEFORE the report is published, so a subscriber handling
+		// the event finds the evidence already on disk. Bus.Publish invokes
+		// handlers synchronously on this goroutine, so capturing afterwards
+		// would guarantee every subscriber saw the report before the artifact
+		// existed — the opposite of what a report about a silent run is for.
+		//
+		// The cost is that the report waits on the capture, bounded by the
+		// implementation's own timeout. A run that has already been silent for
+		// several times its own widest gap is not harmed by that wait, and a
+		// report nobody can find evidence for is worth less than a late one.
+		//
+		// Errors are deliberately not fatal to the report: "the capture could
+		// not be taken" is itself evidence, recorded by the implementation, and
+		// suppressing the report as well would lose both.
 		if w.capture != nil {
 			// context.Background is correct here: the run's work context may be
-			// closing (that is the ordinary way a run ends), and a capture issued
-			// on an already-expired context would always fail. The capture is
-			// bounded by the implementation's own timeout.
+			// closing (that is the ordinary way a run ends), and a capture
+			// issued on an already-expired context would always fail.
 			w.capture(context.Background(), d.key) //nolint:errcheck
 		}
+		w.bus.Publish(d.event)
 	}
 }
 

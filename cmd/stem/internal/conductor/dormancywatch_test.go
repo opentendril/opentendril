@@ -409,45 +409,87 @@ func TestDormancyCaptureArtifactContainsExpectedSections(t *testing.T) {
 }
 
 // TestDormancyCaptureArtifactNotWrittenOnHealthyRun checks the inverse: a run
-// that never crosses the reporting level produces no artifact at all. The watcher
-// is the gatekeeper — capture fires only after a dormancy report — and this
-// test confirms the gate holds when suspicion stays below the threshold.
+// that never crosses the reporting level produces no artifact at all. The
+// watcher is the gatekeeper — capture fires only on a dormancy report — and this
+// test confirms the gate holds when suspicion stays below it.
 func TestDormancyCaptureArtifactNotWrittenOnHealthyRun(t *testing.T) {
 	captureDir := t.TempDir()
 	originalCapture := DormancyCaptureDir
 	DormancyCaptureDir = func() string { return captureDir }
 	t.Cleanup(func() { DormancyCaptureDir = originalCapture })
 
-	// A run that emits stream tokens on every tick stays below reportingSuspicion.
-	// Using the watcher directly with a synthetic clock so the whole cadence plays
-	// out without any wall-clock time passing, exactly as the dormancy suite does.
+	// The absence asserted below is only worth anything if the watcher actually
+	// evaluated this run. The scratch probe is the observable edge of a tick, so
+	// the test waits on it rather than sleeping and hoping: a run that never
+	// ticked would produce no artifact for the wrong reason, and would pass.
+	original := collectStageableFilesFn
+	t.Cleanup(func() { collectStageableFilesFn = original })
+	ticked := make(chan struct{}, 1)
+	collectStageableFilesFn = func(ctx context.Context, path string, excludedPaths ...string) ([]string, error) {
+		select {
+		case ticked <- struct{}{}:
+		default:
+		}
+		return []string{"pkg/thing.go"}, nil
+	}
+
 	bus := eventbus.New()
 
-	var captures int
 	stop := watchDormancy(
-		context.Background(), bus, 5*time.Millisecond, t.TempDir(),
+		context.Background(), bus, 10*time.Millisecond, t.TempDir(),
 		&stubInspector{logs: "ok"},
 		&stubSnapshot{req: "q", resp: "a"},
 	)
 
-	// Publish enough stream tokens at a tight interval to keep suspicion low.
-	for i := 0; i < 10; i++ {
-		bus.Publish(eventbus.Event{
-			Type:      eventbus.EventStreamToken,
-			Source:    "healthy-step",
-			SessionID: "healthy-session",
-			Data:      map[string]interface{}{"token": "word"},
-		})
-		time.Sleep(time.Millisecond)
+	// A run whose stream keeps arriving stays far below the reporting level.
+	// The stream must keep flowing across the watcher's evaluation, so it is
+	// published from here until the tick below has been observed.
+	streaming := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-streaming:
+				return
+			default:
+			}
+			bus.Publish(eventbus.Event{
+				Type:      eventbus.EventStreamToken,
+				Source:    "healthy-step",
+				SessionID: "healthy-session",
+				Data:      map[string]interface{}{"token": "word"},
+			})
+			// Tokens published back to back teach the watcher a microsecond
+			// cadence, after which a few milliseconds of ordinary scheduling
+			// delay genuinely is many envelopes of silence — the detector would
+			// be right and the fixture wrong. Nothing is being waited for here;
+			// the tick is waited for on a channel below.
+			//
+			// dwell: paces the simulated stream, so the cadence the watcher
+			// learns is one a healthy run could actually have.
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-ticked:
+	case <-time.After(5 * time.Second):
+		close(streaming)
+		<-done
+		stop()
+		t.Fatal("the watcher never evaluated the run; an empty capture directory below would prove nothing")
 	}
+
+	close(streaming)
+	<-done
 	stop()
 
 	entries, err := os.ReadDir(captureDir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	captures = len(entries)
-	if captures != 0 {
+	if captures := len(entries); captures != 0 {
 		t.Fatalf("healthy run produced %d capture artifact(s), want 0", captures)
 	}
 }
