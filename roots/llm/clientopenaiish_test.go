@@ -454,36 +454,3 @@ func TestDoCallOpenAIishDowngradesOn400(t *testing.T) {
 		t.Errorf("expected downgraded answer, got %q", res.Text)
 	}
 }
-
-func TestDoCallOpenAIishFailsImmediatelyIfRequiresToolUse(t *testing.T) {
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		w.WriteHeader(http.StatusBadRequest)
-		w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
-	}))
-	defer server.Close()
-
-	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish, RequiresToolUse: true})
-	tools := []ToolDefinition{{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "test",
-		},
-	}}
-
-	observedError := false
-	observer := func() { observedError = true }
-
-	_, err := client.doCall(context.Background(), server.URL, nil, tools, observer, new(bool), false, nil)
-	if err == nil {
-		t.Fatalf("expected error due to RequiresToolUse=true, got success")
-	}
-
-	if requests != 1 {
-		t.Errorf("expected exactly 1 request, got %d", requests)
-	}
-	if observedError {
-		t.Errorf("expected observer NOT to be called when RequiresToolUse=true")
-	}
-}

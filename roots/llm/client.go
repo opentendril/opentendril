@@ -49,9 +49,6 @@ type ProviderSpec struct {
 	// endpoint cannot accept the native tool-calling protocol and should be
 	// driven with the prose protocol instead. Unset (nil) means attempt native.
 	AcceptsToolDefinitions *bool
-	// RequiresToolUse prevents the client from falling back to a tool-less
-	// protocol if native tool usage is rejected.
-	RequiresToolUse bool
 }
 
 type Message struct {
@@ -371,18 +368,15 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 	}
 	if model, ok := explicitModelForTier(provider, tier); ok {
 		spec := providerSpecForModel(provider, tier, model, "")
-		spec.RequiresToolUse = requireTools
 		return spec
 	}
 	if model := configuredModelForProvider(provider); model != "" {
 		spec := providerSpecForModel(provider, tier, model, "")
-		spec.RequiresToolUse = requireTools
 		return spec
 	}
 
 	if model, err := SelectBestModel(Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}); err == nil {
 		spec := providerSpecForModel(model.Provider, tier, model.Name, "")
-		spec.RequiresToolUse = requireTools
 		return spec
 	}
 
@@ -393,13 +387,11 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 	if requireTools {
 		if model, err := SelectBestModel(Capabilities{MaxCostTier: tier}); err == nil {
 			spec := providerSpecForModel(model.Provider, tier, model.Name, "")
-			spec.RequiresToolUse = requireTools
 			return spec
 		}
 	}
 
 	spec := providerSpecForModel(provider, tier, "", "")
-	spec.RequiresToolUse = requireTools
 	return spec
 }
 
@@ -852,12 +844,12 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 
 		// If tools were sent and rejected, try exactly once without tools.
 		// We flag the downgrade so subsequent candidates on this call also drop tools.
-		if len(tools) > 0 && downgraded != nil && !*downgraded && !c.spec.RequiresToolUse {
+		if len(tools) > 0 && downgraded != nil {
 			*downgraded = true
 			if observer != nil {
 				observer()
 			}
-			retryRes, retryErr := c.doCall(ctx, baseURL, messages, nil, nil, downgraded, stream, tokenChan)
+			retryRes, retryErr := c.doCall(ctx, baseURL, messages, tools, observer, downgraded, stream, tokenChan)
 			if retryErr != nil {
 				// If the retry also fails, report the original rejection rather
 				// than the retry's error.

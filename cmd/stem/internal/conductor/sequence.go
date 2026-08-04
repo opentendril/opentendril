@@ -1552,7 +1552,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	// toolchains/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
 	imageName := orch.resolveImageName(mountPath)
 	result.ImageName = imageName
-	if err := ensureSproutImage(ctx, imageName); err != nil {
+	if err := ensureSproutImageFn(ctx, imageName); err != nil {
 		return result, err
 	}
 

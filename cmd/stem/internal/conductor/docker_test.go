@@ -814,7 +814,10 @@ func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, _ = orch.RunSprout(ctx, "test prompt")
+	_, err := orch.RunSprout(ctx, "test prompt")
+	if err != nil {
+		t.Logf("RunSprout error: %v", err)
+	}
 
 	if received != 0 {
 		t.Fatalf("expected 0 host execution events for docker provider, got %d", received)
@@ -828,13 +831,19 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 	originalEnsureSprout := ensureSproutImageFn
 	originalStartSession := startTerrariumSessionFn
 	originalNewSprout := newSproutFn
+	originalPreflight := runSproutPreflightChecksFn
+	originalRepoMap := generateRepoMapFn
 	t.Cleanup(func() {
 		ensureSproutImageFn = originalEnsureSprout
 		startTerrariumSessionFn = originalStartSession
 		newSproutFn = originalNewSprout
+		runSproutPreflightChecksFn = originalPreflight
+		generateRepoMapFn = originalRepoMap
 	})
 
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 
 	tests := []struct {
 		name          string
@@ -864,7 +873,10 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 				Investigation: tc.investigation,
 			}
 
-			_, _ = orch.RunSprout(ctx, "test prompt")
+			_, err := orch.RunSprout(ctx, "test prompt")
+			if err != nil {
+				t.Logf("RunSprout error: %v", err)
+			}
 
 			if capturedReadOnly != tc.wantReadOnly {
 				t.Errorf("startTerrariumSessionFn called with readOnly=%v, want %v", capturedReadOnly, tc.wantReadOnly)

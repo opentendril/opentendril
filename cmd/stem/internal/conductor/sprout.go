@@ -254,6 +254,12 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			}
 			a.msgMu.Lock()
 			a.protocol = "prose"
+			// The fallback retry inside the client re-marshals this exact slice (the backing
+			// array is aliased). This mutation reaches the retry because the client passes
+			// the slice through without a defensive copy — a stated dependency of this seam.
+			if len(a.messages) > 0 {
+				a.messages[0].Content += "\n\n" + buildProseProtocolRules(a.tools)
+			}
 			a.msgMu.Unlock()
 		})
 	})
