@@ -1628,6 +1628,16 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		return result, err
 	}
 
+	// The dormancy watcher runs on the WORK's context and is stopped by the
+	// teardown sequence, not by this function returning: a detached call
+	// returns while the Sprout is still growing, and a watcher torn down at
+	// that moment would go blind at exactly the point nobody else is looking.
+	scratchInterval := time.Duration(0)
+	if planErr == nil && sequencePlan != nil {
+		scratchInterval = sequencePlan.scratchInterval
+	}
+	teardown = append(teardown, watchDormancy(workCtx, orch.EventBus, scratchInterval, mountPath))
+
 	// completeRun measures, classifies and records what the run did. It is a
 	// closure rather than the tail of this function because a detached call
 	// reaches it from the goroutine below, long after this function returned —

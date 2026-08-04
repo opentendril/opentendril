@@ -28,6 +28,9 @@ substrates:
       growth: 20m                    # how long the Stem keeps its attention on
                                      # one growth. Unset means no bound of its
                                      # own — whatever the caller already set.
+      scratch: 30s                   # how often to actively ask the workspace
+                                     # whether it is still changing. Bounds
+                                     # nothing; unset leaves the probe off.
 
   # Foreign read-only substrate: no local `path`, so the Stem clones `url` with
   # the PAT named by `auth`. `readonly: true` discards edits — nothing is pushed
@@ -91,3 +94,9 @@ substrates:
 #   still governs — this only ever tightens. A malformed or non-positive value is a
 #   load error, not a silent default: a bound you asked for and did not get is worse
 #   than none. Raise it for a slower model; lower it to stop waiting sooner.
+# - `patience.scratch`: a Go duration ("30s", "2m") setting how often a running growth's
+#   workspace is actively probed for a sign of life — the scratch test. It bounds
+#   nothing and ends nothing: a growing diff lowers the suspicion that a quiet growth
+#   has stopped, and a static one is simply not evidence either way. Unset (the
+#   default) leaves the probe off, so nothing is asked and nothing changes. A
+#   malformed or non-positive value is a load error, for the same reason as above.

@@ -63,7 +63,16 @@ const (
 	// still gets exactly one matured/withered event, published later, when the
 	// work actually ends — a consumer that treats this as an ending will
 	// report a run as finished while it is still writing files.
-	EventSproutDetached    EventType = "sprout-detached"
+	EventSproutDetached EventType = "sprout-detached"
+	// EventSproutDormant reports that a growth has stopped showing signs of
+	// life for long enough to be worth saying so out loud. It is a REPORT and
+	// never a verdict: nothing acts on it, no run ends because of it, and a
+	// dormant growth may still be working. Distinguishing a stopped growth
+	// from a slow one is undecidable, so this carries an accrued suspicion
+	// level derived from the run's own observed cadence rather than a
+	// judgement, and its only effect is to raise verbosity around a run we
+	// otherwise hold the least evidence about.
+	EventSproutDormant     EventType = "sprout-dormant"
 	EventParallelSprouting EventType = "parallel-sprouting"
 	EventMycelialMerge     EventType = "mycelial-merge"
 	// EventPhenotypicSelection reports Genetic Algorithm progress (start,
@@ -102,6 +111,7 @@ func AllEventTypes() []EventType {
 		EventSproutMatured,
 		EventSproutWithered,
 		EventSproutDetached,
+		EventSproutDormant,
 		EventParallelSprouting,
 		EventMycelialMerge,
 		EventPhenotypicSelection,
