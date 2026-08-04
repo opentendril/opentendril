@@ -123,7 +123,7 @@ func TestBudgetExpiryIsTimedOutNotFailed(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifySproutOutcome(testCase.runErr, nil, false, "")
+			got := classifySproutOutcome(testCase.runErr, nil, false, "", false)
 			if got != testCase.want {
 				t.Fatalf("classifySproutOutcome(%v) = %q, want %q", testCase.runErr, got, testCase.want)
 			}
@@ -393,7 +393,7 @@ func stubSequencePostMortemCollaborators(t *testing.T, root string) {
 	removeShadowWorktreeFn = func(sourcePath, shadowPath string) {}
 	injectMycorrhizalCacheFn = func(sourcePath, shadowPath string) {}
 	stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
 	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {

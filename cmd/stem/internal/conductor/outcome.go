@@ -24,6 +24,10 @@ const (
 	// is NOT an error — "investigate and report" legitimately changes nothing —
 	// but it must never be dressed as plain completion.
 	SproutOutcomeNoChanges = "no-changes"
+	// SproutOutcomeReported: the run finished without changing files, because
+	// it was declared an investigation run. This is an honest record of a task
+	// whose goal was a report rather than a diff.
+	SproutOutcomeReported = "reported"
 	// SproutOutcomeFailed: the run errored before finishing.
 	SproutOutcomeFailed = "failed"
 	// SproutOutcomeTimedOut: a clock ended the run before it could finish —
@@ -94,7 +98,7 @@ type SproutRunReport struct {
 // whether FilesModified was measurable at all — a non-git or readonly
 // substrate cannot distinguish complete from no-changes, and claiming
 // "no-changes" there would be its own kind of lie.
-func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string) string {
+func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string, isInvestigation bool) string {
 	if runErr != nil {
 		// The reaper is checked first because its error deliberately wraps the
 		// cancellation it caused: a run ended for want of anyone waiting is
@@ -127,6 +131,9 @@ func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool
 	// engaged regardless of what it said, so file evidence wins.
 	if strings.TrimSpace(sproutResponse) == "" && !changedFiles {
 		return SproutOutcomeNoEngagement
+	}
+	if isInvestigation && !changedFiles {
+		return SproutOutcomeReported
 	}
 	if filesKnown && !changedFiles {
 		return SproutOutcomeNoChanges

@@ -87,7 +87,7 @@ func stubCountingSession(t *testing.T) *countingToolSession {
 	original := startTerrariumSessionFn
 	t.Cleanup(func() { startTerrariumSessionFn = original })
 
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return session, nil
 	}
 

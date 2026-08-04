@@ -1134,6 +1134,7 @@ func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step 
 		StepID:          step.ID,
 		IsCoordinator:   isMeristemStep(step.ID),
 		Genotype:        genotype,
+		Investigation:   step.Investigation,
 		Provider:        provider,
 		Model:           model,
 		BaseURL:         baseURL,
@@ -1175,6 +1176,7 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 		StepID:           step.ID,
 		IsCoordinator:    isMeristemStep(step.ID),
 		Genotype:         genotype,
+		Investigation:    step.Investigation,
 		DisableMergeBack: true,
 	}
 	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
@@ -1271,6 +1273,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				StepID:           step.ID,
 				IsCoordinator:    isMeristemStep(step.ID),
 				Genotype:         genotype,
+				Investigation:    step.Investigation,
 				Temperature:      0.1 + float64(index)*0.3,
 				DisableMergeBack: true,
 			}
@@ -1377,7 +1380,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		// Sprout turn) must reclassify: the run's provisional verdict cannot
 		// stand once its results failed to land.
 		if err != nil || outcome == "" {
-			outcome = classifySproutOutcome(err, executionFiles, false, response)
+			outcome = classifySproutOutcome(err, executionFiles, false, response, orch.Investigation)
 		}
 		reason := ""
 		if err != nil {
@@ -1613,7 +1616,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		releaseWork(nil)
 	}()
 
-	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, command, nil, deriveWatchdogTimeout(workCtx), obs)
+	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, orch.Investigation, command, nil, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
 		return result, err
 	}
@@ -1724,7 +1727,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
 			FilesModified:   modifiedFiles,
 			FilesUnmeasured: result.FilesUnmeasured,
-			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
+			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response, orch.Investigation),
 		}
 		if runErr != nil {
 			executionStatus.Error = runErr.Error()
@@ -1817,8 +1820,12 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 				// outcome, so the run still gets one terminal event and gets it
 				// when the work actually ended.
 				outcome := detachedResult.Outcome
-				if detachedErr != nil || outcome == "" {
-					outcome = classifySproutOutcome(detachedErr, detachedResult.FilesModified, detachedFilesKnown, detachedResult.Response)
+				if detachedResult.Outcome == "" {
+					if detachedResult.Response == "" && detachedFilesKnown && len(detachedResult.FilesModified) == 0 && detachedErr == nil {
+						outcome = SproutOutcomeNoEngagement
+					} else {
+						outcome = classifySproutOutcome(detachedErr, detachedResult.FilesModified, detachedFilesKnown, detachedResult.Response, orch.Investigation)
+					}
 				}
 				reason := ""
 				if detachedErr != nil {
