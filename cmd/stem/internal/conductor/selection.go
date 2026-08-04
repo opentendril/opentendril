@@ -302,6 +302,7 @@ func growPhenotype(ctx context.Context, step *SequenceStep, cfg *SelectionConfig
 		Genotype:         genotypeName,
 		Temperature:      genotype.temperature,
 		DisableMergeBack: true,
+		AwaitsRunEnding:  true,
 	}
 	applyStepLLMSelection(orch, llmSelection)
 

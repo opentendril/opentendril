@@ -1178,6 +1178,7 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 		Genotype:         genotype,
 		Investigation:    step.Investigation,
 		DisableMergeBack: true,
+		AwaitsRunEnding:  true,
 	}
 	applyStepLLMSelection(orch, resolveStepLLMSelection(ctx, step))
 
@@ -1276,6 +1277,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				Investigation:    step.Investigation,
 				Temperature:      0.1 + float64(index)*0.3,
 				DisableMergeBack: true,
+				AwaitsRunEnding:  true,
 			}
 			applyStepLLMSelection(orch, llmSelection)
 
@@ -1793,7 +1795,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	select {
 	case turn = <-turns:
 	case <-ctx.Done():
-		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) {
+		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) && !orch.AwaitsRunEnding {
 			// The Stem stops waiting; the Sprout keeps growing. Nothing here
 			// closes the session or restores the host stash — the run still
 			// owns both — and the caller is told to hold its own teardown too,

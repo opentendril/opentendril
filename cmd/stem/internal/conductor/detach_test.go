@@ -725,3 +725,55 @@ func TestPatienceReapLoading(t *testing.T) {
 		}
 	})
 }
+
+// TestAwaitingCallerEndsInsteadOfDetaching proves that an awaiting caller whose
+// budget expires gets a finished result classified as timed-out, rather than
+// detaching into an immediate await.
+func TestAwaitingCallerEndsInsteadOfDetaching(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	cwd := chdirToTempDir(t)
+	writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 300ms\n")
+
+	stubSequencePostMortemCollaborators(t, root)
+	runner := newHeldSproutRunner("this response should not be seen")
+	stubSequenceRunner(t, runner)
+	stubCountingSession(t)
+	stubCountingSequenceCommit(t)
+
+	bus := eventbus.New()
+	recorder := recordSproutEvents(bus)
+
+	orch := &DockerOrchestrator{
+		Substrate:        "bounded",
+		StepID:           "await-seqpath",
+		EventBus:         bus,
+		DisableMergeBack: true,
+		AwaitsRunEnding:  true,
+	}
+	_, err := runSequenceSprout(context.Background(), orch, "await probe")
+
+	if err == nil {
+		t.Fatalf("runSequenceSprout returned nil error; expected it to fail with timed-out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+
+	// 2. no sprout-detached event — as an explicit count over recorded bus events
+	if detachments := recorder.count(eventbus.EventSproutDetached); detachments != 0 {
+		t.Fatalf("got %d sprout-detached events, want 0; an awaiting caller does not detach", detachments)
+	}
+
+	// 3. exactly one terminal event, counted, at the ending
+	if terminals := recorder.terminalCount(); terminals != 1 {
+		t.Fatalf("got %d terminal events, want exactly 1; recorded %#v", terminals, recorder.recorded())
+	}
+
+	terminal := recorder.awaitTerminal(t, "Awaiting Caller")
+	if terminal.Type != eventbus.EventSproutWithered {
+		t.Fatalf("terminal event is %s, want %s", terminal.Type, eventbus.EventSproutWithered)
+	}
+	if outcome, _ := terminal.Data["outcome"].(string); outcome != SproutOutcomeTimedOut {
+		t.Fatalf("terminal event carries outcome %q, want %q", outcome, SproutOutcomeTimedOut)
+	}
+}

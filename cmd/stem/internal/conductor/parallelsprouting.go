@@ -271,6 +271,7 @@ func growParallelSprout(ctx context.Context, step *SequenceStep, sourcePath, bra
 		StepID:           step.ID + "-sprout-" + strconv.Itoa(index),
 		Genotype:         stepGenotype(step.ID),
 		DisableMergeBack: true,
+		AwaitsRunEnding:  true,
 	}
 	applyStepLLMSelection(orch, llmSelection)
 
