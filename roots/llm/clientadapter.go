@@ -31,16 +31,19 @@ type providerAdapter interface {
 	// Anthropic's caching beta flag) on a chat request.
 	SetChatHeaders(req *http.Request, spec ProviderSpec)
 
-	// ParseStreamChunk extracts one delta from an SSE "data: ..." line's JSON
-	// payload (already stripped of the "data: " prefix). ok is false when the
-	// line carries nothing this provider's event shape recognises. A delta
-	// carries text or a tool-call fragment; reassembling fragments that span
-	// several lines is the adapter's job, because no later layer sees them.
-	ParseStreamChunk(data string) (delta StreamDelta, ok bool)
+	// NewStreamDecoder returns a stateful decoder for an SSE stream. A decoder
+	// processes each line's JSON payload (already stripped of the "data: " prefix)
+	// and reassembles fragments that span several lines.
+	NewStreamDecoder() streamDecoder
 
 	// ParseResponse extracts the completion — text, tool calls, or both — from
 	// a non-streaming response body.
 	ParseResponse(body []byte) (Result, error)
+}
+
+type streamDecoder interface {
+	ParseChunk(data string) (StreamDelta, bool)
+	Finalize() error
 }
 
 // adapterForMode returns the adapter for mode. Any mode other than
@@ -84,9 +87,10 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 				systemParts = append(systemParts, trimmedContent)
 			}
 		case "assistant", "user":
-			anthropicMessages = append(anthropicMessages, anthropicMessagePayload(role, content))
+			anthropicMessages = append(anthropicMessages, anthropicMessagePayload(message))
 		default:
-			anthropicMessages = append(anthropicMessages, anthropicMessagePayload("user", content))
+			message.Role = "user"
+			anthropicMessages = append(anthropicMessages, anthropicMessagePayload(message))
 		}
 	}
 
@@ -103,6 +107,18 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 		}
 	}
 
+	if len(tools) > 0 {
+		anthropicTools := make([]map[string]any, 0, len(tools))
+		for _, tool := range tools {
+			anthropicTools = append(anthropicTools, map[string]any{
+				"name":         tool.Function.Name,
+				"description":  tool.Function.Description,
+				"input_schema": tool.Function.Parameters,
+			})
+		}
+		payloadBody["tools"] = anthropicTools
+	}
+
 	payload, err := json.Marshal(payloadBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
@@ -116,38 +132,109 @@ func (anthropicAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
 }
 
-func (anthropicAdapter) ParseStreamChunk(dataStr string) (StreamDelta, bool) {
+type anthropicStreamDecoder struct {
+	accumulators map[int]*ToolCall
+}
+
+func (anthropicAdapter) NewStreamDecoder() streamDecoder {
+	return &anthropicStreamDecoder{
+		accumulators: make(map[int]*ToolCall),
+	}
+}
+
+func (d *anthropicStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) {
 	var event struct {
 		Type  string `json:"type"`
+		Index int    `json:"index"`
 		Delta struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type        string `json:"type"`
+			Text        string `json:"text"`
+			PartialJSON string `json:"partial_json"`
 		} `json:"delta"`
+		ContentBlock struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"content_block"`
 	}
-	if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
-		if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
+	if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
+		return StreamDelta{}, false
+	}
+
+	switch event.Type {
+	case "content_block_delta":
+		if event.Delta.Type == "text_delta" {
 			return StreamDelta{Text: event.Delta.Text}, true
+		} else if event.Delta.Type == "input_json_delta" {
+			if acc, ok := d.accumulators[event.Index]; ok {
+				acc.Function.Arguments += event.Delta.PartialJSON
+			}
+			return StreamDelta{ToolCallFragment: event.Delta.PartialJSON}, true
+		}
+	case "content_block_start":
+		if event.ContentBlock.Type == "tool_use" {
+			d.accumulators[event.Index] = &ToolCall{
+				ID:   event.ContentBlock.ID,
+				Type: "function",
+				Function: ToolCallFunction{
+					Name:      event.ContentBlock.Name,
+					Arguments: "",
+				},
+			}
+			return StreamDelta{}, true // Processed, but no delta to yield
+		}
+	case "content_block_stop":
+		if acc, ok := d.accumulators[event.Index]; ok {
+			delete(d.accumulators, event.Index)
+			return StreamDelta{ToolCall: acc}, true
 		}
 	}
+
 	return StreamDelta{}, false
+}
+
+func (d *anthropicStreamDecoder) Finalize() error {
+	if len(d.accumulators) > 0 {
+		return fmt.Errorf("truncated tool call: stream ended before stop block")
+	}
+	return nil
 }
 
 func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 	var decoded struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string         `json:"type"`
+			Text  string         `json:"text"`
+			ID    string         `json:"id"`
+			Name  string         `json:"name"`
+			Input map[string]any `json:"input"`
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return Result{}, fmt.Errorf("decode anthropic response: %w", err)
 	}
+
+	var res Result
 	for _, block := range decoded.Content {
-		if strings.TrimSpace(block.Text) != "" {
-			return Result{Text: strings.TrimSpace(block.Text)}, nil
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			res.Text = strings.TrimSpace(block.Text)
+		} else if block.Type == "tool_use" {
+			inputBytes, _ := json.Marshal(block.Input)
+			res.ToolCalls = append(res.ToolCalls, ToolCall{
+				ID:   block.ID,
+				Type: "function",
+				Function: ToolCallFunction{
+					Name:      block.Name,
+					Arguments: string(inputBytes),
+				},
+			})
 		}
 	}
-	return Result{}, fmt.Errorf("anthropic response contained no text")
+
+	if res.Text == "" && len(res.ToolCalls) == 0 {
+		return Result{}, fmt.Errorf("anthropic response contained no text or tool calls")
+	}
+	return res, nil
 }
 
 type openAIishAdapter struct{}
@@ -181,7 +268,13 @@ func (openAIishAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	}
 }
 
-func (openAIishAdapter) ParseStreamChunk(dataStr string) (StreamDelta, bool) {
+type openAIishStreamDecoder struct{}
+
+func (openAIishAdapter) NewStreamDecoder() streamDecoder {
+	return openAIishStreamDecoder{}
+}
+
+func (openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) {
 	var chunk struct {
 		Choices []struct {
 			Delta struct {
@@ -198,6 +291,10 @@ func (openAIishAdapter) ParseStreamChunk(dataStr string) (StreamDelta, bool) {
 		}
 	}
 	return StreamDelta{}, false
+}
+
+func (openAIishStreamDecoder) Finalize() error {
+	return nil
 }
 
 func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {

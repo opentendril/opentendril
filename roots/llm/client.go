@@ -103,8 +103,9 @@ type Result struct {
 // learns to accumulate tool-call fragments, which is where a tool call streamed
 // in pieces gets reassembled — no other layer sees the pieces.
 type StreamDelta struct {
-	Text     string
-	ToolCall *ToolCall
+	Text             string
+	ToolCallFragment string
+	ToolCall         *ToolCall
 }
 
 type Client struct {
@@ -282,9 +283,9 @@ func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan c
 
 	var lastErr error
 	for _, baseURL := range candidates {
-		content, err := c.doCall(ctx, baseURL, messages, tokenChan != nil, tokenChan)
+		result, err := c.doCall(ctx, baseURL, messages, tokenChan != nil, tokenChan)
 		if err == nil {
-			return content, nil
+			return result.Text, nil
 		}
 		lastErr = err
 	}
@@ -691,7 +692,8 @@ func LocalInferenceBaseURLs(baseURL string) []string {
 }
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
-	return c.doCall(ctx, baseURL, messages, false, nil)
+	result, err := c.doCall(ctx, baseURL, messages, false, nil)
+	return result.Text, err
 }
 
 func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]string, error) {
@@ -745,7 +747,7 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 	return models, nil
 }
 
-func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, stream bool, tokenChan chan<- string) (string, error) {
+func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, stream bool, tokenChan chan<- string) (Result, error) {
 	var (
 		url = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
 		req *http.Request
@@ -753,12 +755,12 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 
 	payload, err := c.adapter.BuildChatRequest(c.spec, messages, nil, stream)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
 
 	req, err = http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
-		return "", fmt.Errorf("create chat request: %w", err)
+		return Result{}, fmt.Errorf("create chat request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -766,7 +768,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("llm request failed: %w", err)
+		return Result{}, fmt.Errorf("llm request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -775,14 +777,17 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return "", fmt.Errorf("read llm response: %w", err)
+			return Result{}, fmt.Errorf("read llm response: %w", err)
 		}
-		return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return Result{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	if stream {
 		scanner := bufio.NewScanner(resp.Body)
 		var fullContent strings.Builder
+		var toolCalls []ToolCall
+		decoder := c.adapter.NewStreamDecoder()
+
 		for scanner.Scan() {
 			line := scanner.Text()
 			if line == "" {
@@ -796,29 +801,40 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				break
 			}
 
-			if delta, ok := c.adapter.ParseStreamChunk(dataStr); ok {
-				fullContent.WriteString(delta.Text)
-				if tokenChan != nil {
-					tokenChan <- delta.Text
+			if delta, ok := decoder.ParseChunk(dataStr); ok {
+				if delta.Text != "" {
+					fullContent.WriteString(delta.Text)
+					if tokenChan != nil {
+						tokenChan <- delta.Text
+					}
+				}
+				if delta.ToolCallFragment != "" && tokenChan != nil {
+					tokenChan <- delta.ToolCallFragment
+				}
+				if delta.ToolCall != nil {
+					toolCalls = append(toolCalls, *delta.ToolCall)
 				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			return fullContent.String(), fmt.Errorf("error reading stream: %w", err)
+			return Result{Text: fullContent.String(), ToolCalls: toolCalls}, fmt.Errorf("error reading stream: %w", err)
 		}
-		return fullContent.String(), nil
+		if err := decoder.Finalize(); err != nil {
+			return Result{Text: fullContent.String(), ToolCalls: toolCalls}, err
+		}
+		return Result{Text: fullContent.String(), ToolCalls: toolCalls}, nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("read llm response: %w", err)
+		return Result{}, fmt.Errorf("read llm response: %w", err)
 	}
 
 	res, err := c.adapter.ParseResponse(body)
 	if err != nil {
-		return "", err
+		return Result{}, err
 	}
-	return res.Text, nil
+	return res, nil
 }
 
 func anthropicTextBlock(text string, cache bool) map[string]any {
@@ -834,16 +850,48 @@ func anthropicTextBlock(text string, cache bool) map[string]any {
 	return block
 }
 
-func anthropicMessagePayload(role string, content string) map[string]any {
-	if shouldCacheAnthropicContent(content) {
+func anthropicMessagePayload(msg Message) map[string]any {
+	var contentBlocks []map[string]any
+
+	if msg.ToolCallID != "" {
 		return map[string]any{
-			"role":    role,
-			"content": []map[string]any{anthropicTextBlock(content, true)},
+			"role": msg.Role,
+			"content": []map[string]any{
+				{
+					"type":        "tool_result",
+					"tool_use_id": msg.ToolCallID,
+					"content":     msg.Content,
+				},
+			},
 		}
 	}
+
+	if msg.Content != "" {
+		contentBlocks = append(contentBlocks, anthropicTextBlock(msg.Content, shouldCacheAnthropicContent(msg.Content)))
+	}
+	for _, call := range msg.ToolCalls {
+		var inputObj map[string]any
+		if err := json.Unmarshal([]byte(call.Function.Arguments), &inputObj); err != nil {
+			inputObj = make(map[string]any)
+		}
+		contentBlocks = append(contentBlocks, map[string]any{
+			"type":  "tool_use",
+			"id":    call.ID,
+			"name":  call.Function.Name,
+			"input": inputObj,
+		})
+	}
+
+	if len(contentBlocks) == 1 && msg.Content != "" && !shouldCacheAnthropicContent(msg.Content) {
+		return map[string]any{
+			"role":    msg.Role,
+			"content": msg.Content,
+		}
+	}
+
 	return map[string]any{
-		"role":    role,
-		"content": content,
+		"role":    msg.Role,
+		"content": contentBlocks,
 	}
 }
 
