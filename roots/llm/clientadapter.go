@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -186,7 +187,7 @@ func (d *anthropicStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 	case "content_block_stop":
 		if acc, ok := d.accumulators[event.Index]; ok {
 			delete(d.accumulators, event.Index)
-			return StreamDelta{ToolCall: acc}, true
+			return StreamDelta{ToolCalls: []ToolCall{*acc}}, true
 		}
 	}
 
@@ -257,12 +258,16 @@ func (openAIishAdapter) SetModelsAuthHeaders(req *http.Request, apiKey string) {
 }
 
 func (openAIishAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, tools []ToolDefinition, stream bool) ([]byte, error) {
-	payload, err := json.Marshal(map[string]any{
+	payloadBody := map[string]any{
 		"model":       spec.Model,
 		"temperature": spec.Temperature,
 		"stream":      stream,
 		"messages":    messages,
-	})
+	}
+	if len(tools) > 0 {
+		payloadBody["tools"] = tools
+	}
+	payload, err := json.Marshal(payloadBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat request: %w", err)
 	}
@@ -275,41 +280,105 @@ func (openAIishAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	}
 }
 
-type openAIishStreamDecoder struct{}
-
-func (openAIishAdapter) NewStreamDecoder() streamDecoder {
-	return openAIishStreamDecoder{}
+type openAIishStreamDecoder struct {
+	accumulators map[int]*ToolCall
 }
 
-func (openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) {
+func (openAIishAdapter) NewStreamDecoder() streamDecoder {
+	return &openAIishStreamDecoder{
+		accumulators: make(map[int]*ToolCall),
+	}
+}
+
+func (d *openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) {
 	var chunk struct {
 		Choices []struct {
 			Delta struct {
-				Content string `json:"content"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					Index    int    `json:"index"`
+					ID       string `json:"id"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
 			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
 		if len(chunk.Choices) > 0 {
-			text := chunk.Choices[0].Delta.Content
-			if text != "" {
-				return StreamDelta{Text: text}, true
+			choice := chunk.Choices[0]
+			var delta StreamDelta
+			hasDelta := false
+
+			if choice.Delta.Content != "" {
+				delta.Text = choice.Delta.Content
+				hasDelta = true
+			}
+
+			if len(choice.Delta.ToolCalls) > 0 {
+				for _, tcDelta := range choice.Delta.ToolCalls {
+					acc, ok := d.accumulators[tcDelta.Index]
+					if !ok {
+						acc = &ToolCall{
+							ID:   tcDelta.ID,
+							Type: "function",
+							Function: ToolCallFunction{
+								Name:      tcDelta.Function.Name,
+								Arguments: "",
+							},
+						}
+						d.accumulators[tcDelta.Index] = acc
+					}
+
+					if tcDelta.Function.Arguments != "" {
+						acc.Function.Arguments += tcDelta.Function.Arguments
+						delta.ToolCallFragment += tcDelta.Function.Arguments
+						hasDelta = true
+					}
+				}
+			}
+
+			if choice.FinishReason != "" {
+				if choice.FinishReason == "length" && len(d.accumulators) > 0 {
+					// Left in accumulators for Finalize to report truncation.
+				} else {
+					var indexes []int
+					for idx := range d.accumulators {
+						indexes = append(indexes, idx)
+					}
+					sort.Ints(indexes)
+					for _, idx := range indexes {
+						delta.ToolCalls = append(delta.ToolCalls, *d.accumulators[idx])
+					}
+					d.accumulators = make(map[int]*ToolCall)
+					if len(delta.ToolCalls) > 0 {
+						hasDelta = true
+					}
+				}
+			}
+
+			if hasDelta {
+				return delta, true
 			}
 		}
 	}
 	return StreamDelta{}, false
 }
 
-func (openAIishStreamDecoder) Finalize() error {
+func (d *openAIishStreamDecoder) Finalize() error {
+	if len(d.accumulators) > 0 {
+		return fmt.Errorf("truncated tool call: stream ended before stop block")
+	}
 	return nil
 }
 
 func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {
 	var decoded struct {
 		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
+			Message Message `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
@@ -319,8 +388,9 @@ func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {
 		return Result{}, fmt.Errorf("chat response contained no choices")
 	}
 	content := strings.TrimSpace(decoded.Choices[0].Message.Content)
-	if content == "" {
+	toolCalls := decoded.Choices[0].Message.ToolCalls
+	if content == "" && len(toolCalls) == 0 {
 		return Result{}, fmt.Errorf("chat response contained no content")
 	}
-	return Result{Text: content}, nil
+	return Result{Text: content, ToolCalls: toolCalls}, nil
 }
