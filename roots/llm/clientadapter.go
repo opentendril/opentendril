@@ -31,13 +31,15 @@ type providerAdapter interface {
 	// Anthropic's caching beta flag) on a chat request.
 	SetChatHeaders(req *http.Request, spec ProviderSpec)
 
-	// ParseStreamChunk extracts a text delta from one SSE "data: ..." line's
-	// JSON payload (already stripped of the "data: " prefix). ok is false
-	// when the line carries no text delta for this provider's event shape.
+	// ParseStreamChunk extracts one delta from an SSE "data: ..." line's JSON
+	// payload (already stripped of the "data: " prefix). ok is false when the
+	// line carries nothing this provider's event shape recognises. A delta
+	// carries text or a tool-call fragment; reassembling fragments that span
+	// several lines is the adapter's job, because no later layer sees them.
 	ParseStreamChunk(data string) (delta StreamDelta, ok bool)
 
-	// ParseResponse extracts the completion text from a non-streaming
-	// response body.
+	// ParseResponse extracts the completion — text, tool calls, or both — from
+	// a non-streaming response body.
 	ParseResponse(body []byte) (Result, error)
 }
 

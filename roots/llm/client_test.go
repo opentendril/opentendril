@@ -721,7 +721,15 @@ func TestMessageOmitsToolFields(t *testing.T) {
 	}
 }
 
-func TestPlumbingCarriesToolDefinitionsAndReturnsResult(t *testing.T) {
+// Both adapters accept tool definitions and, for now, ignore them: emitting
+// them onto the wire belongs to the per-family slices that follow. So this
+// asserts acceptance only, and is named for that. The claim it does NOT make —
+// that today's text still comes back through the new return types — is pinned
+// by TestCallSendsOpenAIShapedRequestWithoutCaching,
+// TestCallSendsAnthropicShapedRequestWithCaching and
+// TestAnthropicPromptCachingPayload, each of which goes red when a parser drops
+// its text into the new Result.
+func TestAdaptersAcceptToolDefinitionsWithoutEmittingThem(t *testing.T) {
 	adapters := []struct {
 		name    string
 		adapter providerAdapter
@@ -731,20 +739,14 @@ func TestPlumbingCarriesToolDefinitionsAndReturnsResult(t *testing.T) {
 		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: 0.5}},
 	}
 
-	tools := []ToolDefinition{
-		{
-			Type: "function",
-			Function: struct {
-				Name        string `json:"name"`
-				Description string `json:"description,omitempty"`
-				Parameters  any    `json:"parameters"`
-			}{
-				Name:        "get_weather",
-				Description: "Gets the weather",
-				Parameters:  map[string]any{"type": "object"},
-			},
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "get_weather",
+			Description: "Gets the weather",
+			Parameters:  map[string]any{"type": "object"},
 		},
-	}
+	}}
 
 	for _, ad := range adapters {
 		t.Run(ad.name, func(t *testing.T) {
