@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -281,16 +282,28 @@ func TestCallStreamReturnsErrorOnTruncatedToolCall(t *testing.T) {
 	}
 }
 
+// Every stream carries a DIFFERENT call, so a splice between two of them shows
+// up in the content itself rather than only under -race. With identical
+// payloads on every stream, two streams swapping arguments is indistinguishable
+// from two streams keeping their own — measured on the OpenAI-shaped twin of
+// this test, a shared-accumulator mutation passed three runs in five. Flushing
+// between events is what makes the streams actually overlap in time.
 func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
+	var next int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&next, 1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
-			`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"c_1","name":"t_1"}}`,
-			`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"arg"}}`,
+			fmt.Sprintf(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"c_%d","name":"t_1"}}`, n),
+			fmt.Sprintf(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"arg-%d"}}`, n),
 			`{"type":"content_block_stop","index":1}`,
 		}
+		flusher, _ := w.(http.Flusher)
 		for _, ev := range events {
 			fmt.Fprintf(w, "data: %s\n\n", ev)
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -299,7 +312,7 @@ func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 24; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -308,8 +321,15 @@ func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return
 			}
-			if len(res.ToolCalls) != 1 || res.ToolCalls[0].Function.Arguments != "arg" {
-				t.Errorf("concurrent mismatch: %v", res.ToolCalls)
+			if len(res.ToolCalls) != 1 {
+				t.Errorf("ToolCalls = %d, want exactly 1", len(res.ToolCalls))
+				return
+			}
+			call := res.ToolCalls[0]
+			wantArgs := "arg-" + strings.TrimPrefix(call.ID, "c_")
+			if call.Function.Arguments != wantArgs {
+				t.Errorf("call %s carried arguments %q, want %q — a stream received another stream's fragments",
+					call.ID, call.Function.Arguments, wantArgs)
 			}
 		}()
 	}

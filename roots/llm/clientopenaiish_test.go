@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -353,16 +354,32 @@ func TestCallStreamOpenAIishTextOnly(t *testing.T) {
 	}
 }
 
+// Every stream carries a DIFFERENT call, so a splice between two of them shows
+// up in the content itself. An earlier version of this test gave all five
+// streams identical payloads: under a shared-accumulator mutation it passed
+// three runs in five, because two streams swapping identical arguments is
+// indistinguishable from two streams keeping their own. Pairing each call's id
+// with its own arguments is what makes the assertion able to fail.
 func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
+	var next int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&next, 1)
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c_1","type":"function","function":{"name":"t","arguments":""}}]}}]}`,
-			`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"arg"}}]}}]}`,
+			fmt.Sprintf(`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c_%d","type":"function","function":{"name":"t","arguments":""}}]}}]}`, n),
+			fmt.Sprintf(`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"arg-%d"}}]}}]}`, n),
 			`{"choices":[{"finish_reason":"tool_calls"}]}`,
 		}
+		// Flush between events so the streams genuinely overlap in time. Without
+		// this the whole response lands in one write and each stream is decoded
+		// start-to-finish before the next begins, which is the arrangement least
+		// likely to expose shared state.
+		flusher, _ := w.(http.Flusher)
 		for _, ev := range events {
 			fmt.Fprintf(w, "data: %s\n\n", ev)
+			if flusher != nil {
+				flusher.Flush()
+			}
 		}
 		fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
@@ -371,7 +388,7 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
 
 	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 24; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -380,8 +397,17 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return
 			}
-			if len(res.ToolCalls) != 1 || res.ToolCalls[0].Function.Arguments != "arg" {
-				t.Errorf("concurrent mismatch: %v", res.ToolCalls)
+			if len(res.ToolCalls) != 1 {
+				t.Errorf("ToolCalls = %d, want exactly 1", len(res.ToolCalls))
+				return
+			}
+			call := res.ToolCalls[0]
+			// The identifier names which stream this call came from, so its
+			// arguments must be that stream's and no other's.
+			wantArgs := "arg-" + strings.TrimPrefix(call.ID, "c_")
+			if call.Function.Arguments != wantArgs {
+				t.Errorf("call %s carried arguments %q, want %q — a stream received another stream's fragments",
+					call.ID, call.Function.Arguments, wantArgs)
 			}
 		}()
 	}
