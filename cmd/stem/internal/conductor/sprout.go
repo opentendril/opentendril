@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,7 +59,7 @@ type llmCaller interface {
 }
 
 type nativeCaller interface {
-	CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, observer llm.ToolDowngradeObserver, tokenChan chan<- string) (llm.Result, error)
+	CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error)
 	ToolDefinitionsCapable() bool
 }
 
@@ -186,6 +187,47 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 	}, nil
 }
 
+// announceDowngrade records that this run is no longer carried natively, and
+// says so three ways: on stderr for whoever is watching the Stem, as an event
+// for whoever is watching the bus, and in the run's own outcome so a growth
+// that produced nothing can answer "was the protocol to blame?" from its record.
+//
+// It also performs the demotion rather than only reporting it. Clearing
+// nativeClient is what the rest of the turn loop reads to mean prose — it
+// selects parseModelResponse over the native tool calls, and it stops the tool
+// catalogue from being withheld from the prompt — so announcing without
+// clearing would leave the prompt teaching one protocol while the parser
+// expects the other, and the run would mature on its first prose tool call.
+//
+// Callers reach here at most once per run, because the only two paths into it
+// both require a non-nil nativeClient.
+func (a *Sprout) announceDowngrade(reason string) {
+	fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol\n", reason)
+
+	if a.eventBus != nil {
+		a.eventBus.Publish(eventbus.Event{
+			Type:      eventbus.EventSproutDowngraded,
+			Source:    a.stepID,
+			SessionID: a.sessionID,
+			Data: map[string]interface{}{
+				"reason": reason,
+			},
+		})
+	}
+
+	a.msgMu.Lock()
+	a.protocol = "prose"
+	// A turn already composed for the native protocol never taught the prose
+	// rules, so the mind has to be taught them before it is asked again.
+	// Re-teaching a prompt that already carries them would say everything twice.
+	if len(a.messages) > 0 && !strings.Contains(a.messages[0].Content, proseProtocolRulesHeading) {
+		a.messages[0].Content += "\n\n" + buildProseProtocolRules(a.tools)
+	}
+	a.msgMu.Unlock()
+
+	a.nativeClient = nil
+}
+
 func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -196,24 +238,13 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	// after the fact as a single transcript, not only as a token stream.
 	defer a.publishTranscript()
 
-	if a.nativeClient != nil {
-		if !a.nativeClient.ToolDefinitionsCapable() {
-			fmt.Fprintln(os.Stderr, "warning: endpoint does not support tool definitions, falling back to prose protocol")
-			if a.eventBus != nil {
-				a.eventBus.Publish(eventbus.Event{
-					Type:      eventbus.EventSproutDowngraded,
-					Source:    a.stepID,
-					SessionID: a.sessionID,
-					Data: map[string]interface{}{
-						"reason": "declared incapable by configuration",
-					},
-				})
-			}
-			a.msgMu.Lock()
-			a.protocol = "prose"
-			a.msgMu.Unlock()
-			a.nativeClient = nil
-		}
+	// A declared-incapable endpoint is known before the first turn is built, so
+	// this one is settled here and the prompt below is composed for the prose
+	// protocol from the start. A refusal discovered at request time is handled
+	// in the turn loop, through the same method.
+	if a.nativeClient != nil && !a.nativeClient.ToolDefinitionsCapable() {
+		a.announceDowngrade("declared incapable by configuration")
+		a.nativeClient = nil
 	}
 
 	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext)
@@ -237,32 +268,6 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	if a.nativeClient != nil {
 		mappedTools = mapToolsToNative(a.tools)
 	}
-
-	var downgradeOnce sync.Once
-	observer := llm.ToolDowngradeObserver(func() {
-		downgradeOnce.Do(func() {
-			fmt.Fprintln(os.Stderr, "warning: endpoint rejected tool definitions, falling back to prose protocol")
-			if a.eventBus != nil {
-				a.eventBus.Publish(eventbus.Event{
-					Type:      eventbus.EventSproutDowngraded,
-					Source:    a.stepID,
-					SessionID: a.sessionID,
-					Data: map[string]interface{}{
-						"reason": "detected rejection by endpoint",
-					},
-				})
-			}
-			a.msgMu.Lock()
-			a.protocol = "prose"
-			// The fallback retry inside the client re-marshals this exact slice (the backing
-			// array is aliased). This mutation reaches the retry because the client passes
-			// the slice through without a defensive copy — a stated dependency of this seam.
-			if len(a.messages) > 0 {
-				a.messages[0].Content += "\n\n" + buildProseProtocolRules(a.tools)
-			}
-			a.msgMu.Unlock()
-		})
-	})
 
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
 		var tokenChan chan string
@@ -295,7 +300,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			}()
 
 			if a.nativeClient != nil {
-				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, observer, tokenChan)
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, tokenChan)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
 				err = errCall
@@ -305,13 +310,27 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			<-tokensPublished
 		} else {
 			if a.nativeClient != nil {
-				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, observer, nil)
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, nil)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
 				err = errCall
 			} else {
 				response, err = a.client.Call(ctx, a.messages)
 			}
+		}
+
+		// The endpoint would not take the definitions. Demote to the prose
+		// protocol and put the same turn again — the mind has not answered yet,
+		// so nothing is lost by re-asking and a.messages still holds the turn.
+		//
+		// The refused attempt must not spend an iteration: it produced nothing
+		// to reason about, and charging the run for it would shorten every
+		// downgraded run by a turn. This cannot spin, because announceDowngrade
+		// clears nativeClient and only the native branch above raises this.
+		if errors.Is(err, llm.ErrToolsRefused) {
+			a.announceDowngrade("detected rejection by endpoint")
+			iteration--
+			continue
 		}
 
 		if err != nil {
@@ -717,10 +736,15 @@ Rules:
 	return strings.TrimSpace(builder.String())
 }
 
+// proseProtocolRulesHeading opens the block buildProseProtocolRules emits. It
+// is named so that a prompt can be asked whether it has already been taught
+// the prose protocol without that question depending on the wording below.
+const proseProtocolRulesHeading = "Protocol Rules:"
+
 func buildProseProtocolRules(tools []ToolDefinition) string {
 	var builder strings.Builder
+	builder.WriteString(proseProtocolRulesHeading + "\n")
 	builder.WriteString(strings.TrimSpace(`
-Protocol Rules:
 - Use only the listed tools.
 - When you need a tool, respond with exactly one JSON object and nothing else (after your thought block).
 - Tool calls must use the shape: {"tool":"name","arguments":{...}}.

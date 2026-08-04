@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,10 +59,16 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// ToolDowngradeObserver is notified exactly once when a security-relevant
-// fallback to the prose protocol happens because an endpoint is incapable of
-// native tool calling.
-type ToolDowngradeObserver func()
+// ErrToolsRefused reports that an endpoint rejected a request because of the
+// tool definitions it carried. It is returned instead of being handled here:
+// this client speaks the wire protocol, and which protocol should carry the
+// turn instead is a decision only the caller holding the conversation can make.
+//
+// Only 400 and 422 raise it. A 429 or a 5xx says the endpoint is busy or
+// broken, not that it cannot take tools, and treating those as a refusal would
+// demote a run to the prose protocol over a transient failure — a quality loss
+// announced as a capability finding.
+var ErrToolsRefused = errors.New("endpoint refused the tool definitions")
 
 // ToolDefinition declares one tool to a provider. The shape is the OpenAI
 // family's, because Message is marshalled straight onto that family's wire and
@@ -274,15 +281,15 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan chan<- string) (string, error) {
-	result, err := c.callInternal(ctx, messages, nil, nil, tokenChan)
+	result, err := c.callInternal(ctx, messages, nil, tokenChan)
 	return result.Text, err
 }
 
-func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, tokenChan chan<- string) (Result, error) {
-	return c.callInternal(ctx, messages, tools, observer, tokenChan)
+func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
+	return c.callInternal(ctx, messages, tools, tokenChan)
 }
 
-func (c *Client) callInternal(ctx context.Context, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, tokenChan chan<- string) (Result, error) {
+func (c *Client) callInternal(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {
 	// Closing the channel is this function's job, on every path. It used to
 	// close only where it streamed or exhausted its candidates, so returning
 	// early — a missing model, an absent key — left a caller ranging over the
@@ -316,20 +323,18 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 	}
 
 	var lastErr error
-	downgraded := false
 	for _, baseURL := range candidates {
-		// If a previous candidate rejected tools and we downgraded, apply that
-		// memory to all subsequent candidates on this turn so we don't spam them.
-		reqTools := tools
-		if downgraded {
-			reqTools = nil
-		}
-
-		result, doErr := c.doCall(ctx, baseURL, messages, reqTools, observer, &downgraded, tokenChan != nil, tokenChan)
-		if doErr == nil {
+		result, err := c.doCall(ctx, baseURL, messages, tools, tokenChan != nil, tokenChan)
+		if err == nil {
 			return result, nil
 		}
-		lastErr = doErr
+		// A refusal is not a transport failure. The candidates are one endpoint
+		// reached at several addresses, so offering the same definitions to the
+		// next one only earns the same refusal — and spends a request doing it.
+		if errors.Is(err, ErrToolsRefused) {
+			return Result{}, err
+		}
+		lastErr = err
 	}
 
 	if lastErr == nil {
@@ -367,17 +372,14 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 		provider = detectProviderFallback()
 	}
 	if model, ok := explicitModelForTier(provider, tier); ok {
-		spec := providerSpecForModel(provider, tier, model, "")
-		return spec
+		return providerSpecForModel(provider, tier, model, "")
 	}
 	if model := configuredModelForProvider(provider); model != "" {
-		spec := providerSpecForModel(provider, tier, model, "")
-		return spec
+		return providerSpecForModel(provider, tier, model, "")
 	}
 
 	if model, err := SelectBestModel(Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}); err == nil {
-		spec := providerSpecForModel(model.Provider, tier, model.Name, "")
-		return spec
+		return providerSpecForModel(model.Provider, tier, model.Name, "")
 	}
 
 	// A tool-capable model was required but none matched (e.g. only small local
@@ -386,13 +388,11 @@ func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) Provider
 	// instead of silently maturing on nothing.
 	if requireTools {
 		if model, err := SelectBestModel(Capabilities{MaxCostTier: tier}); err == nil {
-			spec := providerSpecForModel(model.Provider, tier, model.Name, "")
-			return spec
+			return providerSpecForModel(model.Provider, tier, model.Name, "")
 		}
 	}
 
-	spec := providerSpecForModel(provider, tier, "", "")
-	return spec
+	return providerSpecForModel(provider, tier, "", "")
 }
 
 func ResolveCoordinatorProviderSpec() ProviderSpec {
@@ -752,7 +752,7 @@ func LocalInferenceBaseURLs(baseURL string) []string {
 }
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
-	result, err := c.doCall(ctx, baseURL, messages, nil, nil, nil, false, nil)
+	result, err := c.doCall(ctx, baseURL, messages, nil, false, nil)
 	return result.Text, err
 }
 
@@ -807,7 +807,7 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 	return models, nil
 }
 
-func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, tools []ToolDefinition, observer ToolDowngradeObserver, downgraded *bool, stream bool, tokenChan chan<- string) (Result, error) {
+func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message, tools []ToolDefinition, stream bool, tokenChan chan<- string) (Result, error) {
 	var (
 		url = strings.TrimRight(baseURL, "/") + c.spec.Endpoint
 		req *http.Request
@@ -840,25 +840,15 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 			return Result{}, fmt.Errorf("read llm response: %w", err)
 		}
 
-		rejectionErr := fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-
-		// If tools were sent and rejected, try exactly once without tools.
-		// We flag the downgrade so subsequent candidates on this call also drop tools.
-		if len(tools) > 0 && downgraded != nil {
-			*downgraded = true
-			if observer != nil {
-				observer()
-			}
-			retryRes, retryErr := c.doCall(ctx, baseURL, messages, tools, observer, downgraded, stream, tokenChan)
-			if retryErr != nil {
-				// If the retry also fails, report the original rejection rather
-				// than the retry's error.
-				return Result{}, rejectionErr
-			}
-			return retryRes, nil
+		// A request carrying tool definitions turned away with a schema
+		// rejection is the one status pair that means "I cannot take these",
+		// as opposed to "not now" or "I am broken". Wrapped rather than
+		// replaced so the provider's own message still reaches the operator.
+		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
+			return Result{}, fmt.Errorf("%w: llm returned %d: %s", ErrToolsRefused, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 
-		return Result{}, rejectionErr
+		return Result{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	if stream {

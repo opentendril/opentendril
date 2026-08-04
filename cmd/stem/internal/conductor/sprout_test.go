@@ -64,7 +64,7 @@ type nativeFakeLLM struct {
 
 func (f *nativeFakeLLM) ToolDefinitionsCapable() bool { return true }
 
-func (f *nativeFakeLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, observer llm.ToolDowngradeObserver, tokenChan chan<- string) (llm.Result, error) {
+func (f *nativeFakeLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error) {
 	callCopy := make([]llm.Message, len(messages))
 	copy(callCopy, messages)
 	f.nativeCalls = append(f.nativeCalls, callCopy)

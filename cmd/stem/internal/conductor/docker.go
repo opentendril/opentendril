@@ -543,6 +543,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
 		defer cancelPostMortem()
 
+		// Recorded once, before any of the exits below. A run that failed is
+		// the one whose record gets asked whether the carrying protocol was to
+		// blame, and the paths that end early — a non-git or readonly
+		// substrate, an investigation, a run that errored — are the ones most
+		// likely to be reading a report assembled by an exit that forgot.
+		report.Protocol = sproutResult.Protocol
+
 		if err := session.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 		}
@@ -566,7 +573,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				}
 			}
 			report.Output = sproutResult.Response
-			report.Protocol = sproutResult.Protocol
 			return report, filesKnown, nil
 		}
 
@@ -608,7 +614,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			executionStatus.Error = runErr.Error()
 		}
 		report.Outcome = executionStatus.Status
-		report.Protocol = sproutResult.Protocol
 
 		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
 		if commitErr != nil {

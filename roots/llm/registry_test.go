@@ -1,6 +1,8 @@
 package llm
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,6 +16,30 @@ func clearProviderKeys(t *testing.T) {
 	t.Setenv("GROK_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("NVIDIA_API_KEY", "")
+}
+
+// chdirWithTendrilConfig writes the given YAML to a temporary .tendril tree and
+// moves into it, so loadTendrilConfig finds it, restoring the original working
+// directory afterwards. Same shape as TestIsRouterConfigOverride's local helper.
+func chdirWithTendrilConfig(t *testing.T, yaml string) {
+	t.Helper()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir .tendril: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".tendril", "config.yaml"), []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 }
 
 func TestSelectBestModelUsesOnlyAvailableProviders(t *testing.T) {
@@ -115,9 +141,14 @@ func TestFallbackRegistryServesCurrentGenerationAnthropic(t *testing.T) {
 
 // With only the always-available local provider, the cheapest model is
 // llama3.2 — which cannot drive tools. RequiresToolUse must skip it (and the
-// coder models) and select the one local model that can WHEN using the prose
-// path. On the native path, RequiresToolUse does not filter out models.
-func TestSelectBestModelRequiresToolUseSkipsNonDriversOnProsePath(t *testing.T) {
+// coder models) and select the one local model that can. This is the fix for a
+// no-session sprout silently landing on a model that returns empty completions.
+//
+// It runs with no configuration on purpose. Selection reached through a
+// provider's own config is a different path, and a guard that only holds when
+// something is configured does not hold for the setup an operator gets by
+// default — which is the setup where a 3B local model is what is available.
+func TestSelectBestModelRequiresToolUseSkipsNonDrivers(t *testing.T) {
 	clearProviderKeys(t)
 
 	generic, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium})
@@ -128,10 +159,9 @@ func TestSelectBestModelRequiresToolUseSkipsNonDriversOnProsePath(t *testing.T) 
 		t.Fatalf("without RequiresToolUse, cheapest local = %q, want llama3.2 (documents the default that was broken)", generic.Name)
 	}
 
-	prosePathPredicate := func(provider string) bool { return false }
-	toolCapable, err := SelectBestModelFromRegistry(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true}, activeModelRegistry(), prosePathPredicate)
+	toolCapable, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true})
 	if err != nil {
-		t.Fatalf("SelectBestModelFromRegistry(RequiresToolUse, prose) failed: %v", err)
+		t.Fatalf("SelectBestModel(RequiresToolUse) failed: %v", err)
 	}
 	if !toolCapable.DrivesTools {
 		t.Fatalf("selected model %#v does not drive tools", toolCapable)
@@ -139,13 +169,30 @@ func TestSelectBestModelRequiresToolUseSkipsNonDriversOnProsePath(t *testing.T) 
 	if toolCapable.Provider != "local" || toolCapable.Name != "qwen3.5:9b" {
 		t.Fatalf("tool-capable local selection = %s/%s, want local/qwen3.5:9b", toolCapable.Provider, toolCapable.Name)
 	}
+}
 
-	nativePathPredicate := func(provider string) bool { return true }
-	nativeCapable, err := SelectBestModelFromRegistry(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true}, activeModelRegistry(), nativePathPredicate)
-	if err != nil {
-		t.Fatalf("SelectBestModelFromRegistry(RequiresToolUse, native) failed: %v", err)
-	}
-	if nativeCapable.Name != "llama3.2" {
-		t.Fatalf("native path with RequiresToolUse = %q, want llama3.2 (since native path ignores DrivesTools)", nativeCapable.Name)
+// Whether an endpoint will take a tools field says nothing about whether the
+// model behind it drives them — a 3B llama on Ollama accepts the field and
+// still answers in prose. Selection must reach the same model either way, or a
+// config key silently switches off a measurement.
+func TestAcceptsToolDefinitionsDoesNotChangeSelection(t *testing.T) {
+	for _, accepts := range []string{"true", "false"} {
+		t.Run("accepts-tool-definitions "+accepts, func(t *testing.T) {
+			clearProviderKeys(t)
+			chdirWithTendrilConfig(t, `
+llm:
+  providers:
+    local:
+      accepts-tool-definitions: `+accepts+`
+`)
+
+			selected, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true})
+			if err != nil {
+				t.Fatalf("SelectBestModel(RequiresToolUse) failed: %v", err)
+			}
+			if !selected.DrivesTools {
+				t.Fatalf("selected %s/%s, which does not drive tools", selected.Provider, selected.Name)
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -212,7 +213,7 @@ func TestCallStreamParsesOpenAIishToolCall(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
 
 	tokenChan := make(chan string, 10)
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, tokenChan)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, tokenChan)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -257,7 +258,7 @@ func TestCallStreamParsesOpenAIishInterleavedToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -291,7 +292,7 @@ func TestCallStreamParsesOpenAIishTextAndToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -320,7 +321,7 @@ func TestCallStreamOpenAIishReturnsErrorOnTruncatedToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	_, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "truncated tool call") {
 		t.Fatalf("expected truncated tool call error, got %v", err)
 	}
@@ -341,7 +342,7 @@ func TestCallStreamOpenAIishTextOnly(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -392,7 +393,7 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := client.doCall(context.Background(), server.URL, nil, nil, nil, nil, true, nil)
+			res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 			if err != nil {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return
@@ -414,43 +415,79 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 	wg.Wait()
 }
 
-func TestDoCallOpenAIishDowngradesOn400(t *testing.T) {
+// The client reports a refusal; it does not answer one. The request count is
+// the assertion that matters: a client that quietly re-asks would still return
+// an error here, and only counting requests can tell the two apart.
+func TestDoCallOpenAIishReportsToolRefusalWithoutRetrying(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if requests == 1 {
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"choices":[{"message":{"content":"downgraded answer"}}]}`))
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
 	}))
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	tools := []ToolDefinition{{
-		Type: "function",
-		Function: ToolFunction{
-			Name: "test",
-		},
-	}}
+	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
 
-	observedError := false
-	observer := func() { observedError = true }
+	_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+	if !errors.Is(err, ErrToolsRefused) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want exactly 1 — the client must not re-ask on its own", requests)
+	}
+	if !strings.Contains(err.Error(), "tools not supported") {
+		t.Errorf("error %q drops the endpoint's own message", err)
+	}
+}
 
-	res, err := client.doCall(context.Background(), server.URL, nil, tools, observer, new(bool), false, nil)
-	if err != nil {
-		t.Fatalf("expected successful retry, got error: %v", err)
+// A refusal is a statement about the tool definitions. Everything else the
+// endpoint might say is an ordinary failure, and demoting a run to the prose
+// protocol over a rate limit would lose quality while announcing a capability.
+func TestDoCallOpenAIishOnlyTreats400And422AsToolRefusal(t *testing.T) {
+	refusing := map[int]bool{
+		http.StatusBadRequest:          true,
+		http.StatusUnprocessableEntity: true,
+		http.StatusUnauthorized:        false,
+		http.StatusTooManyRequests:     false,
+		http.StatusInternalServerError: false,
+		http.StatusBadGateway:          false,
 	}
 
-	if requests != 2 {
-		t.Errorf("expected exactly 2 requests (1 failure, 1 retry), got %d", requests)
+	for status, wantRefusal := range refusing {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":{"message":"nope"}}`))
+		}))
+
+		client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
+		tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
+
+		_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+		if got := errors.Is(err, ErrToolsRefused); got != wantRefusal {
+			t.Errorf("status %d: errors.Is(err, ErrToolsRefused) = %v, want %v (err = %v)", status, got, wantRefusal, err)
+		}
+		server.Close()
 	}
-	if !observedError {
-		t.Errorf("expected observer to be called on downgrade, but it wasn't")
+}
+
+// A request carrying no definitions cannot be refused for carrying them, so a
+// 400 on a plain call stays the ordinary error every caller already matches on.
+func TestDoCallOpenAIishPlain400IsNotAToolRefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"bad model"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
+
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, false, nil)
+	if err == nil {
+		t.Fatal("expected an error")
 	}
-	if res.Text != "downgraded answer" {
-		t.Errorf("expected downgraded answer, got %q", res.Text)
+	if errors.Is(err, ErrToolsRefused) {
+		t.Errorf("a 400 with no tool definitions must not read as a tool refusal: %v", err)
 	}
 }

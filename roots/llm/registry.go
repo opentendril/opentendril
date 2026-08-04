@@ -16,10 +16,16 @@ type ModelDefinition struct {
 	HasVision    bool
 	HasReasoning bool
 	// DrivesTools marks a model that reliably follows the tool-calling
-	// protocol on the fallback (prose) path. Frontier hosted models and
-	// large instruct models do; small local models (e.g. a 3B llama3.2) and
-	// code-completion-tuned models do not — measured, they return prose or an
-	// empty completion and the sprout matures having done nothing.
+	// protocol. Frontier hosted models and large instruct models do; small
+	// local models (e.g. a 3B llama3.2) and code-completion-tuned models do
+	// not — measured, they return prose or an empty completion and the sprout
+	// matures having done nothing.
+	//
+	// This is a property of the model, not of the endpoint serving it. An
+	// endpoint that accepts a tools field is not evidence that the model
+	// behind it emits calls that parse: a 3B llama behind Ollama accepts the
+	// field and still answers in prose. See ProviderSpec.AcceptsToolDefinitions
+	// for the separate endpoint-level property.
 	DrivesTools bool
 	CostTier    ModelTier
 }
@@ -81,14 +87,10 @@ func activeModelRegistry() []ModelDefinition {
 }
 
 func SelectBestModel(caps Capabilities) (ModelDefinition, error) {
-	providerAcceptsTools := func(provider string) bool {
-		cfg := configuredProvider(provider)
-		return resolveAcceptsToolDefinitions(cfg) == nil || *resolveAcceptsToolDefinitions(cfg)
-	}
-	return SelectBestModelFromRegistry(caps, activeModelRegistry(), providerAcceptsTools)
+	return SelectBestModelFromRegistry(caps, activeModelRegistry())
 }
 
-func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition, providerAcceptsTools func(provider string) bool) (ModelDefinition, error) {
+func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) (ModelDefinition, error) {
 	providers := AvailableProviders()
 	available := make(map[string]struct{}, len(providers))
 	for _, provider := range providers {
@@ -107,9 +109,7 @@ func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition, 
 			continue
 		}
 		if caps.RequiresToolUse && !model.DrivesTools {
-			if providerAcceptsTools == nil || !providerAcceptsTools(model.Provider) {
-				continue
-			}
+			continue
 		}
 		if caps.MinContextSize > 0 && model.ContextSize < caps.MinContextSize {
 			continue

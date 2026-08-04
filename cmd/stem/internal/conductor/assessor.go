@@ -63,7 +63,7 @@ func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, re
 
 	filtered := filterRegistry(registry, caps)
 	if !llm.ShouldUseDynamicRouter(filtered) {
-		model, err := llm.SelectBestModelFromRegistry(caps, filtered, nil)
+		model, err := llm.SelectBestModelFromRegistry(caps, filtered)
 		if err != nil {
 			return llm.RouteSelection{}, err
 		}
@@ -74,7 +74,7 @@ func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, re
 	prompt := buildRouterPrompt(strings.TrimSpace(transcript), filtered)
 	response, err := client.CallPrompt(ctx, taskRouterSystemPrompt, prompt)
 	if err != nil {
-		model, fallbackErr := llm.SelectBestModelFromRegistry(caps, filtered, nil)
+		model, fallbackErr := llm.SelectBestModelFromRegistry(caps, filtered)
 		if fallbackErr != nil {
 			return llm.RouteSelection{}, fmt.Errorf("route task: %w", err)
 		}
@@ -83,7 +83,7 @@ func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, re
 
 	selection, err := parseRouterResponse(response)
 	if err != nil {
-		model, fallbackErr := llm.SelectBestModelFromRegistry(caps, filtered, nil)
+		model, fallbackErr := llm.SelectBestModelFromRegistry(caps, filtered)
 		if fallbackErr != nil {
 			return llm.RouteSelection{}, fmt.Errorf("parse router response: %w", err)
 		}
@@ -91,7 +91,7 @@ func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, re
 	}
 
 	if !registryContains(filtered, selection.Provider, selection.Model) {
-		model, err := llm.SelectBestModelFromRegistry(caps, filtered, nil)
+		model, err := llm.SelectBestModelFromRegistry(caps, filtered)
 		if err != nil {
 			return llm.RouteSelection{}, fmt.Errorf("router selected unavailable model %q/%q", selection.Provider, selection.Model)
 		}
