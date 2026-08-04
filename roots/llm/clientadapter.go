@@ -25,7 +25,7 @@ type providerAdapter interface {
 	SetModelsAuthHeaders(req *http.Request, apiKey string)
 
 	// BuildChatRequest returns the JSON body for one chat call.
-	BuildChatRequest(spec ProviderSpec, messages []Message, stream bool) ([]byte, error)
+	BuildChatRequest(spec ProviderSpec, messages []Message, tools []ToolDefinition, stream bool) ([]byte, error)
 
 	// SetChatHeaders sets auth and any provider-specific headers (e.g.
 	// Anthropic's caching beta flag) on a chat request.
@@ -34,11 +34,11 @@ type providerAdapter interface {
 	// ParseStreamChunk extracts a text delta from one SSE "data: ..." line's
 	// JSON payload (already stripped of the "data: " prefix). ok is false
 	// when the line carries no text delta for this provider's event shape.
-	ParseStreamChunk(data string) (text string, ok bool)
+	ParseStreamChunk(data string) (delta StreamDelta, ok bool)
 
 	// ParseResponse extracts the completion text from a non-streaming
 	// response body.
-	ParseResponse(body []byte) (string, error)
+	ParseResponse(body []byte) (Result, error)
 }
 
 // adapterForMode returns the adapter for mode. Any mode other than
@@ -69,7 +69,7 @@ func (anthropicAdapter) SetModelsAuthHeaders(req *http.Request, apiKey string) {
 	req.Header.Set("anthropic-version", "2023-06-01")
 }
 
-func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, stream bool) ([]byte, error) {
+func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, tools []ToolDefinition, stream bool) ([]byte, error) {
 	systemParts := make([]string, 0, 2)
 	anthropicMessages := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
@@ -114,7 +114,7 @@ func (anthropicAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
 }
 
-func (anthropicAdapter) ParseStreamChunk(dataStr string) (string, bool) {
+func (anthropicAdapter) ParseStreamChunk(dataStr string) (StreamDelta, bool) {
 	var event struct {
 		Type  string `json:"type"`
 		Delta struct {
@@ -124,13 +124,13 @@ func (anthropicAdapter) ParseStreamChunk(dataStr string) (string, bool) {
 	}
 	if err := json.Unmarshal([]byte(dataStr), &event); err == nil {
 		if event.Type == "content_block_delta" && event.Delta.Type == "text_delta" {
-			return event.Delta.Text, true
+			return StreamDelta{Text: event.Delta.Text}, true
 		}
 	}
-	return "", false
+	return StreamDelta{}, false
 }
 
-func (anthropicAdapter) ParseResponse(body []byte) (string, error) {
+func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 	var decoded struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -138,14 +138,14 @@ func (anthropicAdapter) ParseResponse(body []byte) (string, error) {
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return "", fmt.Errorf("decode anthropic response: %w", err)
+		return Result{}, fmt.Errorf("decode anthropic response: %w", err)
 	}
 	for _, block := range decoded.Content {
 		if strings.TrimSpace(block.Text) != "" {
-			return strings.TrimSpace(block.Text), nil
+			return Result{Text: strings.TrimSpace(block.Text)}, nil
 		}
 	}
-	return "", fmt.Errorf("anthropic response contained no text")
+	return Result{}, fmt.Errorf("anthropic response contained no text")
 }
 
 type openAIishAdapter struct{}
@@ -160,7 +160,7 @@ func (openAIishAdapter) SetModelsAuthHeaders(req *http.Request, apiKey string) {
 	}
 }
 
-func (openAIishAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, stream bool) ([]byte, error) {
+func (openAIishAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, tools []ToolDefinition, stream bool) ([]byte, error) {
 	payload, err := json.Marshal(map[string]any{
 		"model":       spec.Model,
 		"temperature": spec.Temperature,
@@ -179,7 +179,7 @@ func (openAIishAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	}
 }
 
-func (openAIishAdapter) ParseStreamChunk(dataStr string) (string, bool) {
+func (openAIishAdapter) ParseStreamChunk(dataStr string) (StreamDelta, bool) {
 	var chunk struct {
 		Choices []struct {
 			Delta struct {
@@ -191,14 +191,14 @@ func (openAIishAdapter) ParseStreamChunk(dataStr string) (string, bool) {
 		if len(chunk.Choices) > 0 {
 			text := chunk.Choices[0].Delta.Content
 			if text != "" {
-				return text, true
+				return StreamDelta{Text: text}, true
 			}
 		}
 	}
-	return "", false
+	return StreamDelta{}, false
 }
 
-func (openAIishAdapter) ParseResponse(body []byte) (string, error) {
+func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {
 	var decoded struct {
 		Choices []struct {
 			Message struct {
@@ -207,14 +207,14 @@ func (openAIishAdapter) ParseResponse(body []byte) (string, error) {
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return "", fmt.Errorf("decode chat response: %w", err)
+		return Result{}, fmt.Errorf("decode chat response: %w", err)
 	}
 	if len(decoded.Choices) == 0 {
-		return "", fmt.Errorf("chat response contained no choices")
+		return Result{}, fmt.Errorf("chat response contained no choices")
 	}
 	content := strings.TrimSpace(decoded.Choices[0].Message.Content)
 	if content == "" {
-		return "", fmt.Errorf("chat response contained no content")
+		return Result{}, fmt.Errorf("chat response contained no content")
 	}
-	return content, nil
+	return Result{Text: content}, nil
 }

@@ -48,8 +48,44 @@ type ProviderSpec struct {
 }
 
 type Message struct {
-	Role    string `json:"role"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type ToolDefinition struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string `json:"name"`
+		Description string `json:"description,omitempty"`
+		Parameters  any    `json:"parameters"`
+	} `json:"function"`
+}
+
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type ToolResult struct {
+	ID      string `json:"id"`
 	Content string `json:"content"`
+	IsError bool   `json:"is_error,omitempty"`
+}
+
+type Result struct {
+	Text      string
+	ToolCalls []ToolCall
+}
+
+type StreamDelta struct {
+	Text     string
+	ToolCall *ToolCall
 }
 
 type Client struct {
@@ -696,7 +732,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		req *http.Request
 	)
 
-	payload, err := c.adapter.BuildChatRequest(c.spec, messages, stream)
+	payload, err := c.adapter.BuildChatRequest(c.spec, messages, nil, stream)
 	if err != nil {
 		return "", err
 	}
@@ -741,10 +777,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				break
 			}
 
-			if text, ok := c.adapter.ParseStreamChunk(dataStr); ok {
-				fullContent.WriteString(text)
+			if delta, ok := c.adapter.ParseStreamChunk(dataStr); ok {
+				fullContent.WriteString(delta.Text)
 				if tokenChan != nil {
-					tokenChan <- text
+					tokenChan <- delta.Text
 				}
 			}
 		}
@@ -759,7 +795,11 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		return "", fmt.Errorf("read llm response: %w", err)
 	}
 
-	return c.adapter.ParseResponse(body)
+	res, err := c.adapter.ParseResponse(body)
+	if err != nil {
+		return "", err
+	}
+	return res.Text, nil
 }
 
 func anthropicTextBlock(text string, cache bool) map[string]any {
