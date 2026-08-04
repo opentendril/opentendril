@@ -31,6 +31,28 @@ if [ ! -f "${body_file}" ]; then
   exit 1
 fi
 
+# Writing ABOUT a filename is indistinguishable from citing one: a description
+# explaining that a guard wrongly excused `a_b_test.go` contains the same
+# characters as a description claiming that file exists. Nothing in the text
+# separates the two, so the author declares — the same resolution
+# check-test-sleep.sh reached for sleeps and check-test-runtime-floor.sh for
+# durations.
+#
+# The declaration names the specific tests or files rather than exempting the
+# description, because a blanket escape would also excuse a genuinely fabricated
+# citation standing beside the hypothetical one. Anything NOT named here still
+# fails.
+#
+#   Names hypothetical: a_b_test.go, TestSomethingImagined — probe inputs, not repository files.
+readonly HYPOTHETICAL_ACK='^[[:space:]]*Names hypothetical:'
+
+declared=$(grep -E "${HYPOTHETICAL_ACK}" "${body_file}" \
+  | grep -oE '\bTest[A-Z][A-Za-z0-9_]*\b|[A-Za-z0-9_/.-]+_test\.go\b' | sort -u || true)
+
+is_declared() {
+  printf '%s\n' "${declared}" | grep -qxF "${1}"
+}
+
 # Extract test function names (Test[A-Z][A-Za-z0-9_]*)
 cited_funcs=$(grep -oE '\bTest[A-Z][A-Za-z0-9_]*\b' "${body_file}" | sort -u || true)
 
@@ -40,6 +62,9 @@ cited_files=$(grep -oE '[A-Za-z0-9_/.-]+_test\.go\b' "${body_file}" | sort -u ||
 status=0
 
 for func in $cited_funcs; do
+  if is_declared "${func}"; then
+    continue
+  fi
   # Search for the function anywhere in the tree at HEAD or base
   if ! git grep -qE "^func ${func}\b" HEAD -- '*_test.go' \
      && ! git grep -qE "^func ${func}\b" "${base}" -- '*_test.go'; then
@@ -50,6 +75,9 @@ for func in $cited_funcs; do
 done
 
 for file in $cited_files; do
+  if is_declared "${file}"; then
+    continue
+  fi
   # Search for files ending with the cited file name at HEAD or base
   if ! git ls-tree -r --name-only HEAD | grep -E "(^|/)${file}$" >/dev/null \
      && ! git ls-tree -r --name-only "${base}" | grep -E "(^|/)${file}$" >/dev/null; then
@@ -62,6 +90,9 @@ done
 if [ ${status} -ne 0 ]; then
   echo "If this is a newly written test, ensure it is committed."
   echo "If it is quoted mutation output, ensure the test actually exists."
+  echo "If the name is deliberately hypothetical — a probe input, or an example of"
+  echo "what a guard wrongly accepted — declare it by name in the description:"
+  echo "  Names hypothetical: a_b_test.go, TestSomethingImagined — probe inputs, not repository files."
   exit 1
 fi
 

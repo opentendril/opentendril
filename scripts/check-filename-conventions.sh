@@ -1,88 +1,95 @@
 #!/usr/bin/env bash
-# Fails when a tracked file's name uses an underscore where kebab-case is required.
+# Fails when a non-Go path uses an underscore that GUARDRAILS.md does not allow.
 #
-# The rule is not new. `.tendril/genome/naming-conventions.md` states it as an
-# absolute: "All files MUST be named using kebab-case. You are strictly
-# forbidden from using underscores (_) or camelCase in filenames." It is
-# injected into every Sprout that grows in this Substrate, and it is one of the
-# five genome files the Botanist maintains by hand.
+# GUARDRAILS.md, "Filesystem Naming (The No Underscore Rule)", splits the tree in
+# two rather than imposing one casing everywhere:
 #
-# It drifted anyway. Eight fixture files arrived in one change with underscored
-# names, through a builder that had the rule in its own context and a review
-# that verified those files byte-for-byte without once reading their names. That
-# is the same failure mode the taxonomy guard was written for: a convention
-# written down in three places and restated repeatedly still went missing,
-# because nothing rejected it. A convention that depends on somebody remembering
-# is a guard.
+#   * code files (Python, Go) are merged lowercase — no underscores, no hyphens;
+#   * directories and non-code files are kebab-case;
+#   * Go tests are `*_test.go`, because the Go build system requires it;
+#   * externally required canonical names are allowed where a platform discovers
+#     a file or directory by its exact spelling.
 #
-# WHY UNDERSCORES ONLY, when the genome also forbids camelCase: the tree already
-# carries deliberate PascalCase — the React components under the interface
-# surface (ChatPanel.tsx, GardenCanvas.tsx and their siblings), where the
-# framework's own convention is that a component file is named for its
-# component. Whether the genome rule means to override that is a decision for
-# the Botanist, not something a guard should settle by going red. This follows
-# the taxonomy guard's stated philosophy: add to the check when a drift is
-# observed, never in anticipation of one.
+# GO FILES ARE NOT CHECKED HERE. `cmd/stem/filenames_test.go` already owns them,
+# and owns them more precisely than this script did: it peels the sanctioned
+# suffixes off the end and judges what remains, so `a_b_test.go` fails a rule
+# that forbids it. The first version of this script checked only that a name
+# ENDED in a sanctioned suffix, which excused every underscore before it — the
+# exact defect that test's comment records having already fixed once. This script
+# now defers instead of restating the logic: a second copy is a second source of
+# truth, and it will drift. It also must not advise on Go names, because the
+# correct fix there is merged lowercase while the fix everywhere else is a
+# hyphen, and one message cannot serve both.
 #
-# Two exemptions, both cases where the name is not a free choice:
+# What was actually missing, and why this exists: nothing guarded the names of
+# files that are neither Go nor Python. Eight JSON fixtures arrived underscored
+# in one change, past a builder holding the rule and a review that read those
+# files byte-for-byte without reading their names. A convention that depends on
+# somebody remembering is a guard.
 #
-#   1. Go source files whose underscore is read by the toolchain. `_test.go` is
-#      how the compiler finds tests; `_linux.go`, `_darwin.go` and the rest of
-#      the GOOS/GOARCH suffixes are build constraints. Renaming them changes
-#      what the toolchain does, so they are not naming decisions at all. An
-#      ordinary Go file with an underscore anywhere else is still a failure.
-#   2. Filenames the wider ecosystem recognises by their exact spelling, the
-#      same class of exception AGENTS.md already occupies in the taxonomy guard.
-#      Today that is CODE_OF_CONDUCT.md, which GitHub locates by name.
+# Underscores only. GUARDRAILS also rules on casing, and the tree carries
+# PascalCase interface components whose status under the merged-lowercase rule is
+# a decision for the Botanist rather than something a guard should settle by
+# going red. This follows the taxonomy guard's stated philosophy: add to the
+# check when a drift is observed, never in anticipation of one.
 #
-# This scans the whole tracked tree rather than a diff. That is affordable
-# because the backlog is empty: after the fixtures above were renamed, the only
-# underscored name left in the tree is the exempt one. A diff-based check would
-# let the vocabulary return to a file nobody touched.
+# Every path COMPONENT is checked, not only the basename, because the rule covers
+# directories too.
 #
 # Invocation:
 #   scripts/check-filename-conventions.sh
 
 set -euo pipefail
 
-# Go suffixes the toolchain reads. Anchored to the end of the name so that a
-# file merely containing the text (my_test_helper.go) is not excused.
-readonly GO_TOOLCHAIN_SUFFIXES='_(test|linux|darwin|windows|freebsd|openbsd|netbsd|js|wasm|android|ios|plan9|solaris|aix|amd64|arm64|arm|386|riscv64|loong64|mips|mips64|mipsle|mips64le|ppc64|ppc64le|s390x|wasip1)\.go$'
-
-# Names the ecosystem locates by exact spelling. Keep this list short and add to
-# it only when a tool genuinely requires the name — not because renaming would
-# be inconvenient.
-readonly ECOSYSTEM_NAMES='^(CODE_OF_CONDUCT\.md)$'
+# Names a platform or tool discovers by exact spelling. Keep this short, and add
+# to it only when something genuinely requires the name — never because renaming
+# would be inconvenient. GUARDRAILS names this class explicitly.
+is_canonical_name() {
+  case "${1}" in
+    # GitHub locates the community-health file and the issue-template directory
+    # by these exact names.
+    CODE_OF_CONDUCT.md | ISSUE_TEMPLATE) return 0 ;;
+    # npm's fixed directory name. Present only inside a test fixture standing in
+    # for a real workspace, where renaming it would stop it representing one.
+    node_modules) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 violations=""
 while IFS= read -r path; do
-  name="${path##*/}"
-  case "${name}" in
-    *_*) ;;
-    *) continue ;;
+  case "${path}" in
+    *.go) continue ;;
   esac
 
-  if printf '%s' "${name}" | grep -qE "${GO_TOOLCHAIN_SUFFIXES}"; then
-    continue
-  fi
-  if printf '%s' "${name}" | grep -qE "${ECOSYSTEM_NAMES}"; then
-    continue
-  fi
-
-  violations="${violations}${path}"$'\n'
+  # Split on "/" and judge each component, so a directory is covered too.
+  IFS='/' read -r -a components <<<"${path}"
+  for component in "${components[@]}"; do
+    case "${component}" in
+      *_*) ;;
+      *) continue ;;
+    esac
+    if is_canonical_name "${component}"; then
+      continue
+    fi
+    violations="${violations}${path}  (component: ${component})"$'\n'
+    break
+  done
 done < <(git ls-files)
 
 if [ -n "${violations}" ]; then
-  echo "::error::Underscore in a filename. This Substrate names files in kebab-case."
+  echo "::error::Underscore in a path. GUARDRAILS.md allows it only where a platform requires the exact name."
   printf '%s' "${violations}" | sed 's/^/  /'
   echo
-  echo "Rename using hyphens: my_fixture.json becomes my-fixture.json."
-  echo "The rule is .tendril/genome/naming-conventions.md, which every Sprout is given."
+  echo "Non-code files and directories are kebab-case:  my_fixture.json -> my-fixture.json"
+  echo "Python modules are merged lowercase:            llm_router.py   -> llmrouter.py"
   echo
-  echo "Exempt: Go files whose underscore is a toolchain suffix (_test.go, _linux.go),"
-  echo "and filenames the ecosystem locates by exact spelling. If a new name genuinely"
-  echo "belongs in the second group, add it to this script and say which tool requires it."
+  echo "Go files are not judged here — cmd/stem/filenames_test.go owns them, and"
+  echo "requires merged lowercase with a *_test.go or build-constraint suffix."
+  echo
+  echo "If a new name is genuinely discovered by a platform, add it to"
+  echo "is_canonical_name in this script and say which tool requires it."
   exit 1
 fi
 
-echo "✅ No underscored filenames outside the toolchain and ecosystem exemptions."
+echo "✅ No underscored non-Go paths outside the canonical-name exemptions."
