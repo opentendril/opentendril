@@ -508,6 +508,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, err
 	}
 
+	// The dormancy watcher runs on the WORK's context and is stopped by the
+	// teardown sequence rather than by this function returning. A detached call
+	// returns while the Sprout is still growing, and a watcher torn down at that
+	// moment would stop observing precisely the run nobody else is waiting on —
+	// the one we hold the least evidence about.
+	teardown = append(teardown, watchDormancy(workCtx, d.EventBus, plan.scratchInterval, mountPath))
+
 	// completeRun measures, classifies and records what the run did. It is a
 	// closure rather than the tail of this function because a detached call
 	// reaches it from the goroutine below, long after RunSprout returned — so

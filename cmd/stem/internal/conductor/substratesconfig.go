@@ -78,6 +78,12 @@ type PatienceSpec struct {
 	// so the reaper answers "is anyone still waiting?" and nothing else.
 	// Empty leaves the terrarium's own watchdog as the only backstop.
 	Reap string `yaml:"reap,omitempty"`
+	// Scratch is neither of the above: it bounds nothing and ends nothing. It
+	// is how often a running growth's workspace is actively asked whether it
+	// is still changing — the scratch test — and asking is what lets diff
+	// growth suppress the suspicion that a quiet run has stopped. Empty leaves
+	// the probe off entirely, which is today's behaviour.
+	Scratch string `yaml:"scratch,omitempty"`
 }
 
 // GrowthBudget parses Growth into a duration. An empty value yields zero and no
@@ -98,9 +104,9 @@ func (p PatienceSpec) ReapBudget() (time.Duration, error) {
 }
 
 // parsePatienceBudget parses one patience field, naming the field and the
-// offending value in any error. Both fields share it so a value that cannot be
-// honoured fails the load identically wherever it was written — the two clocks
-// differ in what they bound, never in how strictly they are read.
+// offending value in any error. Every patience field shares it so a value that
+// cannot be honoured fails the load identically wherever it was written — the
+// fields differ in what they govern, never in how strictly they are read.
 func parsePatienceBudget(field, value string) (time.Duration, error) {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -116,6 +122,15 @@ func parsePatienceBudget(field, value string) (time.Duration, error) {
 	}
 
 	return budget, nil
+}
+
+// ScratchInterval parses Scratch into a duration, on the same terms as the two
+// budgets above: an empty value yields zero and no error, leaving the active
+// probe off, and anything that cannot be honoured fails the load by name. A zero
+// interval would ask the workspace the same question in a tight loop, which is
+// never what an operator wrote a value to mean.
+func (p PatienceSpec) ScratchInterval() (time.Duration, error) {
+	return parsePatienceBudget("patience.scratch", p.Scratch)
 }
 
 // AuthSpec describes a substrate's authentication method. Design RFC.
@@ -213,6 +228,10 @@ type substrateExecutionPlan struct {
 	// unconfigured. Callers apply it to the context that bounds the work
 	// itself, which outlives the wait.
 	reapBudget time.Duration
+	// scratchInterval is the resolved patience.scratch for this substrate, zero
+	// when unconfigured. Callers hand it to the dormancy watcher, which uses it
+	// as the period of its active workspace probe; zero leaves the probe off.
+	scratchInterval time.Duration
 }
 
 // LoadSubstratesConfig searches for the active substrates.yaml and parses it.
@@ -332,6 +351,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
 		}
 		plan.reapBudget = reapBudget
+
+		scratchInterval, err := spec.Patience.ScratchInterval()
+		if err != nil {
+			return nil, fmt.Errorf("substrate %q: %w", plan.name, err)
+		}
+		plan.scratchInterval = scratchInterval
 	}
 
 	if plan.hostPath == "" {
@@ -486,6 +511,9 @@ func validateSubstratePatience(sourcePath string, config *SubstratesConfig) erro
 			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
 		}
 		if _, err := spec.Patience.ReapBudget(); err != nil {
+			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
+		}
+		if _, err := spec.Patience.ScratchInterval(); err != nil {
 			return fmt.Errorf("substrates config %s: substrate %q: %w", sourcePath, name, err)
 		}
 	}
