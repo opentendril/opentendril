@@ -105,7 +105,7 @@ type Result struct {
 type StreamDelta struct {
 	Text             string
 	ToolCallFragment string
-	ToolCall         *ToolCall
+	ToolCalls        []ToolCall
 }
 
 type Client struct {
@@ -811,8 +811,8 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				if delta.ToolCallFragment != "" && tokenChan != nil {
 					tokenChan <- delta.ToolCallFragment
 				}
-				if delta.ToolCall != nil {
-					toolCalls = append(toolCalls, *delta.ToolCall)
+				if len(delta.ToolCalls) > 0 {
+					toolCalls = append(toolCalls, delta.ToolCalls...)
 				}
 			}
 		}
