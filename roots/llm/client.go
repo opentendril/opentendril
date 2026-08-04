@@ -48,8 +48,63 @@ type ProviderSpec struct {
 }
 
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolDefinition declares one tool to a provider. The shape is the OpenAI
+// family's, because Message is marshalled straight onto that family's wire and
+// the two have to agree; the Anthropic adapter builds its own payload and
+// translates. Parameters carries a JSON Schema — the one description of a
+// tool's inputs both families accept.
+type ToolDefinition struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction is the named half of a ToolDefinition. It is a named type rather
+// than an inline struct so a caller can construct one without restating the
+// field set; the conductor builds these for every tool on every turn.
+type ToolFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Parameters  any    `json:"parameters"`
+}
+
+// ToolCall is one call a mind made. Arguments is a JSON string rather than a
+// decoded object because that is what the OpenAI family puts on the wire and
+// what its streaming path delivers in fragments; an adapter whose provider
+// carries a decoded object translates at its own boundary.
+type ToolCall struct {
+	ID       string           `json:"id"`
+	Type     string           `json:"type"`
+	Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction is the named half of a ToolCall, named for the same reason
+// as ToolFunction.
+type ToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// Result is one parsed non-streaming response. ToolCalls is always empty until
+// an adapter learns to parse them; a caller reading it today gets nothing, not
+// a mistake.
+type Result struct {
+	Text      string
+	ToolCalls []ToolCall
+}
+
+// StreamDelta is one parsed fragment of a streamed response. Exactly one of its
+// fields is meaningful per fragment. ToolCall is always nil until an adapter
+// learns to accumulate tool-call fragments, which is where a tool call streamed
+// in pieces gets reassembled — no other layer sees the pieces.
+type StreamDelta struct {
+	Text     string
+	ToolCall *ToolCall
 }
 
 type Client struct {
@@ -696,7 +751,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		req *http.Request
 	)
 
-	payload, err := c.adapter.BuildChatRequest(c.spec, messages, stream)
+	payload, err := c.adapter.BuildChatRequest(c.spec, messages, nil, stream)
 	if err != nil {
 		return "", err
 	}
@@ -741,10 +796,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				break
 			}
 
-			if text, ok := c.adapter.ParseStreamChunk(dataStr); ok {
-				fullContent.WriteString(text)
+			if delta, ok := c.adapter.ParseStreamChunk(dataStr); ok {
+				fullContent.WriteString(delta.Text)
 				if tokenChan != nil {
-					tokenChan <- text
+					tokenChan <- delta.Text
 				}
 			}
 		}
@@ -759,7 +814,11 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		return "", fmt.Errorf("read llm response: %w", err)
 	}
 
-	return c.adapter.ParseResponse(body)
+	res, err := c.adapter.ParseResponse(body)
+	if err != nil {
+		return "", err
+	}
+	return res.Text, nil
 }
 
 func anthropicTextBlock(text string, cache bool) map[string]any {

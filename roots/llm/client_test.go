@@ -652,3 +652,108 @@ func TestCallReturnsErrorOnNon200(t *testing.T) {
 		t.Errorf("res = %q, want empty", res)
 	}
 }
+
+func TestByteIdentity(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter providerAdapter
+		spec    ProviderSpec
+	}{
+		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: 0.5}},
+		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: 0.5}},
+	}
+
+	scenarios := []struct {
+		name     string
+		messages []Message
+		stream   bool
+	}{
+		{"system-user-assistant", []Message{
+			{Role: "system", Content: "system instruction"},
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "hi"},
+			{Role: "user", Content: "how are you?"},
+		}, false},
+		{"long-caching", []Message{
+			{Role: "system", Content: "system instruction"},
+			{Role: "user", Content: "A long message to trigger caching: " + strings.Repeat("X", 1005)},
+		}, false},
+		{"repomap-caching", []Message{
+			{Role: "system", Content: "system instruction"},
+			{Role: "user", Content: "Please review repomap.md"},
+		}, false},
+		{"streaming", []Message{
+			{Role: "user", Content: "stream this"},
+		}, true},
+	}
+
+	for _, ad := range adapters {
+		for _, sc := range scenarios {
+			t.Run(ad.name+"-"+sc.name, func(t *testing.T) {
+				actual, err := ad.adapter.BuildChatRequest(ad.spec, sc.messages, nil, sc.stream)
+				if err != nil {
+					t.Fatalf("BuildChatRequest failed: %v", err)
+				}
+
+				fixturePath := filepath.Join("testdata", ad.name+"-"+sc.name+".json")
+				expected, err := os.ReadFile(fixturePath)
+				if err != nil {
+					t.Fatalf("Failed to read fixture %s: %v", fixturePath, err)
+				}
+
+				if string(actual) != string(expected) {
+					t.Errorf("Marshalled bytes differ from fixture.\nExpected: %s\nActual:   %s", string(expected), string(actual))
+				}
+			})
+		}
+	}
+}
+
+func TestMessageOmitsToolFields(t *testing.T) {
+	msg := Message{Role: "user", Content: "hello"}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		t.Fatalf("Failed to marshal Message: %v", err)
+	}
+	expected := `{"role":"user","content":"hello"}`
+	if string(b) != expected {
+		t.Errorf("Message serialization failed. Expected %s, got %s", expected, string(b))
+	}
+}
+
+// Both adapters accept tool definitions and, for now, ignore them: emitting
+// them onto the wire belongs to the per-family slices that follow. So this
+// asserts acceptance only, and is named for that. The claim it does NOT make —
+// that today's text still comes back through the new return types — is pinned
+// by TestCallSendsOpenAIShapedRequestWithoutCaching,
+// TestCallSendsAnthropicShapedRequestWithCaching and
+// TestAnthropicPromptCachingPayload, each of which goes red when a parser drops
+// its text into the new Result.
+func TestAdaptersAcceptToolDefinitionsWithoutEmittingThem(t *testing.T) {
+	adapters := []struct {
+		name    string
+		adapter providerAdapter
+		spec    ProviderSpec
+	}{
+		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: 0.5}},
+		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: 0.5}},
+	}
+
+	tools := []ToolDefinition{{
+		Type: "function",
+		Function: ToolFunction{
+			Name:        "get_weather",
+			Description: "Gets the weather",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}}
+
+	for _, ad := range adapters {
+		t.Run(ad.name, func(t *testing.T) {
+			_, err := ad.adapter.BuildChatRequest(ad.spec, []Message{{Role: "user", Content: "hi"}}, tools, false)
+			if err != nil {
+				t.Fatalf("BuildChatRequest with tools failed: %v", err)
+			}
+		})
+	}
+}
