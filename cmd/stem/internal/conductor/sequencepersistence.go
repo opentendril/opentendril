@@ -49,6 +49,7 @@ type SequenceStep struct {
 	Command           []string `yaml:"command,omitempty"`
 	Parallel          bool     `yaml:"parallel,omitempty"`
 	SproutCount       int      `yaml:"sproutCount,omitempty"`
+	Investigation     bool     `yaml:"investigation,omitempty"`
 	MergeTranscript   string   `yaml:"mergeTranscript,omitempty"`
 	PhenotypesCount   int      `yaml:"phenotypesCount,omitempty"`
 	FitnessTest       string   `yaml:"fitnessTest,omitempty"`

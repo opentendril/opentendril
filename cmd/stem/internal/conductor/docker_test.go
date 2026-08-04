@@ -655,7 +655,7 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 			}()
 
 			ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
-			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 				return &terrariumToolSession{}, nil // Dummy session
 			}
 			newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
@@ -818,5 +818,57 @@ func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
 
 	if received != 0 {
 		t.Fatalf("expected 0 host execution events for docker provider, got %d", received)
+	}
+}
+
+func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	workDir := t.TempDir()
+
+	originalEnsureSprout := ensureSproutImageFn
+	originalStartSession := startTerrariumSessionFn
+	originalNewSprout := newSproutFn
+	t.Cleanup(func() {
+		ensureSproutImageFn = originalEnsureSprout
+		startTerrariumSessionFn = originalStartSession
+		newSproutFn = originalNewSprout
+	})
+
+	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
+
+	tests := []struct {
+		name          string
+		investigation bool
+		wantReadOnly  bool
+	}{
+		{"ordinary run is unaffected", false, false},
+		{"investigation run mounts read-only", true, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			capturedReadOnly := false
+			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+				capturedReadOnly = readOnly
+				return &stubToolSession{}, nil
+			}
+
+			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+				return &mockSproutRunner{
+					response: "done",
+				}, nil
+			}
+
+			orch := &DockerOrchestrator{
+				Substrate:     workDir,
+				Investigation: tc.investigation,
+			}
+
+			_, _ = orch.RunSprout(ctx, "test prompt")
+
+			if capturedReadOnly != tc.wantReadOnly {
+				t.Errorf("startTerrariumSessionFn called with readOnly=%v, want %v", capturedReadOnly, tc.wantReadOnly)
+			}
+		})
 	}
 }

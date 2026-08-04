@@ -187,7 +187,7 @@ func captureTerrariumSessionPatience(t *testing.T) *patienceCapture {
 	original := startTerrariumSessionFn
 	t.Cleanup(func() { startTerrariumSessionFn = original })
 
-	startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+	startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		capture.called = true
 		capture.timeout = timeout
 		if deadline, ok := innerCtx.Deadline(); ok {

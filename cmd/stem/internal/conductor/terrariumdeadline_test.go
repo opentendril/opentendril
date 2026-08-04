@@ -88,7 +88,7 @@ func TestRunSproutCallSitePassesDerivedWatchdog(t *testing.T) {
 		defer cancel()
 		deadline, _ := ctx.Deadline()
 
-		startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 			capturedRemaining = time.Until(deadline)
 			capturedTimeout = timeout
 			return &stubToolSession{}, nil
@@ -127,7 +127,7 @@ func TestRunSproutCallSitePassesDerivedWatchdog(t *testing.T) {
 
 		originalStartSession := startTerrariumSessionFn
 		t.Cleanup(func() { startTerrariumSessionFn = originalStartSession })
-		startTerrariumSessionFn = func(_ context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		startTerrariumSessionFn = func(_ context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 			capturedTimeout = timeout
 			return &stubToolSession{}, nil
 		}
@@ -190,7 +190,7 @@ func TestRunSequenceSproutAtPathCallSitePassesDerivedWatchdog(t *testing.T) {
 		defer cancel()
 		deadline, _ := ctx.Deadline()
 
-		startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		startTerrariumSessionFn = func(innerCtx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 			capturedRemaining = time.Until(deadline)
 			capturedTimeout = timeout
 			return &stubToolSession{}, nil
@@ -242,7 +242,7 @@ func TestRunSequenceSproutAtPathCallSitePassesDerivedWatchdog(t *testing.T) {
 		removeShadowWorktreeFn = func(sourcePath, shadowPath string) {}
 		injectMycorrhizalCacheFn = func(sourcePath, shadowPath string) {}
 		stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
-		startTerrariumSessionFn = func(_ context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		startTerrariumSessionFn = func(_ context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 			capturedTimeout = timeout
 			return &stubToolSession{}, nil
 		}

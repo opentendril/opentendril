@@ -74,6 +74,7 @@ type DockerOrchestrator struct {
 	Genotype         string
 	Temperature      float64
 	DisableMergeBack bool
+	Investigation    bool
 	EventBus         *eventbus.Bus
 	// SessionID attributes the run's lifecycle events to the session (Phytomer)
 	// it belongs to; empty for sessionless runs.
@@ -90,8 +91,8 @@ type sproutRunner interface {
 
 var (
 	ensureSproutImageFn     = ensureSproutImage
-	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
-		return startTerrariumSession(ctx, providerName, imageName, mountPath, command, extraEnv, timeout, observers...)
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		return startTerrariumSession(ctx, providerName, imageName, mountPath, readOnly, command, extraEnv, timeout, observers...)
 	}
 	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
 		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
@@ -167,7 +168,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	detached := false
 	publishTerminal := func(report *SproutRunReport, filesKnown bool, err error) {
 		if report.Outcome == "" {
-			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown, report.Output)
+			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown, report.Output, d.Investigation)
 		}
 		reason := ""
 		if err != nil {
@@ -258,7 +259,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 	})
 	extraEnv := make([]string, 0, 2)
-	if plan.readOnly {
+	if plan.readOnly || d.Investigation {
 		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
 	}
 	if plan.credential.ExposeToken && strings.TrimSpace(plan.credential.TokenValue) != "" {
@@ -491,7 +492,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		releaseWork(nil)
 	}()
 
-	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, plan.command, extraEnv, deriveWatchdogTimeout(workCtx), obs)
+	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, d.Investigation, plan.command, extraEnv, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -545,9 +546,20 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// Non-git and readonly substrates cannot measure what changed, so their
 		// successful runs report SproutOutcomeComplete with FilesModified unknown
 		// (nil) rather than claiming a no-changes verdict nothing measured.
-		if !gitRepo || plan.readOnly {
+		if !gitRepo || plan.readOnly || d.Investigation {
 			if runErr != nil {
 				return report, filesKnown, runErr
+			}
+			if d.Investigation && statusPath != "" {
+				executionStatus := sproutExecutionStatus{
+					StepID:          stepID,
+					Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+					Status:          classifySproutOutcome(runErr, nil, filesKnown, sproutResult.Response, d.Investigation),
+					FilesUnmeasured: "run was investigation-only and therefore took no diff",
+				}
+				if writeErr := writeSproutStatus(statusPath, executionStatus); writeErr != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Failed to write investigation status to %s: %v\n", statusPath, writeErr)
+				}
 			}
 			report.Output = sproutResult.Response
 			return report, filesKnown, nil
@@ -585,7 +597,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
 			FilesModified:   modifiedFiles,
 			FilesUnmeasured: report.FilesUnmeasured,
-			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response),
+			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response, d.Investigation),
 		}
 		if runErr != nil {
 			executionStatus.Error = runErr.Error()
@@ -985,7 +997,7 @@ func deriveWatchdogTimeout(ctx context.Context) time.Duration {
 	return terrariumWatchdogFallback
 }
 
-func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 	provider, err := terrarium.NewProvider(ctx, providerName, observers...)
 	if err != nil {
 		return nil, err
@@ -1003,8 +1015,9 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 		Timeout:        timeout,
 		Mounts: []terrarium.MountSpec{
 			{
-				Source: mountPath,
-				Target: "/app",
+				Source:   mountPath,
+				Target:   "/app",
+				ReadOnly: readOnly,
 			},
 		},
 		Command:     command,
