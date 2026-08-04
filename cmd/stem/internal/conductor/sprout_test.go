@@ -904,3 +904,37 @@ func TestMalformedArguments(t *testing.T) {
 		t.Fatalf("expected tool error observation for malformed JSON, got %v", toolMsg.Content)
 	}
 }
+
+// A call whose arguments never parsed was never made, so the run must not
+// publish a tool-invoked event for it. That event is one of the signs of life a
+// supervisor reads, and it is also persisted as the run's evidence — a forged
+// one makes a stalled growth look busy and makes the history describe a call
+// that never happened. The existing malformed-arguments test passes a nil bus,
+// so nothing here was observable until this test.
+func TestSproutDoesNotForgeToolInvokedForUnparsableArguments(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{nativeResponses: []llm.Result{
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Type: "function",
+			Function: llm.ToolCallFunction{Name: "readFile", Arguments: `{malformed}`}}}},
+		{Text: "done"},
+	}}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
+
+	bus := eventbus.New()
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step", "sess")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+	if _, err := sprout.Run(context.Background(), "test"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if len(session.calls) != 0 {
+		t.Fatalf("session executed %d tool call(s), want 0", len(session.calls))
+	}
+	for _, ev := range bus.History(50) {
+		if ev.Type == eventbus.EventToolInvoked {
+			t.Errorf("published a tool-invoked event for a tool that never ran: %v", ev.Data)
+		}
+	}
+}

@@ -219,6 +219,13 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 
 		if a.eventBus != nil {
 			tokenChan = make(chan string, 100)
+			// Publishing happens on another goroutine, so the turn must wait
+			// for it to drain before moving on. Without the wait a token could
+			// be published after the events that conclude the run, or dropped
+			// entirely when a short-lived caller shuts the bus down — which
+			// makes the liveness signal exactly as untrustworthy as no signal.
+			// Both entry points below close the channel on every path, so this
+			// cannot hang.
 			tokensPublished := make(chan struct{})
 			go func() {
 				defer close(tokensPublished)
@@ -280,6 +287,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		a.appendTranscript("assistant", response)
 
 		var calls []ToolCall
+		var argErrors []string
 		var isToolCall bool
 		var finalResponse string
 		var actionResult *ActionResult
@@ -287,26 +295,21 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		if a.nativeClient != nil {
 			if len(nativeToolCalls) > 0 {
 				isToolCall = true
-				for _, ntc := range nativeToolCalls {
+				// Arguments that will not parse are recorded alongside the call
+				// rather than inside it. A sentinel key smuggled through
+				// Arguments would reach the tool-invoked event and the persisted
+				// history as though the mind had really sent it, which makes the
+				// evidence trail describe a call that was never made.
+				argErrors = make([]string, len(nativeToolCalls))
+				for i, ntc := range nativeToolCalls {
 					var args map[string]any
 					if err := json.Unmarshal([]byte(ntc.Function.Arguments), &args); err != nil {
-						// Record the error for this malformed call but do not fail the whole turn.
-						// The execute tool stage will see a fake "malformed tool" call or we can feed it back directly.
-						// A cleaner way: return it as a tool call but with a special indicator, or just an empty map.
-						// Wait, the brief says: "malformed arguments feed back an error observation".
-						// We can put it in calls and let executeTool handle it, but executeTool does not see the error right now.
-						// Or we can add an error property. Actually, if json fails, we can just pass the raw string and let the execution catch it.
-						// To keep ToolCall struct clean, let's inject a synthetic error here if parsing fails.
-						calls = append(calls, ToolCall{
-							Tool:      ntc.Function.Name,
-							Arguments: map[string]any{"_malformed_arguments_error": fmt.Sprintf("failed to parse arguments JSON: %v", err)},
-						})
-					} else {
-						calls = append(calls, ToolCall{
-							Tool:      ntc.Function.Name,
-							Arguments: args,
-						})
+						argErrors[i] = fmt.Sprintf("failed to parse arguments JSON: %v", err)
 					}
+					calls = append(calls, ToolCall{
+						Tool:      ntc.Function.Name,
+						Arguments: args,
+					})
 				}
 			} else {
 				// No tool calls means it's a final text natively.
@@ -349,21 +352,25 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			var resp ToolResponse
 			var obs string
 
-			if errStr, ok := call.Arguments["_malformed_arguments_error"].(string); ok {
+			if i < len(argErrors) && argErrors[i] != "" {
 				resp = ToolResponse{
 					Status: "error",
-					Error:  errStr,
+					Error:  argErrors[i],
 				}
 				obs = renderToolObservation(call.Tool, resp)
+				// No tool-invoked event: nothing was invoked. The observation
+				// still reaches the mind and the transcript, so the failure is
+				// recorded — but a sign of life is not forged for a tool that
+				// never ran, which is the one signal a supervisor may not be
+				// misled about.
 			} else {
 				var err error
 				resp, obs, err = a.executeTool(ctx, call)
 				if err != nil {
 					return sproutResult{}, err
 				}
+				a.publishToolInvoked(call, resp, obs)
 			}
-
-			a.publishToolInvoked(call, resp, obs)
 			if combinedObservation.Len() > 0 {
 				combinedObservation.WriteString("\n\n")
 			}
