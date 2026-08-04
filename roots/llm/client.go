@@ -715,6 +715,16 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 	}
 	defer resp.Body.Close()
 
+	// A streamed non-200 previously returned no error, so a rejected turn read as
+	// an empty answer and failover never advanced. Both paths check it here.
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("read llm response: %w", err)
+		}
+		return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
 	if stream {
 		scanner := bufio.NewScanner(resp.Body)
 		var fullContent strings.Builder
@@ -747,9 +757,6 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read llm response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	return c.adapter.ParseResponse(body)

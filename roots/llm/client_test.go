@@ -527,3 +527,92 @@ func TestCallStreamParsesOpenAIChunks(t *testing.T) {
 		t.Fatalf("tokens = %v, want ['hello', ' world']", received)
 	}
 }
+
+func TestCallStreamReturnsErrorOnNon200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("invalid model parameters"))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+
+	tokenChan := make(chan string, 10)
+	res, err := client.CallStream(context.Background(), []Message{{Role: "user", Content: "hi"}}, tokenChan)
+
+	if err == nil {
+		t.Fatalf("CallStream returned nil error, want 400 error")
+	}
+	if !strings.Contains(err.Error(), "invalid model parameters") {
+		t.Errorf("error = %v, want to contain 'invalid model parameters'", err)
+	}
+	if !strings.Contains(err.Error(), "llm returned 400") {
+		t.Errorf("error = %v, want to contain 'llm returned 400'", err)
+	}
+	if res != "" {
+		t.Errorf("res = %q, want empty", res)
+	}
+
+	// Assert token channel is closed
+	_, ok := <-tokenChan
+	if ok {
+		t.Errorf("tokenChan is open, want closed")
+	}
+}
+
+func TestCallStreamAdvancesCandidateLoopOnNon200(t *testing.T) {
+	var server1Called, server2Called bool
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server1Called = true
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("overloaded"))
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server2Called = true
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		events := []string{
+			`{"id":"1","choices":[{"delta":{"content":"server2"}}]}`,
+		}
+		for _, ev := range events {
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server2.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server1.URL,
+		BaseURLs: []string{server1.URL, server2.URL},
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+
+	tokenChan := make(chan string, 10)
+	res, err := client.CallStream(context.Background(), []Message{{Role: "user", Content: "hi"}}, tokenChan)
+	if err != nil {
+		t.Fatalf("CallStream failed: %v", err)
+	}
+	if res != "server2" {
+		t.Fatalf("res = %q, want 'server2'", res)
+	}
+
+	if !server1Called {
+		t.Errorf("server1 was not called")
+	}
+	if !server2Called {
+		t.Errorf("server2 was not called")
+	}
+}
