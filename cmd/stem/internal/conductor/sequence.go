@@ -1636,7 +1636,15 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	if planErr == nil && sequencePlan != nil {
 		scratchInterval = sequencePlan.scratchInterval
 	}
-	teardown = append(teardown, watchDormancy(workCtx, orch.EventBus, scratchInterval, mountPath))
+	var dormancyInspector terrariumInspector
+	if insp, ok := session.(terrariumInspector); ok {
+		dormancyInspector = insp
+	}
+	var dormancySnapshot sproutSnapshot
+	if snap, ok := sprout.(sproutSnapshot); ok {
+		dormancySnapshot = snap
+	}
+	teardown = append(teardown, watchDormancy(workCtx, orch.EventBus, scratchInterval, mountPath, dormancyInspector, dormancySnapshot))
 
 	// completeRun measures, classifies and records what the run did. It is a
 	// closure rather than the tail of this function because a detached call

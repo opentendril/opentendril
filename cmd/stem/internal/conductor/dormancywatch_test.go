@@ -2,10 +2,14 @@ package conductor
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/dormancy"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
@@ -117,7 +121,7 @@ func TestPatienceScratchLoading(t *testing.T) {
 func TestWatchDormancyAttachesOnlyWhenConfigured(t *testing.T) {
 	t.Run("unconfigured attaches nothing", func(t *testing.T) {
 		bus := eventbus.New()
-		stop := watchDormancy(context.Background(), bus, 0, t.TempDir())
+		stop := watchDormancy(context.Background(), bus, 0, t.TempDir(), nil, nil)
 		defer stop()
 
 		if got := bus.HandlerCount(eventbus.EventStreamToken); got != 0 {
@@ -128,13 +132,13 @@ func TestWatchDormancyAttachesOnlyWhenConfigured(t *testing.T) {
 	t.Run("no bus attaches nothing", func(t *testing.T) {
 		// Nothing to publish a report to and nothing to read events from; the
 		// call must be inert rather than starting a loop that observes nobody.
-		stop := watchDormancy(context.Background(), nil, time.Second, t.TempDir())
+		stop := watchDormancy(context.Background(), nil, time.Second, t.TempDir(), nil, nil)
 		stop()
 	})
 
 	t.Run("configured attaches for the run and detaches after it", func(t *testing.T) {
 		bus := eventbus.New()
-		stop := watchDormancy(context.Background(), bus, time.Hour, t.TempDir())
+		stop := watchDormancy(context.Background(), bus, time.Hour, t.TempDir(), nil, nil)
 
 		if got := bus.HandlerCount(eventbus.EventStreamToken); got != 1 {
 			t.Fatalf("stream-token handlers while watching = %d, want 1", got)
@@ -175,7 +179,7 @@ func TestWatchDormancyProbesThroughTheInjectedPort(t *testing.T) {
 	// assertion below blocks on the probe rather than on the clock, so the
 	// interval only bounds how long the wait can be, never whether it is long
 	// enough for the thing to have happened.
-	stop := watchDormancy(context.Background(), bus, 5*time.Millisecond, mountPath)
+	stop := watchDormancy(context.Background(), bus, 5*time.Millisecond, mountPath, nil, nil)
 	defer stop()
 
 	bus.Publish(eventbus.Event{
@@ -320,4 +324,169 @@ func TestRunSequenceSproutAtPathWatchesForDormancyWhenConfigured(t *testing.T) {
 	t.Run("unconfigured", func(t *testing.T) {
 		assertWatched(t, "", 0)
 	})
+}
+
+// stubInspector is a terrariumInspector that returns preset values, for use
+// in dormancy capture tests that must not start Docker.
+type stubInspector struct {
+	logs  string
+	ps    string
+	psErr error
+}
+
+func (s *stubInspector) Logs() string { return s.logs }
+func (s *stubInspector) ProcessListing(_ context.Context) (string, error) {
+	return s.ps, s.psErr
+}
+
+// stubSnapshot is a sproutSnapshot that returns preset last-exchange values.
+type stubSnapshot struct {
+	req  string
+	resp string
+}
+
+func (s *stubSnapshot) LastExchange() (request, response string) {
+	return s.req, s.resp
+}
+
+// TestDormancyCaptureArtifactContainsExpectedSections asserts that a capture
+// written by dormancyCaptureArtifact carries all four evidence sections and that
+// each section contains the value the stub returned. The artifact is verbose
+// by design — the Botanist must be able to reconstruct the run from it.
+func TestDormancyCaptureArtifactContainsExpectedSections(t *testing.T) {
+	captureDir := t.TempDir()
+	originalCapture := DormancyCaptureDir
+	// Replace the directory function so the capture lands in the test's temp dir
+	// rather than in the live control plane.
+	DormancyCaptureDir = func() string { return captureDir }
+	t.Cleanup(func() { DormancyCaptureDir = originalCapture })
+
+	inspector := &stubInspector{
+		logs: "process output line\n",
+		ps:   "root 1 cmd\nroot 2 other\n",
+	}
+	snapshot := &stubSnapshot{
+		req:  "last user message",
+		resp: "last assistant reply",
+	}
+
+	run := dormancy.RunKey{Step: "step-abc", Session: "session-xyz"}
+	if err := dormancyCaptureArtifact(context.Background(), run, inspector, snapshot); err != nil {
+		t.Fatalf("dormancyCaptureArtifact returned error: %v", err)
+	}
+
+	entries, err := os.ReadDir(captureDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s): %v", captureDir, err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly one capture file, got %d", len(entries))
+	}
+
+	content, err := os.ReadFile(filepath.Join(captureDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	text := string(content)
+
+	for _, want := range []string{
+		"dormancy-capture",
+		"step-abc",
+		"session-xyz",
+		"=== container stderr ===",
+		"process output line",
+		"=== last request ===",
+		"last user message",
+		"=== last response ===",
+		"last assistant reply",
+		"=== process listing ===",
+		"root 1 cmd",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("capture artifact does not contain %q\nfull content:\n%s", want, text)
+		}
+	}
+}
+
+// TestDormancyCaptureArtifactNotWrittenOnHealthyRun checks the inverse: a run
+// that never crosses the reporting level produces no artifact at all. The watcher
+// is the gatekeeper — capture fires only after a dormancy report — and this
+// test confirms the gate holds when suspicion stays below the threshold.
+func TestDormancyCaptureArtifactNotWrittenOnHealthyRun(t *testing.T) {
+	captureDir := t.TempDir()
+	originalCapture := DormancyCaptureDir
+	DormancyCaptureDir = func() string { return captureDir }
+	t.Cleanup(func() { DormancyCaptureDir = originalCapture })
+
+	// A run that emits stream tokens on every tick stays below reportingSuspicion.
+	// Using the watcher directly with a synthetic clock so the whole cadence plays
+	// out without any wall-clock time passing, exactly as the dormancy suite does.
+	bus := eventbus.New()
+
+	var captures int
+	stop := watchDormancy(
+		context.Background(), bus, 5*time.Millisecond, t.TempDir(),
+		&stubInspector{logs: "ok"},
+		&stubSnapshot{req: "q", resp: "a"},
+	)
+
+	// Publish enough stream tokens at a tight interval to keep suspicion low.
+	for i := 0; i < 10; i++ {
+		bus.Publish(eventbus.Event{
+			Type:      eventbus.EventStreamToken,
+			Source:    "healthy-step",
+			SessionID: "healthy-session",
+			Data:      map[string]interface{}{"token": "word"},
+		})
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+
+	entries, err := os.ReadDir(captureDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	captures = len(entries)
+	if captures != 0 {
+		t.Fatalf("healthy run produced %d capture artifact(s), want 0", captures)
+	}
+}
+
+// TestDormancyCaptureWritesAllSectionsWhenInspectorFails proves that the capture
+// is still written even when the process listing cannot be obtained. Each section
+// is independent: a failed ps(1) produces a "could not be taken" record and does
+// not abort the capture of the sections that did succeed.
+func TestDormancyCaptureWritesAllSectionsWhenInspectorFails(t *testing.T) {
+	captureDir := t.TempDir()
+	originalCapture := DormancyCaptureDir
+	DormancyCaptureDir = func() string { return captureDir }
+	t.Cleanup(func() { DormancyCaptureDir = originalCapture })
+
+	inspector := &stubInspector{
+		logs:  "some stderr output",
+		psErr: fmt.Errorf("container exited"),
+	}
+	snapshot := &stubSnapshot{req: "user", resp: "model"}
+
+	run := dormancy.RunKey{Step: "step-failing-ps", Session: "sess-1"}
+	if err := dormancyCaptureArtifact(context.Background(), run, inspector, snapshot); err != nil {
+		t.Fatalf("dormancyCaptureArtifact returned error: %v", err)
+	}
+
+	entries, _ := os.ReadDir(captureDir)
+	if len(entries) != 1 {
+		t.Fatalf("expected one capture file, got %d", len(entries))
+	}
+	content, _ := os.ReadFile(filepath.Join(captureDir, entries[0].Name()))
+	text := string(content)
+
+	if !strings.Contains(text, "some stderr output") {
+		t.Errorf("capture missing stderr section: %s", text)
+	}
+	if !strings.Contains(text, "user") {
+		t.Errorf("capture missing request section: %s", text)
+	}
+	if !strings.Contains(text, "could not be taken") {
+		t.Errorf("capture missing process listing failure note: %s", text)
+	}
 }

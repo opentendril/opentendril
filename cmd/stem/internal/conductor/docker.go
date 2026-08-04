@@ -513,7 +513,15 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// returns while the Sprout is still growing, and a watcher torn down at that
 	// moment would stop observing precisely the run nobody else is waiting on —
 	// the one we hold the least evidence about.
-	teardown = append(teardown, watchDormancy(workCtx, d.EventBus, plan.scratchInterval, mountPath))
+	var dormancyInspector terrariumInspector
+	if insp, ok := session.(terrariumInspector); ok {
+		dormancyInspector = insp
+	}
+	var dormancySnapshot sproutSnapshot
+	if snap, ok := sprout.(sproutSnapshot); ok {
+		dormancySnapshot = snap
+	}
+	teardown = append(teardown, watchDormancy(workCtx, d.EventBus, plan.scratchInterval, mountPath, dormancyInspector, dormancySnapshot))
 
 	// completeRun measures, classifies and records what the run did. It is a
 	// closure rather than the tail of this function because a detached call
@@ -874,6 +882,32 @@ type terrariumToolSession struct {
 	terrarium terrarium.Terrarium
 }
 
+// terrariumInspector is the narrow surface watchDormancy uses to observe a
+// live Terrarium without touching the tool protocol. It is a separate interface
+// — not a widened toolSession — so the capture path is never confused with the
+// model's conversation channel.
+type terrariumInspector interface {
+	// Logs returns the container's accumulated stderr. It is a snapshot, not a
+	// stream, so it is safe to call while the model turn is in flight.
+	Logs() string
+	// ProcessListing returns a best-effort snapshot of the container's running
+	// processes, taken at the Terrarium level rather than through the tool
+	// protocol. The listing may be unavailable if the container has already
+	// stopped; callers must treat a non-nil error as a first-class answer.
+	ProcessListing(ctx context.Context) (string, error)
+}
+
+// sproutSnapshot is the narrow surface watchDormancy uses to read the last
+// request and response from the model conversation without being able to write
+// to it. It is a separate interface from sproutRunner so the capture path
+// cannot accidentally drive the model turn.
+type sproutSnapshot interface {
+	// LastExchange returns the last request sent to the model and the response
+	// received, both as raw strings. Either may be empty if the run has not yet
+	// completed a full exchange.
+	LastExchange() (request, response string)
+}
+
 // deriveWatchdogTimeout computes the terrarium watchdog duration from the
 // caller's context. When the context has a deadline, the watchdog is set to
 // the remaining time plus a grace margin so the context deadline governs the
@@ -1084,6 +1118,40 @@ func (s *terrariumToolSession) Logs() string {
 		return ""
 	}
 	return logs.Stderr
+}
+
+// ProcessListing returns the container's running processes by running ps(1)
+// through the Terrarium's Run channel — not through the model tool protocol.
+// This is intentional: the model turn may be blocked inside Call at exactly
+// the moment a dormancy capture fires, and injecting anything into that channel
+// would put an unsolicited tool result into the model's conversation.
+//
+// If the listing cannot be taken (container already stopped, ps not present,
+// execution timed out) the error is returned as-is; callers record it as
+// "could not be taken" rather than treating it as an empty listing.
+func (s *terrariumToolSession) ProcessListing(ctx context.Context) (string, error) {
+	if s == nil || s.terrarium == nil {
+		return "", fmt.Errorf("terrarium is not active")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	const listingTimeout = 10 * time.Second
+	listCtx, cancel := context.WithTimeout(ctx, listingTimeout)
+	defer cancel()
+
+	result, err := s.terrarium.Run(listCtx, terrarium.CommandSpec{
+		Command: []string{"ps", "aux"},
+		Timeout: listingTimeout,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ps aux: %w", err)
+	}
+	if result.TimedOut {
+		return "", fmt.Errorf("ps aux timed out after %s", listingTimeout)
+	}
+	return result.Stdout, nil
 }
 
 func buildTerrariumEnvironment(extraEnv ...string) map[string]string {

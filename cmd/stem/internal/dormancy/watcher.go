@@ -47,6 +47,21 @@ type RunKey struct {
 // caller supplies a closure instead, and this package stays a leaf.
 type ScratchProbe func(ctx context.Context, run RunKey) ([]string, error)
 
+// DormancyCapture is called once per dormancy report, for the run that crossed
+// the reporting level. It captures whatever the caller knows about the run's
+// live state at that instant — container stderr, last request and response,
+// Terrarium state, a process listing — and retains it as an artifact.
+//
+// It is a function port for the same reason ScratchProbe is: the capture
+// implementation reaches things that live in the orchestrator package (session
+// logs, Terrarium exec), and importing that package from here would pull a
+// dependency across the leaf boundary this package asserts in its tests.
+//
+// A non-nil error from the capture is not fatal to the report: the dormancy
+// event is published regardless, and "capture could not be taken" is itself
+// evidence worth recording.
+type DormancyCapture func(ctx context.Context, run RunKey) error
+
 // Config wires a Watcher. Every field is optional: with none of them set the
 // Watcher still accrues suspicion from observed events, it simply has nothing
 // to publish to and no workspace to probe.
@@ -61,6 +76,10 @@ type Config struct {
 	// ScratchInterval is how often the probe is taken, and the tick interval
 	// the production loop runs at. Zero disables the probe and the loop.
 	ScratchInterval time.Duration
+	// Capture is called once per dormancy report to retain evidence about the
+	// silent run as an artifact. Nil disables artifact capture; the dormancy
+	// report is still published to the bus either way.
+	Capture DormancyCapture
 	// Now supplies the current time. Nil means time.Now. Tests pass a
 	// synthetic clock so a run's whole cadence can be replayed without
 	// waiting for any of it.
@@ -133,6 +152,7 @@ type runRecord struct {
 type Watcher struct {
 	bus             *eventbus.Bus
 	scratch         ScratchProbe
+	capture         DormancyCapture
 	scratchInterval time.Duration
 	now             func() time.Time
 
@@ -151,6 +171,7 @@ func New(cfg Config) *Watcher {
 	return &Watcher{
 		bus:             cfg.Bus,
 		scratch:         cfg.Scratch,
+		capture:         cfg.Capture,
 		scratchInterval: cfg.ScratchInterval,
 		now:             now,
 		runs:            make(map[RunKey]*runRecord),
@@ -437,7 +458,11 @@ func (w *Watcher) sampleScratch(ctx context.Context, now time.Time) {
 // one that has newly crossed the reporting level. Publishing happens outside the
 // lock so a handler on the far side of the bus can never deadlock the Watcher.
 func (w *Watcher) evaluate(now time.Time) {
-	var reports []eventbus.Event
+	type dormantRun struct {
+		key   RunKey
+		event eventbus.Event
+	}
+	var dormant []dormantRun
 
 	w.mu.Lock()
 	for _, key := range w.order {
@@ -456,12 +481,23 @@ func (w *Watcher) evaluate(now time.Time) {
 
 		record.armed = false
 		record.reported++
-		reports = append(reports, record.dormantEvent(now, level))
+		dormant = append(dormant, dormantRun{key: key, event: record.dormantEvent(now, level)})
 	}
 	w.mu.Unlock()
 
-	for _, report := range reports {
-		w.bus.Publish(report)
+	for _, d := range dormant {
+		w.bus.Publish(d.event)
+		// Capture runs after the report is published so a subscriber that reads
+		// the bus event cannot observe an empty artifact directory. Errors from
+		// capture are non-fatal: the report already landed, and "could not be
+		// taken" is itself evidence, recorded by the implementation.
+		if w.capture != nil {
+			// context.Background is correct here: the run's work context may be
+			// closing (that is the ordinary way a run ends), and a capture issued
+			// on an already-expired context would always fail. The capture is
+			// bounded by the implementation's own timeout.
+			w.capture(context.Background(), d.key) //nolint:errcheck
+		}
 	}
 }
 
