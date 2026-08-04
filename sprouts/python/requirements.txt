@@ -8,6 +8,19 @@
 #     'pip install -q pip-tools && pip-compile --generate-hashes --allow-unsafe \
 #        --output-file requirements.lock requirements.txt'
 #
+# That command deliberately does NOT move versions already in the lock — it
+# resolves only what this file newly requires. Refreshing a package the lock
+# already pins needs an explicit request, which is what a published advisory
+# calls for even when the declaration above already allows the fixed version:
+#
+#   ... pip-compile --generate-hashes --allow-unsafe \
+#        --upgrade-package <name> --output-file requirements.lock requirements.txt
+#
+# Without it the regeneration is a silent no-op on versions, and the audit keeps
+# failing against a fix that was available all along. Name the packages rather
+# than passing --upgrade, so a security refresh stays a reviewable two-line diff
+# instead of moving every pin at once.
+#
 fastapi>=0.116.0
 uvicorn[standard]>=0.32.0
 langchain-anthropic>=0.3.0
