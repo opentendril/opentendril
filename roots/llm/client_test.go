@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -617,6 +618,49 @@ func TestCallStreamAdvancesCandidateLoopOnNon200(t *testing.T) {
 	}
 }
 
+// Failover exists for an address that is down. A refusal is the endpoint
+// answering, and the candidates are one endpoint reached several ways, so
+// offering the same definitions to the next address only buys the same refusal
+// a second time — and delays the downgrade the caller is waiting to hear about.
+func TestCallWithToolsDoesNotAdvanceCandidateLoopOnToolRefusal(t *testing.T) {
+	var server1Calls, server2Calls int
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server1Calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("tools not supported"))
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server2Calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"server2"}}]}`))
+	}))
+	defer server2.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server1.URL,
+		BaseURLs: []string{server1.URL, server2.URL},
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+
+	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "readFile"}}}
+	_, err := client.CallWithTools(context.Background(), []Message{{Role: "user", Content: "hi"}}, tools, nil)
+	if !errors.Is(err, ErrToolsRefused) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	}
+	if server1Calls != 1 {
+		t.Errorf("server1 calls = %d, want 1", server1Calls)
+	}
+	if server2Calls != 0 {
+		t.Errorf("server2 calls = %d, want 0 — a refusal must not spend the next candidate", server2Calls)
+	}
+}
+
 // The status check guards both branches from one place, so the branch that no
 // longer carries its own check needs its own assertion. Without this, narrowing
 // the check to the streaming path leaves the whole package green and a
@@ -756,4 +800,55 @@ func TestAdaptersAcceptToolDefinitionsWithoutEmittingThem(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The endpoint capability is operator-declared, so the YAML key is the whole
+// interface. Nothing asserted that it reached the spec, which meant an operator
+// could set it correctly and be driven natively anyway.
+func TestAcceptsToolDefinitionsReachesProviderSpec(t *testing.T) {
+	t.Run("declared false", func(t *testing.T) {
+		clearProviderKeys(t)
+		chdirWithTendrilConfig(t, `
+llm:
+  default-provider: local
+  providers:
+    local:
+      base-url: http://localhost:11434/v1
+      model: llama3.2
+      accepts-tool-definitions: false
+`)
+		t.Setenv("DEFAULT_LLM_PROVIDER", "local")
+
+		spec := ResolveTierProviderSpec(TierPremium)
+		if spec.AcceptsToolDefinitions == nil {
+			t.Fatal("AcceptsToolDefinitions = nil, want an explicit false")
+		}
+		if *spec.AcceptsToolDefinitions {
+			t.Fatal("AcceptsToolDefinitions = true, want false")
+		}
+		if NewClient(spec).ToolDefinitionsCapable() {
+			t.Error("ToolDefinitionsCapable() = true for an endpoint declared incapable")
+		}
+	})
+
+	t.Run("unset attempts native", func(t *testing.T) {
+		clearProviderKeys(t)
+		chdirWithTendrilConfig(t, `
+llm:
+  default-provider: local
+  providers:
+    local:
+      base-url: http://localhost:11434/v1
+      model: llama3.2
+`)
+		t.Setenv("DEFAULT_LLM_PROVIDER", "local")
+
+		spec := ResolveTierProviderSpec(TierPremium)
+		if spec.AcceptsToolDefinitions != nil {
+			t.Fatalf("AcceptsToolDefinitions = %v, want nil when the key is absent", *spec.AcceptsToolDefinitions)
+		}
+		if !NewClient(spec).ToolDefinitionsCapable() {
+			t.Error("ToolDefinitionsCapable() = false with no declaration; unset must attempt native carriage")
+		}
+	})
 }

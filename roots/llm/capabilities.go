@@ -7,6 +7,12 @@ type Capabilities struct {
 	// tool-calling protocol. An autonomous sprout is useless without it: a
 	// model that cannot emit tool calls returns prose (or nothing) and the run
 	// matures having changed no files. See ModelDefinition.DrivesTools.
+	//
+	// The flag is honoured exactly as set. A caller that knows its turns will
+	// be carried natively — and so does not need the measurement — says so by
+	// leaving this false; selection never decides that on the caller's behalf,
+	// because at selection time nothing yet knows whether the endpoint will
+	// take the definitions when they are finally offered.
 	RequiresToolUse bool
 	MinContextSize  int
 	MaxCostTier     ModelTier

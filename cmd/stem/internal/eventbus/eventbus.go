@@ -64,6 +64,9 @@ const (
 	// work actually ends — a consumer that treats this as an ending will
 	// report a run as finished while it is still writing files.
 	EventSproutDetached EventType = "sprout-detached"
+	// EventSproutDowngraded reports that a Sprout run was forced to use the
+	// prose protocol because the endpoint could not accept native tool definitions.
+	EventSproutDowngraded EventType = "sprout-downgraded"
 	// EventSproutDormant reports that a growth has stopped showing signs of
 	// life for long enough to be worth saying so out loud. It is a REPORT and
 	// never a verdict: nothing acts on it, no run ends because of it, and a
@@ -111,6 +114,7 @@ func AllEventTypes() []EventType {
 		EventSproutMatured,
 		EventSproutWithered,
 		EventSproutDetached,
+		EventSproutDowngraded,
 		EventSproutDormant,
 		EventParallelSprouting,
 		EventMycelialMerge,

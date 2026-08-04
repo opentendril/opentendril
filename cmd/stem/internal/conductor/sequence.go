@@ -1051,6 +1051,7 @@ type sproutExecutionResult struct {
 	// FilesModified is the evidence behind it (nil when unmeasurable, e.g. a
 	// non-git workspace).
 	Outcome       string
+	Protocol      string
 	FilesModified []string
 	// FilesUnmeasured explains why FilesModified is unknown on a run that
 	// should have been able to measure it, so an unmeasurable substrate and a
@@ -1551,7 +1552,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	// toolchains/go-fuzz/Dockerfile) — see runMacrophageFuzzCheck below.
 	imageName := orch.resolveImageName(mountPath)
 	result.ImageName = imageName
-	if err := ensureSproutImage(ctx, imageName); err != nil {
+	if err := ensureSproutImageFn(ctx, imageName); err != nil {
 		return result, err
 	}
 
@@ -1670,6 +1671,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 
 		result.Response = sproutResult.Response
+		result.Protocol = sproutResult.Protocol
 		if sproutResult.ActionResult != nil {
 			verdict := strings.ToUpper(strings.TrimSpace(sproutResult.ActionResult.Verdict))
 			switch verdict {

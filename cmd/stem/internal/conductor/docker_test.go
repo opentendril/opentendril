@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -714,11 +715,69 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 
 type mockSproutRunner struct {
 	response string
+	protocol string
 	err      error
 }
 
 func (m *mockSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
-	return sproutResult{Response: m.response}, m.err
+	return sproutResult{Response: m.response, Protocol: m.protocol}, m.err
+}
+
+// The protocol a run was carried by only answers "was the protocol to blame?"
+// if it survives the trip from the Sprout out to the report. Both exits carry
+// it — the one that returns early and the one that goes through the
+// post-mortem — and a run that failed is exactly the one where the question
+// gets asked, so the failing exit is not the optional half to assert.
+func TestRunSproutCarriesProtocolOntoTheReport(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runErr  error
+		disable bool
+	}{
+		{"run that completes", nil, true},
+		{"run that fails into the post-mortem", errors.New("sprout blew up"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+
+			originalEnsureSprout := ensureSproutImageFn
+			originalStartSession := startTerrariumSessionFn
+			originalNewSprout := newSproutFn
+			originalPreflight := runSproutPreflightChecksFn
+			originalRepoMap := generateRepoMapFn
+			t.Cleanup(func() {
+				ensureSproutImageFn = originalEnsureSprout
+				startTerrariumSessionFn = originalStartSession
+				newSproutFn = originalNewSprout
+				runSproutPreflightChecksFn = originalPreflight
+				generateRepoMapFn = originalRepoMap
+			})
+
+			ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
+			runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+			generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
+			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+				return &stubToolSession{}, nil
+			}
+			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+				return &mockSproutRunner{response: "done", protocol: "prose", err: tc.runErr}, nil
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			orch := &DockerOrchestrator{
+				Substrate:        workDir,
+				StepID:           "test-step",
+				DisableMergeBack: tc.disable,
+			}
+
+			report, _ := orch.RunSprout(ctx, "test prompt")
+			if report.Protocol != "prose" {
+				t.Errorf("report.Protocol = %q, want prose", report.Protocol)
+			}
+		})
+	}
 }
 
 func TestDockerOrchestratorPublishesHostActivationEvent(t *testing.T) {
@@ -814,7 +873,10 @@ func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, _ = orch.RunSprout(ctx, "test prompt")
+	_, err := orch.RunSprout(ctx, "test prompt")
+	if err != nil {
+		t.Logf("RunSprout error: %v", err)
+	}
 
 	if received != 0 {
 		t.Fatalf("expected 0 host execution events for docker provider, got %d", received)
@@ -828,13 +890,19 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 	originalEnsureSprout := ensureSproutImageFn
 	originalStartSession := startTerrariumSessionFn
 	originalNewSprout := newSproutFn
+	originalPreflight := runSproutPreflightChecksFn
+	originalRepoMap := generateRepoMapFn
 	t.Cleanup(func() {
 		ensureSproutImageFn = originalEnsureSprout
 		startTerrariumSessionFn = originalStartSession
 		newSproutFn = originalNewSprout
+		runSproutPreflightChecksFn = originalPreflight
+		generateRepoMapFn = originalRepoMap
 	})
 
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 
 	tests := []struct {
 		name          string
@@ -864,7 +932,10 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 				Investigation: tc.investigation,
 			}
 
-			_, _ = orch.RunSprout(ctx, "test prompt")
+			_, err := orch.RunSprout(ctx, "test prompt")
+			if err != nil {
+				t.Logf("RunSprout error: %v", err)
+			}
 
 			if capturedReadOnly != tc.wantReadOnly {
 				t.Errorf("startTerrariumSessionFn called with readOnly=%v, want %v", capturedReadOnly, tc.wantReadOnly)

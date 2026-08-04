@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -356,5 +357,53 @@ func TestParseResponseKeepsEveryAnthropicTextBlock(t *testing.T) {
 	}
 	if len(res.ToolCalls) != 1 {
 		t.Fatalf("ToolCalls = %d, want 1", len(res.ToolCalls))
+	}
+}
+
+// The refusal contract is the client's, not one adapter's — this family must
+// raise it on the same statuses and with the same single request.
+func TestDoCallAnthropicReportsToolRefusalWithoutRetrying(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
+
+	_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+	if !errors.Is(err, ErrToolsRefused) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want exactly 1 — the client must not re-ask on its own", requests)
+	}
+}
+
+func TestDoCallAnthropicOnlyTreats400And422AsToolRefusal(t *testing.T) {
+	refusing := map[int]bool{
+		http.StatusBadRequest:          true,
+		http.StatusUnprocessableEntity: true,
+		http.StatusTooManyRequests:     false,
+		http.StatusInternalServerError: false,
+	}
+
+	for status, wantRefusal := range refusing {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":{"message":"nope"}}`))
+		}))
+
+		client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+		tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
+
+		_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+		if got := errors.Is(err, ErrToolsRefused); got != wantRefusal {
+			t.Errorf("status %d: errors.Is(err, ErrToolsRefused) = %v, want %v (err = %v)", status, got, wantRefusal, err)
+		}
+		server.Close()
 	}
 }

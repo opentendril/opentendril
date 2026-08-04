@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -412,4 +413,81 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// The client reports a refusal; it does not answer one. The request count is
+// the assertion that matters: a client that quietly re-asks would still return
+// an error here, and only counting requests can tell the two apart.
+func TestDoCallOpenAIishReportsToolRefusalWithoutRetrying(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"tools not supported"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
+	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
+
+	_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+	if !errors.Is(err, ErrToolsRefused) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	}
+	if requests != 1 {
+		t.Errorf("requests = %d, want exactly 1 — the client must not re-ask on its own", requests)
+	}
+	if !strings.Contains(err.Error(), "tools not supported") {
+		t.Errorf("error %q drops the endpoint's own message", err)
+	}
+}
+
+// A refusal is a statement about the tool definitions. Everything else the
+// endpoint might say is an ordinary failure, and demoting a run to the prose
+// protocol over a rate limit would lose quality while announcing a capability.
+func TestDoCallOpenAIishOnlyTreats400And422AsToolRefusal(t *testing.T) {
+	refusing := map[int]bool{
+		http.StatusBadRequest:          true,
+		http.StatusUnprocessableEntity: true,
+		http.StatusUnauthorized:        false,
+		http.StatusTooManyRequests:     false,
+		http.StatusInternalServerError: false,
+		http.StatusBadGateway:          false,
+	}
+
+	for status, wantRefusal := range refusing {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":{"message":"nope"}}`))
+		}))
+
+		client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
+		tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
+
+		_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
+		if got := errors.Is(err, ErrToolsRefused); got != wantRefusal {
+			t.Errorf("status %d: errors.Is(err, ErrToolsRefused) = %v, want %v (err = %v)", status, got, wantRefusal, err)
+		}
+		server.Close()
+	}
+}
+
+// A request carrying no definitions cannot be refused for carrying them, so a
+// 400 on a plain call stays the ordinary error every caller already matches on.
+func TestDoCallOpenAIishPlain400IsNotAToolRefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":{"message":"bad model"}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
+
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, false, nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if errors.Is(err, ErrToolsRefused) {
+		t.Errorf("a 400 with no tool definitions must not read as a tool refusal: %v", err)
+	}
 }

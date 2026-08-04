@@ -16,10 +16,16 @@ type ModelDefinition struct {
 	HasVision    bool
 	HasReasoning bool
 	// DrivesTools marks a model that reliably follows the tool-calling
-	// protocol an autonomous sprout depends on. Frontier hosted models and
-	// large instruct models do; small local models (e.g. a 3B llama3.2) and
-	// code-completion-tuned models do not — measured, they return prose or an
-	// empty completion and the sprout matures having done nothing.
+	// protocol. Frontier hosted models and large instruct models do; small
+	// local models (e.g. a 3B llama3.2) and code-completion-tuned models do
+	// not — measured, they return prose or an empty completion and the sprout
+	// matures having done nothing.
+	//
+	// This is a property of the model, not of the endpoint serving it. An
+	// endpoint that accepts a tools field is not evidence that the model
+	// behind it emits calls that parse: a 3B llama behind Ollama accepts the
+	// field and still answers in prose. See ProviderSpec.AcceptsToolDefinitions
+	// for the separate endpoint-level property.
 	DrivesTools bool
 	CostTier    ModelTier
 }
