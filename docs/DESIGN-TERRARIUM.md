@@ -11,6 +11,7 @@
 - Provide a unified `TerrariumProvider` factory (`factory.go`) to select the appropriate isolation backend based on declared capabilities and host readiness.
 - Enforce capability checks (`validate.go`) so that unsupported spec requests (e.g., mounts in host provider, images in firecracker) are rejected rather than silently ignored.
 - Execute commands in a sealed environment (`docker.go`, `firecracker.go`) with default-deny network posture and configurable constraints (CPU, memory, PIDs limit).
+- Enforce watchdog timeouts supplied by the caller, rather than fixed values (the hardcoded value is a named fallback used only when the caller sets no deadline).
 - Stage dependencies and retrieve results by copying files into and out of the isolated filesystem (`FilePayload`, `Artifact`).
 - Support interactive I/O for payloads by piping stdin/stdout streams (`docker.go`, `host.go`).
 

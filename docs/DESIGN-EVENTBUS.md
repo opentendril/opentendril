@@ -19,7 +19,7 @@
 
 - Persist events (history.db is a sink owned by `historydb`; Resin is owned by `telemetry`).
 - Own WebSocket, Prometheus, Kafka, Redis, or webhook transport (gateway + telemetry attach as consumers).
-- Unsubscribe handlers, rate-limit, or provide at-least-once / durable delivery.
+- Rate-limit, or provide at-least-once / durable delivery.
 - Validate event `Data` schemas or enforce which package may publish which type.
 - Cross process or network boundaries by itself — it is strictly in-process.
 
@@ -33,7 +33,7 @@
 | **Sequence** | `EventSequenceFailure` (`sequence-failure`), `EventSequenceComplete` (`sequence-complete`), `EventSequenceCleanupIncomplete` (`sequence-cleanup-incomplete`). |
 | **Stream / thought** | `EventStreamToken` (`stream-token`), `EventThoughtBranch` (`thought-branch`). |
 | **Tool / transcript** | `EventToolInvoked` (`tool-invoked`), `EventSproutTranscript` (`sprout-transcript`; historical persisted name `Pollinator-transcript` may still exist in old history rows). |
-| **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`). |
+| **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`), `EventSproutDetached` (`sprout-detached`), `EventSproutDormant` (`sprout-dormant`). |
 | **Parallel / GA / mesh-ish** | `EventParallelSprouting` (`parallel-sprouting`), `EventMycelialMerge` (`mycelial-merge`), `EventPhenotypicSelection` (`phenotypic-selection`). |
 | **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`), `EventTriggerBlocked` (`hormonal-trigger-blocked`). |
 | `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
@@ -42,7 +42,7 @@
 | `Sink` | `Consume(Event)` — type-agnostic consumer; intended for persistence and remote transporters. |
 | `Bus` | In-process bus: handlers map, history slice, sink pumps, closed flag. |
 | `New` | Construct an empty bus. |
-| `(*Bus).Subscribe` | Append a handler for one `EventType` (no remove/unsubscribe API). Nil bus/handler is a no-op. |
+| `(*Bus).Subscribe` | Append a handler for one `EventType` (returns an unsubscribe closure). Nil bus/handler is a no-op. |
 | `(*Bus).Publish` | Append to history (cap 100), invoke matching handlers synchronously, non-blocking fan-out to sink pumps. |
 | `(*Bus).AttachSink` | Register a sink pump (default buffer 1024; `buffer <= 0` → default). Drop-on-full per sink. No-op if bus closed or args nil. |
 | `(*Bus).Shutdown` | Close all sink channels, wait for pumps to drain, mark closed. Idempotent. |
@@ -61,6 +61,7 @@ Package-level sentinel errors: **none**.
 - **`internal/gateway`** — consumer only: `Subscribe`s to every `AllEventTypes()` entry per WebSocket client and optionally replays `History` via `?replay=N` (`gateway.go`).
 - **`internal/healthmon`** — publishes `health-check` every interval and `health-degraded` when overall health is false (`monitor.go`). Does not publish `health-recovered`.
 - **`internal/historydb`** — sink: `Store.Consume` persists every event into SQLite (`historydb.go`).
+- **`internal/dormancy`** — consumer **and** publisher: `Subscribe`s to the signs of life a run emits (stream tokens, distinct tool calls) and uses the returned unsubscribe closure to detach at the end of the run; publishes `sprout-dormant` when accrued suspicion crosses its reporting level. This is the bus's first **deciding** consumer — it accrues state across events and decides when to publish, where every earlier consumer only forwarded or stored what it was given. It decides nothing *about the run*: it cannot end one, and the import allowlist in its own tests is what holds that.
 - **`internal/receptors`** — publishes sequence complete/failure from session sequence runs; `DelegationGate.audit` publishes `delegation-authorized` / `delegation-denied` (`sessions.go`, `config.go`). Threads the ambient bus into sprout handlers for lifecycle visibility.
 - **`internal/telemetry`** — attaches transporters as sinks (`AttachTransporter`); Resin log sink attaches via `AttachSink` (`resin.go`, `transporter.go`); Prometheus counters pre-register from `AllEventTypes()`.
 

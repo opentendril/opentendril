@@ -21,10 +21,12 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 |---|---|---|---|
 | **Abscission** | The Stem dropping a withered Sprout to protect the organism. | Fault isolation / fault tolerance | event |
 | **Amber** | Hardened, archived, immutable logs. | Archived log storage | persistent |
-| **Axillary bud** | A dormant branch point on a Phytomer; buds into a new Phytomer chain (branch, parallel, recursion). | Fork / branch point | per-run |
+| **Axillary bud** | A **dormant bud** on a Phytomer; buds into a new Phytomer chain (branch, parallel, recursion). | Fork / branch point | per-run |
 | **Biome** | The normative/regulatory climate the organism must adapt to (ISO 27001, ISO 42001, SDLC). | Compliance / governance regime | environment |
 | **Botanist** | The human who studies and cultivates the organism — plants Seeds, prunes, reviews Fruit (the *gardening* activity), and observes through the Greenhouse. | Operator / developer | external |
 | **Branch** | A capability group / security zone the Stem initialises at boot. | Capability group / security zone | persistent |
+| **Dormant bud** | See **Axillary bud** (an inactive branch point). Distinguish from **Dormant growth**. | Inactive fork point | per-run |
+| **Dormant growth** | A Sprout that is alive and running but showing no observable progress. | Hung / stalled worker | per-run |
 | **Epigenetics** | Distilled learnings appended after runs and fed forward into prompts. | Persistent memory / self-correction | persistent |
 | **Fruit** | The deliverable a cycle yields (a PR / artifact). | Output / deliverable | per-cycle |
 | **Genotype** | The base persona / system prompt (*who* a Sprout is). | System prompt / persona | definition |
@@ -46,6 +48,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Rhizosphere** | The **external** ecosystem the Roots tap — the LLM providers, Docker, git, MCP themselves. *(The outside world; contrast **Roots**, which is OpenTendril's own code that reaches into it.)* | Underlying tech stack / dependencies | environment |
 | **Roots** | OpenTendril's **own** connectivity organ (`roots/`) — provider clients, model discovery, and tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae. | Provider client / SDK layer | persistent |
 | **Genet** | All **Ramets** grown from the same Genome — the genetic individual they are copies of. What a mesh of instances collectively is. | Fleet / cluster of instances | persistent |
+| **Scratch test** | An active probe for a sign of life in a growth, rather than passively waiting or watching. | Health check / liveness probe | per-run |
 | **Seed** | The originating goal / intent / use-case; the blueprint work grows from. | Product goal / use-case / intent | definition |
 | **Sequence** | An ordered YAML workflow of steps. | Agentic pipeline / workflow | definition |
 | **Sprout** | An ephemeral, strictly isolated worker that does one unit of work. | Worker container (*not* "agent") | ephemeral |

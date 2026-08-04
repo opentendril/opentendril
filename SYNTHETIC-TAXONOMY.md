@@ -249,11 +249,16 @@ growth cycle:
     **Taproot**. *(Two cadences are reserved as telemetry metrics, adopted when the
     Greenhouse needs them: the **plastochron** — the interval between new Phytomers;
     and the **phyllochron** — the rate at which Sprouts emerge within one.)*
-*   **Axillary bud** — a **dormant branch point** carried by a Phytomer. It stays
+*   **Axillary bud** — a **dormant bud** (branch point) carried by a Phytomer. It stays
     dormant, or **buds** — activates into a new Phytomer chain: a branch, a
     parallel line, or a recursive sub-task (in grasses, a *tiller*). This is how
     work forks and recurses; the Conductor already does it (e.g. budding a
     recursive Debugger).
+*   **Dormant growth** — a Sprout that is alive and running but showing no
+    observable progress. A state of accrued suspicion, not a verdict. (Distinguish
+    from a **dormant bud**).
+*   **Scratch test** — an active probe for a sign of life in a growth, rather than passively
+    waiting or watching. It asks the workspace whether it is still changing.
 *   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
     delivered, and its merge returns seeds to the Substrate (soil) for the next
     cycle.
