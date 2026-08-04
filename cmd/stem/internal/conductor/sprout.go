@@ -57,11 +57,16 @@ type llmCaller interface {
 	CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 }
 
+type nativeCaller interface {
+	CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error)
+}
+
 type Sprout struct {
 	workspace       string
 	genotypeContext string
 	genomeContext   string
 	client          llmCaller
+	nativeClient    nativeCaller
 	session         toolSession
 	tools           []ToolDefinition
 	toolIndex       map[string]ToolDefinition
@@ -159,11 +164,14 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 		return nil, fmt.Errorf("sprout tool discovery returned only empty or denied tool names")
 	}
 
+	nativeClient, _ := client.(nativeCaller)
+
 	return &Sprout{
 		workspace:       workspace,
 		genotypeContext: instructions,
 		genomeContext:   genomeContext,
 		client:          client,
+		nativeClient:    nativeClient,
 		session:         session,
 		tools:           filteredTools,
 		toolIndex:       toolIndex,
@@ -184,7 +192,10 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	// after the fact as a single transcript, not only as a token stream.
 	defer a.publishTranscript()
 
-	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
+	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext)
+	if a.nativeClient == nil {
+		systemPrompt += "\n\n" + buildProseProtocolRules(a.tools)
+	}
 	a.msgMu.Lock()
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -195,9 +206,15 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	a.appendTranscript("system", systemPrompt)
 	a.appendTranscript("user", taskPrompt)
 
+	var mappedTools []llm.ToolDefinition
+	if a.nativeClient != nil {
+		mappedTools = mapToolsToNative(a.tools)
+	}
+
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
 		var tokenChan chan string
 		var response string
+		var nativeToolCalls []llm.ToolCall
 		var err error
 
 		if a.eventBus != nil {
@@ -207,7 +224,8 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			// be published after the events that conclude the run, or dropped
 			// entirely when a short-lived caller shuts the bus down — which
 			// makes the liveness signal exactly as untrustworthy as no signal.
-			// CallStream closes the channel on every path, so this cannot hang.
+			// Both entry points below close the channel on every path, so this
+			// cannot hang.
 			tokensPublished := make(chan struct{})
 			go func() {
 				defer close(tokensPublished)
@@ -222,10 +240,25 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 					})
 				}
 			}()
-			response, err = a.client.CallStream(ctx, a.messages, tokenChan)
+
+			if a.nativeClient != nil {
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, tokenChan)
+				response = res.Text
+				nativeToolCalls = res.ToolCalls
+				err = errCall
+			} else {
+				response, err = a.client.CallStream(ctx, a.messages, tokenChan)
+			}
 			<-tokensPublished
 		} else {
-			response, err = a.client.Call(ctx, a.messages)
+			if a.nativeClient != nil {
+				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, nil)
+				response = res.Text
+				nativeToolCalls = res.ToolCalls
+				err = errCall
+			} else {
+				response, err = a.client.Call(ctx, a.messages)
+			}
 		}
 
 		if err != nil {
@@ -245,13 +278,57 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		a.msgMu.Lock()
-		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response})
+		a.messages = append(a.messages, llm.Message{
+			Role:      "assistant",
+			Content:   response,
+			ToolCalls: nativeToolCalls,
+		})
 		a.msgMu.Unlock()
 		a.appendTranscript("assistant", response)
 
-		calls, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
-		if err != nil {
-			return sproutResult{}, err
+		var calls []ToolCall
+		var argErrors []string
+		var isToolCall bool
+		var finalResponse string
+		var actionResult *ActionResult
+
+		if a.nativeClient != nil {
+			if len(nativeToolCalls) > 0 {
+				isToolCall = true
+				// Arguments that will not parse are recorded alongside the call
+				// rather than inside it. A sentinel key smuggled through
+				// Arguments would reach the tool-invoked event and the persisted
+				// history as though the mind had really sent it, which makes the
+				// evidence trail describe a call that was never made.
+				argErrors = make([]string, len(nativeToolCalls))
+				for i, ntc := range nativeToolCalls {
+					var args map[string]any
+					if err := json.Unmarshal([]byte(ntc.Function.Arguments), &args); err != nil {
+						argErrors[i] = fmt.Sprintf("failed to parse arguments JSON: %v", err)
+					}
+					calls = append(calls, ToolCall{
+						Tool:      ntc.Function.Name,
+						Arguments: args,
+					})
+				}
+			} else {
+				// No tool calls means it's a final text natively.
+				isToolCall = false
+				finalResponse = response
+			}
+		} else {
+			var parseErr error
+			calls, isToolCall, finalResponse, actionResult, parseErr = parseModelResponse(response)
+			if parseErr != nil {
+				return sproutResult{}, parseErr
+			}
+		}
+
+		if a.nativeClient != nil && !isToolCall {
+			if strings.TrimSpace(finalResponse) != "" {
+				finalResponse = stripThoughtBlock(finalResponse)
+				finalResponse, actionResult = extractActionResult(finalResponse)
+			}
 		}
 
 		if strings.TrimSpace(finalResponse) != "" {
@@ -271,21 +348,51 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		var combinedObservation strings.Builder
-		for _, call := range calls {
-			response, obs, err := a.executeTool(ctx, call)
-			if err != nil {
-				return sproutResult{}, err
+		for i, call := range calls {
+			var resp ToolResponse
+			var obs string
+
+			if i < len(argErrors) && argErrors[i] != "" {
+				resp = ToolResponse{
+					Status: "error",
+					Error:  argErrors[i],
+				}
+				obs = renderToolObservation(call.Tool, resp)
+				// No tool-invoked event: nothing was invoked. The observation
+				// still reaches the mind and the transcript, so the failure is
+				// recorded — but a sign of life is not forged for a tool that
+				// never ran, which is the one signal a supervisor may not be
+				// misled about.
+			} else {
+				var err error
+				resp, obs, err = a.executeTool(ctx, call)
+				if err != nil {
+					return sproutResult{}, err
+				}
+				a.publishToolInvoked(call, resp, obs)
 			}
-			a.publishToolInvoked(call, response, obs)
 			if combinedObservation.Len() > 0 {
 				combinedObservation.WriteString("\n\n")
 			}
 			combinedObservation.WriteString(obs)
+
+			if a.nativeClient != nil {
+				// Native tools require observations to be tied to the ToolCallID
+				a.msgMu.Lock()
+				a.messages = append(a.messages, llm.Message{
+					Role:       "tool",
+					Content:    obs,
+					ToolCallID: nativeToolCalls[i].ID,
+				})
+				a.msgMu.Unlock()
+			}
 		}
 
-		a.msgMu.Lock()
-		a.messages = append(a.messages, llm.Message{Role: "user", Content: combinedObservation.String()})
-		a.msgMu.Unlock()
+		if a.nativeClient == nil {
+			a.msgMu.Lock()
+			a.messages = append(a.messages, llm.Message{Role: "user", Content: combinedObservation.String()})
+			a.msgMu.Unlock()
+		}
 		a.appendTranscript("user", combinedObservation.String())
 
 		// Tool results are part of the conversation history; the next loop
@@ -485,7 +592,43 @@ func (a *Sprout) availableToolNames() []string {
 	return names
 }
 
-func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string, tools []ToolDefinition) string {
+func mapToolsToNative(tools []ToolDefinition) []llm.ToolDefinition {
+	var mapped []llm.ToolDefinition
+	for _, tool := range tools {
+		properties := make(map[string]any)
+		var required []string
+		for _, arg := range tool.Arguments {
+			prop := map[string]any{
+				"type": arg.Type,
+			}
+			if arg.Description != "" {
+				prop["description"] = arg.Description
+			}
+			properties[arg.Name] = prop
+			if arg.Required {
+				required = append(required, arg.Name)
+			}
+		}
+		parameters := map[string]any{
+			"type":       "object",
+			"properties": properties,
+		}
+		if len(required) > 0 {
+			parameters["required"] = required
+		}
+		mapped = append(mapped, llm.ToolDefinition{
+			Type: "function",
+			Function: llm.ToolFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  parameters,
+			},
+		})
+	}
+	return mapped
+}
+
+func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(`
 You are the OpenTendril host-side ReAct loop.
@@ -493,10 +636,6 @@ You reason about tasks, choose tools, and stop when the task is complete.
 
 Rules:
 - You should think about the problem before taking action. Enclose your reasoning inside <thought> and </thought> tags. Explain alternatives you considered and why you rejected them.
-- Use only the listed tools.
-- When you need a tool, respond with exactly one JSON object and nothing else (after your thought block).
-- Tool calls must use the shape: {"tool":"name","arguments":{...}}.
-- When the task is complete, respond with exactly one JSON object containing {"final":"..."} or plain final text.
 - Prefer concise, high-signal actions and responses.
 `))
 	builder.WriteString("\n\nWorkspace root:\n")
@@ -507,9 +646,6 @@ Rules:
 		builder.WriteString(strings.TrimSpace(genotypeContext))
 	}
 
-	builder.WriteString("\n\nAvailable tools:\n")
-	builder.WriteString(formatToolCatalog(tools))
-
 	if strings.TrimSpace(genomeContext) != "" {
 		builder.WriteString("\n\nLoaded genome context:\n")
 		builder.WriteString(strings.TrimSpace(genomeContext))
@@ -517,6 +653,20 @@ Rules:
 		builder.WriteString("\n\nLoaded genome context:\n(no genome files found)")
 	}
 
+	return strings.TrimSpace(builder.String())
+}
+
+func buildProseProtocolRules(tools []ToolDefinition) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(`
+Protocol Rules:
+- Use only the listed tools.
+- When you need a tool, respond with exactly one JSON object and nothing else (after your thought block).
+- Tool calls must use the shape: {"tool":"name","arguments":{...}}.
+- When the task is complete, respond with exactly one JSON object containing {"final":"..."} or plain final text.
+`))
+	builder.WriteString("\n\nAvailable tools:\n")
+	builder.WriteString(formatToolCatalog(tools))
 	return strings.TrimSpace(builder.String())
 }
 
@@ -564,24 +714,7 @@ type modelResponse struct {
 }
 
 func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult, error) {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return nil, false, "", nil, nil
-	}
-
-	for {
-		start := strings.Index(trimmed, "<thought>")
-		end := strings.Index(trimmed, "</thought>")
-		if start != -1 {
-			if end != -1 {
-				trimmed = strings.TrimSpace(trimmed[:start] + trimmed[end+10:])
-			} else {
-				trimmed = strings.TrimSpace(trimmed[:start])
-			}
-		} else {
-			break
-		}
-	}
+	trimmed := stripThoughtBlock(strings.TrimSpace(content))
 
 	candidate := stripCodeFences(trimmed)
 	var decoded modelResponse
@@ -607,36 +740,52 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 	}
 
 	if strings.TrimSpace(decoded.Final) != "" {
-		finalText := decoded.Final
-		var actionResult *ActionResult
-
-		// Look for `ACTION_RESULT` block in the final text
-		// format: ```json ACTION_RESULT ... ``` or just embedded JSON after ACTION_RESULT
-		idx := strings.Index(finalText, "ACTION_RESULT")
-		if idx != -1 {
-			// Find the JSON block after ACTION_RESULT
-			openBrace := strings.Index(finalText[idx:], "{")
-			if openBrace != -1 {
-				openBrace += idx
-				// Find matching close brace. A naive string index could fail if there are nested braces,
-				// but for a flat struct this is often sufficient, or we just take the last '}'
-				closeBrace := strings.LastIndex(finalText[openBrace:], "}")
-				if closeBrace != -1 {
-					closeBrace += openBrace
-					jsonStr := finalText[openBrace : closeBrace+1]
-					var ar ActionResult
-					if err := json.Unmarshal([]byte(jsonStr), &ar); err == nil {
-						actionResult = &ar
-						// Optionally strip the ACTION_RESULT block from the final text
-						finalText = strings.TrimSpace(finalText[:idx])
-					}
-				}
-			}
-		}
+		finalText, actionResult := extractActionResult(decoded.Final)
 		return nil, false, finalText, actionResult, nil
 	}
 
 	return nil, false, trimmed, nil, nil
+}
+
+func extractActionResult(finalText string) (string, *ActionResult) {
+	idx := strings.Index(finalText, "ACTION_RESULT")
+	if idx != -1 {
+		openBrace := strings.Index(finalText[idx:], "{")
+		if openBrace != -1 {
+			openBrace += idx
+			closeBrace := strings.LastIndex(finalText[openBrace:], "}")
+			if closeBrace != -1 {
+				closeBrace += openBrace
+				jsonStr := finalText[openBrace : closeBrace+1]
+				var ar ActionResult
+				if err := json.Unmarshal([]byte(jsonStr), &ar); err == nil {
+					return strings.TrimSpace(finalText[:idx]), &ar
+				}
+			}
+		}
+	}
+	return finalText, nil
+}
+
+func stripThoughtBlock(content string) string {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return ""
+	}
+	for {
+		start := strings.Index(trimmed, "<thought>")
+		end := strings.Index(trimmed, "</thought>")
+		if start != -1 {
+			if end != -1 {
+				trimmed = strings.TrimSpace(trimmed[:start] + trimmed[end+10:])
+			} else {
+				trimmed = strings.TrimSpace(trimmed[:start])
+			}
+		} else {
+			break
+		}
+	}
+	return trimmed
 }
 
 // repairToolCallMissingBraces recovers a tool call whose trailing closing

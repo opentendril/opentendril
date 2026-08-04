@@ -212,7 +212,7 @@ func TestCallStreamParsesOpenAIishToolCall(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
 
 	tokenChan := make(chan string, 10)
-	res, err := client.doCall(context.Background(), server.URL, nil, true, tokenChan)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, tokenChan)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestCallStreamParsesOpenAIishInterleavedToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestCallStreamParsesOpenAIishTextAndToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestCallStreamOpenAIishReturnsErrorOnTruncatedToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	_, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "truncated tool call") {
 		t.Fatalf("expected truncated tool call error, got %v", err)
 	}
@@ -341,7 +341,7 @@ func TestCallStreamOpenAIishTextOnly(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "openai", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestConcurrencyOpenAIishStreamDecoder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+			res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 			if err != nil {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return

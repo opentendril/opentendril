@@ -167,7 +167,7 @@ func TestCallStreamParsesAnthropicToolCall(t *testing.T) {
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
 
 	tokenChan := make(chan string, 10)
-	res, err := client.doCall(context.Background(), server.URL, nil, true, tokenChan)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, tokenChan)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestCallStreamParsesAnthropicInterleavedToolCalls(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestCallStreamParsesAnthropicTextAndToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err != nil {
 		t.Fatalf("doCall failed: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestCallStreamReturnsErrorOnTruncatedToolCall(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	_, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+	_, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "truncated tool call") {
 		t.Fatalf("expected truncated tool call error, got %v", err)
 	}
@@ -316,7 +316,7 @@ func TestConcurrencyAnthropicStreamDecoder(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := client.doCall(context.Background(), server.URL, nil, true, nil)
+			res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
 			if err != nil {
 				t.Errorf("concurrent doCall failed: %v", err)
 				return
