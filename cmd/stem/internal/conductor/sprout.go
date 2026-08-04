@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/data/genotypes"
@@ -65,6 +66,7 @@ type Sprout struct {
 	tools           []ToolDefinition
 	toolIndex       map[string]ToolDefinition
 	denyPlasmids    []string
+	msgMu           sync.RWMutex
 	messages        []llm.Message
 	transcript      strings.Builder
 	eventBus        *eventbus.Bus
@@ -183,10 +185,12 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	defer a.publishTranscript()
 
 	systemPrompt := buildSproutSystemPrompt(a.workspace, a.genotypeContext, a.genomeContext, a.tools)
+	a.msgMu.Lock()
 	a.messages = []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: strings.TrimSpace(taskPrompt)},
 	}
+	a.msgMu.Unlock()
 
 	a.appendTranscript("system", systemPrompt)
 	a.appendTranscript("user", taskPrompt)
@@ -240,7 +244,9 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			})
 		}
 
+		a.msgMu.Lock()
 		a.messages = append(a.messages, llm.Message{Role: "assistant", Content: response})
+		a.msgMu.Unlock()
 		a.appendTranscript("assistant", response)
 
 		calls, isToolCall, finalResponse, actionResult, err := parseModelResponse(response)
@@ -277,7 +283,9 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			combinedObservation.WriteString(obs)
 		}
 
+		a.msgMu.Lock()
 		a.messages = append(a.messages, llm.Message{Role: "user", Content: combinedObservation.String()})
+		a.msgMu.Unlock()
 		a.appendTranscript("user", combinedObservation.String())
 
 		// Tool results are part of the conversation history; the next loop
@@ -301,6 +309,34 @@ func (a *Sprout) appendTranscript(role string, content string) {
 	a.transcript.WriteString(role)
 	a.transcript.WriteString("]\n")
 	a.transcript.WriteString(content)
+}
+
+// LastExchange returns the last request the Stem sent to the model and the
+// last response it received, as raw strings. It reads the message history
+// under a lock so it is safe to call from a capture goroutine concurrent with
+// the model turn. Either value may be empty if the exchange has not yet
+// completed.
+func (a *Sprout) LastExchange() (request, response string) {
+	if a == nil {
+		return "", ""
+	}
+	a.msgMu.RLock()
+	msgs := a.messages
+	a.msgMu.RUnlock()
+
+	// Walk backwards: the most recent assistant turn is the last response,
+	// and the user message just before it is the request that prompted it.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if response == "" && msgs[i].Role == "assistant" {
+			response = msgs[i].Content
+			continue
+		}
+		if response != "" && msgs[i].Role == "user" {
+			request = msgs[i].Content
+			break
+		}
+	}
+	return request, response
 }
 
 func extractThought(response string) string {

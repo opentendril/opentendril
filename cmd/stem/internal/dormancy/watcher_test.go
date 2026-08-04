@@ -617,3 +617,69 @@ func TestIdenticalArgumentsFingerprintIdentically(t *testing.T) {
 		t.Fatalf("different arguments share a fingerprint %q; every call would read as a repeat", first)
 	}
 }
+
+// TestCaptureLandsBeforeTheReportIsPublished pins the ordering the capture port
+// exists to guarantee.
+//
+// eventbus.Bus runs handlers synchronously on the publishing goroutine, so a
+// subscriber reacting to a dormancy report runs to completion before Publish
+// returns. Capturing after the publish would therefore guarantee that every
+// subscriber saw the report while the evidence did not yet exist — which is the
+// opposite of what a report about a silent run is for.
+//
+// This is asserted as an observed order rather than described in a comment: the
+// previous arrangement carried a comment claiming this very guarantee while
+// doing the reverse, and no test contradicted it.
+func TestCaptureLandsBeforeTheReportIsPublished(t *testing.T) {
+	bus := eventbus.New()
+
+	var sequence []string
+	bus.Subscribe(eventbus.EventSproutDormant, func(eventbus.Event) {
+		sequence = append(sequence, "subscriber")
+	})
+
+	watcher := New(Config{
+		Bus: bus,
+		Now: func() time.Time { return at(0) },
+		Capture: func(context.Context, RunKey) error {
+			sequence = append(sequence, "capture")
+			return nil
+		},
+	})
+
+	last := steadyStream(watcher, probeRun, at(0), time.Second, 10)
+	watcher.Tick(context.Background(), last.Add(30*time.Second))
+
+	want := []string{"capture", "subscriber"}
+	if len(sequence) != len(want) {
+		t.Fatalf("observed %v, want %v; the report and its capture did not both happen exactly once", sequence, want)
+	}
+	for i := range want {
+		if sequence[i] != want[i] {
+			t.Fatalf("observed %v, want %v; a subscriber ran before the evidence was retained", sequence, want)
+		}
+	}
+}
+
+// TestCaptureFailureStillPublishesTheReport keeps a capture that cannot be taken
+// from swallowing the report as well. Losing both is strictly worse than losing
+// one, and "the capture could not be taken" is itself evidence.
+func TestCaptureFailureStillPublishesTheReport(t *testing.T) {
+	bus := eventbus.New()
+	rec := recordAll(bus)
+
+	watcher := New(Config{
+		Bus: bus,
+		Now: func() time.Time { return at(0) },
+		Capture: func(context.Context, RunKey) error {
+			return errors.New("terrarium is gone")
+		},
+	})
+
+	last := steadyStream(watcher, probeRun, at(0), time.Second, 10)
+	watcher.Tick(context.Background(), last.Add(30*time.Second))
+
+	if got := rec.count(eventbus.EventSproutDormant); got != 1 {
+		t.Fatalf("dormancy reported %d time(s) when the capture failed, want exactly 1", got)
+	}
+}

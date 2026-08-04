@@ -55,6 +55,18 @@ func QuarantineDir() string {
 	return filepath.Join(controlPlaneDirName, "quarantine")
 }
 
+// DormancyCaptureDir is where dormancy artifacts are written when a run crosses
+// the reporting level. It lives in the control plane for the same reason
+// QuarantineDir does: a Sprout cannot read or alter captures of its own
+// behaviour, because the directory is never mounted into a Terrarium.
+//
+// It is a var holding a function (rather than a plain function) so tests can
+// redirect captures to a temp directory without touching the live control plane,
+// following the same pattern as the other injectable test seams in this package.
+var DormancyCaptureDir = func() string {
+	return filepath.Join(controlPlaneDirName, "dormancy-captures")
+}
+
 // sameDirectory reports whether two paths name the same directory, resolving
 // symbolic links where it can. Paths that cannot be resolved are compared as
 // cleaned absolute paths, and an unanswerable comparison reports true — the

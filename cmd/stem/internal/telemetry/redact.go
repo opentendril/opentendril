@@ -104,3 +104,11 @@ func redactString(s string) string {
 	}
 	return res
 }
+
+// RedactString scrubs secret patterns from a raw string and returns the result.
+// It applies the same patterns as the internal event scrubber, so API tokens,
+// bearer credentials, and high-entropy strings are replaced with [REDACTED]
+// before the value leaves the telemetry boundary.
+func RedactString(s string) string {
+	return redactString(s)
+}
