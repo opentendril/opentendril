@@ -1,4 +1,12 @@
-# 🌱 OpenTendril: The Synthetic AI Organism
+# 🌱 OpenTendril
+
+**An LLM harness that governs what a model can touch, rather than what it can say.**
+
+Plants do not govern animals by issuing instructions. They govern by *being the environment* — what exists, what is reachable, what is nourishing. OpenTendril controls a model the same way: it does not ask the model to behave, it owns everything the model's code can reach.
+
+Most work on controlling these models addresses what they *say* — prompts, filters, evaluations. This addresses what their code *does* once you run it.
+
+---
 
 **Artificial Intelligence does not behave like traditional computing.**
 
