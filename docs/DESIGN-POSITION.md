@@ -49,10 +49,15 @@ and measured nowhere. `OBJECTIVE.md` makes measuring it the first objective, whi
 means the number exists here before a competitor has one — and the number is worth
 something to the field independently of this project's fortunes.
 
-## Explicit non-goals
+## What this does not do
 
-These are not deferred. They are other projects, and saying so is kinder than
-leaving them looking merely postponed.
+The test: **when something needs this project to hold an opinion about the *work*
+rather than about the *containment*, it belongs elsewhere.**
+
+Applying it honestly produces two lists rather than one, and the distinction
+matters — the first is a decision, the second is a description.
+
+**Never ours.** Not deferred; other projects.
 
 - **Judging whether the work is any good.** Tests, continuous integration and
   human review already do this well. The rule is *report, never decide*: this
@@ -60,14 +65,29 @@ leaving them looking merely postponed.
   Botanist's or a gate the Botanist chose.
 - **Review, history, revert, acceptance.** Version control has owned these for
   twenty years and does them better than anything built here would.
-- **Selecting a winner among speculative attempts.** Judgment about work.
 - **A registry of shareable capabilities.** A different product with a different
   customer.
-- **A separate operating surface.** A consumer of the evidence stream, which is
-  the shape of a separate thing rather than part of this one.
 
-The test that produced this list: **when a feature needs this project to hold an
-opinion about the work rather than about the containment, it belongs elsewhere.**
+**Built, and not what is being proven now.** These exist, they work, and they are
+documented in `ARCHITECTURE.md`. They are outside the current objective's path,
+which means they are frozen rather than removed — and whether they stay is a
+decision to take deliberately once the objective is met, not one to smuggle in as
+a scoping note.
+
+- **Selecting a winner among speculative attempts** (Phenotypic Selection). This
+  is judgment about work by the test above, so on principle it does not belong
+  here. It is also implemented and shipped. Both facts are true and the second
+  does not excuse the first; extraction is the likely answer, later.
+
+**Core, and previously mis-scoped here.** Recorded because the correction is more
+useful than the original claim.
+
+- **Seeing what a run is doing while it does it** (the Greenhouse). An earlier
+  draft of this document listed a viewing surface as a separate project. That was
+  wrong: the objective requires that a run can be watched, because being asked for
+  nothing is only tolerable if looking is always available. Local observability is
+  constitutive. What *is* separable is fleet-scale monitoring of many Ramets at
+  once — a consumer of the evidence stream, and a different product.
 
 ## Where this is weakest
 
