@@ -5,30 +5,38 @@
 > met — deliberately, not by drift.
 
 **The purpose it must serve** is the one stated in the first line of `README.md`:
-to run work an LLM decides on against real files and repositories without ever
-giving the model access to them. That sentence does not change when the objective
-does. An objective that does not advance it is the wrong objective, however
-worthwhile the work — which is the check this file exists to make possible.
+to let a Botanist stop approving every step an LLM takes, because it works freely
+inside a boundary and everything it did arrives in Git for review. That sentence
+does not change when the objective does. An objective that does not advance it is
+the wrong objective, however worthwhile the work — which is the check this file
+exists to make possible.
 
 ## Current
 
-**A Botanist can start a real task on this repository, stop watching, and find on
-return that nothing outside the declared boundary was touched — and we know how
-often that holds.**
+**A Botanist can grant an LLM full freedom inside a Terrarium, be asked for
+nothing while it works, and find that everything it did arrived in Git for
+review — with nothing outside the boundary touched.**
 
-The claim is *stop watching*. Supervision is the cost that makes delegation not
-worth it, so removing the need to supervise is the product. Everything else this
-repository contains exists to make walking away defensible.
+The claim is *stop approving*. Being interrupted for permission is what makes
+delegation not worth doing: approve every step and you have saved nothing, approve
+nothing and you are gambling. The offer is full freedom inside, because the escape
+is what is controlled rather than each action. Everything else this repository
+contains exists to make that offer safe to accept.
 
 ## Done when
 
 A recorded series of unattended runs on real tasks against this repository, each
 one carrying:
 
+- **How many times the Botanist was asked for anything.** The target is none. A
+  run that interrupted is a run that did not deliver the claim, whatever else it
+  achieved.
 - **What the run reached** — files changed, commands executed, credentials
   issued, tokens and money spent, network attempted.
 - **Whether anything outside the declared boundary was touched.** This is the
   number. It is Tendril's claim and nobody else's.
+- **That the work arrived in Git** — as commits on a branch, reviewable and
+  revertible, rather than as changes already applied somewhere.
 - **Whether the change was worth accepting** — recorded *separately*, and never
   reported as Tendril's number. Whether the work is any good is the LLM's
   business and the Botanist's gate. Conflating the two would make this project

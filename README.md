@@ -1,8 +1,8 @@
 # 🌱 OpenTendril
 
-**OpenTendril runs LLM-written code against your real files and repositories without ever giving the model access to them.**
+**OpenTendril lets you stop approving every step an LLM takes — it works freely inside a boundary, and everything it did arrives in Git for you to review.**
 
-Think of it as Docker for work an LLM produces — the model proposes, the kernel executes, and what that execution can reach is decided before it starts.
+The container gives it room to work; Git gives you the veto. Neither half is new. The combination is what makes walking away reasonable.
 
 Most work on controlling these models addresses what they *say*: prompts, filters, evaluations. This addresses what their code *does* once you run it.
 
