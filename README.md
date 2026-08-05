@@ -1,10 +1,10 @@
 # 🌱 OpenTendril
 
-**An LLM harness that governs what a model can touch, rather than what it can say.**
+**OpenTendril runs LLM-written code against your real files and repositories without ever giving the model access to them.**
 
-Plants do not govern animals by issuing instructions. They govern by *being the environment* — what exists, what is reachable, what is nourishing. OpenTendril controls a model the same way: it does not ask the model to behave, it owns everything the model's code can reach.
+Think of it as Docker for work an LLM produces — the model proposes, the kernel executes, and what that execution can reach is decided before it starts.
 
-Most work on controlling these models addresses what they *say* — prompts, filters, evaluations. This addresses what their code *does* once you run it.
+Most work on controlling these models addresses what they *say*: prompts, filters, evaluations. This addresses what their code *does* once you run it.
 
 ---
 

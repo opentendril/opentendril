@@ -4,6 +4,12 @@
 > does not serve it is filed, not started. It changes when the condition below is
 > met — deliberately, not by drift.
 
+**The purpose it must serve** is the one stated in the first line of `README.md`:
+to run code an LLM wrote against real files and repositories without ever giving
+the model access to them. That sentence does not change when the objective does.
+An objective that does not advance it is the wrong objective, however worthwhile
+the work — which is the check this file exists to make possible.
+
 ## Current
 
 **_(unset — the Botanist sets this.)_**
