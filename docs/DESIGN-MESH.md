@@ -19,7 +19,7 @@
 - Own CLI, REST, or MCP surface wiring (those live in `cmd/stem` adapters and `internal/core`).
 - Authenticate the admin issue-token HTTP route itself — callers wrap `HandleAdminIssueToken` (e.g. Botanist API key middleware in `cmdserve.go`).
 - Persist trait inbox state across process restarts, or run inbound trait network transport (explicitly deferred in `trait.go` comments).
-- Implement full peer-to-peer mesh discovery (the as-built model is local Stem → central Stem graft, not a multi-hop swarm).
+- Implement full peer-to-peer mesh discovery (the as-built model is local Stem → central Stem graft, not a multi-hop mesh).
 - Perform substrate name resolution (Core injects that via `MeshOperations.ResolveWorkspace`).
 
 ## Public interface
