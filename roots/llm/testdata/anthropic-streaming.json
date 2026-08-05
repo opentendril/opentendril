@@ -1,1 +1,1 @@
-{"max_tokens":2048,"messages":[{"content":"stream this","role":"user"}],"model":"claude-3","stream":true,"temperature":0.5}
+{"max_tokens":8192,"messages":[{"content":"stream this","role":"user"}],"model":"claude-3","stream":true,"temperature":0.5}

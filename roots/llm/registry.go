@@ -9,10 +9,16 @@ import (
 )
 
 type ModelDefinition struct {
-	Provider     string
-	Name         string
-	Family       ModelFamily
-	ContextSize  int
+	Provider    string
+	Name        string
+	Family      ModelFamily
+	ContextSize int
+	// OutputLimit is the maximum number of output tokens this model accepts on
+	// a single request. Zero means the model's own provider default applies.
+	// For Anthropic, where max_tokens is required by the API, the adapter uses
+	// anthropicOutputFallback when this is zero (see clientadapter.go).
+	// Source: docs.anthropic.com/en/docs/about-claude/models/overview
+	OutputLimit  int
 	HasVision    bool
 	HasReasoning bool
 	// DrivesTools marks a model that reliably follows the tool-calling
@@ -36,9 +42,10 @@ type ModelDefinition struct {
 // the provider actually serves today: a retired name here means every auto-selected request
 // fails at the provider with a model-not-found error.
 var FallbackModels = []ModelDefinition{
-	{Provider: "anthropic", Name: "claude-opus-4-8", Family: ModelFamilyClaude, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
-	{Provider: "anthropic", Name: "claude-sonnet-5", Family: ModelFamilyClaude, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierStandard},
-	{Provider: "anthropic", Name: "claude-haiku-4-5", Family: ModelFamilyClaude, ContextSize: 200000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
+	// OutputLimit values sourced from docs.anthropic.com/en/docs/about-claude/models/overview
+	{Provider: "anthropic", Name: "claude-opus-4-8", Family: ModelFamilyClaude, ContextSize: 1000000, OutputLimit: 128000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "anthropic", Name: "claude-sonnet-5", Family: ModelFamilyClaude, ContextSize: 1000000, OutputLimit: 128000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierStandard},
+	{Provider: "anthropic", Name: "claude-haiku-4-5", Family: ModelFamilyClaude, ContextSize: 200000, OutputLimit: 64000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
 	{Provider: "openai", Name: "gpt-5.6-terra", Family: ModelFamilyGPT, ContextSize: 400000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "openai", Name: "gpt-5.6-luna", Family: ModelFamilyGPT, ContextSize: 400000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierCheapest},
 	{Provider: "google", Name: "gemini-2.5-pro", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
