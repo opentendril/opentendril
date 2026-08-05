@@ -50,6 +50,12 @@ type ProviderSpec struct {
 	// endpoint cannot accept the native tool-calling protocol and should be
 	// driven with the prose protocol instead. Unset (nil) means attempt native.
 	AcceptsToolDefinitions *bool
+	// OutputLimit is the maximum number of output tokens to request. Zero means
+	// the provider's own default applies (the right answer for OpenAI-shaped
+	// families; see BuildChatRequest in clientadapter.go). For Anthropic, where
+	// max_tokens is required, the adapter substitutes the package fallback when
+	// this is zero.
+	OutputLimit int
 }
 
 type Message struct {
@@ -154,8 +160,13 @@ type tendrilProviderConfig struct {
 	IsRouter *bool `yaml:"is-router"`
 	// AcceptsToolDefinitions, when explicitly false, signals that this
 	// endpoint cannot accept native tool definitions. Unset defers to an attempt.
-	AcceptsToolDefinitions *bool                `yaml:"accepts-tool-definitions"`
-	Models                 []tendrilModelConfig `yaml:"models"`
+	AcceptsToolDefinitions *bool `yaml:"accepts-tool-definitions"`
+	// OutputLimit, when non-zero, overrides the model-registry declared limit
+	// for this provider. A configured value larger than the registry limit is
+	// used as-is; the operator's stated intent wins, but a warning is written
+	// to stderr so the mismatch is visible before Anthropic rejects the request.
+	OutputLimit int                  `yaml:"output-limit"`
+	Models      []tendrilModelConfig `yaml:"models"`
 }
 
 // tendrilModelConfig declares one model's fallback/capability metadata for a
@@ -464,6 +475,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	temperature := configuredTemperature(providerConfig, 0.1)
 	isRouter := resolveIsRouter(providerConfig)
 	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
+	outputLimit := resolveOutputLimit(providerConfig, model)
 
 	switch provider {
 	case "local":
@@ -482,6 +494,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "anthropic":
 		return ProviderSpec{
@@ -494,6 +507,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "openai":
 		return ProviderSpec{
@@ -506,6 +520,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "grok":
 		return ProviderSpec{
@@ -518,6 +533,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "google":
 		return ProviderSpec{
@@ -530,6 +546,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "openrouter":
 		return ProviderSpec{
@@ -542,6 +559,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	case "nvidia":
 		return ProviderSpec{
@@ -554,6 +572,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	default:
 		baseURL := localInferenceOverride
@@ -570,6 +589,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Temperature:            temperature,
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
+			OutputLimit:            outputLimit,
 		}
 	}
 }
@@ -587,6 +607,33 @@ func resolveIsRouter(cfg tendrilProviderConfig) bool {
 
 func resolveAcceptsToolDefinitions(cfg tendrilProviderConfig) *bool {
 	return cfg.AcceptsToolDefinitions
+}
+
+// resolveOutputLimit returns the output-token limit to carry on a ProviderSpec.
+// Config wins over the registry; when both are set and the configured value
+// exceeds the declared registry limit, a warning is written to stderr. The
+// configured value is still used because the operator's stated intent beats a
+// table that docs/DESIGN-ROOTS-LLM.md already flags as going stale. If
+// Anthropic rejects the value, the resulting 400 is visible and classified by
+// the error path added in the earlier HTTP-status fix.
+func resolveOutputLimit(cfg tendrilProviderConfig, modelName string) int {
+	registryLimit := 0
+	for _, m := range activeModelRegistry() {
+		if m.Name == modelName {
+			registryLimit = m.OutputLimit
+			break
+		}
+	}
+	if cfg.OutputLimit > 0 {
+		if registryLimit > 0 && cfg.OutputLimit > registryLimit {
+			fmt.Fprintf(os.Stderr,
+				"warning: configured output-limit %d for model %q exceeds registry limit %d;"+
+					" the configured value will be sent; Anthropic will reject it if it is over the model's hard cap\n",
+				cfg.OutputLimit, modelName, registryLimit)
+		}
+		return cfg.OutputLimit
+	}
+	return registryLimit
 }
 
 func envOr(key, fallback string) string {

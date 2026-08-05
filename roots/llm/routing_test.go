@@ -223,8 +223,8 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 	if captured.Request.Model != "claude-sonnet-5" {
 		t.Fatalf("model = %q, want %q", captured.Request.Model, "claude-sonnet-5")
 	}
-	if captured.Request.MaxTokens != 2048 {
-		t.Fatalf("max_tokens = %d, want 2048", captured.Request.MaxTokens)
+	if captured.Request.MaxTokens != anthropicOutputFallback {
+		t.Fatalf("max_tokens = %d, want %d (anthropicOutputFallback)", captured.Request.MaxTokens, anthropicOutputFallback)
 	}
 	if captured.Request.Temperature != 0.25 {
 		t.Fatalf("temperature = %v, want 0.25", captured.Request.Temperature)

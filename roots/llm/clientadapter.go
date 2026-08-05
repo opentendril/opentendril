@@ -63,6 +63,18 @@ func adapterForMode(mode Mode) providerAdapter {
 
 type anthropicAdapter struct{}
 
+// anthropicOutputFallback is used when neither the model registry nor an
+// operator config declares an explicit output-token limit. Anthropic's
+// Messages API requires max_tokens on every request; there is no server-side
+// default, so something must go on the wire. 8192 is chosen because:
+//   - A realistic file-write tool call produces 2-4 KB of JSON as output tokens;
+//     the previous value (2048) was too small for the native-tool path.
+//   - It leaves meaningful headroom above a single large write without
+//     inventing a ceiling that no model declaration asked for.
+//   - It is small enough that a misconfigured model name is rejected quickly
+//     rather than expensively.
+const anthropicOutputFallback = 8192
+
 func (anthropicAdapter) ModelsPath() string {
 	return "/v1/models"
 }
@@ -97,10 +109,13 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 
 	payloadBody := map[string]any{
 		"model":       spec.Model,
-		"max_tokens":  2048,
+		"max_tokens":  spec.OutputLimit,
 		"temperature": spec.Temperature,
 		"messages":    anthropicMessages,
 		"stream":      stream,
+	}
+	if payloadBody["max_tokens"] == 0 {
+		payloadBody["max_tokens"] = anthropicOutputFallback
 	}
 	if len(systemParts) > 0 {
 		payloadBody["system"] = []map[string]any{
