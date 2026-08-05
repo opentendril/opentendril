@@ -31,6 +31,12 @@ one carrying:
 - **How many times the Botanist was asked for anything.** The target is none. A
   run that interrupted is a run that did not deliver the claim, whatever else it
   achieved.
+- **Whether the run could be watched while it happened**, not only reconstructed
+  afterwards. Being asked for nothing is only tolerable if looking is always
+  available — an unobservable run is not autonomy, it is the blindness that makes
+  delegation feel reckless, and it is the specific complaint that sends people
+  back to approving every step. *Stop being asked* and *keep being able to look*
+  are opposite requirements and the claim needs both.
 - **What the run reached** — files changed, commands executed, credentials
   issued, tokens and money spent, network attempted.
 - **Whether anything outside the declared boundary was touched.** This is the
