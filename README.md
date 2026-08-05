@@ -1,4 +1,12 @@
-# 🌱 OpenTendril: The Synthetic AI Organism
+# 🌱 OpenTendril
+
+**OpenTendril lets you stop approving every step an LLM takes — it works freely inside a boundary, and everything it did arrives in Git for you to review.**
+
+The container gives it room to work; Git gives you the veto. Neither half is new. The combination is what makes walking away reasonable.
+
+Most work on controlling these models addresses what they *say*: prompts, filters, evaluations. This addresses what their code *does* once you run it.
+
+---
 
 **Artificial Intelligence does not behave like traditional computing.**
 

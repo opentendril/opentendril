@@ -60,7 +60,26 @@ declare -A replacements=(
   ["agent"]="a Pollinator (an external requester holding a Pollen), a Sprout (Tendril's own sealed worker), or the Mycorrhizal Network (the LLM) — say which"
   ["sandbox"]="Terrarium"
   ["worker container"]="Sprout"
+  # The taxonomy is botanical, and the boundary is not "biology" — it is the
+  # plant's world. A Pollinator is admissible because it names a relationship a
+  # plant has; a hive names the animal's own dwelling, with no plant in it. That
+  # distinction is easy to lose, and it was lost: the roadmap retired alongside
+  # this change carried "The Automated Hive" through the sweep that removed the
+  # last standard-IT vocabulary, because the sweep only looked for IT terms.
+  ["hive"]="a Seed Bank (a shared store propagated between Ramets), or name the organ that does the work"
+  ["swarm"]="Parallel Sprouting, or a Clonal Colony of Ramets — say which"
+  ["colony"]="a Clonal Colony (botanical, one Genet) — qualify it, or use Ramets"
+  ["nest"]="the organ that holds it — say which"
+  ["flock"]="Ramets, or Parallel Sprouting — say which"
 )
+
+# Underscored names written in prose. GUARDRAILS.md's No Underscore Rule is
+# enforced on filenames by check-filename-conventions.sh and
+# cmd/stem/filenames_test.go, and nowhere else — so a component named in a
+# document escaped both for as long as the document existed. The retired roadmap
+# carried `credit_manager` through the same sweep that missed "Hive". A name
+# written in prose is still a name.
+underscore_identifier='\b[a-z][a-z0-9]*_[a-z][a-z0-9_]*\b'
 
 # Where the taxonomy is binding: everything except the sanctioned boundary and
 # the documents whose job is to define or translate the words being ruled out.
@@ -121,6 +140,40 @@ for term in "${!replacements[@]}"; do
     echo
   fi
 done
+
+# Prose only, and with code stripped exactly as the text mode strips it: a name
+# in backticks is being quoted, not coined — the same allowance the term list
+# already makes. Identifiers inside source are the language's business, and
+# source filenames are owned elsewhere.
+#
+# ADDED LINES ONLY, unlike the term list above. This rule is new and the tree
+# carries a backlog it would otherwise block unrelated work on — four tool names
+# in the Genotype prompts and CAPABILITIES.md that appear nowhere in the Go
+# source, which is a documentation defect deserving its own change rather than a
+# rename smuggled into this one. Same reasoning, and same sequence, this script's
+# own first rule followed: start on the diff, tighten to the tree once cleared.
+if [ "${mode}" = "text" ]; then
+  prose="${added}"
+else
+  # A diff with no added documentation lines is the ordinary case, and grep
+  # reports "no match" by exiting non-zero, which pipefail would read as the
+  # check itself failing. Every stage is guarded so an empty result stays empty.
+  prose="$( { git diff -U0 "${base}...HEAD" -- '*.md' "${exclude_paths[@]}" 2>/dev/null || true; } \
+      | { grep '^+' || true; } | { grep -v '^+++' || true; } | sed 's/`[^`]*`//g')"
+fi
+
+underscore_hits="$(printf '%s\n' "${prose}" | { grep -IoE "${underscore_identifier}" || true; } \
+    | { grep -viE '^(snake_case|code_of_conduct)$' || true; } | sort -u)"
+if [ -n "${underscore_hits}" ]; then
+  status=1
+  echo "::error::Underscored name(s) written in prose inside the organism."
+  echo "GUARDRAILS.md's No Underscore Rule is not only about filenames — a component"
+  echo "named in a document is still a name. Use the organism's term, or merged"
+  echo "lowercase if it is a Go identifier. If this is a provider's own wire key or"
+  echo "an environment variable, write it in backticks so it reads as quoted."
+  printf '%s\n' "${underscore_hits}"
+  echo
+fi
 
 if [ "${status}" -ne 0 ]; then
   echo "The taxonomy is authoritative for internal code and architecture documentation."
