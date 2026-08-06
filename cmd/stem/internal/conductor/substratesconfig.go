@@ -209,17 +209,18 @@ type CredentialProfile struct {
 }
 
 type substrateExecutionPlan struct {
-	name        string
-	hostPath    string
-	cloneURL    string
-	cloneBranch string
-	authRef     string
-	credential  ResolvedCredential
-	readOnly    bool
-	named       bool
-	remoteClone bool
-	provider    string
-	command     []string
+	name                     string
+	hostPath                 string
+	cloneURL                 string
+	cloneBranch              string
+	authRef                  string
+	credential               ResolvedCredential
+	readOnly                 bool
+	named                    bool
+	remoteClone              bool
+	provider                 string
+	command                  []string
+	allowDefaultBranchCommit bool
 	// growthBudget is the resolved patience.growth for this substrate, zero
 	// when unconfigured. Callers apply it to the context that bounds how long
 	// they wait for the run.
@@ -339,6 +340,10 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		plan.authRef = credential.TokenEnv
 		plan.provider = strings.ToLower(strings.TrimSpace(spec.Provider))
 		plan.command = spec.Command
+
+		if spec.ProtectDefaultBranch != nil && !*spec.ProtectDefaultBranch {
+			plan.allowDefaultBranchCommit = true
+		}
 
 		growthBudget, err := spec.Patience.GrowthBudget()
 		if err != nil {
