@@ -947,34 +947,58 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 func TestStartTerrariumSessionDerivesUserIdentity(t *testing.T) {
 	origUID := osGetuidFn
 	origGID := osGetgidFn
+	origRootless := dockerIsRootlessFn
 	origProvider := terrariumNewProviderFn
 	defer func() {
 		osGetuidFn = origUID
 		osGetgidFn = origGID
+		dockerIsRootlessFn = origRootless
 		terrariumNewProviderFn = origProvider
 	}()
 
 	osGetuidFn = func() int { return 1001 }
 	osGetgidFn = func() int { return 1002 }
 
-	var capturedSpec terrarium.TerrariumSpec
-	terrariumNewProviderFn = func(ctx context.Context, name string, observers ...terrarium.ActivationObserver) (terrarium.TerrariumProvider, error) {
-		return &stubProvider{
-			createFn: func(spec terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
-				capturedSpec = spec
-				return &stubTerrarium{}, nil
-			},
-		}, nil
+	tests := []struct {
+		name       string
+		isRootless bool
+		want       string
+	}{
+		{
+			name:       "Rootful",
+			isRootless: false,
+			want:       "1001:1002",
+		},
+		{
+			name:       "Rootless",
+			isRootless: true,
+			want:       "0:0",
+		},
 	}
 
-	_, err := startTerrariumSession(context.Background(), "docker", "test-image", "/mnt", false, []string{"ls"}, nil, time.Minute)
-	if err != nil {
-		t.Fatalf("startTerrariumSession: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dockerIsRootlessFn = func() bool { return tt.isRootless }
 
-	want := "1001:1002"
-	if capturedSpec.RunAsUser != want {
-		t.Errorf("RunAsUser = %q, want %q", capturedSpec.RunAsUser, want)
+			var capturedSpec terrarium.TerrariumSpec
+			terrariumNewProviderFn = func(ctx context.Context, name string, observers ...terrarium.ActivationObserver) (terrarium.TerrariumProvider, error) {
+				return &stubProvider{
+					createFn: func(spec terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
+						capturedSpec = spec
+						return &stubTerrarium{}, nil
+					},
+				}, nil
+			}
+
+			_, err := startTerrariumSession(context.Background(), "docker", "test-image", "/mnt", false, []string{"ls"}, nil, time.Minute)
+			if err != nil {
+				t.Fatalf("startTerrariumSession: %v", err)
+			}
+
+			if capturedSpec.RunAsUser != tt.want {
+				t.Errorf("RunAsUser = %q, want %q", capturedSpec.RunAsUser, tt.want)
+			}
+		})
 	}
 }
 
