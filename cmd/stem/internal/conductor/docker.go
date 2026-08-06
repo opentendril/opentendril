@@ -106,6 +106,9 @@ var (
 	createShadowWorktreeFn         = createShadowWorktree
 	removeShadowWorktreeFn         = removeShadowWorktree
 	injectMycorrhizalCacheFn       = injectMycorrhizalCache
+	terrariumNewProviderFn         = terrarium.NewProvider
+	osGetuidFn                     = os.Getuid
+	osGetgidFn                     = os.Getgid
 	collectStageableFilesFn        = collectStageableFiles
 	collectGitDiffFn               = collectGitDiff
 	commitTerrariumExecutionFn     = commitTerrariumExecution
@@ -1011,7 +1014,7 @@ func deriveWatchdogTimeout(ctx context.Context) time.Duration {
 }
 
 func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
-	provider, err := terrarium.NewProvider(ctx, providerName, observers...)
+	provider, err := terrariumNewProviderFn(ctx, providerName, observers...)
 	if err != nil {
 		return nil, err
 	}
@@ -1020,7 +1023,7 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 		Image:          imageName,
 		WorkingDir:     "/app",
 		NetworkMode:    terrarium.NetworkModeNone,
-		RunAsUser:      "1000:1000",
+		RunAsUser:      fmt.Sprintf("%d:%d", osGetuidFn(), osGetgidFn()),
 		CPUQuota:       "1.0",
 		MemoryLimitMB:  2048,
 		ReadOnlyRootFS: false,

@@ -943,3 +943,70 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestStartTerrariumSessionDerivesUserIdentity(t *testing.T) {
+	origUID := osGetuidFn
+	origGID := osGetgidFn
+	origProvider := terrariumNewProviderFn
+	defer func() {
+		osGetuidFn = origUID
+		osGetgidFn = origGID
+		terrariumNewProviderFn = origProvider
+	}()
+
+	osGetuidFn = func() int { return 1001 }
+	osGetgidFn = func() int { return 1002 }
+
+	var capturedSpec terrarium.TerrariumSpec
+	terrariumNewProviderFn = func(ctx context.Context, name string, observers ...terrarium.ActivationObserver) (terrarium.TerrariumProvider, error) {
+		return &stubProvider{
+			createFn: func(spec terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
+				capturedSpec = spec
+				return &stubTerrarium{}, nil
+			},
+		}, nil
+	}
+
+	_, err := startTerrariumSession(context.Background(), "docker", "test-image", "/mnt", false, []string{"ls"}, nil, time.Minute)
+	if err != nil {
+		t.Fatalf("startTerrariumSession: %v", err)
+	}
+
+	want := "1001:1002"
+	if capturedSpec.RunAsUser != want {
+		t.Errorf("RunAsUser = %q, want %q", capturedSpec.RunAsUser, want)
+	}
+}
+
+type stubProvider struct {
+	createFn func(terrarium.TerrariumSpec) (terrarium.Terrarium, error)
+}
+
+func (s *stubProvider) Name() string { return "stub" }
+func (s *stubProvider) Capabilities() terrarium.TerrariumCapabilities {
+	return terrarium.TerrariumCapabilities{}
+}
+func (s *stubProvider) Create(ctx context.Context, spec terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
+	if s.createFn != nil {
+		return s.createFn(spec)
+	}
+	return &stubTerrarium{}, nil
+}
+
+type stubTerrarium struct{}
+
+func (s *stubTerrarium) ID() string                            { return "stub" }
+func (s *stubTerrarium) Provider() terrarium.TerrariumProvider { return nil }
+func (s *stubTerrarium) CopyIn(ctx context.Context, payloads []terrarium.FilePayload) error {
+	return nil
+}
+func (s *stubTerrarium) Run(ctx context.Context, spec terrarium.CommandSpec) (terrarium.CommandResult, error) {
+	return terrarium.CommandResult{}, nil
+}
+func (s *stubTerrarium) CopyOut(ctx context.Context, paths []string) ([]terrarium.Artifact, error) {
+	return nil, nil
+}
+func (s *stubTerrarium) SnapshotLogs(ctx context.Context) (terrarium.TerrariumLogs, error) {
+	return terrarium.TerrariumLogs{}, nil
+}
+func (s *stubTerrarium) Stop(ctx context.Context) error { return nil }
