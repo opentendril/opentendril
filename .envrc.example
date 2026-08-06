@@ -1,7 +1,34 @@
-# Copy to .envrc, then run: direnv allow
+# === OpenTendril .envrc Example ===
+# Source this file from your shell to load .env variables.
 #
-# The Stem needs GITHUB_TOKEN in its process environment so terrariums can
-# push over HTTPS — gh's keyring alone does not expose the token to child
-# processes. This sources it from `gh auth token` when not already set.
-export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
-[ -f .env ] && dotenv .env
+# Usage:
+#   echo 'source .envrc' >> ~/.bashrc
+#   source ~/.bashrc
+#
+# The .envrc file is sourced by the Stem to load environment variables
+# from .env. It supports GitHub token injection via `gh auth token`.
+#
+# Example:
+#   echo 'source .envrc' >> ~/.bashrc
+#   source ~/.bashrc
+#   echo 'source .envrc' >> ~/.zshrc
+#   source ~/.zshrc
+#
+# The .envrc file is sourced by the Stem to load environment variables
+# from .env. It supports GitHub token injection via `gh auth token`.
+#
+# Example:
+#   echo 'source .envrc' >> ~/.bashrc
+#   source ~/.bashrc
+#   echo 'source .envrc' >> ~/.zshrc
+#   source ~/.zshrc
+
+# GitHub PAT for terrarium git clones/pushes (fine-grained, repo-scoped).
+# Tip: use .envrc (see .envrc.example) to source it from `gh auth token`.
+GITHUB_TOKEN=
+
+# Source .envrc from .envrc.example
+# echo 'source .envrc' >> ~/.bashrc
+# source ~/.bashrc
+# echo 'source .envrc' >> ~/.zshrc
+# source ~/.zshrc
