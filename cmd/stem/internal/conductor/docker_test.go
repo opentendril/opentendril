@@ -943,3 +943,114 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestPushTerrariumCommitDefaultBranchProtection(t *testing.T) {
+	ctx := context.Background()
+
+	setupRepo := func(t *testing.T, branch string) string {
+		dir := t.TempDir()
+		if _, err := runGitCommand(ctx, dir, "init", "--initial-branch="+branch); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		runGitCommand(ctx, dir, "config", "user.email", "test@example.com")
+		runGitCommand(ctx, dir, "config", "user.name", "Test User")
+		if _, err := runGitCommand(ctx, dir, "commit", "--allow-empty", "-m", "init"); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+
+		// Create an origin to push to
+		remote := t.TempDir()
+		if _, err := runGitCommand(ctx, remote, "init", "--bare", "--initial-branch="+branch); err != nil {
+			t.Fatalf("init bare: %v", err)
+		}
+		if _, err := runGitCommand(ctx, dir, "remote", "add", "origin", remote); err != nil {
+			t.Fatalf("remote add: %v", err)
+		}
+		if _, err := runGitCommand(ctx, dir, "push", "-u", "origin", branch); err != nil {
+			t.Fatalf("push init: %v", err)
+		}
+
+		// Create a new commit to push
+		if _, err := runGitCommand(ctx, dir, "commit", "--allow-empty", "-m", "new work"); err != nil {
+			t.Fatalf("commit new work: %v", err)
+		}
+
+		return dir
+	}
+
+	t.Run("DefaultBranch_Redirects", func(t *testing.T) {
+		repo := setupRepo(t, "main")
+		stepID := "step-protect"
+		err := pushTerrariumCommit(ctx, repo, "main", ResolvedCredential{}, false, stepID)
+		if err != nil {
+			t.Fatalf("push: %v", err)
+		}
+
+		// Verify the push went to the isolated branch, not main
+		out, err := runGitCommand(ctx, repo, "ls-remote", "origin")
+		if err != nil {
+			t.Fatalf("ls-remote: %v", err)
+		}
+		if !strings.Contains(out, "refs/heads/sprout/task-"+stepID) {
+			t.Errorf("expected isolation branch to be pushed to origin, got: %s", out)
+		}
+
+		// Verify main was not pushed
+		localMain, _ := runGitCommand(ctx, repo, "rev-parse", "main")
+		remoteMain, _ := runGitCommand(ctx, repo, "ls-remote", "origin", "refs/heads/main")
+		if strings.Contains(remoteMain, strings.TrimSpace(localMain)) {
+			t.Errorf("main branch was pushed directly: %s", remoteMain)
+		}
+	})
+
+	t.Run("FeatureBranch_Untouched", func(t *testing.T) {
+		repo := setupRepo(t, "feat/my-feature")
+		stepID := "step-feature"
+		err := pushTerrariumCommit(ctx, repo, "feat/my-feature", ResolvedCredential{}, false, stepID)
+		if err != nil {
+			t.Fatalf("push: %v", err)
+		}
+
+		// Verify the push went to the feature branch directly
+		out, err := runGitCommand(ctx, repo, "ls-remote", "origin")
+		if err != nil {
+			t.Fatalf("ls-remote: %v", err)
+		}
+		if strings.Contains(out, "refs/heads/sprout/task-"+stepID) {
+			t.Errorf("feature branch push was unexpectedly isolated: %s", out)
+		}
+
+		// Verify feat/my-feature was pushed
+		localFeat, _ := runGitCommand(ctx, repo, "rev-parse", "feat/my-feature")
+		remoteFeat, _ := runGitCommand(ctx, repo, "ls-remote", "origin", "refs/heads/feat/my-feature")
+		if !strings.Contains(remoteFeat, strings.TrimSpace(localFeat)) {
+			t.Errorf("feature branch was not pushed directly: %s", remoteFeat)
+		}
+	})
+
+	t.Run("OptOut_PushesToDefaultBranch", func(t *testing.T) {
+		repo := setupRepo(t, "main")
+		stepID := "step-optout"
+		// allowDefaultBranchCommit = true
+		err := pushTerrariumCommit(ctx, repo, "main", ResolvedCredential{}, true, stepID)
+		if err != nil {
+			t.Fatalf("push: %v", err)
+		}
+
+		// Verify the push went to main directly
+		out, err := runGitCommand(ctx, repo, "ls-remote", "origin")
+		if err != nil {
+			t.Fatalf("ls-remote: %v", err)
+		}
+		if strings.Contains(out, "refs/heads/sprout/task-"+stepID) {
+			t.Errorf("opt-out push was unexpectedly isolated: %s", out)
+		}
+
+		// Verify main was pushed
+		localMain, _ := runGitCommand(ctx, repo, "rev-parse", "main")
+		remoteMain, _ := runGitCommand(ctx, repo, "ls-remote", "origin", "refs/heads/main")
+		if !strings.Contains(remoteMain, strings.TrimSpace(localMain)) {
+			t.Errorf("main branch was not pushed directly: %s", remoteMain)
+		}
+	})
+}

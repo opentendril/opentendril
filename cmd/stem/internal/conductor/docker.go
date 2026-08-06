@@ -630,7 +630,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 
 		if plan.remoteClone {
-			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential); pushErr != nil {
+			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
 					return report, filesKnown, errors.Join(runErr, pushErr)
@@ -1936,7 +1936,7 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 	return dest, checkout.persistent, nil
 }
 
-func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential) error {
+func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {
 	targetBranch := strings.TrimSpace(branch)
 	if targetBranch == "" {
 		currentBranch, err := runGitCommand(ctx, mountPath, "branch", "--show-current")
@@ -1949,6 +1949,14 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred Res
 		return fmt.Errorf("unable to determine branch for push")
 	}
 	targetBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
+
+	defaultBranch := ResolveDefaultBranchLocal(ctx, mountPath, "")
+	if !allowDefaultBranchCommit && defaultBranch.IsProtected(targetBranch) {
+		newBranch := fmt.Sprintf("sprout/task-%s", stepID)
+		fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching push from %s to %s\n", targetBranch, newBranch)
+
+		targetBranch = newBranch
+	}
 
 	commitMessage, err := runGitCommand(ctx, mountPath, "log", "-1", "--pretty=%B", "HEAD")
 	if err != nil {
