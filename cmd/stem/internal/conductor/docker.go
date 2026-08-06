@@ -106,6 +106,10 @@ var (
 	createShadowWorktreeFn         = createShadowWorktree
 	removeShadowWorktreeFn         = removeShadowWorktree
 	injectMycorrhizalCacheFn       = injectMycorrhizalCache
+	terrariumNewProviderFn         = terrarium.NewProvider
+	osGetuidFn                     = os.Getuid
+	osGetgidFn                     = os.Getgid
+	dockerIsRootlessFn             = DockerIsRootless
 	collectStageableFilesFn        = collectStageableFiles
 	collectGitDiffFn               = collectGitDiff
 	commitTerrariumExecutionFn     = commitTerrariumExecution
@@ -1011,16 +1015,21 @@ func deriveWatchdogTimeout(ctx context.Context) time.Duration {
 }
 
 func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
-	provider, err := terrarium.NewProvider(ctx, providerName, observers...)
+	provider, err := terrariumNewProviderFn(ctx, providerName, observers...)
 	if err != nil {
 		return nil, err
+	}
+
+	runAsUser := fmt.Sprintf("%d:%d", osGetuidFn(), osGetgidFn())
+	if dockerIsRootlessFn() {
+		runAsUser = "0:0"
 	}
 
 	instance, err := provider.Create(ctx, terrarium.TerrariumSpec{
 		Image:          imageName,
 		WorkingDir:     "/app",
 		NetworkMode:    terrarium.NetworkModeNone,
-		RunAsUser:      "1000:1000",
+		RunAsUser:      runAsUser,
 		CPUQuota:       "1.0",
 		MemoryLimitMB:  2048,
 		ReadOnlyRootFS: false,
@@ -2069,4 +2078,17 @@ func stagePlasmidsForGenotype(sourcePath, targetPath, genotypeName string) error
 		return fmt.Errorf("one or more required plasmid signature checks failed")
 	}
 	return nil
+}
+
+// DockerIsRootless asks the daemon whether it is running rootless. A rootless
+// daemon cannot grant root on the host, so group membership stops being an
+// escalation path, and container root (0:0) maps to an unprivileged host user.
+func DockerIsRootless() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.SecurityOptions}}").Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(output), "rootless")
 }

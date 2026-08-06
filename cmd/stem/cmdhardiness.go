@@ -340,7 +340,7 @@ func escalationFindings() []hardinessFinding {
 	// Membership of the container-daemon group is equivalent to root: a member
 	// can bind-mount the whole filesystem into a container and read or write
 	// anything as root, whatever a file's owner and mode say.
-	if inGroup("docker") && !dockerIsRootless() {
+	if inGroup("docker") && !conductor.DockerIsRootless() {
 		findings = append(findings, hardinessFinding{
 			Severity: "weak",
 			Title:    "This user is in the \"docker\" group with a rootful daemon — that is root",
@@ -1016,19 +1016,6 @@ func inGroup(name string) bool {
 		}
 	}
 	return false
-}
-
-// dockerIsRootless asks the daemon whether it is running rootless. A rootless
-// daemon cannot grant root on the host, so group membership stops being an
-// escalation path.
-func dockerIsRootless() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.SecurityOptions}}").Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(output), "rootless")
 }
 
 // canSudoWithoutPassword reports whether sudo would run right now with no
