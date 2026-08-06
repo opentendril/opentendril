@@ -1,7 +1,35 @@
-# Copy to .envrc, then run: direnv allow
-#
-# The Stem needs GITHUB_TOKEN in its process environment so terrariums can
-# push over HTTPS — gh's keyring alone does not expose the token to child
-# processes. This sources it from `gh auth token` when not already set.
-export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
-[ -f .env ] && dotenv .env
+# === OpenTendril Stem Environment Loader ===
+# Source this file to load the Stem's environment from .env.example.
+# Run: cp .env.example .env && source .envrc
+# Or: source .envrc (after .env is populated)
+
+# Load the base configuration from .env.example
+if [ -f .env.example ]; then
+    # Export all variables from .env.example (ignoring comments and blank lines)
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+        # Export the line as a shell variable
+        export "$line"
+    done < .env.example
+fi
+
+# Additional Stem-specific overrides (optional)
+# Uncomment and set values as needed:
+# export TENDRIL_DB_PATH=.tendril/history.db
+# export TENDRIL_REMOTE_SINKS=redis://:pass@localhost:6379/opentendril-events
+
+# Validate that required variables are set (optional)
+# if [ -z "$DEFAULT_LLM_PROVIDER" ]; then
+#     echo "ERROR: DEFAULT_LLM_PROVIDER is not set" >&2
+#     exit 1
+# fi
+
+# If running in a container, ensure the host's Ollama is reachable
+# (the Stem auto-discovers localhost/127.0.0.1/host.docker.internal)
+# if [ -z "$LOCAL_INFERENCE_URL" ]; then
+#     export LOCAL_INFERENCE_URL=http://host.docker.internal:11434/v1
+# fi
+
+# Print a confirmation message (optional)
+# echo "OpenTendril Stem environment loaded from .env.example" >&2
