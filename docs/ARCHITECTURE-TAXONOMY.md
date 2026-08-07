@@ -162,7 +162,7 @@ graph TB
 | **Stem** | Go Orchestrator | Trust anchor. Runs on host. Owns all security decisions. |
 | **Mycorrhizal Network** | LLM (Claude/GPT/Ollama) | External. Never touches the host filesystem. |
 | **Hormonal Trigger** | Security Gate / Hook | Pre-flight POSIX-sh script running in an isolated Terrarium. Blocks execution if exit > 0. |
-| **Sprout** | One Terrarium execution run — the ephemeral worker | Created fresh, destroyed on completion. The executor: dumb by design, only follows Genotype instructions. *(Formerly split as "Tendril" for the worker loop; now a single organ.)* |
+| **Sprout** | One Terrarium execution run — the ephemeral worker | Created fresh, destroyed on completion. The executor: dumb by design, only follows Genotype instructions. |
 | **Terrarium** | Docker / gVisor / Firecracker / Host | Isolation layer. Defines the security boundary. |
 | **Genotype** | System Prompt / Persona | Defines identity, capability scope, and **deny-list** of blocked tools. |
 | **Plasmid** | Tool / RAG context block | Modular capability injected at runtime. Blocked by Genotype deny-list. |
