@@ -152,24 +152,28 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 
 	t.Run("unset identity with no ambient git identity is refused", func(t *testing.T) {
 		repo := newRepo(t)
-		// We use a custom context to pass the env variables to the runGitCommand inside commitTerrariumExecution
-		// Wait, runGitCommand uses exec.CommandContext, which gets the env from os.Environ(). We need to set it for the test process or use t.Setenv.
+
+		// Close off every source git resolves an identity from, so the probe
+		// meets the one case it exists to refuse. newRepo configures a local
+		// identity, and the process environment supplies the rest; runGitCommand
+		// inherits that environment, so t.Setenv reaches the probe.
+		//
+		// The author and committer variables are emptied rather than left to
+		// the runner, because git falls back to auto-detecting one from the
+		// operating-system user and the hostname. That fallback succeeds on a
+		// machine whose hostname yields a usable address and fails on one that
+		// does not, which would make this assertion depend on where it runs.
 		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 		t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
-		// The repo created by newRepo has local git config set.
-		// Wait, newRepo runs `git config user.email ambient@example.com` which is LOCAL!
-		// So newRepo(t) sets an ambient local identity. We need to unset it in this subtest.
-		if _, err := runGitCommand(context.Background(), repo, "config", "--unset", "user.email"); err != nil {
-			t.Fatalf("unset user.email: %v", err)
-		}
-		if _, err := runGitCommand(context.Background(), repo, "config", "--unset", "user.name"); err != nil {
-			t.Fatalf("unset user.name: %v", err)
-		}
-		// Also unset GIT_AUTHOR_* and GIT_COMMITTER_* just in case the test runner has them.
 		t.Setenv("GIT_AUTHOR_NAME", "")
 		t.Setenv("GIT_AUTHOR_EMAIL", "")
 		t.Setenv("GIT_COMMITTER_NAME", "")
 		t.Setenv("GIT_COMMITTER_EMAIL", "")
+		for _, key := range []string{"user.email", "user.name"} {
+			if _, err := runGitCommand(context.Background(), repo, "config", "--unset", key); err != nil {
+				t.Fatalf("unset %s: %v", key, err)
+			}
+		}
 
 		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{})
 		if err == nil {
