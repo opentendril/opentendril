@@ -24,6 +24,12 @@ func clearProviderKeys(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "")
 	t.Setenv("LOCAL_INFERENCE_URL", "")
 	t.Setenv("LOCAL_MODEL_NAME", "")
+
+	// The discovered-model registry is process-global and outlives the test
+	// that filled it, so a cache left behind by an earlier test decides which
+	// models a later one can select from.
+	ResetModelRegistryCache()
+	t.Cleanup(ResetModelRegistryCache)
 }
 
 // withLocalInference declares a local inference endpoint for the duration of a

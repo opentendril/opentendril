@@ -30,6 +30,14 @@ func clearLLMEnv(t *testing.T) {
 		t.Setenv(key, "")
 	}
 
+	// The discovered-model registry is process-global and outlives the test
+	// that filled it. A test that ran earlier with only a local endpoint
+	// declared leaves a cache containing local models and nothing else, so a
+	// later test asking for another provider's model finds none — a failure
+	// that depends on test order rather than on the code under test.
+	llm.ResetModelRegistryCache()
+	t.Cleanup(llm.ResetModelRegistryCache)
+
 	// This repository ships a .tendril/config.yaml pinning a local model, and
 	// resolution walks up from the working directory to find it. A resolution
 	// test run from the source tree would otherwise be reading the repository's
