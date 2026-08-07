@@ -81,8 +81,8 @@ func TestConfiguredProviderReceivesTheRequest(t *testing.T) {
 	if spec.Provider != "google" {
 		t.Fatalf("spec.Provider = %q, want google", spec.Provider)
 	}
-	if spec.Model != "gemini-2.5-pro" {
-		t.Fatalf("spec.Model = %q, want gemini-2.5-pro (the best google model under a premium ceiling)", spec.Model)
+	if spec.Model != "gemini-3.1-pro" {
+		t.Fatalf("spec.Model = %q, want gemini-3.1-pro (the best google model under a premium ceiling)", spec.Model)
 	}
 
 	if _, err := NewClient(spec).CallPrompt(context.Background(), "system", "user"); err != nil {
@@ -158,10 +158,10 @@ func TestConfiguredProviderWithNoUsableModelFailsLoudly(t *testing.T) {
 	}
 }
 
-// The tool-capability relaxation for an autonomous run may drop the tool
-// requirement. It may not drop the provider: doing so would reintroduce the
-// same silent hop this seam exists to close, through the one path that runs
-// without a Botanist watching.
+// A relaxation for an autonomous run may raise the cost ceiling, and as a last
+// resort may drop the tool requirement. It may not drop the provider: doing so
+// would reintroduce the same silent hop this seam exists to close, through the
+// one path that runs without a Botanist watching.
 func TestAutonomousToolFallbackStaysOnTheConfiguredProvider(t *testing.T) {
 	chdirWithoutTendrilConfig(t)
 	clearProviderKeys(t)

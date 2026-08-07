@@ -28,15 +28,15 @@ func TestRecordSproutRunSettlesTheModelOnTheFinishingCall(t *testing.T) {
 	}
 
 	if err := store.RecordSproutRun(ctx, SproutRun{
-		RunID: "run-1", SessionID: "s1", StepID: "run-1", Model: "gemini-2.5-pro",
+		RunID: "run-1", SessionID: "s1", StepID: "run-1", Model: "gemini-3.1-pro",
 		Status: "matured", Output: "done", FinishedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("RecordSproutRun(matured): %v", err)
 	}
 
 	stored = loadRun(t, store, "run-1")
-	if stored.Model != "gemini-2.5-pro" {
-		t.Fatalf("stored model = %q, want gemini-2.5-pro", stored.Model)
+	if stored.Model != "gemini-3.1-pro" {
+		t.Fatalf("stored model = %q, want gemini-3.1-pro", stored.Model)
 	}
 	if stored.Status != "matured" || stored.Output != "done" {
 		t.Fatalf("stored run = %+v, want a matured run carrying its output", stored)

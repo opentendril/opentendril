@@ -49,7 +49,7 @@ var FallbackModels = []ModelDefinition{
 	{Provider: "anthropic", Name: "claude-haiku-4-5", Family: ModelFamilyClaude, ContextSize: 200000, OutputLimit: 64000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
 	{Provider: "openai", Name: "gpt-5.6-terra", Family: ModelFamilyGPT, ContextSize: 400000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "openai", Name: "gpt-5.6-luna", Family: ModelFamilyGPT, ContextSize: 400000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierCheapest},
-	{Provider: "google", Name: "gemini-2.5-pro", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
+	{Provider: "google", Name: "gemini-3.1-pro", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "google", Name: "gemini-3.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierCheapest},
 	{Provider: "grok", Name: "grok-4.5", Family: ModelFamilyGPT, ContextSize: 256000, HasVision: true, HasReasoning: true, DrivesTools: true, CostTier: TierPremium},
 	{Provider: "openrouter", Name: "google/gemini-2.5-flash", Family: ModelFamilyGemini, ContextSize: 1000000, HasVision: true, DrivesTools: true, CostTier: TierCheapest},
