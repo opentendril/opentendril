@@ -28,12 +28,36 @@ const (
 )
 
 // generatedRuntimeArtifacts lists, relative to the substrate root, everything
-// GenerateRepoMap and its callers leave behind.
+// OpenTendril writes into a Substrate on its own behalf while running against
+// it. None of it is a Sprout's work, so none of it belongs in a run's change
+// set or in a run's commit.
+//
+// This list answers ATTRIBUTION — whose write is this — and nothing else. It is
+// deliberately not what decides whether a run did any work: that comes from the
+// model's own tool calls, because a list of paths can only ever exclude the
+// writes somebody remembered to add to it. The two work together. Excluding a
+// path Tendril wrote keeps it out of the commit, and it also removes it from
+// the diff, so it can no longer supply the evidence that makes an idle run look
+// productive.
+//
+// The genome entries were missing, and their absence is what let a run in which
+// the model only read files report itself complete: the epigenetic write from
+// the PREVIOUS run was still sitting in the checkout, unattributed, and the
+// diff handed it to whoever ran next.
 func generatedRuntimeArtifacts() []string {
+	genomeFile := func(name string) string {
+		return filepath.ToSlash(filepath.Join(tendrilStateDirectory, "genome", name))
+	}
 	return []string{
 		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexKeyFile)),
 		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase)),
-		filepath.ToSlash(filepath.Join(tendrilStateDirectory, "genome", repositoryMapFile)),
+		genomeFile(repositoryMapFile),
+		// Written before every run, by the repository and memory mappers.
+		genomeFile(memoryMapFile),
+		// Written after a run: the chronicler's learnings, and the genome
+		// fitness record. Both are Tendril accounting for itself.
+		genomeFile(genomicEpigeneticsFilename),
+		genomeFile(genomicFitnessFilename),
 	}
 }
 

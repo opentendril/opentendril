@@ -3,6 +3,9 @@ package conductor
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -403,4 +406,91 @@ func stubSequenceAttributionCollaborators(t *testing.T, root string, runner spro
 		return runner, nil
 	}
 	collectGitDiffFn = func(ctx context.Context, mountPath string) (string, error) { return "", nil }
+}
+
+// Attribution and countability are separate mechanisms and they have to
+// compose. The tool seam answers "did the model write". This answers "whose
+// write is this" — and it matters on its own, because a path OpenTendril wrote
+// is not the Sprout's work even on a run where the model wrote plenty, and a
+// reviewer seeing it in the commit is reading a change no task asked for.
+//
+// It also removes the evidence that made an idle run look productive: with the
+// genome artifacts out of the diff, a run that only shelled around has nothing
+// left to be credited with.
+func TestGeneratedArtifactsAreNotTheSproutsWork(t *testing.T) {
+	workspace := newSproutWorkspace(t)
+	genome := filepath.Join(workspace, ".tendril", "genome")
+	if err := os.MkdirAll(genome, 0o755); err != nil {
+		t.Fatalf("mkdir genome: %v", err)
+	}
+
+	// Everything OpenTendril writes into a Substrate on its own behalf.
+	for _, name := range []string{"epigenetics.md", "memorymap.md", "repomap.md", "fitness.json"} {
+		if err := os.WriteFile(filepath.Join(genome, name), []byte("tendril wrote this\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// A genome file the OPERATOR authors. It is Substrate content, not
+	// OpenTendril's accounting, so a Sprout asked to edit it must still be
+	// credited with having done so.
+	if err := os.WriteFile(filepath.Join(genome, "taxonomy-canonical.md"), []byte("operator content\n"), 0o644); err != nil {
+		t.Fatalf("write taxonomy: %v", err)
+	}
+
+	files, err := collectStageableFiles(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("collectStageableFiles: %v", err)
+	}
+
+	for _, unwanted := range []string{
+		".tendril/genome/epigenetics.md",
+		".tendril/genome/memorymap.md",
+		".tendril/genome/repomap.md",
+		".tendril/genome/fitness.json",
+	} {
+		if slices.Contains(files, unwanted) {
+			t.Errorf("%s is attributed to the run; OpenTendril wrote it, not the model", unwanted)
+		}
+	}
+	if !slices.Contains(files, ".tendril/genome/taxonomy-canonical.md") {
+		t.Errorf("files = %v, want the operator-authored genome file kept — excluding it would hide real work", files)
+	}
+}
+
+// The composed result, stated as the measurement relies on it: a run whose only
+// workspace difference is OpenTendril's own writing reports no-changes, even
+// when the model used a tool that counts as able to write. Before, the stale
+// epigenetic file from the previous run supplied a diff and the run reported
+// complete on the strength of it.
+func TestAnIdleRunIsNotRescuedByTendrilsOwnWrites(t *testing.T) {
+	workspace := newSproutWorkspace(t)
+	genome := filepath.Join(workspace, ".tendril", "genome")
+	if err := os.MkdirAll(genome, 0o755); err != nil {
+		t.Fatalf("mkdir genome: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(genome, "epigenetics.md"), []byte("left by the previous run\n"), 0o644); err != nil {
+		t.Fatalf("write epigenetics: %v", err)
+	}
+
+	measured, err := collectStageableFiles(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("collectStageableFiles: %v", err)
+	}
+
+	// execCommand counts as able to write — nothing at the seam can tell `ls`
+	// from `rm -rf`. That over-credit must not be enough on its own.
+	shelled := changeEvidence{
+		modelWrote:    toolCanWriteWorkspace("execCommand"),
+		measured:      true,
+		measuredFiles: measured,
+	}
+	if !shelled.modelWrote {
+		t.Fatal("execCommand no longer counts as able to write; this test no longer probes the over-credit")
+	}
+	if shelled.changedAnything() {
+		t.Fatalf("a run whose only diff was OpenTendril's own write counts as work: measured = %v", measured)
+	}
+	if got := classifySproutOutcome(nil, shelled, "I had a look around.", false); got != SproutOutcomeNoChanges {
+		t.Fatalf("outcome = %q, want %q", got, SproutOutcomeNoChanges)
+	}
 }
