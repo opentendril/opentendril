@@ -169,9 +169,10 @@ func TestAutonomousToolFallbackStaysOnTheConfiguredProvider(t *testing.T) {
 	withLocalInference(t)
 
 	// Under a cheapest ceiling the only local model is llama3.2, which does not
-	// drive tools — so RequiresToolUse matches nothing and the relaxation
-	// fires. anthropic, whose key is present, has a cheapest-tier model that
-	// DOES drive tools, and is exactly where an unconstrained fallback would go.
+	// drive tools — so RequiresToolUse matches nothing under the ceiling and a
+	// relaxation fires. anthropic, whose key is present, has a cheapest-tier
+	// model that DOES drive tools, and is exactly where an unconstrained
+	// fallback would go.
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 
@@ -180,10 +181,13 @@ func TestAutonomousToolFallbackStaysOnTheConfiguredProvider(t *testing.T) {
 		t.Fatalf("spec.ResolutionErr = %v, want nil", spec.ResolutionErr)
 	}
 	if spec.Provider != "local" {
-		t.Fatalf("spec.Provider = %q, want local (the fallback must relax the capability, not the provider)", spec.Provider)
+		t.Fatalf("spec.Provider = %q, want local (a relaxation must never leave the chosen provider)", spec.Provider)
 	}
-	if spec.Model != "llama3.2" {
-		t.Fatalf("spec.Model = %q, want llama3.2", spec.Model)
+	// The relaxation that fires is the ceiling rising, not the tool requirement
+	// falling — so the answer is the provider's tool-capable model rather than
+	// its cheapest one. Which of the two gives way is asserted in its own test.
+	if spec.Model != "qwen3.5:9b" {
+		t.Fatalf("spec.Model = %q, want qwen3.5:9b", spec.Model)
 	}
 }
 
@@ -305,5 +309,56 @@ func TestMaxCostTierIsACeilingTheSortRespects(t *testing.T) {
 		if costTierRank(model.CostTier) > costTierRank(tier) {
 			t.Fatalf("SelectBestModel(%s) returned %s-tier %q, which is above the ceiling", tier, model.CostTier, model.Name)
 		}
+	}
+}
+
+// An autonomous run has two constraints that are not equal, and the order they
+// are given up in decides whether the run does anything at all. A model that
+// cannot drive tools does not do cheap work — it returns prose or an empty
+// completion and the sprout matures having achieved nothing. A model above the
+// intended tier still does the work.
+//
+// A local-only installation is where this bites: its one tool-capable model is
+// standard-tier, so any cheaper ceiling has nothing to offer under it. The
+// ceiling must give way, not the tool requirement.
+func TestAgentTierRaisesTheCeilingBeforeGivingUpToolCapability(t *testing.T) {
+	chdirWithoutTendrilConfig(t)
+	clearProviderKeys(t)
+	withLocalInference(t)
+	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
+	clearTierModelEnv(t, "local")
+
+	spec := ResolveAgentTierProviderSpec(TierCheapest)
+	if spec.ResolutionErr != nil {
+		t.Fatalf("spec.ResolutionErr = %v, want nil", spec.ResolutionErr)
+	}
+	if spec.Provider != "local" {
+		t.Fatalf("spec.Provider = %q, want local", spec.Provider)
+	}
+	if spec.Model != "qwen3.5:9b" {
+		t.Fatalf("spec.Model = %q, want qwen3.5:9b — the ceiling should rise, not the tool requirement fall", spec.Model)
+	}
+
+	// Asserted against the registry rather than against the name, so this keeps
+	// meaning what it says if the local entries are ever re-tiered.
+	var drivesTools bool
+	var found bool
+	for _, model := range FallbackModels {
+		if model.Provider == spec.Provider && model.Name == spec.Model {
+			found, drivesTools = true, model.DrivesTools
+		}
+	}
+	if !found {
+		t.Fatalf("resolved model %q is not in the registry", spec.Model)
+	}
+	if !drivesTools {
+		t.Fatalf("resolved model %q cannot drive tools; an autonomous run on it does nothing", spec.Model)
+	}
+
+	// Resolution that does not require tools is deliberately unchanged: only an
+	// autonomous run carries the requirement that forces the ceiling up.
+	plain := ResolveTierProviderSpec(TierCheapest)
+	if plain.Model != "llama3.2" {
+		t.Fatalf("ResolveTierProviderSpec(cheapest) = %q, want llama3.2 — the ceiling still binds where tools are not required", plain.Model)
 	}
 }

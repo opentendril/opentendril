@@ -483,15 +483,31 @@ func resolveForProviderChoice(choice providerChoice, tier ModelTier, requireTool
 
 	model, err := SelectBestModel(caps)
 	if err != nil && requireTools {
-		// A tool-capable model was required but none matched (e.g. only small
-		// local models are available). Relax the requirement so the run reports
-		// its outcome honestly instead of silently maturing on nothing — but
-		// relax ONLY that. caps.Provider stays set, because leaving the chosen
-		// provider is the very thing this resolution exists to prevent, and a
-		// fallback allowed to do it is the same defect wearing a different name.
-		relaxed := caps
-		relaxed.RequiresToolUse = false
-		model, err = SelectBestModel(relaxed)
+		// Nothing tool-capable fits under the ceiling. The two constraints are
+		// not equal here and the order of giving them up matters: an autonomous
+		// run that cannot drive tools does not do cheap work, it does NO work —
+		// it returns prose or an empty completion and matures having achieved
+		// nothing. A run that costs more than intended still does the work.
+		//
+		// So cost gives way first. Raising the ceiling while keeping the tool
+		// requirement is what a local-only installation needs: its one
+		// tool-capable model is standard-tier, so any cheaper ceiling would
+		// otherwise select a model that cannot drive tools at all.
+		raised := caps
+		raised.MaxCostTier = ""
+		model, err = SelectBestModel(raised)
+
+		if err != nil {
+			// Nothing tool-capable exists at this provider at any price. Relax
+			// the requirement last, so the run reports its outcome honestly
+			// instead of refusing outright — but relax ONLY that. caps.Provider
+			// stays set, because leaving the chosen provider is the very thing
+			// this resolution exists to prevent, and a fallback allowed to do it
+			// is the same defect wearing a different name.
+			relaxed := caps
+			relaxed.RequiresToolUse = false
+			model, err = SelectBestModel(relaxed)
+		}
 	}
 	if err != nil {
 		return providerSpecForModel(choice.name, tier, "", ""), resolutionFailure(choice, tier, err)
