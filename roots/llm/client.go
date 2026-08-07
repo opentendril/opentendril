@@ -33,14 +33,17 @@ const (
 )
 
 type ProviderSpec struct {
-	Provider    string
-	BaseURL     string
-	BaseURLs    []string
-	APIKey      string
-	Model       string
-	Endpoint    string
-	Mode        Mode
-	Temperature float64
+	Provider string
+	BaseURL  string
+	BaseURLs []string
+	APIKey   string
+	Model    string
+	Endpoint string
+	Mode     Mode
+	// Temperature is the sampling temperature to send on every request. Nil means
+	// the field is omitted from the wire and the provider's own default applies.
+	// Set explicitly via temperature in .tendril/config.yaml or SetTemperature.
+	Temperature *float64
 	// IsRouter, when true, signals that this provider delegates model selection
 	// to a third-party router (e.g. OpenRouter, NVIDIA NIM router). Set
 	// explicitly via the `is-router` field in .tendril/config.yaml; it
@@ -193,7 +196,8 @@ type tendrilModelConfig struct {
 
 func (c *Client) SetTemperature(temp float64) {
 	if c != nil {
-		c.spec.Temperature = temp
+		t := temp
+		c.spec.Temperature = &t
 	}
 }
 
@@ -597,7 +601,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	if model == "" {
 		model = strings.TrimSpace(providerConfig.Model)
 	}
-	temperature := configuredTemperature(providerConfig, 0.1)
+	temperature := configuredTemperature(providerConfig)
 	isRouter := resolveIsRouter(providerConfig)
 	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
 	outputLimit := resolveOutputLimit(providerConfig, model)
@@ -785,11 +789,19 @@ func configOrDefault(configured string, fallback string) string {
 	return fallback
 }
 
-func configuredTemperature(config tendrilProviderConfig, fallback float64) float64 {
+// configuredTemperature returns a pointer to the operator-configured temperature
+// when one is set, or nil when the config field is zero (meaning no temperature
+// was configured). Nil propagates to the adapter, which omits the field from the
+// request body so the provider's own default applies.
+//
+// Note: YAML 0.0 and an absent key both parse to float64(0), so a deliberate
+// zero cannot be expressed through config. This is a known limitation.
+func configuredTemperature(config tendrilProviderConfig) *float64 {
 	if config.Temperature != 0 {
-		return config.Temperature
+		t := config.Temperature
+		return &t
 	}
-	return fallback
+	return nil
 }
 
 func configuredDefaultProvider() string {

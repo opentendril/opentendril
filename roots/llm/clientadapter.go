@@ -108,11 +108,13 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 	}
 
 	payloadBody := map[string]any{
-		"model":       spec.Model,
-		"max_tokens":  spec.OutputLimit,
-		"temperature": spec.Temperature,
-		"messages":    anthropicMessages,
-		"stream":      stream,
+		"model":      spec.Model,
+		"max_tokens": spec.OutputLimit,
+		"messages":   anthropicMessages,
+		"stream":     stream,
+	}
+	if spec.Temperature != nil {
+		payloadBody["temperature"] = *spec.Temperature
 	}
 	if payloadBody["max_tokens"] == 0 {
 		payloadBody["max_tokens"] = anthropicOutputFallback
@@ -274,10 +276,12 @@ func (openAIishAdapter) SetModelsAuthHeaders(req *http.Request, apiKey string) {
 
 func (openAIishAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, tools []ToolDefinition, stream bool) ([]byte, error) {
 	payloadBody := map[string]any{
-		"model":       spec.Model,
-		"temperature": spec.Temperature,
-		"stream":      stream,
-		"messages":    messages,
+		"model":    spec.Model,
+		"stream":   stream,
+		"messages": messages,
+	}
+	if spec.Temperature != nil {
+		payloadBody["temperature"] = *spec.Temperature
 	}
 	if len(tools) > 0 {
 		payloadBody["tools"] = tools

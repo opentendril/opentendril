@@ -54,7 +54,7 @@ func TestBuildChatRequestEmitsOpenAIishTools(t *testing.T) {
 
 func TestBuildChatRequestWithoutToolsMatchesFixture(t *testing.T) {
 	adapter := openAIishAdapter{}
-	spec := ProviderSpec{Model: "gpt-4", Temperature: 0.5}
+	spec := ProviderSpec{Model: "gpt-4", Temperature: ptr(0.5)}
 	messages := []Message{
 		{Role: "system", Content: "system instruction"},
 		{Role: "user", Content: "hello"},
@@ -490,4 +490,95 @@ func TestDoCallOpenAIishPlain400IsNotAToolRefusal(t *testing.T) {
 	if errors.Is(err, ErrToolsRefused) {
 		t.Errorf("a 400 with no tool definitions must not read as a tool refusal: %v", err)
 	}
+}
+
+// TestTemperatureOpenAIishShape asserts that the OpenAI-ish request body carries
+// temperature only when one was configured.
+//
+// Mirror of TestTemperatureAnthropicShape for the other adapter implementation.
+// Both adapters were changed identically; a test covering only one shape is the
+// likeliest gap — two call sites, and both must be pinned.
+//
+// Mutation plan (must be run and reported):
+//   - Restore the unconditional "temperature": spec.Temperature in
+//     openAIishAdapter.BuildChatRequest → the "unconfigured" sub-tests go red.
+//   - Confirm the "configured" and "zero deliberate" sub-tests stay green on
+//     that mutation, proving they are not trivially true.
+func TestTemperatureOpenAIishShape(t *testing.T) {
+	adapter := openAIishAdapter{}
+
+	t.Run("unconfigured non-streaming", func(t *testing.T) {
+		spec := ProviderSpec{Model: "gpt-test"}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; present {
+			t.Errorf("temperature key is present in body, want absent when not configured: %s", payload)
+		}
+	})
+
+	t.Run("unconfigured streaming", func(t *testing.T) {
+		spec := ProviderSpec{Model: "gpt-test"}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, true)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; present {
+			t.Errorf("temperature key is present in streaming body, want absent when not configured: %s", payload)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		spec := ProviderSpec{Model: "gpt-test", Temperature: ptr(0.7)}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		got, present := body["temperature"]
+		if !present {
+			t.Fatalf("temperature key is absent, want present when configured")
+		}
+		if got != 0.7 {
+			t.Errorf("temperature = %v, want 0.7", got)
+		}
+	})
+
+	t.Run("zero deliberate choice", func(t *testing.T) {
+		// Note: no production path can currently reach this sub-case.
+		// The only caller is docker.go which guards d.Temperature > 0 before
+		// calling SetTemperature, so a genotype temperature of 0 is filtered
+		// out before the pointer is set. YAML cannot express it either: both
+		// an absent key and an explicit 0.0 parse to float64(0), which
+		// configuredTemperature reads as nil. This test proves the mechanism
+		// is correct at the type level; it does not prove the mechanism is
+		// reachable in production.
+		spec := ProviderSpec{Model: "gpt-test", Temperature: ptr(0.0)}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; !present {
+			t.Errorf("temperature key is absent, want present when ptr(0.0) is set")
+		}
+		if body["temperature"] != float64(0) {
+			t.Errorf("temperature = %v, want 0", body["temperature"])
+		}
+	})
 }

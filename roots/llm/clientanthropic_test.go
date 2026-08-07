@@ -407,3 +407,105 @@ func TestDoCallAnthropicOnlyTreats400And422AsToolRefusal(t *testing.T) {
 		server.Close()
 	}
 }
+
+// TestTemperatureAnthropicShape asserts that the Anthropic request body carries
+// temperature only when one was configured.
+//
+// The defect this pins: configuredTemperature used to apply a 0.1 fallback for
+// every provider when nothing was configured, and anthropicAdapter put
+// "temperature": spec.Temperature in the body unconditionally. Anthropic's
+// extended-thinking models reject the field entirely, returning a 400, which
+// removed the provider from any unattended run.
+//
+// Mutation plan (must be run and reported):
+//   - Restore the unconditional "temperature": spec.Temperature in
+//     anthropicAdapter.BuildChatRequest → the "unconfigured" sub-tests go red.
+//   - Confirm the "configured" and "zero deliberate" sub-tests stay green on
+//     that mutation, proving they are not trivially true.
+func TestTemperatureAnthropicShape(t *testing.T) {
+	adapter := anthropicAdapter{}
+
+	t.Run("unconfigured non-streaming", func(t *testing.T) {
+		// spec.Temperature is nil — no temperature was configured.
+		// The field must be absent from the request body, not zero, not null.
+		spec := ProviderSpec{Model: "claude-test"}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; present {
+			t.Errorf("temperature key is present in body, want absent when not configured: %s", payload)
+		}
+	})
+
+	t.Run("unconfigured streaming", func(t *testing.T) {
+		// Same assertion for the streaming call shape. Both shapes share one
+		// implementation, but the plan requires each to be pinned separately
+		// because omitting the guard from either is a half-ship.
+		spec := ProviderSpec{Model: "claude-test"}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, true)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; present {
+			t.Errorf("temperature key is present in streaming body, want absent when not configured: %s", payload)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		spec := ProviderSpec{Model: "claude-test", Temperature: ptr(0.7)}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		got, present := body["temperature"]
+		if !present {
+			t.Fatalf("temperature key is absent, want present when configured")
+		}
+		if got != 0.7 {
+			t.Errorf("temperature = %v, want 0.7", got)
+		}
+	})
+
+	t.Run("zero deliberate choice", func(t *testing.T) {
+		// ptr(0.0) makes 0.0 expressible at the type level. The field is
+		// present with value 0 when the pointer is non-nil, regardless of
+		// what value it carries.
+		//
+		// Note: no production path can currently reach this sub-case.
+		// The only caller is docker.go which guards d.Temperature > 0 before
+		// calling SetTemperature, so a genotype temperature of 0 is filtered
+		// out before the pointer is set. YAML cannot express it either: both
+		// an absent key and an explicit 0.0 parse to float64(0), which
+		// configuredTemperature reads as nil. This test proves the mechanism
+		// is correct at the type level; it does not prove the mechanism is
+		// reachable in production.
+		spec := ProviderSpec{Model: "claude-test", Temperature: ptr(0.0)}
+		payload, err := adapter.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
+		if err != nil {
+			t.Fatalf("BuildChatRequest failed: %v", err)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(payload, &body); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, present := body["temperature"]; !present {
+			t.Errorf("temperature key is absent, want present when ptr(0.0) is set")
+		}
+		if body["temperature"] != float64(0) {
+			t.Errorf("temperature = %v, want 0", body["temperature"])
+		}
+	})
+}
