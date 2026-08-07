@@ -68,9 +68,10 @@ func historyRetentionDaysFromEnv() int {
 }
 
 // currentSchemaVersion is the history database's current schema generation.
-// Bump this and add a migration step in migrateSchema when a future change
-// needs to alter existing tables rather than just adding new IF NOT EXISTS
-// ones.
+// Bump it and add a forward step in migrateSchema when a change alters an
+// existing table rather than only adding a new IF NOT EXISTS one. The number is
+// what stops an older binary opening a shape it would misread, so a shape
+// change that leaves it alone is a shape change with no such guard.
 const currentSchemaVersion = 2
 
 // SproutRun is one Sprout execution history record. It records the dispatching
