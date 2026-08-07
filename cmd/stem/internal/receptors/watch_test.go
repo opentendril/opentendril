@@ -229,6 +229,54 @@ func TestWatchIsBoundToTheSubstrateItWasGranted(t *testing.T) {
 	}
 }
 
+// TestPartialSubstrateGrantDoesNotCoverPhytomer pins the "every one, not any
+// one" semantics of authorizeSubstrates. The caller owns every run in the
+// phytomer — both dispatched by watchOwner — and holds a real sprout.watch
+// grant, but the grant only covers "myrepo". Because one run targeted
+// "otherrepo", the grant does not cover the whole phytomer and every surface
+// must refuse.
+//
+// Without this fixture the mutation that replaces "deny on first failure" with
+// "return true on first success" passes all observation tests, because every
+// other fixture puts only one substrate per phytomer, so the loop never
+// iterates more than once.
+func TestPartialSubstrateGrantDoesNotCoverPhytomer(t *testing.T) {
+	mux, store := newWatchFixtureWithGrants(t, []core.DelegationGrant{
+		{Pollen: watchOwner, OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
+	})
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-myrepo", SessionID: watchSubject, StepID: "run-myrepo",
+		Pollen: watchOwner, Substrate: "myrepo", Status: "matured",
+	})
+	// Second run by the same caller into the same phytomer — but "otherrepo",
+	// which the grant does not reach.
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-otherrepo", SessionID: watchSubject, StepID: "run-otherrepo",
+		Pollen: watchOwner, Substrate: "otherrepo", Status: "matured",
+	})
+
+	// Events: the phytomer is not divisible, so a partial-substrate grant
+	// does not release it.
+	events := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/events", watchOwner)
+	if events.Code != http.StatusForbidden {
+		t.Fatalf("events with partial-substrate grant = %d, want 403: %s", events.Code, events.Body.String())
+	}
+	if body := events.Body.String(); strings.Contains(body, "sessionId") {
+		t.Fatalf("a refused events read still carried phytomer data: %s", body)
+	}
+
+	// Runs: AuthorizeRuns collects both substrates from the caller's own runs,
+	// so it must also refuse — the "any one suffices" mutation would return 200
+	// here and hand the caller both run records.
+	runs := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/sprout-runs", watchOwner)
+	if runs.Code != http.StatusForbidden {
+		t.Fatalf("sprout-runs with partial-substrate grant = %d, want 403: %s", runs.Code, runs.Body.String())
+	}
+	if body := runs.Body.String(); strings.Contains(body, "run-otherrepo") || strings.Contains(body, "run-myrepo") {
+		t.Fatalf("a refused sprout-runs read still carried run records: %s", body)
+	}
+}
+
 // TestWatchDoesNotEscalateLikeWork pins the impact classification. Looking at a
 // run is not doing one, so a grant that escalates high-impact operations back
 // to a human must not put a read in that queue — an observer interrupted for
