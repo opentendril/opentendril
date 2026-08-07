@@ -40,6 +40,16 @@ func TestMain(m *testing.M) {
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
 
+	// And from the operator's real provider credentials, for the same reason.
+	// A run's post-mortem asks a model to transcribe what the run learned, and
+	// resolution reads the ambient environment — so on a developer machine with
+	// keys exported, the suite reached a live provider, on the developer's
+	// account, for tests that assert nothing about it. The cost is real and so
+	// is the runtime: measured here, one such test sat on a hosted request
+	// until the suite's own timeout killed it. A test that wants a particular
+	// provider declares one with t.Setenv, which still works over these.
+	clearProviderEnvironment()
+
 	// Stub CheckGVisorReadinessFn to prevent tests that don't specify a Substrate
 	// from accidentally spawning a real `docker info` subprocess just to resolve
 	// the default terrarium provider name. This satisfies the implicit assumption
@@ -54,6 +64,37 @@ func TestMain(m *testing.M) {
 	CheckGVisorReadinessFn = originalGVisorReadyFn
 	os.RemoveAll(home)
 	os.Exit(exitCode)
+}
+
+// clearProviderEnvironment removes every signal that would let model
+// resolution reach a real provider: the credentials, the provider and model
+// choices, and the local inference endpoint. It names them explicitly rather
+// than pattern-matching the environment, so a variable added later is a
+// deliberate addition here and not an accident of a regular expression.
+func clearProviderEnvironment() {
+	for _, key := range []string{
+		"DEFAULT_LLM_PROVIDER", "COORDINATOR_LLM_PROVIDER",
+		"DEFAULT_MODEL_NAME", "COORDINATOR_MODEL_NAME",
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
+		"GROK_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
+		"LOCAL_INFERENCE_URL", "LOCAL_MODEL_NAME", "COORDINATOR_LOCAL_INFERENCE_URL",
+	} {
+		os.Unsetenv(key)
+	}
+	for _, provider := range []string{"ANTHROPIC", "OPENAI", "GOOGLE", "GROK", "OPENROUTER", "NVIDIA", "LOCAL"} {
+		for _, suffix := range []string{"_MODEL_NAME", "_PREMIUM_MODEL", "_STANDARD_MODEL", "_CHEAPEST_MODEL", "_BASE_URL"} {
+			os.Unsetenv(provider + suffix)
+		}
+	}
+
+	// One inference endpoint is then declared, deliberately pointing nowhere.
+	// A sprout run refuses to start when nothing resolves, so the suite has to
+	// name a provider for the runs it exercises — and naming a dead local port
+	// gives it a deterministic answer that reaches no network: a call nothing
+	// stubbed fails at connect in microseconds instead of arriving somewhere
+	// real.
+	os.Setenv("LOCAL_INFERENCE_URL", "http://127.0.0.1:1/v1")
+	os.Setenv("LOCAL_MODEL_NAME", "test-only-model")
 }
 
 // pinGoEnvironment resolves the go toolchain's home-relative locations and

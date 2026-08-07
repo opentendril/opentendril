@@ -15,7 +15,18 @@ type Capabilities struct {
 	// take the definitions when they are finally offered.
 	RequiresToolUse bool
 	MinContextSize  int
-	MaxCostTier     ModelTier
+	// MaxCostTier is a ceiling, not a target: a model qualifies when its own
+	// cost tier is at or below this one, and selection then takes the best
+	// qualifying model rather than the cheapest. A caller that wants the
+	// cheapest model asks for the cheapest tier.
+	MaxCostTier ModelTier
+	// Provider, when set, restricts selection to models served by that
+	// provider. It is a filter, not a preference: an operator who names a
+	// provider has said where their work is to run, and selection that treats
+	// that as a starting point can silently spend money at a provider they did
+	// not choose — and then no record of the run can say which one it was.
+	// Empty means every available provider is a candidate.
+	Provider string
 }
 
 type ModelFamily string

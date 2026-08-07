@@ -127,7 +127,11 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	var spec llm.ProviderSpec
 	if d != nil && d.IsCoordinator {
 		spec = llm.ResolveCoordinatorProviderSpec()
-	} else if d != nil && strings.TrimSpace(d.Provider) != "" && strings.TrimSpace(d.Model) != "" {
+	} else if d != nil && strings.TrimSpace(d.Provider) != "" {
+		// A preference that names a provider and no model is still a choice of
+		// provider. Requiring both before taking this path discarded it and
+		// went to tier resolution, where — until the provider became a filter
+		// there too — the run could end up somewhere else entirely.
 		spec = llm.ResolveModelProviderSpec(d.Provider, d.Model)
 	} else {
 		tier := llm.TierPremium
@@ -210,6 +214,27 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		runTeardown()
 		err = errors.Join(err, teardownErr)
 	}()
+
+	// The mind is resolved before anything is built, so every report this
+	// function produces names what carried the run — including the reports for
+	// runs that failed before they ever reached the model, so the record of a
+	// run can be checked against what the provider billed for.
+	//
+	// Resolving is not the same as refusing on it. The refusal waits until the
+	// substrate has been resolved to a real workspace, because a run can be
+	// misconfigured in two ways at once and the operator needs the more
+	// specific answer: an installation with no provider key AND a missing
+	// checkout was told only that no provider was configured, which sends
+	// somebody to fix the wrong thing. Substrate resolution reads; it spends
+	// nothing that a failure here would waste.
+	mind := d.resolveLLMClient()
+	report.Provider = mind.Provider()
+	report.Model = mind.Model()
+	// refuseUnresolvedMind stops a run that has no model to call. It is invoked
+	// on each substrate path once that path has a workspace and before that
+	// path mutates anything, so the terrarium, the shadow worktree, the host
+	// stash and the isolation branch all stay on the far side of it.
+	refuseUnresolvedMind := func() error { return mind.ResolutionError() }
 
 	if err := runSproutPreflightChecksFn(ctx); err != nil {
 		return report, err
@@ -299,9 +324,25 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 
 		fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", plan.cloneURL)
+
+		// The checkout resolved, so an unresolvable mind is now the run's most
+		// specific failure and is reported as one. An absent managed checkout
+		// has already returned above, which is the whole point of the ordering.
+		if err := refuseUnresolvedMind(); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return report, err
+		}
 	} else {
 		sourcePath = repoRoot(sourcePath)
 		gitRepo = isGitRepo(sourcePath)
+
+		// Before the isolation branch, the host stash and the shadow worktree,
+		// all of which are below this line.
+		if err := refuseUnresolvedMind(); err != nil {
+			return report, err
+		}
 
 		if statusPath != "" && !filepath.IsAbs(statusPath) {
 			statusPath = filepath.Join(sourcePath, statusPath)
@@ -319,7 +360,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				case SproutOutcomeComplete, SproutOutcomeNoChanges:
 					message := fmt.Sprintf("Step %s already completed. Skipping.", stepID)
 					fmt.Fprintln(os.Stderr, message)
-					return SproutRunReport{Output: message, Outcome: SproutOutcomeSkipped}, nil
+					report.Output = message
+					report.Outcome = SproutOutcomeSkipped
+					return report, nil
 				case SproutOutcomeFailed:
 					errText := strings.TrimSpace(existing.Error)
 					if errText == "" {
@@ -512,7 +555,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	teardown = append(teardown, func() { _ = session.Close() })
 
-	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, d.resolveLLMClient(), session, d.EventBus, stepID, d.SessionID)
+	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, mind, session, d.EventBus, stepID, d.SessionID)
 	if err != nil {
 		return report, err
 	}
@@ -553,6 +596,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// substrate, an investigation, a run that errored — are the ones most
 		// likely to be reading a report assembled by an exit that forgot.
 		report.Protocol = sproutResult.Protocol
+
+		// This report is built fresh, not inherited from the caller's — a
+		// detached run reaches here long after RunSprout returned — so the
+		// resolved mind is restated on it. Without this, every detached run
+		// records a null model, which is precisely the population of runs
+		// nobody watched and the account matters most for.
+		report.Provider = mind.Provider()
+		report.Model = mind.Model()
 
 		if err := session.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)

@@ -83,6 +83,13 @@ type SproutRunReport struct {
 	Outcome string
 	// Protocol is the tool-calling protocol the run used ("native" or "prose").
 	Protocol string
+	// Provider and Model name the mind that actually carried the run, as
+	// resolved — not as requested. A run that requested nothing still names
+	// them, which is the whole point: without this, a record of an autonomous
+	// run cannot say which model did the work, so no claim about the work is
+	// checkable against what the provider billed for.
+	Provider string
+	Model    string
 	// FilesModified lists the workspace files the run changed, when the run
 	// happened in a git repository where that is measurable. Nil when unknown
 	// (non-git or readonly substrates).

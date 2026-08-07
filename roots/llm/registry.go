@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -63,8 +64,43 @@ var FallbackModels = []ModelDefinition{
 	{Provider: "local", Name: "qwen2.5-coder:14b", Family: ModelFamilyQwen, ContextSize: 128000, CostTier: TierPremium},
 }
 
+// ErrNoModelAvailable reports that nothing in the registry satisfied the
+// requested capabilities. Callers match on it with errors.Is to tell "the
+// operator asked for something unreachable" from a transport failure.
+var ErrNoModelAvailable = errors.New("no available model satisfies capabilities")
+
+// LocalProviderAvailable reports whether a local inference endpoint has been
+// pointed at.
+//
+// Every hosted provider announces itself with an API key: the key is both the
+// credential and the operator's statement that the provider is set up. The
+// local provider has no key, so the equivalent statement is the endpoint —
+// LOCAL_INFERENCE_URL, LOCAL_MODEL_NAME, or a `local` block under
+// llm.providers in .tendril/config.yaml. Without one of those, nothing has
+// said a local inference server exists, and offering local models as
+// candidates makes a model that can never answer the default choice.
+//
+// Availability is decided from configuration, never probed over the network. A
+// probe would put an HTTP request inside model selection — slow, and worse,
+// non-deterministic: whether a run picked a model would depend on whether a
+// server happened to answer within a timeout. A declared endpoint that is down
+// fails at the request, where the error names the endpoint, rather than
+// silently changing which model was chosen.
+func LocalProviderAvailable() bool {
+	if strings.TrimSpace(os.Getenv("LOCAL_INFERENCE_URL")) != "" {
+		return true
+	}
+	if strings.TrimSpace(os.Getenv(providerModelEnvName("local"))) != "" {
+		return true
+	}
+	return hasConfiguredProvider("local")
+}
+
 func AvailableProviders() []string {
-	providers := []string{"local"}
+	providers := make([]string, 0, 7)
+	if LocalProviderAvailable() {
+		providers = append(providers, "local")
+	}
 	candidates := []struct {
 		provider string
 		key      string
@@ -104,9 +140,24 @@ func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) 
 		available[strings.ToLower(strings.TrimSpace(provider))] = struct{}{}
 	}
 
+	// A named provider is a filter on the candidate set, not a starting point
+	// the search may wander away from. Checked before the loop so that a
+	// provider nobody can reach is reported as exactly that, rather than as the
+	// capability mismatch it would otherwise look like once every one of its
+	// models had been filtered out.
+	wanted := strings.ToLower(strings.TrimSpace(caps.Provider))
+	if wanted != "" {
+		if _, ok := available[wanted]; !ok {
+			return ModelDefinition{}, fmt.Errorf("%w: provider %q is not available (no API key, and no inference endpoint configured for it)", ErrNoModelAvailable, wanted)
+		}
+	}
+
 	matches := make([]ModelDefinition, 0, len(registry))
 	for _, model := range registry {
 		if _, ok := available[strings.ToLower(strings.TrimSpace(model.Provider))]; !ok {
+			continue
+		}
+		if wanted != "" && !strings.EqualFold(strings.TrimSpace(model.Provider), wanted) {
 			continue
 		}
 		if caps.RequiresVision && !model.HasVision {
@@ -128,13 +179,48 @@ func SelectBestModelFromRegistry(caps Capabilities, registry []ModelDefinition) 
 	}
 
 	if len(matches) == 0 {
-		return ModelDefinition{}, fmt.Errorf("no available model satisfies capabilities")
+		if wanted != "" {
+			return ModelDefinition{}, fmt.Errorf("%w: provider %q serves no model that %s", ErrNoModelAvailable, wanted, describeCapabilities(caps))
+		}
+		return ModelDefinition{}, fmt.Errorf("%w: no available provider serves a model that %s", ErrNoModelAvailable, describeCapabilities(caps))
 	}
 
+	// MaxCostTier is a CEILING, so the best model at or below it is the one the
+	// caller asked for. Sorting the other way made the ceiling select against
+	// itself: asking for premium admitted every cheaper model and then actively
+	// preferred them, so the tier a caller chose could never be the tier it
+	// got, and a request assessed as complex was answered by the cheapest model
+	// on the shelf. Ties inside a tier keep registry order, which keeps the
+	// choice deterministic.
 	sort.SliceStable(matches, func(i, j int) bool {
-		return costTierRank(matches[i].CostTier) < costTierRank(matches[j].CostTier)
+		return costTierRank(matches[i].CostTier) > costTierRank(matches[j].CostTier)
 	})
 	return matches[0], nil
+}
+
+// describeCapabilities renders the constraints a selection could not satisfy,
+// so the failure names what was asked for rather than only that it failed.
+func describeCapabilities(caps Capabilities) string {
+	parts := make([]string, 0, 5)
+	if caps.RequiresToolUse {
+		parts = append(parts, "drives tools")
+	}
+	if caps.RequiresVision {
+		parts = append(parts, "has vision")
+	}
+	if caps.RequiresReasoning {
+		parts = append(parts, "has reasoning")
+	}
+	if caps.MinContextSize > 0 {
+		parts = append(parts, fmt.Sprintf("holds a %d-token context", caps.MinContextSize))
+	}
+	if caps.MaxCostTier != "" {
+		parts = append(parts, fmt.Sprintf("costs at most the %s tier", canonicalModelTier(caps.MaxCostTier)))
+	}
+	if len(parts) == 0 {
+		return "is registered at all"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func compareCostTier(left ModelTier, right ModelTier) int {

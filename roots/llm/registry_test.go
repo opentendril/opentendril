@@ -7,6 +7,12 @@ import (
 	"testing"
 )
 
+// clearProviderKeys removes every signal that makes a provider available, so a
+// test states its own availability and nothing else does. The local endpoint
+// variables are cleared alongside the API keys because local availability is
+// now decided the same way a keyed provider's is — by configuration — and a
+// developer machine that happens to run an inference server would otherwise
+// hand these tests a candidate the assertions never asked for.
 func clearProviderKeys(t *testing.T) {
 	t.Helper()
 
@@ -16,6 +22,39 @@ func clearProviderKeys(t *testing.T) {
 	t.Setenv("GROK_API_KEY", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("LOCAL_INFERENCE_URL", "")
+	t.Setenv("LOCAL_MODEL_NAME", "")
+
+	// The discovered-model registry is process-global and outlives the test
+	// that filled it, so a cache left behind by an earlier test decides which
+	// models a later one can select from.
+	ResetModelRegistryCache()
+	t.Cleanup(ResetModelRegistryCache)
+}
+
+// withLocalInference declares a local inference endpoint for the duration of a
+// test, which is what makes the local provider a selection candidate.
+func withLocalInference(t *testing.T) {
+	t.Helper()
+	t.Setenv("LOCAL_INFERENCE_URL", "http://127.0.0.1:11434/v1")
+}
+
+// chdirWithoutTendrilConfig moves into an empty temporary directory so that
+// loadTendrilConfig finds nothing. This repository ships its own
+// .tendril/config.yaml pinning a local model, and a test run from the source
+// tree silently reads it — which is how a resolution test can pass while
+// asserting nothing about resolution.
+func chdirWithoutTendrilConfig(t *testing.T) {
+	t.Helper()
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
 }
 
 // chdirWithTendrilConfig writes the given YAML to a temporary .tendril tree and
@@ -72,8 +111,10 @@ func TestSelectBestModelFiltersCapabilities(t *testing.T) {
 	if !model.HasReasoning {
 		t.Fatalf("selected model %#v without reasoning", model)
 	}
-	if model.Name != "gpt-5.6-luna" {
-		t.Fatalf("model.Name = %q, want %q", model.Name, "gpt-5.6-luna")
+	// No cost ceiling means no cost constraint, so the best reasoning model
+	// OpenAI serves is the answer.
+	if model.Name != "gpt-5.6-terra" {
+		t.Fatalf("model.Name = %q, want %q", model.Name, "gpt-5.6-terra")
 	}
 }
 
@@ -82,14 +123,27 @@ func TestSelectBestModelFiltersContextAndCost(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
 	// A one-million-token context requirement excludes claude-haiku-4-5
-	// (200K); the cheapest remaining match under a premium cap is the
-	// standard-tier claude-sonnet-5.
+	// (200K); under a premium ceiling the best remaining match is the
+	// premium-tier claude-opus-4-8.
 	model, err := SelectBestModel(Capabilities{
 		MinContextSize: 1000000,
 		MaxCostTier:    TierPremium,
 	})
 	if err != nil {
 		t.Fatalf("SelectBestModel failed: %v", err)
+	}
+	if model.Provider != "anthropic" || model.Name != "claude-opus-4-8" {
+		t.Fatalf("model = %#v, want anthropic claude-opus-4-8", model)
+	}
+
+	// The ceiling still excludes: lowering it to standard drops opus and
+	// leaves the standard-tier model that also holds the context.
+	model, err = SelectBestModel(Capabilities{
+		MinContextSize: 1000000,
+		MaxCostTier:    TierStandard,
+	})
+	if err != nil {
+		t.Fatalf("SelectBestModel(standard ceiling) failed: %v", err)
 	}
 	if model.Provider != "anthropic" || model.Name != "claude-sonnet-5" {
 		t.Fatalf("model = %#v, want anthropic claude-sonnet-5", model)
@@ -122,8 +176,8 @@ func TestFallbackRegistryServesCurrentGenerationAnthropic(t *testing.T) {
 	if model.Provider != "anthropic" {
 		t.Fatalf("model.Provider = %q, want anthropic", model.Provider)
 	}
-	if model.Name != "claude-sonnet-5" {
-		t.Fatalf("model.Name = %q, want claude-sonnet-5", model.Name)
+	if model.Name != "claude-opus-4-8" {
+		t.Fatalf("model.Name = %q, want claude-opus-4-8", model.Name)
 	}
 
 	for _, entry := range FallbackModels {
@@ -139,24 +193,28 @@ func TestFallbackRegistryServesCurrentGenerationAnthropic(t *testing.T) {
 	}
 }
 
-// With only the always-available local provider, the cheapest model is
-// llama3.2 — which cannot drive tools. RequiresToolUse must skip it (and the
-// coder models) and select the one local model that can. This is the fix for a
-// no-session sprout silently landing on a model that returns empty completions.
+// With only a local inference endpoint declared, the models on offer include
+// several that cannot drive tools. RequiresToolUse must skip them and select
+// the one local model that can. This is the fix for a no-session sprout
+// silently landing on a model that returns empty completions.
 //
-// It runs with no configuration on purpose. Selection reached through a
-// provider's own config is a different path, and a guard that only holds when
-// something is configured does not hold for the setup an operator gets by
-// default — which is the setup where a 3B local model is what is available.
+// Nothing but the endpoint is configured, on purpose. Selection reached through
+// a provider's own model pin is a different path, and a guard that only holds
+// when a model is pinned does not hold for the setup where a small local model
+// is what is available.
 func TestSelectBestModelRequiresToolUseSkipsNonDrivers(t *testing.T) {
 	clearProviderKeys(t)
+	withLocalInference(t)
 
-	generic, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium})
+	generic, err := SelectBestModel(Capabilities{MaxCostTier: TierCheapest})
 	if err != nil {
 		t.Fatalf("SelectBestModel failed: %v", err)
 	}
 	if generic.Name != "llama3.2" {
-		t.Fatalf("without RequiresToolUse, cheapest local = %q, want llama3.2 (documents the default that was broken)", generic.Name)
+		t.Fatalf("under a cheapest ceiling, local selection = %q, want llama3.2 (the model RequiresToolUse must reject)", generic.Name)
+	}
+	if generic.DrivesTools {
+		t.Fatalf("llama3.2 is registered as driving tools; this test no longer proves anything")
 	}
 
 	toolCapable, err := SelectBestModel(Capabilities{MaxCostTier: TierPremium, RequiresToolUse: true})

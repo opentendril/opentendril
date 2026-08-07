@@ -75,6 +75,13 @@ type SproutRunResult struct {
 	// FilesModified is the evidence behind Outcome, when the workspace could
 	// measure it.
 	FilesModified []string `json:"filesModified,omitempty"`
+	// Provider and Model name the mind that carried the run, as resolved by the
+	// execution port. They are reported rather than echoed: a request that
+	// named neither still gets an answer here, and that answer is what a
+	// surface records and what a Botanist checks against a provider's own
+	// usage.
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 // SproutRunReport is what the execution port says a finished run actually
@@ -84,6 +91,11 @@ type SproutRunReport struct {
 	Output        string
 	Outcome       string
 	FilesModified []string
+	// Provider and Model name the mind that actually carried the run, as
+	// resolved. The requested values are not a substitute: a run that requested
+	// nothing is exactly the run whose model nothing could name.
+	Provider string
+	Model    string
 }
 
 // SproutOperations is the injection port for sprout execution. Run may be nil, in
@@ -141,6 +153,10 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 	report, err := s.sprout.Run(ctx, spec)
 	result.Outcome = report.Outcome
 	result.FilesModified = report.FilesModified
+	// Carried before the error branch: a withered run has a model too, and the
+	// runs that fail are the ones whose account is asked the most of.
+	result.Provider = report.Provider
+	result.Model = report.Model
 	if err != nil {
 		result.Status = "withered"
 		return result, err

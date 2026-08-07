@@ -660,6 +660,12 @@ ORDER BY id ASC`
 
 // RecordSproutRun upserts one Sprout execution record; call it once when the
 // sprout emerges (status "running") and again when it matures or withers.
+//
+// The model is settled on the finishing call, not the opening one: which model
+// carried a run is only known once resolution has happened, and resolution
+// happens inside the run. The update takes a non-empty model and keeps the
+// stored one otherwise, so a later call that does not know the model cannot
+// erase what an earlier one recorded.
 func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	if strings.TrimSpace(run.RunID) == "" {
 		return fmt.Errorf("sprout run requires runId")
@@ -695,6 +701,7 @@ INSERT INTO sproutruns (runId, sessionId, stepId, origin, model, genotype, trans
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET
 	status = excluded.status,
+	model = COALESCE(NULLIF(excluded.model, ''), model),
 	output = excluded.output,
 	error = excluded.error,
 	finishedAt = excluded.finishedAt`

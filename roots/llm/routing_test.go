@@ -53,6 +53,12 @@ func clearTierModelEnv(t *testing.T, provider string) {
 func assertProviderSpec(t *testing.T, got ProviderSpec, wantProvider, wantModel string, wantMode Mode, wantEndpoint string) {
 	t.Helper()
 
+	// A spec that resolved is a spec that can be called. Without this, a
+	// resolution failure carrying the right provider name and an empty model
+	// would satisfy every field assertion below it that happens to match.
+	if got.ResolutionErr != nil {
+		t.Fatalf("spec.ResolutionErr = %v, want nil", got.ResolutionErr)
+	}
 	if got.Provider != wantProvider {
 		t.Fatalf("spec.Provider = %q, want %q", got.Provider, wantProvider)
 	}
@@ -97,44 +103,55 @@ func TestModelTierResolution(t *testing.T) {
 		assertProviderSpec(t, spec, "google", "shared-override", ModeOpenAIish, "/chat/completions")
 	})
 
-	t.Run("registry fallback selects lowest available cost", func(t *testing.T) {
+	// The configured provider is a filter on selection, and the tier is a
+	// ceiling under which the BEST model wins. Every case here names the
+	// configured provider in wantProv: a resolution that answers with some
+	// other provider's model is the defect this table exists to catch.
+	t.Run("registry fallback stays on the configured provider and takes its best model under the tier", func(t *testing.T) {
 		cases := []struct {
 			name      string
 			provider  string
 			key       string
+			local     bool
 			tier      ModelTier
 			wantProv  string
 			wantModel string
 			wantMode  Mode
 			wantEndpt string
 		}{
-			{name: "anthropic premium cap", provider: "anthropic", key: "ANTHROPIC_API_KEY", tier: TierPremium, wantProv: "anthropic", wantModel: "claude-haiku-4-5", wantMode: ModeAnthropic, wantEndpt: "/v1/messages"},
-			{name: "anthropic standard cap", provider: "anthropic", key: "ANTHROPIC_API_KEY", tier: TierStandard, wantProv: "anthropic", wantModel: "claude-haiku-4-5", wantMode: ModeAnthropic, wantEndpt: "/v1/messages"},
+			{name: "anthropic premium cap", provider: "anthropic", key: "ANTHROPIC_API_KEY", tier: TierPremium, wantProv: "anthropic", wantModel: "claude-opus-4-8", wantMode: ModeAnthropic, wantEndpt: "/v1/messages"},
+			{name: "anthropic standard cap", provider: "anthropic", key: "ANTHROPIC_API_KEY", tier: TierStandard, wantProv: "anthropic", wantModel: "claude-sonnet-5", wantMode: ModeAnthropic, wantEndpt: "/v1/messages"},
 			{name: "anthropic cheapest cap", provider: "anthropic", key: "ANTHROPIC_API_KEY", tier: TierCheapest, wantProv: "anthropic", wantModel: "claude-haiku-4-5", wantMode: ModeAnthropic, wantEndpt: "/v1/messages"},
-			{name: "openai premium cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierPremium, wantProv: "openai", wantModel: "gpt-5.6-luna", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "openai premium cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierPremium, wantProv: "openai", wantModel: "gpt-5.6-terra", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openai standard cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierStandard, wantProv: "openai", wantModel: "gpt-5.6-luna", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openai cheapest cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierCheapest, wantProv: "openai", wantModel: "gpt-5.6-luna", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "google premium cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierPremium, wantProv: "google", wantModel: "gemini-3.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "google premium cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierPremium, wantProv: "google", wantModel: "gemini-2.5-pro", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "google standard cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierStandard, wantProv: "google", wantModel: "gemini-3.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "google cheapest cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierCheapest, wantProv: "google", wantModel: "gemini-3.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "grok premium cap uses local lower cost", provider: "grok", key: "GROK_API_KEY", tier: TierPremium, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "grok standard cap uses local lower cost", provider: "grok", key: "GROK_API_KEY", tier: TierStandard, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "grok cheapest cap uses local lower cost", provider: "grok", key: "GROK_API_KEY", tier: TierCheapest, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			// grok serves one premium model. A premium ceiling reaches it; the
+			// cheaper ceilings reach nothing AT GROK, which is the failing case
+			// covered by TestConfiguredProviderWithNoUsableModelFailsLoudly —
+			// it used to answer with a local model instead.
+			{name: "grok premium cap", provider: "grok", key: "GROK_API_KEY", tier: TierPremium, wantProv: "grok", wantModel: "grok-4.5", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openrouter premium cap", provider: "openrouter", key: "OPENROUTER_API_KEY", tier: TierPremium, wantProv: "openrouter", wantModel: "google/gemini-2.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openrouter standard cap", provider: "openrouter", key: "OPENROUTER_API_KEY", tier: TierStandard, wantProv: "openrouter", wantModel: "google/gemini-2.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openrouter cheapest cap", provider: "openrouter", key: "OPENROUTER_API_KEY", tier: TierCheapest, wantProv: "openrouter", wantModel: "google/gemini-2.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "local premium cap", provider: "local", tier: TierPremium, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "local standard cap", provider: "local", tier: TierStandard, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "local cheapest cap", provider: "local", tier: TierCheapest, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "local premium cap", provider: "local", local: true, tier: TierPremium, wantProv: "local", wantModel: "qwen2.5-coder:14b", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "local standard cap", provider: "local", local: true, tier: TierStandard, wantProv: "local", wantModel: "qwen3.5:9b", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "local cheapest cap", provider: "local", local: true, tier: TierCheapest, wantProv: "local", wantModel: "llama3.2", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 		}
 
 		for _, tt := range cases {
 			t.Run(tt.name, func(t *testing.T) {
+				chdirWithoutTendrilConfig(t)
 				clearProviderKeys(t)
 				t.Setenv("DEFAULT_LLM_PROVIDER", tt.provider)
 				clearTierModelEnv(t, tt.provider)
 				if tt.key != "" {
 					t.Setenv(tt.key, "test-key")
+				}
+				if tt.local {
+					withLocalInference(t)
 				}
 
 				spec := ResolveTierProviderSpec(tt.tier)
