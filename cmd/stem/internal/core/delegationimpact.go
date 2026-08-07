@@ -10,7 +10,7 @@ func CapabilityImpact(operationClass string) string {
 		return DelegationImpactHigh
 	case CapGitCommit, CapGitBranch, CapStomaPass, CapPlasmidInject, CapGenotypeCreate:
 		return DelegationImpactMedium
-	case CapGitStatus, CapGitBranchList, CapSequenceList, CapMeshTraitList:
+	case CapGitStatus, CapGitBranchList, CapSequenceList, CapMeshTraitList, CapSproutWatch:
 		return DelegationImpactLow
 	default:
 		// Any other *.list or *.get capability is treated as read-only (Low).

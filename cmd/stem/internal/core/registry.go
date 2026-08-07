@@ -44,6 +44,18 @@ const (
 	CapGitPrune        = "git.prune"
 )
 
+// CapSproutWatch is the read side of the sprout family: it authorises watching
+// a phytomer that a subject's own runs were dispatched into — the stored run
+// record, the persisted events, and the live stream.
+//
+// It is deliberately absent from CapabilityNames() and the parity registry. A
+// capability there is a command every surface must project; this is a view, and
+// views are outside that registry by design. It is nonetheless a real
+// operation-class: a grant naming it is what a delegated observer is measured
+// against, and an operator can therefore hand out watching without handing out
+// growing.
+const CapSproutWatch = "sprout.watch"
+
 // Capability is one declarative command capability. A single declaration is
 // projected onto every surface: MCP reads Name/Description/InputSchema to build
 // a tool, the CLI builds a subcommand, and all non-REST surfaces run it through

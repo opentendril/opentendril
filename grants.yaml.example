@@ -8,7 +8,13 @@ grants:
     # git.prune is deliberately NOT here: it deletes branches, and every other
     # operation is recoverable. Add it knowingly, per pollen, if you want one
     # cleaning up after merges.
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
+    #
+    # sprout.watch is the read side: it lets this pollen watch the runs it
+    # dispatched — the stored record, the persisted events, and the live
+    # stream — and nothing anyone else dispatched. Grant it alongside
+    # sprout.grow, or on its own for an observer that may look but not start
+    # work. Without it a pollen can begin work it cannot then see.
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.watch]
     substrates: [myrepo]
     # egress: [github.com]                 # optional: hosts the Stem may fetch for this pollen
     # expires: 2027-01-01                  # optional: RFC 3339 timestamp or YYYY-MM-DD

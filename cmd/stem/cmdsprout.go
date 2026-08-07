@@ -256,10 +256,17 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			}
 
 			run := historydb.SproutRun{
-				RunID:      spec.StepID,
-				StepID:     spec.StepID,
-				SessionID:  spec.SessionID,
-				Origin:     spec.Origin,
+				RunID:     spec.StepID,
+				StepID:    spec.StepID,
+				SessionID: spec.SessionID,
+				Origin:    spec.Origin,
+				// The dispatching subject comes from the context, which only
+				// the surface that authenticated the caller can write, and is
+				// blank for an operator at a terminal. It is not read from the
+				// spec: that is decoded from caller-supplied content, so a
+				// subject named there would be a subject anyone could claim.
+				Pollen:     core.PollenFromContext(ctx),
+				Substrate:  wiring.Substrate,
 				Transcript: spec.Transcript,
 				Model:      spec.Model,
 				Genotype:   spec.Genotype,
