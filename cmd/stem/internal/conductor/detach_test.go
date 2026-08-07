@@ -47,7 +47,7 @@ func (h *heldSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutRe
 	}
 	select {
 	case <-h.released:
-		return sproutResult{Response: h.response}, nil
+		return sproutResult{Response: h.response, WroteWorkspace: true}, nil
 	case <-ctx.Done():
 		return sproutResult{}, ctx.Err()
 	}

@@ -27,7 +27,10 @@ type budgetWaitingRunner struct{}
 
 func (budgetWaitingRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	<-ctx.Done()
-	return sproutResult{}, ctx.Err()
+	// A run a clock cut off mid-flight has written whatever it had written by
+	// then, and the post-mortem is what commits it. Reporting otherwise would
+	// make this test assert that a budget expiry discards the work.
+	return sproutResult{WroteWorkspace: true}, ctx.Err()
 }
 
 // postMortemCapture records the state of the context the post-run tail was
@@ -123,7 +126,7 @@ func TestBudgetExpiryIsTimedOutNotFailed(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifySproutOutcome(testCase.runErr, nil, false, "", false)
+			got := classifySproutOutcome(testCase.runErr, changeEvidence{}, "", false)
 			if got != testCase.want {
 				t.Fatalf("classifySproutOutcome(%v) = %q, want %q", testCase.runErr, got, testCase.want)
 			}

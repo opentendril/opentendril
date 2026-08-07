@@ -717,10 +717,15 @@ type mockSproutRunner struct {
 	response string
 	protocol string
 	err      error
+	// wroteWorkspace stands in for the model having asked the terrarium for
+	// something that could change files. It is off by default so a test that
+	// wants a run's measured diff attributed to it has to say so — the whole
+	// point of the signal is that a diff alone does not establish it.
+	wroteWorkspace bool
 }
 
 func (m *mockSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
-	return sproutResult{Response: m.response, Protocol: m.protocol}, m.err
+	return sproutResult{Response: m.response, Protocol: m.protocol, WroteWorkspace: m.wroteWorkspace}, m.err
 }
 
 // The protocol a run was carried by only answers "was the protocol to blame?"

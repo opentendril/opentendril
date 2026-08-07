@@ -125,7 +125,7 @@ func TestRunSproutOrdinaryRunStillCommitsItsAccount(t *testing.T) {
 	cwd := chdirToTempDir(t)
 	writePatienceSubstrate(t, cwd, "ordinary", root, "")
 
-	captured := stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done"}, []string{"pkg/thing.go"})
+	captured := stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done", wroteWorkspace: true}, []string{"pkg/thing.go"})
 
 	orch := &DockerOrchestrator{
 		Substrate:        "ordinary",

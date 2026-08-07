@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/data/genotypes"
@@ -85,6 +86,45 @@ type Sprout struct {
 	// to — present in the table, invisible to the surface meant to show them.
 	sessionID string
 	protocol  string
+	// wroteWorkspace records that the model handed the terrarium a tool call
+	// that can write to the workspace. It is set at the single seam every tool
+	// call passes through, so it describes the model's own actions rather than
+	// the state of the mount — which OpenTendril writes into before and after
+	// every run, and which therefore cannot say who changed what.
+	//
+	// Atomic because a dormancy capture may look at a Sprout while its loop
+	// goroutine is still running.
+	wroteWorkspace atomic.Bool
+}
+
+// readOnlyTerrariumTools names the terrarium tools that cannot write to the
+// workspace.
+//
+// Membership is by exclusion deliberately: a tool name this set does not know
+// counts as able to write. The two mistakes are not symmetric. Counting a
+// harmless tool as a write inflates a run's file list with a diff it did not
+// cause, which a reviewer sees and can reject; failing to count a real write
+// drops the model's work out of the run's commit, and nobody sees what is not
+// there. So an unrecognised tool — a genotype's own, or one added later — is
+// credited to the model until someone says otherwise.
+var readOnlyTerrariumTools = map[string]struct{}{
+	"readFile":           {},
+	"listFiles":          {},
+	"gitDiff":            {},
+	"listAvailableTools": {},
+}
+
+// toolCanWriteWorkspace reports whether handing this tool to the terrarium
+// could change the workspace.
+//
+// A shell command counts, because nothing here can tell `ls` from `rm -rf`.
+// That is a deliberate over-credit rather than an oversight: see
+// readOnlyTerrariumTools for why the error is taken in this direction.
+func toolCanWriteWorkspace(toolName string) bool {
+	if _, readOnly := readOnlyTerrariumTools[strings.TrimSpace(toolName)]; readOnly {
+		return false
+	}
+	return true
 }
 
 type ActionResult struct {
@@ -101,6 +141,14 @@ type sproutResult struct {
 	Transcript   string
 	ActionResult *ActionResult
 	Protocol     string
+	// WroteWorkspace reports whether the model asked the terrarium for
+	// anything that could change the workspace. It is the evidence behind
+	// "did the model change anything", which a diff of the mount cannot
+	// answer on its own.
+	//
+	// It is carried on failed runs too: a run cut off halfway still wrote
+	// whatever it wrote, and the post-mortem commits that work.
+	WroteWorkspace bool
 }
 
 func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
@@ -334,7 +382,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		if err != nil {
-			return sproutResult{}, err
+			return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, err
 		}
 
 		thoughtContent := extractThought(response)
@@ -392,7 +440,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			var parseErr error
 			calls, isToolCall, finalResponse, actionResult, parseErr = parseModelResponse(response)
 			if parseErr != nil {
-				return sproutResult{}, parseErr
+				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, parseErr
 			}
 		}
 
@@ -408,10 +456,11 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
 			return sproutResult{
-				Response:     strings.TrimSpace(finalResponse),
-				Transcript:   a.transcript.String(),
-				ActionResult: actionResult,
-				Protocol:     reportedProtocol,
+				Response:       strings.TrimSpace(finalResponse),
+				Transcript:     a.transcript.String(),
+				ActionResult:   actionResult,
+				Protocol:       reportedProtocol,
+				WroteWorkspace: a.wroteWorkspace.Load(),
 			}, nil
 		}
 
@@ -420,10 +469,11 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
 			return sproutResult{
-				Response:     strings.TrimSpace(response),
-				Transcript:   a.transcript.String(),
-				ActionResult: actionResult,
-				Protocol:     reportedProtocol,
+				Response:       strings.TrimSpace(response),
+				Transcript:     a.transcript.String(),
+				ActionResult:   actionResult,
+				Protocol:       reportedProtocol,
+				WroteWorkspace: a.wroteWorkspace.Load(),
 			}, nil
 		}
 
@@ -447,7 +497,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				var err error
 				resp, obs, err = a.executeTool(ctx, call)
 				if err != nil {
-					return sproutResult{}, err
+					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, err
 				}
 				a.publishToolInvoked(call, resp, obs)
 			}
@@ -479,7 +529,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		// iteration lets the model decide whether the task is complete.
 	}
 
-	return sproutResult{}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
+	return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
 }
 
 func (a *Sprout) appendTranscript(role string, content string) {
@@ -578,6 +628,14 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 	if call.Tool == "gitCommit" {
 		response := managedGitCommitResponse()
 		return response, renderToolObservation(call.Tool, response), nil
+	}
+
+	// Recorded before the call, not after it: a tool call the terrarium never
+	// finished — a watchdog kill mid-write — has still written, and the
+	// post-mortem commits what it left behind. Everything above this line
+	// returned without reaching the workspace, so nothing above it counts.
+	if toolCanWriteWorkspace(call.Tool) {
+		a.wroteWorkspace.Store(true)
 	}
 
 	response, err := a.session.Call(ctx, call)
