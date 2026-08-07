@@ -1057,6 +1057,12 @@ type sproutExecutionResult struct {
 	// should have been able to measure it, so an unmeasurable substrate and a
 	// measurement cut short stay distinguishable.
 	FilesUnmeasured string
+	// WroteWorkspace reports whether the model asked the terrarium for
+	// anything that could change the workspace. It travels with the result so
+	// a caller that has to reclassify a run — a failure after the turn, a
+	// detachment that ended elsewhere — still knows whether the model did any
+	// work, which the file list alone cannot say.
+	WroteWorkspace bool
 	// DetachedEnd delivers what a detached run finally did, once it has
 	// actually ended, and is non-nil only when Outcome is
 	// SproutOutcomeDetached. The caller still holds teardown the run needs —
@@ -1370,6 +1376,11 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	var executionOutcome string
 	var executionFiles []string
 	var executionFilesUnmeasured string
+	// What the model asked for, carried alongside what was measured, because a
+	// reclassification below has to answer "did the model change anything" and
+	// the file list cannot: it is empty both when the model did nothing and
+	// when the run never got far enough to look.
+	var executionWroteWorkspace bool
 	defer func() {
 		outcome := executionOutcome
 		// A detached run has not ended, so it has no terminal event yet. The
@@ -1383,7 +1394,10 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		// Sprout turn) must reclassify: the run's provisional verdict cannot
 		// stand once its results failed to land.
 		if err != nil || outcome == "" {
-			outcome = classifySproutOutcome(err, executionFiles, false, response, orch.Investigation)
+			outcome = classifySproutOutcome(err, changeEvidence{
+				modelWrote:    executionWroteWorkspace,
+				measuredFiles: executionFiles,
+			}, response, orch.Investigation)
 		}
 		reason := ""
 		if err != nil {
@@ -1462,6 +1476,7 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	executionOutcome = executionResult.Outcome
 	executionFiles = executionResult.FilesModified
 	executionFilesUnmeasured = executionResult.FilesUnmeasured
+	executionWroteWorkspace = executionResult.WroteWorkspace
 	if err != nil {
 		if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
 			return executionResult.CommitHash, err
@@ -1657,8 +1672,13 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	// reaches it from the goroutine below, long after this function returned —
 	// so it owns every value it touches and shares nothing with the caller's
 	// result, which by then belongs to somebody else.
-	completeRun := func(sproutResult sproutResult, runErr error) (result sproutExecutionResult, filesKnown bool, err error) {
+	completeRun := func(sproutResult sproutResult, runErr error) (result sproutExecutionResult, changes changeEvidence, err error) {
 		result.ImageName = imageName
+		// Recorded before every exit below: what the model asked the terrarium
+		// to do is known the moment the turn ends, and each of those exits is
+		// asked whether the run did any work.
+		changes.modelWrote = sproutResult.WroteWorkspace
+		result.WroteWorkspace = sproutResult.WroteWorkspace
 
 		// The post-mortem runs on its own clock, for the reason given at the
 		// equivalent point in RunSprout: this is the path that actually carries
@@ -1677,15 +1697,15 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 			switch verdict {
 			case "DANGEROUS":
 				if quarantineErr := quarantineScriptPrompt(stepID, taskPrompt); quarantineErr != nil {
-					return result, filesKnown, errors.Join(fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks), quarantineErr)
+					return result, changes, errors.Join(fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks), quarantineErr)
 				}
-				return result, filesKnown, fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks)
+				return result, changes, fmt.Errorf("script quarantined: %v", sproutResult.ActionResult.Risks)
 			case "REVIEW":
-				return result, filesKnown, ErrRequiresReview
+				return result, changes, ErrRequiresReview
 			case "SAFE":
 			case "":
 			default:
-				return result, filesKnown, fmt.Errorf("unknown script review verdict %q", sproutResult.ActionResult.Verdict)
+				return result, changes, fmt.Errorf("unknown script review verdict %q", sproutResult.ActionResult.Verdict)
 			}
 		}
 
@@ -1702,21 +1722,27 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 		if !gitRepo {
 			if runErr != nil {
-				return result, filesKnown, runErr
+				return result, changes, runErr
 			}
-			return result, filesKnown, nil
+			return result, changes, nil
 		}
 
 		// A measurement that fails is not a run that failed — see the equivalent
 		// point in RunSprout. Record why the evidence is missing and carry on to
 		// the record-keeping rather than returning and losing all of it.
-		modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, "tendril-status.json")
+		measuredFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, "tendril-status.json")
 		if diffErr != nil {
 			result.FilesUnmeasured = diffErr.Error()
 			fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
 		} else {
-			filesKnown = true
+			changes.measured = true
+			changes.measuredFiles = measuredFiles
 		}
+
+		// The diff of the mount is not the run's change set — see the
+		// equivalent point in RunSprout. What the run is answerable for is
+		// what the model did.
+		modifiedFiles := changes.attributedFiles()
 
 		var gitDiff string
 		if !orch.DisableMergeBack {
@@ -1731,7 +1757,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
 			FilesModified:   modifiedFiles,
 			FilesUnmeasured: result.FilesUnmeasured,
-			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response, orch.Investigation),
+			Status:          classifySproutOutcome(runErr, changes, sproutResult.Response, orch.Investigation),
 		}
 		if runErr != nil {
 			executionStatus.Error = runErr.Error()
@@ -1746,23 +1772,23 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
 		if commitErr != nil {
 			if runErr != nil {
-				return result, filesKnown, errors.Join(runErr, commitErr)
+				return result, changes, errors.Join(runErr, commitErr)
 			}
-			return result, filesKnown, commitErr
+			return result, changes, commitErr
 		}
 
 		result.CommitHash = commitHash
 
 		if orch.DisableMergeBack {
-			return result, filesKnown, runErr
+			return result, changes, runErr
 		}
 
 		mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
 		if mergeErr != nil {
 			if runErr != nil {
-				return result, filesKnown, errors.Join(runErr, mergeErr)
+				return result, changes, errors.Join(runErr, mergeErr)
 			}
-			return result, filesKnown, mergeErr
+			return result, changes, mergeErr
 		}
 
 		if gitDiff != "" && runErr == nil {
@@ -1777,10 +1803,10 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		}
 
 		if runErr != nil {
-			return result, filesKnown, runErr
+			return result, changes, runErr
 		}
 
-		return result, filesKnown, nil
+		return result, changes, nil
 	}
 
 	// The Sprout turn runs on the work's clock, in its own goroutine, so this
@@ -1814,7 +1840,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 				// what says which clock ended the run, and releasing overwrites
 				// it with a bare cancellation.
 				runErr := attributeSproutEnding(workCtx, finished.err)
-				detachedResult, detachedFilesKnown, detachedErr := completeRun(finished.result, runErr)
+				detachedResult, detachedChanges, detachedErr := completeRun(finished.result, runErr)
 				releaseWork(nil)
 				runTeardown()
 				detachedErr = errors.Join(detachedErr, teardownErr)
@@ -1825,10 +1851,10 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 				// when the work actually ended.
 				outcome := detachedResult.Outcome
 				if detachedResult.Outcome == "" {
-					if detachedResult.Response == "" && detachedFilesKnown && len(detachedResult.FilesModified) == 0 && detachedErr == nil {
+					if detachedResult.Response == "" && detachedChanges.measured && len(detachedResult.FilesModified) == 0 && detachedErr == nil {
 						outcome = SproutOutcomeNoEngagement
 					} else {
-						outcome = classifySproutOutcome(detachedErr, detachedResult.FilesModified, detachedFilesKnown, detachedResult.Response, orch.Investigation)
+						outcome = classifySproutOutcome(detachedErr, detachedChanges, detachedResult.Response, orch.Investigation)
 					}
 				}
 				reason := ""

@@ -23,32 +23,91 @@ func TestClassifySproutOutcome(t *testing.T) {
 	cases := []struct {
 		name       string
 		runErr     error
+		modelWrote bool
 		files      []string
 		filesKnown bool
 		response   string
 		want       string
 	}{
-		{"changed something", nil, []string{"main.go"}, true, "done", SproutOutcomeComplete},
-		{"changed nothing but answered", nil, []string{}, true, "here is my report", SproutOutcomeNoChanges},
-		{"changes unmeasurable but answered", nil, nil, false, "report", SproutOutcomeComplete},
-		{"failed", errors.New("Sprout exploded"), nil, true, "", SproutOutcomeFailed},
-		{"timed out", timedOut, nil, true, "", SproutOutcomeTimedOut},
-		{"timed out beats file evidence", timedOut, []string{"main.go"}, true, "", SproutOutcomeTimedOut},
-		{"reaped at the backstop", reaped, nil, true, "", SproutOutcomeReaped},
-		{"reaped beats the deadline it wraps", reaped, []string{"main.go"}, true, "", SproutOutcomeReaped},
-		{"empty response, no files, is no-engagement", nil, []string{}, true, "", SproutOutcomeNoEngagement},
-		{"whitespace response, no files, is no-engagement", nil, []string{}, true, "  \n\t ", SproutOutcomeNoEngagement},
-		{"empty response, unmeasurable, is no-engagement", nil, nil, false, "", SproutOutcomeNoEngagement},
-		{"empty response but changed files is complete", nil, []string{"main.go"}, true, "", SproutOutcomeComplete},
+		{"changed something", nil, true, []string{"main.go"}, true, "done", SproutOutcomeComplete},
+		{"changed nothing but answered", nil, false, []string{}, true, "here is my report", SproutOutcomeNoChanges},
+		{"changes unmeasurable but answered", nil, true, nil, false, "report", SproutOutcomeComplete},
+		{"failed", errors.New("Sprout exploded"), false, nil, true, "", SproutOutcomeFailed},
+		{"timed out", timedOut, false, nil, true, "", SproutOutcomeTimedOut},
+		{"timed out beats file evidence", timedOut, true, []string{"main.go"}, true, "", SproutOutcomeTimedOut},
+		{"reaped at the backstop", reaped, false, nil, true, "", SproutOutcomeReaped},
+		{"reaped beats the deadline it wraps", reaped, true, []string{"main.go"}, true, "", SproutOutcomeReaped},
+		{"empty response, no files, is no-engagement", nil, false, []string{}, true, "", SproutOutcomeNoEngagement},
+		{"whitespace response, no files, is no-engagement", nil, false, []string{}, true, "  \n\t ", SproutOutcomeNoEngagement},
+		{"empty response, unmeasurable, is no-engagement", nil, false, nil, false, "", SproutOutcomeNoEngagement},
+		{"empty response but changed files is complete", nil, true, []string{"main.go"}, true, "", SproutOutcomeComplete},
+		// The divergence this vocabulary exists to name. A mount whose diff is
+		// not empty says nothing about the model: OpenTendril writes into the
+		// same workspace, before the run and after it, and a checkout that
+		// persists still carries the last run's leavings. A model that only
+		// read files changed nothing, and the file it did not write is not
+		// evidence that it did.
+		{"model wrote nothing, mount differs anyway", nil, false, []string{"leftover.md"}, true, "I read the code and stopped", SproutOutcomeNoChanges},
+		{"model wrote nothing, mount differs, no answer", nil, false, []string{"leftover.md"}, true, "", SproutOutcomeNoEngagement},
+		// The mirror image: the model asked to write and the measurement says
+		// nothing differs — it rewrote a file with its own contents, or ran a
+		// command that changed nothing. The measurement is the authority when
+		// it exists, so this is no-changes rather than complete.
+		{"model wrote but nothing differs", nil, true, []string{}, true, "tried and changed nothing", SproutOutcomeNoChanges},
+		// An unmeasurable substrate cannot contradict the model, but it does
+		// not need to when the model never asked to write.
+		{"model wrote nothing, unmeasurable", nil, false, nil, false, "report only", SproutOutcomeNoChanges},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			got := classifySproutOutcome(testCase.runErr, testCase.files, testCase.filesKnown, testCase.response, false)
+			got := classifySproutOutcome(testCase.runErr, changeEvidence{
+				modelWrote:    testCase.modelWrote,
+				measured:      testCase.filesKnown,
+				measuredFiles: testCase.files,
+			}, testCase.response, false)
 			if got != testCase.want {
 				t.Fatalf("classifySproutOutcome() = %q, want %q", got, testCase.want)
 			}
 		})
 	}
+}
+
+// TestChangeEvidenceAttributedFiles covers the other half of the divergence:
+// not just what a run is called, but what lands in its commit. The commit
+// stages exactly the attributed list, so a path attributed to a model that
+// never wrote is a path committed and pushed as the Sprout's work.
+func TestChangeEvidenceAttributedFiles(t *testing.T) {
+	t.Run("model wrote nothing yields a measured-empty list", func(t *testing.T) {
+		evidence := changeEvidence{modelWrote: false, measured: true, measuredFiles: []string{"leftover.md", "notes/scratch.txt"}}
+		got := evidence.attributedFiles()
+		if got == nil {
+			t.Fatalf("attributedFiles() = nil, want a non-nil measured-empty slice: nil serializes as null and reads as unmeasured")
+		}
+		if len(got) != 0 {
+			t.Fatalf("attributedFiles() = %v, want empty", got)
+		}
+	})
+
+	t.Run("model wrote keeps the whole measured diff", func(t *testing.T) {
+		measured := []string{"pkg/thing.go", "pkg/thing_test.go"}
+		evidence := changeEvidence{modelWrote: true, measured: true, measuredFiles: measured}
+		got := evidence.attributedFiles()
+		if len(got) != len(measured) {
+			t.Fatalf("attributedFiles() = %v, want %v", got, measured)
+		}
+		for i := range measured {
+			if got[i] != measured[i] {
+				t.Fatalf("attributedFiles() = %v, want %v", got, measured)
+			}
+		}
+	})
+
+	t.Run("unmeasured stays nil", func(t *testing.T) {
+		evidence := changeEvidence{modelWrote: false, measured: false}
+		if got := evidence.attributedFiles(); got != nil {
+			t.Fatalf("attributedFiles() = %v, want nil: an unmeasured run must not claim it measured nothing", got)
+		}
+	})
 }
 
 // failingSproutRunner is a Sprout whose loop errors, standing in for both a
@@ -217,7 +276,7 @@ func TestRunSproutOutcomes(t *testing.T) {
 	}{
 		{
 			name:          "changed something",
-			runner:        &stubSproutRunner{result: sproutResult{Response: "did the work"}},
+			runner:        &stubSproutRunner{result: sproutResult{Response: "did the work", WroteWorkspace: true}},
 			modifiedFiles: []string{"pkg/thing.go"},
 			wantOutcome:   SproutOutcomeComplete,
 			wantTerminal:  eventbus.EventSproutMatured,
@@ -364,7 +423,7 @@ func TestRunSproutResumptionHonorsOutcomeVocabulary(t *testing.T) {
 		}
 
 		captured := stubRunSproutCollaborators(t, root,
-			&stubSproutRunner{result: sproutResult{Response: "second attempt"}}, []string{"pkg/thing.go"})
+			&stubSproutRunner{result: sproutResult{Response: "second attempt", WroteWorkspace: true}}, []string{"pkg/thing.go"})
 
 		report, err := (&DockerOrchestrator{
 			Substrate:  root,

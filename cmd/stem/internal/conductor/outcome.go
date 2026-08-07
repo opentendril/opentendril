@@ -18,11 +18,14 @@ import (
 // and carried on sprout lifecycle events. "complete" and "failed" keep their
 // historical spelling so existing status files and readers stay valid.
 const (
-	// SproutOutcomeComplete: the run finished and changed at least one file.
+	// SproutOutcomeComplete: the run finished and the model changed at least
+	// one file. "The model changed" rather than "a file differs": a diff of
+	// the mount also contains OpenTendril's own writes, and a run that only
+	// read files once reported complete on the strength of them.
 	SproutOutcomeComplete = "complete"
-	// SproutOutcomeNoChanges: the run finished without changing any file. This
-	// is NOT an error — "investigate and report" legitimately changes nothing —
-	// but it must never be dressed as plain completion.
+	// SproutOutcomeNoChanges: the run finished without the model changing any
+	// file. This is NOT an error — "investigate and report" legitimately
+	// changes nothing — but it must never be dressed as plain completion.
 	SproutOutcomeNoChanges = "no-changes"
 	// SproutOutcomeReported: the run finished without changing files, because
 	// it was declared an investigation run. This is an honest record of a task
@@ -90,9 +93,11 @@ type SproutRunReport struct {
 	// checkable against what the provider billed for.
 	Provider string
 	Model    string
-	// FilesModified lists the workspace files the run changed, when the run
+	// FilesModified lists the workspace files the model changed, when the run
 	// happened in a git repository where that is measurable. Nil when unknown
-	// (non-git or readonly substrates).
+	// (non-git or readonly substrates). It is the run's change set, not the
+	// mount's: OpenTendril's own writes into the workspace are not the
+	// Sprout's work and are never reported or committed as it.
 	FilesModified []string
 	// FilesUnmeasured explains why FilesModified is unknown on a run that
 	// should have been able to measure it. Empty when the measurement
@@ -103,11 +108,63 @@ type SproutRunReport struct {
 	FilesUnmeasured string
 }
 
-// classifySproutOutcome names what a run actually did. filesKnown reports
-// whether FilesModified was measurable at all — a non-git or readonly
-// substrate cannot distinguish complete from no-changes, and claiming
-// "no-changes" there would be its own kind of lie.
-func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool, sproutResponse string, isInvestigation bool) string {
+// changeEvidence is everything a finished run knows about what it changed.
+//
+// It exists because two different questions were being answered by one number.
+// "Did anything in the mount differ" is what a diff measures; "did the model
+// change anything" is what the outcome vocabulary claims. They come apart
+// whenever something other than the model writes into the mount, and
+// OpenTendril writes into it repeatedly — a repository map and a memory map
+// before the run, the epigenetic genome after it, an encrypted index and its
+// write-ahead log throughout. A run in which the model only read files then
+// reported "complete" with those artifacts as its file list, and committed
+// them as the Sprout's work.
+type changeEvidence struct {
+	// modelWrote reports whether the model handed the terrarium a tool call
+	// that could write to the workspace. This is the answer to "did the model
+	// change anything", and it comes from the model's own actions rather than
+	// from the state of the mount.
+	modelWrote bool
+	// measured reports whether the workspace diff could be taken at all. A
+	// non-git or readonly substrate cannot take one, so it can never say a run
+	// changed files — but it can still say the model never asked to.
+	measured bool
+	// measuredFiles is the raw diff of the mount: every path that differs,
+	// whoever wrote it. Nil when the diff was not taken.
+	measuredFiles []string
+}
+
+// attributedFiles is the change set the run is answerable for — what belongs
+// in its commit and in its report.
+//
+// A model that wrote nothing is answerable for nothing, whatever the mount
+// says, and the empty slice is deliberately non-nil: a measured "the model
+// changed nothing" must stay distinguishable from an unmeasured "nobody
+// knows".
+//
+// When the model did write, the raw diff stands. Narrowing it further would
+// mean naming the paths a shell command touched, which the tool protocol does
+// not carry — and dropping a path the model really wrote loses work silently,
+// which is the more expensive mistake.
+func (e changeEvidence) attributedFiles() []string {
+	if e.modelWrote || !e.measured {
+		return e.measuredFiles
+	}
+	return []string{}
+}
+
+// changedAnything answers the question the outcome vocabulary asks.
+//
+// It takes both halves: the model must have written, AND the diff must either
+// agree or be unavailable. A model that rewrote a file with its own contents
+// asked to change something and changed nothing, and the measurement is the
+// authority on that.
+func (e changeEvidence) changedAnything() bool {
+	return e.modelWrote && (!e.measured || len(e.measuredFiles) > 0)
+}
+
+// classifySproutOutcome names what a run actually did.
+func classifySproutOutcome(runErr error, changes changeEvidence, sproutResponse string, isInvestigation bool) string {
 	if runErr != nil {
 		// The reaper is checked first because its error deliberately wraps the
 		// cancellation it caused: a run ended for want of anyone waiting is
@@ -134,7 +191,7 @@ func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool
 		}
 		return SproutOutcomeFailed
 	}
-	changedFiles := len(filesModified) > 0
+	changedFiles := changes.changedAnything()
 	// No response and nothing changed is a non-engaging run, not a legitimate
 	// no-op: the Sprout neither acted nor answered. A run that changed files
 	// engaged regardless of what it said, so file evidence wins.
@@ -144,7 +201,13 @@ func classifySproutOutcome(runErr error, filesModified []string, filesKnown bool
 	if isInvestigation && !changedFiles {
 		return SproutOutcomeReported
 	}
-	if filesKnown && !changedFiles {
+	// An unmeasured run used to be dressed as complete, because nothing could
+	// contradict it. The model's own actions can: a run that asked the
+	// terrarium for nothing but reads changed nothing, and no substrate needs
+	// to be measurable for that to be true. An unmeasured run in which the
+	// model did write still reports complete — there the measurement is the
+	// only thing that could say otherwise, and it is missing.
+	if !changedFiles {
 		return SproutOutcomeNoChanges
 	}
 	return SproutOutcomeComplete

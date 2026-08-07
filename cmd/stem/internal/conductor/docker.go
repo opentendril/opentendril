@@ -184,11 +184,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// event per run, with the honest outcome and the evidence for it. A detach
 	// is not an ending: it hands the same publisher to the goroutine that
 	// outlives this call, which fires it when the work does end.
-	filesKnown := false
+	var changes changeEvidence
 	detached := false
-	publishTerminal := func(report *SproutRunReport, filesKnown bool, err error) {
+	publishTerminal := func(report *SproutRunReport, changes changeEvidence, err error) {
 		if report.Outcome == "" {
-			report.Outcome = classifySproutOutcome(err, report.FilesModified, filesKnown, report.Output, d.Investigation)
+			report.Outcome = classifySproutOutcome(err, changes, report.Output, d.Investigation)
 		}
 		reason := ""
 		if err != nil {
@@ -200,7 +200,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if detached {
 			return
 		}
-		publishTerminal(&report, filesKnown, err)
+		publishTerminal(&report, changes, err)
 	}()
 
 	// Teardown a detached run must NOT take with it: the terrarium it is still
@@ -588,7 +588,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// reaches it from the goroutine below, long after RunSprout returned — so
 	// it owns every value it touches and shares nothing with the caller's
 	// report, which by then belongs to somebody else.
-	completeRun := func(sproutResult sproutResult, runErr error) (report SproutRunReport, filesKnown bool, err error) {
+	completeRun := func(sproutResult sproutResult, runErr error) (report SproutRunReport, changes changeEvidence, err error) {
 		// Everything here runs on its own clock. The work's context may be
 		// spent — that is the ordinary way a run ends — and handing the
 		// post-mortem an already-expired context makes the clock that ended the
@@ -613,6 +613,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		report.Provider = mind.Provider()
 		report.Model = mind.Model()
 
+		// Recorded before the exits below for the same reason as the protocol:
+		// what the model asked the terrarium to do is known the moment the turn
+		// ends, and every path out of here is asked whether the run did any
+		// work.
+		changes.modelWrote = sproutResult.WroteWorkspace
+
 		if err := session.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Sprout session shutdown issue: %v\n", err)
 		}
@@ -622,13 +628,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// (nil) rather than claiming a no-changes verdict nothing measured.
 		if !gitRepo || plan.readOnly || d.Investigation {
 			if runErr != nil {
-				return report, filesKnown, runErr
+				return report, changes, runErr
 			}
 			if d.Investigation && statusPath != "" {
 				executionStatus := sproutExecutionStatus{
 					StepID:          stepID,
 					Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
-					Status:          classifySproutOutcome(runErr, nil, filesKnown, sproutResult.Response, d.Investigation),
+					Status:          classifySproutOutcome(runErr, changes, sproutResult.Response, d.Investigation),
 					FilesUnmeasured: "run was investigation-only and therefore took no diff",
 				}
 				if writeErr := writeSproutStatus(statusPath, executionStatus); writeErr != nil {
@@ -636,7 +642,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				}
 			}
 			report.Output = sproutResult.Response
-			return report, filesKnown, nil
+			return report, changes, nil
 		}
 
 		var statusRelPath string
@@ -644,7 +650,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			var err error
 			statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
 			if err != nil {
-				return report, filesKnown, err
+				return report, changes, err
 			}
 		}
 
@@ -652,14 +658,22 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// costs the evidence behind the verdict; returning here would additionally
 		// lose the verdict, the status file, and the run's own error — replaced by
 		// the measurement's. Record why the evidence is missing and carry on.
-		modifiedFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, statusRelPath)
+		measuredFiles, diffErr := collectStageableFilesFn(postMortemCtx, mountPath, statusRelPath)
 		if diffErr != nil {
 			report.FilesUnmeasured = diffErr.Error()
 			fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
 		} else {
-			report.FilesModified = modifiedFiles
-			filesKnown = true
+			changes.measured = true
+			changes.measuredFiles = measuredFiles
 		}
+
+		// The diff of the mount is not the run's change set. OpenTendril wrote
+		// into this workspace before the run and writes into it again after,
+		// and a previous run's leavings are still here on a checkout that
+		// persists — so a model that only read files finds a diff waiting for
+		// it. What the run is answerable for is what the model did.
+		modifiedFiles := changes.attributedFiles()
+		report.FilesModified = modifiedFiles
 
 		gitDiff, diffErr := collectGitDiffFn(postMortemCtx, mountPath)
 		if diffErr != nil {
@@ -671,7 +685,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
 			FilesModified:   modifiedFiles,
 			FilesUnmeasured: report.FilesUnmeasured,
-			Status:          classifySproutOutcome(runErr, modifiedFiles, filesKnown, sproutResult.Response, d.Investigation),
+			Status:          classifySproutOutcome(runErr, changes, sproutResult.Response, d.Investigation),
 		}
 		if runErr != nil {
 			executionStatus.Error = runErr.Error()
@@ -682,37 +696,37 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if commitErr != nil {
 			report.Outcome = ""
 			if runErr != nil {
-				return report, filesKnown, errors.Join(runErr, commitErr)
+				return report, changes, errors.Join(runErr, commitErr)
 			}
-			return report, filesKnown, commitErr
+			return report, changes, commitErr
 		}
 
 		if d.DisableMergeBack {
 			report.Output = commitHash
-			return report, filesKnown, runErr
+			return report, changes, runErr
 		}
 
 		if plan.remoteClone {
 			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
-					return report, filesKnown, errors.Join(runErr, pushErr)
+					return report, changes, errors.Join(runErr, pushErr)
 				}
-				return report, filesKnown, pushErr
+				return report, changes, pushErr
 			}
 		} else {
 			mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
 			if mergeErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
-					return report, filesKnown, errors.Join(runErr, mergeErr)
+					return report, changes, errors.Join(runErr, mergeErr)
 				}
-				return report, filesKnown, mergeErr
+				return report, changes, mergeErr
 			}
 		}
 
 		if runErr != nil {
-			return report, filesKnown, runErr
+			return report, changes, runErr
 		}
 
 		if gitDiff != "" {
@@ -726,7 +740,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 
 		report.Output = sproutResult.Response
-		return report, filesKnown, nil
+		return report, changes, nil
 	}
 
 	// The Sprout turn runs on the work's clock, in its own goroutine, so this
@@ -758,10 +772,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				// what says which clock ended the run, and releasing overwrites
 				// it with a bare cancellation.
 				runErr := attributeSproutEnding(workCtx, finished.err)
-				detachedReport, detachedFilesKnown, detachedErr := completeRun(finished.result, runErr)
+				detachedReport, detachedChanges, detachedErr := completeRun(finished.result, runErr)
 				releaseWork(nil)
 				runTeardown()
-				publishTerminal(&detachedReport, detachedFilesKnown, errors.Join(detachedErr, teardownErr))
+				publishTerminal(&detachedReport, detachedChanges, errors.Join(detachedErr, teardownErr))
 			}()
 			report.Outcome = SproutOutcomeDetached
 			return report, nil
@@ -774,7 +788,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		turn = <-turns
 	}
 
-	report, filesKnown, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
+	report, changes, err = completeRun(turn.result, attributeSproutEnding(workCtx, turn.err))
 	return report, err
 }
 
