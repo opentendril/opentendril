@@ -12,16 +12,18 @@
 - Subscribe a single shared handler to every type returned by `eventbus.AllEventTypes()` on that connection's bus (`Subscribe` once per type).
 - Emit a first-frame `{"type":"connected"}` handshake so clients know the feed is live before any bus event arrives.
 - Map each `eventbus.Event` to a JSON object with `type`, `timestamp`, and `source`; include `sessionId` when non-empty, `data` when non-empty, and a top-level `content` field for `EventStreamToken` (from `data["token"]`) and `EventThoughtBranch` (from `data["thought"]`).
-- Support opt-in catch-up via `?replay=N`, replaying the last `N` events from `bus.History` capped at package `maxReplay` (100).
+- Support opt-in catch-up via `?replay=N`, replaying the last `N` events from `bus.History` capped at package `maxReplay` (100). Replay runs through the same per-event handler as the live feed, so a narrowed connection is narrowed in both.
+- Narrow a connection to one phytomer when the request context carries a stream scope (`WithStreamScope`). A scoped connection sees only events naming that phytomer; an event naming none at all is dropped rather than shared. A connection with no scope sees everything, which is what keeps the unscoped feed exactly as it was.
 - Keep the connection alive with a server-side write-pump ping every 50 seconds (`writePump`).
 - Discard inbound client frames in `readPump` so the feed stays unidirectional (read only to detect disconnect).
 
 **Does not:**
 
-- Own authentication or origin policy. Bearer/`key` query auth is layered in `cmd/stem/cmdserve.go` (`withWebSocketAuth`); `CheckOrigin` inside the package always returns true.
+- Own authentication or origin policy. Bearer/`key` query auth is layered in `cmd/stem/cmdserve.go` (`withWebSocketAuth`, over the resolver the data routes share); `CheckOrigin` inside the package always returns true.
 - Accept or interpret inbound client messages as commands — `readPump` discards payload bytes; there is no reverse RPC over `/ws`.
-- Own the `GATEWAY_PORT` (default `9090`) server lifecycle or the main API mux mount. Both are constructed in `cmd/stem` (`cmdserve.go`), which also wraps the handler with `delegationGate.Middleware`.
-- Persist events, filter by session, rate-limit, or back-pressure publishers. Lossy drop-on-full is local to the connection's `send` channel.
+- Own the `GATEWAY_PORT` (default `9090`) server lifecycle or the main API mux mount. Both are constructed in `cmd/stem` (`cmdserve.go`), which also wraps the handler with `receptors.WatchAuthority.StreamMiddleware`.
+- Persist events, rate-limit, or back-pressure publishers. Lossy drop-on-full is local to the connection's `send` channel.
+- Decide who may narrow a connection. The package applies a scope it is handed on the request context (`WithStreamScope`); which caller gets one, and to which phytomer, is settled in `cmd/stem` before the upgrade.
 - Expose a Core capability. The gateway is a transport surface only; it is listed among Core's forbidden imports in the boundary test.
 
 ## Public interface
@@ -43,7 +45,7 @@ Package-level sentinel errors: **none**.
 
 **Fan-in:**
 
-- **`cmd/stem`** — mounts `/ws` on the main serve mux and again on a dedicated Gateway server (`GATEWAY_PORT`, default `9090`), each behind `withWebSocketAuth` (API key via `Authorization` bearer or `key` query parameter) and `delegationGate.Middleware` (`cmdserve.go`). A bind failure on the dedicated port logs a warning and leaves the main-mux `/ws` available.
+- **`cmd/stem`** — mounts `/ws` on the main serve mux and again on a dedicated Gateway server (`GATEWAY_PORT`, default `9090`), each behind `withWebSocketAuth` (the Botanist key, an issued Pollinator credential, or a Stem-signed access token, presented as an `Authorization` bearer or a `key` query parameter) and `receptors.WatchAuthority.StreamMiddleware` (`cmdserve.go`). A bind failure on the dedicated port logs a warning and leaves the main-mux `/ws` available.
 - **`internal/core`** — does **not** import `gateway` (boundary test lists it among forbidden Core imports). Gateway exposes no capability to Core; it is a transport surface wired only in `cmd/stem`.
 
 ## Limitations
@@ -57,7 +59,11 @@ Package-level sentinel errors: **none**.
 
 The gateway exists so live observers (Command Center UI, terminal clients) share one process-local signalling spine without each attaching their own bus logic. Keeping it a **thin fan-out leaf** preserves the Architecture Audit modularity baseline: producers publish to `eventbus`; durable sinks attach elsewhere; this package only upgrades a socket and pushes JSON. Fan-out=1 (`eventbus` only) means the leaf cannot drag HTTP auth, Core, or Conductor into the transport layer.
 
-**Auth and origin stay outside the package.** Bearer and query-key checks, plus the delegation gate, are Stem serve concerns shared with REST/MCP posture. Browsers cannot set custom headers on the native WebSocket handshake, so `withWebSocketAuth` deliberately accepts a `key` query parameter; that policy belongs next to the rest of serve auth, not inside the upgrade handler. Leaving `CheckOrigin` open inside the package matches that layering — origin policy, if tightened, should land where the mux is composed.
+**Auth and origin stay outside the package.** Bearer and query-key checks, plus the observation authority that decides who may watch what, are Stem serve concerns shared with REST/MCP posture. Browsers cannot set custom headers on the native WebSocket handshake, so `withWebSocketAuth` deliberately accepts a `key` query parameter; that policy belongs next to the rest of serve auth, not inside the upgrade handler. Leaving `CheckOrigin` open inside the package matches that layering — origin policy, if tightened, should land where the mux is composed.
+
+A bearer that arrives in the query parameter is moved into the `Authorization` header before the request continues, because everything downstream derives the caller's identity from that header alone. A credential left in the query string would authenticate the connection and then be invisible to the authority that scopes it — admitted as a Pollinator, served as the operator.
+
+**Scope is applied here, decided elsewhere.** The package reads a scope off the request context and filters; it never resolves a caller or consults a grant. That keeps fan-out at 1 while still letting a delegated observer onto the stream, which the alternative — admitting the caller to the unfiltered feed — would not have done safely.
 
 **`?replay=N` exists for session-less telemetry.** Many sequence and organism events never carry a `sessionId`. A refreshed dashboard cannot re-subscribe by session; it needs a short in-memory catch-up window from `bus.History` (itself capped at 100 on the bus, and again at `maxReplay` here) so the UI can re-grow recent state before the live feed continues. Replay is opt-in and best-effort, not a durable log.
 
