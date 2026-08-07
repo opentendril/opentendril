@@ -16,7 +16,6 @@ func TestAnthropicRequestCarriesModelDeclaredOutputLimit(t *testing.T) {
 	// claude-sonnet-5 declares OutputLimit: 128000 in FallbackModels.
 	spec := ProviderSpec{
 		Model:       "claude-sonnet-5",
-		Temperature: 0.1,
 		OutputLimit: 128000,
 	}
 	payload, err := anthropicAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
@@ -59,7 +58,6 @@ func TestAnthropicDifferentModelsDifferentOutputLimits(t *testing.T) {
 	for _, tc := range cases {
 		spec := ProviderSpec{
 			Model:       tc.model,
-			Temperature: 0.1,
 			OutputLimit: tc.want,
 		}
 		payload, err := anthropicAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
@@ -148,7 +146,7 @@ llm:
 func TestOpenAIishRequestCarriesNoMaxTokens(t *testing.T) {
 	spec := ProviderSpec{
 		Model:       "gpt-test",
-		Temperature: 0.5,
+		Temperature: ptr(0.5),
 		OutputLimit: 8192, // carried on the spec but must not reach the wire
 	}
 	payload, err := openAIishAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
@@ -259,8 +257,7 @@ llm:
 // value Anthropic accepts; a zero on the wire would not be.
 func TestAnthropicRequestWithNoModelDeclarationIsValid(t *testing.T) {
 	spec := ProviderSpec{
-		Model:       "unknown-future-model",
-		Temperature: 0.1,
+		Model: "unknown-future-model",
 		// OutputLimit intentionally zero: registry has no entry for this name.
 	}
 	payload, err := anthropicAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)

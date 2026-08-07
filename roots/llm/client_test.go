@@ -14,6 +14,10 @@ import (
 	"testing"
 )
 
+// ptr returns a pointer to a float64 value, used to construct *float64 fields
+// in ProviderSpec literals where the zero value means "not set".
+func ptr(v float64) *float64 { return &v }
+
 func TestResolveCoordinatorProviderSpecUsesDefaultProviderFallback(t *testing.T) {
 	t.Setenv("DEFAULT_LLM_PROVIDER", "openai")
 	t.Setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -251,7 +255,7 @@ llm:
 	if spec.Model != "qwen2.5-coder:7b" {
 		t.Fatalf("spec.Model = %q, want configured model", spec.Model)
 	}
-	if spec.Temperature != 0.2 {
+	if spec.Temperature == nil || *spec.Temperature != 0.2 {
 		t.Fatalf("spec.Temperature = %v, want 0.2", spec.Temperature)
 	}
 }
@@ -292,7 +296,7 @@ func TestCallSendsAnthropicShapedRequestWithCaching(t *testing.T) {
 		Mode:        ModeAnthropic,
 		APIKey:      "test-key",
 		Model:       "claude-test",
-		Temperature: 0.5,
+		Temperature: ptr(0.5),
 	})
 
 	messages := []Message{
@@ -388,7 +392,7 @@ func TestCallSendsOpenAIShapedRequestWithoutCaching(t *testing.T) {
 		Mode:        ModeOpenAIish,
 		APIKey:      "test-key-openai",
 		Model:       "gpt-test",
-		Temperature: 0.5,
+		Temperature: ptr(0.5),
 	})
 
 	messages := []Message{
@@ -703,8 +707,8 @@ func TestByteIdentity(t *testing.T) {
 		adapter providerAdapter
 		spec    ProviderSpec
 	}{
-		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: 0.5}},
-		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: 0.5}},
+		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: ptr(0.5)}},
+		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: ptr(0.5)}},
 	}
 
 	scenarios := []struct {
@@ -779,8 +783,8 @@ func TestAdaptersAcceptToolDefinitionsWithoutEmittingThem(t *testing.T) {
 		adapter providerAdapter
 		spec    ProviderSpec
 	}{
-		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: 0.5}},
-		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: 0.5}},
+		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: ptr(0.5)}},
+		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: ptr(0.5)}},
 	}
 
 	tools := []ToolDefinition{{

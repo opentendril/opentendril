@@ -212,7 +212,7 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 		APIKey:      "test-key",
 		Endpoint:    "/v1/messages",
 		Mode:        ModeAnthropic,
-		Temperature: 0.25,
+		Temperature: ptr(0.25),
 	})
 
 	content := strings.Repeat("repomap.md cached context ", 60)
