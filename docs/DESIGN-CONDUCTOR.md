@@ -97,6 +97,16 @@ The package exports on the order of **~365** symbols. The load-bearing surface i
 
 **In-flight drain residual** (`sequence.go`). `run()` now cancels and drains in-flight steps on every exit, and the residual is the grace period: if a step's cleanup wedges past `CleanupGracePeriod` the runner reports the affected steps and gives up rather than blocking forever, so a stash can still be left behind in that case.
 
+**One run at a time per managed Substrate** (`checkout.go`, `docker.go`). Concurrency is bounded by where a run's working tree comes from, and the Substrate's `checkout.mode` decides it.
+
+`ephemeralCheckoutPath` derives a fresh directory per run from a random identifier, so ephemeral Substrates carry no shared working state and concurrent runs against the same Substrate do not meet. `managedCheckoutDir` derives its path from the **Substrate name alone**, so every run against a managed Substrate uses one directory. Three things in a run then treat that directory as its own:
+
+- `refreshExistingCheckout` fetches and hard-resets it to the target branch at the start of a run, which discards whatever a concurrent run has in progress there.
+- `stashHostWorkspace` stashes the tree under a run-scoped name and pops it at the end. Two runs pop each other's stash, because `git stash pop` takes the top of the stack rather than the name.
+- `createShadowWorktree` adds a worktree for the configured branch. Git permits a branch in one worktree at a time, so a second run naming the same branch is refused outright.
+
+Nothing serialises them: there is no lock, and a second run is not refused with a diagnosis — it interleaves and the outcome depends on ordering. So the supported shape today is **many Pollen and many Substrates, one run per managed Substrate at a time**. The delegation model itself imposes no such bound: grants are keyed per Pollen and scoped per Substrate, run records carry the dispatching Pollen, and observation is scoped to the caller's own runs. The bound comes from the checkout layout alone.
+
 ## Design & rationale
 
 Conductor exists because OpenTendril keeps **state in git** and **execution in terraria**, with the host Stem owning the ReAct loop. The package is the place where those choices meet: a Sequence YAML (or dynamically appended steps) names work; the runner schedules it; each step grows one or more sprouts against a substrate; outcomes are committed, selected, verified, and chronicled.

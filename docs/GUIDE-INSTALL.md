@@ -121,6 +121,19 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 > it and discards uncommitted changes without asking. Your clone is the one you
 > edit.
 
+> [!IMPORTANT]
+> **One run at a time per managed Substrate.** A managed checkout is one
+> directory per Substrate, and a run resets it, stashes in it, and adds a
+> worktree for the configured branch. A second run starting against the same
+> Substrate before the first finishes will discard its work, pop the wrong
+> stash, or be refused the branch — and nothing serialises them or reports the
+> collision.
+>
+> This bounds Substrates, not callers. Several Pollen may work at once, and
+> several Substrates may run at once; two runs against one managed Substrate
+> may not. A Substrate using `checkout: mode: ephemeral` gets a fresh directory
+> per run and is not affected.
+
 The boundary and the workflow are the same mechanism here — nothing needs to be
 shared between the accounts, because everything already travels through the
 remote.
