@@ -56,6 +56,12 @@ type ProviderSpec struct {
 	// max_tokens is required, the adapter substitutes the package fallback when
 	// this is zero.
 	OutputLimit int
+	// ResolutionErr records why resolution could not name a model to use. It is
+	// carried on the spec rather than returned because resolution happens
+	// inside constructors that have no error return and many callers; a spec
+	// that carries it names no model, and every request made through it fails
+	// with this error instead of reaching a provider nobody chose.
+	ResolutionErr error
 }
 
 type Message struct {
@@ -204,6 +210,34 @@ func (c *Client) ToolDefinitionsCapable() bool {
 	return true
 }
 
+// Provider reports the provider this client will actually send to. It is the
+// resolved value, which is not always the configured one and is never the
+// requested one when nothing was requested.
+func (c *Client) Provider() string {
+	if c == nil {
+		return ""
+	}
+	return c.spec.Provider
+}
+
+// Model reports the model name this client will actually put on the wire.
+func (c *Client) Model() string {
+	if c == nil {
+		return ""
+	}
+	return c.spec.Model
+}
+
+// ResolutionError reports why this client has no model to call, or nil when it
+// has one. A caller that can refuse to start expensive work checks it first;
+// one that cannot gets the same error from the first request.
+func (c *Client) ResolutionError() error {
+	if c == nil {
+		return fmt.Errorf("llm client is nil")
+	}
+	return c.spec.ResolutionErr
+}
+
 func NewClient(spec ProviderSpec) *Client {
 	return &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
@@ -224,13 +258,22 @@ func NewClientForModel(provider string, model string) *Client {
 	return NewClient(ResolveModelProviderSpec(provider, model))
 }
 
+// ResolveModelProviderSpec resolves a spec for a caller that has named a
+// provider, and optionally a model. A named provider with no model is still a
+// choice of provider: the model is selected from what that provider serves, and
+// the resolution fails rather than answering with somebody else's model.
 func ResolveModelProviderSpec(provider string, model string) ProviderSpec {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	model = strings.TrimSpace(model)
 	if provider == "" {
 		return ResolveTierProviderSpec(TierPremium)
 	}
-	return providerSpecForModel(provider, TierPremium, model, "")
+	if model != "" {
+		return providerSpecForModel(provider, TierPremium, model, "")
+	}
+	return carryResolutionFailure(resolveForProviderChoice(
+		providerChoice{name: provider, explicit: true}, TierPremium, false,
+	))
 }
 
 func NewCoordinatorClientFromEnv() *Client {
@@ -267,6 +310,9 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if c.spec.ResolutionErr != nil {
+		return nil, c.spec.ResolutionErr
 	}
 	if c.spec.BaseURL == "" {
 		return nil, fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
@@ -318,6 +364,12 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 		ctx = context.Background()
 	}
 
+	// Checked before anything else about the spec: a resolution failure already
+	// knows which provider was asked for and what it was missing, and the
+	// checks below would replace that with a vaguer symptom of it.
+	if c.spec.ResolutionErr != nil {
+		return Result{}, c.spec.ResolutionErr
+	}
 	if c.spec.BaseURL == "" {
 		return Result{}, fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
 	}
@@ -373,37 +425,94 @@ func ResolveAgentTierProviderSpec(tier ModelTier) ProviderSpec {
 	return resolveTierProviderSpecWithCaps(tier, true)
 }
 
+// providerChoice is the provider a resolution will run against, and whether an
+// operator actually said so.
+type providerChoice struct {
+	name string
+	// explicit is true when the name came from DEFAULT_LLM_PROVIDER or from
+	// llm.default-provider in .tendril/config.yaml. It is false when the name
+	// was guessed from whichever credential happened to be present, which is a
+	// starting point rather than an instruction and must not constrain
+	// selection.
+	explicit bool
+}
+
+func configuredProviderChoice() providerChoice {
+	if provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER"))); provider != "" {
+		return providerChoice{name: provider, explicit: true}
+	}
+	if provider := configuredDefaultProvider(); provider != "" {
+		return providerChoice{name: provider, explicit: true}
+	}
+	return providerChoice{name: detectProviderFallback()}
+}
+
+// carryResolutionFailure announces a resolution failure and attaches it to the
+// spec. The two answer different questions: the warning tells an operator
+// watching the process that their configuration selected nothing, at the moment
+// it did, while the carried error makes the next request fail with that reason
+// instead of leaving somewhere downstream to report a missing model as if no
+// provider had ever been named.
+func carryResolutionFailure(spec ProviderSpec, err error) ProviderSpec {
+	if err == nil {
+		return spec
+	}
+	fmt.Fprintf(os.Stderr, "⚠️ %v\n", err)
+	spec.ResolutionErr = err
+	return spec
+}
+
 func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) ProviderSpec {
+	return carryResolutionFailure(resolveForProviderChoice(configuredProviderChoice(), tier, requireTools))
+}
+
+func resolveForProviderChoice(choice providerChoice, tier ModelTier, requireTools bool) (ProviderSpec, error) {
 	tier = canonicalModelTier(tier)
-	provider := strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_LLM_PROVIDER")))
-	if provider == "" {
-		provider = configuredDefaultProvider()
+
+	if model, ok := explicitModelForTier(choice.name, tier); ok {
+		return providerSpecForModel(choice.name, tier, model, ""), nil
 	}
-	if provider == "" {
-		provider = detectProviderFallback()
-	}
-	if model, ok := explicitModelForTier(provider, tier); ok {
-		return providerSpecForModel(provider, tier, model, "")
-	}
-	if model := configuredModelForProvider(provider); model != "" {
-		return providerSpecForModel(provider, tier, model, "")
+	if model := configuredModelForProvider(choice.name); model != "" {
+		return providerSpecForModel(choice.name, tier, model, ""), nil
 	}
 
-	if model, err := SelectBestModel(Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}); err == nil {
-		return providerSpecForModel(model.Provider, tier, model.Name, "")
+	caps := Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}
+	if choice.explicit {
+		caps.Provider = choice.name
 	}
 
-	// A tool-capable model was required but none matched (e.g. only small local
-	// models are available). Rather than return an empty spec, fall back to the
-	// unconstrained best model — the run then reports its outcome honestly
-	// instead of silently maturing on nothing.
-	if requireTools {
-		if model, err := SelectBestModel(Capabilities{MaxCostTier: tier}); err == nil {
-			return providerSpecForModel(model.Provider, tier, model.Name, "")
-		}
+	model, err := SelectBestModel(caps)
+	if err != nil && requireTools {
+		// A tool-capable model was required but none matched (e.g. only small
+		// local models are available). Relax the requirement so the run reports
+		// its outcome honestly instead of silently maturing on nothing — but
+		// relax ONLY that. caps.Provider stays set, because leaving the chosen
+		// provider is the very thing this resolution exists to prevent, and a
+		// fallback allowed to do it is the same defect wearing a different name.
+		relaxed := caps
+		relaxed.RequiresToolUse = false
+		model, err = SelectBestModel(relaxed)
+	}
+	if err != nil {
+		return providerSpecForModel(choice.name, tier, "", ""), resolutionFailure(choice, tier, err)
 	}
 
-	return providerSpecForModel(provider, tier, "", "")
+	return providerSpecForModel(model.Provider, tier, model.Name, ""), nil
+}
+
+// resolutionFailure explains a selection that produced no model, naming the
+// provider, where the provider came from, and how to pin a model for it.
+func resolutionFailure(choice providerChoice, tier ModelTier, cause error) error {
+	if choice.explicit {
+		return fmt.Errorf(
+			"llm provider %q is configured (DEFAULT_LLM_PROVIDER or llm.default-provider) but no model could be resolved for the %s tier: %w; pin one with %s or llm.providers.%s.model",
+			choice.name, canonicalModelTier(tier), cause, providerModelEnvName(choice.name), choice.name,
+		)
+	}
+	return fmt.Errorf(
+		"no llm provider is configured and no model could be resolved for the %s tier: %w; set DEFAULT_LLM_PROVIDER and the matching API key, or point LOCAL_INFERENCE_URL at a local inference endpoint",
+		canonicalModelTier(tier), cause,
+	)
 }
 
 func ResolveCoordinatorProviderSpec() ProviderSpec {
@@ -686,6 +795,23 @@ func configuredProvider(provider string) tendrilProviderConfig {
 		}
 	}
 	return tendrilProviderConfig{}
+}
+
+// hasConfiguredProvider reports whether .tendril/config.yaml declares a block
+// for this provider at all, whatever it puts in it. Writing the block is the
+// operator saying the provider exists for them, which is the statement an API
+// key makes for the providers that have one.
+func hasConfiguredProvider(provider string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return false
+	}
+	for name := range loadTendrilConfig().LLM.Providers {
+		if strings.EqualFold(strings.TrimSpace(name), provider) {
+			return true
+		}
+	}
+	return false
 }
 
 func configuredModelForProvider(provider string) string {

@@ -193,3 +193,43 @@ func TestSproutRunCarriesExecutionOutcome(t *testing.T) {
 		t.Fatalf("Output = %q, want report only", result.Output)
 	}
 }
+
+// The resolved provider and model reach the result on both endings. They are
+// reported by the execution port rather than echoed from the request: a run
+// that requested neither is exactly the run whose model nothing else could
+// name, and that is the run the measurement is made of.
+func TestSproutRunReportsTheResolvedProviderAndModel(t *testing.T) {
+	t.Run("matured", func(t *testing.T) {
+		svc, _ := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
+			if spec.Model != "" || spec.Provider != "" {
+				t.Fatalf("spec carried provider %q model %q, want neither", spec.Provider, spec.Model)
+			}
+			return core.SproutRunReport{
+				Output: "ok", Outcome: "complete",
+				Provider: "google", Model: "gemini-2.5-pro",
+			}, nil
+		})
+
+		result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+		if err != nil {
+			t.Fatalf("SproutRun failed: %v", err)
+		}
+		if result.Provider != "google" || result.Model != "gemini-2.5-pro" {
+			t.Fatalf("result = %s/%s, want google/gemini-2.5-pro", result.Provider, result.Model)
+		}
+	})
+
+	t.Run("withered", func(t *testing.T) {
+		svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			return core.SproutRunReport{Provider: "anthropic", Model: "claude-opus-4-8"}, fmt.Errorf("terrarium exploded")
+		})
+
+		result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+		if err == nil {
+			t.Fatal("expected the execution error to propagate")
+		}
+		if result.Provider != "anthropic" || result.Model != "claude-opus-4-8" {
+			t.Fatalf("result = %s/%s, want anthropic/claude-opus-4-8 on a failed run", result.Provider, result.Model)
+		}
+	})
+}

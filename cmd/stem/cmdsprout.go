@@ -278,6 +278,13 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 
 			sproutReport, err := orch.RunSprout(ctx, spec.Transcript)
 			run.FinishedAt = time.Now().UTC()
+			// The RESOLVED model, not the requested one. The record used to
+			// carry spec.Model, which is empty on every run nobody pinned a
+			// model for — so the runs that most needed an account of what did
+			// the work were exactly the ones that stored no model at all.
+			if resolved := strings.TrimSpace(sproutReport.Model); resolved != "" {
+				run.Model = resolved
+			}
 			if err != nil {
 				run.Status = "withered"
 				run.Error = err.Error()
@@ -296,6 +303,8 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 				Output:        sproutReport.Output,
 				Outcome:       sproutReport.Outcome,
 				FilesModified: sproutReport.FilesModified,
+				Provider:      sproutReport.Provider,
+				Model:         sproutReport.Model,
 			}, err
 		},
 	}

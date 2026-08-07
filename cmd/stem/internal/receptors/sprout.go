@@ -216,10 +216,15 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 		if sid == "" {
 			sid = sessionID
 		}
+		// The model reaches the record here and nowhere earlier: the opening
+		// "running" row is written before a provider has been resolved, so this
+		// is the first moment the run can say what carried it. A detached run
+		// is watched by nobody, which makes its stored record the only account
+		// of it there will ever be.
 		if err != nil {
 			if h.history != nil {
 				_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
-					RunID: stepID, SessionID: sid, StepID: stepID,
+					RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
 					Status: "withered", Error: err.Error(), FinishedAt: time.Now().UTC(),
 				})
 			}
@@ -227,7 +232,7 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 		}
 		if h.history != nil {
 			_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
-				RunID: stepID, SessionID: sid, StepID: stepID,
+				RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
 				Status: "matured", Output: result.Output, FinishedAt: time.Now().UTC(),
 			})
 		}
