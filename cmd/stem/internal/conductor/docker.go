@@ -1766,6 +1766,16 @@ func shouldIgnoreStagePath(path string) bool {
 }
 
 func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	if credential.CommitMode == CommitModeAPI {
+		return "", fmt.Errorf("sprout git commit refused: the substrate is configured for api commit mode (commit: api), which commits directly to the remote branch, but a Sprout requires a local commit to merge back from its shadow worktree. Remove commit: api from the substrate to use the Sprout local commit path")
+	}
+
+	if strings.TrimSpace(credential.Identity.Name) == "" && strings.TrimSpace(credential.Identity.Email) == "" {
+		if _, err := runGitCommand(ctx, mountPath, "var", "GIT_COMMITTER_IDENT"); err != nil {
+			return "", fmt.Errorf("sprout git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) and git cannot resolve an ambient identity — an unattributable Sprout commit is never created")
+		}
+	}
+
 	stagePaths := append([]string{}, executionStatus.FilesModified...)
 
 	if strings.TrimSpace(statusPath) != "" {
