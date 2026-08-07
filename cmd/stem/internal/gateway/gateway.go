@@ -45,9 +45,17 @@ func streamScope(ctx context.Context) string {
 // in-memory history window).
 const maxReplay = 100
 
-const (
+// Timing parameters for the WebSocket keep-alive protocol. Declared as
+// package-level vars rather than consts so test code can shorten them to
+// exercise the write-deadline and ping paths without waiting 50 s.
+var (
+	// writeWait is the deadline applied to every outgoing write, both event
+	// messages and pings. Matching the two branches keeps them from drifting
+	// apart.
+	writeWait = 10 * time.Second
+
 	// pingPeriod is how often writePump sends a Ping to keep the connection
-	// alive and detect a dead peer.
+	// alive and detect a dead peer. Must be less than pongWait.
 	pingPeriod = 50 * time.Second
 
 	// pongWait is how long the server waits for a pong (or any other client
@@ -95,9 +103,15 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			send: make(chan []byte, 256),
 		}
 
-		conn.SetReadDeadline(time.Now().Add(pongWait))
+		// Capture package-level timing vars so concurrent test cleanups
+		// don't race with the background pumps of this connection.
+		pWait := pongWait
+		wWait := writeWait
+		pPeriod := pingPeriod
+
+		conn.SetReadDeadline(time.Now().Add(pWait))
 		conn.SetPongHandler(func(string) error {
-			conn.SetReadDeadline(time.Now().Add(pongWait))
+			conn.SetReadDeadline(time.Now().Add(pWait))
 			return nil
 		})
 
@@ -172,7 +186,7 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 		}
 
 		// Start write pump
-		go c.writePump()
+		go c.writePump(pPeriod, wWait)
 		// Start read pump
 		c.readPump()
 	}
@@ -185,6 +199,11 @@ func (c *client) readPump() {
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+				log.Printf("gateway: readPump exiting on unexpected close: %v", err)
+			} else {
+				log.Printf("gateway: readPump exiting: %v", err)
+			}
 			break
 		}
 		// Handle incoming messages if needed
@@ -192,8 +211,8 @@ func (c *client) readPump() {
 	}
 }
 
-func (c *client) writePump() {
-	ticker := time.NewTicker(pingPeriod)
+func (c *client) writePump(pPeriod, wWait time.Duration) {
+	ticker := time.NewTicker(pPeriod)
 	defer func() {
 		ticker.Stop()
 		c.conn.Close()
@@ -202,20 +221,28 @@ func (c *client) writePump() {
 		select {
 		case message, ok := <-c.send:
 			if !ok {
+				log.Printf("gateway: writePump exiting on send channel closed")
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
+			c.conn.SetWriteDeadline(time.Now().Add(wWait))
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Printf("gateway: writePump exiting on NextWriter error: %v", err)
 				return
 			}
-			w.Write(message)
+			if _, err := w.Write(message); err != nil {
+				log.Printf("gateway: writePump exiting on write error: %v", err)
+				return
+			}
 			if err := w.Close(); err != nil {
+				log.Printf("gateway: writePump exiting on writer close error: %v", err)
 				return
 			}
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			c.conn.SetWriteDeadline(time.Now().Add(wWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				log.Printf("gateway: writePump exiting on ping error: %v", err)
 				return
 			}
 		}
