@@ -310,7 +310,8 @@ func runServeCmd(ctx context.Context, args []string) {
 	gatewayAddr := net.JoinHostPort(listenHost, gatewayPort)
 	go func() {
 		gatewayMux := http.NewServeMux()
-		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, delegationGate.Middleware(gateway.HandleWebSocket(bus))))
+		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, pollinatorCredentials, stemSigner, networked,
+			receptors.NewWatchAuthority(delegationGate, history).StreamMiddleware(gateway.HandleWebSocket(bus))))
 		gatewayServer := &http.Server{
 			Addr:    gatewayAddr,
 			Handler: gatewayMux,
@@ -562,75 +563,98 @@ func registerBotanistRoute(mux *http.ServeMux, deps serveDependencies, pattern s
 // by the grant model downstream, which derives the Pollen from this same bearer.
 func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		presented := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
-
-		if core.LooksLikeAccessToken(presented) {
-			// A token-shaped bearer is verified or refused. Like a credential it
-			// never falls back to the Botanist key comparison, so an expired or
-			// forged token cannot be retried as anything else. A nil verifier
-			// proves nothing and denies (deny-closed).
-			if verifier == nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			if _, ok := verifier.VerifyAccessToken(presented); !ok {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			next(w, r)
-			return
-		}
-
-		if core.LooksLikePollinatorCredential(presented) {
-			// Off-host: the durable root is the refresh secret only. Present it
-			// at POST /v1/pollinator/token; data routes accept the short-lived
-			// access token it mints. Loopback keeps the prior root-on-data-routes
-			// behaviour so personal local setups are unchanged.
-			if networked {
-				http.Error(w, "Unauthorized: durable Pollinator credentials are not accepted on off-host binds; mint an access token via POST /v1/pollinator/token", http.StatusUnauthorized)
-				return
-			}
-			// A credential-shaped bearer is resolved or refused. It never falls
-			// back to the Botanist key comparison, so a revoked credential
-			// cannot be retried as anything else.
-			if core.ResolvePollenFromCredential(credentials, presented) == "" {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-			next(w, r)
-			return
-		}
-
-		// An empty apiKey is a caller bug, not an invitation to skip auth:
-		// fail closed rather than repeat finding 1.
-		if strings.TrimSpace(apiKey) == "" || !bearerMatches(r.Header.Get("Authorization"), apiKey) {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		if reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, credentials, verifier, networked); !ok {
+			http.Error(w, reason, http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
 }
 
-// withWebSocketAuth gates a WebSocket upgrade handler behind the same bearer
-// key as the REST/MCP surface. Browsers cannot attach
-// custom headers to the native WebSocket handshake, so a `key` query
-// parameter is accepted alongside the Authorization header used by non-browser
-// clients (e.g. the CLI's gorilla/websocket dialer).
-func withWebSocketAuth(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+// resolveAuthorization decides whether one presented Authorization header
+// authenticates, as the Botanist or as a Pollinator. It is the single answer to
+// "who may come in", shared by every surface, so no surface can develop its own
+// opinion — which is exactly how the event stream came to accept only the
+// Botanist while the data routes accepted issued credentials.
+//
+// It reports only whether the caller is admitted. WHICH Pollen it is, and what
+// that Pollen may then do, is decided downstream from the same header.
+func resolveAuthorization(authorization, apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool) (reason string, ok bool) {
+	presented := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(authorization), "Bearer "))
+
+	if core.LooksLikeAccessToken(presented) {
+		// A token-shaped bearer is verified or refused. Like a credential it
+		// never falls back to the Botanist key comparison, so an expired or
+		// forged token cannot be retried as anything else. A nil verifier
+		// proves nothing and denies (deny-closed).
+		if verifier == nil {
+			return "Unauthorized", false
+		}
+		if _, verified := verifier.VerifyAccessToken(presented); !verified {
+			return "Unauthorized", false
+		}
+		return "", true
+	}
+
+	if core.LooksLikePollinatorCredential(presented) {
+		// Off-host: the durable root is the refresh secret only. Present it
+		// at POST /v1/pollinator/token; data routes accept the short-lived
+		// access token it mints. Loopback keeps the prior root-on-data-routes
+		// behaviour so personal local setups are unchanged.
+		if networked {
+			return "Unauthorized: durable Pollinator credentials are not accepted on off-host binds; mint an access token via POST /v1/pollinator/token", false
+		}
+		// A credential-shaped bearer is resolved or refused. It never falls
+		// back to the Botanist key comparison, so a revoked credential
+		// cannot be retried as anything else.
+		if core.ResolvePollenFromCredential(credentials, presented) == "" {
+			return "Unauthorized", false
+		}
+		return "", true
+	}
+
+	// An empty apiKey is a caller bug, not an invitation to skip auth:
+	// fail closed rather than repeat finding 1.
+	if strings.TrimSpace(apiKey) == "" || !bearerMatches(authorization, apiKey) {
+		return "Unauthorized", false
+	}
+	return "", true
+}
+
+// withWebSocketAuth gates a WebSocket upgrade handler with the same resolver
+// the data routes use, so an issued credential opens a stream exactly as it
+// opens a read. Browsers cannot attach custom headers to the native WebSocket
+// handshake, so a `key` query parameter is accepted alongside the
+// Authorization header used by non-browser clients (e.g. the CLI's
+// gorilla/websocket dialer).
+//
+// A bearer that arrived in the query parameter is moved into the Authorization
+// header before the request continues. Everything downstream derives the
+// caller's identity from that header alone, so leaving a credential in the
+// query string would let it authenticate the connection and then be invisible
+// to the gate that decides what the connection may see — authenticated as a
+// Pollinator, treated as the operator.
+func withWebSocketAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if strings.TrimSpace(apiKey) == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		if bearerMatches(r.Header.Get("Authorization"), apiKey) {
+		reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, credentials, verifier, networked)
+		if ok {
 			next(w, r)
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("key")), []byte(apiKey)) == 1 {
-			next(w, r)
-			return
+
+		if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
+			authorization := "Bearer " + key
+			if queryReason, queryOK := resolveAuthorization(authorization, apiKey, credentials, verifier, networked); queryOK {
+				r = r.Clone(r.Context())
+				r.Header.Set("Authorization", authorization)
+				next(w, r)
+				return
+			} else if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+				reason = queryReason
+			}
 		}
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+
+		http.Error(w, reason, http.StatusUnauthorized)
 	}
 }
 
@@ -976,7 +1000,20 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// mint another token, and a plain bearer key cannot mint for a named identity.
 	receptors.NewPollinatorTokenHandler(deps.StemSigner, deps.PollinatorCredentials).Register(mux)
 
-	mux.HandleFunc("/ws", withWebSocketAuth(deps.APIKey, deps.DelegationGate.Middleware(gateway.HandleWebSocket(deps.EventBus))))
+	// observeAuth authenticates without the blanket delegated-request denial:
+	// the surfaces it carries reach a decision about the phytomer the caller
+	// named, which is a decision guardedAuth's default cannot make because it
+	// runs before any phytomer is in hand.
+	observeAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+	}
+
+	// Who may observe a phytomer: one authority, shared by the stored views and
+	// the live stream, so the two cannot answer the same question differently.
+	watch := receptors.NewWatchAuthority(deps.DelegationGate, deps.History)
+
+	mux.HandleFunc("/ws", withWebSocketAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked,
+		watch.StreamMiddleware(gateway.HandleWebSocket(deps.EventBus))))
 
 	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(deps.EventBus, deps.Sessions, deps.History)))
 
@@ -986,8 +1023,8 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("GET /health", deps.DelegationGate.Middleware(handleHealth(deps.HealthMonitor, deps.Networked)))
 
 	// Tendril session REST API (adapter).
-	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus)
-	sessionsHandler.Register(mux, guardedAuth)
+	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).WithWatch(watch)
+	sessionsHandler.Register(mux, guardedAuth, observeAuth)
 
 	// Genome REST API (adapter, slice 1).
 	genomeHandler := receptors.NewGenomeHandler(deps.CoreService)

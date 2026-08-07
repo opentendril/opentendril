@@ -51,19 +51,23 @@ func (h *SproutHandler) WithDelegation(gate *DelegationGate) *SproutHandler {
 	return h
 }
 
-// authorizeDelegated gates a delegated sprout invocation. It returns true
-// when handling may proceed: either the request is not delegated (no marker
-// header — today's path, untouched) or an active grant covers
-// {pollen, operation-class, substrate}. On denial it writes 403 and the gate
-// records the audit event.
-func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Request, substrate string) bool {
+// authorizeDelegated gates a delegated sprout invocation. It returns the
+// authorized Pollen and true when handling may proceed: either the request is
+// not delegated (no marker header — today's path, untouched, and the Pollen is
+// blank) or an active grant covers {pollen, operation-class, substrate}. On
+// denial it writes 403 and the gate records the audit event.
+//
+// The Pollen is returned rather than discarded because a run that does not
+// record who dispatched it can never be scoped back to them, and a run nobody
+// can be scoped to is a run its own dispatcher cannot watch.
+func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Request, substrate string) (pollen string, ok bool) {
 	pollen, credentialOK := h.delegation.PollenFor(r)
 	if !credentialOK {
 		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
-		return false
+		return "", false
 	}
 	if pollen == "" {
-		return true
+		return "", true
 	}
 	decision := h.delegation.Authorize(core.DelegationRequest{
 		Pollen:         pollen,
@@ -73,9 +77,9 @@ func (h *SproutHandler) authorizeDelegated(w http.ResponseWriter, r *http.Reques
 	})
 	if !decision.Authorized {
 		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
-		return false
+		return "", false
 	}
-	return true
+	return pollen, true
 }
 
 // governedRoutes is the single table of sprout-capability routes this adapter
@@ -129,12 +133,18 @@ func (h *SproutHandler) run(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcript and substrate are required", http.StatusBadRequest)
 		return
 	}
-	if !h.authorizeDelegated(w, r, req.Substrate) {
+	pollen, ok := h.authorizeDelegated(w, r, req.Substrate)
+	if !ok {
 		return
 	}
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+
+	// Stamped after authorization and only from the resolved credential, so
+	// the execution port records the run against a subject the caller could
+	// not have named.
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
 	result, err := h.core.SproutRun(r.Context(), req)
 	if err != nil {
@@ -167,7 +177,8 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	// The detached path is excluded from the parity registry but NOT from
 	// delegation governance: a delegated invocation must hold an active grant
 	// before any session is minted or any goroutine detaches.
-	if !h.authorizeDelegated(w, r, req.Substrate) {
+	pollen, ok := h.authorizeDelegated(w, r, req.Substrate)
+	if !ok {
 		return
 	}
 
@@ -192,12 +203,19 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	req.StepID = stepID
 
 	// Write "running" status immediately so observers can see the job start.
+	// Ownership is settled here, before the goroutine detaches: a delegated
+	// caller that polls the instant it receives its 202 must already find a
+	// record attributed to it, or the run it just started would read as
+	// somebody else's.
+	substrate := strings.TrimSpace(req.Substrate)
 	if h.history != nil {
 		_ = h.history.RecordSproutRun(r.Context(), historydb.SproutRun{
 			RunID:      stepID,
 			SessionID:  sessionID,
 			StepID:     stepID,
 			Origin:     "rest",
+			Pollen:     pollen,
+			Substrate:  substrate,
 			Transcript: req.Transcript,
 			Status:     "running",
 			StartedAt:  time.Now().UTC(),
@@ -225,6 +243,7 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 			if h.history != nil {
 				_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
 					RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
+					Pollen: pollen, Substrate: substrate,
 					Status: "withered", Error: err.Error(), FinishedAt: time.Now().UTC(),
 				})
 			}
@@ -233,6 +252,7 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 		if h.history != nil {
 			_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
 				RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
+				Pollen: pollen, Substrate: substrate,
 				Status: "matured", Output: result.Output, FinishedAt: time.Now().UTC(),
 			})
 		}

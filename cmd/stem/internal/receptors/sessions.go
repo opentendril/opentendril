@@ -28,6 +28,10 @@ type SessionsHandler struct {
 	manager *session.Manager
 	history *historydb.Store
 	bus     *eventbus.Bus
+	// watch decides who may observe a phytomer's events and run records. A nil
+	// authority denies every delegated observer and leaves the operator's view
+	// unchanged.
+	watch *WatchAuthority
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
 	// list) — the independence the parity coverage test relies on.
@@ -39,6 +43,13 @@ type SessionsHandler struct {
 // history may be nil when SQLite logging is disabled; bus may be nil in tests.
 func NewSessionsHandler(coreSvc core.Core, manager *session.Manager, history *historydb.Store, bus *eventbus.Bus) *SessionsHandler {
 	return &SessionsHandler{core: coreSvc, manager: manager, history: history, bus: bus}
+}
+
+// WithWatch wires the observation authority onto the handler and returns it
+// for chaining.
+func (h *SessionsHandler) WithWatch(watch *WatchAuthority) *SessionsHandler {
+	h.watch = watch
+	return h
 }
 
 // governedRoute binds one REST route to the Core capability it projects.
@@ -87,11 +98,24 @@ func writeCoreErr(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
-// Register mounts the session routes onto the mux, wrapping each handler
-// with the provided auth middleware.
-func (h *SessionsHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
+// Register mounts the session routes onto the mux. Two lanes, because the
+// routes answer to two different authorities and a single wrapper could only
+// serve one of them.
+//
+// auth carries the command routes: it authenticates, and it refuses a
+// delegated caller outright, because those routes project capabilities that
+// evaluate no per-invocation grant here.
+//
+// observeAuth carries the observation views. They authenticate the same way and
+// then consult the observation authority per request, with the phytomer in
+// hand, so a delegated caller reaches a decision about the phytomer it named
+// rather than a blanket refusal.
+func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(http.HandlerFunc) http.HandlerFunc) {
 	if auth == nil {
 		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
+	}
+	if observeAuth == nil {
+		observeAuth = func(next http.HandlerFunc) http.HandlerFunc { return next }
 	}
 
 	// Governed phytomer capabilities: mount each canonical /v1/phytomers route
@@ -111,24 +135,24 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth func(http.HandlerFun
 		}
 	}
 
-	// Ungoverned routes (views / follow-up capabilities) — not part of the
-	// parity registry. Canonical + legacy alias, as above.
+	// Observation views — not part of the parity registry, and gated per
+	// request inside the handler against the phytomer named in the path.
+	// Canonical + legacy alias, as above.
+	for pattern, handler := range map[string]http.HandlerFunc{
+		"GET /v1/phytomers/{sessionId}/events":      h.events,
+		"GET /v1/phytomers/{sessionId}/sprout-runs": h.sproutRuns,
+	} {
+		mux.HandleFunc(pattern, observeAuth(handler))
+		mux.HandleFunc(sessionAlias(pattern), observeAuth(handler))
+	}
+
+	// Ungoverned follow-up capability. It executes work rather than reporting
+	// on it, and it evaluates no grant, so it stays on the refusing lane.
 	for _, pattern := range []string{
-		"GET /v1/phytomers/{sessionId}/events",
-		"GET /v1/phytomers/{sessionId}/sprout-runs",
 		"POST /v1/phytomers/{sessionId}/sequences/grow",
 	} {
-		var handler http.HandlerFunc
-		switch {
-		case strings.HasSuffix(pattern, "/events"):
-			handler = h.events
-		case strings.HasSuffix(pattern, "/sprout-runs"):
-			handler = h.sproutRuns
-		default:
-			handler = h.runSequenceAsync
-		}
-		mux.HandleFunc(pattern, auth(handler))
-		mux.HandleFunc(sessionAlias(pattern), auth(handler))
+		mux.HandleFunc(pattern, auth(h.runSequenceAsync))
+		mux.HandleFunc(sessionAlias(pattern), auth(h.runSequenceAsync))
 	}
 }
 
@@ -243,6 +267,17 @@ func (h *SessionsHandler) events(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := r.PathValue("sessionId")
+
+	// A phytomer's events are session-wide and name no owner individually, so
+	// a delegated observer is admitted to all of them or to none.
+	pollen, ok := h.watch.Observer(w, r)
+	if !ok {
+		return
+	}
+	if pollen != "" && !h.watch.AuthorizePhytomer(w, r, pollen, sessionID) {
+		return
+	}
+
 	records, err := h.history.LoadEvents(r.Context(), sessionID, queryLimit(r, 100))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -261,11 +296,28 @@ func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := r.PathValue("sessionId")
+
+	pollen, ok := h.watch.Observer(w, r)
+	if !ok {
+		return
+	}
+
 	runs, err := h.history.LoadSproutRuns(r.Context(), sessionID, queryLimit(r, 50))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A run record names the subject that dispatched it, so a delegated
+	// observer is narrowed to its own rather than refused the phytomer. The
+	// limit above is applied before the narrowing, so a busy phytomer answers
+	// with the observer's share of one page rather than a page of its own.
+	if pollen != "" {
+		runs, ok = h.watch.AuthorizeRuns(w, r, pollen, runs)
+		if !ok {
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"sessionId":  sessionID,
 		"sproutRuns": runs,

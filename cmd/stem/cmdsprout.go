@@ -210,6 +210,30 @@ func resolveSproutSubstrateWiring(spec core.SproutSpec, config *conductor.Substr
 	return wiring
 }
 
+// openSproutRunRecord builds the history record written when a sprout run
+// starts, before anything is known about how it ends.
+//
+// The dispatching subject comes from the context, which only the surface that
+// authenticated the caller can write, and is blank for an operator at a
+// terminal. It is deliberately not read from the spec: that is decoded from
+// caller-supplied content, so a subject named there would be a subject anyone
+// could claim — and the subject is what the read surface later scopes by.
+func openSproutRunRecord(ctx context.Context, spec core.SproutSpec, substrate string) historydb.SproutRun {
+	return historydb.SproutRun{
+		RunID:      spec.StepID,
+		StepID:     spec.StepID,
+		SessionID:  spec.SessionID,
+		Origin:     spec.Origin,
+		Pollen:     core.PollenFromContext(ctx),
+		Substrate:  substrate,
+		Transcript: spec.Transcript,
+		Model:      spec.Model,
+		Genotype:   spec.Genotype,
+		Status:     "running",
+		StartedAt:  time.Now().UTC(),
+	}
+}
+
 func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
@@ -255,17 +279,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 				SessionID:       spec.SessionID,
 			}
 
-			run := historydb.SproutRun{
-				RunID:      spec.StepID,
-				StepID:     spec.StepID,
-				SessionID:  spec.SessionID,
-				Origin:     spec.Origin,
-				Transcript: spec.Transcript,
-				Model:      spec.Model,
-				Genotype:   spec.Genotype,
-				Status:     "running",
-				StartedAt:  time.Now().UTC(),
-			}
+			run := openSproutRunRecord(ctx, spec, wiring.Substrate)
 			recordRun := func() {
 				if history == nil {
 					return

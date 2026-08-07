@@ -68,17 +68,28 @@ func historyRetentionDaysFromEnv() int {
 }
 
 // currentSchemaVersion is the history database's current schema generation.
-// Bump this and add a migration step in migrateSchema when a future change
-// needs to alter existing tables rather than just adding new IF NOT EXISTS
-// ones.
-const currentSchemaVersion = 1
+// Bump it and add a forward step in migrateSchema when a change alters an
+// existing table rather than only adding a new IF NOT EXISTS one. The number is
+// what stops an older binary opening a shape it would misread, so a shape
+// change that leaves it alone is a shape change with no such guard.
+const currentSchemaVersion = 2
 
-// SproutRun is one Sprout execution history record.
+// SproutRun is one Sprout execution history record. It records the dispatching
+// Pollen and the substrate the work targeted so the read surface can scope a
+// run to the subject that owns it.
 type SproutRun struct {
-	RunID      string    `json:"runId"`
-	SessionID  string    `json:"sessionId,omitempty"`
-	StepID     string    `json:"stepId,omitempty"`
-	Origin     string    `json:"origin,omitempty"`
+	RunID     string `json:"runId"`
+	SessionID string `json:"sessionId,omitempty"`
+	StepID    string `json:"stepId,omitempty"`
+	Origin    string `json:"origin,omitempty"`
+	// Pollen is the subject that dispatched the run, and empty for a run the
+	// operator started directly. It is settled by the first write and never
+	// reassigned afterwards, so a recorded run cannot change hands.
+	Pollen string `json:"pollen,omitempty"`
+	// Substrate names the workspace the run targeted. A delegated read is
+	// evaluated against it, so observation is bounded by the same substrate
+	// scope that bounded the dispatch.
+	Substrate  string    `json:"substrate,omitempty"`
 	Model      string    `json:"model,omitempty"`
 	Genotype   string    `json:"genotype,omitempty"`
 	Transcript string    `json:"transcript,omitempty"`
@@ -293,6 +304,8 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	sessionId TEXT NOT NULL DEFAULT '',
 	stepId TEXT NOT NULL DEFAULT '',
 	origin TEXT NOT NULL DEFAULT '',
+	pollen TEXT NOT NULL DEFAULT '',
+	substrate TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
 	genotype TEXT NOT NULL DEFAULT '',
 	transcript TEXT NOT NULL DEFAULT '',
@@ -335,25 +348,62 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	err := s.db.QueryRowContext(ctx, `SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// Fresh database, or an existing pre-versioning .tendril/history.db
-		// opened for the first time after this change shipped. Either way,
-		// its current tables already match currentSchemaVersion — stamp it
-		// without touching any data.
-		_, err := s.db.ExecContext(ctx, `INSERT INTO schemaMeta (id, version) VALUES (1, ?)`, currentSchemaVersion)
-		if err != nil {
-			return fmt.Errorf("stamp initial schema version: %w", err)
-		}
-		return nil
+		// Never stamped: a fresh database, or an existing pre-versioning
+		// .tendril/history.db opened for the first time after versioning
+		// shipped. Both converge through the forward steps below.
 	case err != nil:
 		return fmt.Errorf("read history schema version: %w", err)
 	case version > currentSchemaVersion:
 		return fmt.Errorf("history database schema version %d is newer than this binary supports (%d) — refusing to open with an older binary", version, currentSchemaVersion)
-	case version < currentSchemaVersion:
-		// No migrations exist yet (currentSchemaVersion has only ever been 1).
-		// When a future schema change bumps currentSchemaVersion, add the
-		// actual ALTER/migration steps here, keyed by version, then update
-		// the stored row to currentSchemaVersion.
-		return fmt.Errorf("history database schema version %d predates a migration path that does not exist yet", version)
+	}
+
+	// Forward steps. Each one inspects the live table before it alters, so a
+	// database created moments ago by the schema literal and a database
+	// carrying rows from an earlier generation converge on the same shape
+	// without either needing to know which it is. Ordering matters only in
+	// that an index may not name a column an earlier step has yet to add.
+	if err := s.ensureColumn(ctx, "sproutruns", "pollen", `ALTER TABLE sproutruns ADD COLUMN pollen TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sproutruns", "substrate", `ALTER TABLE sproutruns ADD COLUMN substrate TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sproutrunsByPollen ON sproutruns(pollen, startedAt)`); err != nil {
+		return fmt.Errorf("index sprout runs by pollen: %w", err)
+	}
+
+	const stamp = `INSERT INTO schemaMeta (id, version) VALUES (1, ?)
+ON CONFLICT(id) DO UPDATE SET version = excluded.version`
+	if _, err := s.db.ExecContext(ctx, stamp, currentSchemaVersion); err != nil {
+		return fmt.Errorf("stamp schema version: %w", err)
+	}
+	return nil
+}
+
+// ensureColumn adds a column when the table does not already carry it. SQLite
+// has no ADD COLUMN IF NOT EXISTS, and re-running a plain ALTER is an error
+// rather than a no-op, so the check is what makes the step safe to run on
+// every open.
+func (s *Store) ensureColumn(ctx context.Context, table, column, alter string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return fmt.Errorf("inspect %s columns: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("scan %s column name: %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s columns: %w", table, err)
+	}
+	if _, err := s.db.ExecContext(ctx, alter); err != nil {
+		return fmt.Errorf("add %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -696,11 +746,16 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 		return fmt.Errorf("encrypt sprout run error: %w", err)
 	}
 
+	// Ownership is settled by whichever call first supplies it and is never
+	// reassigned: a run that already names a dispatching subject keeps it, so
+	// no later write can hand a recorded run to a different subject.
 	const statement = `
-INSERT INTO sproutruns (runId, sessionId, stepId, origin, model, genotype, transcript, status, output, error, startedAt, finishedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET
 	status = excluded.status,
+	pollen = CASE WHEN pollen = '' THEN excluded.pollen ELSE pollen END,
+	substrate = CASE WHEN substrate = '' THEN excluded.substrate ELSE substrate END,
 	model = COALESCE(NULLIF(excluded.model, ''), model),
 	output = excluded.output,
 	error = excluded.error,
@@ -711,6 +766,8 @@ ON CONFLICT(runId) DO UPDATE SET
 		run.SessionID,
 		run.StepID,
 		run.Origin,
+		strings.TrimSpace(run.Pollen),
+		strings.TrimSpace(run.Substrate),
 		run.Model,
 		genotype,
 		transcript,
@@ -734,7 +791,7 @@ func (s *Store) LoadSproutRuns(ctx context.Context, sessionID string, limit int)
 	}
 
 	query := `
-SELECT runId, sessionId, stepId, origin, model, genotype, transcript, status, output, error, startedAt, finishedAt
+SELECT runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt
 FROM sproutruns`
 	args := []any{}
 	if strings.TrimSpace(sessionID) != "" {
@@ -757,7 +814,7 @@ LIMIT ?`
 	for rows.Next() {
 		var run SproutRun
 		var startedAt, finishedAt string
-		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt); err != nil {
 			return nil, fmt.Errorf("scan sprout run: %w", err)
 		}
 		if run.Genotype, err = s.dec(run.Genotype, "historydb/sproutruns/genotype"); err != nil {
@@ -786,6 +843,50 @@ LIMIT ?`
 		return nil, fmt.Errorf("iterate sprout runs: %w", err)
 	}
 	return runs, nil
+}
+
+// SproutRunOwner is one distinct pairing of dispatching subject and substrate
+// recorded against a phytomer's sprout runs.
+type SproutRunOwner struct {
+	Pollen    string `json:"pollen,omitempty"`
+	Substrate string `json:"substrate,omitempty"`
+}
+
+// SproutRunOwners returns the distinct subjects that dispatched the sprout runs
+// recorded against one phytomer, each paired with the substrate that run
+// targeted. A read surface uses it to decide who owns a phytomer without
+// loading — or decrypting — any run content, and an empty result means nothing
+// has ever been dispatched into it.
+func (s *Store) SproutRunOwners(ctx context.Context, sessionID string) ([]SproutRunOwner, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, fmt.Errorf("sprout run owners require a sessionId")
+	}
+
+	const query = `
+SELECT DISTINCT pollen, substrate
+FROM sproutruns
+WHERE sessionId = ?
+ORDER BY pollen, substrate`
+
+	rows, err := s.db.QueryContext(ctx, query, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load sprout run owners: %w", err)
+	}
+	defer rows.Close()
+
+	owners := make([]SproutRunOwner, 0)
+	for rows.Next() {
+		var owner SproutRunOwner
+		if err := rows.Scan(&owner.Pollen, &owner.Substrate); err != nil {
+			return nil, fmt.Errorf("scan sprout run owner: %w", err)
+		}
+		owners = append(owners, owner)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate sprout run owners: %w", err)
+	}
+	return owners, nil
 }
 
 // RecordSeedRun upserts one seed.grow execution keyed by its handle; call it

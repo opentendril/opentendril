@@ -1,16 +1,44 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
+
+type streamScopeKey struct{}
+
+// WithStreamScope narrows a stream to one phytomer. The scope travels in the
+// request context and only ever arrives from the surface that authenticated
+// and authorised the caller, so a connection cannot widen its own view by
+// asking. A blank scope is not stored: an unscoped connection is
+// indistinguishable from one that never asked to be narrowed, which is what
+// keeps the operator's feed exactly as it was.
+func WithStreamScope(ctx context.Context, sessionID string) context.Context {
+	trimmed := strings.TrimSpace(sessionID)
+	if trimmed == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, streamScopeKey{}, trimmed)
+}
+
+// streamScope returns the phytomer a connection is narrowed to, or "" when it
+// sees everything.
+func streamScope(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	scope, _ := ctx.Value(streamScopeKey{}).(string)
+	return scope
+}
 
 // maxReplay caps how many buffered bus events a client may request on
 // connect via the opt-in ?replay=N query parameter (bounded by the bus's own
@@ -73,7 +101,16 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			return nil
 		})
 
+		// A narrowed connection sees its own phytomer and nothing else. An
+		// event carrying no phytomer at all is dropped rather than shared:
+		// telemetry that names no owner belongs to whoever can already see
+		// everything.
+		scope := streamScope(r.Context())
+
 		handler := func(event eventbus.Event) {
+			if scope != "" && event.SessionID != scope {
+				return
+			}
 			msg := map[string]interface{}{
 				"type":      string(event.Type),
 				"timestamp": event.Timestamp,

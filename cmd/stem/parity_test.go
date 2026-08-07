@@ -65,7 +65,7 @@ func newParityFixture(t *testing.T) (core.Core, *receptors.SessionsHandler, *rec
 	// actually mounted on the mux (not the canonical list) — the independence
 	// the coverage test relies on.
 	mux := http.NewServeMux()
-	rest.Register(mux, nil)
+	rest.Register(mux, nil, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)
@@ -928,7 +928,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	gitRest := receptors.NewGitHandler(mock).WithDelegation(gate)
 	configRest := receptors.NewConfigHandler(mock, "").WithDelegation(gate)
 	mux := http.NewServeMux()
-	rest.Register(mux, nil)
+	rest.Register(mux, nil, nil)
 	genomeRest.Register(mux, nil)
 	plasmidRest.Register(mux, nil)
 	graftRest.Register(mux, nil)

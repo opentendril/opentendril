@@ -143,7 +143,7 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 // parameter (the browser cannot set headers on a WebSocket upgrade).
 func TestWithWebSocketAuth(t *testing.T) {
 	bus := eventbus.New()
-	handler := withWebSocketAuth("secret-key", gateway.HandleWebSocket(bus))
+	handler := withWebSocketAuth("secret-key", nil, nil, false, gateway.HandleWebSocket(bus))
 	server := httptest.NewServer(http.HandlerFunc(handler))
 	defer server.Close()
 
