@@ -509,3 +509,58 @@ func TestTemperatureAnthropicShape(t *testing.T) {
 		}
 	})
 }
+
+// TestUnconfiguredTemperatureReachesProviderSpecAsNil covers the step the
+// adapter tests cannot see. They build a ProviderSpec literal and assert on
+// what the adapter writes; the defect lived earlier than that, in the value
+// providerSpecForModel put into the spec in the first place.
+//
+// configuredTemperature applied a 0.1 fallback whenever the operator had set
+// nothing, so every provider received a temperature nobody chose. Restoring
+// that fallback leaves every adapter assertion green, because none of them
+// runs this function — which is why this test exists separately.
+//
+// Each provider branch is checked, not just one. providerSpecForModel builds
+// a ProviderSpec in eight places; a fallback reintroduced into any single
+// branch would otherwise reach the wire unnoticed.
+//
+// Mutation: return a non-nil pointer from configuredTemperature when the
+// config field is zero -> every sub-test goes red.
+func TestUnconfiguredTemperatureReachesProviderSpecAsNil(t *testing.T) {
+	// This repository ships its own .tendril/config.yaml; a test run from the
+	// source tree would silently read it and assert nothing about the
+	// unconfigured case.
+	chdirWithoutTendrilConfig(t)
+
+	for _, provider := range []string{
+		"local", "anthropic", "openai", "grok", "google",
+		"openrouter", "nvidia", "unknown-falls-to-default",
+	} {
+		t.Run(provider, func(t *testing.T) {
+			spec := providerSpecForModel(provider, TierPremium, "probe-model", "")
+			if spec.Temperature != nil {
+				t.Errorf("provider %q: ProviderSpec.Temperature = %v, want nil so the adapter omits the field and the provider's own default applies",
+					provider, *spec.Temperature)
+			}
+		})
+	}
+}
+
+// TestConfiguredTemperatureReachesProviderSpec is the other half: an operator
+// who sets a temperature must still have it sent. Without this, removing the
+// field entirely would satisfy the test above.
+func TestConfiguredTemperatureReachesProviderSpec(t *testing.T) {
+	chdirWithTendrilConfig(t, `llm:
+  providers:
+    anthropic:
+      temperature: 0.35
+`)
+
+	spec := providerSpecForModel("anthropic", TierPremium, "probe-model", "")
+	if spec.Temperature == nil {
+		t.Fatalf("ProviderSpec.Temperature = nil, want the configured 0.35 to reach the spec")
+	}
+	if *spec.Temperature != 0.35 {
+		t.Errorf("ProviderSpec.Temperature = %v, want 0.35", *spec.Temperature)
+	}
+}
