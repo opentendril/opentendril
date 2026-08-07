@@ -99,14 +99,14 @@ func waitForSproutRun(t *testing.T, store *historydb.Store, runID string, wantSt
 func TestDetachedSproutRunRecordsTheResolvedModel(t *testing.T) {
 	mux, store := newSproutModelHandler(t, core.SproutRunReport{
 		Output: "grown", Outcome: "complete",
-		Provider: "google", Model: "gemini-2.5-pro",
+		Provider: "google", Model: "gemini-3.1-pro",
 	}, nil)
 
 	stepID := growSproutDetached(t, mux)
 	run := waitForSproutRun(t, store, stepID, "matured")
 
-	if run.Model != "gemini-2.5-pro" {
-		t.Fatalf("stored model = %q, want gemini-2.5-pro", run.Model)
+	if run.Model != "gemini-3.1-pro" {
+		t.Fatalf("stored model = %q, want gemini-3.1-pro", run.Model)
 	}
 	if run.Output != "grown" {
 		t.Fatalf("stored output = %q, want grown", run.Output)

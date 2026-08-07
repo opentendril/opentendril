@@ -125,7 +125,7 @@ func TestModelTierResolution(t *testing.T) {
 			{name: "openai premium cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierPremium, wantProv: "openai", wantModel: "gpt-5.6-terra", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openai standard cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierStandard, wantProv: "openai", wantModel: "gpt-5.6-luna", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "openai cheapest cap", provider: "openai", key: "OPENAI_API_KEY", tier: TierCheapest, wantProv: "openai", wantModel: "gpt-5.6-luna", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
-			{name: "google premium cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierPremium, wantProv: "google", wantModel: "gemini-2.5-pro", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
+			{name: "google premium cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierPremium, wantProv: "google", wantModel: "gemini-3.1-pro", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "google standard cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierStandard, wantProv: "google", wantModel: "gemini-3.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			{name: "google cheapest cap", provider: "google", key: "GOOGLE_API_KEY", tier: TierCheapest, wantProv: "google", wantModel: "gemini-3.5-flash", wantMode: ModeOpenAIish, wantEndpt: "/chat/completions"},
 			// grok serves one premium model. A premium ceiling reaches it; the

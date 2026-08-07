@@ -206,7 +206,7 @@ func TestSproutRunReportsTheResolvedProviderAndModel(t *testing.T) {
 			}
 			return core.SproutRunReport{
 				Output: "ok", Outcome: "complete",
-				Provider: "google", Model: "gemini-2.5-pro",
+				Provider: "google", Model: "gemini-3.1-pro",
 			}, nil
 		})
 
@@ -214,8 +214,8 @@ func TestSproutRunReportsTheResolvedProviderAndModel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SproutRun failed: %v", err)
 		}
-		if result.Provider != "google" || result.Model != "gemini-2.5-pro" {
-			t.Fatalf("result = %s/%s, want google/gemini-2.5-pro", result.Provider, result.Model)
+		if result.Provider != "google" || result.Model != "gemini-3.1-pro" {
+			t.Fatalf("result = %s/%s, want google/gemini-3.1-pro", result.Provider, result.Model)
 		}
 	})
 
