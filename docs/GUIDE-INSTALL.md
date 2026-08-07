@@ -353,7 +353,13 @@ grants:
   claude:
     # git.prune is deliberately absent: it deletes branches, and every other
     # operation is recoverable. Add it knowingly if you want one tidying up.
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
+    #
+    # sprout.watch is the read side: it lets this pollen watch the runs it
+    # dispatched — the stored record, the persisted events, and the live
+    # stream — and nothing anyone else dispatched. Grant it alongside
+    # sprout.grow, or on its own for an observer that may look but not start
+    # work. Without it a pollen can begin work it cannot then see.
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.watch]
     substrates: [myrepo]
     # egress: [github.com]              # optional: hosts the Stem may fetch for this pollen
     # expires: 2027-01-01               # optional: RFC 3339 timestamp or YYYY-MM-DD
@@ -571,6 +577,18 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/stoma/pass` | `stoma.pass` |
 | `POST /v1/seeds/grow` | `seed.grow` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
+| `GET /v1/phytomers/{id}/sprout-runs` | `sprout.watch` |
+| `GET /v1/phytomers/{id}/events` | `sprout.watch` |
+| `GET /ws?sessionId={id}` | `sprout.watch` |
+
+A `sprout.watch` grant releases only what the Pollen's own runs put there, and
+only for the substrates those runs targeted. `sprout-runs` narrows to the
+caller's own records. A phytomer's events and its live stream are session-wide
+and name no owner individually, so they are released whole or not at all: every
+run in the phytomer must be the caller's, and a phytomer nothing was dispatched
+into belongs to nobody. A delegated stream must name the phytomer it watches and
+receives only that phytomer's events; the Botanist key still opens the
+unfiltered feed.
 
 ```bash
 curl -X POST http://localhost:8080/v1/git/status \

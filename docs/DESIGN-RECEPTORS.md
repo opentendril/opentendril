@@ -9,7 +9,7 @@
 **Does:**
 
 - **Config & Security Gate (`cmd/stem/internal/receptors/config.go`):** Exposes `ConfigHandler` endpoints for managing hormonal triggers and AI genotypes (`/v1/config/triggers`, `/v1/config/genotypes`), and provides `DelegationGate` and `AccessTokenVerifier` to resolve, prove, and audit Pollen identities (`DelegatedPollen`, `PollenFor`, `Authorize`, `Middleware`), publishing decision outcomes to `eventbus.Bus`.
-- **Session Lifecycle Adapter (`cmd/stem/internal/receptors/sessions.go`):** Implements `SessionsHandler` over `core.Core`, mapping canonical `/v1/phytomers` REST endpoints (create, list, get, update, delete, history) and legacy `/v1/sessions` aliases to Core session capabilities, while supporting ungoverned event/run views and async sequence triggers (`runSequenceAsync`).
+- **Session Lifecycle Adapter (`cmd/stem/internal/receptors/sessions.go`):** Implements `SessionsHandler` over `core.Core`, mapping canonical `/v1/phytomers` REST endpoints (create, list, get, update, delete, history) and legacy `/v1/sessions` aliases to Core session capabilities, while supporting async sequence triggers (`runSequenceAsync`) and the event/run observation views, which sit outside the parity registry and are gated per request by `WatchAuthority` against the phytomer named in the path.
 - **Git Operations Adapter (`cmd/stem/internal/receptors/git.go`):** Implements `GitHandler`, projecting governed git capabilities (`POST /v1/git/commit`, `push`, `pr`, `branch`, `status`, `branches`, `prune`) onto Core git operations with per-invocation delegation checks against operation-classes.
 - **Sprout Execution Adapter (`cmd/stem/internal/receptors/sprout.go`):** Implements `SproutHandler`, mapping synchronous `POST /v1/sprouts/grow` and detached 202 Accepted `POST /v1/phytomers/{sessionId}/sprout/grow` (and legacy `/v1/sessions` alias) to Core sprout runs with background goroutine tracking and history logging.
 - **Seed Intent Growth Adapter (`cmd/stem/internal/receptors/seed.go`):** Implements `SeedHandler`, mapping synchronous `POST /v1/seeds/grow`, background `POST /v1/seeds/grow/async`, and subject-scoped `GET /v1/seeds/runs/{handle}` collection to Core seed growth with grant-material egress injection.
@@ -74,7 +74,7 @@ The package exports approximately 108 symbols across exported types, constructor
 
 ## Limitations
 
-- **Monolithic `mcp.go` size and breadth:** (Resolved) The original monolithic file has been split into `cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance) to separate these unrelated concerns.
+- **MCP surface spans three files:** `cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance), separating concerns that are otherwise unrelated.
 - **Surface Asymmetries:**
   - Asynchronous sprout (`POST /v1/phytomers/{sessionId}/sprout/grow`) and seed growth collection (`GET /v1/seeds/runs/{handle}`) exist on REST handlers (`SproutHandler`, `SeedHandler`) but have no corresponding MCP tool equivalents.
 - **Delegation Gate Posture on Tokens:** `AccessTokenVerifier` and `DelegatedPollen` in `cmd/stem/internal/receptors/config.go` fail closed for unverifiable or missing tokens, but a plain bearer request presenting no Pollen marker header bypasses the delegation gate for ungoverned REST routes.

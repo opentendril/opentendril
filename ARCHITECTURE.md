@@ -73,7 +73,7 @@ The single source of truth for execution flow and orchestrator security. It runs
 *   **Responsibilities:** They dictate the blast radius and authorization scope. A Sprout that grows on the Core Branch physically cannot access integrations (Symbiotic Nodules) located on the Enterprise Branch.
 
 ### E. Symbiotic Nodules (External Integrations)
-*   **Role:** Persistent, modular integration plugins that reach out and attach to external enterprise systems (e.g., GCP, AWS, Datadog) without bloating the lightweight Go Stem binary. Symbiotic Nodules **form symbioses** on specific Branches. *(Formerly "Tendrils"; "Tendril" is now the concept/brand only — see SYNTHETIC-TAXONOMY.md.)*
+*   **Role:** Persistent, modular integration plugins that reach out and attach to external enterprise systems (e.g., GCP, AWS, Datadog) without bloating the lightweight Go Stem binary. Symbiotic Nodules **form symbioses** on specific Branches.
 *   **Architectural Approaches:**
     1.  **Downstream MCP Servers:** The Stem speaks the Model Context Protocol downstream to external Tendril tools (e.g., `opentendril-gcp-mcp`).
     2.  **Core Capability Interfaces:** Conditionally compiled Go interfaces (`internal/core`) tailored for enterprise builds using build tags (`go build -tags enterprise`).

@@ -133,7 +133,7 @@ growth cycle:
 *   **Terroir** — the **host OS and machine** this instance grows on. *Terroir* is
     the complete local ground — soil, topography, microclimate — that gives a
     specific site its character; here, the particular machine/OS that shapes what
-    can grow. (Formerly referred to plainly as the "Host System".)
+    can grow.
 *   **Rhizosphere** — the **external ecosystem of existing technologies
     OpenTendril is based on**: the LLM providers, the container runtime, git, MCP
     — the inherited world the roots tap into. It is what Tendril *stands on*, kept
