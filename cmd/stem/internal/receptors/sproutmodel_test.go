@@ -85,6 +85,7 @@ func waitForSproutRun(t *testing.T, store *historydb.Store, runID string, wantSt
 				return run
 			}
 		}
+		// poll: the detached goroutine records the run, so re-read the store until the deadline above.
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("run %q never reached status %q; last seen %+v", runID, wantStatus, last)

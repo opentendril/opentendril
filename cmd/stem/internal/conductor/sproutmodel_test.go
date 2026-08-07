@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -183,14 +184,26 @@ func TestRunSproutRefusesAnUnresolvableProviderBeforeBuildingAnything(t *testing
 	built := false
 	stubSproutRun(t, func(llmCaller) { built = true })
 
-	preflightRan := false
-	runSproutPreflightChecksFn = func(ctx context.Context) error {
-		preflightRan = true
-		return nil
-	}
+	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		t.Fatal("a terrarium was started for a run with no resolvable model")
 		return nil, nil
+	}
+
+	// The refusal is ordered by what it protects, not by how early it can be
+	// made. Reads may precede it — preflight and substrate resolution both
+	// spend nothing, and their failures are more specific than "no model
+	// resolved", so a run misconfigured in both ways must report theirs.
+	// Nothing that MUTATES may precede it, and these are the mutations.
+	worktreeCreated := false
+	createShadowWorktreeFn = func(repoPath, branch string) (string, error) {
+		worktreeCreated = true
+		return "", fmt.Errorf("no shadow worktree should be created for a run with no resolvable model")
+	}
+	hostStashed := false
+	stashHostWorkspaceFn = func(ctx context.Context, workspace, stepID string) (bool, error) {
+		hostStashed = true
+		return false, fmt.Errorf("the host workspace should not be stashed for a run with no resolvable model")
 	}
 
 	orch := NewDockerOrchestrator()
@@ -212,8 +225,11 @@ func TestRunSproutRefusesAnUnresolvableProviderBeforeBuildingAnything(t *testing
 	if built {
 		t.Fatal("a sprout was constructed for a run with no resolvable model")
 	}
-	if preflightRan {
-		t.Fatal("the run got as far as its preflight checks; the refusal must come first")
+	if worktreeCreated {
+		t.Fatal("a shadow worktree was created for a run with no resolvable model")
+	}
+	if hostStashed {
+		t.Fatal("the host workspace was stashed for a run with no resolvable model")
 	}
 	if report.Provider != "grok" {
 		t.Fatalf("report.Provider = %q, want grok so the failure names where it was pointed", report.Provider)

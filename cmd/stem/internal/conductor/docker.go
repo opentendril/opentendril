@@ -215,19 +215,26 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		err = errors.Join(err, teardownErr)
 	}()
 
-	// The mind is resolved before anything is built, for two reasons. Every
-	// report this function produces then names what carried the run —
-	// including the reports for runs that failed before they ever called it —
-	// so the record of a run can be checked against what the provider billed
-	// for. And a resolution that named no model stops the run here, where
-	// nothing has been spent: the terrarium, the shadow worktree and the
-	// stashed host workspace are all on the far side of this line.
+	// The mind is resolved before anything is built, so every report this
+	// function produces names what carried the run — including the reports for
+	// runs that failed before they ever reached the model, so the record of a
+	// run can be checked against what the provider billed for.
+	//
+	// Resolving is not the same as refusing on it. The refusal waits until the
+	// substrate has been resolved to a real workspace, because a run can be
+	// misconfigured in two ways at once and the operator needs the more
+	// specific answer: an installation with no provider key AND a missing
+	// checkout was told only that no provider was configured, which sends
+	// somebody to fix the wrong thing. Substrate resolution reads; it spends
+	// nothing that a failure here would waste.
 	mind := d.resolveLLMClient()
 	report.Provider = mind.Provider()
 	report.Model = mind.Model()
-	if resolutionErr := mind.ResolutionError(); resolutionErr != nil {
-		return report, resolutionErr
-	}
+	// refuseUnresolvedMind stops a run that has no model to call. It is invoked
+	// on each substrate path once that path has a workspace and before that
+	// path mutates anything, so the terrarium, the shadow worktree, the host
+	// stash and the isolation branch all stay on the far side of it.
+	refuseUnresolvedMind := func() error { return mind.ResolutionError() }
 
 	if err := runSproutPreflightChecksFn(ctx); err != nil {
 		return report, err
@@ -317,9 +324,25 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 
 		fmt.Fprintf(os.Stderr, "🍄 Cross-pollinated foreign Substrate: %s\n", plan.cloneURL)
+
+		// The checkout resolved, so an unresolvable mind is now the run's most
+		// specific failure and is reported as one. An absent managed checkout
+		// has already returned above, which is the whole point of the ordering.
+		if err := refuseUnresolvedMind(); err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return report, err
+		}
 	} else {
 		sourcePath = repoRoot(sourcePath)
 		gitRepo = isGitRepo(sourcePath)
+
+		// Before the isolation branch, the host stash and the shadow worktree,
+		// all of which are below this line.
+		if err := refuseUnresolvedMind(); err != nil {
+			return report, err
+		}
 
 		if statusPath != "" && !filepath.IsAbs(statusPath) {
 			statusPath = filepath.Join(sourcePath, statusPath)
