@@ -149,6 +149,52 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 			t.Fatalf("attribution = %q, want %q", got, want)
 		}
 	})
+
+	t.Run("unset identity with no ambient git identity is refused", func(t *testing.T) {
+		repo := newRepo(t)
+		// We use a custom context to pass the env variables to the runGitCommand inside commitTerrariumExecution
+		// Wait, runGitCommand uses exec.CommandContext, which gets the env from os.Environ(). We need to set it for the test process or use t.Setenv.
+		t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+		t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+		// The repo created by newRepo has local git config set.
+		// Wait, newRepo runs `git config user.email ambient@example.com` which is LOCAL!
+		// So newRepo(t) sets an ambient local identity. We need to unset it in this subtest.
+		if _, err := runGitCommand(context.Background(), repo, "config", "--unset", "user.email"); err != nil {
+			t.Fatalf("unset user.email: %v", err)
+		}
+		if _, err := runGitCommand(context.Background(), repo, "config", "--unset", "user.name"); err != nil {
+			t.Fatalf("unset user.name: %v", err)
+		}
+		// Also unset GIT_AUTHOR_* and GIT_COMMITTER_* just in case the test runner has them.
+		t.Setenv("GIT_AUTHOR_NAME", "")
+		t.Setenv("GIT_AUTHOR_EMAIL", "")
+		t.Setenv("GIT_COMMITTER_NAME", "")
+		t.Setenv("GIT_COMMITTER_EMAIL", "")
+
+		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{})
+		if err == nil {
+			t.Fatalf("expected commit to be refused due to missing identity")
+		}
+		wantMsg := "sprout git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) and git cannot resolve an ambient identity — an unattributable Sprout commit is never created"
+		if !strings.Contains(err.Error(), wantMsg) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("api commit mode is refused", func(t *testing.T) {
+		repo := newRepo(t)
+		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{
+			CommitMode: CommitModeAPI,
+			Identity:   ResolvedIdentity{Name: "Name", Email: "email@example.com"},
+		})
+		if err == nil {
+			t.Fatalf("expected commit to be refused due to api mode")
+		}
+		wantMsg := "sprout git commit refused: the substrate is configured for api commit mode"
+		if !strings.Contains(err.Error(), wantMsg) {
+			t.Fatalf("unexpected error message: %v", err)
+		}
+	})
 }
 
 // The sprout CLI hands the orchestrator a substrate name; this is what the
