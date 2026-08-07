@@ -183,6 +183,11 @@ CREATE TABLE schemaMeta (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER 
 INSERT INTO schemaMeta (id, version) VALUES (1, 1);
 INSERT INTO sproutruns (runId, sessionId, status, startedAt)
 VALUES ('legacy-run', 'sess-legacy', 'matured', '2026-01-01T00:00:00Z');`
+	// The generation the fixture above is written at. A shape change that does
+	// not move the stamp past it is a shape change an older binary would open
+	// and misread, so the assertion below is against this number and not only
+	// against whatever the constant currently says.
+	const legacyVersion = 1
 	if _, err := legacy.Exec(legacySchema); err != nil {
 		t.Fatalf("write legacy schema: %v", err)
 	}
@@ -202,6 +207,9 @@ VALUES ('legacy-run', 'sess-legacy', 'matured', '2026-01-01T00:00:00Z');`
 	}
 	if version != currentSchemaVersion {
 		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
+	}
+	if version <= legacyVersion {
+		t.Fatalf("schema version = %d after a shape change; it must advance past %d or an older binary will open this database and misread it", version, legacyVersion)
 	}
 
 	runs, err := store.LoadSproutRuns(context.Background(), "sess-legacy", 10)

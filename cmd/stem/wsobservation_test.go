@@ -96,6 +96,27 @@ func bearerHeader(secret string) http.Header {
 	return http.Header{"Authorization": []string{"Bearer " + secret}}
 }
 
+// TestSproutRunRecordTakesItsSubjectFromTheContext pins where attribution can
+// come from. The synchronous run path records through this one constructor, and
+// a run whose subject came from the request body would be a run any caller
+// could file under somebody else's name.
+func TestSproutRunRecordTakesItsSubjectFromTheContext(t *testing.T) {
+	spec := core.SproutSpec{StepID: "step-1", SessionID: "sess-1", Transcript: "grow"}
+
+	delegated := openSproutRunRecord(core.WithPollen(context.Background(), "claude"), spec, "myrepo")
+	if delegated.Pollen != "claude" {
+		t.Fatalf("Pollen = %q, want claude", delegated.Pollen)
+	}
+	if delegated.Substrate != "myrepo" {
+		t.Fatalf("Substrate = %q, want myrepo", delegated.Substrate)
+	}
+
+	operator := openSproutRunRecord(context.Background(), spec, "myrepo")
+	if operator.Pollen != "" {
+		t.Fatalf("a run with no authenticated subject was attributed to %q", operator.Pollen)
+	}
+}
+
 // TestDelegatedStreamAcceptsItsOwnPhytomer is the access half: an issued
 // credential opens the live stream for the phytomer its own run is in, which
 // the Botanist key alone could do before.

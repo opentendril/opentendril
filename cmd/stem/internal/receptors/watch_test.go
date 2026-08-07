@@ -143,6 +143,31 @@ func TestOtherSubjectIsRefusedAnotherRun(t *testing.T) {
 	}
 }
 
+// TestUnresolvableCredentialIsNotTheOperator closes the fall-through. A
+// credential that no longer resolves — revoked, unknown, malformed — must be
+// refused, not quietly demoted to "no Pollen presented", which is the operator
+// and sees everything.
+func TestUnresolvableCredentialIsNotTheOperator(t *testing.T) {
+	mux, _ := newWatchFixture(t)
+
+	for _, path := range []string{
+		"/v1/phytomers/" + watchSubject + "/events",
+		"/v1/phytomers/" + watchSubject + "/sprout-runs",
+	} {
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer tendril_root_00000000000000000000000000000000")
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("%s with an unresolvable credential = %d, want 403: %s", path, recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Body.String(), "run-owner") {
+			t.Fatalf("%s answered an unresolvable credential with the record: %s", path, recorder.Body.String())
+		}
+	}
+}
+
 // TestOperatorReadsEverything pins the requirement that closing the read to
 // subjects does not close it to the Botanist. The operator holds no Pollen, so
 // it is scoped to nothing and both phytomers answer in full.
@@ -297,9 +322,17 @@ func TestDispatchedRunIsObservableByItsDispatcher(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 
+	// The run is held mid-flight until this test releases it, so the reads
+	// below happen against the record written when the dispatch was accepted
+	// rather than the one written when it finished. A caller that polls the
+	// instant it has its handle is the case that matters, and letting the run
+	// complete first would let a surface that only attributes finished runs
+	// pass.
+	release := make(chan struct{})
 	executed := &atomic.Int64{}
 	coreSvc := core.NewService(nil).WithSprout(core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
+			<-release
 			executed.Add(1)
 			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
 		},
@@ -335,7 +368,6 @@ func TestDispatchedRunIsObservableByItsDispatcher(t *testing.T) {
 	if dispatched.Code != http.StatusAccepted {
 		t.Fatalf("delegated dispatch = %d, want 202: %s", dispatched.Code, dispatched.Body.String())
 	}
-	waitForExecutions(t, executed, 1)
 
 	own := watchRequest(t, mux, "/v1/phytomers/tendril-dispatched/sprout-runs", watchOwner)
 	if own.Code != http.StatusOK {
@@ -353,6 +385,20 @@ func TestDispatchedRunIsObservableByItsDispatcher(t *testing.T) {
 	foreign := watchRequest(t, mux, "/v1/phytomers/tendril-dispatched/sprout-runs", watchOther)
 	if foreign.Code != http.StatusForbidden {
 		t.Fatalf("another subject reading the dispatched run = %d, want 403: %s", foreign.Code, foreign.Body.String())
+	}
+
+	// Let the run finish and confirm the finished record is still the
+	// dispatcher's — the ownership that was readable mid-flight is the same one
+	// that survives the write settling it.
+	close(release)
+	waitForExecutions(t, executed, 1)
+	settled := watchRequest(t, mux, "/v1/phytomers/tendril-dispatched/sprout-runs", watchOwner)
+	if settled.Code != http.StatusOK {
+		t.Fatalf("dispatcher reading its finished run = %d, want 200: %s", settled.Code, settled.Body.String())
+	}
+	runs := decodeRuns(t, settled.Body.Bytes())
+	if len(runs) != 1 || runs[0].Status != "matured" {
+		t.Fatalf("finished run did not settle under its dispatcher: %+v", runs)
 	}
 }
 
