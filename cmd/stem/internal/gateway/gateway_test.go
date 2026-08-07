@@ -171,7 +171,7 @@ func TestGatewayOverflowClosesConnection(t *testing.T) {
 // to avoid the writePump drain race seen in full integration tests.
 func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 	// Capture log output.
-	var logBuf bytes.Buffer
+	var logBuf threadSafeBuffer
 	origLog := log.Writer()
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(origLog)
@@ -226,6 +226,293 @@ func TestGatewayOverflowConcurrentCloseOnce(t *testing.T) {
 	_, _, readErr := rawConn.ReadMessage()
 	if readErr == nil {
 		t.Fatal("expected rawConn.ReadMessage to error after dropAndClose, got nil")
+	}
+}
+
+// TestGatewayWriteDeadlineNotStale is the regression test for the bug where
+// writePump's message branch inherited the absolute deadline set by the ping
+// branch. A write after that deadline expired would fail silently.
+//
+// Mechanism: shorten pingPeriod so the server pings within 150 ms. After
+// answering the ping (so the server stays alive), wait 200 ms past writeWait —
+// the exact window where a stale deadline would have killed the connection —
+// then publish a second event and assert it arrives. Under the bug, the second
+// event would cause a write against the expired ping-deadline and the
+// connection would close without a log line. With the fix, the message branch
+// resets the deadline before every write, so the second event delivers
+// normally.
+//
+// Mutation verification (do not delete): removing the
+// c.conn.SetWriteDeadline(time.Now().Add(writeWait)) line from the message
+// branch of writePump causes this test to time out waiting for the second
+// event, because the connection closes silently under the stale deadline.
+func TestGatewayWriteDeadlineNotStale(t *testing.T) {
+	// Shorten timing so the test completes quickly, but crucially keep
+	// writeWait < pingPeriod just as it is in production (10s < 50s). This
+	// ensures the deadline set by a ping actually expires before the next
+	// ping fires, creating the stale deadline window.
+	origWrite := writeWait
+	origPing := pingPeriod
+	origPong := pongWait
+	writeWait = 100 * time.Millisecond
+	pingPeriod = 300 * time.Millisecond
+	pongWait = 800 * time.Millisecond
+	t.Cleanup(func() {
+		writeWait = origWrite
+		pingPeriod = origPing
+		pongWait = origPong
+	})
+
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+
+	// Dial with a custom dialer so we can register a PingHandler to answer
+	// the server's pings. websocket.DefaultDialer does not reply to pings,
+	// which would cause readPump to close after pongWait.
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// pingFired signals when a ping is actually received and processed by the client.
+	pingFired := make(chan struct{}, 1)
+
+	// Answer any incoming ping control frames — a pong extends the server's
+	// read deadline and keeps the connection alive for the duration of the
+	// test.
+	conn.SetPingHandler(func(data string) error {
+		select {
+		case pingFired <- struct{}{}:
+		default:
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
+	})
+
+	// Drain the initial "connected" handshake frame.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+
+	// Publish a first event and receive it to confirm the connection is live.
+	bus.Publish(eventbus.Event{
+		Type:   eventbus.EventSproutEmerged,
+		Source: "deadline-test-first",
+	})
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read first event: %v", err)
+	}
+
+	// In order to process control frames (like pings), gorilla requires an active read.
+	// Since we don't expect data messages before we publish the second event, we start
+	// a background reader to block and wait for the ping.
+	msgChan := make(chan []byte, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		// Just one read is enough to process the ping and then block on the second event.
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		msgChan <- payload
+	}()
+
+	// Wait up to 2 seconds for the server to actually send its ping.
+	select {
+	case <-pingFired:
+		// Ping received! We know definitively that the server's writePump executed
+		// the ping branch and set an absolute write deadline on the connection.
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for server to send ping")
+	case err := <-errChan:
+		t.Fatalf("read error while waiting for ping: %v", err)
+	}
+
+	// Now wait for the server's writeWait to elapse, so the deadline expires
+	// before we attempt the second write.
+	time.Sleep(writeWait + 50*time.Millisecond) // dwell: let the observed deadline expire
+
+	// Publish the second event. Under the bug this write meets the expired
+	// ping deadline and closes silently. With the fix it resets the deadline
+	// and delivers normally.
+	bus.Publish(eventbus.Event{
+		Type:   eventbus.EventSproutEmerged,
+		Source: "deadline-test-second",
+	})
+
+	// Wait for the background reader to receive the second event.
+	select {
+	case payload := <-msgChan:
+		var msg map[string]interface{}
+		if err := json.Unmarshal(payload, &msg); err != nil {
+			t.Fatalf("decode second event: %v", err)
+		}
+		if msg["source"] != "deadline-test-second" {
+			t.Fatalf("second event source = %v, want deadline-test-second", msg["source"])
+		}
+	case err := <-errChan:
+		t.Fatalf("second event not received after stale-deadline window: %v — connection was likely closed by a stale write deadline (the regression)", err)
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for second event")
+	}
+}
+
+type threadSafeBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *threadSafeBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *threadSafeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// TestGatewayWritePumpLogsOnError asserts that a write error in writePump
+// produces a log line, so the next stream defect is observable from journalctl
+// rather than requiring a live investigation. The test forces a write error by
+// closing the underlying net.Conn while writePump is blocked trying to write,
+// then reads the captured log output.
+//
+// Mutation verification (do not delete): removing the log.Printf calls from
+// the writePump message branch causes this test to fail because logBuf remains
+// empty.
+func TestGatewayWritePumpLogsOnError(t *testing.T) {
+	origWrite := writeWait
+	origPing := pingPeriod
+	writeWait = 500 * time.Millisecond
+	pingPeriod = 10 * time.Second
+	t.Cleanup(func() {
+		writeWait = origWrite
+		pingPeriod = origPing
+	})
+
+	var logBuf threadSafeBuffer
+	origLog := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(origLog)
+
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// Drain the handshake.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+
+	// Close the client connection so the next write from writePump fails.
+	conn.Close()
+
+	// Give readPump time to notice the close and exit, which also fires the
+	// deferred conn.Close on the server side. Then publish into the closed
+	// connection so writePump's message branch tries a write and logs.
+	// poll: wait for server-side cleanup after client disconnect
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		bus.Publish(eventbus.Event{
+			Type:   eventbus.EventSproutEmerged,
+			Source: "write-error-probe",
+		})
+		str := logBuf.String()
+		if strings.Contains(str, "gateway: writePump exiting") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond) // poll: check every 20 ms
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "gateway: writePump exiting") {
+		t.Fatalf("expected a gateway writePump log line after write error, got nothing; log:\n%s", logged)
+	}
+}
+
+// TestGatewayIdleConnectionSurvivesPingPeriod asserts that a well-behaved
+// client that answers pings stays connected through an entire pingPeriod and
+// continues to receive events afterwards. This is the non-regression for the
+// fix — it must remain true that pings keep an idle connection alive.
+func TestGatewayIdleConnectionSurvivesPingPeriod(t *testing.T) {
+	origWrite := writeWait
+	origPing := pingPeriod
+	origPong := pongWait
+	writeWait = 200 * time.Millisecond
+	pingPeriod = 150 * time.Millisecond
+	pongWait = 600 * time.Millisecond
+	t.Cleanup(func() {
+		writeWait = origWrite
+		pingPeriod = origPing
+		pongWait = origPong
+	})
+
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Answer pings to keep the server's read deadline extended.
+	conn.SetPingHandler(func(data string) error {
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(time.Second))
+	})
+
+	// Drain the handshake.
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read connected frame: %v", err)
+	}
+
+	// Idle through two full pingPeriods (300 ms). The server sends pings;
+	// we answer them. No events are published during this window.
+	// dwell: deliberate two-pingPeriod idle to confirm pings sustain the connection
+	time.Sleep(300 * time.Millisecond) // dwell: two pingPeriods of silence
+
+	// Now publish an event. If the connection survived the idle window, it
+	// arrives. If the server closed the connection (e.g. because pings broke
+	// something), ReadMessage returns an error.
+	bus.Publish(eventbus.Event{
+		Type:   eventbus.EventSproutEmerged,
+		Source: "idle-survival",
+	})
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, payload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("event not received after idle window — connection was closed during ping cycle: %v", err)
+	}
+
+	var msg map[string]interface{}
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		t.Fatalf("decode event: %v", err)
+	}
+	if msg["source"] != "idle-survival" {
+		t.Fatalf("event source = %v, want idle-survival", msg["source"])
 	}
 }
 
