@@ -158,8 +158,10 @@ func TestRunSproutReportsTheModelItsClientWillUse(t *testing.T) {
 	if report.Model == "" {
 		t.Fatal("report names no model; a run whose model is unknown cannot be checked against a provider's usage")
 	}
-	if report.Provider != "google" || report.Model != "gemini-2.5-pro" {
-		t.Fatalf("report = %s/%s, want google/gemini-2.5-pro", report.Provider, report.Model)
+	// The cheapest tool-capable model google serves, because this run set no
+	// tier and the unconfigured default no longer reaches for premium.
+	if report.Provider != "google" || report.Model != "gemini-3.5-flash" {
+		t.Fatalf("report = %s/%s, want google/gemini-3.5-flash", report.Provider, report.Model)
 	}
 	// The report is only worth anything if it names the mind that ran. Asserting
 	// the field alone would pass just as well if the report were assembled from
@@ -175,10 +177,11 @@ func TestRunSproutReportsTheModelItsClientWillUse(t *testing.T) {
 // the far end of a container start is the expensive version of it.
 func TestRunSproutRefusesAnUnresolvableProviderBeforeBuildingAnything(t *testing.T) {
 	clearLLMEnv(t)
-	// grok serves one premium model; a cheapest tier leaves it nothing, while
-	// anthropic — whose key is present — has a cheapest model waiting.
+	// grok is named and its key is absent, so the provider is not available at
+	// any tier — the ordinary shape of this mistake, and one no relaxation can
+	// rescue. anthropic, whose key IS present, is where an unconstrained
+	// fallback would go instead.
 	t.Setenv("DEFAULT_LLM_PROVIDER", "grok")
-	t.Setenv("GROK_API_KEY", "grok-key")
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
 	built := false
@@ -261,5 +264,34 @@ func TestResolveLLMClientHonoursAProviderWithoutAModel(t *testing.T) {
 	}
 	if !strings.HasPrefix(client.Model(), "gemini") {
 		t.Fatalf("client model = %q, want a google model", client.Model())
+	}
+}
+
+// An unattended run nobody configured must not land on the most expensive model
+// its provider serves. The cost ceiling now means what it says, so the default
+// tier decides what an operator is billed for a run they never chose a model
+// for — and that default is the cheapest model that can still drive tools.
+func TestUnconfiguredAutonomousRunStartsOnTheCheapestToolCapableModel(t *testing.T) {
+	clearLLMEnv(t)
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+	orch := NewDockerOrchestrator()
+	if orch.Tier != "" {
+		t.Fatalf("orch.Tier = %q, want empty — this test is about the DEFAULT", orch.Tier)
+	}
+
+	client := orch.resolveLLMClient()
+	if err := client.ResolutionError(); err != nil {
+		t.Fatalf("ResolutionError = %v, want nil", err)
+	}
+	if client.Model() != "claude-haiku-4-5" {
+		t.Fatalf("default model = %q, want claude-haiku-4-5 (the cheapest tool-capable model)", client.Model())
+	}
+
+	// A tier set on the step still governs, so escalation stays available and
+	// deliberate rather than being the thing that happens by itself.
+	orch.Tier = llm.TierPremium
+	if got := orch.resolveLLMClient().Model(); got != "claude-opus-4-8" {
+		t.Fatalf("with an explicit premium tier, model = %q, want claude-opus-4-8", got)
 	}
 }

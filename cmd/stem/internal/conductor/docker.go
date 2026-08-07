@@ -134,12 +134,20 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 		// there too — the run could end up somewhere else entirely.
 		spec = llm.ResolveModelProviderSpec(d.Provider, d.Model)
 	} else {
-		tier := llm.TierPremium
+		// An unconfigured autonomous run starts on the cheapest model that can
+		// still drive tools, and is escalated deliberately — by a tier on the
+		// step, a session preference, or a pinned model — rather than by
+		// default. The ceiling now means what it says, so defaulting it to
+		// premium would put every unattended run on the most expensive model
+		// its provider serves, which is not a decision to make on an operator's
+		// behalf and not one they would see until a bill arrived.
+		tier := llm.TierCheapest
 		if d != nil && d.Tier != "" {
 			tier = d.Tier
 		}
 		// An autonomous sprout must drive tools; the tier default must never
-		// fall back to a model that cannot (see ResolveAgentTierProviderSpec).
+		// fall back to a model that cannot (see ResolveAgentTierProviderSpec,
+		// which raises this ceiling before it ever gives up tool-capability).
 		spec = llm.ResolveAgentTierProviderSpec(tier)
 	}
 
