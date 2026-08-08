@@ -240,6 +240,11 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 // for whoever is watching the bus, and in the run's own outcome so a growth
 // that produced nothing can answer "was the protocol to blame?" from its record.
 //
+// endpointMessage is the provider's own text and is surfaced alongside the
+// stable reason so an operator reads what the endpoint said, not what we
+// concluded. For the declared-incapable path it is empty: that classification
+// comes from the operator's own configuration and needs no evidence.
+//
 // It also performs the demotion rather than only reporting it. Clearing
 // nativeClient is what the rest of the turn loop reads to mean prose — it
 // selects parseModelResponse over the native tool calls, and it stops the tool
@@ -249,17 +254,25 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 //
 // Callers reach here at most once per run, because the only two paths into it
 // both require a non-nil nativeClient.
-func (a *Sprout) announceDowngrade(reason string) {
-	fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol\n", reason)
+func (a *Sprout) announceDowngrade(reason string, endpointMessage string) {
+	if endpointMessage != "" {
+		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol: %s\n", reason, endpointMessage)
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol\n", reason)
+	}
 
 	if a.eventBus != nil {
+		data := map[string]interface{}{
+			"reason": reason,
+		}
+		if endpointMessage != "" {
+			data["endpointMessage"] = endpointMessage
+		}
 		a.eventBus.Publish(eventbus.Event{
 			Type:      eventbus.EventSproutDowngraded,
 			Source:    a.stepID,
 			SessionID: a.sessionID,
-			Data: map[string]interface{}{
-				"reason": reason,
-			},
+			Data:      data,
 		})
 	}
 
@@ -291,7 +304,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	// protocol from the start. A refusal discovered at request time is handled
 	// in the turn loop, through the same method.
 	if a.nativeClient != nil && !a.nativeClient.ToolDefinitionsCapable() {
-		a.announceDowngrade("declared incapable by configuration")
+		a.announceDowngrade("declared incapable by configuration", "")
 		a.nativeClient = nil
 	}
 
@@ -367,16 +380,30 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			}
 		}
 
-		// The endpoint would not take the definitions. Demote to the prose
-		// protocol and put the same turn again — the mind has not answered yet,
-		// so nothing is lost by re-asking and a.messages still holds the turn.
+		// The endpoint returned a client error on a request that carried tool
+		// definitions. That is not proof the definitions were the cause — probe
+		// the same turn without them to find out.
 		//
-		// The refused attempt must not spend an iteration: it produced nothing
-		// to reason about, and charging the run for it would shorten every
-		// downgraded run by a turn. This cannot spin, because announceDowngrade
-		// clears nativeClient and only the native branch above raises this.
-		if errors.Is(err, llm.ErrToolsRefused) {
-			a.announceDowngrade("detected rejection by endpoint")
+		// Probe succeeds → the definitions were the cause. Announce the
+		// downgrade with the original error's text as evidence, and put the
+		// same turn again in prose. The refused attempt must not spend an
+		// iteration: it produced nothing to reason about.
+		//
+		// Probe fails → the definitions were not the cause. Return the probe's
+		// error. Nothing has been mutated at this point — announceDowngrade has
+		// not run — so no demotion or announcement is made.
+		if errors.Is(err, llm.ErrRejectedWithTools) {
+			originalErrMsg := err.Error()
+			a.msgMu.RLock()
+			currentMessages := a.messages
+			a.msgMu.RUnlock()
+			_, probeErr := a.nativeClient.CallWithTools(ctx, currentMessages, nil, nil)
+			if probeErr != nil {
+				// Probe also failed: definitions were not the cause.
+				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, probeErr
+			}
+			// Probe succeeded: definitions were the cause.
+			a.announceDowngrade("accepted without tool definitions", originalErrMsg)
 			iteration--
 			continue
 		}

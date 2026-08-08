@@ -375,8 +375,8 @@ func TestDoCallAnthropicReportsToolRefusalWithoutRetrying(t *testing.T) {
 	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
 
 	_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
-	if !errors.Is(err, ErrToolsRefused) {
-		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	if !errors.Is(err, ErrRejectedWithTools) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrRejectedWithTools)", err)
 	}
 	if requests != 1 {
 		t.Errorf("requests = %d, want exactly 1 — the client must not re-ask on its own", requests)
@@ -401,8 +401,8 @@ func TestDoCallAnthropicOnlyTreats400And422AsToolRefusal(t *testing.T) {
 		tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "test"}}}
 
 		_, err := client.doCall(context.Background(), server.URL, nil, tools, false, nil)
-		if got := errors.Is(err, ErrToolsRefused); got != wantRefusal {
-			t.Errorf("status %d: errors.Is(err, ErrToolsRefused) = %v, want %v (err = %v)", status, got, wantRefusal, err)
+		if got := errors.Is(err, ErrRejectedWithTools); got != wantRefusal {
+			t.Errorf("status %d: errors.Is(err, ErrRejectedWithTools) = %v, want %v (err = %v)", status, got, wantRefusal, err)
 		}
 		server.Close()
 	}

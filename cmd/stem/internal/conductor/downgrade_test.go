@@ -3,6 +3,7 @@ package conductor
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -115,32 +116,40 @@ func TestDeclaredIncapableEndpointRunsInProseAndSaysSo(t *testing.T) {
 	}
 }
 
-// refusingLLM answers the first native call with a refusal, exactly as the
-// client raises one, then behaves as an ordinary prose endpoint.
+// refusingLLM answers any native call that carries tool definitions with a
+// refusal, exactly as the real client does. A call with no definitions (the
+// probe) succeeds and returns a parseable final answer. The previous
+// count-based design refused on a call count, which would also refuse the
+// probe and hide the whole change. The offer-based design matches the real
+// client.
 type refusingLLM struct {
 	fakeLLM
 	toolsPerNativeCall [][]llm.ToolDefinition
-	refusals           int
-	refusalsToGive     int
+	refusalMessage     string
 }
 
 func (f *refusingLLM) ToolDefinitionsCapable() bool { return true }
 
 func (f *refusingLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error) {
-	f.toolsPerNativeCall = append(f.toolsPerNativeCall, tools)
+	toolsCopy := make([]llm.ToolDefinition, len(tools))
+	copy(toolsCopy, tools)
+	f.toolsPerNativeCall = append(f.toolsPerNativeCall, toolsCopy)
 	if tokenChan != nil {
 		close(tokenChan)
 	}
-	if f.refusals < f.refusalsToGive {
-		f.refusals++
-		return llm.Result{}, llm.ErrToolsRefused
+	if len(tools) > 0 {
+		msg := f.refusalMessage
+		if msg == "" {
+			msg = "tools not supported by this endpoint"
+		}
+		return llm.Result{}, fmt.Errorf("%w: llm returned 400: %s", llm.ErrRejectedWithTools, msg)
 	}
 	return llm.Result{Text: "native answer"}, nil
 }
 
 func TestRefusedToolDefinitionsDowngradeAndSaySo(t *testing.T) {
 	workspace := t.TempDir()
-	client := &refusingLLM{refusalsToGive: 1}
+	client := &refusingLLM{refusalMessage: "temperature is deprecated for this model"}
 	client.response = `{"final":"done"}`
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 	bus := eventbus.New()
@@ -160,26 +169,44 @@ func TestRefusedToolDefinitionsDowngradeAndSaySo(t *testing.T) {
 		t.Fatalf("Run: %v", runErr)
 	}
 
-	if !strings.Contains(stderr, "detected rejection by endpoint") {
-		t.Errorf("stderr = %q, want the detected-rejection warning", stderr)
+	// The probe found that removing definitions made the call succeed, so the
+	// downgrade is announced with what was proven, not a hypothesis.
+	if !strings.Contains(stderr, "accepted without tool definitions") {
+		t.Errorf("stderr = %q, want the proven-reason in the warning", stderr)
+	}
+	if !strings.Contains(stderr, "falling back to prose protocol") {
+		t.Errorf("stderr = %q, want the downgrade warning", stderr)
+	}
+	// The endpoint's own message must reach the operator.
+	if !strings.Contains(stderr, "temperature is deprecated for this model") {
+		t.Errorf("stderr = %q, want the endpoint's own message", stderr)
 	}
 
 	events := downgradeEvents(bus)
 	if len(events) != 1 {
 		t.Fatalf("EventSproutDowngraded count = %d, want 1", len(events))
 	}
-	if got := events[0].Data["reason"]; got != "detected rejection by endpoint" {
-		t.Errorf("event reason = %v, want 'detected rejection by endpoint'", got)
+	if got := events[0].Data["reason"]; got != "accepted without tool definitions" {
+		t.Errorf("event reason = %v, want 'accepted without tool definitions'", got)
+	}
+	if got, ok := events[0].Data["endpointMessage"].(string); !ok || !strings.Contains(got, "temperature is deprecated for this model") {
+		t.Errorf("event endpointMessage = %v, want the endpoint's message", events[0].Data["endpointMessage"])
 	}
 
 	if res.Protocol != "prose" {
 		t.Errorf("Protocol = %q, want prose", res.Protocol)
 	}
 
-	// The refused turn is the only one that may be offered definitions. Anything
-	// after it goes to the prose client, which takes none at all.
-	if len(client.toolsPerNativeCall) != 1 {
-		t.Errorf("native calls = %d, want 1 — the endpoint must not be asked again", len(client.toolsPerNativeCall))
+	// Two native calls must have been made: the refused turn (with tools) and
+	// the probe (without tools).
+	if len(client.toolsPerNativeCall) != 2 {
+		t.Fatalf("native calls = %d, want 2 (refused turn + probe)", len(client.toolsPerNativeCall))
+	}
+	if len(client.toolsPerNativeCall[0]) == 0 {
+		t.Errorf("first native call (refused) carried no tools, want the refused turn to carry tools")
+	}
+	if len(client.toolsPerNativeCall[1]) != 0 {
+		t.Errorf("probe carried %d tools, want zero", len(client.toolsPerNativeCall[1]))
 	}
 
 	// The re-issued turn has to teach the protocol it now expects back.
@@ -198,7 +225,7 @@ func TestRefusedToolDefinitionsDowngradeAndSaySo(t *testing.T) {
 // touched nothing.
 func TestProseToolCallAfterDowngradeIsExecuted(t *testing.T) {
 	workspace := t.TempDir()
-	client := &refusingLLM{refusalsToGive: 1}
+	client := &refusingLLM{}
 	client.responses = []string{
 		`{"tool":"readFile","arguments":{"path":"README.md"}}`,
 		`{"final":"read it"}`,
@@ -231,11 +258,11 @@ func TestProseToolCallAfterDowngradeIsExecuted(t *testing.T) {
 }
 
 // The downgrade is a state change, so it is announced when the state changes —
-// once. A second refusal cannot happen, because the native client is gone; if
-// one somehow did, the run would still not announce it twice.
+// once. A second refusal cannot happen after a proven downgrade, because the
+// native client is cleared and the endpoint is not asked again.
 func TestDowngradeAnnouncesOncePerRun(t *testing.T) {
 	workspace := t.TempDir()
-	client := &refusingLLM{refusalsToGive: 5}
+	client := &refusingLLM{}
 	client.response = `{"final":"done"}`
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 	bus := eventbus.New()
@@ -258,8 +285,11 @@ func TestDowngradeAnnouncesOncePerRun(t *testing.T) {
 	if got := len(downgradeEvents(bus)); got != 1 {
 		t.Errorf("EventSproutDowngraded count = %d, want 1", got)
 	}
-	if client.refusals != 1 {
-		t.Errorf("refusals collected = %d, want 1 — the endpoint was asked again after it said no", client.refusals)
+	// The refusingLLM refuses on len(tools)>0. After the probe succeeds and
+	// the downgrade fires, nativeClient is nil — the endpoint is never asked
+	// again with definitions.
+	if len(client.toolsPerNativeCall) > 2 {
+		t.Errorf("native calls = %d, want at most 2 (refused + probe) — endpoint was asked again after downgrade", len(client.toolsPerNativeCall))
 	}
 }
 
@@ -269,7 +299,7 @@ func TestDowngradeAnnouncesOncePerRun(t *testing.T) {
 // else in the suite can see, because the budget is only reached at the cap.
 func TestRefusedTurnDoesNotSpendAnIteration(t *testing.T) {
 	workspace := t.TempDir()
-	client := &refusingLLM{refusalsToGive: 1}
+	client := &refusingLLM{}
 	// Never finishes: every prose turn asks for a tool, so the run is driven
 	// all the way to the cap and the number of turns it got becomes visible.
 	client.response = `{"tool":"readFile","arguments":{"path":"README.md"}}`
@@ -317,6 +347,243 @@ func TestNativeRunPublishesNoDowngrade(t *testing.T) {
 	}
 	if res.Protocol != "native" {
 		t.Errorf("Protocol = %q, want native", res.Protocol)
+	}
+}
+
+// alwaysRefusingLLM refuses every native call regardless of whether tool
+// definitions are present, simulating a request error unrelated to tools
+// (e.g. a deprecated model parameter). probeMessage is the error text
+// returned on the no-tools probe.
+type alwaysRefusingLLM struct {
+	fakeLLM
+	toolsPerNativeCall [][]llm.ToolDefinition
+	probeMessage       string
+}
+
+func (f *alwaysRefusingLLM) ToolDefinitionsCapable() bool { return true }
+
+func (f *alwaysRefusingLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error) {
+	toolsCopy := make([]llm.ToolDefinition, len(tools))
+	copy(toolsCopy, tools)
+	f.toolsPerNativeCall = append(f.toolsPerNativeCall, toolsCopy)
+	if tokenChan != nil {
+		close(tokenChan)
+	}
+	if len(tools) > 0 {
+		// First call (with definitions): raise ErrRejectedWithTools so the
+		// Sprout believes it may need to probe.
+		return llm.Result{}, fmt.Errorf("%w: llm returned 400: tools not allowed", llm.ErrRejectedWithTools)
+	}
+	// Probe (no tools) also fails — the cause was not the definitions.
+	msg := f.probeMessage
+	if msg == "" {
+		msg = "request failed"
+	}
+	return llm.Result{}, fmt.Errorf("llm returned 400: %s", msg)
+}
+
+// TestProbeFailsNoDowngrade is the critical test. When the probe also fails
+// the definitions were not the cause, and the run must return the probe's
+// error without any downgrade announcement on any of the three channels.
+//
+// Mutation that must make this test fail: remove the `if probeErr != nil {
+// return }` branch in the turn loop (i.e. let the code reach announceDowngrade
+// regardless of probe outcome). Confirm no other test fails on that mutation.
+func TestProbeFailsNoDowngrade(t *testing.T) {
+	workspace := t.TempDir()
+	probeErrMsg := "temperature is deprecated for this model"
+	client := &alwaysRefusingLLM{probeMessage: probeErrMsg}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	var runErr error
+	stderr := captureStderr(t, func() {
+		_, runErr = sprout.Run(context.Background(), "test")
+	})
+
+	// The probe failed — no downgrade must be announced on any channel.
+	if got := len(downgradeEvents(bus)); got != 0 {
+		t.Errorf("EventSproutDowngraded count = %d, want 0 — probe failure must not cause downgrade", got)
+	}
+	if strings.Contains(stderr, "falling back to prose protocol") {
+		t.Errorf("stderr contains downgrade warning but probe failed — no downgrade must be announced: %q", stderr)
+	}
+	if runErr == nil {
+		t.Fatal("Run returned nil error, want the probe's error")
+	}
+	if !strings.Contains(runErr.Error(), probeErrMsg) {
+		t.Errorf("runErr = %v, want to contain the probe's error message %q", runErr, probeErrMsg)
+	}
+}
+
+// recordingAndRefusingLLM refuses any native call with tools, accepts the
+// probe (no tools) with a parseable final answer, and records all native calls
+// for inspection.
+type recordingAndRefusingLLM struct {
+	fakeLLM
+	nativeCalls []struct {
+		messages []llm.Message
+		tools    []llm.ToolDefinition
+	}
+	probeAnswer string
+}
+
+func (f *recordingAndRefusingLLM) ToolDefinitionsCapable() bool { return true }
+
+func (f *recordingAndRefusingLLM) CallWithTools(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition, tokenChan chan<- string) (llm.Result, error) {
+	msgCopy := make([]llm.Message, len(messages))
+	copy(msgCopy, messages)
+	toolCopy := make([]llm.ToolDefinition, len(tools))
+	copy(toolCopy, tools)
+	f.nativeCalls = append(f.nativeCalls, struct {
+		messages []llm.Message
+		tools    []llm.ToolDefinition
+	}{msgCopy, toolCopy})
+	if tokenChan != nil {
+		close(tokenChan)
+	}
+	if len(tools) > 0 {
+		return llm.Result{}, fmt.Errorf("%w: llm returned 400: tools not supported", llm.ErrRejectedWithTools)
+	}
+	// Probe succeeds: return a parseable answer that must be discarded.
+	return llm.Result{Text: f.probeAnswer}, nil
+}
+
+// TestProbeSendsCorrectMessages asserts that the probe carries the same
+// messages as the refused turn and zero tool definitions, and that the probe's
+// answer is discarded — the run continues in prose and returns the prose
+// client's answer, not the probe's.
+//
+// Mutation for messages check: modify the probe call to send a different
+// message set — the message-equality assertions fail. Mutation for discarded-
+// answer: to verify the property is not already structurally guaranteed,
+// assign the probe result to `response` in the turn loop — the response and
+// transcript checks fail.
+func TestProbeSendsCorrectMessages(t *testing.T) {
+	workspace := t.TempDir()
+
+	probeAnswerText := "probe answer that must be discarded"
+	rec := &recordingAndRefusingLLM{probeAnswer: probeAnswerText}
+	// The prose client returns the real final answer after downgrade.
+	rec.fakeLLM.response = `{"final":"real answer"}`
+
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", rec, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	var res sproutResult
+	var runErr error
+	_ = captureStderr(t, func() {
+		res, runErr = sprout.Run(context.Background(), "test task")
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+
+	// Two native calls must have been made: refused turn and probe.
+	if len(rec.nativeCalls) != 2 {
+		t.Fatalf("native calls = %d, want 2 (refused + probe)", len(rec.nativeCalls))
+	}
+
+	// First call (refused) must carry tools.
+	if len(rec.nativeCalls[0].tools) == 0 {
+		t.Errorf("first native call (refused) carried no tools, want non-empty")
+	}
+
+	// Second call (probe) must carry zero tools.
+	if len(rec.nativeCalls[1].tools) != 0 {
+		t.Errorf("probe carried %d tools, want zero", len(rec.nativeCalls[1].tools))
+	}
+
+	// Both calls must carry the same messages — the probe is the same turn
+	// without the definitions, not a different turn.
+	msgs0 := rec.nativeCalls[0].messages
+	msgs1 := rec.nativeCalls[1].messages
+	if len(msgs0) != len(msgs1) {
+		t.Fatalf("refused call had %d messages, probe had %d — they must match", len(msgs0), len(msgs1))
+	}
+	for i := range msgs0 {
+		if msgs0[i].Role != msgs1[i].Role || msgs0[i].Content != msgs1[i].Content {
+			t.Errorf("message[%d] differs: refused=%+v probe=%+v", i, msgs0[i], msgs1[i])
+		}
+	}
+
+	// The probe asked a question; it did not take a turn. Its answer must not
+	// reach the record of what the mind said.
+	//
+	// The transcript is the assertion that can catch this. A companion check on
+	// res.Response was removed because it could not fail: the probe is followed
+	// by a continue, which reassigns response before anything reads it, so the
+	// answer is unreachable from there whatever the code does. An assertion
+	// that cannot go red reads as coverage without being any.
+	if strings.Contains(sprout.transcript.String(), probeAnswerText) {
+		t.Errorf("probe answer leaked into transcript: %s", sprout.transcript.String())
+	}
+
+	// The run must have continued in prose and returned the prose client's answer.
+	if res.Response != "real answer" {
+		t.Errorf("Response = %q, want 'real answer'", res.Response)
+	}
+}
+
+// TestAnnouncedReasonCarriesEndpointMessage asserts that the endpointMessage
+// field in the downgrade event and on stderr carries the provider's own text,
+// not a fixed string we invented. The reason field must remain the stable
+// short value.
+//
+// Mutation: pass "" as endpointMessage to announceDowngrade in the proven-cause
+// branch — both the stderr check and the event endpointMessage check fail.
+func TestAnnouncedReasonCarriesEndpointMessage(t *testing.T) {
+	workspace := t.TempDir()
+	providerText := "tool_use is not supported for this model"
+	client := &refusingLLM{refusalMessage: providerText}
+	client.response = `{"final":"done"}`
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	var runErr error
+	stderr := captureStderr(t, func() {
+		_, runErr = sprout.Run(context.Background(), "test")
+	})
+	if runErr != nil {
+		t.Fatalf("Run: %v", runErr)
+	}
+
+	// The endpoint's own sentence must appear on stderr.
+	if !strings.Contains(stderr, providerText) {
+		t.Errorf("stderr = %q, want to contain the endpoint's own message %q", stderr, providerText)
+	}
+
+	// The endpoint's own sentence must appear in the event's endpointMessage field.
+	events := downgradeEvents(bus)
+	if len(events) != 1 {
+		t.Fatalf("EventSproutDowngraded count = %d, want 1", len(events))
+	}
+	got, ok := events[0].Data["endpointMessage"].(string)
+	if !ok {
+		t.Fatalf("endpointMessage field missing or wrong type: %v", events[0].Data["endpointMessage"])
+	}
+	if !strings.Contains(got, providerText) {
+		t.Errorf("endpointMessage = %q, want to contain %q", got, providerText)
+	}
+	// The reason field must remain the stable short value, not the provider's text.
+	if reason := events[0].Data["reason"]; reason != "accepted without tool definitions" {
+		t.Errorf("reason = %v, want 'accepted without tool definitions'", reason)
 	}
 }
 
