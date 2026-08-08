@@ -564,3 +564,284 @@ func TestConfiguredTemperatureReachesProviderSpec(t *testing.T) {
 		t.Errorf("ProviderSpec.Temperature = %v, want 0.35", *spec.Temperature)
 	}
 }
+
+// countCacheMarkers walks any JSON value and returns the number of objects that
+// carry a "cache_control" key with {"type":"ephemeral"}.
+func countCacheMarkers(v any) int {
+	switch val := v.(type) {
+	case map[string]any:
+		n := 0
+		if cc, ok := val["cache_control"].(map[string]any); ok && cc["type"] == "ephemeral" {
+			n++
+		}
+		for _, child := range val {
+			n += countCacheMarkers(child)
+		}
+		return n
+	case []any:
+		n := 0
+		for _, item := range val {
+			n += countCacheMarkers(item)
+		}
+		return n
+	}
+	return 0
+}
+
+// collectMessageBlockPositions returns the flat 0-based positions (across all
+// messages) that carry a cache_control marker. It does not include the system
+// block; only the message sequence is walked.
+func collectMessageBlockPositions(messages []any) []int {
+	var marked []int
+	pos := 0
+	for _, msg := range messages {
+		m, ok := msg.(map[string]any)
+		if !ok {
+			continue
+		}
+		blocks, ok := m["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, block := range blocks {
+			b, ok := block.(map[string]any)
+			if !ok {
+				pos++
+				continue
+			}
+			if cc, ok := b["cache_control"].(map[string]any); ok && cc["type"] == "ephemeral" {
+				marked = append(marked, pos)
+			}
+			pos++
+		}
+	}
+	return marked
+}
+
+// TestAnthropicCacheControlNeverGatesOnLength verifies that cache_control is
+// injected positionally regardless of content length. Both a short system block
+// and a short user message must be marked.
+//
+// Mutation target: restore any len(content) > N gate in anthropicMessagePayload.
+// A 2-character message collapses to a bare string instead of block form, so
+// the positional walk finds no blocks at all and len(marked) == 0.
+func TestAnthropicCacheControlNeverGatesOnLength(t *testing.T) {
+	adapter := anthropicAdapter{}
+	spec := ProviderSpec{Model: "claude-test"}
+	messages := []Message{
+		{Role: "system", Content: "hi"},
+		{Role: "user", Content: "go"},
+	}
+
+	payload, err := adapter.BuildChatRequest(spec, messages, nil, false)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// System block must be marked unconditionally.
+	system, ok := parsed["system"].([]any)
+	if !ok || len(system) == 0 {
+		t.Fatalf("system block missing or empty")
+	}
+	sysBlock := system[0].(map[string]any)
+	if cc, ok := sysBlock["cache_control"].(map[string]any); !ok || cc["type"] != "ephemeral" {
+		t.Fatalf("system block cache_control = %v, want ephemeral", sysBlock["cache_control"])
+	}
+
+	// The last (and only) message block must also be marked — it is at the last
+	// position in the flat index regardless of its byte length.
+	msgs, ok := parsed["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("messages missing or empty")
+	}
+	marked := collectMessageBlockPositions(msgs)
+	if len(marked) != 1 || marked[0] != 0 {
+		t.Fatalf("marked message-block positions = %v, want [0]", marked)
+	}
+}
+
+// TestAnthropicCacheControlBudgetLimitFull verifies that the total marker count
+// is exactly 4 when the message sequence is long enough to earn all three
+// message breakpoints (60 messages → positions 59, 44, 29, plus system = 4).
+//
+// Mutation targets:
+// 1. Remove the budget counter so every block gets a marker → count > 4 → fails.
+// 2. Invert the loop to walk forward from index 0 → marked positions become [0, 15, 30] → position equality assertion fails.
+func TestAnthropicCacheControlBudgetLimitFull(t *testing.T) {
+	adapter := anthropicAdapter{}
+	spec := ProviderSpec{Model: "claude-test"}
+
+	// 60 user messages: flat index 0–59.
+	// Backward walk at step 15: positions 59, 44, 29 → 3 message markers.
+	// Plus 1 system marker = 4 total.
+	msgs := make([]Message, 0, 61)
+	msgs = append(msgs, Message{Role: "system", Content: "sys"})
+	for i := 0; i < 60; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: "msg"})
+	}
+
+	payload, err := adapter.BuildChatRequest(spec, msgs, nil, false)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got := countCacheMarkers(parsed); got != 4 {
+		t.Fatalf("cache_control count = %d, want exactly 4", got)
+	}
+
+	msgsSlice, _ := parsed["messages"].([]any)
+	marked := collectMessageBlockPositions(msgsSlice)
+	if len(marked) != 3 || marked[0] != 29 || marked[1] != 44 || marked[2] != 59 {
+		t.Fatalf("marked message-block positions = %v, want [29, 44, 59]", marked)
+	}
+}
+
+// TestAnthropicCacheControlBudgetSelfLimiting verifies that the budget does not
+// inflate for short conversations. With 10 messages (flat index 0–9), only
+// position 9 is selected: 1 message marker + 1 system marker = 2 total.
+//
+// Mutation targets:
+// 1. Always emit 3 message markers regardless of depth → count > 2 → fails.
+// 2. Invert the loop to walk forward from index 0 → marked position becomes [0] → position equality assertion fails.
+func TestAnthropicCacheControlBudgetSelfLimiting(t *testing.T) {
+	adapter := anthropicAdapter{}
+	spec := ProviderSpec{Model: "claude-test"}
+
+	msgs := make([]Message, 0, 11)
+	msgs = append(msgs, Message{Role: "system", Content: "sys"})
+	for i := 0; i < 10; i++ {
+		msgs = append(msgs, Message{Role: "user", Content: "msg"})
+	}
+
+	payload, err := adapter.BuildChatRequest(spec, msgs, nil, false)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if got := countCacheMarkers(parsed); got != 2 {
+		t.Fatalf("cache_control count = %d, want exactly 2 (system + last message)", got)
+	}
+
+	msgsSlice, _ := parsed["messages"].([]any)
+	marked := collectMessageBlockPositions(msgsSlice)
+	if len(marked) != 1 || marked[0] != 9 {
+		t.Fatalf("marked message-block positions = %v, want [9]", marked)
+	}
+}
+
+// TestAnthropicCacheControlSpacingDefeatsLookback verifies that a single
+// assistant turn with 25 tool_use blocks receives at least two message-sequence
+// markers, and that no gap between consecutive marked positions exceeds 20
+// content blocks.
+//
+// The provider's lookback scans back at most 20 blocks to find a prior cache
+// entry. Without intermediate breakpoints, a 25-block turn leaves a gap of 24
+// between the trailing marker and any prior entry, breaking the chain.
+//
+// Mutation targets:
+// 1. Place only one message marker (no spacing step) → len(markedPositions) == 1 → assertion 1 fails loudly. The gap loop would pass vacuously with a single position; the explicit count assertion is what actually catches this mutation.
+// 2. Invert the loop to walk forward from index 0 → marked positions become [0, 15] → position equality assertion fails.
+//
+// Scope note: only the message sequence is asserted. The system breakpoint is
+// not included in markedPositions.
+func TestAnthropicCacheControlSpacingDefeatsLookback(t *testing.T) {
+	adapter := anthropicAdapter{}
+	spec := ProviderSpec{Model: "claude-test"}
+
+	// Build one assistant message with 25 tool_use blocks. Each ToolCall is
+	// one block in the flat index.
+	toolCalls := make([]ToolCall, 25)
+	for i := range toolCalls {
+		toolCalls[i] = ToolCall{
+			ID: fmt.Sprintf("c%d", i),
+			Function: ToolCallFunction{
+				Name:      "noop",
+				Arguments: "{}",
+			},
+		}
+	}
+
+	messages := []Message{
+		{Role: "assistant", ToolCalls: toolCalls},
+	}
+
+	payload, err := adapter.BuildChatRequest(spec, messages, nil, false)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	msgs, _ := parsed["messages"].([]any)
+	markedPositions := collectMessageBlockPositions(msgs)
+
+	// Assertion 1: must have at least two markers so the gap loop has pairs to
+	// check. Fail loudly here — a single marker passes the gap loop vacuously.
+	if len(markedPositions) < 2 {
+		t.Fatalf("marked message-block positions = %v, want at least 2 (an intermediate breakpoint is required to keep the lookback chain intact on a 25-block turn)", markedPositions)
+	}
+
+	// Assertion 2: no gap between consecutive markers exceeds 20.
+	for i := 1; i < len(markedPositions); i++ {
+		gap := markedPositions[i] - markedPositions[i-1]
+		if gap > 20 {
+			t.Errorf("gap between positions %d and %d = %d blocks, exceeds the 20-block lookback limit", markedPositions[i-1], markedPositions[i], gap)
+		}
+	}
+
+	// Assertion 3: exact positions pin the reverse-walk direction.
+	if len(markedPositions) != 2 || markedPositions[0] != 9 || markedPositions[1] != 24 {
+		t.Errorf("marked message-block positions = %v, want [9, 24]", markedPositions)
+	}
+}
+
+// TestAnthropicMessagePayloadAlwaysBlockForm verifies that anthropicMessagePayload
+// always returns block-form content, not a bare string, regardless of message
+// length. Deterministic serialisation is required for byte-stable cache keys.
+//
+// Mutation target: restore the short-circuit branch (return "content": string
+// when len < threshold) → short message returns a string → type assertion fails.
+func TestAnthropicMessagePayloadAlwaysBlockForm(t *testing.T) {
+	shortMsg := Message{Role: "user", Content: "hi"}
+	payload := anthropicMessagePayload(shortMsg)
+	if _, ok := payload["content"].([]map[string]any); !ok {
+		t.Errorf("short message content type = %T, want []map[string]any", payload["content"])
+	}
+
+	longMsg := Message{Role: "user", Content: strings.Repeat("x", 2000)}
+	payload = anthropicMessagePayload(longMsg)
+	if _, ok := payload["content"].([]map[string]any); !ok {
+		t.Errorf("long message content type = %T, want []map[string]any", payload["content"])
+	}
+}
+
+// TestAnthropicNoBetaHeader verifies that SetChatHeaders does not emit the
+// anthropic-beta header. Prompt caching is generally available; the header is
+// dead and rejected by some endpoints.
+//
+// Mutation target: re-add req.Header.Set("anthropic-beta", ...) → header
+// present → fails.
+func TestAnthropicNoBetaHeader(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "http://example.com/", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	anthropicAdapter{}.SetChatHeaders(req, ProviderSpec{APIKey: "test-key"})
+	if got := req.Header.Get("Anthropic-Beta"); got != "" {
+		t.Fatalf("Anthropic-Beta header = %q, want absent (header is dead; prompt caching is GA)", got)
+	}
+}

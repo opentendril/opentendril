@@ -121,7 +121,7 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 	}
 	if len(systemParts) > 0 {
 		payloadBody["system"] = []map[string]any{
-			anthropicTextBlock(strings.Join(systemParts, "\n\n"), true),
+			annotateCacheControl(anthropicTextBlock(strings.Join(systemParts, "\n\n"))),
 		}
 	}
 
@@ -137,6 +137,45 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 		payloadBody["tools"] = anthropicTools
 	}
 
+	// Inject ephemeral cache_control markers positionally. The budget is 4 per
+	// request; the system block consumed one above, leaving 3 for the message
+	// sequence. The budget is fixed at 3 regardless of whether a system block is
+	// present: a conditional budget adds a branch that needs its own test and
+	// mutation pin in exchange for one extra marker in an uncommon case.
+	//
+	// Markers cluster near the end rather than spreading across the conversation.
+	// A breakpoint covers every token before it, so the last one handles coverage.
+	// The intermediates exist solely to stay within the provider's 20-block
+	// lookback limit: a turn with many tool calls can append more than 20 blocks,
+	// making the next request unable to find any prior entry. Spreading markers
+	// evenly would waste budget on positions already covered by the final marker.
+	//
+	// Note: a written-but-never-read breakpoint above the provider's minimum costs
+	// 1.25× on those tokens. Positions 1 and 2 (system block and last message) are
+	// the high-confidence reads in a multi-turn loop; the intermediates earn their
+	// keep only when the conversation is long enough for the chain to matter.
+	const (
+		cacheBreakpointBudget  = 3
+		cacheBreakpointSpacing = 15
+	)
+	if len(anthropicMessages) > 0 {
+		type blockPos struct{ msgIdx, blockIdx int }
+		var positions []blockPos
+		for mi, m := range anthropicMessages {
+			blocks, _ := m["content"].([]map[string]any)
+			for bi := range blocks {
+				positions = append(positions, blockPos{mi, bi})
+			}
+		}
+		spent := 0
+		for i := len(positions) - 1; i >= 0 && spent < cacheBreakpointBudget; i -= cacheBreakpointSpacing {
+			p := positions[i]
+			blocks := anthropicMessages[p.msgIdx]["content"].([]map[string]any)
+			annotateCacheControl(blocks[p.blockIdx])
+			spent++
+		}
+	}
+
 	payload, err := json.Marshal(payloadBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
@@ -147,7 +186,6 @@ func (anthropicAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 func (anthropicAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 	req.Header.Set("x-api-key", spec.APIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
 }
 
 type anthropicStreamDecoder struct {
