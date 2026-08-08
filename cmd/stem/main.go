@@ -36,8 +36,9 @@ import (
 )
 
 func main() {
-	// Load .env file if it exists
-	_ = godotenv.Load()
+	if warning := dotenvWarning(godotenv.Load(), workingDirForReport()); warning != "" {
+		fmt.Fprint(os.Stderr, warning)
+	}
 	llm.StartModelDiscovery()
 
 	if len(os.Args) < 2 {
