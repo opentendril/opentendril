@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,16 +227,25 @@ func TestParseModelResponseRepairsToolCallMissingClosingBraces(t *testing.T) {
 
 func TestParseModelResponseDoesNotRepairUnterminatedString(t *testing.T) {
 	// A string cut off mid-value cannot be recovered without inventing
-	// content, so it must fall through instead of writing a truncated file.
+	// content, so it must never become a write.
 	truncated := `{"tool":"writeFile","arguments":{"path":"a.md","content":"partial conte`
-	calls, isToolCall, _, _, err := parseModelResponse(truncated)
-	if err != nil {
-		t.Fatalf("parseModelResponse returned error: %v", err)
-	}
+	calls, isToolCall, finalText, _, err := parseModelResponse(truncated)
+
 	if isToolCall && len(calls) > 0 && calls[0].Tool == "writeFile" {
 		if _, ok := calls[0].Arguments["content"]; ok {
 			t.Fatalf("unterminated string must not be repaired into a write, got %+v", calls[0])
 		}
+	}
+
+	// Where it goes instead is the rest of the claim. It used to fall through
+	// to final text, so a half-sent writeFile ended the growth as the mind's
+	// finished answer — the reply is visibly an attempt, and the run reported
+	// success having written nothing.
+	if !errors.Is(err, errUnusableReply) {
+		t.Errorf("err = %v, want errUnusableReply — a truncated call is an attempt, not an answer", err)
+	}
+	if strings.Contains(finalText, "partial conte") {
+		t.Errorf("finalText = %q, want the truncated call not to be reported as the mind's answer", finalText)
 	}
 }
 

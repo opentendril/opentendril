@@ -20,6 +20,14 @@ import (
 
 const (
 	sproutMaxIterations = 20
+
+	// maxUnusableReplies bounds how many times in a row a mind may answer with
+	// a tool call the parser cannot read before the growth is ended. One
+	// restatement of the rules is a fair chance to correct a shape; a mind that
+	// ignores it twice is not going to comply on the third, and letting it run
+	// to the iteration cap would spend the whole budget to reach the same
+	// verdict with a vaguer error.
+	maxUnusableReplies = 2
 )
 
 type ToolArgument struct {
@@ -330,6 +338,8 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		mappedTools = mapToolsToNative(a.tools)
 	}
 
+	unusableReplies := 0
+
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
 		var tokenChan chan string
 		var response string
@@ -466,9 +476,34 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		} else {
 			var parseErr error
 			calls, isToolCall, finalResponse, actionResult, parseErr = parseModelResponse(response)
+			if errors.Is(parseErr, errUnusableReply) {
+				// The mind tried to call a tool in a shape we cannot execute.
+				// Restating the rules is a fair chance to correct it, and this
+				// turn is charged to the budget because the mind did answer —
+				// unlike a refused request, which produced nothing.
+				//
+				// A second consecutive failure ends the growth naming the
+				// cause. One restatement is a fair chance; a mind that ignores
+				// it twice will not comply on the third, and the alternative is
+				// spending the whole budget discovering that.
+				unusableReplies++
+				if unusableReplies >= maxUnusableReplies {
+					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
+				}
+				observation := buildUnusableReplyObservation(a.tools)
+				a.msgMu.Lock()
+				a.messages = append(a.messages, llm.Message{Role: "user", Content: observation})
+				a.msgMu.Unlock()
+				a.appendTranscript("user", observation)
+				continue
+			}
 			if parseErr != nil {
 				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, parseErr
 			}
+			// Counted consecutively: a mind that recovers has not failed twice,
+			// and carrying the tally across a good turn would end a growth on
+			// two unrelated slips many turns apart.
+			unusableReplies = 0
 		}
 
 		if a.nativeClient != nil && !isToolCall {
@@ -826,6 +861,26 @@ Rules:
 // the prose protocol without that question depending on the wording below.
 const proseProtocolRulesHeading = "Protocol Rules:"
 
+// buildUnusableReplyObservation tells the mind what was wrong with the reply it
+// just gave, in the same channel a tool observation arrives on. It restates the
+// shape rather than only complaining, because the failure it answers is a mind
+// reaching for a wrapper it was trained on instead of the shape it was taught —
+// which a reminder can fix and a rebuke cannot. The tool catalogue goes with it
+// so the correction does not depend on the system prompt still being attended
+// to many turns later.
+func buildUnusableReplyObservation(tools []ToolDefinition) string {
+	var builder strings.Builder
+	builder.WriteString(strings.TrimSpace(`
+Your last reply looked like a tool call but could not be read as one, so nothing was run.
+Do not wrap tool calls in tags such as <function_calls>, <invoke> or <tool_call>.
+Respond with exactly one JSON object and nothing else: {"tool":"name","arguments":{...}}.
+If the task is already complete, respond with {"final":"..."} instead.
+`))
+	builder.WriteString("\n\nAvailable tools:\n")
+	builder.WriteString(formatToolCatalog(tools))
+	return strings.TrimSpace(builder.String())
+}
+
 func buildProseProtocolRules(tools []ToolDefinition) string {
 	var builder strings.Builder
 	builder.WriteString(proseProtocolRulesHeading + "\n")
@@ -883,8 +938,28 @@ type modelResponse struct {
 	Final     string         `json:"final,omitempty"`
 }
 
+// errUnusableReply reports a reply that tried to call a tool and could not be
+// read as one. It is distinct from a final answer, which is the whole point:
+// the protocol rules invite "plain final text" as an ending, so every reply the
+// parser cannot decode used to arrive at the same return as a finished run. A
+// reply carrying a half-formed writeFile then ended the growth reporting
+// success, having written nothing.
+//
+// It is not returned for every parse failure. Plain prose is still a legal
+// ending, so only a reply showing an attempted call is refused — see
+// looksLikeToolCallAttempt for what counts and what that deliberately misses.
+var errUnusableReply = errors.New("model reply attempted a tool call that could not be read")
+
 func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult, error) {
 	trimmed := stripThoughtBlock(strings.TrimSpace(content))
+
+	// Checked before anything else: a reply carrying both a tool call and a
+	// closing statement is asking for the call, and reading the statement
+	// instead is how a growth ends "done" without doing it. An attempt outranks
+	// a final in the same reply.
+	if wrapped := extractWrappedToolCalls(trimmed); len(wrapped) > 0 {
+		return wrapped, true, "", nil, nil
+	}
 
 	candidate := stripCodeFences(trimmed)
 	var decoded modelResponse
@@ -897,6 +972,9 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 			syntheticCalls := extractMarkdownSyntheticCalls(content)
 			if len(syntheticCalls) > 0 {
 				return syntheticCalls, true, "", nil, nil
+			}
+			if looksLikeToolCallAttempt(trimmed) {
+				return nil, false, "", nil, errUnusableReply
 			}
 			return nil, false, trimmed, nil, nil
 		}
@@ -914,7 +992,88 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 		return nil, false, finalText, actionResult, nil
 	}
 
+	// Decoded as JSON but named neither a tool nor a final. The same question
+	// applies as above: an object shaped like a call the decoder could not bind
+	// is an attempt, not an answer.
+	if looksLikeToolCallAttempt(trimmed) {
+		return nil, false, "", nil, errUnusableReply
+	}
+
 	return nil, false, trimmed, nil, nil
+}
+
+// toolCallKeyRegex matches the "tool" key of our own protocol shape. The colon
+// is required so that a final answer mentioning the word in quotes — "I used
+// the \"tool\" you listed" — is not mistaken for a call.
+var toolCallKeyRegex = regexp.MustCompile(`"tool"\s*:`)
+
+// toolCallWrapperMarkers are the openings of wrappers a mind reaches for when
+// it has native tool-calling trained into it and is being asked to speak the
+// prose protocol instead. They are listed because each was chosen by a model
+// rather than by us, which is also their limit: a wrapper not named here still
+// falls through to "plain final text". That is a gap in a list we own and can
+// extend, not the parser's designed behaviour, and the work-detection condition
+// still refuses to count a growth in which nothing was written.
+var toolCallWrapperMarkers = []string{"<function_calls", "<invoke", "<tool_call"}
+
+// looksLikeToolCallAttempt reports whether a reply the parser could not decode
+// was nonetheless trying to call a tool. The question is structural — does this
+// carry a tool-invocation shape — and every shape it asks about is either our
+// own protocol's or a wrapper we have seen emitted. It never asks what the text
+// says.
+func looksLikeToolCallAttempt(content string) bool {
+	if toolCallKeyRegex.MatchString(content) {
+		return true
+	}
+	for _, marker := range toolCallWrapperMarkers {
+		if strings.Contains(content, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var wrappedToolCallRegex = regexp.MustCompile(`(?s)<(?:function_calls|tool_call)>(.*?)</(?:function_calls|tool_call)>`)
+
+// extractWrappedToolCalls reads calls out of the wrappers a native-trained mind
+// emits under the prose protocol. It handles the JSON payload that has actually
+// been observed — an array or a single object of our own {tool, arguments}
+// shape — and deliberately does not implement the XML <invoke>/<parameter> form,
+// which has not been seen here. That form still trips looksLikeToolCallAttempt,
+// so it fails the turn loudly instead of being read as a finished answer, which
+// is the behaviour that matters until there is a real reply to build from.
+func extractWrappedToolCalls(content string) []ToolCall {
+	var calls []ToolCall
+	for _, match := range wrappedToolCallRegex.FindAllStringSubmatch(content, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		payload := stripCodeFences(strings.TrimSpace(match[1]))
+
+		var batch []modelResponse
+		if strings.HasPrefix(payload, "[") {
+			if err := json.Unmarshal([]byte(payload), &batch); err != nil {
+				continue
+			}
+		} else {
+			var single modelResponse
+			if err := json.Unmarshal([]byte(payload), &single); err != nil {
+				continue
+			}
+			batch = []modelResponse{single}
+		}
+
+		for _, decoded := range batch {
+			if strings.TrimSpace(decoded.Tool) == "" {
+				continue
+			}
+			if decoded.Arguments == nil {
+				decoded.Arguments = map[string]any{}
+			}
+			calls = append(calls, ToolCall{Tool: decoded.Tool, Arguments: decoded.Arguments})
+		}
+	}
+	return calls
 }
 
 func extractActionResult(finalText string) (string, *ActionResult) {
