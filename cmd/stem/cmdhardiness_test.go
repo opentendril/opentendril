@@ -977,18 +977,23 @@ func TestReadablePollinatorCredentialsPathDiscovery(t *testing.T) {
 
 func TestReadableStemSecretsPathDiscovery(t *testing.T) {
 	root := cleanTempRoot(t)
-	tendrilDir := filepath.Join(root, ".tendril")
+	// The control plane and the home directory must be DIFFERENT directories.
+	// Point HOME at the control plane's parent and <tendrilDir>/pollinators.json
+	// and ~/.tendril/pollinators.json become the same file: they de-duplicate,
+	// the home-side candidate cannot be observed, and removing it from the
+	// implementation changes nothing the test can see.
+	tendrilDir := filepath.Join(root, "control-plane")
+	home := filepath.Join(root, "home")
+	t.Setenv("HOME", home)
 
-	t.Setenv("HOME", root)
-
-	pathsToCreate := []string{
+	want := []string{
 		filepath.Join(tendrilDir, core.PollinatorCredentialsFilename),
 		filepath.Join(tendrilDir, "api-key"),
-		filepath.Join(root, ".tendril", "test1.pem"),
-		filepath.Join(root, ".tendril", core.PollinatorCredentialsFilename),
+		filepath.Join(home, ".tendril", "test1.pem"),
+		filepath.Join(home, ".tendril", core.PollinatorCredentialsFilename),
 	}
 
-	for _, path := range pathsToCreate {
+	for _, path := range want {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
@@ -997,18 +1002,31 @@ func TestReadableStemSecretsPathDiscovery(t *testing.T) {
 		}
 	}
 
-	paths := readableStemSecrets(tendrilDir)
-	// Some paths might be duplicate (tendrilDir vs ~/.tendril if they are the same)
-	// But in this test tendrilDir == ~/.tendril, so they de-duplicate.
-	// We expect 3 distinct files: pollinators.json, api-key, test1.pem
-	if len(paths) != 3 {
-		t.Fatalf("expected 3 distinct paths, got %d: %v", len(paths), paths)
+	// Assert membership per path, not cardinality. A count is satisfied by the
+	// wrong set of the right size, so it cannot tell which candidate went
+	// missing — which is the only thing this test is for.
+	got := readableStemSecrets(tendrilDir)
+	found := map[string]bool{}
+	for _, path := range got {
+		found[path] = true
+	}
+	for _, path := range want {
+		if !found[path] {
+			t.Errorf("readableStemSecrets omitted %s\ngot: %v", path, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("readableStemSecrets returned %d paths, want %d: %v", len(got), len(want), got)
 	}
 
-	// Drop one and confirm it returns 2
-	os.Remove(filepath.Join(root, ".tendril", "test1.pem"))
-	paths = readableStemSecrets(tendrilDir)
-	if len(paths) != 2 {
-		t.Fatalf("expected 2 paths after dropping one, got %d", len(paths))
+	// An unreadable candidate drops out, and it is the one we removed.
+	gone := filepath.Join(home, ".tendril", "test1.pem")
+	if err := os.Remove(gone); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	for _, path := range readableStemSecrets(tendrilDir) {
+		if path == gone {
+			t.Errorf("readableStemSecrets still returned %s after it was removed", gone)
+		}
 	}
 }
