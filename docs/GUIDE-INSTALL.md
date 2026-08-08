@@ -902,7 +902,7 @@ git status --short                        # must show no deleted tracked files
 **6. Rotate the credential.** Regenerate the private key at GitHub and install
 the new one per Stage 5.
 
-**Check:** `cd ~ && tendril hardiness` reports no readable credential files.
+**Check:** as your own account, `find /home/tendril/.tendril ~/.tendril -type f -readable 2>/dev/null` prints nothing — no credential file is readable by you. Run it from the Botanist's own account because the question is whether *you* can read the Stem's credentials, and only your own account can answer that by trying (the `tendril` binary is installed mode 750 under the Stem's account, so it is not on your PATH and `tendril hardiness` cannot be run here).
 
 ---
 
