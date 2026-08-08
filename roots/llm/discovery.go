@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -197,12 +198,47 @@ func enrichModelDefinition(provider, name string) ModelDefinition {
 		}
 	}
 
+	// A provider may serve the same model under a dated identifier while the
+	// registry holds its undated alias — Anthropic serves claude-haiku-4-5 as
+	// claude-haiku-4-5-20251001. An exact-match miss falls through to name
+	// inference, which cannot infer tool capability at all, so the model arrives
+	// declared unable to drive tools. That emptied the cheapest tier of
+	// tool-capable models and silently escalated every autonomous run to the
+	// most expensive model the provider serves.
+	//
+	// Matching the undated base name keeps what the registry actually knows
+	// about a model attached to it, rather than teaching the name heuristic to
+	// guess at tool capability — a second heuristic covering for the first.
+	if base := undatedModelName(name); base != name {
+		for _, fallback := range FallbackModels {
+			if strings.EqualFold(fallback.Provider, provider) && strings.EqualFold(fallback.Name, base) {
+				known := fallback
+				// Keep the identifier the provider actually serves: it is what
+				// goes on the wire and what a run record must report.
+				known.Name = name
+				return known
+			}
+		}
+	}
+
 	definition := ModelDefinition{
 		Provider: provider,
 		Name:     name,
 	}
 	inferCapabilitiesFromName(&definition)
 	return definition
+}
+
+// datedModelSuffix matches the trailing release date some providers append to a
+// model identifier (claude-haiku-4-5-20251001). Anchored, and eight digits
+// exactly, so a version segment such as gpt-4-32k or a name ending in a shorter
+// number is left alone.
+var datedModelSuffix = regexp.MustCompile(`-\d{8}$`)
+
+// undatedModelName strips a trailing release date, returning the name unchanged
+// when there is none.
+func undatedModelName(name string) string {
+	return datedModelSuffix.ReplaceAllString(strings.TrimSpace(name), "")
 }
 
 func inferCapabilitiesFromName(definition *ModelDefinition) {

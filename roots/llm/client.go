@@ -505,6 +505,20 @@ func resolveForProviderChoice(choice providerChoice, tier ModelTier, requireTool
 		raised.MaxCostTier = ""
 		model, err = SelectBestModel(raised)
 
+		// Say so. This escalation is correct — a run that cannot drive tools
+		// does no work at all — but it changes what a run costs, and it fired
+		// on every autonomous growth for as long as the cheapest tier held no
+		// model declared tool-capable. Nothing reported it, so the only way to
+		// notice was to compare a run record against the configuration and then
+		// probe the resolver across model discovery. An escalation nobody can
+		// see is indistinguishable from a tier that was never honoured.
+		if err == nil {
+			fmt.Fprintf(os.Stderr,
+				"⚠️ no model at the %s tier declares tool capability; raising the cost ceiling and selecting %q instead. "+
+					"Tool capability is kept ahead of cost deliberately — but this run costs more than the tier implies.\n",
+				tier, model.Name)
+		}
+
 		if err != nil {
 			// Nothing tool-capable exists at this provider at any price. Relax
 			// the requirement last, so the run reports its outcome honestly
