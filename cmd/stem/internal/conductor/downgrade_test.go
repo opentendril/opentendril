@@ -517,10 +517,14 @@ func TestProbeSendsCorrectMessages(t *testing.T) {
 		}
 	}
 
-	// The probe's answer must not have ended the run or appeared in the transcript.
-	if strings.Contains(res.Response, probeAnswerText) {
-		t.Errorf("probe answer leaked into run response: %q", res.Response)
-	}
+	// The probe asked a question; it did not take a turn. Its answer must not
+	// reach the record of what the mind said.
+	//
+	// The transcript is the assertion that can catch this. A companion check on
+	// res.Response was removed because it could not fail: the probe is followed
+	// by a continue, which reassigns response before anything reads it, so the
+	// answer is unreachable from there whatever the code does. An assertion
+	// that cannot go red reads as coverage without being any.
 	if strings.Contains(sprout.transcript.String(), probeAnswerText) {
 		t.Errorf("probe answer leaked into transcript: %s", sprout.transcript.String())
 	}

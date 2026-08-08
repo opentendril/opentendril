@@ -1045,10 +1045,14 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 			return Result{}, fmt.Errorf("read llm response: %w", err)
 		}
 
-		// A request carrying tool definitions turned away with a schema
-		// rejection is the one status pair that means "I cannot take these",
-		// as opposed to "not now" or "I am broken". Wrapped rather than
-		// replaced so the provider's own message still reaches the operator.
+		// This status pair establishes two things and no more: the request was
+		// turned away for its own contents rather than "not now" or "I am
+		// broken", and it carried tool definitions. Which of the two the
+		// endpoint objected to is not knowable here — a rejected parameter and
+		// a rejected definition arrive as the same status — so the error names
+		// the coincidence and leaves the cause to a caller that can test it.
+		// Wrapped rather than replaced so the provider's own message, which is
+		// usually the whole answer, still reaches the operator.
 		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
 			return Result{}, fmt.Errorf("%w: llm returned %d: %s", ErrRejectedWithTools, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
