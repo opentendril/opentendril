@@ -85,7 +85,7 @@ func governedStemAt(t *testing.T) (host, port string) {
 func credentialFile(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "credential")
-	if err := os.WriteFile(path, []byte("tendril_root_forwardplanetest"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("tendril_refresh_forwardplanetest"), 0o600); err != nil {
 		t.Fatalf("write credential: %v", err)
 	}
 	return path

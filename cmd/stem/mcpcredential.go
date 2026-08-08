@@ -3,24 +3,52 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 const envMCPCredential = "TENDRIL_MCP_CREDENTIAL"
+const envPollinatorCredential = "TENDRIL_POLLINATOR_CREDENTIAL"
 
-// loadMCPCredential reads a durable root credential from the file named by
-// TENDRIL_MCP_CREDENTIAL. If the variable is unset, it returns an empty string
+// loadMCPCredential reads a durable root credential. It checks TENDRIL_POLLINATOR_CREDENTIAL,
+// then TENDRIL_MCP_CREDENTIAL. If both are unset, it defaults to
+// ~/.config/tendril/pollinators/<pollen> (using TENDRIL_POLLEN).
+// If no path is found or the default path does not exist, it returns an empty string
 // and no error (the ordinary, unconfigured case). It refuses files that are
-// missing or too permissive (any group or other permission), returning a safe error
-// that names the path and mode but never the secret.
+// missing (if explicitly requested) or too permissive (any group or other permission),
+// returning a safe error that names the path and mode but never the secret.
 func loadMCPCredential() (string, error) {
-	path := strings.TrimSpace(os.Getenv(envMCPCredential))
+	path := strings.TrimSpace(os.Getenv(envPollinatorCredential))
+	if path == "" {
+		path = strings.TrimSpace(os.Getenv(envMCPCredential))
+	}
+
+	isDefault := false
+	if path == "" {
+		pollen := strings.TrimSpace(os.Getenv("TENDRIL_POLLEN"))
+		if pollen != "" {
+			xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+			if xdgConfig == "" {
+				if home, err := os.UserHomeDir(); err == nil {
+					xdgConfig = filepath.Join(home, ".config")
+				}
+			}
+			if xdgConfig != "" {
+				path = filepath.Join(xdgConfig, "tendril", "pollinators", pollen)
+				isDefault = true
+			}
+		}
+	}
+
 	if path == "" {
 		return "", nil
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) && isDefault {
+			return "", nil
+		}
 		return "", fmt.Errorf("credential file %s: %w", path, err)
 	}
 

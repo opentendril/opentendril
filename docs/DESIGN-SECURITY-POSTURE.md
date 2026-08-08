@@ -207,7 +207,7 @@ The `confirmAbove` bound on a delegation grant ensures that high-impact operatio
 
 Pollinator REST access is **two-tier**:
 
-1. **Durable refresh root** — a Pollinator credential (`tendril_root_…`) issued by
+1. **Durable refresh root** — a Pollinator credential (`tendril_refresh_…`) issued by
    `tendril pollinator issue`. Digest-stored, revocable by Pollen, no inherent
    lifetime. Presented **only to mint** (CLI `tendril pollinator token`, or
    `POST /v1/pollinator/token`).
@@ -315,8 +315,9 @@ unaffected.
 | **Governed Stem, credential configured** | the governed Stem's, reached over loopback | derived there from the presented credential |
 | **Governed Stem, no credential** | refuses, naming the command that issues one | — |
 
-The credential is a durable root, read from the file named by
-`TENDRIL_MCP_CREDENTIAL`; access tokens are minted from it on demand because
+The credential is a durable root, read from the location defined by
+`TENDRIL_POLLINATOR_CREDENTIAL`, `TENDRIL_MCP_CREDENTIAL`, or the default
+`~/.config/tendril/pollinators/<pollen>`; access tokens are minted from it on demand because
 their ≤15-minute cap is shorter than a working session. `TENDRIL_POLLEN` binds a
 Pollen on the in-process path only — where the surface forwards, the presented
 credential derives the Pollen and the variable has no effect.

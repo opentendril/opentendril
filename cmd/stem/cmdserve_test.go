@@ -102,7 +102,7 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 	// issued before that rename would still be presenting. The current prefix is
 	// unexported, so it is spelled out here and guarded — the guard fires on the
 	// next rename, which is the reminder to add the outgoing prefix below.
-	const currentPrefix = "tendril_root_"
+	const currentPrefix = "tendril_refresh_"
 	body := strings.TrimPrefix(secret, currentPrefix)
 	if body == secret {
 		t.Fatalf("issued secret does not carry %q; add the outgoing prefix to the superseded list", currentPrefix)
@@ -110,7 +110,7 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 
 	// Only the prefix is ever named in a failure — never the value, which
 	// carries the secret body.
-	for _, superseded := range []string{"otp_", "tendril_"} {
+	for _, superseded := range []string{"otp_", "tendril_", "tendril_root_"} {
 		reached = false
 		req := httptest.NewRequest(http.MethodPost, "/v1/git/status", nil)
 		req.Header.Set("Authorization", "Bearer "+superseded+body)
