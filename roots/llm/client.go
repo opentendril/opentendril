@@ -74,16 +74,19 @@ type Message struct {
 	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
-// ErrToolsRefused reports that an endpoint rejected a request because of the
-// tool definitions it carried. It is returned instead of being handled here:
-// this client speaks the wire protocol, and which protocol should carry the
-// turn instead is a decision only the caller holding the conversation can make.
+// ErrRejectedWithTools reports that an endpoint returned a client error (400 or
+// 422) on a request that carried tool definitions. It establishes only that:
+// the request was turned away and it carried definitions. It is not proof the
+// definitions were the cause — the caller must establish that through a probe.
+// It is returned rather than being handled here: this client speaks the wire
+// protocol, and which protocol should carry the turn instead is a decision only
+// the caller holding the conversation can make.
 //
 // Only 400 and 422 raise it. A 429 or a 5xx says the endpoint is busy or
 // broken, not that it cannot take tools, and treating those as a refusal would
 // demote a run to the prose protocol over a transient failure — a quality loss
 // announced as a capability finding.
-var ErrToolsRefused = errors.New("endpoint refused the tool definitions")
+var ErrRejectedWithTools = errors.New("endpoint returned a client error on a request carrying tool definitions")
 
 // ToolDefinition declares one tool to a provider. The shape is the OpenAI
 // family's, because Message is marshalled straight onto that family's wire and
@@ -395,10 +398,11 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 		if err == nil {
 			return result, nil
 		}
-		// A refusal is not a transport failure. The candidates are one endpoint
-		// reached at several addresses, so offering the same definitions to the
-		// next one only earns the same refusal — and spends a request doing it.
-		if errors.Is(err, ErrToolsRefused) {
+		// A client error is the request's fault. The candidates are one
+		// endpoint reached at several addresses, so offering the same request
+		// to the next address only earns the same answer — and spends a
+		// request doing it.
+		if errors.Is(err, ErrRejectedWithTools) {
 			return Result{}, err
 		}
 		lastErr = err
@@ -1046,7 +1050,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		// as opposed to "not now" or "I am broken". Wrapped rather than
 		// replaced so the provider's own message still reaches the operator.
 		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
-			return Result{}, fmt.Errorf("%w: llm returned %d: %s", ErrToolsRefused, resp.StatusCode, strings.TrimSpace(string(body)))
+			return Result{}, fmt.Errorf("%w: llm returned %d: %s", ErrRejectedWithTools, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
 
 		return Result{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

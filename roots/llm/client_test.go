@@ -654,8 +654,8 @@ func TestCallWithToolsDoesNotAdvanceCandidateLoopOnToolRefusal(t *testing.T) {
 
 	tools := []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "readFile"}}}
 	_, err := client.CallWithTools(context.Background(), []Message{{Role: "user", Content: "hi"}}, tools, nil)
-	if !errors.Is(err, ErrToolsRefused) {
-		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrToolsRefused)", err)
+	if !errors.Is(err, ErrRejectedWithTools) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrRejectedWithTools)", err)
 	}
 	if server1Calls != 1 {
 		t.Errorf("server1 calls = %d, want 1", server1Calls)
