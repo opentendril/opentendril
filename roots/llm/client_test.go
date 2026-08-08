@@ -318,8 +318,9 @@ func TestCallSendsAnthropicShapedRequestWithCaching(t *testing.T) {
 	if versionHeader != "2023-06-01" {
 		t.Fatalf("anthropic-version = %q, want 2023-06-01", versionHeader)
 	}
-	if betaHeader != "prompt-caching-2024-07-31" {
-		t.Fatalf("anthropic-beta = %q, want prompt-caching-2024-07-31", betaHeader)
+	// The beta header was required while prompt caching was in beta; it is dead now.
+	if betaHeader != "" {
+		t.Fatalf("anthropic-beta = %q, want absent (header is dead; prompt caching is GA)", betaHeader)
 	}
 	if contentTypeHeader != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", contentTypeHeader)
@@ -353,6 +354,7 @@ func TestCallSendsAnthropicShapedRequestWithCaching(t *testing.T) {
 	}
 	contentArr := msg1["content"].([]any)
 	contentBlock := contentArr[0].(map[string]any)
+	// Message 1 is the last message; the positional strategy always marks it.
 	if _, hasCache := contentBlock["cache_control"]; !hasCache {
 		t.Fatalf("message 1 is missing cache_control block")
 	}

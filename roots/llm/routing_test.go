@@ -230,8 +230,9 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 
 	captured := <-capturedCh
 
-	if got := captured.Header.Get("anthropic-beta"); got != "prompt-caching-2024-07-31" {
-		t.Fatalf("anthropic-beta header = %q, want %q", got, "prompt-caching-2024-07-31")
+	// The beta header was required while prompt caching was in beta; it is dead now.
+	if got := captured.Header.Get("anthropic-beta"); got != "" {
+		t.Fatalf("anthropic-beta header = %q, want absent (header is dead; prompt caching is GA)", got)
 	}
 	if got := captured.Header.Get("anthropic-version"); got != "2023-06-01" {
 		t.Fatalf("anthropic-version header = %q, want %q", got, "2023-06-01")
@@ -268,12 +269,24 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 		t.Fatalf("second message role = %q, want assistant", captured.Request.Messages[1].Role)
 	}
 
-	var smallContent string
-	if err := json.Unmarshal(captured.Request.Messages[0].Content, &smallContent); err != nil {
-		t.Fatalf("decode small message content: %v", err)
+	// Message 0 ("small note") is always block form regardless of length.
+	var smallBlocks []anthropicContentBlock
+	if err := json.Unmarshal(captured.Request.Messages[0].Content, &smallBlocks); err != nil {
+		t.Fatalf("decode small message as blocks: %v", err)
 	}
-	if smallContent != "small note" {
-		t.Fatalf("small message content = %q, want %q", smallContent, "small note")
+	if len(smallBlocks) != 1 {
+		t.Fatalf("small message block count = %d, want 1", len(smallBlocks))
+	}
+	if smallBlocks[0].Type != "text" {
+		t.Fatalf("small message block type = %q, want text", smallBlocks[0].Type)
+	}
+	if smallBlocks[0].Text != "small note" {
+		t.Fatalf("small message text = %q, want %q", smallBlocks[0].Text, "small note")
+	}
+	// With two single-block messages, the flat index selects position 1 only.
+	// Message 0 must be unmarked — this pins "we don't mark everything".
+	if smallBlocks[0].CacheControl != nil {
+		t.Fatalf("small message has cache_control = %#v, want none (only the last position is selected)", smallBlocks[0].CacheControl)
 	}
 
 	var largeBlocks []anthropicContentBlock
@@ -286,9 +299,11 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 	if largeBlocks[0].Type != "text" {
 		t.Fatalf("large message block type = %q, want text", largeBlocks[0].Type)
 	}
+	// Text is preserved verbatim regardless of caching decisions.
 	if !strings.Contains(largeBlocks[0].Text, "repomap.md") {
-		t.Fatalf("large message text did not preserve cached context marker: %q", largeBlocks[0].Text)
+		t.Fatalf("large message text was not preserved verbatim: %q", largeBlocks[0].Text)
 	}
+	// Message 1 is the last message; the positional strategy always marks it.
 	if largeBlocks[0].CacheControl == nil || largeBlocks[0].CacheControl.Type != "ephemeral" {
 		t.Fatalf("large message cache_control = %#v, want ephemeral", largeBlocks[0].CacheControl)
 	}

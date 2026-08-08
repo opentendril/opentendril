@@ -1115,19 +1115,26 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 	return res, nil
 }
 
-func anthropicTextBlock(text string, cache bool) map[string]any {
-	block := map[string]any{
+func anthropicTextBlock(text string) map[string]any {
+	return map[string]any{
 		"type": "text",
 		"text": text,
 	}
-	if cache {
-		block["cache_control"] = map[string]string{
-			"type": "ephemeral",
-		}
-	}
+}
+
+// annotateCacheControl adds an ephemeral cache_control entry to block in place
+// and returns block, allowing it to be used inline as a slice element.
+func annotateCacheControl(block map[string]any) map[string]any {
+	block["cache_control"] = map[string]string{"type": "ephemeral"}
 	return block
 }
 
+// anthropicMessagePayload converts a Message to the wire shape Anthropic
+// expects. Tool-result messages return a bare tool_result block. All other
+// messages always return block form — never a bare string — so that serialisation
+// is byte-deterministic regardless of content length. cache_control markers are
+// not set here; BuildChatRequest injects them positionally after the full message
+// slice is assembled.
 func anthropicMessagePayload(msg Message) map[string]any {
 	var contentBlocks []map[string]any
 
@@ -1145,7 +1152,7 @@ func anthropicMessagePayload(msg Message) map[string]any {
 	}
 
 	if msg.Content != "" {
-		contentBlocks = append(contentBlocks, anthropicTextBlock(msg.Content, shouldCacheAnthropicContent(msg.Content)))
+		contentBlocks = append(contentBlocks, anthropicTextBlock(msg.Content))
 	}
 	for _, call := range msg.ToolCalls {
 		var inputObj map[string]any
@@ -1160,20 +1167,8 @@ func anthropicMessagePayload(msg Message) map[string]any {
 		})
 	}
 
-	if len(contentBlocks) == 1 && msg.Content != "" && !shouldCacheAnthropicContent(msg.Content) {
-		return map[string]any{
-			"role":    msg.Role,
-			"content": msg.Content,
-		}
-	}
-
 	return map[string]any{
 		"role":    msg.Role,
 		"content": contentBlocks,
 	}
-}
-
-func shouldCacheAnthropicContent(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	return strings.Contains(trimmed, "repomap.md") || len(trimmed) > 1000
 }
