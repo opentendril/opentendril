@@ -8,6 +8,7 @@ import (
 )
 
 const envMCPCredential = "TENDRIL_MCP_CREDENTIAL"
+const envPollinatorCredential = "TENDRIL_POLLINATOR_CREDENTIAL"
 
 // loadMCPCredential reads a durable root credential. It checks TENDRIL_POLLINATOR_CREDENTIAL,
 // then TENDRIL_MCP_CREDENTIAL. If both are unset, it defaults to
@@ -17,9 +18,9 @@ const envMCPCredential = "TENDRIL_MCP_CREDENTIAL"
 // missing (if explicitly requested) or too permissive (any group or other permission),
 // returning a safe error that names the path and mode but never the secret.
 func loadMCPCredential() (string, error) {
-	path := strings.TrimSpace(os.Getenv("TENDRIL_POLLINATOR_CREDENTIAL"))
+	path := strings.TrimSpace(os.Getenv(envPollinatorCredential))
 	if path == "" {
-		path = strings.TrimSpace(os.Getenv("TENDRIL_MCP_CREDENTIAL"))
+		path = strings.TrimSpace(os.Getenv(envMCPCredential))
 	}
 
 	isDefault := false

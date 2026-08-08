@@ -37,18 +37,64 @@ snippet to stdout.
 
 ## Issue a credential
 
-A Pollinator authenticates as a specific Pollen. Issue a durable credential and write it to the default location:
+A Pollinator authenticates as a specific Pollen. The credential is durable, and
+its only power is minting the short-lived access tokens that carry requests.
+
+On a governed installation the binary is mode 750 under the Stem's own account,
+so issuance runs as the Stem and cannot write into your home. Issue to a staging
+path, install it where the Pollinator will read it, then destroy the staging copy:
+
+```bash
+sudo -u tendril -i tendril pollinator issue --pollen claude --out /tmp/claude.cred
+mkdir -p -m 700 ~/.config/tendril/pollinators
+sudo install -o "$USER" -g "$USER" -m 600 /tmp/claude.cred ~/.config/tendril/pollinators/claude
+shred -u /tmp/claude.cred
+```
+
+On a single-user installation, where the binary is on your own PATH, `--out`
+writes the final location directly:
 
 ```bash
 tendril pollinator issue --pollen claude --out ~/.config/tendril/pollinators/claude
 ```
 
-To reissue a credential, add `--force` to overwrite the file, then revoke the old one:
+`--out` prints the path it wrote and never the secret; without it the secret goes
+to stdout instead. It refuses an existing file unless you add `--force`.
+
+**Check:** the file is mode 600 and owned by the account that uses it.
+
+```bash
+stat -c '%A %U %n' ~/.config/tendril/pollinators/claude
+```
+
+Where the binary is reachable from that account, `tendril hardiness` reports the
+same fact as a finding alongside the rest of the posture. A finding naming weak
+permissions means the file is readable beyond its owner.
+
+To rotate, revoke **before** issuing. `revoke` takes every active credential for
+the Pollen, so issuing first would revoke the credential you had just written:
 
 ```bash
 tendril pollinator list
 tendril pollinator revoke --pollen claude
+sudo -u tendril -i tendril pollinator issue --pollen claude --out /tmp/claude.cred
 ```
+
+Requests presenting the revoked credential are denied at once; access tokens
+already minted from it age out within their 15-minute cap.
+
+> [!NOTE]
+> **Where the credential is read from.** `TENDRIL_POLLINATOR_CREDENTIAL` names the
+> file directly and takes precedence. `TENDRIL_MCP_CREDENTIAL` is honoured next.
+> With neither set, the path defaults to `~/.config/tendril/pollinators/<pollen>`,
+> where `<pollen>` comes from `TENDRIL_POLLEN`. A missing file at the default path
+> is the ordinary unconfigured case and is not an error; a missing file at a path
+> you named explicitly is.
+>
+> `TENDRIL_POLLEN` binds a Pollen on the in-process path only. Where the surface
+> forwards to a governed Stem, the presented credential derives the Pollen and the
+> variable has no effect — so the default path does not resolve there. Name the
+> file explicitly with `TENDRIL_POLLINATOR_CREDENTIAL` on a governed install.
 
 ## MCP config snippet
 

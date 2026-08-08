@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
@@ -187,7 +188,7 @@ func collectHardinessFindings(ctx context.Context, tendrilDir string) []hardines
 
 	// 2. Are the secrets readable by this user? This is the specific failure
 	//    that let the organism's own credential be borrowed.
-	findings = append(findings, credentialExclusivityFinding(tendrilDir))
+	findings = append(findings, credentialExclusivityFinding(tendrilDir)...)
 
 	// 3. Escalation paths that defeat a separate principal before it starts.
 	//    File ownership is necessary and nowhere near sufficient: a caller that
@@ -287,13 +288,10 @@ func pathOwnedByCurrentUser(path string) (bool, string) {
 	return owner == os.Getuid(), name
 }
 
-// readableSecrets lists credential material this user can actually open. It
-// opens rather than inspecting the mode, because that is the question that
+// readableStemSecrets lists Stem-side credential material this user can actually open.
+// It opens rather than inspecting the mode, because that is the question that
 // matters — permissions can be satisfied through group membership.
-func readableSecrets(tendrilDir string) []string {
-	// Candidates are collected as written and de-duplicated by resolved path: a
-	// relative control plane and an absolute home reach the same file, and
-	// counting it twice overstates what is exposed.
+func readableStemSecrets(tendrilDir string) []string {
 	candidates := []string{
 		filepath.Join(tendrilDir, core.PollinatorCredentialsFilename),
 		filepath.Join(tendrilDir, "api-key"),
@@ -303,10 +301,16 @@ func readableSecrets(tendrilDir string) []string {
 		candidates = append(candidates, matches...)
 		candidates = append(candidates, filepath.Join(home, ".tendril", core.PollinatorCredentialsFilename))
 	}
-	if mcpPath := strings.TrimSpace(os.Getenv("TENDRIL_MCP_CREDENTIAL")); mcpPath != "" {
+	return filterReadable(candidates)
+}
+
+// readablePollinatorCredentials lists Pollinator-held material this user can open.
+func readablePollinatorCredentials() []string {
+	var candidates []string
+	if mcpPath := strings.TrimSpace(os.Getenv(envMCPCredential)); mcpPath != "" {
 		candidates = append(candidates, mcpPath)
 	}
-	if polPath := strings.TrimSpace(os.Getenv("TENDRIL_POLLINATOR_CREDENTIAL")); polPath != "" {
+	if polPath := strings.TrimSpace(os.Getenv(envPollinatorCredential)); polPath != "" {
 		candidates = append(candidates, polPath)
 	}
 	xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
@@ -320,7 +324,10 @@ func readableSecrets(tendrilDir string) []string {
 			candidates = append(candidates, matches...)
 		}
 	}
+	return filterReadable(candidates)
+}
 
+func filterReadable(candidates []string) []string {
 	seen := map[string]bool{}
 	readable := []string{}
 	for _, candidate := range candidates {
@@ -816,65 +823,119 @@ func mustGetwdOrDot() string {
 // The Stem must be able to read its own credentials; that is what they are for.
 // The same fact from an account that hosts Pollinators is the weakness. Reported
 // as one verdict it condemns a correct installation.
-func credentialExclusivityFinding(tendrilDir string) hardinessFinding {
-	readable := readableSecrets(tendrilDir)
-	if len(readable) == 0 {
-		return hardinessFinding{Severity: "ok", Title: "No credential files are readable by this account"}
-	}
+func credentialExclusivityFinding(tendrilDir string) []hardinessFinding {
+	findings := []hardinessFinding{}
 
-	// Owning a .tendril directory is not being the Stem. A control plane a Stem
-	// has actually started in carries an identity record; without one, readable
-	// credential material here is leftover rather than in use, which is exactly
-	// what a caller-side run exists to surface.
-	identity, recorded := readStemIdentity(tendrilDir)
-	isStem := recorded && identity.UID == os.Getuid()
+	stemSecrets := readableStemSecrets(tendrilDir)
+	if len(stemSecrets) > 0 {
+		identity, recorded := readStemIdentity(tendrilDir)
+		isStem := recorded && identity.UID == os.Getuid()
 
-	// Material inside the measured control plane belongs to it. Material found
-	// elsewhere — a key left in an account's own home — belongs to nothing here,
-	// and is worth reporting however the rest resolves.
-	controlPlane, stray := partitionByPrefix(readable, tendrilDir)
+		controlPlane, stray := partitionByPrefix(stemSecrets, tendrilDir)
 
-	if len(stray) > 0 {
-		detail := "  " + strings.Join(stray, "\n  ") + "\n" +
-			"These are outside the control plane being measured. A credential sitting in\n" +
-			"an account's home is readable by anything running as that account, whether\n" +
-			"or not this Ramet knows about it."
-		if len(controlPlane) > 0 && isStem {
-			detail += "\n(The Stem's own material in " + tendrilDir + " is expected and not counted here.)"
+		if len(stray) > 0 {
+			detail := "  " + strings.Join(stray, "\n  ") + "\n" +
+				"These are outside the control plane being measured. A credential sitting in\n" +
+				"an account's home is readable by anything running as that account, whether\n" +
+				"or not this Ramet knows about it."
+			if len(controlPlane) > 0 && isStem {
+				detail += "\n(The Stem's own material in " + tendrilDir + " is expected and not counted here.)"
+			}
+			findings = append(findings, hardinessFinding{
+				Severity: "weak",
+				Title:    fmt.Sprintf("%d credential file(s) readable outside the control plane", len(stray)),
+				Detail:   detail,
+			})
+		} else if isStem {
+			findings = append(findings, hardinessFinding{
+				Severity: "ok",
+				Title:    fmt.Sprintf("%d credential file(s) readable — this is the Stem's own material", len(controlPlane)),
+				Detail: "  " + strings.Join(controlPlane, "\n  ") + "\n" +
+					"The Stem must be able to read these. Run this again from an account that\n" +
+					"hosts Pollinators: there, none of them may be readable.",
+			})
+		} else {
+			detail := "  " + strings.Join(stemSecrets, "\n  ") + "\n" +
+				"A Pollinator running as this account can use a credential directly — without\n" +
+				"asking the Stem, and without appearing in the audit lane.\n"
+			if !recorded {
+				detail += "No Stem has recorded itself in " + tendrilDir + ", so this is leftover\n" +
+					"material rather than a running Ramet's. Remove it, or start the Stem here if\n" +
+					"this account is meant to run one."
+			} else {
+				detail += "The Stem here runs as another principal, so this account should not be\n" +
+					"able to read its credentials at all."
+			}
+			findings = append(findings, hardinessFinding{
+				Severity: "weak",
+				Title:    fmt.Sprintf("%d credential file(s) are readable by this account", len(stemSecrets)),
+				Detail:   detail,
+			})
 		}
-		return hardinessFinding{
-			Severity: "weak",
-			Title:    fmt.Sprintf("%d credential file(s) readable outside the control plane", len(stray)),
-			Detail:   detail,
+	}
+
+	pollinatorCreds := readablePollinatorCredentials()
+	if len(pollinatorCreds) > 0 {
+		var weak []string
+		var ok []string
+		var undetermined []string
+
+		for _, path := range pollinatorCreds {
+			info, err := os.Stat(path)
+			if err != nil {
+				undetermined = append(undetermined, path)
+				continue
+			}
+			stat, isSys := info.Sys().(*syscall.Stat_t)
+			if !isSys {
+				// Sys().(*syscall.Stat_t) is Unix-only.
+				undetermined = append(undetermined, path)
+				continue
+			}
+
+			// We inspect the mode for Pollinator credentials (a reversal of the
+			// generic Stem logic) because their exclusivity relies on a strict
+			// 0600 mode and single-user ownership.
+			if int(stat.Uid) == os.Getuid() && info.Mode().Perm()&0o077 == 0 {
+				ok = append(ok, path)
+			} else {
+				weak = append(weak, path)
+			}
+		}
+
+		if len(weak) > 0 {
+			findings = append(findings, hardinessFinding{
+				Severity: "weak",
+				Title:    fmt.Sprintf("%d Pollinator credential(s) with weak permissions", len(weak)),
+				Detail: "  " + strings.Join(weak, "\n  ") + "\n" +
+					"These Pollinator credentials can be read, but are either owned by another\n" +
+					"principal, or have group/other permission bits set. They must be mode 0600\n" +
+					"and owned by the running user.",
+			})
+		}
+		if len(undetermined) > 0 {
+			findings = append(findings, hardinessFinding{
+				Severity: "note",
+				Title:    fmt.Sprintf("%d Pollinator credential(s) with undetermined ownership", len(undetermined)),
+				Detail: "  " + strings.Join(undetermined, "\n  ") + "\n" +
+					"The owner UID could not be read from the filesystem.",
+			})
+		}
+		if len(ok) > 0 {
+			findings = append(findings, hardinessFinding{
+				Severity: "ok",
+				Title:    fmt.Sprintf("%d Pollinator credential(s) are correctly secured", len(ok)),
+				Detail: "  " + strings.Join(ok, "\n  ") + "\n" +
+					"These are readable, owned by this user, and correctly isolated.",
+			})
 		}
 	}
 
-	if isStem {
-		return hardinessFinding{
-			Severity: "ok",
-			Title:    fmt.Sprintf("%d credential file(s) readable — this is the Stem's own material", len(controlPlane)),
-			Detail: "  " + strings.Join(controlPlane, "\n  ") + "\n" +
-				"The Stem must be able to read these. Run this again from an account that\n" +
-				"hosts Pollinators: there, none of them may be readable.",
-		}
+	if len(findings) == 0 {
+		return []hardinessFinding{{Severity: "ok", Title: "No credential files are readable by this account"}}
 	}
 
-	detail := "  " + strings.Join(readable, "\n  ") + "\n" +
-		"A Pollinator running as this account can use a credential directly — without\n" +
-		"asking the Stem, and without appearing in the audit lane.\n"
-	if !recorded {
-		detail += "No Stem has recorded itself in " + tendrilDir + ", so this is leftover\n" +
-			"material rather than a running Ramet's. Remove it, or start the Stem here if\n" +
-			"this account is meant to run one."
-	} else {
-		detail += "The Stem here runs as another principal, so this account should not be\n" +
-			"able to read its credentials at all."
-	}
-	return hardinessFinding{
-		Severity: "weak",
-		Title:    fmt.Sprintf("%d credential file(s) are readable by this account", len(readable)),
-		Detail:   detail,
-	}
+	return findings
 }
 
 // partitionByPrefix splits paths into those under a directory and those outside

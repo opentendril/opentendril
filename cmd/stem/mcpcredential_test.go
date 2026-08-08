@@ -242,3 +242,72 @@ func TestMCPCredential_RefusalOutput(t *testing.T) {
 		t.Fatalf("expected refusal message in stderr, got:\n%s", stderr)
 	}
 }
+
+func TestLoadMCPCredentialPathResolution(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Set up files for overrides
+	polPath := filepath.Join(tempDir, "pol.pem")
+	mcpPath := filepath.Join(tempDir, "mcp.pem")
+	for _, p := range []string{polPath, mcpPath} {
+		if err := os.WriteFile(p, []byte("tendril_refresh_secret"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	// 1. Prioritizes TENDRIL_POLLINATOR_CREDENTIAL
+	_, stderrPol, codePol := runTendrilMCP(t, map[string]string{
+		"TENDRIL_POLLINATOR_CREDENTIAL": polPath,
+		"TENDRIL_MCP_CREDENTIAL":        mcpPath,
+	})
+	if codePol != 0 {
+		t.Fatalf("expected pollinator credential to succeed, got %d. stderr: %s", codePol, stderrPol)
+	}
+
+	// 2. Uses TENDRIL_MCP_CREDENTIAL if pollinator one is absent
+	_, stderrMcp, codeMcp := runTendrilMCP(t, map[string]string{
+		"TENDRIL_MCP_CREDENTIAL": mcpPath,
+	})
+	if codeMcp != 0 {
+		t.Fatalf("expected mcp credential to succeed, got %d. stderr: %s", codeMcp, stderrMcp)
+	}
+
+	// 3. Fallback resolves to XDG default only when TENDRIL_POLLEN is set.
+	xdgConfig := filepath.Join(tempDir, ".config")
+	pollenPath := filepath.Join(xdgConfig, "tendril", "pollinators", "testpollen")
+	if err := os.MkdirAll(filepath.Dir(pollenPath), 0o755); err != nil {
+		t.Fatalf("mkdir xdg: %v", err)
+	}
+	if err := os.WriteFile(pollenPath, []byte("tendril_refresh_secret"), 0o600); err != nil {
+		t.Fatalf("write xdg: %v", err)
+	}
+
+	_, stderrXdg, codeXdg := runTendrilMCP(t, map[string]string{
+		"XDG_CONFIG_HOME": xdgConfig,
+		"TENDRIL_POLLEN":  "testpollen",
+	})
+	if codeXdg != 0 {
+		t.Fatalf("expected xdg config fallback to succeed, got %d. stderr: %s", codeXdg, stderrXdg)
+	}
+
+	// 4. A missing explicitly-named file throws an error
+	missingExp := filepath.Join(tempDir, "missing-explicit")
+	_, stderrMissingExp, codeMissingExp := runTendrilMCP(t, map[string]string{
+		"TENDRIL_POLLINATOR_CREDENTIAL": missingExp,
+	})
+	if codeMissingExp == 0 || !strings.Contains(stderrMissingExp, missingExp) {
+		t.Fatalf("expected explicit missing file to fail naming the file, got exit code %d. stderr: %s", codeMissingExp, stderrMissingExp)
+	}
+
+	// 5. A missing default path remains quiet (unconfigured)
+	os.Remove(pollenPath)
+	_, stderrMissingDef, codeMissingDef := runTendrilMCP(t, map[string]string{
+		"XDG_CONFIG_HOME": xdgConfig,
+		"TENDRIL_POLLEN":  "testpollen",
+		"TERROIR_HOST":    "127.0.0.1",
+		"PORT":            "65534",
+	})
+	if codeMissingDef != 0 || !strings.Contains(stderrMissingDef, "Pollen \"testpollen\" bound") {
+		t.Fatalf("expected missing default path to fall back to unconfigured, got exit %d. stderr: %s", codeMissingDef, stderrMissingDef)
+	}
+}

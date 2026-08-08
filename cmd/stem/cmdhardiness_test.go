@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
@@ -861,5 +862,153 @@ func TestIsolationTierExplicitUnprobedIsNote(t *testing.T) {
 				t.Errorf("report claims the host can satisfy %s, which nothing established: %s / %s", provider, finding.Title, finding.Detail)
 			}
 		})
+	}
+}
+
+func TestPollinatorCredentialExclusivityIsOK(t *testing.T) {
+	root := cleanTempRoot(t)
+	tendrilDir := filepath.Join(root, ".tendril")
+	xdgConfig := filepath.Join(root, ".config")
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	t.Setenv("TENDRIL_POLLEN", "testpollen")
+
+	credPath := filepath.Join(xdgConfig, "tendril", "pollinators", "testpollen")
+	if err := os.MkdirAll(filepath.Dir(credPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(credPath, []byte("tendril_refresh_test"), 0o600); err != nil {
+		t.Fatalf("write cred: %v", err)
+	}
+
+	findings := credentialExclusivityFinding(tendrilDir)
+
+	okFound := false
+	for _, f := range findings {
+		if strings.Contains(f.Title, "Pollinator credential(s) are correctly secured") {
+			if f.Severity != "ok" {
+				t.Fatalf("expected ok severity for correctly secured pollinator credential, got %s", f.Severity)
+			}
+			okFound = true
+		}
+	}
+	if !okFound {
+		t.Fatalf("missing expected ok finding for correctly secured pollinator credential")
+	}
+}
+
+func TestPollinatorCredentialExclusivityIsWeakFor0644(t *testing.T) {
+	root := cleanTempRoot(t)
+	tendrilDir := filepath.Join(root, ".tendril")
+	xdgConfig := filepath.Join(root, ".config")
+	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
+	t.Setenv("TENDRIL_POLLEN", "testpollen")
+
+	credPath := filepath.Join(xdgConfig, "tendril", "pollinators", "testpollen")
+	if err := os.MkdirAll(filepath.Dir(credPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(credPath, []byte("tendril_refresh_test"), 0o644); err != nil {
+		t.Fatalf("write cred: %v", err)
+	}
+
+	findings := credentialExclusivityFinding(tendrilDir)
+
+	weakFound := false
+	for _, f := range findings {
+		if strings.Contains(f.Title, "Pollinator credential(s) with weak permissions") {
+			if f.Severity != "weak" {
+				t.Fatalf("expected weak severity for 0644 pollinator credential, got %s", f.Severity)
+			}
+			weakFound = true
+		}
+	}
+	if !weakFound {
+		t.Fatalf("missing expected weak finding for 0644 pollinator credential")
+	}
+}
+
+func TestReadablePollinatorCredentialsPathDiscovery(t *testing.T) {
+	root := cleanTempRoot(t)
+
+	mcpPath := filepath.Join(root, "mcp.pem")
+	polPath := filepath.Join(root, "pol.pem")
+	xdgDir := filepath.Join(root, ".config", "tendril", "pollinators")
+	xdgPath := filepath.Join(xdgDir, "testpollen")
+
+	t.Setenv(envMCPCredential, mcpPath)
+	t.Setenv(envPollinatorCredential, polPath)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, ".config"))
+	t.Setenv("TENDRIL_POLLEN", "testpollen")
+
+	for _, path := range []string{mcpPath, polPath, xdgPath} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+	}
+
+	paths := readablePollinatorCredentials()
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 paths, got %d", len(paths))
+	}
+
+	for _, expected := range []string{mcpPath, polPath, xdgPath} {
+		found := false
+		for _, p := range paths {
+			if p == expected {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing expected path %s", expected)
+		}
+	}
+
+	// Drop one and confirm it returns 2
+	os.Remove(polPath)
+	paths = readablePollinatorCredentials()
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths after dropping one, got %d", len(paths))
+	}
+}
+
+func TestReadableStemSecretsPathDiscovery(t *testing.T) {
+	root := cleanTempRoot(t)
+	tendrilDir := filepath.Join(root, ".tendril")
+
+	t.Setenv("HOME", root)
+
+	pathsToCreate := []string{
+		filepath.Join(tendrilDir, core.PollinatorCredentialsFilename),
+		filepath.Join(tendrilDir, "api-key"),
+		filepath.Join(root, ".tendril", "test1.pem"),
+		filepath.Join(root, ".tendril", core.PollinatorCredentialsFilename),
+	}
+
+	for _, path := range pathsToCreate {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("secret"), 0o600); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+	}
+
+	paths := readableStemSecrets(tendrilDir)
+	// Some paths might be duplicate (tendrilDir vs ~/.tendril if they are the same)
+	// But in this test tendrilDir == ~/.tendril, so they de-duplicate.
+	// We expect 3 distinct files: pollinators.json, api-key, test1.pem
+	if len(paths) != 3 {
+		t.Fatalf("expected 3 distinct paths, got %d: %v", len(paths), paths)
+	}
+
+	// Drop one and confirm it returns 2
+	os.Remove(filepath.Join(root, ".tendril", "test1.pem"))
+	paths = readableStemSecrets(tendrilDir)
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths after dropping one, got %d", len(paths))
 	}
 }
