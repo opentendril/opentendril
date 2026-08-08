@@ -84,17 +84,28 @@ Requests presenting the revoked credential are denied at once; access tokens
 already minted from it age out within their 15-minute cap.
 
 > [!NOTE]
-> **Where the credential is read from.** `TENDRIL_POLLINATOR_CREDENTIAL` names the
-> file directly and takes precedence. `TENDRIL_MCP_CREDENTIAL` is honoured next.
-> With neither set, the path defaults to `~/.config/tendril/pollinators/<pollen>`,
-> where `<pollen>` comes from `TENDRIL_POLLEN`. A missing file at the default path
-> is the ordinary unconfigured case and is not an error; a missing file at a path
-> you named explicitly is.
+> **Two kinds of consumer, one location.** The path above is a convention. What
+> reads it depends on which surface the Pollinator speaks.
+>
+> **Where the Stem is the client — MCP.** It reads the durable credential at
+> startup and mints access tokens on demand, because a working session outlives
+> the 15-minute cap. `TENDRIL_POLLINATOR_CREDENTIAL` names the file directly and
+> takes precedence; `TENDRIL_MCP_CREDENTIAL` is honoured next. With neither set the
+> path defaults to `~/.config/tendril/pollinators/<pollen>`, where `<pollen>` comes
+> from `TENDRIL_POLLEN`. A missing file at the default path is the ordinary
+> unconfigured case and is not an error; a missing file at a path you named
+> explicitly is.
 >
 > `TENDRIL_POLLEN` binds a Pollen on the in-process path only. Where the surface
 > forwards to a governed Stem, the presented credential derives the Pollen and the
 > variable has no effect — so the default path does not resolve there. Name the
 > file explicitly with `TENDRIL_POLLINATOR_CREDENTIAL` on a governed install.
+>
+> **Where your own process is the client — REST.** None of those variables apply.
+> Your client reads the file itself, presents the credential to
+> `POST /v1/pollinator/token` to obtain an access token, and carries that token on
+> data routes. Follow the location above so `hardiness` can audit the file; no Stem
+> code path reads it on your behalf.
 
 ## MCP config snippet
 
