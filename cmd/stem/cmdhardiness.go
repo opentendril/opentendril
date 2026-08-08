@@ -303,6 +303,23 @@ func readableSecrets(tendrilDir string) []string {
 		candidates = append(candidates, matches...)
 		candidates = append(candidates, filepath.Join(home, ".tendril", core.PollinatorCredentialsFilename))
 	}
+	if mcpPath := strings.TrimSpace(os.Getenv("TENDRIL_MCP_CREDENTIAL")); mcpPath != "" {
+		candidates = append(candidates, mcpPath)
+	}
+	if polPath := strings.TrimSpace(os.Getenv("TENDRIL_POLLINATOR_CREDENTIAL")); polPath != "" {
+		candidates = append(candidates, polPath)
+	}
+	xdgConfig := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if xdgConfig == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			xdgConfig = filepath.Join(home, ".config")
+		}
+	}
+	if xdgConfig != "" {
+		if matches, err := filepath.Glob(filepath.Join(xdgConfig, "tendril", "pollinators", "*")); err == nil {
+			candidates = append(candidates, matches...)
+		}
+	}
 
 	seen := map[string]bool{}
 	readable := []string{}

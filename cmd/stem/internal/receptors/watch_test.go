@@ -155,7 +155,7 @@ func TestUnresolvableCredentialIsNotTheOperator(t *testing.T) {
 		"/v1/phytomers/" + watchSubject + "/sprout-runs",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
-		request.Header.Set("Authorization", "Bearer tendril_root_00000000000000000000000000000000")
+		request.Header.Set("Authorization", "Bearer tendril_refresh_00000000000000000000000000000000")
 		recorder := httptest.NewRecorder()
 		mux.ServeHTTP(recorder, request)
 

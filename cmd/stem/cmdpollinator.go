@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -43,37 +44,45 @@ func runPollinatorCmd(ctx context.Context, args []string) {
 	}
 }
 
-// parsePollinatorArgs reads --pollen and --note.
-func parsePollinatorArgs(args []string) (pollen, note string, err error) {
+// parsePollinatorArgs reads --pollen, --note, --out and --force.
+func parsePollinatorArgs(args []string) (pollen, note, out string, force bool, err error) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--pollen":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("flag --pollen requires a value")
+				return "", "", "", false, fmt.Errorf("flag --pollen requires a value")
 			}
 			i++
 			pollen = args[i]
 		case "--note":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("flag --note requires a value")
+				return "", "", "", false, fmt.Errorf("flag --note requires a value")
 			}
 			i++
 			note = args[i]
+		case "--out":
+			if i+1 >= len(args) {
+				return "", "", "", false, fmt.Errorf("flag --out requires a value")
+			}
+			i++
+			out = args[i]
+		case "--force":
+			force = true
 		default:
-			return "", "", fmt.Errorf("unknown argument %q", args[i])
+			return "", "", "", false, fmt.Errorf("unknown argument %q", args[i])
 		}
 	}
-	return pollen, note, nil
+	return pollen, note, out, force, nil
 }
 
 func runPollinatorIssue(tendrilDir string, args []string) {
-	pollen, note, err := parsePollinatorArgs(args)
+	pollen, note, out, force, err := parsePollinatorArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 	if strings.TrimSpace(pollen) == "" {
-		fmt.Fprintln(os.Stderr, "❌ missing --pollen. Usage: tendril pollinator issue --pollen <name> [--note <memo>]")
+		fmt.Fprintln(os.Stderr, "❌ missing --pollen. Usage: tendril pollinator issue --pollen <name> [--note <memo>] [--out <path>] [--force]")
 		os.Exit(1)
 	}
 
@@ -81,6 +90,25 @@ func runPollinatorIssue(tendrilDir string, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Could not issue credential: %v\n", err)
 		os.Exit(1)
+	}
+
+	if out != "" {
+		if !force {
+			if _, err := os.Stat(out); err == nil {
+				fmt.Fprintf(os.Stderr, "❌ file exists (use --force to overwrite): %s\n", out)
+				os.Exit(1)
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(out), 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Could not create directory for credential: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(out, []byte(secret+"\n"), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Could not write credential: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(out)
+		return
 	}
 
 	// The secret is printed once and stored nowhere. Losing it means issuing
@@ -122,7 +150,7 @@ func runPollinatorList(tendrilDir string) {
 }
 
 func runPollinatorRevoke(tendrilDir string, args []string) {
-	pollen, _, err := parsePollinatorArgs(args)
+	pollen, _, _, _, err := parsePollinatorArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
@@ -228,11 +256,13 @@ func mintPollinatorAccessToken(tendrilDir, pollen string, ttl time.Duration) (to
 func printPollinatorUsage() {
 	fmt.Println("Usage: tendril pollinator <issue|list|revoke|token> [flags]")
 	fmt.Println()
-	fmt.Println("issue --pollen <name> [--note <memo>]")
+	fmt.Println("issue --pollen <name> [--note <memo>] [--out <path>] [--force]")
 	fmt.Println("  Mints a durable credential (refresh root) that authenticates AS that Pollen.")
 	fmt.Println("  The secret prints once and is never stored — only its digest is kept, so a")
 	fmt.Println("  leaked store cannot be replayed. A grant is still required for the Pollen to")
 	fmt.Println("  do anything.")
+	fmt.Println("  With --out, writes the secret to the given path at mode 0600 (creating its")
+	fmt.Println("  parent at 0700) and prints only the path to stdout.")
 	fmt.Println()
 	fmt.Println("list")
 	fmt.Println("  Shows every durable credential, active and revoked, with its Pollen and")

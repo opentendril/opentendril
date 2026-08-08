@@ -29,7 +29,7 @@ import (
 // signature verification rather than to the digest resolver.
 //
 // Both kinds share the "tendril_" namespace; the full two-segment prefix —
-// "tendril_access_" here and "tendril_root_" for Pollinator credentials — is
+// "tendril_access_" here and "tendril_refresh_" for Pollinator credentials — is
 // what discriminates them. Every check must use the full prefix, never the
 // namespace alone. LooksLikeAccessToken and LooksLikePollinatorCredential are
 // mutually exclusive: a bearer is at most one of the two.

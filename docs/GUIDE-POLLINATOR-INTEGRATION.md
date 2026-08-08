@@ -35,6 +35,21 @@ The command prompts for:
 It then writes `~/.tendril/substrates.yaml` and prints an MCP configuration
 snippet to stdout.
 
+## Issue a credential
+
+A Pollinator authenticates as a specific Pollen. Issue a durable credential and write it to the default location:
+
+```bash
+tendril pollinator issue --pollen claude --out ~/.config/tendril/pollinators/claude
+```
+
+To reissue a credential, add `--force` to overwrite the file, then revoke the old one:
+
+```bash
+tendril pollinator list
+tendril pollinator revoke --pollen claude
+```
+
 ## MCP config snippet
 
 The setup command emits a JSON block like this:
@@ -44,7 +59,10 @@ The setup command emits a JSON block like this:
   "mcpServers": {
     "opentendril": {
       "command": "tendril",
-      "args": ["serve", "mcp", "stdio"]
+      "args": ["serve", "mcp", "stdio"],
+      "env": {
+        "TENDRIL_POLLEN": "claude"
+      }
     }
   }
 }

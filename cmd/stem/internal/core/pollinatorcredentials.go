@@ -37,7 +37,7 @@ const PollinatorCredentialsFilename = "pollinators.json"
 //
 // It is functional, not decorative: it discriminates a Pollinator credential
 // from an access token. Changing it invalidates every credential issued.
-const pollinatorTokenPrefix = "tendril_root_"
+const pollinatorTokenPrefix = "tendril_refresh_"
 
 var pollinatorStoreMu sync.Mutex
 
