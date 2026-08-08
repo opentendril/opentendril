@@ -792,18 +792,46 @@ func (a *Sprout) availableToolNames() []string {
 	return names
 }
 
+// jsonSchemaProperty renders one sprout tool argument as a JSON Schema property.
+//
+// The sprout runtimes describe argument types in their own short vocabulary —
+// "string", "number", "boolean", "string[]". Providers validate tool definitions
+// against JSON Schema draft 2020-12, which has a closed set of type names and no
+// array shorthand: a list of strings is {"type":"array","items":{"type":"string"}}.
+// Passing the sprout's spelling through unchanged emitted "type":"string[]", which
+// is not a JSON Schema type, and the provider rejected the whole request — so no
+// tool definition reached it and every growth fell back to the prose protocol.
+//
+// An unrecognised type yields a property carrying its description and no type
+// constraint. That is valid and permissive: the argument stays usable and the
+// request stays valid, rather than one unknown spelling disabling native tool
+// calling wholesale — which is the failure this replaces. Recognising a new type
+// properly is the job of the vocabulary test, not of a runtime guess.
+func jsonSchemaProperty(arg ToolArgument) map[string]any {
+	prop := map[string]any{}
+	switch arg.Type {
+	case "string", "number", "integer", "boolean", "object":
+		prop["type"] = arg.Type
+	case "string[]":
+		prop["type"] = "array"
+		prop["items"] = map[string]any{"type": "string"}
+	case "number[]":
+		prop["type"] = "array"
+		prop["items"] = map[string]any{"type": "number"}
+	}
+	if arg.Description != "" {
+		prop["description"] = arg.Description
+	}
+	return prop
+}
+
 func mapToolsToNative(tools []ToolDefinition) []llm.ToolDefinition {
 	var mapped []llm.ToolDefinition
 	for _, tool := range tools {
 		properties := make(map[string]any)
 		var required []string
 		for _, arg := range tool.Arguments {
-			prop := map[string]any{
-				"type": arg.Type,
-			}
-			if arg.Description != "" {
-				prop["description"] = arg.Description
-			}
+			prop := jsonSchemaProperty(arg)
 			properties[arg.Name] = prop
 			if arg.Required {
 				required = append(required, arg.Name)
