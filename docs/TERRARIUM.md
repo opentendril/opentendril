@@ -1,4 +1,4 @@
-# Terrarium Terrariuming Architecture
+# Terrarium Isolation Architecture
 
 OpenTendril executes untrusted, Sprout-generated code inside isolated environments called "Sprouts". To support a spectrum of security requirements—ranging from local rapid development to enterprise SaaS deployments—the Stem orchestrator implements the `TerrariumProvider` contract.
 
