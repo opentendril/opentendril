@@ -712,14 +712,10 @@ boundary is enforced by the operating system."*
 
 ```bash
 # as your own account, from your own home — the caller's view
-cd ~ && tendril hardiness
+cd ~ && find ~/.tendril .tendril -type f -readable 2>/dev/null
 ```
 
-This run must report **no readable credential files**. The check opens each
-candidate rather than inspecting its mode, because permission can be satisfied
-through group membership, and it examines the invoking user's own home as well as
-the control plane. If anything ever left credential material in your `~/.tendril`,
-this is where it surfaces.
+This is run from the Botanist's own account to verify that no credential files are readable to a non-Stem account, which is the critical access control boundary. The check examines the invoking user's own home as well as the control plane. If anything ever left credential material in your `~/.tendril`, this is where it surfaces.
 
 For reference, a **single-principal** installation reports like this — every
 finding legible, exit status still zero:
@@ -902,7 +898,7 @@ git status --short                        # must show no deleted tracked files
 **6. Rotate the credential.** Regenerate the private key at GitHub and install
 the new one per Stage 5.
 
-**Check:** `cd ~ && tendril hardiness` reports no readable credential files.
+**Check:** `cd ~ && find ~/.tendril .tendril -type f -readable 2>/dev/null` should print nothing.
 
 ---
 
@@ -924,8 +920,8 @@ sudo -u tendril -i
 cd ~/.tendril/substrates/myrepo && git log --oneline -5 && git status
 ```
 
-**After anything that touches the installation**, run `tendril hardiness` as
-yourself. It is the fastest way to notice credential material that has drifted
+**After anything that touches the installation**, run the credential check as
+yourself: `cd ~ && find ~/.tendril .tendril -type f -readable 2>/dev/null`. It is the fastest way to notice credential material that has drifted
 back into your home directory.
 
 ---
