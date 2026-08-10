@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -581,5 +582,36 @@ substrates:
 	}
 	if got := config.Substrates["inline"].Commit; got != "api" {
 		t.Fatalf("inline.Commit = %q, want normalized %q", got, "api")
+	}
+}
+
+// TestRunSproutMissingWorkspaceWinsOverPreflight asserts that substrate/workspace
+// resolution errors (like ErrWorkspaceAbsent) take precedence over Terrarium/Docker
+// preflight checks so absent workspaces fail with the specific missing-workspace sentinel.
+func TestRunSproutMissingWorkspaceWinsOverPreflight(t *testing.T) {
+	originalPreflight := runSproutPreflightChecksFn
+	t.Cleanup(func() { runSproutPreflightChecksFn = originalPreflight })
+
+	runSproutPreflightChecksFn = func(ctx context.Context) error {
+		return fmt.Errorf("❌ Docker daemon is not responding")
+	}
+
+	dir := chdirToTempDir(t)
+	writeSubstratesYAML(t, filepath.Join(dir, "substrates.yaml"), `
+substrates:
+  missing_managed:
+    checkout:
+      mode: managed
+`)
+
+	orch := &DockerOrchestrator{
+		Substrate: "missing_managed",
+	}
+	_, err := orch.RunSprout(context.Background(), "test prompt")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrWorkspaceAbsent) {
+		t.Fatalf("got unexpected error: %v, want ErrWorkspaceAbsent", err)
 	}
 }
