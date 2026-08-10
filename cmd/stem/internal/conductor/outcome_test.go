@@ -386,7 +386,7 @@ func TestRunSproutResumptionHonorsOutcomeVocabulary(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("write status: %v", err)
 		}
-		if _, err := runGitCommand(context.Background(), root, "add", "tendril-status.json"); err != nil {
+		if _, err := runGitCommand(context.Background(), root, "add", "-f", "tendril-status.json"); err != nil {
 			t.Fatalf("git add status: %v", err)
 		}
 		if _, err := runGitCommand(context.Background(), root, "commit", "-m", "status"); err != nil {
@@ -419,7 +419,7 @@ func TestRunSproutResumptionHonorsOutcomeVocabulary(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("write status: %v", err)
 		}
-		if _, err := runGitCommand(context.Background(), root, "add", "tendril-status.json"); err != nil {
+		if _, err := runGitCommand(context.Background(), root, "add", "-f", "tendril-status.json"); err != nil {
 			t.Fatalf("git add status: %v", err)
 		}
 		if _, err := runGitCommand(context.Background(), root, "commit", "-m", "status"); err != nil {

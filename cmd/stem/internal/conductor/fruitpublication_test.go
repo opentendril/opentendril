@@ -3,7 +3,9 @@ package conductor
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
@@ -231,6 +233,7 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 	runner := &stubSproutRunner{result: sproutResult{Response: "added feature", WroteWorkspace: true}}
 	stubRunSproutCollaborators(t, root, runner, []string{"pkg/feature.go"})
 
+	var capturedStatusPath string
 	var commitCount, mergeCount int
 	origCommit := commitTerrariumExecutionFn
 	origMerge := mergeTerrariumCommitFn
@@ -240,6 +243,7 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 	})
 
 	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+		capturedStatusPath = statusPath
 		commitCount++
 		return "deadbeef1234", nil
 	}
@@ -251,10 +255,13 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 	bus := eventbus.New()
 	events := recordSproutLifecycle(bus)
 
+	statusPath := filepath.Join(root, "tendril-status.json")
+
 	orch := &DockerOrchestrator{
-		Substrate: root,
-		StepID:    "step-matured-one-file",
-		EventBus:  bus,
+		Substrate:  root,
+		StepID:     "step-matured-one-file",
+		EventBus:   bus,
+		StatusPath: statusPath,
 	}
 
 	report, err := orch.RunSprout(context.Background(), "matured task")
@@ -264,6 +271,10 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 
 	if report.Outcome != SproutOutcomeComplete {
 		t.Fatalf("report.Outcome = %q, want %q", report.Outcome, SproutOutcomeComplete)
+	}
+
+	if capturedStatusPath != "" {
+		t.Fatalf("commitTerrariumExecutionFn was passed statusPath %q, want empty (status should not be committed as fruit)", capturedStatusPath)
 	}
 
 	if commitCount != 1 {
@@ -279,6 +290,14 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 	}
 	if got := terminal[0].Data["outcome"]; got != SproutOutcomeComplete {
 		t.Fatalf("matured event outcome = %v, want %q", got, SproutOutcomeComplete)
+	}
+
+	statusBytes, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("expected status to be written locally: %v", err)
+	}
+	if !strings.Contains(string(statusBytes), "step-matured-one-file") {
+		t.Fatalf("local status missing expected step id")
 	}
 }
 
@@ -341,5 +360,65 @@ func TestFruitPublicationHistoryAndEventPublishedForNonReviewableOutcomes(t *tes
 	}
 	if onDisk.StepID != "step-history-event" {
 		t.Fatalf("status file stepID = %q, want step-history-event", onDisk.StepID)
+	}
+}
+
+// TestFruitPublicationStatusDoesNotDirtyGitWorktree verifies that a non-reviewable run
+// with StatusPath set inside a Git repo leaves the repo clean and reclaims the isolation branch.
+func TestFruitPublicationStatusDoesNotDirtyGitWorktree(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	chdirToTempDir(t)
+
+	statusFile := filepath.Join(root, "tendril-status.json")
+
+	runner := &stubSproutRunner{result: sproutResult{Response: "investigation report", WroteWorkspace: false}}
+	stubRunSproutCollaborators(t, root, runner, []string{})
+
+	origCommit := commitTerrariumExecutionFn
+	t.Cleanup(func() { commitTerrariumExecutionFn = origCommit })
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+		t.Fatalf("commitTerrariumExecutionFn should not be called")
+		return "", nil
+	}
+
+	bus := eventbus.New()
+
+	orch := &DockerOrchestrator{
+		Substrate:  root,
+		StepID:     "step-status-dirty",
+		StatusPath: statusFile,
+		EventBus:   bus,
+	}
+
+	report, err := orch.RunSprout(context.Background(), "dirty test task")
+	if err != nil {
+		t.Fatalf("RunSprout failed: %v", err)
+	}
+	if report.Outcome != SproutOutcomeNoChanges {
+		t.Fatalf("report.Outcome = %q, want %q", report.Outcome, SproutOutcomeNoChanges)
+	}
+
+	// Verify git status --porcelain is empty on the root
+	out, err := runGitCommand(context.Background(), root, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("git status failed: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("git status --porcelain is not empty, worktree is dirty:\n%s", out)
+	}
+
+	// Verify current branch is back to main
+	branch, err := runGitCommand(context.Background(), root, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("git rev-parse failed: %v", err)
+	}
+	if strings.TrimSpace(branch) != "outcome-test" {
+		t.Fatalf("expected to return to 'outcome-test' branch, got %q", strings.TrimSpace(branch))
+	}
+
+	// Verify the isolation branch is deleted
+	branches, _ := runGitCommand(context.Background(), root, "branch", "--list", "sprout/task-step-status-dirty")
+	if strings.TrimSpace(branches) != "" {
+		t.Fatalf("isolation branch was not deleted")
 	}
 }
