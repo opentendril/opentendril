@@ -11,6 +11,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/dormancy"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // TestPatienceScratchLoading pins the schema half of the scratch interval, on
@@ -297,6 +298,9 @@ func TestRunSequenceSproutAtPathWatchesForDormancyWhenConfigured(t *testing.T) {
 		removeShadowWorktreeFn = func(sourcePath, shadowPath string) {}
 		injectMycorrhizalCacheFn = func(sourcePath, shadowPath string) {}
 		stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
+		startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+			return &stubToolSession{}, nil
+		}
 		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
 			return probe, nil
 		}

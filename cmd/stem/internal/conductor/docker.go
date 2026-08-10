@@ -244,10 +244,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// stash and the isolation branch all stay on the far side of it.
 	refuseUnresolvedMind := func() error { return mind.ResolutionError() }
 
-	if err := runSproutPreflightChecksFn(ctx); err != nil {
-		return report, err
-	}
-
 	substratesConfig, err := LoadSubstratesConfig("")
 	if err != nil {
 		return report, err
@@ -255,6 +251,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	plan, err := resolveSubstrateExecutionPlan(d, substratesConfig)
 	if err != nil {
+		return report, err
+	}
+
+	if err := runSproutPreflightChecksFn(ctx); err != nil {
 		return report, err
 	}
 
