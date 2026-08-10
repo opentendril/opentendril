@@ -692,50 +692,67 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 		report.Outcome = executionStatus.Status
 
-		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
-		if commitErr != nil {
-			report.Outcome = ""
-			if runErr != nil {
-				return report, changes, errors.Join(runErr, commitErr)
-			}
-			return report, changes, commitErr
-		}
+		isReviewableFruit := executionStatus.Status == SproutOutcomeComplete &&
+			len(modifiedFiles) > 0 &&
+			runErr == nil &&
+			!plan.readOnly && !d.Investigation &&
+			changes.measured && report.FilesUnmeasured == ""
 
-		if d.DisableMergeBack {
-			report.Output = commitHash
-			return report, changes, runErr
-		}
-
-		if plan.remoteClone {
-			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
+		if isReviewableFruit {
+			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
+			if commitErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
-					return report, changes, errors.Join(runErr, pushErr)
+					return report, changes, errors.Join(runErr, commitErr)
 				}
-				return report, changes, pushErr
+				return report, changes, commitErr
+			}
+
+			if d.DisableMergeBack {
+				report.Output = commitHash
+				return report, changes, runErr
+			}
+
+			if plan.remoteClone {
+				if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
+					report.Outcome = ""
+					if runErr != nil {
+						return report, changes, errors.Join(runErr, pushErr)
+					}
+					return report, changes, pushErr
+				}
+			} else {
+				mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
+				if mergeErr != nil {
+					report.Outcome = ""
+					if runErr != nil {
+						return report, changes, errors.Join(runErr, mergeErr)
+					}
+					return report, changes, mergeErr
+				}
+			}
+
+			if runErr != nil {
+				return report, changes, runErr
+			}
+
+			if gitDiff != "" {
+				// On the post-mortem's clock, not the wait's: transcribing what a
+				// run learned is part of the account of the run, and a detached
+				// call has long since let go of the context it waited on.
+				chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
+				if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+				}
 			}
 		} else {
-			mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
-			if mergeErr != nil {
-				report.Outcome = ""
-				if runErr != nil {
-					return report, changes, errors.Join(runErr, mergeErr)
+			if statusPath != "" {
+				if writeErr := writeSproutStatus(statusPath, executionStatus); writeErr != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Failed to write status to %s: %v\n", statusPath, writeErr)
 				}
-				return report, changes, mergeErr
 			}
-		}
-
-		if runErr != nil {
-			return report, changes, runErr
-		}
-
-		if gitDiff != "" {
-			// On the post-mortem's clock, not the wait's: transcribing what a
-			// run learned is part of the account of the run, and a detached
-			// call has long since let go of the context it waited on.
-			chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-			if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+			if runErr != nil {
+				return report, changes, runErr
 			}
 		}
 

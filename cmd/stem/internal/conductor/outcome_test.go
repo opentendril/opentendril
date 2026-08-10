@@ -334,8 +334,12 @@ func TestRunSproutOutcomes(t *testing.T) {
 			if report.Outcome != testCase.wantOutcome {
 				t.Fatalf("report.Outcome = %q, want %q", report.Outcome, testCase.wantOutcome)
 			}
-			if captured.Status != testCase.wantOutcome {
-				t.Fatalf("tendril-status Status = %q, want %q", captured.Status, testCase.wantOutcome)
+			if testCase.wantOutcome == SproutOutcomeComplete {
+				if captured.Status != testCase.wantOutcome {
+					t.Fatalf("tendril-status Status = %q, want %q", captured.Status, testCase.wantOutcome)
+				}
+			} else if captured.Status != "" {
+				t.Fatalf("commit status = %q, want empty (commitTerrariumExecutionFn must not run for non-reviewable outcomes)", captured.Status)
 			}
 
 			emerged := filterEvents(*events, eventbus.EventSproutEmerged)

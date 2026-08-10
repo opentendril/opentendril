@@ -165,6 +165,7 @@ func TestRunSproutPostMortemOutlivesExpiredBudget(t *testing.T) {
 	orch := &DockerOrchestrator{
 		Substrate:        "bounded",
 		StepID:           "postmortem-runsprout",
+		StatusPath:       statusPath,
 		EventBus:         bus,
 		DisableMergeBack: true,
 	}
@@ -229,6 +230,7 @@ func TestRunSproutReportsUnmeasurableEvidence(t *testing.T) {
 	orch := &DockerOrchestrator{
 		Substrate:        "bounded",
 		StepID:           "postmortem-unmeasurable",
+		StatusPath:       statusPath,
 		EventBus:         bus,
 		DisableMergeBack: true,
 	}
@@ -297,8 +299,8 @@ func TestRunSequenceSproutAtPathPostMortemOutlivesExpiredBudget(t *testing.T) {
 	if result.Outcome != SproutOutcomeTimedOut {
 		t.Fatalf("result.Outcome = %q, want %q", result.Outcome, SproutOutcomeTimedOut)
 	}
-	if captured.Status != SproutOutcomeTimedOut {
-		t.Fatalf("recorded status = %q, want %q", captured.Status, SproutOutcomeTimedOut)
+	if captured.Status != "" {
+		t.Fatalf("recorded status = %q, want empty (commitTerrariumExecutionFn must not run for non-reviewable outcomes)", captured.Status)
 	}
 	if len(result.FilesModified) != 1 {
 		t.Fatalf("result.FilesModified = %#v, want the measured file", result.FilesModified)

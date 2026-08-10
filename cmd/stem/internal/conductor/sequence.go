@@ -1765,45 +1765,53 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		result.Outcome = executionStatus.Status
 		result.FilesModified = modifiedFiles
 
-		var sequenceCredential ResolvedCredential
-		if sequencePlan != nil {
-			sequenceCredential = sequencePlan.credential
-		}
-		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
-		if commitErr != nil {
-			if runErr != nil {
-				return result, changes, errors.Join(runErr, commitErr)
+		isReviewableFruit := executionStatus.Status == SproutOutcomeComplete &&
+			len(modifiedFiles) > 0 &&
+			runErr == nil &&
+			!orch.Investigation &&
+			changes.measured && result.FilesUnmeasured == ""
+
+		if isReviewableFruit {
+			var sequenceCredential ResolvedCredential
+			if sequencePlan != nil {
+				sequenceCredential = sequencePlan.credential
 			}
-			return result, changes, commitErr
-		}
-
-		result.CommitHash = commitHash
-
-		if orch.DisableMergeBack {
-			return result, changes, runErr
-		}
-
-		mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
-		if mergeErr != nil {
-			if runErr != nil {
-				return result, changes, errors.Join(runErr, mergeErr)
+			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
+			if commitErr != nil {
+				if runErr != nil {
+					return result, changes, errors.Join(runErr, commitErr)
+				}
+				return result, changes, commitErr
 			}
-			return result, changes, mergeErr
-		}
 
-		if gitDiff != "" && runErr == nil {
-			chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-			if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+			result.CommitHash = commitHash
+
+			if orch.DisableMergeBack {
+				return result, changes, runErr
+			}
+
+			mergeErr := mergeSequenceTerrariumCommit(postMortemCtx, sourcePath, commitHash)
+			if mergeErr != nil {
+				if runErr != nil {
+					return result, changes, errors.Join(runErr, mergeErr)
+				}
+				return result, changes, mergeErr
+			}
+
+			if gitDiff != "" && runErr == nil {
+				chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
+				if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+				}
+			}
+		} else {
+			if runErr != nil {
+				return result, changes, runErr
 			}
 		}
 
 		if fitErr := RecordGenomicFitness(sourcePath, runErr == nil); fitErr != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Genome fitness record skipped: %v\n", fitErr)
-		}
-
-		if runErr != nil {
-			return result, changes, runErr
 		}
 
 		return result, changes, nil

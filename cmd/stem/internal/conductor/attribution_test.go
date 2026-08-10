@@ -245,8 +245,8 @@ func TestRunSproutAttributesOnlyTheModelsChanges(t *testing.T) {
 
 	// The commit stages exactly the file list it is handed, so this is what
 	// keeps OpenTendril's own bookkeeping out of the Sprout's commit.
-	if captured.Status != SproutOutcomeNoChanges {
-		t.Fatalf("tendril-status Status = %q, want %q", captured.Status, SproutOutcomeNoChanges)
+	if captured.Status != "" {
+		t.Fatalf("commit status = %q, want empty (commitTerrariumExecutionFn must not run for non-reviewable outcomes)", captured.Status)
 	}
 	if len(captured.FilesModified) != 0 {
 		t.Fatalf("the commit was handed %v to stage; a run that wrote nothing has nothing to stage", captured.FilesModified)
@@ -362,8 +362,12 @@ func TestRunSequenceSproutAtPathAttributesOnlyTheModelsChanges(t *testing.T) {
 			if len(captured.FilesModified) != testCase.wantFiles {
 				t.Fatalf("the commit was handed %v to stage, want %d file(s)", captured.FilesModified, testCase.wantFiles)
 			}
-			if captured.Status != testCase.wantOutcome {
-				t.Fatalf("recorded status = %q, want %q", captured.Status, testCase.wantOutcome)
+			if testCase.wantOutcome == SproutOutcomeComplete {
+				if captured.Status != testCase.wantOutcome {
+					t.Fatalf("recorded status = %q, want %q", captured.Status, testCase.wantOutcome)
+				}
+			} else if captured.Status != "" {
+				t.Fatalf("recorded status = %q, want empty (commitTerrariumExecutionFn must not run for non-reviewable outcomes)", captured.Status)
 			}
 		})
 	}
