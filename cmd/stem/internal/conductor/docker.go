@@ -692,50 +692,68 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 		report.Outcome = executionStatus.Status
 
-		commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, plan.credential)
-		if commitErr != nil {
-			report.Outcome = ""
-			if runErr != nil {
-				return report, changes, errors.Join(runErr, commitErr)
+		if statusPath != "" {
+			if writeErr := writeSproutStatus(statusPath, executionStatus); writeErr != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to write status to %s: %v\n", statusPath, writeErr)
 			}
-			return report, changes, commitErr
 		}
 
-		if d.DisableMergeBack {
-			report.Output = commitHash
-			return report, changes, runErr
-		}
+		isReviewableFruit := executionStatus.Status == SproutOutcomeComplete &&
+			len(modifiedFiles) > 0 &&
+			runErr == nil &&
+			!plan.readOnly && !d.Investigation &&
+			changes.measured && report.FilesUnmeasured == ""
 
-		if plan.remoteClone {
-			if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
+		if isReviewableFruit {
+			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, plan.credential)
+			if commitErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
-					return report, changes, errors.Join(runErr, pushErr)
+					return report, changes, errors.Join(runErr, commitErr)
 				}
-				return report, changes, pushErr
+				return report, changes, commitErr
+			}
+
+			if d.DisableMergeBack {
+				report.Output = commitHash
+				return report, changes, runErr
+			}
+
+			if plan.remoteClone {
+				if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
+					report.Outcome = ""
+					if runErr != nil {
+						return report, changes, errors.Join(runErr, pushErr)
+					}
+					return report, changes, pushErr
+				}
+			} else {
+				mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
+				if mergeErr != nil {
+					report.Outcome = ""
+					if runErr != nil {
+						return report, changes, errors.Join(runErr, mergeErr)
+					}
+					return report, changes, mergeErr
+				}
+			}
+
+			if runErr != nil {
+				return report, changes, runErr
+			}
+
+			if gitDiff != "" {
+				// On the post-mortem's clock, not the wait's: transcribing what a
+				// run learned is part of the account of the run, and a detached
+				// call has long since let go of the context it waited on.
+				chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
+				if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+				}
 			}
 		} else {
-			mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
-			if mergeErr != nil {
-				report.Outcome = ""
-				if runErr != nil {
-					return report, changes, errors.Join(runErr, mergeErr)
-				}
-				return report, changes, mergeErr
-			}
-		}
-
-		if runErr != nil {
-			return report, changes, runErr
-		}
-
-		if gitDiff != "" {
-			// On the post-mortem's clock, not the wait's: transcribing what a
-			// run learned is part of the account of the run, and a detached
-			// call has long since let go of the context it waited on.
-			chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-			if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+			if runErr != nil {
+				return report, changes, runErr
 			}
 		}
 
@@ -1615,6 +1633,8 @@ func writeSproutStatus(path string, status sproutExecutionStatus) error {
 		return fmt.Errorf("create tendril status directory: %w", err)
 	}
 
+	ensureNotGitVisible(path)
+
 	payload, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode tendril status: %w", err)
@@ -2174,4 +2194,48 @@ func DockerIsRootless() bool {
 		return false
 	}
 	return strings.Contains(string(output), "rootless")
+}
+
+// ensureNotGitVisible ensures that if the targetPath is inside a Git repository,
+// it is added to .git/info/exclude so it does not dirty the worktree.
+func ensureNotGitVisible(targetPath string) {
+	absTarget, err := filepath.Abs(targetPath)
+	if err != nil {
+		return
+	}
+	dir := filepath.Dir(absTarget)
+	for {
+		gitDir := filepath.Join(dir, ".git")
+		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+			excludePath := filepath.Join(gitDir, "info", "exclude")
+			rel, err := filepath.Rel(dir, absTarget)
+			if err == nil {
+				// Normalize for exclude pattern
+				rel = filepath.ToSlash(rel)
+				content, _ := os.ReadFile(excludePath)
+				lines := strings.Split(string(content), "\n")
+				found := false
+				for _, line := range lines {
+					if strings.TrimSpace(line) == rel {
+						found = true
+						break
+					}
+				}
+				if !found {
+					os.MkdirAll(filepath.Dir(excludePath), 0755)
+					f, _ := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+					if f != nil {
+						f.WriteString("\n" + rel + "\n")
+						f.Close()
+					}
+				}
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
 }
