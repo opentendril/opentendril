@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,17 @@ const (
 	ModeAnthropic Mode = "anthropic"
 	ModeOpenAIish Mode = "openaiish"
 )
+
+// DefaultOutputFallback is used when neither a tier environment variable, an
+// operator config, nor the model registry declares an explicit output-token limit.
+// 8192 is chosen because:
+//   - A realistic file-write tool call produces 2-4 KB of JSON as output tokens;
+//     the previous value (2048) was too small for the native-tool path.
+//   - It leaves meaningful headroom above a single large write without
+//     inventing a ceiling that no model declaration asked for.
+//   - It is small enough that a misconfigured model name is rejected quickly
+//     rather than expensively.
+const DefaultOutputFallback = 8192
 
 type ModelTier string
 
@@ -53,11 +65,9 @@ type ProviderSpec struct {
 	// endpoint cannot accept the native tool-calling protocol and should be
 	// driven with the prose protocol instead. Unset (nil) means attempt native.
 	AcceptsToolDefinitions *bool
-	// OutputLimit is the maximum number of output tokens to request. Zero means
-	// the provider's own default applies (the right answer for OpenAI-shaped
-	// families; see BuildChatRequest in clientadapter.go). For Anthropic, where
-	// max_tokens is required, the adapter substitutes the package fallback when
-	// this is zero.
+	// OutputLimit is the maximum number of output tokens to request. Zero is
+	// only allowed for manually constructed specs in tests, while resolved specs
+	// should carry a governed value (defaulting to DefaultOutputFallback).
 	OutputLimit int
 	// ResolutionErr records why resolution could not name a model to use. It is
 	// carried on the spec rather than returned because resolution happens
@@ -566,6 +576,11 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 				spec.BaseURLs = LocalInferenceBaseURLs(baseURL)
 			}
 		}
+		if val := strings.TrimSpace(os.Getenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS")); val != "" {
+			if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+				spec.OutputLimit = limit
+			}
+		}
 		return spec
 	}
 
@@ -576,6 +591,11 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 	)
 	if model := strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")); model != "" {
 		spec.Model = model
+	}
+	if val := strings.TrimSpace(os.Getenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS")); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			spec.OutputLimit = limit
+		}
 	}
 	return spec
 }
@@ -622,7 +642,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	temperature := configuredTemperature(providerConfig)
 	isRouter := resolveIsRouter(providerConfig)
 	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
-	outputLimit := resolveOutputLimit(providerConfig, model)
+	outputLimit := resolveOutputLimit(provider, tier, providerConfig, model)
 
 	switch provider {
 	case "local":
@@ -757,13 +777,16 @@ func resolveAcceptsToolDefinitions(cfg tendrilProviderConfig) *bool {
 }
 
 // resolveOutputLimit returns the output-token limit to carry on a ProviderSpec.
-// Config wins over the registry; when both are set and the configured value
-// exceeds the declared registry limit, a warning is written to stderr. The
-// configured value is still used because the operator's stated intent beats a
-// table that docs/DESIGN-ROOTS-LLM.md already flags as going stale. If
-// Anthropic rejects the value, the resulting 400 is visible and classified by
-// the error path added in the earlier HTTP-status fix.
-func resolveOutputLimit(cfg tendrilProviderConfig, modelName string) int {
+// It resolves the ceiling by following this precedence (first configured source wins):
+//  1. Provider-specific tier env var (e.g. MYCORRHIZA_OPENROUTER_FAST_MAX_OUTPUT_TOKENS)
+//  2. General tier env var (e.g. MYCORRHIZA_FAST_MAX_OUTPUT_TOKENS)
+//  3. Configured output-limit from YAML config
+//  4. Registry limit
+//  5. Compiled fallback (DefaultOutputFallback)
+//
+// A configured value larger than the registry limit is used as-is; the operator's
+// stated intent wins, but a warning is written to stderr so the mismatch is visible.
+func resolveOutputLimit(provider string, tier ModelTier, cfg tendrilProviderConfig, modelName string) int {
 	registryLimit := 0
 	for _, m := range activeModelRegistry() {
 		if m.Name == modelName {
@@ -771,16 +794,62 @@ func resolveOutputLimit(cfg tendrilProviderConfig, modelName string) int {
 			break
 		}
 	}
-	if cfg.OutputLimit > 0 {
-		if registryLimit > 0 && cfg.OutputLimit > registryLimit {
+
+	envTier := tierEnvName(tier)
+	providerEnvPrefix := strings.ToUpper(strings.TrimSpace(provider))
+	var configuredLimit int
+
+	// 1. Provider-specific tier env var
+	if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_%s_MAX_OUTPUT_TOKENS", providerEnvPrefix, envTier)); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			configuredLimit = limit
+		}
+	}
+
+	// 2. General tier env var
+	if configuredLimit == 0 {
+		if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_MAX_OUTPUT_TOKENS", envTier)); val != "" {
+			if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+				configuredLimit = limit
+			}
+		}
+	}
+
+	// 3. YAML config
+	if configuredLimit == 0 && cfg.OutputLimit > 0 {
+		configuredLimit = cfg.OutputLimit
+	}
+
+	if configuredLimit > 0 {
+		if registryLimit > 0 && configuredLimit > registryLimit {
 			fmt.Fprintf(os.Stderr,
 				"warning: configured output-limit %d for model %q exceeds registry limit %d;"+
 					" the configured value will be sent; Anthropic will reject it if it is over the model's hard cap\n",
-				cfg.OutputLimit, modelName, registryLimit)
+				configuredLimit, modelName, registryLimit)
 		}
-		return cfg.OutputLimit
+		return configuredLimit
 	}
-	return registryLimit
+
+	// 4. Registry limit
+	if registryLimit > 0 {
+		return registryLimit
+	}
+
+	// 5. Compiled fallback
+	return DefaultOutputFallback
+}
+
+func tierEnvName(tier ModelTier) string {
+	switch canonicalModelTier(tier) {
+	case TierCheapest:
+		return "FAST"
+	case TierStandard:
+		return "STANDARD"
+	case TierPremium:
+		return "POWER"
+	default:
+		return "POWER"
+	}
 }
 
 func envOr(key, fallback string) string {

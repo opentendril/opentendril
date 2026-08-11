@@ -709,7 +709,7 @@ func TestByteIdentity(t *testing.T) {
 		adapter providerAdapter
 		spec    ProviderSpec
 	}{
-		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: ptr(0.5)}},
+		{"anthropic", anthropicAdapter{}, ProviderSpec{Model: "claude-3", Temperature: ptr(0.5), OutputLimit: DefaultOutputFallback}},
 		{"openai", openAIishAdapter{}, ProviderSpec{Model: "gpt-4", Temperature: ptr(0.5)}},
 	}
 
