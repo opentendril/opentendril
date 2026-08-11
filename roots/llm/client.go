@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,17 @@ const (
 	ModeAnthropic Mode = "anthropic"
 	ModeOpenAIish Mode = "openaiish"
 )
+
+// DefaultOutputFallback is used when neither a tier environment variable, an
+// operator config, nor the model registry declares an explicit output-token limit.
+// 8192 is chosen because:
+//   - A realistic file-write tool call produces 2-4 KB of JSON as output tokens;
+//     the previous value (2048) was too small for the native-tool path.
+//   - It leaves meaningful headroom above a single large write without
+//     inventing a ceiling that no model declaration asked for.
+//   - It is small enough that a misconfigured model name is rejected quickly
+//     rather than expensively.
+const DefaultOutputFallback = 8192
 
 type ModelTier string
 
@@ -53,12 +65,14 @@ type ProviderSpec struct {
 	// endpoint cannot accept the native tool-calling protocol and should be
 	// driven with the prose protocol instead. Unset (nil) means attempt native.
 	AcceptsToolDefinitions *bool
-	// OutputLimit is the maximum number of output tokens to request. Zero means
-	// the provider's own default applies (the right answer for OpenAI-shaped
-	// families; see BuildChatRequest in clientadapter.go). For Anthropic, where
-	// max_tokens is required, the adapter substitutes the package fallback when
-	// this is zero.
+	// OutputLimit is the maximum number of output tokens to request. Zero is
+	// only allowed for manually constructed specs in tests, while resolved specs
+	// should carry a governed value (defaulting to DefaultOutputFallback).
 	OutputLimit int
+	// CeilingSource is a string describing where the OutputLimit came from (e.g., "provider-specific env var", "general tier env var", "yaml config", "registry", "compiled fallback").
+	CeilingSource string
+	// Tier is the resolved ModelTier used to fetch the model and limits.
+	Tier ModelTier
 	// ResolutionErr records why resolution could not name a model to use. It is
 	// carried on the spec rather than returned because resolution happens
 	// inside constructors that have no error return and many callers; a spec
@@ -566,6 +580,12 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 				spec.BaseURLs = LocalInferenceBaseURLs(baseURL)
 			}
 		}
+		if val := strings.TrimSpace(os.Getenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS")); val != "" {
+			if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+				spec.OutputLimit = limit
+				spec.CeilingSource = "coordinator override env var"
+			}
+		}
 		return spec
 	}
 
@@ -576,6 +596,12 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 	)
 	if model := strings.TrimSpace(os.Getenv("COORDINATOR_MODEL_NAME")); model != "" {
 		spec.Model = model
+	}
+	if val := strings.TrimSpace(os.Getenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS")); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			spec.OutputLimit = limit
+			spec.CeilingSource = "coordinator override env var"
+		}
 	}
 	return spec
 }
@@ -622,7 +648,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	temperature := configuredTemperature(providerConfig)
 	isRouter := resolveIsRouter(providerConfig)
 	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
-	outputLimit := resolveOutputLimit(providerConfig, model)
+	outputLimit, ceilingSource := resolveOutputLimit(provider, tier, providerConfig, model)
 
 	switch provider {
 	case "local":
@@ -642,6 +668,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "anthropic":
 		return ProviderSpec{
@@ -655,6 +683,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "openai":
 		return ProviderSpec{
@@ -668,6 +698,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "grok":
 		return ProviderSpec{
@@ -681,6 +713,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "google":
 		return ProviderSpec{
@@ -694,6 +728,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "openrouter":
 		return ProviderSpec{
@@ -707,6 +743,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	case "nvidia":
 		return ProviderSpec{
@@ -720,6 +758,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	default:
 		baseURL := localInferenceOverride
@@ -737,6 +777,8 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			IsRouter:               isRouter,
 			AcceptsToolDefinitions: acceptsToolDefs,
 			OutputLimit:            outputLimit,
+			CeilingSource:          ceilingSource,
+			Tier:                   tier,
 		}
 	}
 }
@@ -756,14 +798,17 @@ func resolveAcceptsToolDefinitions(cfg tendrilProviderConfig) *bool {
 	return cfg.AcceptsToolDefinitions
 }
 
-// resolveOutputLimit returns the output-token limit to carry on a ProviderSpec.
-// Config wins over the registry; when both are set and the configured value
-// exceeds the declared registry limit, a warning is written to stderr. The
-// configured value is still used because the operator's stated intent beats a
-// table that docs/DESIGN-ROOTS-LLM.md already flags as going stale. If
-// Anthropic rejects the value, the resulting 400 is visible and classified by
-// the error path added in the earlier HTTP-status fix.
-func resolveOutputLimit(cfg tendrilProviderConfig, modelName string) int {
+// resolveOutputLimit returns the output-token limit to carry on a ProviderSpec, and its source.
+// It resolves the ceiling by following this precedence (first configured source wins):
+//  1. Provider-specific tier env var (primary, then alias)
+//  2. General tier env var (primary, then alias)
+//  3. Configured output-limit from YAML config
+//  4. Registry limit
+//  5. Compiled fallback (DefaultOutputFallback)
+//
+// A configured value larger than the registry limit is used as-is; the operator's
+// stated intent wins, but a warning is written to stderr so the mismatch is visible.
+func resolveOutputLimit(provider string, tier ModelTier, cfg tendrilProviderConfig, modelName string) (int, string) {
 	registryLimit := 0
 	for _, m := range activeModelRegistry() {
 		if m.Name == modelName {
@@ -771,16 +816,73 @@ func resolveOutputLimit(cfg tendrilProviderConfig, modelName string) int {
 			break
 		}
 	}
-	if cfg.OutputLimit > 0 {
-		if registryLimit > 0 && cfg.OutputLimit > registryLimit {
-			fmt.Fprintf(os.Stderr,
-				"warning: configured output-limit %d for model %q exceeds registry limit %d;"+
-					" the configured value will be sent; Anthropic will reject it if it is over the model's hard cap\n",
-				cfg.OutputLimit, modelName, registryLimit)
+
+	envTierPrimary, envTierAlias := tierEnvNames(tier)
+	providerEnvPrefix := strings.ToUpper(strings.TrimSpace(provider))
+
+	// 1. Provider-specific tier env var (primary, then alias)
+	if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_%s_MAX_OUTPUT_TOKENS", providerEnvPrefix, envTierPrimary)); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			return checkConfiguredLimit(limit, registryLimit, modelName), "provider-specific tier env var (primary)"
 		}
-		return cfg.OutputLimit
 	}
-	return registryLimit
+	if envTierAlias != "" {
+		if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_%s_MAX_OUTPUT_TOKENS", providerEnvPrefix, envTierAlias)); val != "" {
+			if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+				return checkConfiguredLimit(limit, registryLimit, modelName), "provider-specific tier env var (alias)"
+			}
+		}
+	}
+
+	// 2. General tier env var (primary, then alias)
+	if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_MAX_OUTPUT_TOKENS", envTierPrimary)); val != "" {
+		if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+			return checkConfiguredLimit(limit, registryLimit, modelName), "general tier env var (primary)"
+		}
+	}
+	if envTierAlias != "" {
+		if val := os.Getenv(fmt.Sprintf("MYCORRHIZA_%s_MAX_OUTPUT_TOKENS", envTierAlias)); val != "" {
+			if limit, err := strconv.Atoi(val); err == nil && limit > 0 {
+				return checkConfiguredLimit(limit, registryLimit, modelName), "general tier env var (alias)"
+			}
+		}
+	}
+
+	// 3. YAML config
+	if cfg.OutputLimit > 0 {
+		return checkConfiguredLimit(cfg.OutputLimit, registryLimit, modelName), "yaml config"
+	}
+
+	// 4. Registry limit
+	if registryLimit > 0 {
+		return registryLimit, "registry"
+	}
+
+	// 5. Compiled fallback
+	return DefaultOutputFallback, "compiled fallback"
+}
+
+func checkConfiguredLimit(configuredLimit, registryLimit int, modelName string) int {
+	if registryLimit > 0 && configuredLimit > registryLimit {
+		fmt.Fprintf(os.Stderr,
+			"warning: configured output-limit %d for model %q exceeds registry limit %d;"+
+				" the configured value will be sent; the provider may reject it if it is over the model's hard cap\n",
+			configuredLimit, modelName, registryLimit)
+	}
+	return configuredLimit
+}
+
+func tierEnvNames(tier ModelTier) (primary, alias string) {
+	switch canonicalModelTier(tier) {
+	case TierCheapest:
+		return "CHEAPEST", "FAST"
+	case TierStandard:
+		return "STANDARD", ""
+	case TierPremium:
+		return "PREMIUM", "POWER"
+	default:
+		return "PREMIUM", "POWER"
+	}
 }
 
 func envOr(key, fallback string) string {
@@ -1068,10 +1170,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		// Wrapped rather than replaced so the provider's own message, which is
 		// usually the whole answer, still reaches the operator.
 		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
-			return Result{}, fmt.Errorf("%w: llm returned %d: %s", ErrRejectedWithTools, resp.StatusCode, strings.TrimSpace(string(body)))
+			return Result{}, fmt.Errorf("%w: llm returned %d: %s (provider=%s model=%s tier=%s ceiling=%d source=%q)", ErrRejectedWithTools, resp.StatusCode, strings.TrimSpace(string(body)), c.spec.Provider, c.spec.Model, c.spec.Tier, c.spec.OutputLimit, c.spec.CeilingSource)
 		}
 
-		return Result{}, fmt.Errorf("llm returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return Result{}, fmt.Errorf("llm returned %d: %s (provider=%s model=%s tier=%s ceiling=%d source=%q)", resp.StatusCode, strings.TrimSpace(string(body)), c.spec.Provider, c.spec.Model, c.spec.Tier, c.spec.OutputLimit, c.spec.CeilingSource)
 	}
 
 	if stream {

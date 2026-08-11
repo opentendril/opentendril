@@ -136,18 +136,16 @@ llm:
 	}
 }
 
-// TestOpenAIishRequestCarriesNoMaxTokens asserts that the OpenAI-shaped
-// adapter never adds max_tokens to its request body. The asymmetry with the
-// Anthropic adapter is deliberate: OpenAI-shaped families treat max_tokens as
-// optional and the provider's own default is the right answer.
+// TestOpenAIishRequestCarriesMaxTokens asserts that the OpenAI-shaped
+// adapter adds max_tokens to its request body.
 //
-// Mutation: add max_tokens to openAIishAdapter.BuildChatRequest → this test
-// goes red. It also prevents the byte-identity OpenAI fixtures from moving.
-func TestOpenAIishRequestCarriesNoMaxTokens(t *testing.T) {
+// Mutation: remove max_tokens from openAIishAdapter.BuildChatRequest → this test
+// goes red.
+func TestOpenAIishRequestCarriesMaxTokens(t *testing.T) {
 	spec := ProviderSpec{
 		Model:       "gpt-test",
 		Temperature: ptr(0.5),
-		OutputLimit: 8192, // carried on the spec but must not reach the wire
+		OutputLimit: 8192,
 	}
 	payload, err := openAIishAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
 	if err != nil {
@@ -158,10 +156,11 @@ func TestOpenAIishRequestCarriesNoMaxTokens(t *testing.T) {
 	if err := json.Unmarshal(payload, &body); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if _, present := body["max_tokens"]; present {
-		t.Errorf("max_tokens present in OpenAI-shaped request body; it must not be sent — "+
-			"OpenAI-shaped providers use their own default, and inventing a ceiling "+
-			"for providers that do not require one is a regression. Got body: %s", payload)
+	got, present := body["max_tokens"]
+	if !present {
+		t.Errorf("max_tokens missing in OpenAI-shaped request body; it must carry the governed output limit")
+	} else if int(got.(float64)) != 8192 {
+		t.Errorf("max_tokens = %v, want 8192", got)
 	}
 }
 
@@ -247,19 +246,20 @@ llm:
 	}
 }
 
-// TestAnthropicRequestWithNoModelDeclarationIsValid asserts that a bare
-// ProviderSpec (OutputLimit zero, model not in registry) still produces a
-// valid request body with max_tokens set to anthropicOutputFallback.
-//
-// This is the most-travelled path in the existing suite: almost every existing
-// test builds a bare ProviderSpec with an unknown model name (e.g.
-// "claude-test"), and none of them set OutputLimit. The fallback must produce a
-// value Anthropic accepts; a zero on the wire would not be.
-func TestAnthropicRequestWithNoModelDeclarationIsValid(t *testing.T) {
-	spec := ProviderSpec{
-		Model: "unknown-future-model",
-		// OutputLimit intentionally zero: registry has no entry for this name.
+// TestUnsetEnvFallsBackToCompiledDefault asserts that a bare
+// resolution request (no env vars, no config, unknown model) still produces a
+// valid request body with max_tokens set to DefaultOutputFallback.
+func TestUnsetEnvFallsBackToCompiledDefault(t *testing.T) {
+	clearProviderKeys(t)
+	os.Unsetenv("MYCORRHIZA_POWER_MAX_OUTPUT_TOKENS")
+	os.Unsetenv("MYCORRHIZA_ANTHROPIC_POWER_MAX_OUTPUT_TOKENS")
+
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	spec := providerSpecForModel("anthropic", TierPremium, "unknown-future-model", "")
+	if spec.OutputLimit != DefaultOutputFallback {
+		t.Errorf("spec.OutputLimit = %d, want DefaultOutputFallback (%d)", spec.OutputLimit, DefaultOutputFallback)
 	}
+
 	payload, err := anthropicAdapter{}.BuildChatRequest(spec, []Message{{Role: "user", Content: "hi"}}, nil, false)
 	if err != nil {
 		t.Fatalf("BuildChatRequest failed: %v", err)
@@ -273,11 +273,8 @@ func TestAnthropicRequestWithNoModelDeclarationIsValid(t *testing.T) {
 	if !ok {
 		t.Fatalf("max_tokens missing or wrong type: %v", body["max_tokens"])
 	}
-	if int(got) != anthropicOutputFallback {
-		t.Errorf("max_tokens = %d, want anthropicOutputFallback (%d)", int(got), anthropicOutputFallback)
-	}
-	if int(got) <= 0 {
-		t.Errorf("max_tokens = %d, must be positive for Anthropic to accept the request", int(got))
+	if int(got) != DefaultOutputFallback {
+		t.Errorf("max_tokens = %d, want DefaultOutputFallback (%d)", int(got), DefaultOutputFallback)
 	}
 }
 
@@ -337,5 +334,58 @@ func TestOutputLimitReachesProviderSpecForAllProviders(t *testing.T) {
 				t.Errorf("provider %q: ProviderSpec.OutputLimit = %d, want 64000 (registry value must reach the spec via all branches)", provider, spec.OutputLimit)
 			}
 		})
+	}
+}
+
+func TestGeneralTierEnvLimitIsApplied(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("MYCORRHIZA_PREMIUM_MAX_OUTPUT_TOKENS", "4000")
+
+	spec := providerSpecForModel("anthropic", TierPremium, "claude-haiku-4-5", "")
+	if spec.OutputLimit != 4000 {
+		t.Errorf("spec.OutputLimit = %d, want 4000 (general tier env)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (primary)'", spec.CeilingSource)
+	}
+}
+
+func TestAliasEnvLimitIsAppliedAndOverriddenByPrimary(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("MYCORRHIZA_FAST_MAX_OUTPUT_TOKENS", "3000") // alias
+
+	spec := providerSpecForModel("anthropic", TierCheapest, "claude-haiku-4-5", "")
+	if spec.OutputLimit != 3000 {
+		t.Errorf("spec.OutputLimit = %d, want 3000 (general alias env)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (alias)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (alias)'", spec.CeilingSource)
+	}
+
+	// Now set primary, it should override alias
+	t.Setenv("MYCORRHIZA_CHEAPEST_MAX_OUTPUT_TOKENS", "4000")
+	spec = providerSpecForModel("anthropic", TierCheapest, "claude-haiku-4-5", "")
+	if spec.OutputLimit != 4000 {
+		t.Errorf("spec.OutputLimit = %d, want 4000 (general primary env overrides alias)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (primary)'", spec.CeilingSource)
+	}
+}
+
+func TestProviderSpecificTierEnvOverridesGeneral(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("MYCORRHIZA_PREMIUM_MAX_OUTPUT_TOKENS", "4000")
+	t.Setenv("MYCORRHIZA_OPENROUTER_PREMIUM_MAX_OUTPUT_TOKENS", "5000")
+
+	spec := providerSpecForModel("openrouter", TierPremium, "anthropic/claude-3-opus", "")
+	if spec.OutputLimit != 5000 {
+		t.Errorf("spec.OutputLimit = %d, want 5000 (provider-specific tier env wins)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "provider-specific tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'provider-specific tier env var (primary)'", spec.CeilingSource)
 	}
 }

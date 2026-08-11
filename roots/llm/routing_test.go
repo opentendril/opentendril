@@ -213,6 +213,7 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 		Endpoint:    "/v1/messages",
 		Mode:        ModeAnthropic,
 		Temperature: ptr(0.25),
+		OutputLimit: DefaultOutputFallback,
 	})
 
 	content := strings.Repeat("repomap.md cached context ", 60)
@@ -241,8 +242,8 @@ func TestAnthropicPromptCachingPayload(t *testing.T) {
 	if captured.Request.Model != "claude-sonnet-5" {
 		t.Fatalf("model = %q, want %q", captured.Request.Model, "claude-sonnet-5")
 	}
-	if captured.Request.MaxTokens != anthropicOutputFallback {
-		t.Fatalf("max_tokens = %d, want %d (anthropicOutputFallback)", captured.Request.MaxTokens, anthropicOutputFallback)
+	if captured.Request.MaxTokens != DefaultOutputFallback {
+		t.Fatalf("max_tokens = %d, want %d (DefaultOutputFallback)", captured.Request.MaxTokens, DefaultOutputFallback)
 	}
 	if captured.Request.Temperature != 0.25 {
 		t.Fatalf("temperature = %v, want 0.25", captured.Request.Temperature)
