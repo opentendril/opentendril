@@ -340,22 +340,52 @@ func TestOutputLimitReachesProviderSpecForAllProviders(t *testing.T) {
 func TestGeneralTierEnvLimitIsApplied(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	t.Setenv("MYCORRHIZA_POWER_MAX_OUTPUT_TOKENS", "4000")
+	t.Setenv("MYCORRHIZA_PREMIUM_MAX_OUTPUT_TOKENS", "4000")
 
 	spec := providerSpecForModel("anthropic", TierPremium, "claude-haiku-4-5", "")
 	if spec.OutputLimit != 4000 {
 		t.Errorf("spec.OutputLimit = %d, want 4000 (general tier env)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (primary)'", spec.CeilingSource)
+	}
+}
+
+func TestAliasEnvLimitIsAppliedAndOverriddenByPrimary(t *testing.T) {
+	clearProviderKeys(t)
+	t.Setenv("ANTHROPIC_API_KEY", "test-key")
+	t.Setenv("MYCORRHIZA_FAST_MAX_OUTPUT_TOKENS", "3000") // alias
+
+	spec := providerSpecForModel("anthropic", TierCheapest, "claude-haiku-4-5", "")
+	if spec.OutputLimit != 3000 {
+		t.Errorf("spec.OutputLimit = %d, want 3000 (general alias env)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (alias)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (alias)'", spec.CeilingSource)
+	}
+
+	// Now set primary, it should override alias
+	t.Setenv("MYCORRHIZA_CHEAPEST_MAX_OUTPUT_TOKENS", "4000")
+	spec = providerSpecForModel("anthropic", TierCheapest, "claude-haiku-4-5", "")
+	if spec.OutputLimit != 4000 {
+		t.Errorf("spec.OutputLimit = %d, want 4000 (general primary env overrides alias)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "general tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'general tier env var (primary)'", spec.CeilingSource)
 	}
 }
 
 func TestProviderSpecificTierEnvOverridesGeneral(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
-	t.Setenv("MYCORRHIZA_POWER_MAX_OUTPUT_TOKENS", "4000")
-	t.Setenv("MYCORRHIZA_OPENROUTER_POWER_MAX_OUTPUT_TOKENS", "5000")
+	t.Setenv("MYCORRHIZA_PREMIUM_MAX_OUTPUT_TOKENS", "4000")
+	t.Setenv("MYCORRHIZA_OPENROUTER_PREMIUM_MAX_OUTPUT_TOKENS", "5000")
 
 	spec := providerSpecForModel("openrouter", TierPremium, "anthropic/claude-3-opus", "")
 	if spec.OutputLimit != 5000 {
 		t.Errorf("spec.OutputLimit = %d, want 5000 (provider-specific tier env wins)", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "provider-specific tier env var (primary)" {
+		t.Errorf("spec.CeilingSource = %q, want 'provider-specific tier env var (primary)'", spec.CeilingSource)
 	}
 }

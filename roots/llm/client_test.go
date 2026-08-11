@@ -78,6 +78,38 @@ func TestResolveCoordinatorProviderSpecUsesExplicitCoordinatorLocalSettings(t *t
 	}
 }
 
+func TestResolveCoordinatorProviderSpecOverridesOutputLimit(t *testing.T) {
+	t.Setenv("DEFAULT_LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "worker-key")
+	t.Setenv("COORDINATOR_LLM_PROVIDER", "anthropic")
+	t.Setenv("COORDINATOR_MODEL_NAME", "claude-3-opus-20240229")
+	t.Setenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS", "4096")
+
+	spec := ResolveCoordinatorProviderSpec()
+
+	if spec.OutputLimit != 4096 {
+		t.Fatalf("spec.OutputLimit = %d, want 4096", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "coordinator override env var" {
+		t.Fatalf("spec.CeilingSource = %q, want 'coordinator override env var'", spec.CeilingSource)
+	}
+}
+
+func TestResolveCoordinatorProviderSpecOverridesOutputLimitDefaultProvider(t *testing.T) {
+	t.Setenv("DEFAULT_LLM_PROVIDER", "openai")
+	t.Setenv("OPENAI_API_KEY", "worker-key")
+	t.Setenv("COORDINATOR_LLM_PROVIDER", "")
+	t.Setenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS", "2048")
+
+	spec := ResolveCoordinatorProviderSpec()
+
+	if spec.OutputLimit != 2048 {
+		t.Fatalf("spec.OutputLimit = %d, want 2048", spec.OutputLimit)
+	}
+	if spec.CeilingSource != "coordinator override env var" {
+		t.Fatalf("spec.CeilingSource = %q, want 'coordinator override env var'", spec.CeilingSource)
+	}
+}
 func TestListModelsUsesOpenAICompatibleEndpointWithoutAPIKey(t *testing.T) {
 	var authHeader string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -543,12 +575,15 @@ func TestCallStreamReturnsErrorOnNon200(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{
-		Provider: "openai",
-		BaseURL:  server.URL,
-		Endpoint: "/chat/completions",
-		Mode:     ModeOpenAIish,
-		APIKey:   "key",
-		Model:    "gpt-test",
+		Provider:      "openai",
+		BaseURL:       server.URL,
+		Endpoint:      "/chat/completions",
+		Mode:          ModeOpenAIish,
+		APIKey:        "key",
+		Model:         "gpt-test",
+		Tier:          TierPremium,
+		OutputLimit:   8192,
+		CeilingSource: "compiled fallback",
 	})
 
 	tokenChan := make(chan string, 10)
@@ -562,6 +597,10 @@ func TestCallStreamReturnsErrorOnNon200(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "llm returned 400") {
 		t.Errorf("error = %v, want to contain 'llm returned 400'", err)
+	}
+	expectedContext := `(provider=openai model=gpt-test tier=premium ceiling=8192 source="compiled fallback")`
+	if !strings.Contains(err.Error(), expectedContext) {
+		t.Errorf("error = %v, want to contain %q", err, expectedContext)
 	}
 	if res != "" {
 		t.Errorf("res = %q, want empty", res)
@@ -680,12 +719,15 @@ func TestCallReturnsErrorOnNon200(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(ProviderSpec{
-		Provider: "openai",
-		BaseURL:  server.URL,
-		Endpoint: "/chat/completions",
-		Mode:     ModeOpenAIish,
-		APIKey:   "key",
-		Model:    "gpt-test",
+		Provider:      "openai",
+		BaseURL:       server.URL,
+		Endpoint:      "/chat/completions",
+		Mode:          ModeOpenAIish,
+		APIKey:        "key",
+		Model:         "gpt-test",
+		Tier:          TierPremium,
+		OutputLimit:   8192,
+		CeilingSource: "compiled fallback",
 	})
 
 	res, err := client.Call(context.Background(), []Message{{Role: "user", Content: "hi"}})
@@ -697,6 +739,10 @@ func TestCallReturnsErrorOnNon200(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "incorrect api key provided") {
 		t.Errorf("error = %v, want to contain the provider's explanation", err)
+	}
+	expectedContext := `(provider=openai model=gpt-test tier=premium ceiling=8192 source="compiled fallback")`
+	if !strings.Contains(err.Error(), expectedContext) {
+		t.Errorf("error = %v, want to contain %q", err, expectedContext)
 	}
 	if res != "" {
 		t.Errorf("res = %q, want empty", res)
