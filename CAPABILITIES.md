@@ -70,15 +70,24 @@ Current view:
 
 - **`sprout.watch`** — authorizes watching a Phytomer's run records, persisted
   events, and live stream. Defined as `CapSproutWatch` in the registry
-  constants but deliberately absent from `CapabilityNames()`. Tested as excluded
-  by `TestControlPlaneCapabilitiesExcluded`.
+  constants, with a doc comment stating it is deliberately absent from
+  `CapabilityNames()` and the parity registry. Because it is not in
+  `CapabilityNames()`, the parity test never evaluates it. Its own
+  authorization semantics are exercised in `watch_test.go`, which verifies
+  that a delegated caller must hold a `sprout.watch` grant for every Substrate
+  targeted by a Phytomer's runs.
 
 ### Control-plane operations
 
 Operations deliberately excluded from the governed command registry because
 exposing them on Pollinator-facing surfaces would create privilege escalation.
-These are reachable only from the Stem's host principal (typically via the local
-CLI).
+They are not Pollinator-facing governed command capabilities, are excluded from
+`CapabilityNames()` and command parity, and their management surface varies by
+operation: some are local CLI commands (e.g. `tendril setup`, `tendril serve`),
+while others are exposed through dedicated Botanist-authenticated REST routes
+(e.g. pending delegation confirmation at `GET /v1/delegation/pending`,
+`POST /v1/delegation/pending/{id}/approve`,
+`POST /v1/delegation/pending/{id}/deny`).
 
 The parity test `TestControlPlaneCapabilitiesExcluded` asserts that no
 capability name in `CapabilityNames()` carries a control-plane prefix. The
@@ -104,8 +113,9 @@ synthesizes a file and invokes a governed capability.
 
 ## 3. Interface Parity
 
-The governed command capability set is independently checked across all four
-surfaces:
+The governed command capability set is independently checked across four
+architectural surfaces — Core, REST, MCP, and CLI — using five independently
+derived observations (MCP is checked two ways):
 
 1. **Core registry** — `core.CapabilityNames()`
 2. **REST adapter** — capabilities from each receptor handler's `Capabilities()`
@@ -271,34 +281,45 @@ Grow a Seed — activate a product-level goal.
 
 ### Git
 
-The delegated-execution ladder for Git operations. Each operation-class is
-separately grantable. Git execution runs on the Stem (the sole
-secret-holding zone), never inside a sealed Sprout — a delegated push is the
-Stem's mediated egress with the Substrate's dedicated credential.
+The delegated Git family. Each operation-class is separately grantable. Git
+execution runs on the Stem (the sole secret-holding zone), never inside a
+sealed Sprout — a delegated push is the Stem's mediated egress with the
+Substrate's dedicated credential.
 
 | Capability | Behavior |
 |---|---|
-| `git.commit` | Commit under the Substrate's configured identity. Deny-closed: execution is refused when the credential carries no commit identity. |
-| `git.push` | Push the current branch to the remote using the Substrate's credential. |
+| `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes refuse to commit on the repository's default branch. |
+| `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
 | `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |
 | `git.branch` | Create or switch to a feature branch. An existing branch is switched to, never reset. A branch named as the repository's default branch is refused. |
 | `git.status` | Read-only report of workspace state: current branch, resolved default branch, uncommitted changes, ahead/behind, and whether a commit would be allowed. |
 | `git.branch.list` | Classify local branches against forge evidence (merged, open PR, closed-unmerged, unpushed, etc.). Read-only. |
 | `git.prune` | Delete local branches whose PR merged. Reports what would be deleted unless `confirm` is true. Never deletes the current or default branch, a branch with an open or unmerged PR, one the remote has never seen, or one held by another subject's workspace. |
 
+**`git.commit` modes.** The Substrate's connection configuration determines
+which mode is used:
+
+- **Local mode** (default) — commits using local Git under the Substrate's
+  configured commit name and email. Deny-closed: execution is refused when no
+  commit identity is configured, so a delegated commit is always attributable.
+  A subsequent `git.push` is required to publish.
+- **API mode** (`commit: api`) — requires a GitHub App connection. Creates the
+  commit server-side through the GitHub API; GitHub supplies the identity and
+  signature. Because the API commit advances the remote branch directly, it
+  also publishes the change — a subsequent `git.push` is unnecessary.
+
 `git.push` and `git.pr` are separate operation-classes by design: a Pollen
 granted only `git.pr` must never be able to publish a branch as a side effect.
 There is no governed `git.merge` capability — merging is a Botanist decision.
 
-> **Implementation note on `git.push`:** The Core's `GitPush` method validates
-> the request and delegates to the injected `GitOperations.Push` port. The Core
-> itself does not enforce default-branch push protection at the `git.push`
-> validation layer — that guard is implemented downstream in `git.branch`
-> (which refuses a branch named as the default) and `git.pr` (which refuses a
-> head branch that is the default). The project invariant is no direct
-> default-branch push, but the generic `git.push` Core validation does not
-> independently verify this. Whether the conductor's Push implementation
-> enforces it is outside this document's scope.
+> **Implementation note on `git.push`:** `RunGitPush` in the conductor does
+> not check whether the target branch is the repository's default branch.
+> Default-branch protection is enforced by `git.branch` (which refuses to
+> create/switch to the default branch), `git.commit` (which refuses to commit
+> on the default branch in both modes), and `git.pr` (which refuses a head
+> branch that is the default branch), but `git.push` itself does not
+> independently verify this. The project invariant is no direct default-branch
+> push; this gap is reported as out-of-scope implementation drift.
 
 ---
 
