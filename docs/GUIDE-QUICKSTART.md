@@ -298,10 +298,7 @@ denied.
 
 ## Where to go next
 
-Every capability is reachable from the command line, the transport surface and
-the Model Context Protocol surface alike — they project the same set, and a test
-enforces that they stay identical. So `tendril phytomer create|list|get|history`
-manages sessions from a terminal exactly as the transport routes do.
+Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
 
 - **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
 - **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
