@@ -288,7 +288,7 @@ Substrate's dedicated credential.
 
 | Capability | Behavior |
 |---|---|
-| `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes refuse to commit on the repository's default branch. |
+| `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes use the same default-branch commit guard: commits to the repository's default branch are refused unless the Substrate explicitly sets `protectDefaultBranch: false`. |
 | `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
 | `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |
 | `git.branch` | Create or switch to a feature branch. An existing branch is switched to, never reset. A branch named as the repository's default branch is refused. |
@@ -316,7 +316,7 @@ There is no governed `git.merge` capability — merging is a Botanist decision.
 > not check whether the target branch is the repository's default branch.
 > Default-branch protection is enforced by `git.branch` (which refuses to
 > create/switch to the default branch), `git.commit` (which refuses to commit
-> on the default branch in both modes), and `git.pr` (which refuses a head
+> on the default branch unless opted out), and `git.pr` (which refuses a head
 > branch that is the default branch), but `git.push` itself does not
 > independently verify this. The project invariant is no direct default-branch
 > push; this gap is reported as out-of-scope implementation drift.
