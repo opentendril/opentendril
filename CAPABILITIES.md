@@ -1,136 +1,351 @@
-# OpenTendril Capabilities & Security Model (CAPABILITIES)
+# OpenTendril Capability & Authorization Model (CAPABILITIES)
 
-OpenTendril is designed to be fully extensible. Botanists and Pollinators can extend the kernel's capabilities using Tools, Skills, Subagents, and Plugins. This document defines what these components are, why they exist, and how they are dynamically allowed, executed, and terrariumed.
-
----
-
-## 💡 Plain-English Analogy (For Beginners)
-
-If you are new to agentic coding, terms like "MCP", "Skills", "Tools", and "Plugins" can sound confusing. Here is a simple analogy comparing OpenTendril to a human developer working at a desk:
-
-* **The Mycorrhizal Network (The Programmer):** The external mind itself (the LLM). It has no body; it can only think, plan, and draft text based on instructions. A **Sprout** is the body that acts on that thinking.
-* **The Desk (The Context Window):** What the programmer can see at any given moment. To work on your codebase, the programmer needs you to place relevant source files on their desk.
-* **The Tools (The Keyboard & Terminal):** The programmer cannot directly modify your host system. Instead, we give them a keyboard with a few specific buttons: `read_file`, `write_file`, and `run_command`. Every action they take must use one of these tools.
-* **The Skills (The Reference Manuals):** Prompts or markdown files (like `SKILL.md`) that teach the programmer how to work with a specific framework or tool (e.g., "How to write Firestore database rules"). When a Sprout is grown for a specialized task, the system automatically pulls the matching "Reference Manual" and puts it on their desk.
-* **The Plugins (The Toolboxes):** A pre-packaged kit containing both reference manuals (Skills) and specialized tools (like a browser inspector or database connector) that you can hand to the programmer to expand their capabilities.
-* **The SDLC Process (The Manager's Sign-off):** The governance rules (defined in `AGENTS.md`) that prevent the programmer from pushing code directly to production. They must write a design draft (Design RFC), get your signature (Gate A), show you exactly what lines of code they will modify (Implementation Plan), get your signature (Gate B), and then open a draft pull request for you to merge (Gate C).
+This document describes the current implemented capability architecture: where
+capability authority lives, how governed commands are projected across transport
+surfaces, how delegated authorization works, and how capability authority relates
+to execution isolation.
 
 ---
 
-## 1. Taxonomy of Capability Extension
+## 1. Core Registry Is the Governed Command Authority
 
+Governed command capabilities are declared in the Stem Core registry
+(`cmd/stem/internal/core/registry.go`). `core.CapabilityNames()` returns the
+canonical set — the single source of truth for every governed command the system
+offers.
+
+A Core **Capability** is a transport-free declaration:
+
+```go
+type Capability struct {
+    Name        string
+    Description string
+    InputSchema map[string]any                                      // JSON-Schema
+    Invoke      func(ctx context.Context, input map[string]any) (any, error)
+}
 ```
-                      ┌─────────────────────────────────────────┐
-                      │                 PLUGIN                  │
-                      │  (Bundled grouping of skills & tools)   │
-                      └────────────────────┬────────────────────┘
-                                           │
-                    ┌──────────────────────┴──────────────────────┐
-                    ▼                                             ▼
-       ┌─────────────────────────┐                   ┌─────────────────────────┐
-       │         SKILL           │                   │         TOOL            │
-       │   (Markdown prompts,    │                   │   (JSON-RPC interface,  │
-       │   RAG resource files)   │                   │    executable logic)    │
-       └─────────────────────────┘                   └─────────────────────────┘
-```
 
-### A. Tools (The LLM's Hands and Eyes)
-* **What:** Executable functions matching the Model Context Protocol (MCP) tool schema.
-* **Why:** LLMs are stateless text generators. Tools allow them to interact with filesystems, networks, shell runtimes, and external APIs.
-* **How They are Allowed:** Registered dynamically via the Go Gateway and executed inside the Terrarium container (Docker/gVisor).
+The `Invoke` signature carries zero transport types — no `net/http`, no MCP
+message types, no CLI flag structs. That is the litmus test for the Core
+boundary, enforced by `TestCoreHasNoTransportOrExecutionImports` in
+`cmd/stem/internal/core/boundary_test.go`, which fails the build if Core imports
+any transport (`net/http`, `receptors`) or execution (`conductor`, `terrarium`,
+`gateway`, `mesh`, `historydb`) package.
 
-### B. Skills (Targeted Context Domains)
-* **What:** Directories containing standard instruction manuals (`SKILL.md`), structural schema definitions, and helper script workflows.
-* **Why:** Avoids polluting the Genotype's system prompt with domain-specific knowledge (e.g., Xcode configuration, Firebase rules). Skills are injected into the Sprout's context *only* when the task requires them.
-* **How They are Allowed:** Located in `skills/` directories. Scanned automatically by the RAG indexer and activated conditionally based on user intent.
+### Architecture boundary
 
-### C. Subagents (Concurrent Delegation)
-* **What:** Isolated LLM processes sprouted dynamically to solve specific, granular subtasks (e.g., deep research, diff reviews).
-* **Why:** Prevents prompt dilution and context pollution in the main orchestrator. Specialized Genotypes perform better than generalists on complex, multi-step code operations.
-* **How They are Allowed:** Invoked strictly via the `invoke_subagent` tool. Subagents communicate asynchronously using JSON-RPC messaging and operate on git staging worktrees.
+| Layer | Responsibility |
+|---|---|
+| **Core** (`cmd/stem/internal/core/`) | Governed capability declarations, delegation authorization, business logic. Transport-free. |
+| **REST / MCP / CLI adapters** | Translate transport ↔ Core. Decode requests, encode responses, map errors. No business logic. |
+| **Conductor / Terrarium** | Execution orchestration and isolation. The Core is structurally forbidden from importing them. |
 
-### D. Plugins & Extensions (Modular Integrations)
-* **What:** Cohesive packages containing configuration files, custom skills, and schema mappings (e.g., `firebase-plugin`, `chrome-devtools-plugin`).
-* **Why:** Provides a modular distribution channel for developers to share entire integration suites.
-* **How They are Allowed:** Configured in `tendril/config.json` under `PLUGINS=[...]`. The Go Gateway registers their tool paths during startup.
+The Stem is a deterministic routing/lifecycle kernel and governed capability
+registry. LLM cognition belongs to the Mycorrhizal Network. The Stem does not
+perform reasoning.
 
 ---
 
-## 2. The Permission & Execution Pipeline (How We Allow Them)
+## 2. Governed Commands, Views, and Control-Plane Operations
 
-Because executing arbitrary code and external tools can introduce security vulnerabilities, OpenTendril enforces a strict permissions pipeline.
+Not every Stem operation is a governed command. The system distinguishes three
+categories:
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                          Go Gateway Handler                            │
-│  - Receives MCP / API call request from Client                         │
-│  - Evaluates tool signature and permission requirements               │
-└───────────────────────────────────┬────────────────────────────────────┘
-                                    │
-                  ┌─────────────────┴─────────────────┐
-                  ▼                                   ▼
-        [ SYSTEM-SAFE TOOL ]                 [ DESTRUCTIVE / WRITE TOOL ]
-        (e.g., read_file, list_dir)          (e.g., write_file, run_command)
-                  │                                   │
-                  ▼                                   ▼
-        ┌──────────────────┐               ┌──────────────────────┐
-        │  Direct Dispatch │               │  Human Consent Gate  │
-        └─────────┬────────┘               └──────────┬───────────┘
-                  │                                   │ (Yes / Approve)
-                  ▼                                   ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│                       Terrarium Execution Zone                           │
-│  - Dispatches execution inside containerized runner (gVisor/KVM)       │
-│  - Limits filesystem mounts strictly to `/workspace`                   │
-│  - Blocks or monitors network egress based on tool scopes              │
-└────────────────────────────────────────────────────────────────────────┘
-```
+### Governed commands
 
-### A. The Three Permission Gates
+Capabilities returned by `core.CapabilityNames()`. Every governed command:
 
-1. **System-Safe Tools (Read-Only):**
-   * Tools like `read_file`, `list_dir`, or local codebase index searches do not modify system state.
-   * **Policy:** Auto-approved. Execute immediately without interrupting the developer.
+- is declared once in the Core registry,
+- is projected onto all three transport surfaces (REST, MCP, CLI),
+- is subject to interface-parity enforcement (§3).
 
-2. **Destructive / Modification Tools (Write/Execute):**
-   * Tools like `write_file`, `run_command`, `git_commit` modify state.
-   * **Policy:** Enforces **Explicit Human Consent**. The Go Gateway blocks execution and prompts the user in the UI. Workflows can configure rule-based bypasses (e.g., "Allow `git commit` without asking, but always ask for `run_command`").
+### Views
 
-3. **Restricted Platform Tools (Sensitive Secrets):**
-   * Tools that read environment variables (`.env`), touch keys, or make unverified network requests.
-   * **Policy:** Blocked by default. Must be explicitly white-listed in the user's `config.json` with domain constraints (e.g., "Allow network requests only to `api.github.com`").
+Real operation-classes that are deliberately outside the governed command
+registry. A view does not map to a command every surface must project, but it is
+nonetheless a recognized operation-class: a delegation grant naming it
+authorizes observation without authorizing execution.
 
----
+Current view:
 
-## 3. Terrariuming & Isolation Levels
+- **`sprout.watch`** — authorizes watching a Phytomer's run records, persisted
+  events, and live stream. Defined as `CapSproutWatch` in the registry
+  constants but deliberately absent from `CapabilityNames()`. Tested as excluded
+  by `TestControlPlaneCapabilitiesExcluded`.
 
-To guarantee safety, we decouple **what** a tool is allowed to do from **where** it does it. OpenTendril defines three terrarium tiers:
+### Control-plane operations
 
-| Tier | Provider | Egress Security | Use Case |
-|---|---|---|---|
-| **Tier 1: High Compat** | Host OS / Standard Docker | Open | Trusted local plugins, compilers, package managers |
-| **Tier 2: User Space Shield** | gVisor (`runsc`) | Restricted | Unverified third-party libraries, test suite execution |
-| **Tier 3: Hardware VM** | Firecracker microVM | Isolated | SaaS environments, multi-tenant execution, unverified tools |
+Operations deliberately excluded from the governed command registry because
+exposing them on Pollinator-facing surfaces would create privilege escalation.
+These are reachable only from the Stem's host principal (typically via the local
+CLI).
+
+The parity test `TestControlPlaneCapabilitiesExcluded` asserts that no
+capability name in `CapabilityNames()` carries a control-plane prefix. The
+current deny-list prefixes are:
+
+| Prefix | Examples |
+|---|---|
+| `setup.` | First-time Stem setup |
+| `init.` | Workspace initialization |
+| `serve.` | Starting the Stem server |
+| `pollinator.` | Pollinator credential management (create, list, revoke) |
+| `delegation.` | Grant management (grant, revoke, list) |
+| `hardiness.` | Deployment posture reporting |
+| `git.setup.` | Git credential configuration |
+| `mcp.` | MCP tool management (install, list, remove) |
+
+Additionally, CLI-local commands such as `mesh keygen`, `mesh issue-token`, and
+`tendril sequence dynamic` remain outside the governed registry because they
+mint cryptographic material, manage local mesh keys, or provide CLI sugar that
+synthesizes a file and invokes a governed capability.
 
 ---
 
-## 4. Extension Registry Layout
+## 3. Interface Parity
 
-Plugins, Skills, and Tools are located in predictable, structured paths within the workspace to prevent path traversal exploits:
+The governed command capability set is independently checked across all four
+surfaces:
 
-```
-opentendril/
-├── core/                       # Stateless system engine
-└── tendril/                    # User configuration & state
-    ├── config.json             # Core configurations & external MCP server pointers
-    ├── plugins/                # User-installed plugins
-    │   └── firebase/           # The firebase plugin bundle
-    │       ├── plugin.json     # Plugin metadata, config, and dependency specifications
-    │       ├── skills/         # Prompt instructions for firebase
-    │       └── genotypes/      # Genotype definitions
-    └── skills/                 # Custom local user skills (not tied to a plugin)
-        └── build-ios/
-            └── SKILL.md        # Specialized local prompt instructions
-```
+1. **Core registry** — `core.CapabilityNames()`
+2. **REST adapter** — capabilities from each receptor handler's `Capabilities()`
+   method, reflecting what is actually mounted on the HTTP mux
+3. **MCP adapter (declared)** — `mcp.CoreCapabilityNames()`
+4. **MCP adapter (live)** — tool names extracted from a real `tools/list`
+   JSON-RPC response
+5. **CLI adapter** — subcommand names collected from each CLI registration
+   function
 
-* **No Path Traversal:** The Terrarium Core rejects any tool call or skill lookup resolving outside the boundary of `core/` and `tendril/`.
+`TestInterfaceParityCoverage` in `cmd/stem/parity_test.go` asserts set equality
+across all of these. It goes red the moment:
+
+- a governed capability is added to one surface but not the others, or
+- a Core capability exists that an adapter failed to project, or
+- an adapter exposes a governed capability that Core does not declare.
+
+Behavioral parity is also tested: `TestBehavioralParity_*` tests assert that
+equivalent REST, MCP, and CLI requests decode to identical typed inputs and call
+the same Core methods exactly once, proving adapters carry zero independent
+business logic.
+
+**What parity does not cover.** Parity applies only to governed commands from
+`CapabilityNames()`. It does not apply to views (`sprout.watch`), control-plane
+operations, or legacy/non-Core transport tools that may exist outside the
+governed set.
+
+---
+
+## 4. Delegation Model
+
+A durable `DelegationGrant` authorizes bounded delegated work on behalf of an
+external Pollinator, replacing per-command host permission prompts with a
+declared boundary the Botanist controls.
+
+### Grant dimensions
+
+A `DelegationGrant` (`cmd/stem/internal/core/delegation.go`) carries:
+
+| Field | Purpose |
+|---|---|
+| `Pollen` | The trust-root identity (Pollinator, Phytomer, or mesh peer) exercising the grant. |
+| `OperationClasses` | Explicit allow-list of delegable operation-class names (e.g. `"sprout.grow"`). Exact match; no wildcards. |
+| `Substrates` | Scopes the grant to named Substrates. Exact match; a request naming no Substrate never matches. |
+| `Egress` | Hostname allow-list bounding network egress for delegated execution. Empty means deny-all. |
+| `Expires` | Expiration timestamp. Zero means the grant does not expire; revocation is removing it from the control-plane config. |
+| `ConfirmAboveImpact` | Optional escalation threshold (`"low"`, `"medium"`, `"high"`). Invocations at or above this level escalate to Botanist approval rather than executing immediately. |
+
+### Security semantics
+
+- **Zero grants = deny all.** With no grants configured, the authorizer denies
+  every delegated invocation. Non-delegated invocations never consult it.
+- **A request cannot carry or widen its own grant.** Grants enter the authorizer
+  only at construction, from the Stem's own control plane.
+  `DelegationRequest` structurally carries no grant material, so neither a
+  caller nor a file inside a cloned Substrate can self-escalate.
+- **Grant matching is exact and bounded.** Pollen, operation-class, and
+  Substrate must each match a value in the grant. No prefix matching, no
+  wildcards.
+- **Empty egress means deny-all.** An empty `Egress` list means no network
+  egress is permitted for delegated execution under that grant. The list is
+  carried on the grant so an authorized decision is complete for downstream
+  Terrarium enforcement.
+- **Expiry is checked at authorization time.** A grant past its `Expires`
+  timestamp is silently skipped.
+- **Grants are deep-copied at construction.** Later mutation of the caller's
+  slice cannot widen (or narrow) what the authorizer permits.
+
+### Impact confirmation
+
+When a grant's `ConfirmAboveImpact` threshold is set and an invocation's impact
+meets or exceeds it, the authorizer escalates:
+
+- If a `PendingConfirmationStore` is attached, the authorizer creates a pending
+  confirmation record (with a TTL) and returns `PendingConfirmation: true` with
+  a `ConfirmationID`. The Botanist can approve or deny it. On a subsequent
+  invocation with the same (Pollen, operation-class, Substrate) tuple, if an
+  approved record exists it is consumed atomically and the invocation proceeds
+  against the live grant — not a stale snapshot.
+- If no pending store is attached, the invocation is denied with a
+  confirmation-required reason.
+- An invocation whose impact is undeclared (empty) ranks above every configured
+  threshold, ensuring undeclared impact never slips under a confirmation bound.
+
+This is an escalation mechanism, not the normal execution model. The purpose
+of delegation is that a Botanist can grant freedom *inside a declared boundary*
+rather than approve every action individually.
+
+---
+
+## 5. Delegated Subset
+
+`DelegatedCapabilityNames()` returns the subset of governed commands that
+execute work on behalf of an external Pollinator and therefore must pass the
+delegation control plane (a grant covering {Pollen, operation-class, Substrate})
+before they run on a Pollinator-facing surface.
+
+Not every governed capability is delegated. The current delegated set is:
+
+| Family | Delegated capabilities |
+|---|---|
+| Genotype | `genotype.create` |
+| Sprout | `sprout.grow` |
+| Stoma | `stoma.pass` |
+| Seed | `seed.grow` |
+| Git | `git.commit`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
+
+Capabilities outside this set (such as `phytomer.*`, `genome.*`, `plasmid.*`,
+`mesh.*`, `sequence.*`) are governed commands subject to parity but are not
+gated by the delegation authorizer on Pollinator-facing surfaces.
+
+`IsDelegatedCapability(name)` reports whether a named capability is in the
+delegated set. The surfaces that gate per-invocation consult it.
+
+---
+
+## 6. Current Governed Capability Families
+
+The governed capabilities in `core.CapabilityNames()` are grouped by family.
+The registry itself is authoritative when exact command names or schemas are
+needed.
+
+### Phytomer
+
+Session lifecycle: create, list, get, update (preference overrides), delete
+(prune), and history (recent unified chat log).
+
+### Genome
+
+View the workspace Genome, reduce it (distill), or evolve it.
+
+### Genotype
+
+Create a new Genotype (behavioral persona).
+
+### Plasmid
+
+List available Plasmids or inject one into context.
+
+### Mesh
+
+Substrate grafting across the Mycelial Mesh: `mesh.graft` delegates a Substrate
+commit through a peer Stem, `mesh.promote` promotes a branch. The trait
+sub-family (`mesh.trait.list`, `mesh.trait.accept`, `mesh.trait.reject`)
+manages inbound trait proposals from mesh peers.
+
+### Sequence
+
+List defined Sequences or grow (execute) one.
+
+### Sprout
+
+Grow a Sprout — emerge an ephemeral worker to execute a Transcript.
+
+### Stoma
+
+`stoma.pass` — pass a command through the Terrarium's Stoma (the single
+controlled aperture in the isolation wall).
+
+### Seed
+
+Grow a Seed — activate a product-level goal.
+
+### Git
+
+The delegated-execution ladder for Git operations. Each operation-class is
+separately grantable. Git execution runs on the Stem (the sole
+secret-holding zone), never inside a sealed Sprout — a delegated push is the
+Stem's mediated egress with the Substrate's dedicated credential.
+
+| Capability | Behavior |
+|---|---|
+| `git.commit` | Commit under the Substrate's configured identity. Deny-closed: execution is refused when the credential carries no commit identity. |
+| `git.push` | Push the current branch to the remote using the Substrate's credential. |
+| `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |
+| `git.branch` | Create or switch to a feature branch. An existing branch is switched to, never reset. A branch named as the repository's default branch is refused. |
+| `git.status` | Read-only report of workspace state: current branch, resolved default branch, uncommitted changes, ahead/behind, and whether a commit would be allowed. |
+| `git.branch.list` | Classify local branches against forge evidence (merged, open PR, closed-unmerged, unpushed, etc.). Read-only. |
+| `git.prune` | Delete local branches whose PR merged. Reports what would be deleted unless `confirm` is true. Never deletes the current or default branch, a branch with an open or unmerged PR, one the remote has never seen, or one held by another subject's workspace. |
+
+`git.push` and `git.pr` are separate operation-classes by design: a Pollen
+granted only `git.pr` must never be able to publish a branch as a side effect.
+There is no governed `git.merge` capability — merging is a Botanist decision.
+
+> **Implementation note on `git.push`:** The Core's `GitPush` method validates
+> the request and delegates to the injected `GitOperations.Push` port. The Core
+> itself does not enforce default-branch push protection at the `git.push`
+> validation layer — that guard is implemented downstream in `git.branch`
+> (which refuses a branch named as the default) and `git.pr` (which refuses a
+> head branch that is the default). The project invariant is no direct
+> default-branch push, but the generic `git.push` Core validation does not
+> independently verify this. Whether the conductor's Push implementation
+> enforces it is outside this document's scope.
+
+---
+
+## 7. Terrarium Is Execution Boundary, Not Capability Authority
+
+Capability authorization and execution isolation are separate concerns:
+
+- **Capability authorization** is decided by the Core registry and the
+  delegation authorizer before execution begins.
+- **Execution isolation** is provided by the Terrarium — the filesystem and
+  network boundary around a Sprout.
+
+A **Sprout** is an ephemeral, strictly isolated worker that grows a Transcript.
+A **Terrarium** is the isolation boundary wrapping it. The Terrarium ensures a
+sealed Sprout cannot reach out on its own — external calls are Stem-mediated.
+
+The Stem remains outside the Sprout/Terrarium distinction. It mediates governed
+operations, holds credentials, and performs Git and network operations that a
+sealed Sprout cannot. The Terrarium's Stoma (the single controlled aperture in
+the isolation wall) is where commands enter and results leave.
+
+Authorization decides *whether* an operation proceeds. The Terrarium decides
+*where* it executes and *what it can reach*. The grant's egress allow-list
+bridges the two: it is an authorization decision (what hosts this delegation
+may contact) that the Terrarium enforces (by configuring the Stoma's network
+policy).
+
+Terrarium provider specifics are documented in `docs/TERRARIUM.md`.
+
+---
+
+## Invariants
+
+| Concept | Role |
+|---|---|
+| **Stem** | Deterministic routing/lifecycle kernel and governed Core capability authority. Not reasoning. |
+| **Mycorrhizal Network** | The LLM — cognitive side, external to the plant. |
+| **Pollinator** | External requester that reaches in and asks for governed work. |
+| **Pollen** | The identity a Pollinator presents; the trust-root a grant names. |
+| **Sprout** | Ephemeral execution body. |
+| **Terrarium** | Isolation boundary around a Sprout. |
+| **Substrate** | Target repository. |
+| **Fruit** | Git-reviewable output. The Botanist decides acceptance. |
+| **Botanist** | The human who decides acceptance. |
+| **Core registry** | Authoritative for governed commands. |
+| **CLI / MCP / REST** | Transport adapters. No business logic. |
+| **Views** | Real operation-classes, distinct from command parity. |
+| **Control-plane operations** | Distinct from Pollinator-facing governed commands. |
+| **Hardiness** | Reports deployment posture. Not an acceptance decision. |
+| **Authorization ≠ containment** | A grant decides whether; a Terrarium decides where. |
