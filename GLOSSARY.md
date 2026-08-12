@@ -50,13 +50,12 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Genet** | All **Ramets** grown from the same Genome — the genetic individual they are copies of. What a mesh of instances collectively is. | Fleet / cluster of instances | persistent |
 | **Scratch test** | An active probe for a sign of life in a growth, rather than passively waiting or watching. | Health check / liveness probe | per-run |
 | **Seed** | The originating goal / intent / use-case; the blueprint work grows from. | Product goal / use-case / intent | definition |
-| **Sequence** | An ordered YAML workflow of steps. | Agentic pipeline / workflow | definition |
+| **Sequence** | A YAML-defined execution DAG of dependency-linked steps with cycle detection and concurrent scheduling. | Agentic pipeline / workflow | definition |
 | **Sprout** | An ephemeral, strictly isolated worker that does one unit of work. | Worker container (*not* "agent") | ephemeral |
 | **Stem** | The deterministic Go orchestrator, lifecycle kernel, and governed capability registry. Not a reasoning component; LLM cognition belongs to the Mycorrhizal Network. | Core orchestrator / backend | persistent |
 | **Stoma** | The single controlled aperture in a **Terrarium** wall — the guest-side listener through which commands enter and results leave. A Terrarium has exactly one. | Guest agent / init process in a micro-VM | ephemeral |
 | **Substrate** | The repository being cultivated (the soil). | Target repo / codebase | persistent |
 | **Symbiotic Nodule** (Nodule) | An external *service* capability the plant partners with (GCP, GitHub API). | Microservice plugin / MCP gateway | persistent |
-
 | **Tendril** | **Concept / brand only** — the organism's reaching-out-and-integrating character. Never a component. | *(the project itself)* | — |
 | **Terrarium** | The isolation boundary (filesystem + network) around a Sprout. | Sandbox / container | ephemeral |
 | **Terroir** | The host OS and machine this instance grows on. | Host system / OS | environment |
@@ -131,7 +130,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **emerge** | a Sprout is created | start / launch |
 | **fruit** | deliver a PR / artifact | output / deliver |
 | **germinate** | activate / boot the framework from a Seed | init / start |
-| **graft** | **reserved:** fuse two *like* tissues (Stem↔Stem mesh, or two Genotypes) | — |
+| **graft** | delegate a Substrate commit through the Mycelial Mesh (Stem↔Stem) | — |
 | **grow** | a Sprout executes its Transcript | run / execute |
 | **mature** | a Sprout completes successfully | complete |
 | **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |

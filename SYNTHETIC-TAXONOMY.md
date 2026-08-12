@@ -72,7 +72,7 @@ it yields.
                 ▲
     Trunk:   Stem  +  Xylem / Phloem / Vascular Cambium
                 ▲
-   ── soil surface ──   Substrate  (the repo — cultivated; Fruit merges back in)
+   ── soil surface ──   Substrate  (the repo — cultivated)
                 │  the plant's own root organs tap and store:
    Root system:   Roots → Mycorrhizae (LLM)   ·   Symbiotic Nodules → services
                   Rhizome → code index
@@ -203,7 +203,7 @@ growth cycle:
 *   **Substrate** — the **repository being cultivated** — the soil the plant is
     rooted in and feeds on. Distinct from the **Terroir** (the OS the soil sits on)
     and from the **Fruit** (what the plant yields). Changes travel *down* to the
-    Substrate via the Phloem, and merged **Fruit** enriches it for the next cycle.
+    Substrate via the Phloem, and accepted changes enrich it for the next cycle.
 *   **Symbiotic Nodule** (everyday: **Nodule**) — an **external *service*
     capability** the plant partners with (GCP, Datadog, the GitHub *API*), just as
     legume roots host nitrogen-fixing Rhizobia in root nodules. A Nodule interfaces
@@ -212,7 +212,6 @@ growth cycle:
 *   **Rhizome** — the **code index**. A continuous underground stem that stores and
     connects; here, a background scanner that parses the Substrate into a
     topological SQLite/AST map for the organism to draw from.
-
 
 ### The Trunk (support & vascular routing)
 
@@ -328,8 +327,8 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
 
 **Genetics.** **Genotype** = the base persona/system prompt (*who* a Sprout is).
 **Plasmid** = a modular, injectable block of context or tools (*a skill*).
-**Transcript** = one instruction for one growth (*a single task*). **Sequence** = an
-ordered YAML workflow of steps (*a pipeline*), triggered only by the Stem or the
+**Transcript** = one instruction for one growth (*a single task*). **Sequence** = a
+YAML-defined execution DAG of dependency-linked steps (*a pipeline*), triggered only by the Stem or the
 Botanist — never by a Sprout. **Meristem** = a Sequence step that dynamically plans
 new steps and translates messy human requests into strict botanical instructions;
 botanically the *shoot apical meristem* is where **Phytomers** (§5, sessions)
@@ -347,17 +346,17 @@ survives (natural selection).
 | **emerge** | a Sprout is created | start / launch |
 | **fruit** | deliver a PR / artifact | output / deliver |
 | **germinate** | activate / boot the framework from a Seed | init / start |
-| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
+| **graft** | delegate a Substrate commit through the Mycelial Mesh (Stem↔Stem) | — |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
 | **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |
 | **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
 | **wither** | a Sprout fails or crashes | fail |
 
-**"Graft" is reserved.** Botanically, grafting fuses tissue from **two different
-plants** into one organism. It is therefore correct **only** for **Stem Grafting**
-(joining a local Stem to a remote Stem — the mesh) and **Genotype Grafting**
-(fusing two personae/plasmids into a hybrid). It is **wrong** for attaching a
+**"Graft" is implemented.** Botanically, grafting fuses tissue from **two different
+plants** into one organism. In OpenTendril, `mesh.graft` delegates a local
+Substrate's latest commit through the Mycelial Mesh to a remote Stem.
+It is **wrong** for attaching a
 Nodule (that is *symbiosis*) or for merging changes home (that is **Phloem**
 transport / a **merge**).
 
