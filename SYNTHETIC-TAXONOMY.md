@@ -75,7 +75,7 @@ it yields.
    ── soil surface ──   Substrate  (the repo — cultivated; Fruit merges back in)
                 │  the plant's own root organs tap and store:
    Root system:   Roots → Mycorrhizae (LLM)   ·   Symbiotic Nodules → services
-                  Rhizome → code index         ·   Taproot → deliberation store
+                  Rhizome → code index
                 │  reaching into …
    Rhizosphere   (the ecosystem of existing technologies Tendril is based on)
                 │  all within …
@@ -93,9 +93,9 @@ it yields.
 > (the repo), within the **Biome** (the ISO 27001 / ISO 42001 / SDLC climate). The
 > organism draws intelligence through its **Roots** from the **Mycorrhizal Network**
 > (the LLM), routes it up the **Stem's** vascular system, and grows **Sprouts**
-> (ephemeral workers) that transform the Substrate. The reasoning behind each
-> decision is stored in the **Taproot**; the yield is **Fruit** (a PR), which the
-> Botanist reviews through the **Greenhouse** — feeding the next Seed.
+> (ephemeral workers) that transform the Substrate. The yield is **Fruit**
+> (a branch / PR), which the Botanist reviews through the **Greenhouse** and
+> decides whether to accept — feeding the next Seed.
 
 Each force in that loop is a distinct organ. None overloads another.
 
@@ -114,10 +114,9 @@ growth cycle:
 6. **bud** *(optional)* — an **axillary bud** branches into a new Phytomer
    (parallel work or recursion).
 7. **mature** / **wither** — success, or failure → **abscise** (the Sprout is dropped).
-8. **merge** — the **Phloem** carries the diff home to the **Substrate**; the
-   rationale is stored in the **Taproot**.
-9. **fruit** — the **Fruit** (PR / artifact) is delivered; the Botanist reviews it
-   through the **Greenhouse**, feeding the next **Seed**.
+8. **merge** — the **Phloem** carries the diff home to the **Substrate**.
+9. **fruit** — the **Fruit** (branch / PR / artifact) is delivered for review;
+   the Botanist decides whether to accept it, feeding the next **Seed**.
 
 ---
 
@@ -213,19 +212,16 @@ growth cycle:
 *   **Rhizome** — the **code index**. A continuous underground stem that stores and
     connects; here, a background scanner that parses the Substrate into a
     topological SQLite/AST map for the organism to draw from.
-*   **Taproot** — the **deep, persistent store of deliberation**: conversations,
-    Design RFCs, decisions *and their rationale*, reviews, and working drafts — the
-    *why and how* a product was built. A taproot stores energy across seasons for
-    the plant to draw on; the Taproot is the organism's memory of its own intent,
-    the highest-value knowledge the Mycorrhizae (LLM) cannot hold between runs.
-    *(New capability — see the Taproot Design RFC.)*
+
 
 ### The Trunk (support & vascular routing)
 
-*   **Stem** — the lean, deterministic **Go orchestrator** (`cmd/stem`). It is
-    explicitly **not** a brain (plants have none); it is a vascular routing highway
-    that receives signals from the Mycorrhizae and routes them to a Branch,
-    triggering a Sprout to grow. It holds no business logic.
+*   **Stem** — the deterministic **Go orchestrator and governed capability
+    registry** (`cmd/stem`). It is explicitly **not** a brain or reasoning
+    component (plants have none; LLM cognition belongs to the Mycorrhizal
+    Network). It routes signals from the Mycorrhizae to a Branch, triggering a
+    Sprout to grow. Governed capability logic lives in the Core registry;
+    REST, MCP, and CLI adapters translate transport only.
 *   **Vascular System (Xylem & Phloem)** — the transport tubes. **Xylem** carries
     Transcripts (inputs) *up* to the Sprouts; **Phloem** carries git diffs
     (synthesised energy) *down* from the Sprouts to the Substrate.
@@ -245,10 +241,7 @@ growth cycle:
 *   **Phytomer** — a **Session**: one persistent interaction thread, and the
     repeating module the organism iterates to build itself (a phytomer = node +
     internode + leaf + bud). The **Meristem** initiates a Phytomer; **Sprouts
-    emerge** from it over time; at maturity it roots its deliberation into the
-    **Taproot**. *(Two cadences are reserved as telemetry metrics, adopted when the
-    Greenhouse needs them: the **plastochron** — the interval between new Phytomers;
-    and the **phyllochron** — the rate at which Sprouts emerge within one.)*
+    emerge** from it over time.
 *   **Axillary bud** — a **dormant bud** (branch point) carried by a Phytomer. It stays
     dormant, or **buds** — activates into a new Phytomer chain: a branch, a
     parallel line, or a recursive sub-task (in grasses, a *tiller*). This is how
@@ -259,14 +252,11 @@ growth cycle:
     from a **dormant bud**).
 *   **Scratch test** — an active probe for a sign of life in a growth, rather than passively
     waiting or watching. It asks the workspace whether it is still changing.
-*   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
-    delivered, and its merge returns seeds to the Substrate (soil) for the next
-    cycle.
+*   **Fruit** — the **Git-reviewable output**: the branch, PR, or artifact a
+    cycle yields. The Botanist decides whether to accept it.
 *   **Seed** — the **originating goal / intent / use-case**: the blueprint (plus
     stored energy) from which a body of work grows. A single task's intent is a
-    **Transcript**; the product-level intent is a **Seed**. Seed (forward intent)
-    and **Taproot** (recorded rationale) are the two ends of the organism's
-    memory of purpose.
+    **Transcript**; the product-level intent is a **Seed**.
 
 ### Microservices & Symbiosis
 

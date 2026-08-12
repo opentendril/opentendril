@@ -14,7 +14,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
 - **Branch**: a capability group / security zone.
 - **Epigenetics**: distilled learnings fed forward into future prompts.
-- **Fruit**: the deliverable a cycle yields (a PR / artifact).
+- **Fruit**: Git-reviewable output a cycle yields (a branch / PR / artifact); the Botanist decides acceptance.
 - **Genotype**: the base persona / system prompt (*who* a Sprout is).
 - **Greenhouse**: the observer UI.
 - **Hardiness**: what a Terroir can withstand — whether its conditions permit the delegation boundary to be enforced rather than merely recorded. A property of the site, not of the running organism (that is health).
@@ -36,11 +36,11 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Seed**: the originating goal / intent / use-case.
 - **Sequence**: an ordered YAML workflow of steps.
 - **Sprout**: an ephemeral, isolated worker that does one unit of work.
-- **Stem**: the Go orchestrator/router. Not a brain; no business logic.
+- **Stem**: the deterministic Go orchestrator, lifecycle kernel, and governed capability registry. Not a brain or reasoning component; LLM cognition belongs to the Mycorrhizal Network. Adapters (REST, MCP, CLI) translate transport only.
 - **Stoma**: the single controlled aperture in a Terrarium wall — the guest-side listener through which commands enter and results leave. A Terrarium has exactly one.
 - **Substrate**: the repository being cultivated (the soil).
 - **Symbiotic Nodule** (Nodule): an external *service* capability (GCP, GitHub API).
-- **Taproot**: the persistent store of deliberation (conversations, RFCs, decisions+rationale, reviews).
+
 - **Terrarium**: the isolation boundary (filesystem+network) around a Sprout.
 - **Terroir**: the host OS / machine.
 - **Transcript**: one instruction for one growth (a single task).
