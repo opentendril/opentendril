@@ -49,7 +49,7 @@ The Stem communicates with execution through the Terrarium provider/Stoma bounda
 
 The Host Terrarium provider is a separate, explicit isolation escape. It requires `TENDRIL_ALLOW_HOST_EXECUTION=true`, runs with full host-user permissions, bypasses Terrarium isolation entirely, and emits a loud audit warning upon activation.
 
-For containerized runs, the host workspace is shadowed to isolate the Substrate (`sprout` execution), protecting the active workspace from untrusted modifications. This shadow-worktree establishment fails closed by default. Executing directly in the active host workspace requires a separate explicit opt-in via `TENDRIL_ALLOW_HOST_WORKSPACE=true`.
+For local Git Sprout runs, the Stem normally creates a shadow worktree before starting the Terrarium, isolating execution from the active source workspace. If shadow-worktree establishment fails, execution fails closed unless `TENDRIL_ALLOW_HOST_WORKSPACE=true` explicitly permits use of the active workspace.
 
 ## Sequence
 
