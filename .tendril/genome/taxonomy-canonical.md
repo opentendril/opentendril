@@ -14,7 +14,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
 - **Branch**: a capability group / security zone.
 - **Epigenetics**: distilled learnings fed forward into future prompts.
-- **Fruit**: the deliverable a cycle yields (a PR / artifact).
+- **Fruit**: Git-reviewable output a cycle yields (a branch / PR / artifact); the Botanist decides acceptance.
 - **Genotype**: the base persona / system prompt (*who* a Sprout is).
 - **Greenhouse**: the observer UI.
 - **Hardiness**: what a Terroir can withstand — whether its conditions permit the delegation boundary to be enforced rather than merely recorded. A property of the site, not of the running organism (that is health).
@@ -34,13 +34,12 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Roots** (`roots/`): OpenTendril's *own* connectivity organ — provider clients, model discovery, tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae.
 - **Genet**: all Ramets grown from the same Genome — the genetic individual they are copies of.
 - **Seed**: the originating goal / intent / use-case.
-- **Sequence**: an ordered YAML workflow of steps.
+- **Sequence**: a YAML-defined execution DAG of dependency-linked steps with cycle detection and concurrent scheduling.
 - **Sprout**: an ephemeral, isolated worker that does one unit of work.
-- **Stem**: the Go orchestrator/router. Not a brain; no business logic.
+- **Stem**: the deterministic Go orchestrator, lifecycle kernel, and governed capability registry. Not a brain or reasoning component; LLM cognition belongs to the Mycorrhizal Network. Adapters (REST, MCP, CLI) translate transport only.
 - **Stoma**: the single controlled aperture in a Terrarium wall — the guest-side listener through which commands enter and results leave. A Terrarium has exactly one.
 - **Substrate**: the repository being cultivated (the soil).
 - **Symbiotic Nodule** (Nodule): an external *service* capability (GCP, GitHub API).
-- **Taproot**: the persistent store of deliberation (conversations, RFCs, decisions+rationale, reviews).
 - **Terrarium**: the isolation boundary (filesystem+network) around a Sprout.
 - **Terroir**: the host OS / machine.
 - **Transcript**: one instruction for one growth (a single task).
@@ -48,7 +47,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Xylem**: vascular channel carrying Transcripts (inputs) up to Sprouts.
 
 ## Verbs (A–Z)
-abscise (drop a withered Sprout) · branch · bud (activate an axillary bud into a new Phytomer) · emerge (create a Sprout) · fruit (deliver) · germinate (boot) · **graft** (fuse two *like* tissues: Stem↔Stem mesh, or two Genotypes) · **grow** (execute) · mature (succeed) · merge (return changes home, via the Phloem) · nodulate / form symbiosis (connect a Nodule) · wither (fail).
+abscise (drop a withered Sprout) · branch · bud (activate an axillary bud into a new Phytomer) · emerge (create a Sprout) · fruit (deliver) · germinate (boot) · **graft** (delegate a Substrate commit through the Mycelial Mesh, Stem↔Stem) · **grow** (execute) · mature (succeed) · merge (return changes home, via the Phloem) · nodulate / form symbiosis (connect a Nodule) · wither (fail).
 
 ## Rules
 1. **Tendril** names the whole organism and brand. Name the ephemeral worker a **Sprout**; name a persistent integration a **Substrate** (a repo) or a **Symbiotic Nodule** (a service).

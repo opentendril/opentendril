@@ -72,10 +72,10 @@ it yields.
                 ▲
     Trunk:   Stem  +  Xylem / Phloem / Vascular Cambium
                 ▲
-   ── soil surface ──   Substrate  (the repo — cultivated; Fruit merges back in)
+   ── soil surface ──   Substrate  (the repo — cultivated)
                 │  the plant's own root organs tap and store:
    Root system:   Roots → Mycorrhizae (LLM)   ·   Symbiotic Nodules → services
-                  Rhizome → code index         ·   Taproot → deliberation store
+                  Rhizome → code index
                 │  reaching into …
    Rhizosphere   (the ecosystem of existing technologies Tendril is based on)
                 │  all within …
@@ -93,9 +93,9 @@ it yields.
 > (the repo), within the **Biome** (the ISO 27001 / ISO 42001 / SDLC climate). The
 > organism draws intelligence through its **Roots** from the **Mycorrhizal Network**
 > (the LLM), routes it up the **Stem's** vascular system, and grows **Sprouts**
-> (ephemeral workers) that transform the Substrate. The reasoning behind each
-> decision is stored in the **Taproot**; the yield is **Fruit** (a PR), which the
-> Botanist reviews through the **Greenhouse** — feeding the next Seed.
+> (ephemeral workers) that transform the Substrate. The yield is **Fruit**
+> (a branch / PR), which the Botanist reviews through the **Greenhouse** and
+> decides whether to accept — feeding the next Seed.
 
 Each force in that loop is a distinct organ. None overloads another.
 
@@ -114,10 +114,9 @@ growth cycle:
 6. **bud** *(optional)* — an **axillary bud** branches into a new Phytomer
    (parallel work or recursion).
 7. **mature** / **wither** — success, or failure → **abscise** (the Sprout is dropped).
-8. **merge** — the **Phloem** carries the diff home to the **Substrate**; the
-   rationale is stored in the **Taproot**.
-9. **fruit** — the **Fruit** (PR / artifact) is delivered; the Botanist reviews it
-   through the **Greenhouse**, feeding the next **Seed**.
+8. **merge** — the **Phloem** carries the diff home to the **Substrate**.
+9. **fruit** — the **Fruit** (branch / PR / artifact) is delivered for review;
+   the Botanist decides whether to accept it, feeding the next **Seed**.
 
 ---
 
@@ -204,7 +203,7 @@ growth cycle:
 *   **Substrate** — the **repository being cultivated** — the soil the plant is
     rooted in and feeds on. Distinct from the **Terroir** (the OS the soil sits on)
     and from the **Fruit** (what the plant yields). Changes travel *down* to the
-    Substrate via the Phloem, and merged **Fruit** enriches it for the next cycle.
+    Substrate via the Phloem, and accepted changes enrich it for the next cycle.
 *   **Symbiotic Nodule** (everyday: **Nodule**) — an **external *service*
     capability** the plant partners with (GCP, Datadog, the GitHub *API*), just as
     legume roots host nitrogen-fixing Rhizobia in root nodules. A Nodule interfaces
@@ -213,19 +212,15 @@ growth cycle:
 *   **Rhizome** — the **code index**. A continuous underground stem that stores and
     connects; here, a background scanner that parses the Substrate into a
     topological SQLite/AST map for the organism to draw from.
-*   **Taproot** — the **deep, persistent store of deliberation**: conversations,
-    Design RFCs, decisions *and their rationale*, reviews, and working drafts — the
-    *why and how* a product was built. A taproot stores energy across seasons for
-    the plant to draw on; the Taproot is the organism's memory of its own intent,
-    the highest-value knowledge the Mycorrhizae (LLM) cannot hold between runs.
-    *(New capability — see the Taproot Design RFC.)*
 
 ### The Trunk (support & vascular routing)
 
-*   **Stem** — the lean, deterministic **Go orchestrator** (`cmd/stem`). It is
-    explicitly **not** a brain (plants have none); it is a vascular routing highway
-    that receives signals from the Mycorrhizae and routes them to a Branch,
-    triggering a Sprout to grow. It holds no business logic.
+*   **Stem** — the deterministic **Go orchestrator and governed capability
+    registry** (`cmd/stem`). It is explicitly **not** a brain or reasoning
+    component (plants have none; LLM cognition belongs to the Mycorrhizal
+    Network). It routes signals from the Mycorrhizae to a Branch, triggering a
+    Sprout to grow. Governed capability logic lives in the Core registry;
+    REST, MCP, and CLI adapters translate transport only.
 *   **Vascular System (Xylem & Phloem)** — the transport tubes. **Xylem** carries
     Transcripts (inputs) *up* to the Sprouts; **Phloem** carries git diffs
     (synthesised energy) *down* from the Sprouts to the Substrate.
@@ -245,10 +240,7 @@ growth cycle:
 *   **Phytomer** — a **Session**: one persistent interaction thread, and the
     repeating module the organism iterates to build itself (a phytomer = node +
     internode + leaf + bud). The **Meristem** initiates a Phytomer; **Sprouts
-    emerge** from it over time; at maturity it roots its deliberation into the
-    **Taproot**. *(Two cadences are reserved as telemetry metrics, adopted when the
-    Greenhouse needs them: the **plastochron** — the interval between new Phytomers;
-    and the **phyllochron** — the rate at which Sprouts emerge within one.)*
+    emerge** from it over time.
 *   **Axillary bud** — a **dormant bud** (branch point) carried by a Phytomer. It stays
     dormant, or **buds** — activates into a new Phytomer chain: a branch, a
     parallel line, or a recursive sub-task (in grasses, a *tiller*). This is how
@@ -259,14 +251,11 @@ growth cycle:
     from a **dormant bud**).
 *   **Scratch test** — an active probe for a sign of life in a growth, rather than passively
     waiting or watching. It asks the workspace whether it is still changing.
-*   **Fruit** — the **deliverable**: the PR or artifact a cycle yields. Fruit is
-    delivered, and its merge returns seeds to the Substrate (soil) for the next
-    cycle.
+*   **Fruit** — the **Git-reviewable output**: the branch, PR, or artifact a
+    cycle yields. The Botanist decides whether to accept it.
 *   **Seed** — the **originating goal / intent / use-case**: the blueprint (plus
     stored energy) from which a body of work grows. A single task's intent is a
-    **Transcript**; the product-level intent is a **Seed**. Seed (forward intent)
-    and **Taproot** (recorded rationale) are the two ends of the organism's
-    memory of purpose.
+    **Transcript**; the product-level intent is a **Seed**.
 
 ### Microservices & Symbiosis
 
@@ -338,8 +327,8 @@ enterprise are delegated further via Stem Grafting to a Central Stem).
 
 **Genetics.** **Genotype** = the base persona/system prompt (*who* a Sprout is).
 **Plasmid** = a modular, injectable block of context or tools (*a skill*).
-**Transcript** = one instruction for one growth (*a single task*). **Sequence** = an
-ordered YAML workflow of steps (*a pipeline*), triggered only by the Stem or the
+**Transcript** = one instruction for one growth (*a single task*). **Sequence** = a
+YAML-defined execution DAG of dependency-linked steps (*a pipeline*), triggered only by the Stem or the
 Botanist — never by a Sprout. **Meristem** = a Sequence step that dynamically plans
 new steps and translates messy human requests into strict botanical instructions;
 botanically the *shoot apical meristem* is where **Phytomers** (§5, sessions)
@@ -357,17 +346,17 @@ survives (natural selection).
 | **emerge** | a Sprout is created | start / launch |
 | **fruit** | deliver a PR / artifact | output / deliver |
 | **germinate** | activate / boot the framework from a Seed | init / start |
-| **graft** | **reserved:** fuse two *like* tissues into one organism | — |
+| **graft** | delegate a Substrate commit through the Mycelial Mesh (Stem↔Stem) | — |
 | **grow** | a Sprout executes its Transcript | **run / execute** |
 | **mature** | a Sprout completes successfully | complete |
 | **merge** | changes return home to the Substrate (via the Phloem) | merge / integrate |
 | **nodulate** / *form symbiosis* | connect a Symbiotic Nodule | attach a plugin |
 | **wither** | a Sprout fails or crashes | fail |
 
-**"Graft" is reserved.** Botanically, grafting fuses tissue from **two different
-plants** into one organism. It is therefore correct **only** for **Stem Grafting**
-(joining a local Stem to a remote Stem — the mesh) and **Genotype Grafting**
-(fusing two personae/plasmids into a hybrid). It is **wrong** for attaching a
+**"Graft" is implemented.** Botanically, grafting fuses tissue from **two different
+plants** into one organism. In OpenTendril, `mesh.graft` delegates a local
+Substrate's latest commit through the Mycelial Mesh to a remote Stem.
+It is **wrong** for attaching a
 Nodule (that is *symbiosis*) or for merging changes home (that is **Phloem**
 transport / a **merge**).
 
