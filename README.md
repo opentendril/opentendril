@@ -41,7 +41,7 @@ REST, MCP, and CLI adapters are architecture surfaces translating transport only
 ### What does this actually mean for developers?
 In standard IT speak: **OpenTendril is a headless, local-first AI coding framework.** 
 
-For operators, the Stem runs host-side, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely.
+For operators, the Stem runs host-side and accepts requests through its CLI, REST, and MCP adapters.
 
 The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **Terrariums** (isolation boundaries). Implemented Terrarium providers include Docker and gVisor (container-based), Firecracker (microVM provider), and Host (the explicit isolation escape requiring `TENDRIL_ALLOW_HOST_EXECUTION=true`). `mesh.graft` delegates a Substrate commit through a peer Stem.
 
@@ -83,7 +83,7 @@ Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers 
     │
     ▼
  Stem / Core authority
-    ├─► Roots ───────► Mycorrhizae (LLM providers)
+    ├─► Roots ───────► Mycorrhizae (cognitive LLM side)
     └─► Terrarium ───► Sprout ───► Substrate
                                        │
                                        ▼
