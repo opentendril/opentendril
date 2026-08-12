@@ -37,8 +37,9 @@ We enforce strict language-based casing boundaries to prevent mixed patterns in 
   * All serialized JSON keys in API payloads and JSON-RPC messages must use **`camelCase`** (e.g., `{"protocolVersion": "2024-11-05", "inputSchema": {...}}`).
 * **REST HTTP Endpoints:**
   * All URL paths and endpoints must use **`kebab-case`** (e.g., `/api/mcp-tools`, `/v1/chat-completions`).
-* **Configuration:**
-  * Environment variables and database keys must use **`SCREAMING_SNAKE_CASE`** (e.g., `TERRARIUM_PROVIDER`, `GROK_API_KEY`).
+* **Configuration & Storage:**
+  * Environment variables must use **`SCREAMING_SNAKE_CASE`** (e.g., `TERRARIUM_PROVIDER`, `GROK_API_KEY`).
+  * Stored database keys and domain enums must use **`kebab-case`** (e.g., `sprout-emerged`).
 
 ---
 
@@ -48,7 +49,7 @@ One rule: **root holds only what the platform or tooling requires by name;
 GitHub community-health files live in `.github/`; everything else lives in `docs/`.**
 
 **Naming.** Markdown docs use `UPPERCASE-KEBAB-CASE.md`, grouped by kind:
-- `DESIGN-*` — architecture and design-decision docs.
+- `DESIGN-*` — current implemented/as-built component or architecture documentation. A `docs/DESIGN-*.md` file must not become a storage location for proposals, alternatives, RFC history, acceptance criteria, or future designs merely because of its filename.
 - `GUIDE-*` — operator/user how-tos (install, setup, integration).
 - Unprefixed — short canonical references (`GLOSSARY`, `SYNTHETIC-TAXONOMY`,
   `ARCHITECTURE`, `CAPABILITIES`, `OBJECTIVE`, `GREENHOUSE`).
@@ -80,7 +81,7 @@ The protected paths are defined in **[`.github/protected-paths`](.github/protect
 
 There is no tool you are required to use and no ceremony to perform. Work on a branch and open a pull request, exactly as for anything else. What is not possible is *landing* the change without human review.
 
-That is the whole design. Protection is enforced on the trusted side rather than asked of whoever is editing, because a rule the editing party is asked to honour constrains only a party that chooses to honour it — the same weakness a declared Pollen had before issued credentials replaced it.
+That is the whole design. Protection is enforced on the trusted side rather than asked of whoever is editing, because a rule the editing party is asked to honour constrains only a party that chooses to honour it.
 
 ### What enforces it
 
@@ -101,10 +102,7 @@ Protection here comes from **repository rulesets**, not classic branch protectio
 
 Enforced today on the default branch, with no bypass actors: deletion and force-push are refused, history must stay linear, **commits must be signed**, a pull request is required, and review threads must be resolved.
 
-Two status checks are required — `Native PR Gate` and `verify-commits`. The first is an aggregator: it fails unless every job the path filter marked necessary succeeded, so the Go and Python suites gate a merge through it rather than by name.
-
-> [!CAUTION]
-> **The Source Hygiene workflow is not among the required checks.** Every job in it — the protected-paths drift check, the taxonomy check, the no-GitHub-references check, the default-branch check, the delegated-isolation check, the branch-deletion guard — reports without gating. A pull request can merge with all six red. Adding them to the ruleset's required contexts is what would make this section's promises true at the pull-request layer.
+Three status checks are required — `Native PR Gate`, `verify-commits`, and `Source Hygiene Gate`. The PR Gate is an aggregator: it fails unless every job the path filter marked necessary succeeded. The Source Hygiene Gate enforces drift checks, taxonomy, and no-GitHub-references rules.
 
 ### Adding a path
 
@@ -113,11 +111,10 @@ Add it to `.github/protected-paths` **and** `.github/CODEOWNERS`. The hygiene jo
 ---
 
 ## 📚 Documentation Governance
-* No major design shift, architectural choice, or branding change exists unless recorded where decisions actually live: a Design-RFC issue (label `design-rfc`, per the AGENTS.md 3-gate lifecycle) and/or a `docs/DESIGN-*.md` document.
-* **Repo files must be self-contained — no GitHub references in source.** Never bake a GitHub issue/PR number into a repo file (code comments, Dockerfiles, requirements, docs): not `(#NNN)`, not `issue #NNN` / `PR #NNN` / `Design RFC #NNN`, not GitHub issue/pull URLs. That context belongs where decisions live — the **commit message** and the **pull-request description** — because that is what GitHub is for. Describe the *why* in prose instead. Enforced by `scripts/check-no-issue-refs.sh` in CI (diff-based: it blocks *new* references; pre-existing ones are swept as encountered). Legitimate exceptions are test fixtures that simulate real GitHub payloads and styling hex colours, which the check excludes.
+
+* **Repository documentation is current-state only.** It contains current implemented architecture, current contracts, current taxonomy, current operator/developer instructions, and current governance. It does NOT contain proposed architecture, Gate A RFC content, implementation plans, alternatives under consideration, future-state designs, historical decision narratives, or progress logs. Those belong in GitHub discussion.
+* **Lifecycle placement:** Proposed non-trivial design is handled at Gate A in GitHub Issues; implementation planning is handled at Gate B in GitHub Issues; implementation lands through Gate C PRs. After implementation, canonical repository docs are updated to describe only the resulting current state without preserving the proposal or history.
+* **Repo files must be self-contained — no GitHub references in source.** Never bake a specific GitHub issue/PR number into a repo file (code comments, Dockerfiles, requirements, docs): not `(#NNN)`, not `issue #NNN` / `PR #NNN` / `Design RFC #NNN`, not GitHub issue/pull URLs. That context belongs where decisions live — the **commit message** and the **pull-request description** — because that is what GitHub is for. Describe the *why* in prose instead. Enforced by `scripts/check-no-issue-refs.sh` in CI. Generic references to GitHub Issues/PRs are fine. Legitimate exceptions are test fixtures that simulate real GitHub payloads and styling hex colours, which the check excludes.
 * Technical structures are maintained in `ARCHITECTURE.md`.
 * **One objective at a time, recorded in `OBJECTIVE.md`, and every brief cites it.** The objective states what the organism must be able to do next — one thing, in the present tense, with the condition that ends it. Work that does not serve it is filed, not started; a defect found while pursuing it is a candidate for the *next* objective, never a reason to widen this one. Changing the objective is a deliberate act, taken when the stated condition is met.
-
-  This replaces a roadmap, deliberately. A roadmap is a list of futures, so nothing in it is ever due, and it decays into aspiration nobody checks work against — which is precisely what happened to the one this rule used to name. An objective can be finished, and work that does not serve it is visible when it is proposed rather than a month later.
-
-* **Shipped progress is not a checked-in file** — it lives in the project's pull-request and release history on GitHub (that is what GitHub is for), and the backlog lives in GitHub Issues, not a checked-in list.
+* **Shipped progress is not a checked-in file** — it lives in the project's pull-request and release history on GitHub. The backlog lives in GitHub Issues, not a checked-in list.

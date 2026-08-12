@@ -8,9 +8,18 @@ This document defines the "Operating Constitution" for all AI agents—both inte
 
 OpenTendril is built on a strict synthetic biological architecture. Any external builder agent (the Mycorrhizae/LLM) that interacts with, self-evolves, or generates code/documentation for OpenTendril **MUST NOT** corrupt the framework with standard industry IT jargon.
 
-*   **No "Agents" or "Workflows"**: You must use **Tendrils**, **Sprouts**, and **Sequences**.
-*   **No "Sandboxes" or "Tools"**: You must use **Terrariums** and **Plasmids**.
-*   **No "Brains"**: The Stem is a vascular routing system, not a brain. 
+*   **Stem**: deterministic Go routing/lifecycle kernel and governed Core authority; it is not a reasoning component. Governed capability business logic belongs in Stem Core; LLM reasoning does not.
+*   **Mycorrhizae**: cognitive LLM side.
+*   **Sprout**: ephemeral execution body.
+*   **Terrarium**: execution/isolation boundary.
+*   **Plasmid**: injected context or capability payload.
+*   **Pollinator**: external requester.
+*   **Pollen**: requester identity/principal.
+*   **Substrate**: target repository.
+*   **Fruit**: Git-reviewable output.
+*   **Botanist**: human owner/reviewer.
+
+Generic technical words such as "tool" may still legitimately appear when describing MCP/tools or external technology. Do not force a biological term onto a concept that is not its synonym.
 
 **Self-Evolution Rule**: If the AI attempts to self-improve, refactor, or generate new architecture, it is absolutely forbidden from reverting to disorganized industry standards. All new concepts must be mapped to their biological equivalent using `GLOSSARY.md` and `SYNTHETIC-TAXONOMY.md` as the ultimate source of truth.
 
@@ -21,7 +30,7 @@ OpenTendril is built on a strict synthetic biological architecture. Any external
 ## 2. Builder Authority & PR Discipline
 
 Any external builder agent or process must operate under strict boundary constraints:
-* **No Merge Authority:** Builders do not own merge authority. A builder must never merge a PR or enable auto-merge **on its own initiative**. The sole exception is an **explicit, per-PR human instruction** to merge a specific named PR; a blanket or standing "you may merge" does not qualify, and the builder must never enable auto-merge. Absent such a direct instruction, the human merges at Gate C.
+* **No Merge Authority:** Builders do not own merge authority. Builders do not merge PRs. Builders do not enable auto-merge. There is no builder merge-authority exception. The Botanist (human) makes the Gate C merge decision and performs the merge.
 * **Scope Discipline:** Keep Pull Requests small, isolated, and single-purpose (one task/issue per PR).
 * **Minimal Diffs:** Avoid drive-by or speculative refactors. Stick strictly to the approved plan.
 * **No Direct Push to Main:** Never commit or push directly to the `main` branch. All changes must go through a staging branch.
@@ -32,9 +41,9 @@ Any external builder agent or process must operate under strict boundary constra
 
 ## 3. The 3-Gate Execution Lifecycle
 
-To prevent "agent runaways" and maintain absolute system security, all non-trivial features or refactors must route through a structured lifecycle. The strictness of this process is governed by the active `TENDRIL_SDLC_PROFILE` configuration (Solo, Collaborative, or Enterprise, as defined in `PLANNING.md`).
+To prevent "agent runaways" and maintain absolute system security, all non-trivial features, refactors, architecture changes, and other non-trivial repository work must route through a structured 3-gate lifecycle.
 
-In **Enterprise Mode** (`enterprise`), the full 3-gate lifecycle is strictly enforced:
+The full 3-gate lifecycle is strictly enforced:
 
 
 ```
@@ -94,14 +103,15 @@ git config core.hooksPath .githooks
 
 ### GitHub Auth: `GITHUB_TOKEN` via direnv
 
-The canonical GitHub PAT variable is **`GITHUB_TOKEN`** (the Stem also accepts `GITHUB_PERSONAL_ACCESS_TOKEN` as a legacy alternate). The token must be present in the Stem's **process environment** — terrariums push branches over HTTPS, and `gh`'s keyring does not expose its token to child processes. The recommended setup uses [direnv](https://direnv.net/):
-
-```bash
-cp .envrc.example .envrc
-direnv allow
-```
-
-The `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when it is not already set, and loads `.env` on top. `.envrc` is gitignored — never commit it.
+* `.envrc.example` is the tracked direnv template.
+* Copy it to `.envrc` and run `direnv allow`:
+  ```bash
+  cp .envrc.example .envrc
+  direnv allow
+  ```
+* The resulting `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when the variable is not already set.
+* It loads `.env` when present.
+* `.envrc` is gitignored and must not be committed.
 
 ---
 
@@ -125,15 +135,13 @@ The detailed filesystem naming policy and its exceptions are maintained in
 
 ## 6. Interface Parity — Adapters Translate Only
 
-The CLI, MCP, and OpenAPI/REST surfaces are **projections of one core capability registry**, not independent implementations. To keep them from silently diverging:
+The CLI, MCP, and OpenAPI/REST surfaces are **transport adapters**, not independent implementations. To keep them from silently diverging:
 
-* **One Core owns command authority.** Every governed command capability lives in `cmd/stem/internal/core` as a declarative `Capability` in the registry. A capability MUST be invokable with **zero HTTP, CLI, or MCP types in scope** — that is the litmus test for the boundary.
-* **Adapters translate transport ↔ core only.** The REST handlers (`internal/api`), the MCP server (`internal/api/mcp.go`, `cmdmcp.go`), and the CLI subcommands (`cmd/stem/cmd*.go`) may decode/encode their transport and map errors, and **nothing else**. No business logic in a handler. Do not reach for orchestrator/terrarium/gateway internals from an adapter path for a governed capability — route it through `core.Core`.
-* **Parity is enforced, not disciplinary.** `core.CapabilityNames()` is the canonical set. The parity tests under `cmd/stem` (`TestInterfaceParityCoverage`) assert REST == MCP == CLI == that canonical set and go **red** the moment a capability is added to one surface but not the others. The boundary test (`internal/core/boundary_test.go`) fails if the Core imports a transport or execution internal. Never weaken or skip these to land a change — add the capability to the registry and wire all three surfaces.
-* **To add a command capability:** declare it once in the `core` registry (Name, InputSchema, Invoke), then project it onto all three adapters. Adding it to only one surface is a CI failure by design.
-* **Views are exempt.** The `/ws` event stream and `?replay` are *views*, not commands, and are deliberately outside the registry and the parity tests. Do not pull them into the capability registry. See `docs/DESIGN-CONDUCTOR.md` for the commands-vs-views distinction.
-
-> **Current scope:** the governed registry covers the phytomer-lifecycle family (`phytomer.create|list|get|update|delete|history`), the genome family (`genome.view|reduce|evolve`), the plasmid family (`plasmid.list|inject`), the substrate-grafting family (`mesh.graft|promote`; `mesh keygen|issue-token` stay deliberately ungoverned CLI-local commands because they mint the workspace's private mesh keys and tokens), the sequence family (`sequence.list|grow`; `tendril sequence dynamic` is CLI-local sugar that synthesizes a file and invokes the governed `sequence.grow`), and the sprout family (`sprout.grow`). All Stem capabilities are now governed in the Core.
+* **Core owns command authority.** Governed command authority and business logic live in the Core.
+* **Adapters translate transport only.** The REST, MCP, and CLI adapters decode/encode their transport and map errors. No governed business logic belongs in adapters.
+* **Parity applies to governed commands.** Parity is enforced across adapters for all governed commands.
+* **Views and control-plane operations are distinct.** Views and control-plane operations are not Pollinator-facing governed command capabilities and are outside the registry and parity tests.
+* **Canonical reference:** `CAPABILITIES.md` is the canonical current reference for the capability set.
 
 ---
 
@@ -142,12 +150,12 @@ The CLI, MCP, and OpenAPI/REST surfaces are **projections of one core capability
 OpenTendril runs specific background processes restricted to distinct scopes:
 
 ### A. The Conductor (Orchestration & Planning)
-* **Scope:** Dynamic Sequence Manager. Compiles transcripts into Directed Acyclic Graph (DAG) sequences, handles topological sorting, and manages concurrency limits using Go routines.
-* **Terrarium:** Runs on the host Stem. It creates terrariumed shadow worktrees, schedules executions, and stages/commits/merges files back cleanly.
+* **Scope:** Dynamic Sequence Manager. Compiles transcripts into Directed Acyclic Graph (DAG) sequences, handles topological sorting, and manages concurrency limits.
+* **Integration:** Runs on the host Stem. It creates terrariumed shadow worktrees and schedules executions. It may use internal/local branch integration mechanics, but Fruit is delivered in Git for review. The Botanist (human) decides acceptance.
 
 ### B. The Trinity Roles (Specialized Genotypes)
 * **Thinker (Genotype: `thinker.json`):** System architect. Parses the workspace repository maps and designs technical plans and step-by-step implementation logs.
-* **Worker (Genotypes: `go-dev`, `typescript-dev`, etc.):** Code editing sprouts. They ingest instructions from the Thinker, write local code edits inside the isolated terrarium, and format files.
+* **Worker (Genotypes: `go-dev`, `typescript-dev`, etc.):** Code editing sprouts. They ingest instructions from the Thinker, write local code edits inside the isolated terrarium, and format files. Sprouts do not hold GitHub credentials or perform authenticated remote pushes themselves; the Stem mediates authenticated Git/network operations outside the sealed Sprout.
 * **Verifier (Genotype: `verifier.json`):** Quality assurance. Compiles code, executes unit test runners (`pytest`, `vitest`, `go test`), and validates linter rules.
 
 ### C. The Debugger (Auto-Correction Sprout)
