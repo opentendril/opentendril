@@ -81,7 +81,7 @@ The protected paths are defined in **[`.github/protected-paths`](.github/protect
 
 There is no tool you are required to use and no ceremony to perform. Work on a branch and open a pull request, exactly as for anything else. What is not possible is *landing* the change without human review.
 
-That is the whole design. Protection is enforced on the trusted side rather than asked of whoever is editing, because a rule the editing party is asked to honour constrains only a party that chooses to honour it — the same weakness a declared Pollen had before issued credentials replaced it.
+That is the whole design. Protection is enforced on the trusted side rather than asked of whoever is editing, because a rule the editing party is asked to honour constrains only a party that chooses to honour it.
 
 ### What enforces it
 

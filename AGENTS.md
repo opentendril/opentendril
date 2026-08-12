@@ -103,7 +103,15 @@ git config core.hooksPath .githooks
 
 ### GitHub Auth: `GITHUB_TOKEN` via direnv
 
-The `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when it is not already set, and loads `.env` on top. `.envrc` is gitignored — never commit it.
+* `.envrc.example` is the tracked direnv template.
+* Copy it to `.envrc` and run `direnv allow`:
+  ```bash
+  cp .envrc.example .envrc
+  direnv allow
+  ```
+* The resulting `.envrc` exports `GITHUB_TOKEN` from `gh auth token` when the variable is not already set.
+* It loads `.env` when present.
+* `.envrc` is gitignored and must not be committed.
 
 ---
 
