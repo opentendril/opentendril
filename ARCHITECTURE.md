@@ -15,8 +15,8 @@ The core invariant is that governed capabilities are executed only by the **Stem
 OpenTendril is built on a strict synthetic biological architecture:
 - **Botanist**: The human owner holding absolute authority.
 - **Pollinator**: An external client or AI builder initiating requests.
-- **Pollen**: The authenticated principal of the Pollinator.
-- **Stem**: The host daemon containing the core authority, orchestrating the system, and retaining secrets.
+- **Pollen**: The identity/principal a Pollinator presents and a delegation grant names.
+- **Stem**: The host-side deterministic routing/lifecycle kernel and governed Core authority.
 - **Mycorrhizae**: The external cognitive LLM side.
 - **Roots**: OpenTendril's own provider/model connectivity organ (under `roots/`), managing provider clients, model discovery, and routing to reach the Mycorrhizae.
 - **Terrarium**: The ephemeral isolation boundary where execution takes place.
@@ -39,13 +39,13 @@ No business logic resides in the adapters. The adapters dispatch to the **Stem C
 
 The **Mycorrhizae** (LLM) is the cognitive engine, running entirely externally. The Stem interacts with the Mycorrhizae via the `roots/llm` package, which acts as the provider connectivity and model routing layer. 
 
-The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. The Mycorrhizae receives context via Plasmids (markdown trait injections) and repository maps (structural maps of the Substrate), and returns tool calls or text.
+The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. The Mycorrhizae receives context via Plasmids (injected context or capability payloads) and repository maps (structural maps of the Substrate), and returns tool calls or text.
 
 ## Execution/Containment
 
-Execution happens inside a **Terrarium** (by default, a network-isolated Docker or gVisor container) or via the explicitly enabled Host provider. The **Sprout** is the stateless worker executing inside this boundary.
+Normal **Sprout** execution is bounded by a **Terrarium**. Implemented isolated providers include Docker, gVisor, and Firecracker. Docker and gVisor use container isolation, while Firecracker uses a microVM. The Host provider is an explicit escape that bypasses Terrarium isolation and requires `TENDRIL_ALLOW_HOST_EXECUTION=true`.
 
-The Stem provides context and tools to the Sprout over stdin/stdout (`ToolCall` / `ToolResponse`). By default, containerized Terraria fail closed: they cannot reach the host network (`--network none`) or the host workspace. Egress is mediated strictly by the Stem via an allow-listed fetch mechanism.
+The Stem communicates with execution through the Terrarium provider/Stoma boundary; the concrete transport is provider-specific (e.g., stdin/stdout for some containers, vsock JSON for Firecracker). By default, isolated Terraria fail closed: they cannot reach the host network or the host workspace. Egress is mediated strictly by the Stem via an allow-listed fetch mechanism.
 
 The Host Terrarium provider is a separate, explicit isolation escape. It requires `TENDRIL_ALLOW_HOST_EXECUTION=true`, runs with full host-user permissions, bypasses Terrarium isolation entirely, and emits a loud audit warning upon activation.
 
@@ -78,7 +78,7 @@ Protected kernel paths enforce a floor of safety, refusing automated merges that
 
 ## Observation/Persistence
 
-The runtime state is persistent. **Phytomers** (sessions) are recorded in `.tendril/history.db`. SQLite persistence is enabled by default (controlled via `TENDRIL_DB_LOGGING`). Heartwood provides application-level encryption for persisted payload values; encrypted writes are default when the cipher resolves and can be disabled with `TENDRIL_ENCRYPT_AT_REST`.
+Runtime state is persisted by default when history logging is enabled. **Phytomers** (sessions) are recorded in `.tendril/history.db`. SQLite persistence is enabled by default (controlled via `TENDRIL_DB_LOGGING`). Heartwood provides application-level encryption for persisted payload values; encrypted writes are default when the cipher resolves and can be disabled with `TENDRIL_ENCRYPT_AT_REST`.
 
 The system publishes lifecycle events (e.g., `sprout-emerged`, `sprout-withered`) over an EventBus.
 For reviewable successful Fruit with a diff, an Epigenetic Chronicler consumes the Sprout transcript, diff, and session logs to distill durable learnings, appending them to epigenetic genome material.
@@ -87,6 +87,6 @@ Hardiness reports deployment/Terroir posture—whether conditions permit the del
 
 ## Trust boundaries
 
-- **Stem (host)**: Full authority. Holds all secrets (API keys, mesh keys, Botanist key, GitHub tokens).
+- **Stem (host)**: Trusted capability authority. Holds the backend credentials and control-plane authority required for governed operations; normal sealed Sprouts do not receive those credentials.
 - **Greenhouse**: Delegated authority. The optional observation UI deployed as an nginx container holds no backend credential itself; the browser presents the Botanist bearer key and the proxy forwards it. The Stem remains the capability authority.
 - **Terrarium / Sprout**: Zero authority by default. Normal sealed Sprouts do not receive Stem credentials. Git/network operations requiring Stem authority are normally mediated by the Stem. A Substrate may explicitly inject its resolved GitHub credential into the Sprout by configuring `exposeToken: true`. The Host Terrarium provider is a separate, explicit escape that bypasses isolation.
