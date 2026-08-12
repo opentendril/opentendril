@@ -2,7 +2,7 @@
 
 **OpenTendril lets you stop approving every step an LLM takes — it works freely inside a boundary, and everything it did arrives in Git for you to review.**
 
-The container gives it room to work; Git gives you the veto. Neither half is new. The combination is what makes walking away reasonable.
+The Terrarium isolation boundary gives it room to work; Git gives you the veto. Neither half is new. The combination is what makes walking away reasonable.
 
 Most work on controlling these models addresses what they *say*: prompts, filters, evaluations. This addresses what their code *does* once you run it.
 
@@ -14,7 +14,7 @@ For decades, the software industry has built deterministic systems—rigid state
 
 Trying to force an organic neural network into rigid, deterministic IT structures leads to fragile execution, context window bloat, and severe security vulnerabilities. 
 
-**OpenTendril abandons traditional software architecture in favor of a Synthetic Biological Taxonomy.** By replicating natural evolutionary processes, we isolate unverified code execution while maintaining a perfectly lean, deterministic Go orchestrator.
+**OpenTendril abandons traditional software architecture in favor of a Synthetic Biological Taxonomy.** By replicating natural evolutionary processes, we isolate unverified code execution while maintaining a deterministic Go orchestrator.
 
 ---
 
@@ -22,15 +22,15 @@ Trying to force an organic neural network into rigid, deterministic IT structure
 To understand OpenTendril, you must understand its anatomy:
 
 *   **Tendril**: The brand name with no specific meaning or name given to a component.
-*   **The Stem**: The deterministic Go routing and lifecycle kernel. It is not a reasoning component.
-*   **Stem Core**: The governed capability authority and business logic.
-*   **Adapters**: REST, MCP, and CLI adapters perform transport translation only.
+*   **The Stem**: The deterministic Go routing and lifecycle kernel. It contains and governs the Core capability authority. It is not a reasoning component.
 *   **The Mycorrhizae**: The cognitive LLM side.
 *   **The Branches**: Capability groups or security zones.
 *   **The Sprouts**: Ephemeral execution bodies.
 *   **The Terrarium**: The execution and isolation boundary.
 *   **The Greenhouse (UI)**: The external observer dashboard. It sits completely outside the biological entity to observe telemetry.
 *   **(Prompt Elements)**: We use **Genotypes** (personas), **Plasmids** (modular context blocks), and **Transcripts** (user tasks) to dynamically assemble instructions for the LLM.
+
+REST, MCP, and CLI adapters are architecture surfaces translating transport only.
 
 > 📖 **Read the full philosophy:** Explore the [GLOSSARY.md](GLOSSARY.md) and [SYNTHETIC-TAXONOMY.md](SYNTHETIC-TAXONOMY.md) to understand the concept design.
 > 🛠️ **Read the architecture guide:** Check [ARCHITECTURE.md](ARCHITECTURE.md) to understand how these concepts are physically built (Go, Docker, and protocols).
@@ -41,9 +41,9 @@ To understand OpenTendril, you must understand its anatomy:
 ### What does this actually mean for developers?
 In standard IT speak: **OpenTendril is a headless, local-first AI coding framework.** 
 
-For operators, it runs entirely on your host machine, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely.
+For operators, the Stem runs host-side, coordinating with any frontend client via the Model Context Protocol (MCP), and executes codebase changes safely.
 
-The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **Terrariums** (isolation boundaries). Implemented Terrarium providers include Docker and gVisor (container-based), Firecracker (microVM provider), and Host (the explicit isolation escape requiring `TENDRIL_ALLOW_HOST_EXECUTION=true`). OpenTendril supports **Stem Grafting**, securely delegating high-privilege operations over WebSockets to a Central Governance Stem.
+The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **Terrariums** (isolation boundaries). Implemented Terrarium providers include Docker and gVisor (container-based), Firecracker (microVM provider), and Host (the explicit isolation escape requiring `TENDRIL_ALLOW_HOST_EXECUTION=true`). `mesh.graft` delegates a Substrate commit through a peer Stem.
 
 ---
 
@@ -75,28 +75,22 @@ Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers 
 
 ## 🏗️ Architecture
 
-```
-            YOU (Developer)
-             │
-             ▼
-      Client Applications  ← Claude Desktop / Cursor / Web UI
-             │  (MCP over stdio / WebSockets)
-             ▼
-       tendril serve       ← Unified Go Stem (port :8080)
-             │  - Dynamic LLM Routing (Coordinator / Worker)
-             │  - Substrate & Read-Only configs checked
-             │  - Ephemeral git worktree checkout
-             │  - Stem Grafting (Delegates high-privilege pushes via WebSockets)
-             ▼
-    Terrarium Provider       ← Extensible Execution Substrate
-             │  - Docker / gVisor (container-based), Firecracker (microVM provider), or Host (isolation escape)
-             │  - Injects Genotype plasmids & AST Repo Map
-             │  - Executes file edits, compilation, and unit tests
-             ▼
-      Git-Reviewable Fruit ← Work lands on a branch or PR for Botanist review
+```text
+ external clients
+    │
+    ▼
+ CLI / REST / MCP adapter (e.g. tendril mcp / tendril serve)
+    │
+    ▼
+ Stem / Core authority
+    ├─► Roots ───────► Mycorrhizae (LLM providers)
+    └─► Terrarium ───► Sprout ───► Substrate
+                                       │
+                                       ▼
+                              Git-Reviewable Fruit
 ```
 
-Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprout can internally merge a Terrarium commit back into its source branch, and remote execution may publish its commit, but this internal merge-back or publication is NOT Botanist acceptance. `git.commit`, `git.push`, and `git.pr` are distinct governed capabilities. `git.pr` opens a pull request and does not merge; there is no governed `git.merge`. Final acceptance and merge remain the Botanist's decision.
+Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprout can internally merge a Terrarium commit back into its source branch, and remote execution may publish its commit, but this internal merge-back or publication is NOT Botanist acceptance. `git.commit`, `git.push`, and `git.pr` are distinct governed capabilities. `git.pr` opens a pull request and does not merge; there is no governed `git.merge`. Final review acceptance and merge remain the Botanist's decision.
 
 ---
 
@@ -105,7 +99,9 @@ Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprou
 OpenTendril acts as a headless backend. You can connect it to your favorite developer tools using either the **Model Context Protocol (MCP)** or its **OpenAI-Compatible API**.
 
 ### 1. Claude Code, Claude Desktop & Cursor (via MCP)
-MCP allows clients to natively access Tendril's secure terrariumed tools.
+`tendril mcp` acts as a governed command surface and stdio bridge. It determines its mode dynamically:
+- With a configured credential and another-user governed Stem, it **forwards** traffic securely to that Stem.
+- Otherwise, it operates in-process locally or refuses connection if appropriate. See [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) for details.
 
 **Claude Code (CLI) — one command:**
 ```bash
@@ -138,7 +134,7 @@ and are not part of governed command parity.
 See [CAPABILITIES.md](CAPABILITIES.md) for the exact current capability set.
 
 ### 2. Aider & CodexCLI (via OpenAI API)
-Command-line coding assistants can use Tendril as their backend LLM provider, benefiting from its local inference and routing.
+Command-line coding assistants can use Tendril as their backend LLM provider, benefiting from its provider routing.
 
 Make sure `tendril serve` is running, then launch Aider:
 ```bash
