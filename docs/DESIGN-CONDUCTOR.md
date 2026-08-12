@@ -64,8 +64,8 @@ Terrarium provider isolation and Git shadow-worktree isolation are separate mech
 ## Provider Selection
 
 Conductor `RunSprout` resolves the Terrarium provider in this order:
-1. Explicit `TENDRIL_TERRARIUM_PROVIDER`.
-2. Explicit provider from resolved Substrate configuration.
+1. Explicit provider from the resolved Substrate configuration, when present.
+2. Otherwise explicit `TENDRIL_TERRARIUM_PROVIDER`.
 3. Otherwise `gvisor` when `runsc` readiness succeeds.
 4. Otherwise `docker`.
 

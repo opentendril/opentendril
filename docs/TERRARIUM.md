@@ -58,10 +58,10 @@ The `NewProvider` factory wraps all providers with capability validation. A requ
 The low-level factory default for the Terrarium package is Docker when the provider name is empty.
 
 However, the Conductor `RunSprout` execution path resolves the provider using this precedence:
-1. An explicit `TENDRIL_TERRARIUM_PROVIDER` environment variable.
-2. An explicit provider from the resolved Substrate configuration.
-3. Otherwise, `gvisor`, if `runsc` readiness succeeds.
-4. Otherwise, `docker`.
+1. Explicit provider from the resolved Substrate configuration, when present.
+2. Otherwise explicit `TENDRIL_TERRARIUM_PROVIDER`.
+3. Otherwise `gvisor` when `runsc` readiness succeeds.
+4. Otherwise `docker`.
 
 An explicit provider selection is strictly honored and never automatically upgraded.
 
@@ -103,9 +103,9 @@ This command performs the following steps:
 - The `firecracker` binary in `PATH`
 - `/dev/kvm` access
 
-Once bootstrapped, configure the environment variables:
+Once bootstrapped, configure the environment variables using the exact `TENDRIL_FC_KERNEL_PATH` and `TENDRIL_FC_ROOTFS_PATH` values printed by `tendril terrarium init-firecracker`. Those paths point under `<bootstrap-working-directory>/.tendril/terrarium/`:
 ```bash
 export TENDRIL_TERRARIUM_PROVIDER=firecracker
-export TENDRIL_FC_KERNEL_PATH=~/.tendril/terrarium/vmlinux.bin
-export TENDRIL_FC_ROOTFS_PATH=~/.tendril/terrarium/rootfs.ext4
+export TENDRIL_FC_KERNEL_PATH=<exact-path-printed-by-init>
+export TENDRIL_FC_ROOTFS_PATH=<exact-path-printed-by-init>
 ```
