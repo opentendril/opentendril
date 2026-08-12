@@ -270,18 +270,18 @@ tendril chat            # interactive session
 
 # Model Context Protocol over stdio
 
-> [!CAUTION]
-> **Read this before configuring it.** `tendril mcp` starts an **in-process Stem
-> as whoever runs it**, reading its control plane from that caller's working
-> directory. On a host where a governed Stem already runs, this creates a second
-> Stem belonging to your account — governed by a control plane you own and can
-> edit, which is the arrangement the governed installation exists to prevent. It
-> does not connect to the Stem running as another user.
->
-> On a governed installation, use the transport surface with a Pollinator
-> credential, as above.
+`tendril mcp` acts as a governed command surface and stdio bridge. It determines its mode based on the environment and credentials:
 
-For a single-user installation it is the natural editor integration:
+- If a governed other-user Stem is reachable and a durable Pollinator credential is provided, it **forwards** MCP frames to that Stem. Authorization and Pollen derivation happen at the governed Stem; local grants and `TENDRIL_POLLEN` do not govern the forwarded connection.
+- If such a Stem is owned by another principal and no credential is available, it **refuses** to start rather than creating a competing local Stem.
+- If no governed other-user Stem is reachable, or if the reachable Stem belongs to the caller, or if explicitly forced via `TENDRIL_MCP_IN_PROCESS=1`, it starts an **in-process Stem** reading its control plane from the caller's working directory.
+
+Credential lookup for forwarding mode checks:
+1. `TENDRIL_POLLINATOR_CREDENTIAL`
+2. `TENDRIL_MCP_CREDENTIAL`
+3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
+
+For a single-user (in-process) installation, it is the natural editor integration:
 
 ```json
 {
@@ -291,17 +291,13 @@ For a single-user installation it is the natural editor integration:
 }
 ```
 
-Bind one Pollen with `TENDRIL_POLLEN`. Unset, every delegated capability is
-denied.
+For the **in-process MCP path**, bind one Pollen with `TENDRIL_POLLEN`. Unset, every delegated capability is denied.
 
 ---
 
 ## Where to go next
 
-Every capability is reachable from the command line, the transport surface and
-the Model Context Protocol surface alike — they project the same set, and a test
-enforces that they stay identical. So `tendril phytomer create|list|get|history`
-manages sessions from a terminal exactly as the transport routes do.
+Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
 
 - **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
 - **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge

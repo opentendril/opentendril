@@ -1,7 +1,11 @@
 # Copy to .envrc, then run: direnv allow
 #
-# The Stem needs GITHUB_TOKEN in its process environment so terrariums can
-# push over HTTPS — gh's keyring alone does not expose the token to child
-# processes. This sources it from `gh auth token` when not already set.
+# substrate Git authentication is resolved by the Stem
+# Git push is normally Stem-side
+# normal sealed Sprouts do not need or receive the token
+# a substrate may explicitly expose its resolved token to Sprout tooling with
+# exposeToken: true
+#
+# This exports GITHUB_TOKEN from `gh auth token` as a local development convenience.
 export GITHUB_TOKEN="${GITHUB_TOKEN:-$(gh auth token 2>/dev/null)}"
 [ -f .env ] && dotenv .env

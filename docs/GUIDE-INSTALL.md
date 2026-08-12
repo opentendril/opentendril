@@ -103,15 +103,14 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 ```
    your account                              the Stem (tendril)
    ~/…/opentendril                           ~/.tendril/substrates/opentendril
-   you edit here                             the Stem clones and edits here
+   you edit here                             the Stem works in managed clone
              │                                          │
-             │  push / fetch                            │  branch + pull request
+             │  push / fetch                            │  publish (push or API commit)
              └──────────────►  remote  ◄────────────────┘
                         source of truth
 ```
 
-* **The Stem makes a change** → it commits in its own clone and opens a pull
-  request. You fetch to review.
+* **The Stem makes a change** → it works in its managed clone/workspace. Commits, pushes, and PR creation are distinct operations. `git.commit` in local mode requires a subsequent `git.push` to publish, while API commit mode publishes directly. `git.pr` opens a pull request separately. Final merge is Botanist-controlled.
 * **You make a change** → you push. The Stem picks it up on its next run: a
   managed checkout is fetched and hard-reset to the target branch before every
   run.
