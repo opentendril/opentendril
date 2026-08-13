@@ -222,9 +222,6 @@ func (d *anthropicStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 			if event.Message.Usage.InputTokens != nil {
 				d.cumulativeUsage.PromptTokens = event.Message.Usage.InputTokens
 			}
-			if event.Message.Usage.OutputTokens != nil {
-				d.cumulativeUsage.CompletionTokens = event.Message.Usage.OutputTokens
-			}
 			return StreamDelta{}, true
 		}
 	case "message_delta":

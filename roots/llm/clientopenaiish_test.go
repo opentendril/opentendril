@@ -683,6 +683,12 @@ func TestCallStreamOpenRouterUsage(t *testing.T) {
 	if res.Usage.CostAmount == nil || *res.Usage.CostAmount != "0.000015000000002" {
 		t.Errorf("CostAmount = %v, want '0.000015000000002'", res.Usage.CostAmount)
 	}
+	if res.Usage.CostUnit == nil || *res.Usage.CostUnit != "credits" {
+		t.Errorf("CostUnit = %v, want credits", res.Usage.CostUnit)
+	}
+	if res.Usage.CostProvenance == nil || *res.Usage.CostProvenance != "openrouter" {
+		t.Errorf("CostProvenance = %v, want openrouter", res.Usage.CostProvenance)
+	}
 }
 
 func TestAbsentUsageFieldsRemainNil(t *testing.T) {

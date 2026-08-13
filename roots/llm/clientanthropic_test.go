@@ -931,3 +931,32 @@ func TestCallStreamAnthropicTruncationDiscardsUsage(t *testing.T) {
 		t.Errorf("Expected nil usage due to stream truncation, got %v", res.Usage)
 	}
 }
+
+func TestCallStreamAnthropicUsageNoDeltaLeavesCompletionNil(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":15,"output_tokens":1}}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+			`{"type":"message_stop"}`,
+		}
+		for _, ev := range events {
+			fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	if err != nil {
+		t.Fatalf("doCall failed: %v", err)
+	}
+
+	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 15 {
+		t.Errorf("PromptTokens = %v, want 15", res.Usage.PromptTokens)
+	}
+	if res.Usage.CompletionTokens != nil {
+		t.Errorf("Expected CompletionTokens to be nil, got %v (must not use message_start.usage.output_tokens)", *res.Usage.CompletionTokens)
+	}
+}
