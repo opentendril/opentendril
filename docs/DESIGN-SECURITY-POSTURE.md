@@ -90,7 +90,7 @@ delegation grant's `egress` allow-list onto the existing isolation seams:
   the Stem's own call sites populate it, after the delegation authorizer has
   matched a grant, so no transport caller can widen its own egress.
 
-This keeps the sealed-Sprout invariant intact for the new operation-class: a
+This keeps the sealed-Sprout invariant intact for the `stoma.pass` operation: a
 Sprout "cannot reach out on its own; external calls are Stem-mediated."
 
 ## Data-at-rest encryption
@@ -251,12 +251,7 @@ and there the caller *is* the Botanist. There is no boundary to cross, and the
 declaration buys real value — every delegated operation is authorised against the
 grants, audited to `history.db`, and run in that Pollinator's own workspace.
 
-**The consequence worth carrying forward:** adding identity checks to the
-declared paths would defend a boundary that does not exist on the installation
-where those paths run, while adding a mode and a refusal path to the
-installation that works today. The enforcement belongs at the operating system,
-which is where P1 through P5 put it. `tendril hardiness` reports whether that
-enforcement is real on a given host, in those words.
+Identity checks are not enforced on the declared paths. The enforcement belongs at the operating system level. `tendril hardiness` reports whether that OS enforcement is correctly configured on a given host.
 
 ### A single principal is the assumption, not an accident
 
@@ -279,8 +274,7 @@ by simply declining to involve the Stem being measured.
 
 ### MCP
 
-MCP has no networked ingress. Scoped access tokens are a **REST** surface;
-networked MCP is a deferred consumer of the same gate.
+MCP has no networked ingress. Scoped access tokens are a **REST** surface.
 
 The stdio surface (`tendril mcp`) selects its control plane at startup, because
 **personal-stdio is only sound where one principal owns the host.** Where a Stem
@@ -310,5 +304,4 @@ credential derives the Pollen and the variable has no effect.
   flags and their regression tests.
 - `cmd/stem/parity_test.go` — CLI/REST/MCP capability parity enforcement.
 - `docs/GREENHOUSE.md` — Greenhouse deployment and auth contract.
-- `docs/DESIGN-MESH.md` — mesh token model; the one place delegated,
-  short-lived tokens already exist today.
+- `docs/DESIGN-MESH.md` — mesh token model for delegated, short-lived tokens.
