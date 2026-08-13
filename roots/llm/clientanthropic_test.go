@@ -881,6 +881,7 @@ func TestCallStreamAnthropicUsageReplacesAndDoesNotSum(t *testing.T) {
 			`{"type":"message_delta","usage":{"output_tokens":3}}`,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}`,
 			`{"type":"message_delta","usage":{"output_tokens":5}}`,
+			`{"type":"message_stop"}`,
 		}
 		for _, ev := range events {
 			fmt.Fprintf(w, "data: %s\n\n", ev)
@@ -900,5 +901,33 @@ func TestCallStreamAnthropicUsageReplacesAndDoesNotSum(t *testing.T) {
 	}
 	if res.Usage.CompletionTokens == nil || *res.Usage.CompletionTokens != 5 {
 		t.Errorf("CompletionTokens = %v, want 5, cumulative replace semantics means it must not sum", res.Usage.CompletionTokens)
+	}
+}
+
+func TestCallStreamAnthropicTruncationDiscardsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":15,"output_tokens":1}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}`,
+			`{"type":"message_delta","usage":{"output_tokens":3}}`,
+			// the stream truncates here before message_stop
+		}
+		for _, ev := range events {
+			fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	if err != nil {
+		t.Fatalf("doCall failed: %v", err)
+	}
+
+	if res.Usage.PromptTokens != nil || res.Usage.CompletionTokens != nil {
+		t.Errorf("Expected nil usage due to stream truncation, got %v", res.Usage)
 	}
 }

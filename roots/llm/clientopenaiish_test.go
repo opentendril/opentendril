@@ -643,8 +643,8 @@ func TestParseResponseOpenRouterUsage(t *testing.T) {
 	if res.Usage.CostAmount == nil || *res.Usage.CostAmount != "0.0000052349000001" {
 		t.Errorf("CostAmount = %v, want exact decimal preservation '0.0000052349000001'", res.Usage.CostAmount)
 	}
-	if res.Usage.CostUnit == nil || *res.Usage.CostUnit != "USD" {
-		t.Errorf("CostUnit = %v, want USD", res.Usage.CostUnit)
+	if res.Usage.CostUnit == nil || *res.Usage.CostUnit != "credits" {
+		t.Errorf("CostUnit = %v, want credits", res.Usage.CostUnit)
 	}
 	if res.Usage.CostProvenance == nil || *res.Usage.CostProvenance != "openrouter" {
 		t.Errorf("CostProvenance = %v, want openrouter", res.Usage.CostProvenance)
@@ -697,5 +697,23 @@ func TestAbsentUsageFieldsRemainNil(t *testing.T) {
 	}
 	if res.Usage.PromptTokens != nil || res.Usage.CostAmount != nil {
 		t.Errorf("Expected nil usage fields, got %v", res.Usage)
+	}
+}
+
+func TestUnknownProviderIgnoresCost(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "some-unknown-provider"}
+	body := []byte(`{
+		"choices": [{"message": {"content": "Hello"}}],
+		"usage": {
+			"cost": 0.0001
+		}
+	}`)
+	res, err := adapter.ParseResponse(spec, body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Usage.CostAmount != nil {
+		t.Errorf("CostAmount = %v, want nil for unknown provider", res.Usage.CostAmount)
 	}
 }

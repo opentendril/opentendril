@@ -176,8 +176,9 @@ func (anthropicAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 }
 
 type anthropicStreamDecoder struct {
-	spec         ProviderSpec
-	accumulators map[int]*ToolCall
+	spec            ProviderSpec
+	accumulators    map[int]*ToolCall
+	cumulativeUsage Usage
 }
 
 func (anthropicAdapter) NewStreamDecoder(spec ProviderSpec) streamDecoder {
@@ -218,17 +219,21 @@ func (d *anthropicStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 	switch event.Type {
 	case "message_start":
 		if event.Message != nil && event.Message.Usage != nil {
-			var u Usage
-			u.PromptTokens = event.Message.Usage.InputTokens
-			u.CompletionTokens = event.Message.Usage.OutputTokens
-			return StreamDelta{Usage: u}, true
+			if event.Message.Usage.InputTokens != nil {
+				d.cumulativeUsage.PromptTokens = event.Message.Usage.InputTokens
+			}
+			if event.Message.Usage.OutputTokens != nil {
+				d.cumulativeUsage.CompletionTokens = event.Message.Usage.OutputTokens
+			}
+			return StreamDelta{}, true
 		}
 	case "message_delta":
-		if event.Usage != nil {
-			var u Usage
-			u.CompletionTokens = event.Usage.OutputTokens
-			return StreamDelta{Usage: u}, true
+		if event.Usage != nil && event.Usage.OutputTokens != nil {
+			d.cumulativeUsage.CompletionTokens = event.Usage.OutputTokens
+			return StreamDelta{}, true
 		}
+	case "message_stop":
+		return StreamDelta{Usage: d.cumulativeUsage}, true
 	case "content_block_delta":
 		if event.Delta.Type == "text_delta" {
 			return StreamDelta{Text: event.Delta.Text}, true
@@ -406,11 +411,11 @@ func (d *openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 			delta.Usage.CompletionTokens = chunk.Usage.CompletionTokens
 			delta.Usage.TotalTokens = chunk.Usage.TotalTokens
 			if chunk.Usage.Cost != nil && *chunk.Usage.Cost != "" {
-				costStr := string(*chunk.Usage.Cost)
-				delta.Usage.CostAmount = &costStr
 				if d.spec.Provider == "openrouter" {
+					costStr := string(*chunk.Usage.Cost)
+					delta.Usage.CostAmount = &costStr
 					prov := "openrouter"
-					unit := "USD"
+					unit := "credits"
 					delta.Usage.CostProvenance = &prov
 					delta.Usage.CostUnit = &unit
 				}
@@ -512,11 +517,11 @@ func (openAIishAdapter) ParseResponse(spec ProviderSpec, body []byte) (Result, e
 		usage.CompletionTokens = decoded.Usage.CompletionTokens
 		usage.TotalTokens = decoded.Usage.TotalTokens
 		if decoded.Usage.Cost != nil && *decoded.Usage.Cost != "" {
-			costStr := string(*decoded.Usage.Cost)
-			usage.CostAmount = &costStr
 			if spec.Provider == "openrouter" {
+				costStr := string(*decoded.Usage.Cost)
+				usage.CostAmount = &costStr
 				prov := "openrouter"
-				unit := "USD"
+				unit := "credits"
 				usage.CostProvenance = &prov
 				usage.CostUnit = &unit
 			}
