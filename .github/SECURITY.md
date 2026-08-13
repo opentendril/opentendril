@@ -45,7 +45,6 @@ OpenTendril is designed under a Zero-Trust architecture. We assume that the code
 
 ## 5. Genotype & Substrate Trust Boundaries
 
-> 📐 **Visual reference:** See [docs/ARCHITECTURE-TAXONOMY.md](../docs/ARCHITECTURE-TAXONOMY.md) for diagrams of the full security trust model.
 
 OpenTendril's host execution capability introduces a specific threat: an autonomous Sprout operating inside a workspace Terrarium could potentially modify `.tendril/substrates.yaml` to inject `provider: host`, causing its next Sequence run to execute arbitrary commands directly on the host machine — completely bypassing Docker isolation.
 
