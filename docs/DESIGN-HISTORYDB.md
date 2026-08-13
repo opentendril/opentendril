@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`cmd/stem/internal/historydb` is the Go Stem's durable state backbone. It persists the unified organism state to a lightweight local SQLite database at `.tendril/history.db` using the CGO-free `modernc.org/sqlite` driver, so the `tendril` binary stays purely portable. Everything the future UI must survive a browser refresh lives here: Tendril sessions and their preferences, unified chat logs, all EventBus telemetry, Sprout execution histories, and bounded `seed.grow` runs.
+`cmd/stem/internal/historydb` is the Go Stem's durable state backbone. It persists the unified organism state to a lightweight local SQLite database at `.tendril/history.db` using the CGO-free `modernc.org/sqlite` driver, so the `tendril` binary stays purely portable. Everything the Greenhouse must survive a browser refresh lives here: Tendril sessions and their preferences, unified chat logs, all EventBus telemetry, Sprout execution histories, and bounded `seed.grow` runs.
 
 The whole package is a single file (`historydb.go`). It plays two roles at once through Go's dependency-inversion: it **implements** `session.Store` (the port that `session` defines) so the `SessionManager` can persist without importing SQLite, and it **implements** `eventbus.Sink` so every published event lands in the database on the bus's own goroutine. Setting `TENDRIL_DB_LOGGING=false` bypasses SQLite entirely for high-performance headless runs.
 
@@ -85,7 +85,7 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 
 ## Design & rationale
 
-**Why SQLite, embedded and CGO-free.** The Stem ships as a single portable binary; the `modernc.org/sqlite` pure-Go driver keeps it that way while still giving durable, queryable, transactional local state. A single file under `.tendril/` is trivial to locate, back up, or delete, and it means the future UI never loses state on a browser refresh. WAL journaling with `synchronous = NORMAL` trades a sliver of crash durability for throughput appropriate to a local developer tool, and the single-connection pool sidesteps the multi-writer contention SQLite handles poorly.
+**Why SQLite, embedded and CGO-free.** The Stem ships as a single portable binary; the `modernc.org/sqlite` pure-Go driver keeps it that way while still giving durable, queryable, transactional local state. A single file under `.tendril/` is trivial to locate, back up, or delete, and it means the Greenhouse never loses state on a browser refresh. WAL journaling with `synchronous = NORMAL` trades a sliver of crash durability for throughput appropriate to a local developer tool, and the single-connection pool sidesteps the multi-writer contention SQLite handles poorly.
 
 **Why the `session.Store` inversion.** Persistence is a policy the `session` package should not know about. `session` declares the `Store` port and works against it; `historydb` is one adapter that satisfies it. The payoff is concrete: `NewManager(ctx, nil)` yields a fully functional in-memory manager for headless and test runs, and swapping SQLite for another backend touches no `session` code. The same inversion is what lets `TENDRIL_DB_LOGGING=false` collapse cleanly to a nil store rather than threading a "disabled" flag through the manager.
 

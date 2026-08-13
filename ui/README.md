@@ -1,7 +1,7 @@
 # OpenTendril Greenhouse (`ui/`)
 
-The **Greenhouse** (the Command Center UI) is the visual operator UI for the
-Tendril OS — a single, desktop-grade dashboard an operator leaves open all day
+The **Greenhouse** (the Command Center UI) is the visual operator UI for
+OpenTendril — a single, desktop-grade dashboard an operator leaves open all day
 to watch every Tendril the Go Stem is growing. It replaces the fragmented "one
 CLI terminal per run" workflow with one living view where live orchestration
 activity is legible at a glance and nothing is lost on refresh.

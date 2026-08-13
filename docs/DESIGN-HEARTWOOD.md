@@ -18,7 +18,7 @@
 
 - Choose which columns to encrypt (callers decide).
 - Enforce per-row AAD (caller supplies AAD).
-- Rotate keys (deferred).
+- Rotate keys.
 - Touch remote backends.
 - Own any database schema.
 
@@ -50,7 +50,7 @@
 ## Limitations
 
 - Tier-1 co-located auto-key is defense-in-depth, not a boundary. The auto-generated `.tendril/rhizome.key` sits beside the ciphertext with the same access control, so it does not defend a wholesale read of `.tendril/` (disk image, full backup, folder sync). It defends casual reads, other-user file perms, and partial copies that exclude the key. Only the operator-supplied `OPEN_TENDRIL_INDEX_KEY` (Tier-2, never written to disk) is a real at-rest control.
-- No key rotation (deferred); the versioned keyID prefix leaves the door open without a schema migration.
+- No key rotation; the versioned keyID prefix leaves the door open without a schema migration.
 - Backward read-compat depends on the `:` in `Prefix` never occurring in a base64 value (true for `base64.RawStdEncoding`).
 - Column selection and which columns stay plaintext-for-indexing are the caller's decision, not enforced here.
 

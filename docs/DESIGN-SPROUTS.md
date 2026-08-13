@@ -4,7 +4,7 @@ The polyglot stateless tool-execution container fleet the Stem drives over a std
 
 ## Purpose
 
-This component provides the execution terrariums for OpenTendril's tools. It splits the architecture by moving the LLM ReAct loop entirely to the host (the Stem) while the sprouts act as purely stateless, "dumb" tool executors. The fleet is divided into two distinct categories: protocol executors that speak the JSON tool protocol to run tasks (located in `sprouts/`), and toolchain/command images that start idle and allow the Conductor to exec deterministic build/test commands directly (located in `toolchains/`).
+This component provides the execution bodies for OpenTendril's tools. It splits the architecture by moving the LLM ReAct loop entirely to the host (the Stem) while the sprouts act as purely stateless, "dumb" tool executors. The fleet is divided into two distinct categories: protocol executors that speak the JSON tool protocol to run tasks (located in `sprouts/`), and toolchain/command images that start idle and allow the Conductor to exec deterministic build/test commands directly (located in `toolchains/`).
 
 ## Responsibilities
 

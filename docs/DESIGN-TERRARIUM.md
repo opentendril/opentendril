@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`cmd/stem/internal/terrarium` abstracts isolated execution environments (Docker, Firecracker, gVisor, host) to safely run untrusted Sprout code and restrict network egress.
+`cmd/stem/internal/terrarium` abstracts isolated execution environments (Docker, Firecracker, gVisor) and the explicit Host isolation escape to safely run untrusted Sprout code and restrict network egress.
 
 ## Responsibilities
 

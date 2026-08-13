@@ -1,8 +1,8 @@
-# Component: Session — unified session manager for Tendril OS (Phytomer lifecycle).
+# Component: Session — unified session manager for OpenTendril (Phytomer lifecycle).
 
 ## Purpose
 
-`cmd/stem/internal/session/` implements the unified session manager for Tendril OS. A Phytomer is the canonical name for one logical interaction thread — what the external surfaces present as a "session" — bound to a unique session ID. Every interface surface (CLI chat, MCP server, REST endpoints, WebSocket gateway) resolves its traffic through this single Manager, allowing concurrent conversations to coexist and maintain their own preferences.
+`cmd/stem/internal/session/` implements the unified session manager for OpenTendril. A Phytomer is the canonical name for one logical interaction thread — what the external surfaces present as a "session" — bound to a unique session ID. Every interface surface (CLI chat, MCP server, REST endpoints, WebSocket gateway) resolves its traffic through this single Manager, allowing concurrent conversations to coexist and maintain their own preferences.
 
 ## Responsibilities
 
