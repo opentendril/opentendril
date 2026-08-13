@@ -109,7 +109,6 @@ exclude_paths=(
   ':!GLOSSARY.md'
   ':!SYNTHETIC-TAXONOMY.md'
   ':!**/taxonomy-canonical.md'
-  ':!INTENT-TRANSLATION.md'
   ':!HISTORY.md'
   ':!.mailmap'
   ':!scripts/check-taxonomy.sh'

@@ -4,7 +4,6 @@ OpenTendril primarily uses **Docker** (or gVisor/Firecracker) to run "Sprouts" i
 
 For this, OpenTendril provides the `host` Terrarium provider.
 
-> 📐 **Architecture diagrams:** See [ARCHITECTURE-TAXONOMY.md](./ARCHITECTURE-TAXONOMY.md) for full visual diagrams of the Terrarium Provider hierarchy and security trust boundaries.
 
 ## Security Posture: Default Deny
 
