@@ -138,12 +138,27 @@ type ToolCallFunction struct {
 	Arguments string `json:"arguments"`
 }
 
+// Usage carries provider-native token and cost metrics for one request.
+// Fields are pointers to explicitly preserve honest absence; zero is a valid
+// measured value but nil means the provider did not supply it.
+// CostAmount uses a lossless decimal string representation.
+type Usage struct {
+	PromptTokens     *int
+	CompletionTokens *int
+	TotalTokens      *int
+
+	CostAmount     *string
+	CostUnit       *string
+	CostProvenance *string
+}
+
 // Result is one parsed non-streaming response. ToolCalls is always empty until
 // an adapter learns to parse them; a caller reading it today gets nothing, not
 // a mistake.
 type Result struct {
 	Text      string
 	ToolCalls []ToolCall
+	Usage     Usage
 }
 
 // StreamDelta is one parsed fragment of a streamed response. Exactly one of its
@@ -154,6 +169,7 @@ type StreamDelta struct {
 	Text             string
 	ToolCallFragment string
 	ToolCalls        []ToolCall
+	Usage            Usage
 }
 
 type Client struct {
@@ -1180,7 +1196,8 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		scanner := bufio.NewScanner(resp.Body)
 		var fullContent strings.Builder
 		var toolCalls []ToolCall
-		decoder := c.adapter.NewStreamDecoder()
+		var accumulatedUsage Usage
+		decoder := c.adapter.NewStreamDecoder(c.spec)
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -1208,15 +1225,30 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 				if len(delta.ToolCalls) > 0 {
 					toolCalls = append(toolCalls, delta.ToolCalls...)
 				}
+
+				if delta.Usage.PromptTokens != nil {
+					accumulatedUsage.PromptTokens = delta.Usage.PromptTokens
+				}
+				if delta.Usage.CompletionTokens != nil {
+					accumulatedUsage.CompletionTokens = delta.Usage.CompletionTokens
+				}
+				if delta.Usage.TotalTokens != nil {
+					accumulatedUsage.TotalTokens = delta.Usage.TotalTokens
+				}
+				if delta.Usage.CostAmount != nil {
+					accumulatedUsage.CostAmount = delta.Usage.CostAmount
+					accumulatedUsage.CostUnit = delta.Usage.CostUnit
+					accumulatedUsage.CostProvenance = delta.Usage.CostProvenance
+				}
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			return Result{Text: fullContent.String(), ToolCalls: toolCalls}, fmt.Errorf("error reading stream: %w", err)
+			return Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}, fmt.Errorf("error reading stream: %w", err)
 		}
 		if err := decoder.Finalize(); err != nil {
-			return Result{Text: fullContent.String(), ToolCalls: toolCalls}, err
+			return Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}, err
 		}
-		return Result{Text: fullContent.String(), ToolCalls: toolCalls}, nil
+		return Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}, nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -1224,7 +1256,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		return Result{}, fmt.Errorf("read llm response: %w", err)
 	}
 
-	res, err := c.adapter.ParseResponse(body)
+	res, err := c.adapter.ParseResponse(c.spec, body)
 	if err != nil {
 		return Result{}, err
 	}

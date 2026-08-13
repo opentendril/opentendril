@@ -124,7 +124,7 @@ func TestParseResponseReturnsAnthropicToolCalls(t *testing.T) {
 		]
 	}`)
 
-	res, err := adapter.ParseResponse(body)
+	res, err := adapter.ParseResponse(ProviderSpec{}, body)
 	if err != nil {
 		t.Fatalf("ParseResponse failed: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestParseResponseKeepsEveryAnthropicTextBlock(t *testing.T) {
 		{"type":"tool_use","id":"t1","name":"readFile","input":{"path":"x"}},
 		{"type":"text","text":"after the call"}]}`)
 
-	res, err := anthropicAdapter{}.ParseResponse(body)
+	res, err := anthropicAdapter{}.ParseResponse(ProviderSpec{}, body)
 	if err != nil {
 		t.Fatalf("ParseResponse failed: %v", err)
 	}
@@ -843,5 +843,62 @@ func TestAnthropicNoBetaHeader(t *testing.T) {
 	anthropicAdapter{}.SetChatHeaders(req, ProviderSpec{APIKey: "test-key"})
 	if got := req.Header.Get("Anthropic-Beta"); got != "" {
 		t.Fatalf("Anthropic-Beta header = %q, want absent (header is dead; prompt caching is GA)", got)
+	}
+}
+
+func TestParseResponseAnthropicUsage(t *testing.T) {
+	adapter := anthropicAdapter{}
+	spec := ProviderSpec{Provider: "anthropic"}
+	body := []byte(`{
+		"content": [{"type": "text", "text": "Hi"}],
+		"usage": {
+			"input_tokens": 10,
+			"output_tokens": 5
+		}
+	}`)
+	res, err := adapter.ParseResponse(spec, body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 10 {
+		t.Errorf("PromptTokens = %v, want 10", res.Usage.PromptTokens)
+	}
+	if res.Usage.CompletionTokens == nil || *res.Usage.CompletionTokens != 5 {
+		t.Errorf("CompletionTokens = %v, want 5", res.Usage.CompletionTokens)
+	}
+	if res.Usage.TotalTokens != nil {
+		t.Errorf("TotalTokens = %v, want nil", res.Usage.TotalTokens)
+	}
+}
+
+func TestCallStreamAnthropicUsageReplacesAndDoesNotSum(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"type":"message_start","message":{"usage":{"input_tokens":15,"output_tokens":1}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}`,
+			`{"type":"message_delta","usage":{"output_tokens":3}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}`,
+			`{"type":"message_delta","usage":{"output_tokens":5}}`,
+		}
+		for _, ev := range events {
+			fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	if err != nil {
+		t.Fatalf("doCall failed: %v", err)
+	}
+
+	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 15 {
+		t.Errorf("PromptTokens = %v, want 15", res.Usage.PromptTokens)
+	}
+	if res.Usage.CompletionTokens == nil || *res.Usage.CompletionTokens != 5 {
+		t.Errorf("CompletionTokens = %v, want 5, cumulative replace semantics means it must not sum", res.Usage.CompletionTokens)
 	}
 }

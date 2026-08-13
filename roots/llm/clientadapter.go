@@ -35,11 +35,11 @@ type providerAdapter interface {
 	// NewStreamDecoder returns a stateful decoder for an SSE stream. A decoder
 	// processes each line's JSON payload (already stripped of the "data: " prefix)
 	// and reassembles fragments that span several lines.
-	NewStreamDecoder() streamDecoder
+	NewStreamDecoder(spec ProviderSpec) streamDecoder
 
 	// ParseResponse extracts the completion — text, tool calls, or both — from
 	// a non-streaming response body.
-	ParseResponse(body []byte) (Result, error)
+	ParseResponse(spec ProviderSpec, body []byte) (Result, error)
 }
 
 type streamDecoder interface {
@@ -176,11 +176,13 @@ func (anthropicAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 }
 
 type anthropicStreamDecoder struct {
+	spec         ProviderSpec
 	accumulators map[int]*ToolCall
 }
 
-func (anthropicAdapter) NewStreamDecoder() streamDecoder {
+func (anthropicAdapter) NewStreamDecoder(spec ProviderSpec) streamDecoder {
 	return &anthropicStreamDecoder{
+		spec:         spec,
 		accumulators: make(map[int]*ToolCall),
 	}
 }
@@ -199,12 +201,34 @@ func (d *anthropicStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 			ID   string `json:"id"`
 			Name string `json:"name"`
 		} `json:"content_block"`
+		Message *struct {
+			Usage *struct {
+				InputTokens  *int `json:"input_tokens"`
+				OutputTokens *int `json:"output_tokens"`
+			} `json:"usage"`
+		} `json:"message"`
+		Usage *struct {
+			OutputTokens *int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(dataStr), &event); err != nil {
 		return StreamDelta{}, false
 	}
 
 	switch event.Type {
+	case "message_start":
+		if event.Message != nil && event.Message.Usage != nil {
+			var u Usage
+			u.PromptTokens = event.Message.Usage.InputTokens
+			u.CompletionTokens = event.Message.Usage.OutputTokens
+			return StreamDelta{Usage: u}, true
+		}
+	case "message_delta":
+		if event.Usage != nil {
+			var u Usage
+			u.CompletionTokens = event.Usage.OutputTokens
+			return StreamDelta{Usage: u}, true
+		}
 	case "content_block_delta":
 		if event.Delta.Type == "text_delta" {
 			return StreamDelta{Text: event.Delta.Text}, true
@@ -243,7 +267,7 @@ func (d *anthropicStreamDecoder) Finalize() error {
 	return nil
 }
 
-func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
+func (anthropicAdapter) ParseResponse(spec ProviderSpec, body []byte) (Result, error) {
 	var decoded struct {
 		Content []struct {
 			Type  string         `json:"type"`
@@ -252,6 +276,10 @@ func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 			Name  string         `json:"name"`
 			Input map[string]any `json:"input"`
 		} `json:"content"`
+		Usage *struct {
+			InputTokens  *int `json:"input_tokens"`
+			OutputTokens *int `json:"output_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return Result{}, fmt.Errorf("decode anthropic response: %w", err)
@@ -267,19 +295,23 @@ func (anthropicAdapter) ParseResponse(body []byte) (Result, error) {
 			// having.
 			texts = append(texts, strings.TrimSpace(block.Text))
 		} else if block.Type == "tool_use" {
-			inputBytes, _ := json.Marshal(block.Input)
+			args, _ := json.Marshal(block.Input)
 			res.ToolCalls = append(res.ToolCalls, ToolCall{
 				ID:   block.ID,
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      block.Name,
-					Arguments: string(inputBytes),
+					Arguments: string(args),
 				},
 			})
 		}
 	}
-
 	res.Text = strings.Join(texts, "\n")
+
+	if decoded.Usage != nil {
+		res.Usage.PromptTokens = decoded.Usage.InputTokens
+		res.Usage.CompletionTokens = decoded.Usage.OutputTokens
+	}
 
 	if res.Text == "" && len(res.ToolCalls) == 0 {
 		return Result{}, fmt.Errorf("anthropic response contained no text or tool calls")
@@ -314,6 +346,9 @@ func (openAIishAdapter) BuildChatRequest(spec ProviderSpec, messages []Message, 
 	if spec.OutputLimit > 0 {
 		payloadBody["max_tokens"] = spec.OutputLimit
 	}
+	if stream && spec.Provider == "openai" {
+		payloadBody["stream_options"] = map[string]any{"include_usage": true}
+	}
 	payload, err := json.Marshal(payloadBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal chat request: %w", err)
@@ -328,11 +363,13 @@ func (openAIishAdapter) SetChatHeaders(req *http.Request, spec ProviderSpec) {
 }
 
 type openAIishStreamDecoder struct {
+	spec         ProviderSpec
 	accumulators map[int]*ToolCall
 }
 
-func (openAIishAdapter) NewStreamDecoder() streamDecoder {
+func (openAIishAdapter) NewStreamDecoder(spec ProviderSpec) streamDecoder {
 	return &openAIishStreamDecoder{
+		spec:         spec,
 		accumulators: make(map[int]*ToolCall),
 	}
 }
@@ -353,12 +390,36 @@ func (d *openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 			} `json:"delta"`
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     *int         `json:"prompt_tokens"`
+			CompletionTokens *int         `json:"completion_tokens"`
+			TotalTokens      *int         `json:"total_tokens"`
+			Cost             *json.Number `json:"cost"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil {
+		var delta StreamDelta
+		hasDelta := false
+
+		if chunk.Usage != nil {
+			delta.Usage.PromptTokens = chunk.Usage.PromptTokens
+			delta.Usage.CompletionTokens = chunk.Usage.CompletionTokens
+			delta.Usage.TotalTokens = chunk.Usage.TotalTokens
+			if chunk.Usage.Cost != nil && *chunk.Usage.Cost != "" {
+				costStr := string(*chunk.Usage.Cost)
+				delta.Usage.CostAmount = &costStr
+				if d.spec.Provider == "openrouter" {
+					prov := "openrouter"
+					unit := "USD"
+					delta.Usage.CostProvenance = &prov
+					delta.Usage.CostUnit = &unit
+				}
+			}
+			hasDelta = true
+		}
+
 		if len(chunk.Choices) > 0 {
 			choice := chunk.Choices[0]
-			var delta StreamDelta
-			hasDelta := false
 
 			if choice.Delta.Content != "" {
 				delta.Text = choice.Delta.Content
@@ -406,10 +467,9 @@ func (d *openAIishStreamDecoder) ParseChunk(dataStr string) (StreamDelta, bool) 
 					}
 				}
 			}
-
-			if hasDelta {
-				return delta, true
-			}
+		}
+		if hasDelta {
+			return delta, true
 		}
 	}
 	return StreamDelta{}, false
@@ -422,11 +482,17 @@ func (d *openAIishStreamDecoder) Finalize() error {
 	return nil
 }
 
-func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {
+func (openAIishAdapter) ParseResponse(spec ProviderSpec, body []byte) (Result, error) {
 	var decoded struct {
 		Choices []struct {
 			Message Message `json:"message"`
 		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     *int         `json:"prompt_tokens"`
+			CompletionTokens *int         `json:"completion_tokens"`
+			TotalTokens      *int         `json:"total_tokens"`
+			Cost             *json.Number `json:"cost"`
+		} `json:"usage"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return Result{}, fmt.Errorf("decode chat response: %w", err)
@@ -439,5 +505,23 @@ func (openAIishAdapter) ParseResponse(body []byte) (Result, error) {
 	if content == "" && len(toolCalls) == 0 {
 		return Result{}, fmt.Errorf("chat response contained no content")
 	}
-	return Result{Text: content, ToolCalls: toolCalls}, nil
+
+	var usage Usage
+	if decoded.Usage != nil {
+		usage.PromptTokens = decoded.Usage.PromptTokens
+		usage.CompletionTokens = decoded.Usage.CompletionTokens
+		usage.TotalTokens = decoded.Usage.TotalTokens
+		if decoded.Usage.Cost != nil && *decoded.Usage.Cost != "" {
+			costStr := string(*decoded.Usage.Cost)
+			usage.CostAmount = &costStr
+			if spec.Provider == "openrouter" {
+				prov := "openrouter"
+				unit := "USD"
+				usage.CostProvenance = &prov
+				usage.CostUnit = &unit
+			}
+		}
+	}
+
+	return Result{Text: content, ToolCalls: toolCalls, Usage: usage}, nil
 }
