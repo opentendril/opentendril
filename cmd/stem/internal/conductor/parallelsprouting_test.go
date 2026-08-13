@@ -33,6 +33,21 @@ func (s *stubBranchingClient) CallPrompt(ctx context.Context, systemPrompt, user
 	return s.response, s.err
 }
 
+func (s *stubBranchingClient) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
+	resp, err := s.Call(ctx, messages)
+	return llm.Result{Text: resp}, err
+}
+
+func (s *stubBranchingClient) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
+	resp, err := s.CallStream(ctx, messages, tokenChan)
+	return llm.Result{Text: resp}, err
+}
+
+func (s *stubBranchingClient) CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error) {
+	resp, err := s.CallPrompt(ctx, systemPrompt, userPrompt)
+	return llm.Result{Text: resp}, err
+}
+
 func stubParallelWorktrees(t *testing.T) {
 	t.Helper()
 

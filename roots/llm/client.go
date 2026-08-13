@@ -321,24 +321,39 @@ func ResolveLocalProviderSpec() ProviderSpec {
 	return resolveTierProviderSpecForProvider("local", TierPremium, "")
 }
 
-func (c *Client) CallPrompt(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
+func (c *Client) CallPromptWithResult(ctx context.Context, systemPrompt string, userPrompt string) (Result, error) {
 	messages := []Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},
 	}
-	return c.Call(ctx, messages)
+	return c.CallWithResult(ctx, messages)
+}
+
+func (c *Client) CallPrompt(ctx context.Context, systemPrompt string, userPrompt string) (string, error) {
+	res, err := c.CallPromptWithResult(ctx, systemPrompt, userPrompt)
+	return res.Text, err
+}
+
+func (c *Client) CallStreamPromptWithResult(ctx context.Context, systemPrompt string, userPrompt string, tokenChan chan<- string) (Result, error) {
+	messages := []Message{
+		{Role: "system", Content: systemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+	return c.CallStreamWithResult(ctx, messages, tokenChan)
 }
 
 func (c *Client) CallStreamPrompt(ctx context.Context, systemPrompt string, userPrompt string, tokenChan chan<- string) (string, error) {
-	messages := []Message{
-		{Role: "system", Content: systemPrompt},
-		{Role: "user", Content: userPrompt},
-	}
-	return c.CallStream(ctx, messages, tokenChan)
+	res, err := c.CallStreamPromptWithResult(ctx, systemPrompt, userPrompt, tokenChan)
+	return res.Text, err
+}
+
+func (c *Client) CallWithResult(ctx context.Context, messages []Message) (Result, error) {
+	return c.CallStreamWithResult(ctx, messages, nil)
 }
 
 func (c *Client) Call(ctx context.Context, messages []Message) (string, error) {
-	return c.CallStream(ctx, messages, nil)
+	res, err := c.CallWithResult(ctx, messages)
+	return res.Text, err
 }
 
 func (c *Client) ListModels(ctx context.Context) ([]string, error) {
@@ -374,9 +389,13 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 	return nil, lastErr
 }
 
+func (c *Client) CallStreamWithResult(ctx context.Context, messages []Message, tokenChan chan<- string) (Result, error) {
+	return c.callInternal(ctx, messages, nil, tokenChan)
+}
+
 func (c *Client) CallStream(ctx context.Context, messages []Message, tokenChan chan<- string) (string, error) {
-	result, err := c.callInternal(ctx, messages, nil, tokenChan)
-	return result.Text, err
+	res, err := c.CallStreamWithResult(ctx, messages, tokenChan)
+	return res.Text, err
 }
 
 func (c *Client) CallWithTools(ctx context.Context, messages []Message, tools []ToolDefinition, tokenChan chan<- string) (Result, error) {

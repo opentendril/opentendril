@@ -605,6 +605,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// likely to be reading a report assembled by an exit that forgot.
 		report.Protocol = sproutResult.Protocol
 
+		// Usage is carried whether the run failed or succeeded, so long as the
+		// actual provider returned measurements before the error.
+		report.Usage = sproutResult.Usage
+
 		// This report is built fresh, not inherited from the caller's — a
 		// detached run reaches here long after RunSprout returned — so the
 		// resolved mind is restated on it. Without this, every detached run
