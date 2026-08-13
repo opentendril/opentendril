@@ -50,10 +50,8 @@
 ## Limitations
 
 - Tier-1 co-located auto-key is defense-in-depth, not a boundary. The auto-generated `.tendril/rhizome.key` sits beside the ciphertext with the same access control, so it does not defend a wholesale read of `.tendril/` (disk image, full backup, folder sync). It defends casual reads, other-user file perms, and partial copies that exclude the key. Only the operator-supplied `OPEN_TENDRIL_INDEX_KEY` (Tier-2, never written to disk) is a real at-rest control.
-- No key rotation; the versioned keyID prefix leaves the door open without a schema migration.
+- There is no key-rotation workflow. Ciphertext carries the format version and key ID in the `tnd:atrest:1:<keyID>:` prefix.
 - Backward read-compat depends on the `:` in `Prefix` never occurring in a base64 value (true for `base64.RawStdEncoding`).
 - Column selection and which columns stay plaintext-for-indexing are the caller's decision, not enforced here.
 
-## Design & rationale
 
-The design leverages column-level AES-GCM instead of SQLCipher to keep the binary portable and preserve the CGO-free guarantee of the Stem. Application-side pre-INSERT encryption also keeps WAL and temp files free of protected-column plaintext. HKDF over the env secret derives keys (replacing raw truncation). Two `LegacyKind` variants are provided because `rhizome`'s pre-existing values are ciphertext while `historydb`'s are plaintext. Finally, AAD binds a ciphertext to its column to prevent cross-column reuse.

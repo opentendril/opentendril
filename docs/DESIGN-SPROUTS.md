@@ -4,7 +4,7 @@ The polyglot stateless tool-execution container fleet the Stem drives over a std
 
 ## Purpose
 
-This component provides the execution bodies for OpenTendril's tools. It splits the architecture by moving the LLM ReAct loop entirely to the host (the Stem) while the sprouts act as purely stateless, "dumb" tool executors. The fleet is divided into two distinct categories: protocol executors that speak the JSON tool protocol to run tasks (located in `sprouts/`), and toolchain/command images that start idle and allow the Conductor to exec deterministic build/test commands directly (located in `toolchains/`).
+This component provides stateless execution bodies for OpenTendril's tools. Protocol Sprouts execute tool calls received over the JSON tool protocol, while toolchain images provide deterministic build/test environments. LLM cognition remains external in the Mycorrhizae; the Stem deterministically orchestrates lifecycle and tool execution and reaches Mycorrhizae through Roots. Sprouts do not run the LLM reasoning loop.
 
 ## Responsibilities
 
@@ -12,6 +12,13 @@ This component provides the execution bodies for OpenTendril's tools. It splits 
 *   **Does:** Read JSON tool calls sequentially from `stdin`.
 *   **Does:** Run local filesystem, git, and shell command tools (e.g., `readFile`, `writeFile`, `gitCommit`, `execCommand`).
 *   **Does:** Return JSON-formatted execution results to `stdout`.
+
+### Executor Images
+*   **Go** serves as the minimal default executor (`opentendril-go`).
+*   **TypeScript/Node** provides a rich ecosystem executor for JavaScript-heavy projects. Two images share the same executor source (`sprouts/typescript/src/main.ts`, built via `sprouts/typescript/tsconfig.json`):
+    *   **`opentendril-typescript`** (`sprouts/typescript/Dockerfile`) runs on a fixed `node:22-alpine` base with a direct `ENTRYPOINT ["node", ...]`.
+    *   **`opentendril-node`** (`sprouts/node/Dockerfile`) runs on `debian:bookworm-slim` with `nvm` installed. Its `entrypoint.sh` detects a `.nvmrc` or `.node-version` file in the target project and dynamically installs/switches to that project's required Node version via `nvm install`/`nvm use` before executing.
+*   **Python** serves Python substrates (`opentendril-python`).
 
 ### Toolchain Images (`toolchains/go-verifier/Dockerfile`, `toolchains/go-fuzz/Dockerfile`)
 *   **Does:** Provide a complete language toolchain (e.g., the Go compiler) available at container runtime.
@@ -56,15 +63,6 @@ The `sprouts/go/main.go` executor implements a base set of tools: `readFile`, `w
 
 ## Limitations
 
-*   The tool sets are static and implemented independently per language (three source implementations today — Go, Python, and the shared TypeScript/Node source), and they already diverge: `sprouts/python/src/main.py` exposes `runPytest` and `runPip` tools that `sprouts/go/main.go` and `sprouts/typescript/src/main.ts` do not. While `listAvailableTools` allows dynamic discovery, this divergence is intentional where a tool is genuinely language-specific (Python sprouts run Python test/dependency tooling that a Go or TypeScript sprout has no use for) — the risk is drift in the *shared* tools' argument/response semantics across languages, not in tool-set membership itself. Each executor now has its own unit test suite (`sprouts/go/main_test.go`, `sprouts/python/src/testmain.py`, `sprouts/typescript/test/main.test.ts`) covering its own tools in isolation — a per-language contract-parity harness across all three was deliberately rejected in favor of this, since forcing identical tool sets/wire behavior would fight the divergence described above.
+*   The tool sets are static and implemented independently per language (three source implementations today — Go, Python, and the shared TypeScript/Node source), and they diverge: `sprouts/python/src/main.py` exposes `runPytest` and `runPip` tools that `sprouts/go/main.go` and `sprouts/typescript/src/main.ts` do not. While `listAvailableTools` allows dynamic discovery, this divergence is intentional where a tool is genuinely language-specific (Python sprouts run Python test/dependency tooling that a Go or TypeScript sprout has no use for). Each executor has its own unit test suite (`sprouts/go/main_test.go`, `sprouts/python/src/testmain.py`, `sprouts/typescript/test/main.test.ts`) covering its own tools in isolation.
 
-## Design & rationale
 
-This architecture migrates the reasoning loop to the host, ensuring that the containerized execution environments (sprouts) are stateless, fast to start, and easily replaceable. 
-*   **Go** serves as the tiny, default executor to hit a minimal runtime budget.
-*   **TypeScript/Node** provides a rich ecosystem executor for JavaScript-heavy projects. Two images share the same executor source (`sprouts/typescript/src/main.ts`, built via `sprouts/typescript/tsconfig.json`):
-    *   **`opentendril-typescript`** (`sprouts/typescript/Dockerfile`) runs on a fixed `node:22-alpine` base with a direct `ENTRYPOINT ["node", ...]` — suitable for projects that need no special Node version.
-    *   **`opentendril-node`** (`sprouts/node/Dockerfile`) runs on `debian:bookworm-slim` with `nvm` installed, pinning a stable executor Node version (22.15.0) for running `main.js`, but its `entrypoint.sh` detects a `.nvmrc` or `.node-version` file in the target project and dynamically installs/switches to that project's required Node version via `nvm install`/`nvm use` before executing — this is the nvm-based variant that honors per-project Node version pins. Both images build from the same shared source to prevent silent drift. Sprout images are built from inputs embedded in the Stem binary, not from a source checkout discovered at runtime, ensuring provenance. Neither Dockerfile reads a checked-in `dist/`; both always run `npm run build` fresh from `src/` during the image build — `sprouts/typescript/dist/` is `.gitignore`d and exists only as a local, uncommitted build output for `npm start` during development (`npm run build` once, first).
-*   **Python** serves Python substrates.
-*   The universal camelCase JSON protocol ensures that any language can be integrated as an executor easily without shared libraries.
-*   The `go-verifier` and `go-fuzz` images keep the full Go toolchain because they are used for deterministic post-generation checks (SequenceStep.Command) and require `go test` and `go build` at runtime, whereas the LLM-driven worker/verifier/debugger roles use the minimal `opentendril-go` image.
