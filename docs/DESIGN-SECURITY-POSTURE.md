@@ -33,13 +33,13 @@ through it.
 
 ### 3. Worker (Terrarium Sprouts) — zero authority
 
-Ephemeral Docker containers that execute a single Sprout run and then die. They
+Ephemeral Terrariums (backed by Docker, gVisor, Firecracker, or Host) that execute a single Sprout run and then die. They
 hold no credentials at all — LLM calls and mesh operations happen on the Stem,
 never inside a Terrarium. No GitHub token is injected by default, upholding the
 zero-authority guarantee; a substrate must explicitly opt in with `exposeToken: true`
 to expose its own resolved token to in-container tooling (see
 [Conductor fail-closed](#conductor-fail-closed--identity--isolation) below).
-Isolation is enforced at the container level
+For the Docker provider, isolation is enforced at the container level
 (`cmd/stem/internal/terrarium/docker.go`):
 
 ```
@@ -114,15 +114,13 @@ OpenTendril applies application-level AES-GCM encryption to sensitive fields bef
 ## Conductor fail-closed — identity & isolation
 
 The conductor enforces fail-closed defaults for GitHub identity and shadow-worktree
-isolation. These replaced prior fail-open defaults and constitute breaking changes;
-each error message names the exact corrective action.
+isolation. Each error message names the exact corrective action.
 
 - **No ambient GitHub identity.** The conductor never reads an ambient host
   `GITHUB_TOKEN`. Substrates declare auth explicitly (`auth: GITHUB_TOKEN`,
   `auth.method: pat+env`, `ssh`, `app`, or `none`). A github.com substrate with no
   declared auth fails closed with an actionable error (`requireGitHubPushAuth` in
-  `credentials.go`). There is no compatibility switch that restores the old ambient
-  behaviour.
+  `credentials.go`).
 
 - **Least-privilege Terrarium credential.** A Sprout receives no GitHub token by
   default — the authenticated push runs host-side. A substrate opts in with
@@ -134,35 +132,23 @@ each error message names the exact corrective action.
 - **Isolation fail-closed.** A sequence or single-run step that cannot establish
   shadow-worktree isolation aborts by default with an actionable error. The opt-in
   for a deliberate in-place run is `TENDRIL_ALLOW_HOST_WORKSPACE=true`. Parallel,
-  selection, and seed paths were already fail-closed; this extends the guarantee to
-  all paths (`docker.go`).
-
-- **Migration note (breaking change).** These defaults flip prior fail-open
-  behaviour. Operators migrating from earlier versions will encounter errors on
-  first run for any substrate relying on ambient auth or implicit host-workspace
-  fallback. Each error names the exact fix (`auth: …`, `TENDRIL_ALLOW_HOST_WORKSPACE`);
-  no compatibility switch restores the old ambient behaviour.
+  selection, and seed paths are fail-closed (`docker.go`).
 
 ## Mesh graft hardening — workspace binding & origin restriction
 
-The `/v1/mesh/graft` WebSocket endpoint previously had two fail-open defaults
-that are now fail-closed. Both controls are unconditional with no override or
+The `/v1/mesh/graft` WebSocket endpoint enforces fail-closed controls. Both controls are unconditional with no override or
 opt-out — cross-workspace tokens and browser-origin callers are never legitimate
 for this endpoint.
 
-- **Workspace binding (was: unbound).** `HandleGraftWebSocket` previously
-  verified issuer, audience, and scope but did not bind the `workspacePath` JWT
-  claim to the server's own workspace (`server.go`). A token minted for any
-  workspace would be accepted. It now validates `workspacePath` against
+- **Workspace binding.** `HandleGraftWebSocket` validates `workspacePath` against
   `s.workspace` via `TokenValidationOptions.ExpectedWorkspace`; a mismatched
   claim is rejected with `401 Unauthorized` before the WebSocket upgrade begins.
   `HandleAdminIssueToken` ignores any caller-supplied `workspacePath` — issued
   tokens always carry `s.workspace`, so a caller cannot mint a cross-workspace
   token even with admin access to the issuance endpoint.
 
-- **Origin restriction (was: always-true CheckOrigin).** The `websocket.Upgrader`
-  in `NewServer` previously set `CheckOrigin: func(r *http.Request) bool { return true }`,
-  accepting upgrades from any origin. It now accepts upgrades only when the
+- **Origin restriction.** The `websocket.Upgrader`
+  in `NewServer` accepts upgrades only when the
   `Origin` header is absent. `Origin` is a browser-controlled header that
   legitimate service-to-service callers (`mesh.Client`, CLI, another Stem) never
   send; this is stricter than a same-host allowlist and requires no configuration
@@ -173,21 +159,21 @@ for this endpoint.
 ## Host execution auditing — loud activation & telemetry
 
 Host execution is an intentional escape hatch that bypasses Terrarium isolation.
-Previously, activation of this path was unaudited. It is now strictly audited
+It is strictly audited
 with both local warnings and verifiable telemetry events, ensuring that bypassing
 isolation cannot happen silently.
 
-- **Audited activation (was: silent).** Host execution is gated by the explicit
-  `TENDRIL_ALLOW_HOST_EXECUTION=true` environment variable. Previously, when
-  this was enabled, the `host` provider would activate silently. It now prints
+- **Audited activation.** Host execution is gated by the explicit
+  `TENDRIL_ALLOW_HOST_EXECUTION=true` environment variable. When
+  enabled, the `host` provider prints
   a loud `stderr` warning (`checkHostExecutionAllowed` in `factory.go`) and
   publishes an `EventHostExecutionActivated` telemetry event. The telemetry
   event is published via the `ActivationObserver` callback pattern, allowing the
   conductor to audit the execution without introducing an eventbus dependency
   into the `terrarium` leaf package.
-- **Audited workspace fallback (was: silent).** The opt-in for an in-place
-  shadow-worktree run is `TENDRIL_ALLOW_HOST_WORKSPACE=true`. Previously, this
-  fallback was also unaudited. It has been retrofitted to publish the exact same
+- **Audited workspace fallback.** The opt-in for an in-place
+  shadow-worktree run is `TENDRIL_ALLOW_HOST_WORKSPACE=true`.
+  This fallback publishes the exact same
   `EventHostExecutionActivated` telemetry event for consistency across all host
   execution paths.
 - **No audit opt-out.** There is no configuration switch to disable the `stderr`
@@ -198,7 +184,7 @@ isolation cannot happen silently.
 
 The `confirmAbove` bound on a delegation grant ensures that high-impact operations require explicit human approval before execution.
 
-- **Pending confirmation state machine (was: blanket denial).** Previously, `confirmAbove` denied everything because no impact was wired and there was no confirmation surface. It now creates a pending confirmation (not a denial) when a grant threshold is crossed.
+- **Pending confirmation state machine.** It creates a pending confirmation (not a denial) when a grant threshold is crossed.
 - **Botanist-only approval.** The pending confirmation can only be approved or denied by the Botanist via REST (`/v1/delegation/pending`) or the CLI (`tendril delegation pending`, `tendril delegation approve <id>`). There is no "loosen this" override — the approval surface itself is the mechanism, not a bypass of it.
 - **Live-grant re-validation.** A pending approval is validated against the live grant at consumption time, not a stale snapshot. Revoking or narrowing a grant while a confirmation is outstanding takes effect immediately.
 - **Single-use and TTL.** An approved confirmation authorizes exactly one matching retry and expires after an hour (1-hour TTL) if unresolved.
