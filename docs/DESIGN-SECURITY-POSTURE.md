@@ -2,12 +2,11 @@
 
 ## Principle
 
-The **Tendril OS** (Greenhouse) is the optional, potentially multi-user,
+**Greenhouse** is the optional, potentially multi-user,
 network-facing surface, so it must be the **thinnest trusted layer**. It
 **delegates and proxies; it does not accumulate** authority or long-lived secrets.
 "Less attack surface" is a design rule to enforce, not an aspiration — this
-document records what is enforced (with tests) and the one place the model is still
-maturing.
+document records what is enforced (with tests).
 
 ## Trust zones
 
@@ -21,7 +20,7 @@ bearer key (`BOTANIST_KEY`, or the auto-generated `.tendril/api-key`), the mesh
 is the only zone that can mint mesh grafting tokens, grow Terrariums, or make LLM
 provider calls. Every other zone reaches capability only by asking the Stem.
 
-### 2. Tendril OS / Greenhouse (optional, network-facing) — delegated authority
+### 2. Greenhouse (optional, network-facing) — delegated authority
 
 An opt-in, containerised reverse proxy + static SPA (see `docs/GREENHOUSE.md`).
 It holds **no secrets of its own** — the proxy adds no credentials and bypasses
@@ -31,14 +30,12 @@ operator's bearer key, entered once during onboarding and stored in the browser'
 `/health`, `/v1*`, and `/ws` on the Stem — nothing else on the host is reachable
 through it.
 
-### 3. Worker (Terrarium Sprouts) — zero authority
+### 3. Terrarium Sprouts — zero authority
 
-Ephemeral Terrariums (backed by Docker, gVisor, Firecracker, or Host) that execute a single Sprout run and then die. They
-hold no credentials at all — LLM calls and mesh operations happen on the Stem,
-never inside a Terrarium. No GitHub token is injected by default, upholding the
-zero-authority guarantee; a substrate must explicitly opt in with `exposeToken: true`
-to expose its own resolved token to in-container tooling (see
-[Conductor fail-closed](#conductor-fail-closed--identity--isolation) below).
+Ephemeral Terrariums (backed by isolated providers: Docker, gVisor, or Firecracker) execute a single Sprout run and then die. (The Host provider exists separately as an explicit escape that bypasses Terrarium isolation.) Normal sealed Sprouts receive no Stem credentials by default; a Substrate may explicitly inject its resolved GitHub credential with `exposeToken: true` to expose its own resolved token to in-container tooling (see
+[Conductor fail-closed](#conductor-fail-closed--identity--isolation) below). LLM calls and mesh operations happen on the Stem,
+never inside a Terrarium.
+
 For the Docker provider, isolation is enforced at the container level
 (`cmd/stem/internal/terrarium/docker.go`):
 
@@ -52,7 +49,7 @@ For the Docker provider, isolation is enforced at the container level
 
 These flags are asserted by `cmd/stem/internal/terrarium/provider_test.go`
 (`TestDockerProviderCreate*`, `Test*ProviderCreateDefaultsToPidsLimit`), so a
-regression fails CI rather than only a manual audit.
+regression fails CI.
 
 ## Enforcement
 
@@ -61,11 +58,11 @@ Two properties of this posture are mechanically enforced, not merely documented:
 - **No command capability beyond the CLI.** The interface-parity test
   (`TestInterfaceParityCoverage`, `cmd/stem/parity_test.go`) diffs the CLI, REST,
   and MCP capability sets against the canonical `core.CapabilityNames()` registry
-  and fails on drift. The Tendril OS (REST) surface is constrained to the same
-  governed capability set as the CLI — an attacker who fully compromises the OS
+  and fails on drift. The Greenhouse (REST) surface is constrained to the same
+  governed capability set as the CLI — an attacker who fully compromises Greenhouse
   reaches no command the CLI did not already expose.
 - **Terrarium isolation is regression-tested.** The flags in
-  [Worker](#3-worker-terrarium-sprouts--zero-authority) above are covered by the
+  [Terrarium Sprouts](#3-terrarium-sprouts--zero-authority) above are covered by the
   provider tests noted there, so a weakening of container isolation breaks the
   build.
 
@@ -77,7 +74,7 @@ delegation grant's `egress` allow-list onto the existing isolation seams:
 
 - **Deny-all is physical, not policy.** The docker provider pins
   `--network none` for every Terrarium it creates (regression-tested per the
-  Worker section), so the executed command itself can never reach any host —
+  Terrarium Sprouts section), so the executed command itself can never reach any host —
   with or without a grant, delegated or not.
 - **The allow-list opens Stem-mediated reach only.** The single egress channel
   a stoma-pass execution has is its optional `fetch` list: URLs the **Stem**
@@ -94,7 +91,7 @@ delegation grant's `egress` allow-list onto the existing isolation seams:
   matched a grant, so no transport caller can widen its own egress.
 
 This keeps the sealed-Sprout invariant intact for the new operation-class: a
-worker "cannot reach out on its own; external calls are Stem-mediated."
+Sprout "cannot reach out on its own; external calls are Stem-mediated."
 
 ## Data-at-rest encryption
 
@@ -109,7 +106,6 @@ OpenTendril applies application-level AES-GCM encryption to sensitive fields bef
   - `OPEN_TENDRIL_INDEX_KEY` to provide the Tier-2 encryption key.
   - `TENDRIL_ENCRYPT_AT_REST` to globally opt out of history database payload encryption.
   - `TENDRIL_MEMORY_REMOTE_CLEARTEXT_ACK` must be explicitly set to acknowledge cleartext egress if selecting a remote memory backend.
-- **Explicitly deferred items:** Key rotation is deferred, though the `tnd:atrest:1:<keyID>:` prefix leaves the door open for future support. Active re-encryption or scrubbing verbs do not yet exist — existing plaintext rows are simply read lazily until overwritten.
 
 ## Conductor fail-closed — identity & isolation
 
@@ -310,9 +306,9 @@ credential derives the Pollen and the variable has no effect.
 
 ## References
 
-- `cmd/stem/internal/terrarium/docker.go` + `provider_test.go` — worker isolation
+- `cmd/stem/internal/terrarium/docker.go` + `provider_test.go` — Terrarium isolation
   flags and their regression tests.
 - `cmd/stem/parity_test.go` — CLI/REST/MCP capability parity enforcement.
-- `docs/GREENHOUSE.md` — Tendril OS deployment and auth contract.
+- `docs/GREENHOUSE.md` — Greenhouse deployment and auth contract.
 - `docs/DESIGN-MESH.md` — mesh token model; the one place delegated,
   short-lived tokens already exist today.
