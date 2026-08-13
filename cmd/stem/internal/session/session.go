@@ -1,4 +1,4 @@
-// Package session implements the unified session manager for Tendril OS.
+// Package session implements the unified session manager for OpenTendril.
 //
 // A Phytomer is the canonical name for one logical interaction thread — what
 // the external surfaces present as a "session" — bound to a unique session ID.

@@ -1,8 +1,8 @@
-# Component: Session — unified session manager for Tendril OS (Phytomer lifecycle).
+# Component: Session — unified session manager for OpenTendril (Phytomer lifecycle).
 
 ## Purpose
 
-`cmd/stem/internal/session/` implements the unified session manager for Tendril OS. A Phytomer is the canonical name for one logical interaction thread — what the external surfaces present as a "session" — bound to a unique session ID. Every interface surface (CLI chat, MCP server, REST endpoints, WebSocket gateway) resolves its traffic through this single Manager, allowing concurrent conversations to coexist and maintain their own preferences.
+`cmd/stem/internal/session/` implements the unified session manager for OpenTendril. A Phytomer is the canonical name for one logical interaction thread — what the external surfaces present as a "session" — bound to a unique session ID. Every interface surface (CLI chat, MCP server, REST endpoints, WebSocket gateway) resolves its traffic through this single Manager, allowing concurrent conversations to coexist and maintain their own preferences.
 
 ## Responsibilities
 
@@ -67,6 +67,4 @@ Package-level sentinel errors: None declared at the package level (errors are re
 - **Preference-merge edge cases:** `Preferences.Merge` copies map values for `Extras` but zero-value overrides (e.g. an empty string for Model) are ignored, meaning it cannot "clear" an existing preference, only overwrite it or inherit.
 - **ID validation:** `ValidID` enforces an alphanumeric start and limited special characters (`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`). `NewID` mints random 12-byte hex IDs, or falls back to a Unix timestamp nano if crypto/rand fails, making collisions practically impossible. `Initiate` guards against one anyway: it regenerates the candidate ID under the same lock up to `maxSessionIDCollisionRetries` times rather than overwriting an existing session, and fails closed with an error if retries are exhausted.
 
-## Design & rationale
 
-The Phytomer model provides a unified context for interaction, regardless of the entry point (CLI, REST, MCP). The `Store` interface keeps `session.go` a fan-out 0 leaf, inverting the dependency so `internal/historydb` can provide SQLite persistence without creating a cyclic dependency. `NewID` creates unique IDs prefixed with `tendril-` using cryptographic randomness, falling back to Unix timestamps if the random reader fails. With a store attached, durability is the source of truth and the in-memory map is a resume-friendly cache; without a store, the map remains the sole authority for the process lifetime.

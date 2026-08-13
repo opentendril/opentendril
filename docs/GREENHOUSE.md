@@ -1,7 +1,7 @@
-# Tendril OS — Greenhouse
+# Greenhouse
 
 The **Greenhouse** (the Command Center UI) is the operator-facing frontend of
-Tendril OS (the Operating System of OpenTendril). Where
+OpenTendril. Where
 [ARCHITECTURE.md §5](../ARCHITECTURE.md) describes the persistent, multi-session
 Go Stem *daemon* (the unified `SessionManager`, the `.tendril/history.db` state
 layer, and the pluggable EventBus), this document describes the **decoupled web
@@ -18,7 +18,7 @@ Stem-side API contracts the client depends on.
 
 ---
 
-## 1. How it fits the Tendril OS picture
+## 1. How it fits the OpenTendril picture
 
 ```
    Operator's browser

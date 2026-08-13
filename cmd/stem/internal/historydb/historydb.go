@@ -2,9 +2,9 @@
 // local SQLite database (.tendril/history.db) using the CGO-free
 // modernc.org/sqlite driver, keeping the tendril binary purely portable.
 //
-// It is the durable backbone of the Tendril OS: Tendril sessions, unified chat
+// It is the durable backbone of OpenTendril: Tendril sessions, unified chat
 // logs, all EventBus telemetry, and Sprout execution histories are written
-// here so the future UI never loses state on a browser refresh. Setting
+// here so the Greenhouse never loses state on a browser refresh. Setting
 // TENDRIL_DB_LOGGING=false bypasses SQLite entirely for high-performance
 // headless runs.
 package historydb
