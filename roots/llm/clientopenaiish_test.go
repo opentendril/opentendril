@@ -136,7 +136,7 @@ func TestParseResponseReturnsOpenAIishToolCalls(t *testing.T) {
 		}]
 	}`)
 
-	res, err := adapter.ParseResponse(body)
+	res, err := adapter.ParseResponse(ProviderSpec{}, body)
 	if err != nil {
 		t.Fatalf("ParseResponse failed: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestParseResponseReturnsToolOnlyResponse(t *testing.T) {
 		}]
 	}`)
 
-	res, err := adapter.ParseResponse(body)
+	res, err := adapter.ParseResponse(ProviderSpec{}, body)
 	if err != nil {
 		t.Fatalf("ParseResponse failed: %v", err)
 	}
@@ -581,4 +581,145 @@ func TestTemperatureOpenAIishShape(t *testing.T) {
 			t.Errorf("temperature = %v, want 0", body["temperature"])
 		}
 	})
+}
+
+func TestBuildChatRequestDoesNotInjectUsageFlagForOpenRouter(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "openrouter", Model: "meta-llama/llama-3.3-70b-instruct"}
+	payload, err := adapter.BuildChatRequest(spec, nil, nil, true)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if _, ok := parsed["stream_options"]; ok {
+		t.Errorf("expected stream_options to be absent for openrouter, got %v", parsed["stream_options"])
+	}
+}
+
+func TestBuildChatRequestInjectsUsageFlagForOpenAI(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "openai", Model: "gpt-4o"}
+	payload, err := adapter.BuildChatRequest(spec, nil, nil, true)
+	if err != nil {
+		t.Fatalf("BuildChatRequest failed: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	opts, ok := parsed["stream_options"].(map[string]any)
+	if !ok || opts["include_usage"] != true {
+		t.Errorf("expected stream_options.include_usage to be true for openai, got %v", parsed["stream_options"])
+	}
+}
+
+func TestParseResponseOpenRouterUsage(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "openrouter"}
+	body := []byte(`{
+		"choices": [{"message": {"content": "Hello"}}],
+		"usage": {
+			"prompt_tokens": 194,
+			"completion_tokens": 0,
+			"cost": 0.0000052349000001
+		}
+	}`)
+	res, err := adapter.ParseResponse(spec, body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 194 {
+		t.Errorf("PromptTokens = %v, want 194", res.Usage.PromptTokens)
+	}
+	if res.Usage.CompletionTokens == nil || *res.Usage.CompletionTokens != 0 {
+		t.Errorf("CompletionTokens = %v, want 0", res.Usage.CompletionTokens)
+	}
+	if res.Usage.TotalTokens != nil {
+		t.Errorf("TotalTokens = %v, want nil", res.Usage.TotalTokens)
+	}
+	if res.Usage.CostAmount == nil || *res.Usage.CostAmount != "0.0000052349000001" {
+		t.Errorf("CostAmount = %v, want exact decimal preservation '0.0000052349000001'", res.Usage.CostAmount)
+	}
+	if res.Usage.CostUnit == nil || *res.Usage.CostUnit != "credits" {
+		t.Errorf("CostUnit = %v, want credits", res.Usage.CostUnit)
+	}
+	if res.Usage.CostProvenance == nil || *res.Usage.CostProvenance != "openrouter" {
+		t.Errorf("CostProvenance = %v, want openrouter", res.Usage.CostProvenance)
+	}
+}
+
+func TestCallStreamOpenRouterUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		events := []string{
+			`{"choices":[{"delta":{"content":"text only"}}]}`,
+			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"cost":0.000015000000002}}`,
+		}
+		for _, ev := range events {
+			fmt.Fprintf(w, "data: %s\n\n", ev)
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{Provider: "openrouter", BaseURL: server.URL, Mode: ModeOpenAIish})
+	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
+	if err != nil {
+		t.Fatalf("doCall failed: %v", err)
+	}
+
+	if res.Text != "text only" {
+		t.Errorf("Text = %q", res.Text)
+	}
+	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 10 {
+		t.Errorf("PromptTokens = %v, want 10", res.Usage.PromptTokens)
+	}
+	if res.Usage.TotalTokens == nil || *res.Usage.TotalTokens != 30 {
+		t.Errorf("TotalTokens = %v, want 30", res.Usage.TotalTokens)
+	}
+	if res.Usage.CostAmount == nil || *res.Usage.CostAmount != "0.000015000000002" {
+		t.Errorf("CostAmount = %v, want '0.000015000000002'", res.Usage.CostAmount)
+	}
+	if res.Usage.CostUnit == nil || *res.Usage.CostUnit != "credits" {
+		t.Errorf("CostUnit = %v, want credits", res.Usage.CostUnit)
+	}
+	if res.Usage.CostProvenance == nil || *res.Usage.CostProvenance != "openrouter" {
+		t.Errorf("CostProvenance = %v, want openrouter", res.Usage.CostProvenance)
+	}
+}
+
+func TestAbsentUsageFieldsRemainNil(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "openai"}
+	body := []byte(`{
+		"choices": [{"message": {"content": "Hello"}}]
+	}`)
+	res, err := adapter.ParseResponse(spec, body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Usage.PromptTokens != nil || res.Usage.CostAmount != nil {
+		t.Errorf("Expected nil usage fields, got %v", res.Usage)
+	}
+}
+
+func TestUnknownProviderIgnoresCost(t *testing.T) {
+	adapter := openAIishAdapter{}
+	spec := ProviderSpec{Provider: "some-unknown-provider"}
+	body := []byte(`{
+		"choices": [{"message": {"content": "Hello"}}],
+		"usage": {
+			"cost": 0.0001
+		}
+	}`)
+	res, err := adapter.ParseResponse(spec, body)
+	if err != nil {
+		t.Fatalf("ParseResponse failed: %v", err)
+	}
+	if res.Usage.CostAmount != nil {
+		t.Errorf("CostAmount = %v, want nil for unknown provider", res.Usage.CostAmount)
+	}
 }
