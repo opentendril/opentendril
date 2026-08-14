@@ -36,8 +36,8 @@ const (
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
 type EpigeneticChronicler struct {
 	workspace   string
-	client      llmCaller
-	coordinator llmCaller
+	client      textCaller
+	coordinator textCaller
 }
 
 // GenomicFitness tracks reinforcement scores for rules and active plasmids.
@@ -318,7 +318,7 @@ If no rules remain, return:
 // newGenomeEvolutionClientFn is the genome-evolution client seam, injectable
 // for tests that exercise the tier-fallback loop without a real roots/llm
 // call.
-var newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller { return llm.NewClientForTier(tier) }
+var newGenomeEvolutionClientFn = func(tier llm.ModelTier) textCaller { return llm.NewClientForTier(tier) }
 
 func callGenomeEvolutionPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	var errs []error

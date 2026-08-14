@@ -106,7 +106,7 @@ func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
 }
 
 // TestTranscribeLearningsUsesInjectedClientSeam proves the chronicler's
-// client field is consistently typed as the llmCaller interface, so a fake
+// client field is consistently typed as the textCaller interface, so a fake
 // can be injected directly (no HTTP server, no roots/llm construction) to
 // exercise TranscribeLearnings as a fast unit test.
 func TestTranscribeLearningsUsesInjectedClientSeam(t *testing.T) {

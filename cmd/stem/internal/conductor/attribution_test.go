@@ -160,6 +160,23 @@ func (f *failingAfterFirstTurnLLM) CallStream(ctx context.Context, messages []ll
 	return f.fakeLLM.CallStream(ctx, messages, tokenChan)
 }
 
+func (f *failingAfterFirstTurnLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
+	if len(f.responses) == 0 {
+		return llm.Result{}, f.err
+	}
+	return f.fakeLLM.CallWithResult(ctx, messages)
+}
+
+func (f *failingAfterFirstTurnLLM) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
+	if len(f.responses) == 0 {
+		if tokenChan != nil {
+			close(tokenChan)
+		}
+		return llm.Result{}, f.err
+	}
+	return f.fakeLLM.CallStreamWithResult(ctx, messages, tokenChan)
+}
+
 // TestSproutReportsItsWritesEvenWhenTheRunBreaks pins the error return.
 //
 // A run that wrote and then broke is still committed by the post-mortem — the

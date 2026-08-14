@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,9 +64,8 @@ type toolSession interface {
 }
 
 type llmCaller interface {
-	Call(ctx context.Context, messages []llm.Message) (string, error)
-	CallStream(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (string, error)
-	CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error)
+	CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error)
+	CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error)
 }
 
 type nativeCaller interface {
@@ -157,6 +158,7 @@ type sproutResult struct {
 	// It is carried on failed runs too: a run cut off halfway still wrote
 	// whatever it wrote, and the post-mortem commits that work.
 	WroteWorkspace bool
+	Usage          llm.Usage
 }
 
 func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
@@ -338,6 +340,9 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		mappedTools = mapToolsToNative(a.tools)
 	}
 
+	var runUsage llm.Usage
+	var usageStarted bool
+
 	unusableReplies := 0
 
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
@@ -346,15 +351,10 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		var nativeToolCalls []llm.ToolCall
 		var err error
 
+		var requestUsage llm.Usage
+
 		if a.eventBus != nil {
 			tokenChan = make(chan string, 100)
-			// Publishing happens on another goroutine, so the turn must wait
-			// for it to drain before moving on. Without the wait a token could
-			// be published after the events that conclude the run, or dropped
-			// entirely when a short-lived caller shuts the bus down — which
-			// makes the liveness signal exactly as untrustworthy as no signal.
-			// Both entry points below close the channel on every path, so this
-			// cannot hang.
 			tokensPublished := make(chan struct{})
 			go func() {
 				defer close(tokensPublished)
@@ -374,9 +374,13 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, tokenChan)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
+				requestUsage = res.Usage
 				err = errCall
 			} else {
-				response, err = a.client.CallStream(ctx, a.messages, tokenChan)
+				res, errCall := a.client.CallStreamWithResult(ctx, a.messages, tokenChan)
+				response = res.Text
+				requestUsage = res.Usage
+				err = errCall
 			}
 			<-tokensPublished
 		} else {
@@ -384,11 +388,18 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				res, errCall := a.nativeClient.CallWithTools(ctx, a.messages, mappedTools, nil)
 				response = res.Text
 				nativeToolCalls = res.ToolCalls
+				requestUsage = res.Usage
 				err = errCall
 			} else {
-				response, err = a.client.Call(ctx, a.messages)
+				res, errCall := a.client.CallWithResult(ctx, a.messages)
+				response = res.Text
+				requestUsage = res.Usage
+				err = errCall
 			}
 		}
+
+		aggregateUsage(&runUsage, requestUsage, !usageStarted)
+		usageStarted = true
 
 		// The endpoint returned a client error on a request that carried tool
 		// definitions. That is not proof the definitions were the cause — probe
@@ -407,10 +418,12 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			a.msgMu.RLock()
 			currentMessages := a.messages
 			a.msgMu.RUnlock()
-			_, probeErr := a.nativeClient.CallWithTools(ctx, currentMessages, nil, nil)
+			probeRes, probeErr := a.nativeClient.CallWithTools(ctx, currentMessages, nil, nil)
+			aggregateUsage(&runUsage, probeRes.Usage, !usageStarted)
+			usageStarted = true
 			if probeErr != nil {
 				// Probe also failed: definitions were not the cause.
-				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, probeErr
+				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, probeErr
 			}
 			// Probe succeeded: definitions were the cause.
 			a.announceDowngrade("accepted without tool definitions", originalErrMsg)
@@ -419,7 +432,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		if err != nil {
-			return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, err
+			return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, err
 		}
 
 		thoughtContent := extractThought(response)
@@ -488,7 +501,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				// spending the whole budget discovering that.
 				unusableReplies++
 				if unusableReplies >= maxUnusableReplies {
-					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
+					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
 				}
 				observation := buildUnusableReplyObservation(a.tools)
 				a.msgMu.Lock()
@@ -498,7 +511,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				continue
 			}
 			if parseErr != nil {
-				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, parseErr
+				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, parseErr
 			}
 			// Counted consecutively: a mind that recovers has not failed twice,
 			// and carrying the tally across a good turn would end a growth on
@@ -523,6 +536,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				ActionResult:   actionResult,
 				Protocol:       reportedProtocol,
 				WroteWorkspace: a.wroteWorkspace.Load(),
+				Usage:          runUsage,
 			}, nil
 		}
 
@@ -536,6 +550,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				ActionResult:   actionResult,
 				Protocol:       reportedProtocol,
 				WroteWorkspace: a.wroteWorkspace.Load(),
+				Usage:          runUsage,
 			}, nil
 		}
 
@@ -559,7 +574,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				var err error
 				resp, obs, err = a.executeTool(ctx, call)
 				if err != nil {
-					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, err
+					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, err
 				}
 				a.publishToolInvoked(call, resp, obs)
 			}
@@ -591,7 +606,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		// iteration lets the model decide whether the task is complete.
 	}
 
-	return sproutResult{WroteWorkspace: a.wroteWorkspace.Load()}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
+	return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
 }
 
 func (a *Sprout) appendTranscript(role string, content string) {
@@ -790,6 +805,104 @@ func (a *Sprout) availableToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// aggregateUsage folds one finalized request Usage into the run aggregate.
+// A field is available on the run only when every request supplied it.
+// Run-level cost is available only when amount, unit, and provenance are all
+// present and match; an incomplete first request can never be completed later.
+func aggregateUsage(run *llm.Usage, req llm.Usage, isFirst bool) {
+	if isFirst {
+		*run = req
+		if run.CostAmount == nil || run.CostUnit == nil || run.CostProvenance == nil {
+			run.CostAmount = nil
+			run.CostUnit = nil
+			run.CostProvenance = nil
+		}
+		return
+	}
+
+	if run.PromptTokens != nil && req.PromptTokens != nil {
+		sum := *run.PromptTokens + *req.PromptTokens
+		run.PromptTokens = &sum
+	} else {
+		run.PromptTokens = nil
+	}
+
+	if run.CompletionTokens != nil && req.CompletionTokens != nil {
+		sum := *run.CompletionTokens + *req.CompletionTokens
+		run.CompletionTokens = &sum
+	} else {
+		run.CompletionTokens = nil
+	}
+
+	if run.TotalTokens != nil && req.TotalTokens != nil {
+		sum := *run.TotalTokens + *req.TotalTokens
+		run.TotalTokens = &sum
+	} else {
+		run.TotalTokens = nil
+	}
+
+	if run.CostAmount != nil && req.CostAmount != nil &&
+		run.CostUnit != nil && req.CostUnit != nil &&
+		run.CostProvenance != nil && req.CostProvenance != nil &&
+		*run.CostUnit == *req.CostUnit && *run.CostProvenance == *req.CostProvenance {
+		sum, err := addDecimalStrings(*run.CostAmount, *req.CostAmount)
+		if err == nil {
+			run.CostAmount = &sum
+		} else {
+			run.CostAmount = nil
+			run.CostUnit = nil
+			run.CostProvenance = nil
+		}
+	} else {
+		run.CostAmount = nil
+		run.CostUnit = nil
+		run.CostProvenance = nil
+	}
+}
+
+// addDecimalStrings sums two provider-native decimal strings exactly.
+// Parsing goes through big.Rat.SetString so scientific-notation JSON numbers
+// such as 1e-6 stay exact; nothing is converted through float64 or big.Float.
+func addDecimalStrings(a, b string) (string, error) {
+	rA, ok := new(big.Rat).SetString(strings.TrimSpace(a))
+	if !ok {
+		return "", fmt.Errorf("invalid decimal: %s", a)
+	}
+	rB, ok := new(big.Rat).SetString(strings.TrimSpace(b))
+	if !ok {
+		return "", fmt.Errorf("invalid decimal: %s", b)
+	}
+	rA.Add(rA, rB)
+	places := decimalPlacesOf(a)
+	if p := decimalPlacesOf(b); p > places {
+		places = p
+	}
+	return rA.FloatString(places), nil
+}
+
+// decimalPlacesOf is the number of fractional digits implied by a JSON number
+// in either ordinary or scientific form. "1e-6" has 6 places, so the sum is
+// formatted as 0.000001 rather than collapsing to 0.
+func decimalPlacesOf(s string) int {
+	s = strings.ToLower(strings.TrimSpace(s))
+	exp := 0
+	if i := strings.IndexByte(s, 'e'); i >= 0 {
+		if e, err := strconv.Atoi(s[i+1:]); err == nil {
+			exp = e
+		}
+		s = s[:i]
+	}
+	places := 0
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		places = len(s) - i - 1
+	}
+	places -= exp
+	if places < 0 {
+		return 0
+	}
+	return places
 }
 
 // jsonSchemaProperty renders one sprout tool argument as a JSON Schema property.

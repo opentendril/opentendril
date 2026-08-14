@@ -88,6 +88,16 @@ func (f *toolOnlyNativeLLM) CallPrompt(ctx context.Context, systemPrompt, userPr
 	return "done", nil
 }
 
+func (f *toolOnlyNativeLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
+	resp, err := f.Call(ctx, messages)
+	return llm.Result{Text: resp}, err
+}
+
+func (f *toolOnlyNativeLLM) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
+	resp, err := f.CallStream(ctx, messages, tokenChan)
+	return llm.Result{Text: resp}, err
+}
+
 // silentNativeLLM is the mutation fixture for assertion 3. It executes a tool
 // call but writes NOTHING to tokenChan, simulating the world where
 // ToolCallFragment tokens are not forwarded to the event bus. EventStreamToken
@@ -137,6 +147,16 @@ func (f *silentNativeLLM) CallStream(ctx context.Context, messages []llm.Message
 
 func (f *silentNativeLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	return "done", nil
+}
+
+func (f *silentNativeLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
+	resp, err := f.Call(ctx, messages)
+	return llm.Result{Text: resp}, err
+}
+
+func (f *silentNativeLLM) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
+	resp, err := f.CallStream(ctx, messages, tokenChan)
+	return llm.Result{Text: resp}, err
 }
 
 // collectEventsByType returns every event of the given type from the bus history.

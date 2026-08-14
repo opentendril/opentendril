@@ -363,7 +363,7 @@ func TestBranchSubTasksParsesCoordinatorPlan(t *testing.T) {
 	originalClient := newMeristemBranchingClient
 	t.Cleanup(func() { newMeristemBranchingClient = originalClient })
 
-	newMeristemBranchingClient = func() llmCaller {
+	newMeristemBranchingClient = func() textCaller {
 		return &stubBranchingClient{response: "```json\n[{\"id\": \"map-api\", \"transcript\": \"update the api\"}, {\"id\": \"map-ui\", \"transcript\": \"update the ui\"}]\n```"}
 	}
 
@@ -387,7 +387,7 @@ func TestBranchSubTasksDegradesGracefullyOnLLMTimeout(t *testing.T) {
 	})
 
 	meristemBranchingTimeout = 10 * time.Millisecond
-	newMeristemBranchingClient = func() llmCaller {
+	newMeristemBranchingClient = func() textCaller {
 		return &stubBranchingClient{err: context.DeadlineExceeded}
 	}
 

@@ -23,7 +23,7 @@ func TestCallGenomeEvolutionPromptFallsBackThroughSeam(t *testing.T) {
 	t.Cleanup(func() { newGenomeEvolutionClientFn = original })
 
 	var seenTiers []llm.ModelTier
-	newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller {
+	newGenomeEvolutionClientFn = func(tier llm.ModelTier) textCaller {
 		seenTiers = append(seenTiers, tier)
 		if tier == llm.TierStandard {
 			return &stubBranchingClient{err: context.DeadlineExceeded}
@@ -52,7 +52,7 @@ func TestCallGenomeEvolutionPromptReturnsJoinedErrorsThroughSeam(t *testing.T) {
 	original := newGenomeEvolutionClientFn
 	t.Cleanup(func() { newGenomeEvolutionClientFn = original })
 
-	newGenomeEvolutionClientFn = func(tier llm.ModelTier) llmCaller {
+	newGenomeEvolutionClientFn = func(tier llm.ModelTier) textCaller {
 		return &stubBranchingClient{err: context.DeadlineExceeded}
 	}
 

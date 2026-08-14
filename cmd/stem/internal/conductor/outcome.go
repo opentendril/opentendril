@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 // The sprout outcome vocabulary. A finished Sprout loop is not a verdict on the
@@ -106,6 +107,9 @@ type SproutRunReport struct {
 	// and "could not be measured" stay distinguishable at the surfaces, which
 	// a bare nil cannot express.
 	FilesUnmeasured string
+	// Usage carries the aggregated, exact cost metrics for every actual LLM request
+	// made by the Sprout during this run.
+	Usage llm.Usage
 }
 
 // changeEvidence is everything a finished run knows about what it changed.

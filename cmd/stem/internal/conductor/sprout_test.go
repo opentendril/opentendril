@@ -56,6 +56,16 @@ func (f *fakeLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt strin
 	})
 }
 
+func (f *fakeLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
+	resp, err := f.Call(ctx, messages)
+	return llm.Result{Text: resp}, err
+}
+
+func (f *fakeLLM) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
+	resp, err := f.CallStream(ctx, messages, tokenChan)
+	return llm.Result{Text: resp}, err
+}
+
 type nativeFakeLLM struct {
 	fakeLLM
 	nativeCalls     [][]llm.Message

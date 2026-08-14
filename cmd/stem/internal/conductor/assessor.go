@@ -34,7 +34,7 @@ type routerResponse struct {
 
 // newAssessorClientFn is the complexity-assessor client seam, injectable for
 // tests that exercise AssessTaskComplexity without a real roots/llm call.
-var newAssessorClientFn = func() llmCaller { return llm.NewClientForTier(llm.TierCheapest) }
+var newAssessorClientFn = func() textCaller { return llm.NewClientForTier(llm.TierCheapest) }
 
 // AssessTaskComplexity asks the cheapest configured model to classify the task's model tier.
 func AssessTaskComplexity(ctx context.Context, transcript string) (llm.ModelTier, error) {
@@ -53,7 +53,7 @@ func AssessTaskComplexity(ctx context.Context, transcript string) (llm.ModelTier
 
 // newRouterClientFn is the dynamic-router client seam, injectable for tests
 // that exercise RouteTask without a real roots/llm call.
-var newRouterClientFn = func() llmCaller { return llm.NewClientForTier(llm.TierCheapest) }
+var newRouterClientFn = func() textCaller { return llm.NewClientForTier(llm.TierCheapest) }
 
 // RouteTask selects the best provider/model pair for a task using the dynamic router.
 func RouteTask(ctx context.Context, transcript string, caps llm.Capabilities, registry []llm.ModelDefinition) (llm.RouteSelection, error) {
