@@ -83,6 +83,11 @@ type DockerOrchestrator struct {
 	// rather than carrying it on asynchronously. When true, a spent growth
 	// budget ends the run as timed-out instead of detaching.
 	AwaitsRunEnding bool
+	// OnTerminal is invoked exactly once when this RunSprout lifecycle reaches
+	// a real ending. A detached return is not an ending; the goroutine that
+	// finishes completeRun invokes this later. Adapters that persist history
+	// install this; the conductor does not write the store.
+	OnTerminal func(report SproutRunReport, err error)
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -195,6 +200,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			reason = err.Error()
 		}
 		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, report.FilesUnmeasured, reason)
+		if d.OnTerminal != nil {
+			d.OnTerminal(*report, err)
+		}
 	}
 	defer func() {
 		if detached {
@@ -783,12 +791,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	select {
 	case turn = <-turns:
 	case <-ctx.Done():
-		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) {
+		if errors.Is(context.Cause(ctx), errGrowthBudgetSpent) && !d.AwaitsRunEnding {
 			// The Stem stops waiting; the Sprout keeps growing. Nothing here
 			// closes the session, removes the worktree or restores the host
 			// stash — the run still owns all three — and no terminal event is
 			// published, because the run has not ended. The goroutine below
 			// finishes the job when the work does.
+			//
+			// An awaiting caller (one-shot CLI/MCP) cannot carry the work
+			// after this return: it will shut down its bus and history store.
+			// That path falls through and ends the work as timed-out.
 			detached = true
 			publishSproutDetached(d.EventBus, stepID, d.SessionID, plan.growthBudget)
 			fmt.Fprintf(os.Stderr, "🌿 Growth budget %s spent; detaching from %s. The Sprout keeps growing.\n", plan.growthBudget, stepID)

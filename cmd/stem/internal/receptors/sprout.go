@@ -224,38 +224,12 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
-		// Lifecycle events (sprout-emerged / sprout-matured / sprout-withered)
-		// are published by the conductor, where the run actually happens, and
-		// reach this daemon's bus through the sprout execution port wiring.
-		// Publishing them here as well would emit every terminal outcome
-		// twice, so this adapter only maintains its run records.
-		result, err := h.core.SproutRun(bgCtx, req)
-		sid := result.SessionID
-		if sid == "" {
-			sid = sessionID
-		}
-		// The model reaches the record here and nowhere earlier: the opening
-		// "running" row is written before a provider has been resolved, so this
-		// is the first moment the run can say what carried it. A detached run
-		// is watched by nobody, which makes its stored record the only account
-		// of it there will ever be.
-		if err != nil {
-			if h.history != nil {
-				_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
-					RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
-					Pollen: pollen, Substrate: substrate,
-					Status: "withered", Error: err.Error(), FinishedAt: time.Now().UTC(),
-				})
-			}
-			return
-		}
-		if h.history != nil {
-			_ = h.history.RecordSproutRun(bgCtx, historydb.SproutRun{
-				RunID: stepID, SessionID: sid, StepID: stepID, Model: result.Model,
-				Pollen: pollen, Substrate: substrate,
-				Status: "matured", Output: result.Output, FinishedAt: time.Now().UTC(),
-			})
-		}
+		// Lifecycle events and the terminal history write are owned by the
+		// conductor observer installed on the daemon's sprout execution port.
+		// This goroutine only keeps the accepted run alive after 202. An inner
+		// SproutOutcomeDetached is not an ending and must not be rewritten as
+		// matured merely because Core returned a nil error.
+		_, _ = h.core.SproutRun(bgCtx, req)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{

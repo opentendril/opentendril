@@ -72,7 +72,10 @@ func historyRetentionDaysFromEnv() int {
 // existing table rather than only adding a new IF NOT EXISTS one. The number is
 // what stops an older binary opening a shape it would misread, so a shape
 // change that leaves it alone is a shape change with no such guard.
-const currentSchemaVersion = 2
+//
+// Version 3 adds sproutruns.usage. The stamp moves so an older binary refuses a
+// database whose sprout run rows carry a column it does not read.
+const currentSchemaVersion = 3
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -89,15 +92,40 @@ type SproutRun struct {
 	// Substrate names the workspace the run targeted. A delegated read is
 	// evaluated against it, so observation is bounded by the same substrate
 	// scope that bounded the dispatch.
-	Substrate  string    `json:"substrate,omitempty"`
-	Model      string    `json:"model,omitempty"`
-	Genotype   string    `json:"genotype,omitempty"`
-	Transcript string    `json:"transcript,omitempty"`
-	Status     string    `json:"status"`
-	Output     string    `json:"output,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	StartedAt  time.Time `json:"startedAt"`
-	FinishedAt time.Time `json:"finishedAt,omitempty"`
+	Substrate  string         `json:"substrate,omitempty"`
+	Model      string         `json:"model,omitempty"`
+	Genotype   string         `json:"genotype,omitempty"`
+	Transcript string         `json:"transcript,omitempty"`
+	Status     string         `json:"status"`
+	Output     string         `json:"output,omitempty"`
+	Error      string         `json:"error,omitempty"`
+	StartedAt  time.Time      `json:"startedAt"`
+	FinishedAt time.Time      `json:"finishedAt,omitempty"`
+	Usage      SproutRunUsage `json:"usage,omitempty"`
+}
+
+// UsageComponent is one fail-honest usage component stored on a Sprout run.
+// Pointer token and cost fields omit when nil so absence stays absence; a
+// pointer to zero remains present so a measured zero is not rewritten as
+// missing. CostAmount is the exact provider-native decimal string. There is
+// no combined token or monetary total at this layer.
+type UsageComponent struct {
+	RequestsMade     bool    `json:"requestsMade"`
+	PromptTokens     *int    `json:"promptTokens,omitempty"`
+	CompletionTokens *int    `json:"completionTokens,omitempty"`
+	TotalTokens      *int    `json:"totalTokens,omitempty"`
+	CostAmount       *string `json:"costAmount,omitempty"`
+	CostUnit         *string `json:"costUnit,omitempty"`
+	CostProvenance   *string `json:"costProvenance,omitempty"`
+	Provider         string  `json:"provider,omitempty"`
+	Model            string  `json:"model,omitempty"`
+}
+
+// SproutRunUsage is the durable component envelope for one Sprout run.
+// Execution and post-run stay separate; neither is folded into the other.
+type SproutRunUsage struct {
+	Execution *UsageComponent `json:"execution,omitempty"`
+	PostRun   *UsageComponent `json:"postRun,omitempty"`
 }
 
 // SeedRun is one bounded-task (seed.grow) execution: the durable handle a
@@ -313,7 +341,8 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	output TEXT NOT NULL DEFAULT '',
 	error TEXT NOT NULL DEFAULT '',
 	startedAt TEXT NOT NULL,
-	finishedAt TEXT NOT NULL DEFAULT ''
+	finishedAt TEXT NOT NULL DEFAULT '',
+	usage TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);
 CREATE TABLE IF NOT EXISTS seedruns (
@@ -366,6 +395,9 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "sproutruns", "substrate", `ALTER TABLE sproutruns ADD COLUMN substrate TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sproutruns", "usage", `ALTER TABLE sproutruns ADD COLUMN usage TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sproutrunsByPollen ON sproutruns(pollen, startedAt)`); err != nil {
@@ -708,6 +740,29 @@ ORDER BY id ASC`
 
 // --- Sprout execution history -------------------------------------------------
 
+func encodeSproutRunUsage(usage SproutRunUsage) (string, error) {
+	if usage.Execution == nil && usage.PostRun == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(usage)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeSproutRunUsage(raw string) (SproutRunUsage, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return SproutRunUsage{}, nil
+	}
+	var usage SproutRunUsage
+	if err := json.Unmarshal([]byte(raw), &usage); err != nil {
+		return SproutRunUsage{}, err
+	}
+	return usage, nil
+}
+
 // RecordSproutRun upserts one Sprout execution record; call it once when the
 // sprout emerges (status "running") and again when it matures or withers.
 //
@@ -745,13 +800,21 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	if err != nil {
 		return fmt.Errorf("encrypt sprout run error: %w", err)
 	}
+	usage, err := encodeSproutRunUsage(run.Usage)
+	if err != nil {
+		return fmt.Errorf("encode sprout run usage: %w", err)
+	}
 
 	// Ownership is settled by whichever call first supplies it and is never
 	// reassigned: a run that already names a dispatching subject keeps it, so
 	// no later write can hand a recorded run to a different subject.
+	//
+	// Usage follows the same "later writer must not erase" rule as model: an
+	// opening or compatibility write with no component envelope leaves a
+	// stored value alone. A non-empty envelope settles an initially empty row.
 	const statement = `
-INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET
 	status = excluded.status,
 	pollen = CASE WHEN pollen = '' THEN excluded.pollen ELSE pollen END,
@@ -759,7 +822,8 @@ ON CONFLICT(runId) DO UPDATE SET
 	model = COALESCE(NULLIF(excluded.model, ''), model),
 	output = excluded.output,
 	error = excluded.error,
-	finishedAt = excluded.finishedAt`
+	finishedAt = excluded.finishedAt,
+	usage = COALESCE(NULLIF(excluded.usage, ''), usage)`
 
 	_, err = s.db.ExecContext(ctx, statement,
 		run.RunID,
@@ -776,6 +840,7 @@ ON CONFLICT(runId) DO UPDATE SET
 		runError,
 		run.StartedAt.UTC().Format(time.RFC3339Nano),
 		finishedAt,
+		usage,
 	)
 	if err != nil {
 		return fmt.Errorf("record sprout run: %w", err)
@@ -791,7 +856,7 @@ func (s *Store) LoadSproutRuns(ctx context.Context, sessionID string, limit int)
 	}
 
 	query := `
-SELECT runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt
+SELECT runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage
 FROM sproutruns`
 	args := []any{}
 	if strings.TrimSpace(sessionID) != "" {
@@ -813,8 +878,8 @@ LIMIT ?`
 	runs := make([]SproutRun, 0)
 	for rows.Next() {
 		var run SproutRun
-		var startedAt, finishedAt string
-		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt); err != nil {
+		var startedAt, finishedAt, usage string
+		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt, &usage); err != nil {
 			return nil, fmt.Errorf("scan sprout run: %w", err)
 		}
 		if run.Genotype, err = s.dec(run.Genotype, "historydb/sproutruns/genotype"); err != nil {
@@ -836,6 +901,9 @@ LIMIT ?`
 			if run.FinishedAt, err = time.Parse(time.RFC3339Nano, finishedAt); err != nil {
 				return nil, fmt.Errorf("parse sprout run finishedAt: %w", err)
 			}
+		}
+		if run.Usage, err = decodeSproutRunUsage(usage); err != nil {
+			return nil, fmt.Errorf("decode sprout run usage: %w", err)
 		}
 		runs = append(runs, run)
 	}

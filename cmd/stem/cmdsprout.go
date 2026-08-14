@@ -234,6 +234,26 @@ func openSproutRunRecord(ctx context.Context, spec core.SproutSpec, substrate st
 	}
 }
 
+// newSproutRunOrchestrator builds the conductor used by sproutOperations.
+// A one-shot surface (ambientBus == nil) awaits the ending so a spent growth
+// budget cannot detach into a process that is about to close its history store.
+// Daemon-backed wiring keeps the existing detachable contract.
+func newSproutRunOrchestrator(spec core.SproutSpec, wiring sproutSubstrateWiring, bus, ambientBus *eventbus.Bus) *conductor.DockerOrchestrator {
+	return &conductor.DockerOrchestrator{
+		Substrate:       wiring.Substrate,
+		SubstrateURL:    wiring.URL,
+		SubstrateBranch: wiring.Branch,
+		StepID:          spec.StepID,
+		StatusPath:      wiring.StatusPath,
+		Provider:        spec.Provider,
+		Model:           spec.Model,
+		Genotype:        spec.Genotype,
+		EventBus:        bus,
+		SessionID:       spec.SessionID,
+		AwaitsRunEnding: ambientBus == nil,
+	}
+}
+
 func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
@@ -266,52 +286,20 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			}
 
 			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
-			orch := &conductor.DockerOrchestrator{
-				Substrate:       wiring.Substrate,
-				SubstrateURL:    wiring.URL,
-				SubstrateBranch: wiring.Branch,
-				StepID:          spec.StepID,
-				StatusPath:      wiring.StatusPath,
-				Provider:        spec.Provider,
-				Model:           spec.Model,
-				Genotype:        spec.Genotype,
-				EventBus:        bus,
-				SessionID:       spec.SessionID,
-			}
+			orch := newSproutRunOrchestrator(spec, wiring, bus, ambientBus)
 
 			run := openSproutRunRecord(ctx, spec, wiring.Substrate)
-			recordRun := func() {
-				if history == nil {
-					return
-				}
+			if history != nil {
 				if recordErr := history.RecordSproutRun(context.WithoutCancel(ctx), run); recordErr != nil {
 					log.Printf("[Sprout] Failed to record sprout run: %v", recordErr)
 				}
+				// Terminal writes go through the orchestrator observer so a
+				// detached return leaves this opening row non-terminal and the
+				// later completeRun settles status, output, model, and usage.
+				installSproutTerminalHistory(orch, history, context.WithoutCancel(ctx), run)
 			}
-			recordRun()
 
 			sproutReport, err := orch.RunSprout(ctx, spec.Transcript)
-			run.FinishedAt = time.Now().UTC()
-			// The RESOLVED model, not the requested one. The record used to
-			// carry spec.Model, which is empty on every run nobody pinned a
-			// model for — so the runs that most needed an account of what did
-			// the work were exactly the ones that stored no model at all.
-			if resolved := strings.TrimSpace(sproutReport.Model); resolved != "" {
-				run.Model = resolved
-			}
-			if err != nil {
-				run.Status = "withered"
-				run.Error = err.Error()
-			} else {
-				run.Status = "matured"
-				// A run that never engaged the task is not a success, even
-				// though the Sprout's loop returned no error.
-				if sproutReport.Outcome == conductor.SproutOutcomeNoEngagement {
-					run.Status = "withered"
-				}
-				run.Output = sproutReport.Output
-			}
-			recordRun()
 
 			return core.SproutRunReport{
 				Output:        sproutReport.Output,
