@@ -15,22 +15,17 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
-// newSproutModelHandler builds a sprout REST surface over a Core whose
-// execution port reports a resolved model the request never asked for — which
-// is the ordinary case for an autonomous run and the one the record used to
-// lose.
-func newSproutModelHandler(t *testing.T, report core.SproutRunReport, runErr error) (*http.ServeMux, *historydb.Store) {
+func newSproutAsyncHandler(t *testing.T, report core.SproutRunReport, runErr error) (*http.ServeMux, *historydb.Store, <-chan struct{}) {
 	t.Helper()
 
+	returned := make(chan struct{})
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("new session manager: %v", err)
 	}
 	coreSvc := core.NewService(manager).WithSprout(core.SproutOperations{
 		Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
-			if strings.TrimSpace(spec.Model) != "" {
-				t.Errorf("spec.Model = %q, want empty: this test covers the run that pinned nothing", spec.Model)
-			}
+			defer close(returned)
 			return report, runErr
 		},
 	})
@@ -43,7 +38,7 @@ func newSproutModelHandler(t *testing.T, report core.SproutRunReport, runErr err
 
 	mux := http.NewServeMux()
 	NewSproutHandler(coreSvc, store, nil).Register(mux, nil)
-	return mux, store
+	return mux, store, returned
 }
 
 func growSproutDetached(t *testing.T, mux *http.ServeMux) string {
@@ -66,67 +61,77 @@ func growSproutDetached(t *testing.T, mux *http.ServeMux) string {
 	return accepted.StepID
 }
 
-func waitForSproutRun(t *testing.T, store *historydb.Store, runID string, wantStatus string) historydb.SproutRun {
+func awaitInnerSproutRun(t *testing.T, returned <-chan struct{}) {
 	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	var last historydb.SproutRun
-	for time.Now().Before(deadline) {
-		runs, err := store.LoadSproutRuns(context.Background(), "", 50)
-		if err != nil {
-			t.Fatalf("LoadSproutRuns: %v", err)
-		}
-		for _, run := range runs {
-			if run.RunID != runID {
-				continue
-			}
-			last = run
-			if run.Status == wantStatus {
-				return run
-			}
-		}
-		// poll: the detached goroutine records the run, so re-read the store until the deadline above.
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("inner SproutRun did not return")
 	}
-	t.Fatalf("run %q never reached status %q; last seen %+v", runID, wantStatus, last)
+}
+
+func loadSproutRun(t *testing.T, store *historydb.Store, runID string) historydb.SproutRun {
+	t.Helper()
+	runs, err := store.LoadSproutRuns(context.Background(), "", 50)
+	if err != nil {
+		t.Fatalf("LoadSproutRuns: %v", err)
+	}
+	for _, run := range runs {
+		if run.RunID == runID {
+			return run
+		}
+	}
+	t.Fatalf("run %q not found in %+v", runID, runs)
 	return historydb.SproutRun{}
 }
 
-// The detached REST path is the one an unattended run takes, and it recorded no
-// model on any of its writes. The stored record is the only account such a run
-// leaves, so a null model there is a run whose cost and behaviour cannot be
-// attributed to anything.
-func TestDetachedSproutRunRecordsTheResolvedModel(t *testing.T) {
-	mux, store := newSproutModelHandler(t, core.SproutRunReport{
+func assertReceptorLeftRunRunning(t *testing.T, store *historydb.Store, runID string) historydb.SproutRun {
+	t.Helper()
+	run := loadSproutRun(t, store, runID)
+	if run.Status != "running" {
+		t.Fatalf("status = %q, want running; the receptor must not be a terminal writer", run.Status)
+	}
+	if !run.FinishedAt.IsZero() {
+		t.Fatalf("FinishedAt = %v, want zero on a still-running row", run.FinishedAt)
+	}
+	if run.Usage.Execution != nil || run.Usage.PostRun != nil {
+		t.Fatalf("receptor wrote usage: %+v", run.Usage)
+	}
+	return run
+}
+
+func TestAsyncReceptorKeepsOpeningRowRunningAfterInnerComplete(t *testing.T) {
+	mux, store, returned := newSproutAsyncHandler(t, core.SproutRunReport{
 		Output: "grown", Outcome: "complete",
 		Provider: "google", Model: "gemini-3.1-pro",
 	}, nil)
 
 	stepID := growSproutDetached(t, mux)
-	run := waitForSproutRun(t, store, stepID, "matured")
+	opening := loadSproutRun(t, store, stepID)
+	if opening.Status != "running" {
+		t.Fatalf("opening status = %q, want running", opening.Status)
+	}
 
-	if run.Model != "gemini-3.1-pro" {
-		t.Fatalf("stored model = %q, want gemini-3.1-pro", run.Model)
-	}
-	if run.Output != "grown" {
-		t.Fatalf("stored output = %q, want grown", run.Output)
-	}
+	awaitInnerSproutRun(t, returned)
+	assertReceptorLeftRunRunning(t, store, stepID)
 }
 
-// A run that failed still ran against a model, and a failure is the record most
-// likely to be read afterwards.
-func TestDetachedSproutRunRecordsTheModelOnAWitheredRun(t *testing.T) {
-	mux, store := newSproutModelHandler(t, core.SproutRunReport{
+func TestAsyncReceptorDoesNotSettleInnerDetachedResult(t *testing.T) {
+	mux, store, returned := newSproutAsyncHandler(t, core.SproutRunReport{
+		Outcome: "detached", Provider: "google", Model: "gemini-3.1-pro",
+	}, nil)
+
+	stepID := growSproutDetached(t, mux)
+	awaitInnerSproutRun(t, returned)
+	assertReceptorLeftRunRunning(t, store, stepID)
+}
+
+func TestAsyncReceptorDoesNotSettleInnerWitheredResult(t *testing.T) {
+	mux, store, returned := newSproutAsyncHandler(t, core.SproutRunReport{
 		Outcome: "failed", Provider: "anthropic", Model: "claude-opus-4-8",
 	}, context.DeadlineExceeded)
 
 	stepID := growSproutDetached(t, mux)
-	run := waitForSproutRun(t, store, stepID, "withered")
-
-	if run.Model != "claude-opus-4-8" {
-		t.Fatalf("stored model = %q, want claude-opus-4-8", run.Model)
-	}
-	if run.Error == "" {
-		t.Fatalf("stored run carries no error: %+v", run)
-	}
+	awaitInnerSproutRun(t, returned)
+	assertReceptorLeftRunRunning(t, store, stepID)
 }

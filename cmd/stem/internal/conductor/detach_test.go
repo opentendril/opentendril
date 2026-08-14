@@ -57,7 +57,10 @@ func (h *heldSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutRe
 			RequestsMade:   h.requestsMade,
 		}, nil
 	case <-ctx.Done():
-		return sproutResult{}, ctx.Err()
+		return sproutResult{
+			Usage:        h.usage,
+			RequestsMade: h.requestsMade,
+		}, ctx.Err()
 	}
 }
 

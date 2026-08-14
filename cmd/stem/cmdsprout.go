@@ -234,6 +234,26 @@ func openSproutRunRecord(ctx context.Context, spec core.SproutSpec, substrate st
 	}
 }
 
+// newSproutRunOrchestrator builds the conductor used by sproutOperations.
+// A one-shot surface (ambientBus == nil) awaits the ending so a spent growth
+// budget cannot detach into a process that is about to close its history store.
+// Daemon-backed wiring keeps the existing detachable contract.
+func newSproutRunOrchestrator(spec core.SproutSpec, wiring sproutSubstrateWiring, bus, ambientBus *eventbus.Bus) *conductor.DockerOrchestrator {
+	return &conductor.DockerOrchestrator{
+		Substrate:       wiring.Substrate,
+		SubstrateURL:    wiring.URL,
+		SubstrateBranch: wiring.Branch,
+		StepID:          spec.StepID,
+		StatusPath:      wiring.StatusPath,
+		Provider:        spec.Provider,
+		Model:           spec.Model,
+		Genotype:        spec.Genotype,
+		EventBus:        bus,
+		SessionID:       spec.SessionID,
+		AwaitsRunEnding: ambientBus == nil,
+	}
+}
+
 func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
@@ -266,18 +286,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			}
 
 			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
-			orch := &conductor.DockerOrchestrator{
-				Substrate:       wiring.Substrate,
-				SubstrateURL:    wiring.URL,
-				SubstrateBranch: wiring.Branch,
-				StepID:          spec.StepID,
-				StatusPath:      wiring.StatusPath,
-				Provider:        spec.Provider,
-				Model:           spec.Model,
-				Genotype:        spec.Genotype,
-				EventBus:        bus,
-				SessionID:       spec.SessionID,
-			}
+			orch := newSproutRunOrchestrator(spec, wiring, bus, ambientBus)
 
 			run := openSproutRunRecord(ctx, spec, wiring.Substrate)
 			if history != nil {

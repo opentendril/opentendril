@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -55,7 +56,7 @@ func TestRunSproutDetachedTerminalObserverWritesOnlyWhenComplete(t *testing.T) {
 	writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 300ms\n")
 
 	runner := newHeldSproutRunner("finished after the Stem stopped waiting")
-	runner.usage = completeUsage(30, 15, 45, "4.00", "USD", "openrouter")
+	runner.usage = completeUsage(30, 15, 45, "4.00", "credits", "openrouter")
 	runner.requestsMade = true
 	stubRunSproutCollaborators(t, root, runner, []string{"pkg/thing.go"})
 	stubCountingSession(t)
@@ -120,5 +121,80 @@ func TestRunSproutDetachedTerminalObserverWritesOnlyWhenComplete(t *testing.T) {
 	}
 	if got.Usage.CostAmount == nil || *got.Usage.CostAmount != "4.00" {
 		t.Fatalf("later observer write cost = %v, want 4.00", got.Usage.CostAmount)
+	}
+}
+
+// TestRunSproutAwaitsGrowthExpiryTimesOutInsteadOfDetaching is the one-shot
+// contract: a caller that will close its store cannot detach. Growth expiry
+// ends the work as timed-out, fires OnTerminal once, and keeps any usage
+// captured before the cancel.
+func TestRunSproutAwaitsGrowthExpiryTimesOutInsteadOfDetaching(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	cwd := chdirToTempDir(t)
+	writePatienceSubstrate(t, cwd, "bounded", root, "    patience:\n      growth: 300ms\n")
+
+	runner := newHeldSproutRunner("should not be seen as a finished turn")
+	runner.usage = completeUsage(21, 7, 28, "0.25", "credits", "openrouter")
+	runner.requestsMade = true
+	stubRunSproutCollaborators(t, root, runner, nil)
+	stubCountingSession(t)
+
+	var mu sync.Mutex
+	var writes []struct {
+		report SproutRunReport
+		err    error
+	}
+	bus := eventbus.New()
+	recorder := recordSproutEvents(bus)
+	orch := &DockerOrchestrator{
+		Substrate:        "bounded",
+		StepID:           "await-observer",
+		EventBus:         bus,
+		DisableMergeBack: true,
+		AwaitsRunEnding:  true,
+		OnTerminal: func(report SproutRunReport, err error) {
+			mu.Lock()
+			writes = append(writes, struct {
+				report SproutRunReport
+				err    error
+			}{report, err})
+			mu.Unlock()
+		},
+	}
+
+	report, err := orch.RunSprout(context.Background(), "await probe")
+	if err == nil {
+		t.Fatal("RunSprout returned nil error; an awaiting growth expiry is a terminal timed-out")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+	if report.Outcome == SproutOutcomeDetached {
+		t.Fatal("awaiting RunSprout returned detached")
+	}
+	if report.Outcome != SproutOutcomeTimedOut {
+		t.Fatalf("Outcome = %q, want timed-out", report.Outcome)
+	}
+	if recorder.count(eventbus.EventSproutDetached) != 0 {
+		t.Fatalf("awaiting path published sprout-detached: %#v", recorder.recorded())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(writes) != 1 {
+		t.Fatalf("OnTerminal fired %d times, want exactly 1", len(writes))
+	}
+	got := writes[0]
+	if got.report.Outcome != SproutOutcomeTimedOut {
+		t.Fatalf("observer outcome = %q, want timed-out", got.report.Outcome)
+	}
+	if !got.report.RequestsMade {
+		t.Fatal("observer dropped RequestsMade on the timed-out path")
+	}
+	if got.report.Usage.PromptTokens == nil || *got.report.Usage.PromptTokens != 21 {
+		t.Fatalf("observer usage = %+v, want usage captured before timeout", got.report.Usage)
+	}
+	if got.report.Usage.CostAmount == nil || *got.report.Usage.CostAmount != "0.25" {
+		t.Fatalf("observer cost = %v, want 0.25 credits", got.report.Usage.CostAmount)
 	}
 }

@@ -39,7 +39,7 @@ func TestSproutRunUsageRoundTripKeepsSeparateComponents(t *testing.T) {
 				CompletionTokens: intPtr(15),
 				TotalTokens:      intPtr(45),
 				CostAmount:       stringPtr("4.00"),
-				CostUnit:         stringPtr("USD"),
+				CostUnit:         stringPtr("credits"),
 				CostProvenance:   stringPtr("openrouter"),
 				Provider:         "openrouter",
 				Model:            "anthropic/claude-sonnet-4.6",
@@ -50,10 +50,10 @@ func TestSproutRunUsageRoundTripKeepsSeparateComponents(t *testing.T) {
 				CompletionTokens: intPtr(8),
 				TotalTokens:      intPtr(20),
 				CostAmount:       stringPtr("0.0001"),
-				CostUnit:         stringPtr("credits"),
-				CostProvenance:   stringPtr("nvidia"),
-				Provider:         "nvidia",
-				Model:            "meta/llama-3.1-8b-instruct",
+				CostUnit:         stringPtr("points"),
+				CostProvenance:   stringPtr("lab"),
+				Provider:         "lab",
+				Model:            "cheap-local",
 			},
 		},
 	}
@@ -65,10 +65,10 @@ func TestSproutRunUsageRoundTripKeepsSeparateComponents(t *testing.T) {
 	if loaded.Usage.Execution == nil || loaded.Usage.PostRun == nil {
 		t.Fatalf("loaded components = %+v, want both present", loaded.Usage)
 	}
-	if *loaded.Usage.Execution.CostAmount != "4.00" || *loaded.Usage.Execution.CostUnit != "USD" {
+	if *loaded.Usage.Execution.CostAmount != "4.00" || *loaded.Usage.Execution.CostUnit != "credits" {
 		t.Fatalf("execution cost = %+v", loaded.Usage.Execution)
 	}
-	if *loaded.Usage.PostRun.CostAmount != "0.0001" || *loaded.Usage.PostRun.CostUnit != "credits" {
+	if *loaded.Usage.PostRun.CostAmount != "0.0001" || *loaded.Usage.PostRun.CostUnit != "points" {
 		t.Fatalf("post-run cost = %+v", loaded.Usage.PostRun)
 	}
 	if loaded.Usage.Execution.Provider == loaded.Usage.PostRun.Provider {
@@ -104,7 +104,7 @@ func TestSproutRunUsagePreservesExactCostAmount(t *testing.T) {
 			Execution: &UsageComponent{
 				RequestsMade:   true,
 				CostAmount:     stringPtr(amount),
-				CostUnit:       stringPtr("USD"),
+				CostUnit:       stringPtr("credits"),
 				CostProvenance: stringPtr("openrouter"),
 			},
 		},
@@ -386,8 +386,8 @@ func TestFreshSchemaIncludesUsageColumn(t *testing.T) {
 
 func TestEncodeSproutRunUsageOmitsCombinedTotals(t *testing.T) {
 	encoded, err := encodeSproutRunUsage(SproutRunUsage{
-		Execution: &UsageComponent{RequestsMade: true, CostAmount: stringPtr("1.00"), CostUnit: stringPtr("USD")},
-		PostRun:   &UsageComponent{RequestsMade: true, CostAmount: stringPtr("2.00"), CostUnit: stringPtr("credits")},
+		Execution: &UsageComponent{RequestsMade: true, CostAmount: stringPtr("1.00"), CostUnit: stringPtr("credits")},
+		PostRun:   &UsageComponent{RequestsMade: true, CostAmount: stringPtr("2.00"), CostUnit: stringPtr("points")},
 	})
 	if err != nil {
 		t.Fatalf("encode: %v", err)

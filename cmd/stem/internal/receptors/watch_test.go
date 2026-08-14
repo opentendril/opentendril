@@ -435,18 +435,21 @@ func TestDispatchedRunIsObservableByItsDispatcher(t *testing.T) {
 		t.Fatalf("another subject reading the dispatched run = %d, want 403: %s", foreign.Code, foreign.Body.String())
 	}
 
-	// Let the run finish and confirm the finished record is still the
-	// dispatcher's — the ownership that was readable mid-flight is the same one
-	// that survives the write settling it.
+	// The inner Run returning is not a receptor terminal write. Ownership was
+	// settled on the opening row and must still be the dispatcher's after the
+	// Core call comes back — including when that call is a non-terminal detach.
 	close(release)
 	waitForExecutions(t, executed, 1)
 	settled := watchRequest(t, mux, "/v1/phytomers/tendril-dispatched/sprout-runs", watchOwner)
 	if settled.Code != http.StatusOK {
-		t.Fatalf("dispatcher reading its finished run = %d, want 200: %s", settled.Code, settled.Body.String())
+		t.Fatalf("dispatcher reading its run after inner return = %d, want 200: %s", settled.Code, settled.Body.String())
 	}
 	runs := decodeRuns(t, settled.Body.Bytes())
-	if len(runs) != 1 || runs[0].Status != "matured" {
-		t.Fatalf("finished run did not settle under its dispatcher: %+v", runs)
+	if len(runs) != 1 || runs[0].Pollen != watchOwner {
+		t.Fatalf("run is no longer owned by its dispatcher: %+v", runs)
+	}
+	if runs[0].Status != "running" {
+		t.Fatalf("receptor settled the run to %q; only the conductor observer may write a terminal status", runs[0].Status)
 	}
 }
 
