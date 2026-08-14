@@ -143,7 +143,7 @@ jobs:
           # Must track a currently supported Go line: govulncheck findings in
           # the standard library are only fixed in supported patch releases,
           # so scanning with an EOL toolchain can never go green.
-          go-version: '1.26.x'
+          go-version: '1.26.6'
           check-latest: true
           cache-dependency-path: go.sum
 
