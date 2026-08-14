@@ -605,9 +605,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// likely to be reading a report assembled by an exit that forgot.
 		report.Protocol = sproutResult.Protocol
 
-		// Usage is carried whether the run failed or succeeded, so long as the
-		// actual provider returned measurements before the error.
+		// Usage is the Sprout execution component, carried whether the run
+		// failed or succeeded. RequestsMade is the occurrence fact, so an
+		// all-nil Usage still records that provider requests happened.
 		report.Usage = sproutResult.Usage
+		report.RequestsMade = sproutResult.RequestsMade
 
 		// This report is built fresh, not inherited from the caller's — a
 		// detached run reaches here long after RunSprout returned — so the
@@ -750,8 +752,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				// On the post-mortem's clock, not the wait's: transcribing what a
 				// run learned is part of the account of the run, and a detached
 				// call has long since let go of the context it waited on.
-				chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-				if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+				chronicler := newRunChroniclerFn(sourcePath, llm.TierCheapest)
+				postRun, err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs())
+				report.PostRun = postRun
+				if err != nil {
 					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 				}
 			}

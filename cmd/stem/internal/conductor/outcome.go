@@ -107,9 +107,32 @@ type SproutRunReport struct {
 	// and "could not be measured" stay distinguishable at the surfaces, which
 	// a bare nil cannot express.
 	FilesUnmeasured string
-	// Usage carries the aggregated, exact cost metrics for every actual LLM request
-	// made by the Sprout during this run.
+	// Usage is the Sprout execution component: the fail-honest aggregate of
+	// every actual LLM request made by Sprout.Run. It is not combined with
+	// PostRun.
 	Usage llm.Usage
+	// RequestsMade is the execution-component occurrence fact, carried from
+	// Sprout.Run's usageStarted flag. It is independent of whether Usage
+	// fields were supplied: all-nil Usage with RequestsMade true means
+	// provider request(s) occurred and the provider reported no accounting.
+	// False means no execution provider request occurred.
+	RequestsMade bool
+	// PostRun is the post-Sprout cognitive component: epigenetic chronicling
+	// and any genome reduction that chronicling triggers. Its provider and
+	// model name the chronicler mind, which is not the Sprout mind.
+	PostRun PostRunUsage
+}
+
+// PostRunUsage is the fail-honest aggregate of every provider request made
+// after Sprout.Run returned and before RunSprout's terminal return.
+type PostRunUsage struct {
+	Usage    llm.Usage
+	Provider string
+	Model    string
+	// RequestsMade is true when at least one post-run provider request was
+	// issued. All-nil Usage with RequestsMade true means the request happened
+	// and the provider reported no accounting.
+	RequestsMade bool
 }
 
 // changeEvidence is everything a finished run knows about what it changed.

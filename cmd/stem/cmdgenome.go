@@ -87,7 +87,8 @@ func genomeOperations(root string) core.GenomeOperations {
 	return core.GenomeOperations{
 		Root: root,
 		Reduce: func(ctx context.Context, root string) error {
-			return conductor.NewEpigeneticChronicler(root).ReduceGenomeFile(ctx)
+			_, err := conductor.NewEpigeneticChronicler(root).ReduceGenomeFile(ctx)
+			return err
 		},
 		Evolve: conductor.EvolveGenome,
 	}

@@ -33,10 +33,24 @@ const (
 	genomicRulePruneThreshold      = -3
 )
 
+// promptResultCaller is the Result-bearing prompt seam used by the
+// epigenetic chronicler so post-run provider requests can be counted.
+// Adaptation and meristem keep textCaller.
+type promptResultCaller interface {
+	CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error)
+}
+
+type namedMind interface {
+	Provider() string
+	Model() string
+}
+
 // EpigeneticChronicler distills durable learnings from successful Sprout runs.
+// The LLM call itself is Mycorrhizal cognitive work; the Stem Conductor
+// invokes, bounds, attributes, and records it.
 type EpigeneticChronicler struct {
 	workspace   string
-	client      textCaller
+	client      promptResultCaller
 	coordinator textCaller
 }
 
@@ -59,32 +73,38 @@ func NewEpigeneticChronicler(workspace string) *EpigeneticChronicler {
 }
 
 // TranscribeLearnings asks the host LLM to summarize durable learnings and appends them to the genome.
-func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcript string, diff string, logs string) error {
+func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcript string, diff string, logs string) (PostRunUsage, error) {
+	var post PostRunUsage
 	if strings.TrimSpace(diff) == "" {
-		return nil
+		return post, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	systemPrompt, userPrompt := buildEpigeneticPrompt(transcript, diff, logs)
-	findings, err := c.client.CallPrompt(ctx, systemPrompt, userPrompt)
+	res, err := c.client.CallPromptWithResult(ctx, systemPrompt, userPrompt)
+	post = observePostRunRequest(c.client, post, res.Usage)
 	if err != nil {
-		return err
+		return post, err
 	}
 
-	findings = normalizeMarkdownBullets(findings)
+	findings := normalizeMarkdownBullets(res.Text)
 	if strings.TrimSpace(findings) == "" {
-		return nil
+		return post, nil
 	}
 
 	if err := c.appendToGenome(findings); err != nil {
-		return err
+		return post, err
 	}
 
 	targetPath := c.genomePath()
-	if reduced, err := c.maybeReduceGenome(ctx, targetPath); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-reduction skipped: %v\n", err)
+	reducedUsage, reduced, reduceErr := c.maybeReduceGenome(ctx, targetPath)
+	if reducedUsage.RequestsMade {
+		post = mergePostRunUsage(post, reducedUsage)
+	}
+	if reduceErr != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-reduction skipped: %v\n", reduceErr)
 	} else if reduced {
 		fmt.Fprintf(os.Stderr, "🧬 Genome auto-reduced at %s\n", targetPath)
 	}
@@ -93,11 +113,12 @@ func (c *EpigeneticChronicler) TranscribeLearnings(ctx context.Context, transcri
 		fmt.Fprintf(os.Stderr, "⚠️ Genome auto-push skipped: %v\n", err)
 	}
 
-	return nil
+	return post, nil
 }
 
 // ReduceGenomeFile consolidates the active epigenetic genome in place.
-func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) error {
+func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) (PostRunUsage, error) {
+	var post PostRunUsage
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -106,21 +127,22 @@ func (c *EpigeneticChronicler) ReduceGenomeFile(ctx context.Context) error {
 	content, err := os.ReadFile(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("epigenetic genome not found at %s", targetPath)
+			return post, fmt.Errorf("epigenetic genome not found at %s", targetPath)
 		}
-		return fmt.Errorf("read epigenetic genome: %w", err)
+		return post, fmt.Errorf("read epigenetic genome: %w", err)
 	}
 
-	reduced, err := c.reduceGenomeContent(ctx, string(content))
+	reduced, reqUsage, err := c.reduceGenomeContent(ctx, string(content))
+	post = observePostRunRequest(c.client, post, reqUsage)
 	if err != nil {
-		return err
+		return post, err
 	}
 
 	if err := os.WriteFile(targetPath, []byte(reduced), 0o644); err != nil {
-		return fmt.Errorf("write reduced epigenetic genome: %w", err)
+		return post, fmt.Errorf("write reduced epigenetic genome: %w", err)
 	}
 
-	return nil
+	return post, nil
 }
 
 // RecordGenomicFitness reinforces genome rules and active plasmids after a sprout run.
@@ -334,19 +356,50 @@ func callGenomeEvolutionPrompt(ctx context.Context, systemPrompt, userPrompt str
 	return "", errors.Join(errs...)
 }
 
-func (c *EpigeneticChronicler) reduceGenomeContent(ctx context.Context, existing string) (string, error) {
+func (c *EpigeneticChronicler) reduceGenomeContent(ctx context.Context, existing string) (string, llm.Usage, error) {
 	systemPrompt, userPrompt := buildGenomeReductionPrompt(existing)
-	findings, err := c.client.CallPrompt(ctx, systemPrompt, userPrompt)
+	res, err := c.client.CallPromptWithResult(ctx, systemPrompt, userPrompt)
 	if err != nil {
-		return "", err
+		return "", res.Usage, err
 	}
 
-	findings = normalizeMarkdownBullets(findings)
+	findings := normalizeMarkdownBullets(res.Text)
 	if strings.TrimSpace(findings) == "" {
-		return "", fmt.Errorf("LLM returned no genome reduction output")
+		return "", res.Usage, fmt.Errorf("LLM returned no genome reduction output")
 	}
 
-	return epigeneticGenomeHeader + "\n\n" + findings + "\n", nil
+	return epigeneticGenomeHeader + "\n\n" + findings + "\n", res.Usage, nil
+}
+
+func observePostRunRequest(client promptResultCaller, post PostRunUsage, req llm.Usage) PostRunUsage {
+	aggregateUsage(&post.Usage, req, !post.RequestsMade)
+	post.RequestsMade = true
+	if named, ok := client.(namedMind); ok {
+		if post.Provider == "" {
+			post.Provider = named.Provider()
+		}
+		if post.Model == "" {
+			post.Model = named.Model()
+		}
+	}
+	return post
+}
+
+func mergePostRunUsage(dst, src PostRunUsage) PostRunUsage {
+	if !src.RequestsMade {
+		return dst
+	}
+	if !dst.RequestsMade {
+		return src
+	}
+	aggregateUsage(&dst.Usage, src.Usage, false)
+	if dst.Provider == "" {
+		dst.Provider = src.Provider
+	}
+	if dst.Model == "" {
+		dst.Model = src.Model
+	}
+	return dst
 }
 
 func truncateMiddle(text string, limit int) string {
@@ -431,24 +484,24 @@ func (c *EpigeneticChronicler) genomePath() string {
 	return filepath.Join(c.workspace, ".tendril", "genome", "epigenetics.md")
 }
 
-func (c *EpigeneticChronicler) maybeReduceGenome(ctx context.Context, targetPath string) (bool, error) {
+func (c *EpigeneticChronicler) maybeReduceGenome(ctx context.Context, targetPath string) (PostRunUsage, bool, error) {
 	info, err := os.Stat(targetPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return PostRunUsage{}, false, nil
 		}
-		return false, fmt.Errorf("stat genome: %w", err)
+		return PostRunUsage{}, false, fmt.Errorf("stat genome: %w", err)
 	}
 
 	if info.Size() <= genomeMaxBytes() {
-		return false, nil
+		return PostRunUsage{}, false, nil
 	}
 
-	if err := c.ReduceGenomeFile(ctx); err != nil {
-		return false, err
+	usage, err := c.ReduceGenomeFile(ctx)
+	if err != nil {
+		return usage, false, err
 	}
-
-	return true, nil
+	return usage, true, nil
 }
 
 func (c *EpigeneticChronicler) maybeAutoPushGenome(ctx context.Context, targetPath string) error {

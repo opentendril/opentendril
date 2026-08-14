@@ -1799,8 +1799,8 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 			}
 
 			if gitDiff != "" && runErr == nil {
-				chronicler := newEpigeneticChroniclerForTier(sourcePath, llm.TierCheapest)
-				if err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
+				chronicler := newRunChroniclerFn(sourcePath, llm.TierCheapest)
+				if _, err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
 					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
 				}
 			}

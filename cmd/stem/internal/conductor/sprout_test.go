@@ -56,6 +56,11 @@ func (f *fakeLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt strin
 	})
 }
 
+func (f *fakeLLM) CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error) {
+	resp, err := f.CallPrompt(ctx, systemPrompt, userPrompt)
+	return llm.Result{Text: resp}, err
+}
+
 func (f *fakeLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
 	resp, err := f.Call(ctx, messages)
 	return llm.Result{Text: resp}, err
