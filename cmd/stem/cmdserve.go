@@ -797,6 +797,9 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		orch.Provider = sess.Preferences.Provider
 		orch.Model = sess.Preferences.Model
 		orch.Genotype = sess.Preferences.Genotype
+		if history != nil {
+			installSproutTerminalHistory(orch, history, context.WithoutCancel(r.Context()), sproutRun)
+		}
 		var sproutReport conductor.SproutRunReport
 		sproutReport, err = orch.RunSprout(r.Context(), taskPrompt)
 		output = sproutReport.Output
@@ -809,26 +812,10 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			Data:      map[string]interface{}{"type": "stream.end", "content": output},
 		})
 
-		sproutRun.FinishedAt = time.Now().UTC()
 		if err != nil {
 			log.Printf("Tendril execution failed: %v", err)
-			sproutRun.Status = "withered"
-			sproutRun.Error = err.Error()
-			if history != nil {
-				if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
-					log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
-				}
-			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
-		}
-
-		sproutRun.Status = "matured"
-		sproutRun.Output = output
-		if history != nil {
-			if recordErr := history.RecordSproutRun(r.Context(), sproutRun); recordErr != nil {
-				log.Printf("⚠️ Failed to record sprout run result: %v", recordErr)
-			}
 		}
 
 		if recordErr := sessions.RecordMessage(r.Context(), session.Message{

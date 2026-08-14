@@ -11,6 +11,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 // detachWaitLimit bounds how long a test waits for a terminal event that must
@@ -29,7 +30,9 @@ type heldSproutRunner struct {
 	response string
 	// observed is the context the turn was actually handed, so a test can
 	// prove the work was NOT run on the clock the Stem was waiting on.
-	observed chan context.Context
+	observed     chan context.Context
+	usage        llm.Usage
+	requestsMade bool
 }
 
 func newHeldSproutRunner(response string) *heldSproutRunner {
@@ -47,7 +50,12 @@ func (h *heldSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutRe
 	}
 	select {
 	case <-h.released:
-		return sproutResult{Response: h.response, WroteWorkspace: true}, nil
+		return sproutResult{
+			Response:       h.response,
+			WroteWorkspace: true,
+			Usage:          h.usage,
+			RequestsMade:   h.requestsMade,
+		}, nil
 	case <-ctx.Done():
 		return sproutResult{}, ctx.Err()
 	}
