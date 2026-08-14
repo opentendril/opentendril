@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,12 +64,8 @@ type toolSession interface {
 }
 
 type llmCaller interface {
-	Call(ctx context.Context, messages []llm.Message) (string, error)
-	CallStream(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (string, error)
-	CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error)
 	CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error)
 	CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error)
-	CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error)
 }
 
 type nativeCaller interface {
@@ -810,35 +807,18 @@ func (a *Sprout) availableToolNames() []string {
 	return names
 }
 
-// jsonSchemaProperty renders one sprout tool argument as a JSON Schema property.
-//
-// The sprout runtimes describe argument types in their own short vocabulary —
-// "string", "number", "boolean", "string[]". Providers validate tool definitions
-// against JSON Schema draft 2020-12, which has a closed set of type names and no
-// array shorthand: a list of strings is {"type":"array","items":{"type":"string"}}.
-// Passing the sprout's spelling through unchanged emitted "type":"string[]", which
-// is not a JSON Schema type, and the provider rejected the whole request — so no
-// tool definition reached it and every growth fell back to the prose protocol.
-//
-// An unrecognised type yields a property carrying its description and no type
-// constraint. That is valid and permissive: the argument stays usable and the
-// request stays valid, rather than one unknown spelling disabling native tool
-// calling wholesale — which is the failure this replaces. Recognising a new type
-// properly is the job of the vocabulary test, not of a runtime guess.
-func parseToolArgumentType(argType string) string {
-	switch argType {
-	case "string", "number", "boolean":
-		return argType
-	case "string[]":
-		return "array"
-	default:
-		return "string"
-	}
-}
-
+// aggregateUsage folds one finalized request Usage into the run aggregate.
+// A field is available on the run only when every request supplied it.
+// Run-level cost is available only when amount, unit, and provenance are all
+// present and match; an incomplete first request can never be completed later.
 func aggregateUsage(run *llm.Usage, req llm.Usage, isFirst bool) {
 	if isFirst {
 		*run = req
+		if run.CostAmount == nil || run.CostUnit == nil || run.CostProvenance == nil {
+			run.CostAmount = nil
+			run.CostUnit = nil
+			run.CostProvenance = nil
+		}
 		return
 	}
 
@@ -882,34 +862,64 @@ func aggregateUsage(run *llm.Usage, req llm.Usage, isFirst bool) {
 	}
 }
 
+// addDecimalStrings sums two provider-native decimal strings exactly.
+// Parsing goes through big.Rat.SetString so scientific-notation JSON numbers
+// such as 1e-6 stay exact; nothing is converted through float64 or big.Float.
 func addDecimalStrings(a, b string) (string, error) {
-	rA, ok := new(big.Rat).SetString(a)
+	rA, ok := new(big.Rat).SetString(strings.TrimSpace(a))
 	if !ok {
 		return "", fmt.Errorf("invalid decimal: %s", a)
 	}
-	rB, ok := new(big.Rat).SetString(b)
+	rB, ok := new(big.Rat).SetString(strings.TrimSpace(b))
 	if !ok {
 		return "", fmt.Errorf("invalid decimal: %s", b)
 	}
 	rA.Add(rA, rB)
-
-	iA := strings.IndexByte(a, '.')
-	iB := strings.IndexByte(b, '.')
-	placesA := 0
-	if iA >= 0 {
-		placesA = len(a) - iA - 1
-	}
-	placesB := 0
-	if iB >= 0 {
-		placesB = len(b) - iB - 1
-	}
-	places := placesA
-	if placesB > places {
-		places = placesB
+	places := decimalPlacesOf(a)
+	if p := decimalPlacesOf(b); p > places {
+		places = p
 	}
 	return rA.FloatString(places), nil
 }
 
+// decimalPlacesOf is the number of fractional digits implied by a JSON number
+// in either ordinary or scientific form. "1e-6" has 6 places, so the sum is
+// formatted as 0.000001 rather than collapsing to 0.
+func decimalPlacesOf(s string) int {
+	s = strings.ToLower(strings.TrimSpace(s))
+	exp := 0
+	if i := strings.IndexByte(s, 'e'); i >= 0 {
+		if e, err := strconv.Atoi(s[i+1:]); err == nil {
+			exp = e
+		}
+		s = s[:i]
+	}
+	places := 0
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		places = len(s) - i - 1
+	}
+	places -= exp
+	if places < 0 {
+		return 0
+	}
+	return places
+}
+
+// jsonSchemaProperty renders one sprout tool argument as a JSON Schema property.
+//
+// The sprout runtimes describe argument types in their own short vocabulary —
+// "string", "number", "boolean", "string[]". Providers validate tool definitions
+// against JSON Schema draft 2020-12, which has a closed set of type names and no
+// array shorthand: a list of strings is {"type":"array","items":{"type":"string"}}.
+// Passing the sprout's spelling through unchanged emitted "type":"string[]", which
+// is not a JSON Schema type, and the provider rejected the whole request — so no
+// tool definition reached it and every growth fell back to the prose protocol.
+//
+// An unrecognised type yields a property carrying its description and no type
+// constraint. That is valid and permissive: the argument stays usable and the
+// request stays valid, rather than one unknown spelling disabling native tool
+// calling wholesale — which is the failure this replaces. Recognising a new type
+// properly is the job of the vocabulary test, not of a runtime guess.
 func jsonSchemaProperty(arg ToolArgument) map[string]any {
 	prop := map[string]any{}
 	switch arg.Type {

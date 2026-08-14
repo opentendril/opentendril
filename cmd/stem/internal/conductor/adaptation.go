@@ -23,7 +23,7 @@ const (
 )
 
 // meristem lazily resolves the coordinator model used for Adaptation.
-func (c *EpigeneticChronicler) meristem() llmCaller {
+func (c *EpigeneticChronicler) meristem() textCaller {
 	if c.coordinator == nil {
 		c.coordinator = llm.NewCoordinatorClientFromEnv()
 	}
@@ -194,7 +194,7 @@ func splitDiffSegments(diff string, maxChars int) []string {
 	return segments
 }
 
-func callMeristemPrompt(ctx context.Context, caller llmCaller, systemPrompt string, userPrompt string) (string, error) {
+func callMeristemPrompt(ctx context.Context, caller textCaller, systemPrompt string, userPrompt string) (string, error) {
 	return caller.Call(ctx, []llm.Message{
 		{Role: "system", Content: systemPrompt},
 		{Role: "user", Content: userPrompt},

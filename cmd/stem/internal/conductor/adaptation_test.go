@@ -48,21 +48,6 @@ func (f *fakeMeristem) CallPrompt(ctx context.Context, systemPrompt, userPrompt 
 	})
 }
 
-func (f *fakeMeristem) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
-	resp, err := f.Call(ctx, messages)
-	return llm.Result{Text: resp}, err
-}
-
-func (f *fakeMeristem) CallStreamWithResult(ctx context.Context, messages []llm.Message, tokenChan chan<- string) (llm.Result, error) {
-	resp, err := f.CallStream(ctx, messages, tokenChan)
-	return llm.Result{Text: resp}, err
-}
-
-func (f *fakeMeristem) CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error) {
-	resp, err := f.CallPrompt(ctx, systemPrompt, userPrompt)
-	return llm.Result{Text: resp}, err
-}
-
 func TestAdaptFromHistoryWritesTraitsToGenome(t *testing.T) {
 	workspace := t.TempDir()
 	fake := &fakeMeristem{

@@ -160,13 +160,6 @@ func (f *failingAfterFirstTurnLLM) CallStream(ctx context.Context, messages []ll
 	return f.fakeLLM.CallStream(ctx, messages, tokenChan)
 }
 
-func (f *failingAfterFirstTurnLLM) CallPrompt(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	if len(f.responses) == 0 {
-		return "", f.err
-	}
-	return f.fakeLLM.CallPrompt(ctx, systemPrompt, userPrompt)
-}
-
 func (f *failingAfterFirstTurnLLM) CallWithResult(ctx context.Context, messages []llm.Message) (llm.Result, error) {
 	if len(f.responses) == 0 {
 		return llm.Result{}, f.err
@@ -182,13 +175,6 @@ func (f *failingAfterFirstTurnLLM) CallStreamWithResult(ctx context.Context, mes
 		return llm.Result{}, f.err
 	}
 	return f.fakeLLM.CallStreamWithResult(ctx, messages, tokenChan)
-}
-
-func (f *failingAfterFirstTurnLLM) CallPromptWithResult(ctx context.Context, systemPrompt, userPrompt string) (llm.Result, error) {
-	if len(f.responses) == 0 {
-		return llm.Result{}, f.err
-	}
-	return f.fakeLLM.CallPromptWithResult(ctx, systemPrompt, userPrompt)
 }
 
 // TestSproutReportsItsWritesEvenWhenTheRunBreaks pins the error return.

@@ -16,7 +16,7 @@ func TestAssessTaskComplexityUsesAssessorSeam(t *testing.T) {
 	t.Cleanup(func() { newAssessorClientFn = original })
 
 	fake := &fakeLLM{response: `{"tier":"standard"}`}
-	newAssessorClientFn = func() llmCaller { return fake }
+	newAssessorClientFn = func() textCaller { return fake }
 
 	tier, err := AssessTaskComplexity(context.Background(), "  implement the widget  ")
 	if err != nil {
@@ -39,7 +39,7 @@ func TestAssessTaskComplexityPropagatesSeamError(t *testing.T) {
 	original := newAssessorClientFn
 	t.Cleanup(func() { newAssessorClientFn = original })
 
-	newAssessorClientFn = func() llmCaller { return &stubBranchingClient{err: context.DeadlineExceeded} }
+	newAssessorClientFn = func() textCaller { return &stubBranchingClient{err: context.DeadlineExceeded} }
 
 	if _, err := AssessTaskComplexity(context.Background(), "transcript"); err == nil {
 		t.Fatal("expected AssessTaskComplexity to return an error when the seam fails")
@@ -59,7 +59,7 @@ func TestRouteTaskUsesDynamicRouterSeam(t *testing.T) {
 	t.Setenv("DEFAULT_MODEL_NAME", "")
 
 	fake := &fakeLLM{response: `{"provider":"local","model":"model-b"}`}
-	newRouterClientFn = func() llmCaller { return fake }
+	newRouterClientFn = func() textCaller { return fake }
 
 	registry := []llm.ModelDefinition{
 		{Provider: "local", Name: "model-a"},

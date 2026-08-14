@@ -33,7 +33,7 @@ var (
 	sproutGrowthTimeout = 20 * time.Minute
 
 	branchSubTasksFn           = branchSubTasks
-	newMeristemBranchingClient = func() llmCaller {
+	newMeristemBranchingClient = func() textCaller {
 		return (&DockerOrchestrator{IsCoordinator: true}).resolveLLMClient()
 	}
 )
