@@ -363,6 +363,9 @@ func TestSproutTwoCompleteNativeRequestsAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	if !res.RequestsMade {
+		t.Fatal("RequestsMade = false after two native requests")
+	}
 	assertIntPtr(t, res.Usage.PromptTokens, 30, "PromptTokens")
 	assertIntPtr(t, res.Usage.CompletionTokens, 15, "CompletionTokens")
 	assertIntPtr(t, res.Usage.TotalTokens, 45, "TotalTokens")
@@ -432,6 +435,9 @@ func TestSproutTerminalErrorPreservesAggregatedUsage(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run succeeded, want the terminal provider error")
 	}
+	if !res.RequestsMade {
+		t.Fatal("RequestsMade = false after requests that ended in a provider error")
+	}
 	assertIntPtr(t, res.Usage.PromptTokens, 30, "PromptTokens")
 	assertIntPtr(t, res.Usage.CompletionTokens, 15, "CompletionTokens")
 	assertStringPtr(t, res.Usage.CostAmount, "3.00", "CostAmount")
@@ -473,7 +479,7 @@ func stubUsageReportRun(t *testing.T, runner sproutRunner) {
 
 func TestSproutRunReportCarriesAggregate(t *testing.T) {
 	usage := completeUsage(30, 15, 45, "4.00", "USD", "api")
-	stubUsageReportRun(t, usageReportRunner{result: sproutResult{Response: "done", Usage: usage}})
+	stubUsageReportRun(t, usageReportRunner{result: sproutResult{Response: "done", Usage: usage, RequestsMade: true}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -484,6 +490,9 @@ func TestSproutRunReportCarriesAggregate(t *testing.T) {
 	}).RunSprout(ctx, "task")
 	if err != nil {
 		t.Fatalf("RunSprout: %v", err)
+	}
+	if !report.RequestsMade {
+		t.Fatal("report.RequestsMade = false after execution requests")
 	}
 	assertIntPtr(t, report.Usage.PromptTokens, 30, "report.Usage.PromptTokens")
 	assertIntPtr(t, report.Usage.TotalTokens, 45, "report.Usage.TotalTokens")
@@ -503,13 +512,16 @@ func TestSproutRunReportNoRequestsHasAbsentUsage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunSprout: %v", err)
 	}
+	if report.RequestsMade {
+		t.Fatal("report.RequestsMade = true when no execution request occurred")
+	}
 	assertUsageAbsent(t, report.Usage)
 }
 
 func TestSproutRunReportPreservesUsageOnTerminalError(t *testing.T) {
 	usage := completeUsage(30, 15, 45, "3.00", "USD", "api")
 	stubUsageReportRun(t, usageReportRunner{
-		result: sproutResult{Usage: usage},
+		result: sproutResult{Usage: usage, RequestsMade: true},
 		err:    errors.New("sprout blew up"),
 	})
 
@@ -523,6 +535,44 @@ func TestSproutRunReportPreservesUsageOnTerminalError(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunSprout succeeded, want the terminal error")
 	}
+	if !report.RequestsMade {
+		t.Fatal("report.RequestsMade = false on a terminal error that still issued requests")
+	}
 	assertIntPtr(t, report.Usage.PromptTokens, 30, "report.Usage.PromptTokens")
 	assertStringPtr(t, report.Usage.CostAmount, "3.00", "report.Usage.CostAmount")
+}
+
+func TestSproutRequestsMadeTrueWithNilUsage(t *testing.T) {
+	mock := &proseMockLLM{
+		results: []llm.Result{{Text: `{"final":"done"}`}},
+	}
+	res, err := newUsageTestSprout(t, mock).Run(context.Background(), "task")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.RequestsMade {
+		t.Fatal("RequestsMade = false after a request that supplied no usage")
+	}
+	assertUsageAbsent(t, res.Usage)
+}
+
+func TestSproutRunReportNilUsageWithRequestsMade(t *testing.T) {
+	stubUsageReportRun(t, usageReportRunner{
+		result: sproutResult{Response: "done", RequestsMade: true},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	report, err := (&DockerOrchestrator{
+		Substrate:        t.TempDir(),
+		StepID:           "usage-nil-requested",
+		DisableMergeBack: true,
+	}).RunSprout(ctx, "task")
+	if err != nil {
+		t.Fatalf("RunSprout: %v", err)
+	}
+	if !report.RequestsMade {
+		t.Fatal("report.RequestsMade = false; execution requests occurred")
+	}
+	assertUsageAbsent(t, report.Usage)
 }

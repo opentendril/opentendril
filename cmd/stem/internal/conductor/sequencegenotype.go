@@ -140,6 +140,8 @@ func applyStepLLMSelection(orch *DockerOrchestrator, selection stepLLMSelection)
 	}
 }
 
+var newRunChroniclerFn = newEpigeneticChroniclerForTier
+
 func newEpigeneticChroniclerForTier(workspace string, tier llm.ModelTier) *EpigeneticChronicler {
 	chronicler := NewEpigeneticChronicler(workspace)
 	if chronicler == nil {

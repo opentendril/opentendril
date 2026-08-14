@@ -82,7 +82,7 @@ func (c *EpigeneticChronicler) AdaptFromHistory(ctx context.Context, commits []C
 		return err
 	}
 
-	if _, err := c.maybeReduceGenome(ctx, c.genomePath()); err != nil {
+	if _, _, err := c.maybeReduceGenome(ctx, c.genomePath()); err != nil {
 		fmt.Printf("⚠️ Genome auto-reduction skipped: %v\n", err)
 	}
 

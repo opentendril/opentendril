@@ -159,6 +159,10 @@ type sproutResult struct {
 	// whatever it wrote, and the post-mortem commits that work.
 	WroteWorkspace bool
 	Usage          llm.Usage
+	// RequestsMade is true when Sprout.Run issued at least one provider
+	// request. It is the usageStarted fact, independent of whether Usage
+	// fields were supplied.
+	RequestsMade bool
 }
 
 func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
@@ -423,7 +427,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			usageStarted = true
 			if probeErr != nil {
 				// Probe also failed: definitions were not the cause.
-				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, probeErr
+				return a.finishedResult(runUsage, usageStarted), probeErr
 			}
 			// Probe succeeded: definitions were the cause.
 			a.announceDowngrade("accepted without tool definitions", originalErrMsg)
@@ -432,7 +436,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		if err != nil {
-			return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, err
+			return a.finishedResult(runUsage, usageStarted), err
 		}
 
 		thoughtContent := extractThought(response)
@@ -501,7 +505,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				// spending the whole budget discovering that.
 				unusableReplies++
 				if unusableReplies >= maxUnusableReplies {
-					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
+					return a.finishedResult(runUsage, usageStarted), fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
 				}
 				observation := buildUnusableReplyObservation(a.tools)
 				a.msgMu.Lock()
@@ -511,7 +515,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				continue
 			}
 			if parseErr != nil {
-				return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, parseErr
+				return a.finishedResult(runUsage, usageStarted), parseErr
 			}
 			// Counted consecutively: a mind that recovers has not failed twice,
 			// and carrying the tally across a good turn would end a growth on
@@ -530,28 +534,24 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			a.msgMu.RLock()
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
-			return sproutResult{
-				Response:       strings.TrimSpace(finalResponse),
-				Transcript:     a.transcript.String(),
-				ActionResult:   actionResult,
-				Protocol:       reportedProtocol,
-				WroteWorkspace: a.wroteWorkspace.Load(),
-				Usage:          runUsage,
-			}, nil
+			result := a.finishedResult(runUsage, usageStarted)
+			result.Response = strings.TrimSpace(finalResponse)
+			result.Transcript = a.transcript.String()
+			result.ActionResult = actionResult
+			result.Protocol = reportedProtocol
+			return result, nil
 		}
 
 		if !isToolCall {
 			a.msgMu.RLock()
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
-			return sproutResult{
-				Response:       strings.TrimSpace(response),
-				Transcript:     a.transcript.String(),
-				ActionResult:   actionResult,
-				Protocol:       reportedProtocol,
-				WroteWorkspace: a.wroteWorkspace.Load(),
-				Usage:          runUsage,
-			}, nil
+			result := a.finishedResult(runUsage, usageStarted)
+			result.Response = strings.TrimSpace(response)
+			result.Transcript = a.transcript.String()
+			result.ActionResult = actionResult
+			result.Protocol = reportedProtocol
+			return result, nil
 		}
 
 		var combinedObservation strings.Builder
@@ -574,7 +574,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				var err error
 				resp, obs, err = a.executeTool(ctx, call)
 				if err != nil {
-					return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, err
+					return a.finishedResult(runUsage, usageStarted), err
 				}
 				a.publishToolInvoked(call, resp, obs)
 			}
@@ -606,7 +606,15 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		// iteration lets the model decide whether the task is complete.
 	}
 
-	return sproutResult{WroteWorkspace: a.wroteWorkspace.Load(), Usage: runUsage}, fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
+	return a.finishedResult(runUsage, usageStarted), fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
+}
+
+func (a *Sprout) finishedResult(usage llm.Usage, started bool) sproutResult {
+	return sproutResult{
+		WroteWorkspace: a.wroteWorkspace.Load(),
+		Usage:          usage,
+		RequestsMade:   started,
+	}
 }
 
 func (a *Sprout) appendTranscript(role string, content string) {

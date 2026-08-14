@@ -77,7 +77,7 @@ func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
 	workspace := t.TempDir()
 	chronicler := NewEpigeneticChronicler(workspace)
 
-	err := chronicler.TranscribeLearnings(
+	usage, err := chronicler.TranscribeLearnings(
 		context.Background(),
 		"task transcript",
 		"diff --git a/app.go b/app.go\n+fmt.Println(\"hi\")\n",
@@ -85,6 +85,9 @@ func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("TranscribeLearnings returned error: %v", err)
+	}
+	if !usage.RequestsMade {
+		t.Fatal("RequestsMade = false after a transcribe provider request")
 	}
 
 	genomePath := filepath.Join(workspace, ".tendril", "genome", "epigenetics.md")
@@ -106,15 +109,15 @@ func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
 }
 
 // TestTranscribeLearningsUsesInjectedClientSeam proves the chronicler's
-// client field is consistently typed as the textCaller interface, so a fake
-// can be injected directly (no HTTP server, no roots/llm construction) to
-// exercise TranscribeLearnings as a fast unit test.
+// client field is the Result-bearing prompt seam, so a fake can be injected
+// directly (no HTTP server, no roots/llm construction) to exercise
+// TranscribeLearnings as a fast unit test.
 func TestTranscribeLearningsUsesInjectedClientSeam(t *testing.T) {
 	workspace := t.TempDir()
 	fake := &fakeLLM{response: "- Fast unit test learning."}
 	chronicler := &EpigeneticChronicler{workspace: workspace, client: fake}
 
-	err := chronicler.TranscribeLearnings(
+	usage, err := chronicler.TranscribeLearnings(
 		context.Background(),
 		"transcript",
 		"diff --git a/x.go b/x.go\n+x\n",
@@ -122,6 +125,9 @@ func TestTranscribeLearningsUsesInjectedClientSeam(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("TranscribeLearnings returned error: %v", err)
+	}
+	if !usage.RequestsMade {
+		t.Fatal("RequestsMade = false after an injected transcribe request")
 	}
 	if len(fake.calls) != 1 {
 		t.Fatalf("expected 1 LLM call via the injected seam, got %d", len(fake.calls))
@@ -152,8 +158,10 @@ func TestReduceGenomeFileUsesInjectedClientSeam(t *testing.T) {
 	fake := &fakeLLM{response: "- reduced rule"}
 	chronicler := &EpigeneticChronicler{workspace: workspace, client: fake}
 
-	if err := chronicler.ReduceGenomeFile(context.Background()); err != nil {
+	if usage, err := chronicler.ReduceGenomeFile(context.Background()); err != nil {
 		t.Fatalf("ReduceGenomeFile returned error: %v", err)
+	} else if !usage.RequestsMade {
+		t.Fatal("RequestsMade = false after an injected reduction request")
 	}
 	if len(fake.calls) != 1 {
 		t.Fatalf("expected 1 LLM call via the injected seam, got %d", len(fake.calls))
@@ -199,13 +207,12 @@ func TestTranscribeLearningsAppendsToExistingGenome(t *testing.T) {
 	}
 
 	chronicler := NewEpigeneticChronicler(workspace)
-	err := chronicler.TranscribeLearnings(
+	if _, err := chronicler.TranscribeLearnings(
 		context.Background(),
 		"transcript",
 		"diff --git a/pkg/main.go b/pkg/main.go\n+fmt.Println(\"ok\")\n",
 		"logs",
-	)
-	if err != nil {
+	); err != nil {
 		t.Fatalf("TranscribeLearnings returned error: %v", err)
 	}
 
@@ -246,8 +253,12 @@ func TestTranscribeLearningsSkipsEmptyDiff(t *testing.T) {
 
 	workspace := t.TempDir()
 	chronicler := NewEpigeneticChronicler(workspace)
-	if err := chronicler.TranscribeLearnings(context.Background(), "transcript", "   ", "logs"); err != nil {
+	usage, err := chronicler.TranscribeLearnings(context.Background(), "transcript", "   ", "logs")
+	if err != nil {
 		t.Fatalf("expected nil error for empty diff, got %v", err)
+	}
+	if usage.RequestsMade {
+		t.Fatal("RequestsMade = true for an empty diff; no provider request should occur")
 	}
 
 	genomePath := filepath.Join(workspace, ".tendril", "genome", "epigenetics.md")
