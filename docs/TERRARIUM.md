@@ -1,6 +1,6 @@
 # Terrarium Isolation Architecture
 
-This document describes the current implemented state of the Terrarium boundary in OpenTendril.
+This document describes the currently implemented state of the Terrarium boundary in OpenTendril.
 
 ## Core Taxonomy
 
