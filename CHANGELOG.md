@@ -10,6 +10,13 @@ where versions are cut.
 
 ### Added
 
+- **Sprout-run observation contract.** Finished Sprout runs persist the
+  Conductor outcome plus a Core-owned `failureCategory`, a credential-free
+  `providerDiagnostic`, `providerRequestAttempted`, and `toolInvocations`.
+  EventBus emits `mycorrhizal-request-begun` when the first Mycorrhizal
+  request is issued, and terminal sprout events carry the same structured
+  fields. The Greenhouse drill-down renders those facts as the primary
+  explanation and does not parse raw error text to decide a category.
 - **Two-tier Pollinator REST auth.** A durable Pollinator credential
   (`tendril_root_…`, issued by `tendril pollinator issue`) is the **refresh root**.
   Callers mint short-lived, Stem-signed **access tokens** (`tendril_access_…`, hard-capped

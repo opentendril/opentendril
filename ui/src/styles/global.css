@@ -622,6 +622,13 @@ input, textarea, select { font: inherit; }
 }
 .fact .v.gold { color: var(--bloom); }
 
+.observation-lead {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  color: var(--ink);
+}
+
 .drawer-section h3 {
   font-family: var(--font-display);
   font-size: 12px;

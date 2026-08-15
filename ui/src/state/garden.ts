@@ -357,8 +357,8 @@ export function applyGardenEvent(state: GardenState, event: StemEvent): GardenSt
       break;
     }
     default:
-      // health-*, terrarium-*, rhizome-update, xylem-transport,
-      // hormonal-trigger, api-key-invalid: ambient — surfaced in the event
+      // health-*, terrarium-*, mycorrhizal-request-begun, rhizome-update,
+      // xylem-transport, hormonal-trigger, api-key-invalid: ambient — surfaced in the event
       // pulse ticker, they only refresh the plant's liveness timestamp here.
       break;
   }

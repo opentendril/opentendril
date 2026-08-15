@@ -625,6 +625,43 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	}
 }
 
+func TestSproutPublishesMycorrhizalRequestBegunOnce(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		responses: []string{
+			`{"tool":"readFile","arguments":{"path":"README.md"}}`,
+			`{"final":"done"}`,
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout returned error: %v", err)
+	}
+	if _, err := sprout.Run(context.Background(), "read the readme"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+
+	var begun []eventbus.Event
+	for _, event := range bus.History(100) {
+		if event.Type == eventbus.EventMycorrhizalRequestBegun {
+			begun = append(begun, event)
+		}
+	}
+	if len(begun) != 1 {
+		t.Fatalf("published %d %s events, want 1", len(begun), eventbus.EventMycorrhizalRequestBegun)
+	}
+	if begun[0].SessionID != "session-1" {
+		t.Fatalf("sessionID = %q, want session-1", begun[0].SessionID)
+	}
+	if begun[0].Data["providerRequestAttempted"] != true {
+		t.Fatalf("data = %+v, want providerRequestAttempted=true", begun[0].Data)
+	}
+}
+
 // A run must be explainable after the fact as one readable transcript, not only
 // as a token stream a reviewer has to stitch back together. This pins that the
 // Sprout publishes its assembled conversation once, correlated to the session.

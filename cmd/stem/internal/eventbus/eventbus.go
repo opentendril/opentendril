@@ -55,6 +55,11 @@ const (
 	EventSproutEmerged    EventType = "sprout-emerged"
 	EventSproutMatured    EventType = "sprout-matured"
 	EventSproutWithered   EventType = "sprout-withered"
+	// EventMycorrhizalRequestBegun is published exactly once when the first
+	// provider / Mycorrhizal request for a Sprout run is about to be issued.
+	// It is the live signal that cognition has begun; the durable twin is
+	// providerRequestAttempted on the Sprout run record.
+	EventMycorrhizalRequestBegun EventType = "mycorrhizal-request-begun"
 	// EventSproutDetached reports that the Stem stopped waiting on a run that
 	// is still growing: the configured growth budget bounds attention, not
 	// work, so its expiry ends the wait and leaves the Sprout alive.
@@ -113,6 +118,7 @@ func AllEventTypes() []EventType {
 		EventSproutEmerged,
 		EventSproutMatured,
 		EventSproutWithered,
+		EventMycorrhizalRequestBegun,
 		EventSproutDetached,
 		EventSproutDowngraded,
 		EventSproutDormant,

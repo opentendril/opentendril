@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -178,6 +179,107 @@ func TestInstallSproutTerminalHistoryIsNoopWithoutStore(t *testing.T) {
 	installSproutTerminalHistory(orch, nil, context.Background(), historydb.SproutRun{})
 	if orch.OnTerminal != nil {
 		t.Fatal("observer installed without a history store")
+	}
+}
+
+func TestPersistTerminalSproutRunMapsProviderAuthFailure(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	opened := historydb.SproutRun{
+		RunID: "run-auth", SessionID: "s1", StepID: "run-auth",
+		Status: "running", StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSproutRun(context.Background(), opened); err != nil {
+		t.Fatalf("opening write: %v", err)
+	}
+
+	authErr := &llm.RequestError{
+		StatusCode: 401,
+		Provider:   "openrouter",
+		Model:      "anthropic/claude-sonnet-4.6",
+		Body:       "User not found",
+	}
+	persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
+		Outcome:         conductor.SproutOutcomeFailed,
+		Provider:        "openrouter",
+		Model:           "anthropic/claude-sonnet-4.6",
+		RequestsMade:    true,
+		ToolInvocations: 0,
+		FailureCategory: string(core.FailureCategoryProviderAuthRejected),
+		ProviderDiagnostic: &core.ProviderDiagnostic{
+			StatusCode: 401,
+			Message:    "User not found",
+			Provider:   "openrouter",
+		},
+	}, authErr)
+
+	runs, err := store.LoadSproutRuns(context.Background(), "s1", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load: %v %+v", err, runs)
+	}
+	got := runs[0]
+	if got.Status != "withered" {
+		t.Fatalf("status = %q, want withered", got.Status)
+	}
+	if got.FailureCategory != string(core.FailureCategoryProviderAuthRejected) {
+		t.Fatalf("failureCategory = %q, want %q", got.FailureCategory, core.FailureCategoryProviderAuthRejected)
+	}
+	if got.ProviderDiagnostic == nil || got.ProviderDiagnostic.StatusCode != 401 || got.ProviderDiagnostic.Message != "User not found" {
+		t.Fatalf("providerDiagnostic = %+v", got.ProviderDiagnostic)
+	}
+	if !got.ProviderRequestAttempted {
+		t.Fatal("providerRequestAttempted = false, want true")
+	}
+	if got.ToolInvocations != 0 {
+		t.Fatalf("toolInvocations = %d, want 0", got.ToolInvocations)
+	}
+	if got.Provider != "openrouter" {
+		t.Fatalf("provider = %q, want openrouter", got.Provider)
+	}
+	if strings.Contains(got.Error, "sk-") || strings.Contains(strings.ToLower(got.Error), "api key=") {
+		t.Fatalf("persisted error leaked a credential: %q", got.Error)
+	}
+}
+
+func TestPersistTerminalSproutRunClassifiesAuthWhenReportOmitsCategory(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	opened := historydb.SproutRun{
+		RunID: "run-auth-classify", SessionID: "s1", StepID: "run-auth-classify",
+		Status: "running", StartedAt: time.Now().UTC(),
+	}
+	persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
+		Outcome:      conductor.SproutOutcomeFailed,
+		RequestsMade: true,
+		ProviderDiagnostic: &core.ProviderDiagnostic{
+			StatusCode: 401,
+			Message:    "User not found",
+			Provider:   "openrouter",
+		},
+	}, &llm.RequestError{StatusCode: 401, Body: "User not found", Provider: "openrouter"})
+
+	runs, err := store.LoadSproutRuns(context.Background(), "s1", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load: %v %+v", err, runs)
+	}
+	if runs[0].FailureCategory != string(core.FailureCategoryProviderAuthRejected) {
+		t.Fatalf("adapter must call Core classification, got %q", runs[0].FailureCategory)
 	}
 }
 

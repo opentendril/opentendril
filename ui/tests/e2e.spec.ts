@@ -6,7 +6,7 @@
 // mirrors the Go Stem's documented REST + WebSocket surface 1:1.
 
 import { test, expect, type Page } from "@playwright/test";
-import type { Session } from "../src/lib/types";
+import type { Session, SproutRun } from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
 
@@ -33,7 +33,7 @@ function makeSession(overrides: Partial<Session>): Session {
  */
 async function mockStemBackend(
   page: Page,
-  { sessions = [] as Session[] } = {},
+  { sessions = [] as Session[], sproutRuns = [] as SproutRun[] } = {},
 ): Promise<{ lastSessionsAuthHeader: () => string | undefined }> {
   let lastSessionsAuthHeader: string | undefined;
 
@@ -61,12 +61,15 @@ async function mockStemBackend(
       json: { sessionId: sessionIdFromPath(route.request().url()), messages: [] },
     });
   });
-  await page.route("**/v1/sessions/*/sprout-runs", async (route) => {
-    await route.fulfill({
-      status: 200,
-      json: { sessionId: sessionIdFromPath(route.request().url()), sproutRuns: [] },
-    });
-  });
+  await page.route(
+    (url) => url.pathname.includes("/sprout-runs"),
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: { sessionId: sessionIdFromPath(route.request().url()), sproutRuns },
+      });
+    },
+  );
   await page.route("**/v1/sessions/*/events", async (route) => {
     await route.fulfill({
       status: 200,
@@ -97,7 +100,7 @@ async function completeOnboarding(page: Page, apiKey: string): Promise<void> {
     page.getByRole("heading", { name: /OpenTendril.*Command Center/ }),
   ).toBeVisible();
 
-  await page.getByLabel("Operator API key").fill(apiKey);
+  await page.getByLabel("Botanist key").fill(apiKey);
   await page.getByRole("button", { name: "Take root" }).click();
 
   // Onboarding.tsx flips to the Command Center ~450ms after both /health and
@@ -117,6 +120,50 @@ test.describe("Command Center onboarding", () => {
 
     // The key collected during onboarding is the one actually sent.
     expect(backend.lastSessionsAuthHeader()).toBe(`Bearer ${testApiKey}`);
+  });
+});
+
+test.describe("Command Center sprout-run observation", () => {
+  test("renders structured auth-failure facts without reading the raw error", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-e2e-observe" });
+    const run: SproutRun = {
+      runId: "step-auth",
+      sessionId: session.sessionId,
+      stepId: "step-auth",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4.6",
+      status: "withered",
+      outcome: "failed",
+      failureCategory: "provider-auth-rejected",
+      providerRequestAttempted: true,
+      toolInvocations: 0,
+      providerDiagnostic: {
+        statusCode: 401,
+        message: "User not found",
+        provider: "openrouter",
+      },
+      transcript: "investigate the withered run",
+      error: "llm returned 401: User not found (provider=openrouter model=anthropic/claude-sonnet-4.6)",
+      startedAt: "2026-08-16T12:00:00Z",
+      finishedAt: "2026-08-16T12:00:02Z",
+    };
+
+    await mockStemBackend(page, { sessions: [session], sproutRuns: [run] });
+    await completeOnboarding(page, testApiKey);
+
+    await page.locator(".run-row").click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText("Withered — provider authentication rejected")).toBeVisible();
+    await expect(drawer.getByText("openrouter", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("attempted", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("HTTP 401 / User not found")).toBeVisible();
+    await expect(drawer.getByText("Fruit", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("none", { exact: true })).toBeVisible();
+    // Raw error remains secondary evidence only.
+    await expect(drawer.getByText("Raw error (secondary)")).toBeVisible();
   });
 });
 

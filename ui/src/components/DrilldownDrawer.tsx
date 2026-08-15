@@ -4,6 +4,13 @@
 // its stepId.
 
 import { useEffect } from "react";
+import {
+  diagnosticLine,
+  failureCategoryLabel,
+  providerRequestLabel,
+  resolvedProvider,
+  toolInvocationCount,
+} from "../lib/observation";
 import { useStem } from "../state/store";
 
 function fmt(iso?: string): string {
@@ -61,14 +68,45 @@ export function DrilldownDrawer() {
         </div>
 
         <div className="drawer-body">
+          {run.failureCategory ? (
+            <div className="drawer-section">
+              <h3>Observation</h3>
+              <p className="observation-lead">
+                {run.status === "withered" ? "Withered" : run.status} — {failureCategoryLabel(run.failureCategory)}
+              </p>
+            </div>
+          ) : null}
+
           <div className="fact-grid">
             <div className="fact">
-              <div className="k">Genotype</div>
-              <div className="v">{run.genotype || "default"}</div>
+              <div className="k">Provider</div>
+              <div className="v">{resolvedProvider(run) || "—"}</div>
             </div>
             <div className="fact">
               <div className="k">Model</div>
               <div className="v">{run.model || "inherited"}</div>
+            </div>
+            <div className="fact">
+              <div className="k">Provider request</div>
+              <div className="v">{providerRequestLabel(run)}</div>
+            </div>
+            <div className="fact">
+              <div className="k">Tools</div>
+              <div className="v">{toolInvocationCount(run)}</div>
+            </div>
+            <div className="fact">
+              <div className="k">Outcome</div>
+              <div className="v">{run.outcome || "—"}</div>
+            </div>
+            {run.failureCategory && run.failureCategory !== "matured" ? (
+              <div className="fact">
+                <div className="k">Fruit</div>
+                <div className="v">none</div>
+              </div>
+            ) : null}
+            <div className="fact">
+              <div className="k">Genotype</div>
+              <div className="v">{run.genotype || "default"}</div>
             </div>
             <div className="fact">
               <div className="k">Origin</div>
@@ -100,6 +138,13 @@ export function DrilldownDrawer() {
             ) : null}
           </div>
 
+          {diagnosticLine(run) ? (
+            <div className="drawer-section">
+              <h3>Diagnostic</h3>
+              <pre className="log-block">{diagnosticLine(run)}</pre>
+            </div>
+          ) : null}
+
           <div className="drawer-section">
             <h3>Task transcript</h3>
             <pre className="log-block">{run.transcript || "(empty)"}</pre>
@@ -107,7 +152,7 @@ export function DrilldownDrawer() {
 
           {run.error ? (
             <div className="drawer-section">
-              <h3>Wither cause</h3>
+              <h3>Raw error (secondary)</h3>
               <pre className="log-block scorched">{run.error}</pre>
             </div>
           ) : null}

@@ -104,6 +104,11 @@ type Sprout struct {
 	// Atomic because a dormancy capture may look at a Sprout while its loop
 	// goroutine is still running.
 	wroteWorkspace atomic.Bool
+	// requestBegun is set the first time a Mycorrhizal request is about to
+	// be issued, so the structured "cognition has begun" signal fires once.
+	requestBegun atomic.Bool
+	// toolInvocations counts terrarium tool calls that actually ran.
+	toolInvocations atomic.Int64
 }
 
 // readOnlyTerrariumTools names the terrarium tools that cannot write to the
@@ -162,7 +167,8 @@ type sproutResult struct {
 	// RequestsMade is true when Sprout.Run issued at least one provider
 	// request. It is the usageStarted fact, independent of whether Usage
 	// fields were supplied.
-	RequestsMade bool
+	RequestsMade    bool
+	ToolInvocations int
 }
 
 func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
@@ -350,6 +356,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 	unusableReplies := 0
 
 	for iteration := 0; iteration < sproutMaxIterations; iteration++ {
+		a.beginMycorrhizalRequest()
 		var tokenChan chan string
 		var response string
 		var nativeToolCalls []llm.ToolCall
@@ -422,6 +429,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			a.msgMu.RLock()
 			currentMessages := a.messages
 			a.msgMu.RUnlock()
+			a.beginMycorrhizalRequest()
 			probeRes, probeErr := a.nativeClient.CallWithTools(ctx, currentMessages, nil, nil)
 			aggregateUsage(&runUsage, probeRes.Usage, !usageStarted)
 			usageStarted = true
@@ -611,10 +619,32 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 
 func (a *Sprout) finishedResult(usage llm.Usage, started bool) sproutResult {
 	return sproutResult{
-		WroteWorkspace: a.wroteWorkspace.Load(),
-		Usage:          usage,
-		RequestsMade:   started,
+		WroteWorkspace:  a.wroteWorkspace.Load(),
+		Usage:           usage,
+		RequestsMade:    started,
+		ToolInvocations: int(a.toolInvocations.Load()),
 	}
+}
+
+// beginMycorrhizalRequest publishes the structured "first provider request
+// has begun" signal exactly once per Sprout.Run. It is the live EventBus
+// half of providerRequestAttempted.
+func (a *Sprout) beginMycorrhizalRequest() {
+	if a == nil || !a.requestBegun.CompareAndSwap(false, true) {
+		return
+	}
+	if a.eventBus == nil {
+		return
+	}
+	a.eventBus.Publish(eventbus.Event{
+		Type:      eventbus.EventMycorrhizalRequestBegun,
+		Source:    a.stepID,
+		SessionID: a.sessionID,
+		Data: map[string]interface{}{
+			"stepId":                   a.stepID,
+			"providerRequestAttempted": true,
+		},
+	})
 }
 
 func (a *Sprout) appendTranscript(role string, content string) {
@@ -760,6 +790,7 @@ const maxToolObservationEventBytes = 2000
 // leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
 // no bus is wired (workspace and test callers), matching the other publishers.
 func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
+	a.toolInvocations.Add(1)
 	if a.eventBus == nil {
 		return
 	}

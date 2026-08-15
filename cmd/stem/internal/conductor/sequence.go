@@ -1063,6 +1063,11 @@ type sproutExecutionResult struct {
 	// detachment that ended elsewhere — still knows whether the model did any
 	// work, which the file list alone cannot say.
 	WroteWorkspace bool
+	// RequestsMade / ToolInvocations travel with the result so a sequence
+	// terminal event can carry the same observation facts the direct path
+	// does, including a withered run that never invoked a tool.
+	RequestsMade    bool
+	ToolInvocations int
 	// DetachedEnd delivers what a detached run finally did, once it has
 	// actually ended, and is non-nil only when Outcome is
 	// SproutOutcomeDetached. The caller still holds teardown the run needs —
@@ -1381,6 +1386,8 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	// the file list cannot: it is empty both when the model did nothing and
 	// when the run never got far enough to look.
 	var executionWroteWorkspace bool
+	var executionRequestsMade bool
+	var executionToolInvocations int
 	defer func() {
 		outcome := executionOutcome
 		// A detached run has not ended, so it has no terminal event yet. The
@@ -1403,7 +1410,15 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 		if err != nil {
 			reason = err.Error()
 		}
-		publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, executionFiles, executionFilesUnmeasured, reason)
+		terminal := SproutRunReport{
+			Outcome:         outcome,
+			FilesModified:   executionFiles,
+			FilesUnmeasured: executionFilesUnmeasured,
+			RequestsMade:    executionRequestsMade,
+			ToolInvocations: executionToolInvocations,
+		}
+		applyObservation(&terminal, err)
+		publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, terminal, reason)
 	}()
 	publishSproutEmerged(orch.EventBus, stepID, orch.SessionID, orch.Substrate)
 
@@ -1477,6 +1492,8 @@ func runSequenceSprout(ctx context.Context, orch *DockerOrchestrator, taskPrompt
 	executionFiles = executionResult.FilesModified
 	executionFilesUnmeasured = executionResult.FilesUnmeasured
 	executionWroteWorkspace = executionResult.WroteWorkspace
+	executionRequestsMade = executionResult.RequestsMade
+	executionToolInvocations = executionResult.ToolInvocations
 	if err != nil {
 		if orch.DisableMergeBack && strings.TrimSpace(executionResult.CommitHash) != "" {
 			return executionResult.CommitHash, err
@@ -1692,6 +1709,8 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 		result.Response = sproutResult.Response
 		result.Protocol = sproutResult.Protocol
+		result.RequestsMade = sproutResult.RequestsMade
+		result.ToolInvocations = sproutResult.ToolInvocations
 		if sproutResult.ActionResult != nil {
 			verdict := strings.ToUpper(strings.TrimSpace(sproutResult.ActionResult.Verdict))
 			switch verdict {
@@ -1870,7 +1889,15 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 					reason = detachedErr.Error()
 				}
 				detachedResult.Outcome = outcome
-				publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, outcome, detachedResult.FilesModified, detachedResult.FilesUnmeasured, reason)
+				terminal := SproutRunReport{
+					Outcome:         outcome,
+					FilesModified:   detachedResult.FilesModified,
+					FilesUnmeasured: detachedResult.FilesUnmeasured,
+					RequestsMade:    detachedResult.RequestsMade,
+					ToolInvocations: detachedResult.ToolInvocations,
+				}
+				applyObservation(&terminal, detachedErr)
+				publishSproutTerminal(orch.EventBus, stepID, orch.SessionID, terminal, reason)
 				detachedEnd <- detachedRunEnding{result: detachedResult, err: detachedErr}
 			}()
 			result.ImageName = imageName

@@ -33,7 +33,7 @@
 | **Sequence** | `EventSequenceFailure` (`sequence-failure`), `EventSequenceComplete` (`sequence-complete`), `EventSequenceCleanupIncomplete` (`sequence-cleanup-incomplete`). |
 | **Stream / thought** | `EventStreamToken` (`stream-token`), `EventThoughtBranch` (`thought-branch`). |
 | **Tool / transcript** | `EventToolInvoked` (`tool-invoked`), `EventSproutTranscript` (`sprout-transcript`; historical persisted name `Pollinator-transcript` may still exist in old history rows). |
-| **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`), `EventSproutDetached` (`sprout-detached`), `EventSproutDormant` (`sprout-dormant`). |
+| **Sprout lifecycle** | `EventSproutEmerged` (`sprout-emerged`), `EventMycorrhizalRequestBegun` (`mycorrhizal-request-begun`), `EventSproutMatured` (`sprout-matured`), `EventSproutWithered` (`sprout-withered`), `EventSproutDetached` (`sprout-detached`), `EventSproutDormant` (`sprout-dormant`). |
 | **Parallel / GA / mesh-ish** | `EventParallelSprouting` (`parallel-sprouting`), `EventMycelialMerge` (`mycelial-merge`), `EventPhenotypicSelection` (`phenotypic-selection`). |
 | **Delegation audit** | `EventDelegationAuthorized` (`delegation-authorized`), `EventDelegationDenied` (`delegation-denied`), `EventTriggerBlocked` (`hormonal-trigger-blocked`). |
 | `AllEventTypes` | Returns every registered type in declaration order — used by gateway `/ws`, Prometheus pre-registration, and broad telemetry subscriptions. **Must be kept in lockstep** with the const block. |
@@ -57,7 +57,7 @@ Package-level sentinel errors: **none**.
 **Fan-in:**
 
 - **`cmd/stem`** — constructs the process bus for `serve`, MCP, health CLI, sprout/sequence ops, and chat-completions streaming; attaches `historydb` as a sink and remote transporters; publishes `stream-token` from the chat path; shuts the bus down on process exit paths (`cmdserve.go`, `cmdmcp.go`, `cmdsprout.go`, `clidelegation.go`, …).
-- **`internal/conductor`** — primary producer: sequence complete/failure + terrarium OOM/timeout; sprout emerged/matured/withered; stream-token, thought-branch, tool-invoked, sprout-transcript; parallel-sprouting / mycelial-merge; phenotypic-selection (`sequence.go`, `sprout.go`, `outcome.go`, `parallelsprouting.go`, `selection.go`).
+- **`internal/conductor`** — primary producer: sequence complete/failure + terrarium OOM/timeout; sprout emerged/mycorrhizal-request-begun/matured/withered; stream-token, thought-branch, tool-invoked, sprout-transcript; parallel-sprouting / mycelial-merge; phenotypic-selection (`sequence.go`, `sprout.go`, `outcome.go`, `parallelsprouting.go`, `selection.go`).
 - **`internal/gateway`** — consumer only: `Subscribe`s to every `AllEventTypes()` entry per WebSocket client and optionally replays `History` via `?replay=N` (`gateway.go`).
 - **`internal/healthmon`** — publishes `health-check` every interval and `health-degraded` when overall health is false (`monitor.go`). Does not publish `health-recovered`.
 - **`internal/historydb`** — sink: `Store.Consume` persists every event into SQLite (`historydb.go`).
