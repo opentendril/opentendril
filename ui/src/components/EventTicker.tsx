@@ -5,6 +5,7 @@ const TYPE_COLOR: Record<string, string> = {
   "sprout-emerged": "var(--chlorophyll)",
   "sprout-matured": "var(--bloom)",
   "sprout-withered": "var(--wither)",
+  "mycorrhizal-request-begun": "var(--spore)",
   "parallel-sprouting": "var(--sap)",
   "mycelial-merge": "var(--spore)",
   "phenotypic-selection": "var(--bloom)",

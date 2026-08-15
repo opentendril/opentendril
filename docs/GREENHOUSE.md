@@ -35,7 +35,10 @@ Stem-side API contracts the client depends on.
 
 The client is **strictly decoupled**: it consumes only the documented HTTP +
 WebSocket surface and has no knowledge of Go internals. This is what allows the
-UI to ship, version, and deploy independently of the Stem binary.
+UI to ship, version, and deploy independently of the Stem binary. The run
+drill-down renders the Stem's structured observation fields as the primary
+explanation of a run; it does not parse raw error strings to decide a failure
+category. Raw telemetry remains secondary evidence.
 
 It leans on three Phase 1 backend capabilities:
 
@@ -69,7 +72,7 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
-| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). |
+| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). |
 

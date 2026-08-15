@@ -29,11 +29,46 @@ export interface ChatMessage {
   createdAt: string;
 }
 
+export interface UsageComponent {
+  requestsMade: boolean;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  costAmount?: string;
+  costUnit?: string;
+  costProvenance?: string;
+  provider?: string;
+  model?: string;
+}
+
+export interface SproutRunUsage {
+  execution?: UsageComponent;
+  postRun?: UsageComponent;
+}
+
+export interface ProviderDiagnostic {
+  statusCode?: number;
+  message?: string;
+  provider?: string;
+}
+
+export type FailureCategory =
+  | "provider-auth-rejected"
+  | "provider-request-rejected"
+  | "no-engagement"
+  | "terrarium-runtime"
+  | "execution-failed"
+  | "matured"
+  | string;
+
 export interface SproutRun {
   runId: string;
   sessionId?: string;
   stepId?: string;
   origin?: string;
+  pollen?: string;
+  substrate?: string;
+  provider?: string;
   model?: string;
   genotype?: string;
   transcript?: string;
@@ -42,6 +77,12 @@ export interface SproutRun {
   error?: string;
   startedAt: string;
   finishedAt?: string;
+  usage?: SproutRunUsage;
+  outcome?: string;
+  failureCategory?: FailureCategory;
+  providerDiagnostic?: ProviderDiagnostic;
+  providerRequestAttempted?: boolean;
+  toolInvocations?: number;
 }
 
 export interface EventRecord {
@@ -80,6 +121,7 @@ export type StemEventType =
   | "sprout-emerged"
   | "sprout-matured"
   | "sprout-withered"
+  | "mycorrhizal-request-begun"
   | "hormonal-trigger"
   | "rhizome-update"
   | "xylem-transport"

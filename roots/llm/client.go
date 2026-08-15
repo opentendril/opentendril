@@ -1205,10 +1205,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		// Wrapped rather than replaced so the provider's own message, which is
 		// usually the whole answer, still reaches the operator.
 		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
-			return Result{}, fmt.Errorf("%w: llm returned %d: %s (provider=%s model=%s tier=%s ceiling=%d source=%q)", ErrRejectedWithTools, resp.StatusCode, strings.TrimSpace(string(body)), c.spec.Provider, c.spec.Model, c.spec.Tier, c.spec.OutputLimit, c.spec.CeilingSource)
+			return Result{}, newRequestError(resp.StatusCode, string(body), c.spec, ErrRejectedWithTools)
 		}
 
-		return Result{}, fmt.Errorf("llm returned %d: %s (provider=%s model=%s tier=%s ceiling=%d source=%q)", resp.StatusCode, strings.TrimSpace(string(body)), c.spec.Provider, c.spec.Model, c.spec.Tier, c.spec.OutputLimit, c.spec.CeilingSource)
+		return Result{}, newRequestError(resp.StatusCode, string(body), c.spec, nil)
 	}
 
 	if stream {

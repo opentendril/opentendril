@@ -233,3 +233,37 @@ func TestSproutRunReportsTheResolvedProviderAndModel(t *testing.T) {
 		}
 	})
 }
+
+func TestSproutRunClassifiesProviderAuthFromTypedDiagnostic(t *testing.T) {
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{
+			Outcome:                  "failed",
+			Provider:                 "openrouter",
+			Model:                    "anthropic/claude-sonnet-4.6",
+			ProviderRequestAttempted: true,
+			ToolInvocations:          0,
+			ProviderDiagnostic: &core.ProviderDiagnostic{
+				StatusCode: 401,
+				Message:    "User not found",
+				Provider:   "openrouter",
+			},
+		}, fmt.Errorf("llm returned 401: User not found")
+	})
+
+	result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+	if err == nil {
+		t.Fatal("expected the execution error to propagate")
+	}
+	if result.FailureCategory != string(core.FailureCategoryProviderAuthRejected) {
+		t.Fatalf("FailureCategory = %q, want %q", result.FailureCategory, core.FailureCategoryProviderAuthRejected)
+	}
+	if result.ProviderDiagnostic == nil || result.ProviderDiagnostic.StatusCode != 401 || result.ProviderDiagnostic.Message != "User not found" {
+		t.Fatalf("ProviderDiagnostic = %+v", result.ProviderDiagnostic)
+	}
+	if !result.ProviderRequestAttempted {
+		t.Fatal("ProviderRequestAttempted = false, want true")
+	}
+	if result.ToolInvocations != 0 {
+		t.Fatalf("ToolInvocations = %d, want 0", result.ToolInvocations)
+	}
+}

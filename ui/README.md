@@ -218,6 +218,7 @@ pods. Payload field names below match the Go publishers exactly.
 | --- | --- | --- |
 | `parallel-sprouting` | `phase:"map"`, `sproutCount` | Branch unfurls with `sproutCount` dashed **buds** awaiting sprouts. |
 | `sprout-emerged` | `sproutIndex`, `branchName`, `detail` | A **tendril tip** grows in (stroke-dash draw), lit chlorophyll-green. |
+| `mycorrhizal-request-begun` | `stepId`, `providerRequestAttempted` | Ambient pulse: the first provider / Mycorrhizal request for that Sprout has begun. |
 | `sprout-matured` | `sproutIndex`, `branchName` | The tip **blooms** — gold bud with a glow. |
 | `sprout-withered` | `sproutIndex`, `branchName`, `detail` | The tip **desaturates to umber, droops, and fades** (never removed — the loss stays visible). |
 | `mycelial-merge` | `phase:"reduce"`, `maturedCount`, `witheredCount` | Glowing **filaments run from matured tips back into the branch node**, which pulses (consensus being grown). |

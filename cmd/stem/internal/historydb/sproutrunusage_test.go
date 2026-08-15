@@ -350,8 +350,8 @@ VALUES ('legacy-run', 'sess-legacy', 'matured', '2026-01-01T00:00:00Z');`
 	if err := store.db.QueryRow(`SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version); err != nil {
 		t.Fatalf("read version: %v", err)
 	}
-	if version != 3 {
-		t.Fatalf("schema version = %d, want 3", version)
+	if version != currentSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, currentSchemaVersion)
 	}
 
 	var usageColumn string

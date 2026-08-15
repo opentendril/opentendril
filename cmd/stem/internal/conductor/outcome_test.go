@@ -9,9 +9,42 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
+
+func TestApplyObservationClassifiesProviderAuthFromTypedError(t *testing.T) {
+	report := SproutRunReport{
+		Outcome:      SproutOutcomeFailed,
+		RequestsMade: true,
+		Provider:     "openrouter",
+		Model:        "anthropic/claude-sonnet-4.6",
+	}
+	applyObservation(&report, &llm.RequestError{
+		StatusCode: 401,
+		Provider:   "openrouter",
+		Body:       "User not found",
+	})
+	if report.FailureCategory != string(core.FailureCategoryProviderAuthRejected) {
+		t.Fatalf("FailureCategory = %q, want %q", report.FailureCategory, core.FailureCategoryProviderAuthRejected)
+	}
+	if report.ProviderDiagnostic == nil || report.ProviderDiagnostic.StatusCode != 401 || report.ProviderDiagnostic.Message != "User not found" {
+		t.Fatalf("ProviderDiagnostic = %+v", report.ProviderDiagnostic)
+	}
+}
+
+func TestApplyObservationDoesNotParseErrorText(t *testing.T) {
+	report := SproutRunReport{Outcome: SproutOutcomeFailed, RequestsMade: true}
+	applyObservation(&report, errors.New("llm returned 401: User not found"))
+	if report.FailureCategory != string(core.FailureCategoryExecutionFailed) {
+		t.Fatalf("FailureCategory = %q, want execution-failed when the error is untyped", report.FailureCategory)
+	}
+	if report.ProviderDiagnostic != nil {
+		t.Fatalf("ProviderDiagnostic = %+v, want nil without a typed RequestError", report.ProviderDiagnostic)
+	}
+}
 
 func TestClassifySproutOutcome(t *testing.T) {
 	timedOut := fmt.Errorf("tool call cut off: %w", ErrSproutTimedOut)
@@ -114,11 +147,12 @@ func TestChangeEvidenceAttributedFiles(t *testing.T) {
 // broken run and a watchdog-killed run (via an error wrapping
 // ErrSproutTimedOut, exactly what terrariumToolSession.Call produces).
 type failingSproutRunner struct {
-	err error
+	err    error
+	result sproutResult
 }
 
 func (f *failingSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
-	return sproutResult{}, f.err
+	return f.result, f.err
 }
 
 // newOutcomeTestRepo builds a committed git repository on a non-default branch
@@ -265,14 +299,16 @@ func filterEvents(events []eventbus.Event, eventType eventbus.EventType) []event
 func TestRunSproutOutcomes(t *testing.T) {
 	sproutFailure := errors.New("Sprout exploded")
 	sproutTimeout := fmt.Errorf("tool call %q was cut off: %w", "runCommand", ErrSproutTimedOut)
+	sproutAuth := &llm.RequestError{StatusCode: 401, Provider: "openrouter", Body: "User not found"}
 
 	cases := []struct {
-		name          string
-		runner        sproutRunner
-		modifiedFiles []string
-		wantOutcome   string
-		wantErrIs     error
-		wantTerminal  eventbus.EventType
+		name                string
+		runner              sproutRunner
+		modifiedFiles       []string
+		wantOutcome         string
+		wantErrIs           error
+		wantTerminal        eventbus.EventType
+		wantFailureCategory string
 	}{
 		{
 			name:          "changed something",
@@ -304,6 +340,18 @@ func TestRunSproutOutcomes(t *testing.T) {
 			wantErrIs:     ErrSproutTimedOut,
 			wantTerminal:  eventbus.EventSproutWithered,
 		},
+		{
+			name: "provider auth rejected",
+			runner: &failingSproutRunner{
+				err:    sproutAuth,
+				result: sproutResult{RequestsMade: true},
+			},
+			modifiedFiles:       []string{},
+			wantOutcome:         SproutOutcomeFailed,
+			wantErrIs:           sproutAuth,
+			wantTerminal:        eventbus.EventSproutWithered,
+			wantFailureCategory: string(core.FailureCategoryProviderAuthRejected),
+		},
 	}
 
 	for _, testCase := range cases {
@@ -334,6 +382,20 @@ func TestRunSproutOutcomes(t *testing.T) {
 			if report.Outcome != testCase.wantOutcome {
 				t.Fatalf("report.Outcome = %q, want %q", report.Outcome, testCase.wantOutcome)
 			}
+			if testCase.wantFailureCategory != "" && report.FailureCategory != testCase.wantFailureCategory {
+				t.Fatalf("report.FailureCategory = %q, want %q", report.FailureCategory, testCase.wantFailureCategory)
+			}
+			if testCase.wantFailureCategory == string(core.FailureCategoryProviderAuthRejected) {
+				if report.ProviderDiagnostic == nil || report.ProviderDiagnostic.StatusCode != 401 {
+					t.Fatalf("ProviderDiagnostic = %+v, want HTTP 401", report.ProviderDiagnostic)
+				}
+				if !report.RequestsMade {
+					t.Fatal("RequestsMade = false, want true")
+				}
+				if report.ToolInvocations != 0 {
+					t.Fatalf("ToolInvocations = %d, want 0", report.ToolInvocations)
+				}
+			}
 			if testCase.wantOutcome == SproutOutcomeComplete {
 				if captured.Status != testCase.wantOutcome {
 					t.Fatalf("tendril-status Status = %q, want %q", captured.Status, testCase.wantOutcome)
@@ -358,6 +420,11 @@ func TestRunSproutOutcomes(t *testing.T) {
 			}
 			if got := terminal[0].Data["outcome"]; got != testCase.wantOutcome {
 				t.Fatalf("terminal event outcome = %v, want %q", got, testCase.wantOutcome)
+			}
+			if testCase.wantFailureCategory != "" {
+				if got := terminal[0].Data["failureCategory"]; got != testCase.wantFailureCategory {
+					t.Fatalf("terminal event failureCategory = %v, want %q", got, testCase.wantFailureCategory)
+				}
 			}
 			if terminal[0].SessionID != "session-outcome" {
 				t.Fatalf("terminal event SessionID = %q, want session-outcome", terminal[0].SessionID)

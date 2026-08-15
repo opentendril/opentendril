@@ -82,6 +82,17 @@ type SproutRunResult struct {
 	// usage.
 	Provider string `json:"provider,omitempty"`
 	Model    string `json:"model,omitempty"`
+	// FailureCategory is the Core-owned observation class. Adapters copy it;
+	// they do not invent it.
+	FailureCategory string `json:"failureCategory,omitempty"`
+	// ProviderDiagnostic is the credential-free provider explanation, when a
+	// typed provider response exists.
+	ProviderDiagnostic *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
+	// ProviderRequestAttempted is true when the first Mycorrhizal request was
+	// issued.
+	ProviderRequestAttempted bool `json:"providerRequestAttempted"`
+	// ToolInvocations is the number of terrarium tool calls the Sprout made.
+	ToolInvocations int `json:"toolInvocations"`
 }
 
 // SproutRunReport is what the execution port says a finished run actually
@@ -96,6 +107,12 @@ type SproutRunReport struct {
 	// nothing is exactly the run whose model nothing could name.
 	Provider string
 	Model    string
+	// Observation fields are classified by the Core (or already classified by
+	// the execution port using ClassifyFailure). Adapters copy them.
+	FailureCategory          string
+	ProviderDiagnostic       *ProviderDiagnostic
+	ProviderRequestAttempted bool
+	ToolInvocations          int
 }
 
 // SproutOperations is the injection port for sprout execution. Run may be nil, in
@@ -157,6 +174,25 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 	// runs that fail are the ones whose account is asked the most of.
 	result.Provider = report.Provider
 	result.Model = report.Model
+	result.ProviderRequestAttempted = report.ProviderRequestAttempted
+	result.ToolInvocations = report.ToolInvocations
+	if report.ProviderDiagnostic != nil {
+		copied := *report.ProviderDiagnostic
+		result.ProviderDiagnostic = &copied
+	}
+	result.FailureCategory = report.FailureCategory
+	if result.FailureCategory == "" {
+		statusCode := 0
+		if result.ProviderDiagnostic != nil {
+			statusCode = result.ProviderDiagnostic.StatusCode
+		}
+		result.FailureCategory = string(ClassifyFailure(ObservationFacts{
+			Outcome:                  report.Outcome,
+			RunFailed:                err != nil,
+			ProviderRequestAttempted: report.ProviderRequestAttempted,
+			ProviderStatusCode:       statusCode,
+		}))
+	}
 	if err != nil {
 		result.Status = "withered"
 		return result, err

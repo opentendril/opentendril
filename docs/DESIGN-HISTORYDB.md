@@ -15,7 +15,7 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 - Persist and resume Tendril sessions with their preferences as upserts, keyed by `sessionId` (`SaveSession` / `LoadSessions` / `DeleteSession`).
 - Append and load the unified chat log, newest-N-in-order per session (`AppendMessage` / `LoadMessages`).
 - Act as the EventBus persistence sink: every published event is encoded and written to the `events` table (`Consume` / `RecordEvent` / `LoadEvents`).
-- Persist Sprout execution history as a lifecycle upsert — once when the Sprout emerges (`running`) and again when it matures or withers — recording the dispatching Pollen and the substrate the work targeted so a read can be scoped to the subject that owns it (`RecordSproutRun` / `LoadSproutRuns`).
+- Persist Sprout execution history as a lifecycle upsert — once when the Sprout emerges (`running`) and again when it matures or withers — recording the dispatching Pollen, the substrate the work targeted, the resolved provider, the usage envelope, and the structured observation envelope (outcome, failure category, safe provider diagnostic, whether a Mycorrhizal request was attempted, and tool invocation count) so a read can be scoped to the subject that owns it and a Botanist can explain the run without parsing free-text errors (`RecordSproutRun` / `LoadSproutRuns`).
 - Report the distinct subjects that dispatched the Sprout runs recorded against one phytomer, each paired with the substrate that run targeted, without loading or decrypting any run content (`SproutRunOwners`).
 - Persist `seed.grow` bounded-task runs keyed by the durable `handle` a Pollinator collects against, recording the dispatching Pollen so collection can be scoped, plus the reviewable Fruit — status, iterations, branch, diff, logs (`RecordSeedRun` / `GetSeedRun`).
 - Honor the persistence toggle: `OpenFromEnv` returns `(nil, nil)` when logging is disabled so callers run fully headless without touching disk (`LoggingEnabled` / `OpenFromEnv`).
@@ -34,7 +34,7 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 | Symbol | Role |
 | --- | --- |
 | `Store` | SQLite-backed history database; implements `session.Store` and `eventbus.Sink`. Fields: `db`, `path`, `eventErrors`. |
-| `SproutRun` | One Sprout execution record (runId, session/step/origin, model, genotype, transcript, status, output, error, timestamps). |
+| `SproutRun` | One Sprout execution record (runId, session/step/origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, timestamps, usage, outcome, failureCategory, providerDiagnostic, providerRequestAttempted, toolInvocations). |
 | `SeedRun` | One `seed.grow` bounded-task record: handle, dispatching Pollen, substrate, goal, status, iterations, and the Fruit (branch, diff, logs, error, timestamps). |
 | `EventRecord` | One persisted EventBus telemetry row (id, sessionId, type, source, data map, createdAt). |
 | `EnvDBLogging` / `EnvDBPath` | Env-var constants: persistence toggle and database-path override. |

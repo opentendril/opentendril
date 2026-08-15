@@ -302,11 +302,15 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			sproutReport, err := orch.RunSprout(ctx, spec.Transcript)
 
 			return core.SproutRunReport{
-				Output:        sproutReport.Output,
-				Outcome:       sproutReport.Outcome,
-				FilesModified: sproutReport.FilesModified,
-				Provider:      sproutReport.Provider,
-				Model:         sproutReport.Model,
+				Output:                   sproutReport.Output,
+				Outcome:                  sproutReport.Outcome,
+				FilesModified:            sproutReport.FilesModified,
+				Provider:                 sproutReport.Provider,
+				Model:                    sproutReport.Model,
+				FailureCategory:          sproutReport.FailureCategory,
+				ProviderDiagnostic:       sproutReport.ProviderDiagnostic,
+				ProviderRequestAttempted: sproutReport.RequestsMade,
+				ToolInvocations:          sproutReport.ToolInvocations,
 			}, err
 		},
 	}

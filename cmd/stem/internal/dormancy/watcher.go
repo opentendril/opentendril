@@ -183,6 +183,7 @@ func New(cfg Config) *Watcher {
 // the two terminal events stop it. Nothing here is acted on beyond recording.
 var observedTypes = []eventbus.EventType{
 	eventbus.EventSproutEmerged,
+	eventbus.EventMycorrhizalRequestBegun,
 	eventbus.EventStreamToken,
 	eventbus.EventToolInvoked,
 	eventbus.EventThoughtBranch,

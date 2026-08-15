@@ -195,11 +195,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if report.Outcome == "" {
 			report.Outcome = classifySproutOutcome(err, changes, report.Output, d.Investigation)
 		}
+		applyObservation(report, err)
 		reason := ""
 		if err != nil {
 			reason = err.Error()
 		}
-		publishSproutTerminal(d.EventBus, stepID, d.SessionID, report.Outcome, report.FilesModified, report.FilesUnmeasured, reason)
+		publishSproutTerminal(d.EventBus, stepID, d.SessionID, *report, reason)
 		if d.OnTerminal != nil {
 			d.OnTerminal(*report, err)
 		}
@@ -618,6 +619,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// all-nil Usage still records that provider requests happened.
 		report.Usage = sproutResult.Usage
 		report.RequestsMade = sproutResult.RequestsMade
+		report.ToolInvocations = sproutResult.ToolInvocations
 
 		// This report is built fresh, not inherited from the caller's — a
 		// detached run reaches here long after RunSprout returned — so the

@@ -73,9 +73,11 @@ func historyRetentionDaysFromEnv() int {
 // what stops an older binary opening a shape it would misread, so a shape
 // change that leaves it alone is a shape change with no such guard.
 //
-// Version 3 adds sproutruns.usage. The stamp moves so an older binary refuses a
-// database whose sprout run rows carry a column it does not read.
-const currentSchemaVersion = 3
+// Version 4 adds sproutruns.provider and sproutruns.observation so a finished
+// run can carry the structured observation contract (outcome, failure
+// category, safe provider diagnostic, request-begun, tool count) without
+// collapsing it to matured/withered + free-text.
+const currentSchemaVersion = 4
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -93,6 +95,7 @@ type SproutRun struct {
 	// evaluated against it, so observation is bounded by the same substrate
 	// scope that bounded the dispatch.
 	Substrate  string         `json:"substrate,omitempty"`
+	Provider   string         `json:"provider,omitempty"`
 	Model      string         `json:"model,omitempty"`
 	Genotype   string         `json:"genotype,omitempty"`
 	Transcript string         `json:"transcript,omitempty"`
@@ -102,6 +105,35 @@ type SproutRun struct {
 	StartedAt  time.Time      `json:"startedAt"`
 	FinishedAt time.Time      `json:"finishedAt,omitempty"`
 	Usage      SproutRunUsage `json:"usage,omitempty"`
+	// Outcome is the Conductor's SproutOutcome* verdict, persisted rather
+	// than collapsed into status.
+	Outcome string `json:"outcome,omitempty"`
+	// FailureCategory is the Core-owned Botanist-facing class.
+	FailureCategory string `json:"failureCategory,omitempty"`
+	// ProviderDiagnostic is the credential-free provider explanation.
+	ProviderDiagnostic *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
+	// ProviderRequestAttempted is true when the first Mycorrhizal request
+	// was issued.
+	ProviderRequestAttempted bool `json:"providerRequestAttempted"`
+	// ToolInvocations is how many terrarium tool calls the Sprout made.
+	ToolInvocations int `json:"toolInvocations"`
+}
+
+// ProviderDiagnostic is the durable copy of the Core's safe provider
+// explanation. It is stored as part of the observation envelope.
+type ProviderDiagnostic struct {
+	StatusCode int    `json:"statusCode,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+}
+
+// sproutRunObservation is the JSON envelope persisted in sproutruns.observation.
+type sproutRunObservation struct {
+	Outcome                  string              `json:"outcome,omitempty"`
+	FailureCategory          string              `json:"failureCategory,omitempty"`
+	ProviderDiagnostic       *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
+	ProviderRequestAttempted bool                `json:"providerRequestAttempted,omitempty"`
+	ToolInvocations          int                 `json:"toolInvocations,omitempty"`
 }
 
 // UsageComponent is one fail-honest usage component stored on a Sprout run.
@@ -335,6 +367,7 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	pollen TEXT NOT NULL DEFAULT '',
 	substrate TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT '',
 	genotype TEXT NOT NULL DEFAULT '',
 	transcript TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
@@ -342,7 +375,8 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	error TEXT NOT NULL DEFAULT '',
 	startedAt TEXT NOT NULL,
 	finishedAt TEXT NOT NULL DEFAULT '',
-	usage TEXT NOT NULL DEFAULT ''
+	usage TEXT NOT NULL DEFAULT '',
+	observation TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);
 CREATE TABLE IF NOT EXISTS seedruns (
@@ -398,6 +432,12 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "sproutruns", "usage", `ALTER TABLE sproutruns ADD COLUMN usage TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sproutruns", "provider", `ALTER TABLE sproutruns ADD COLUMN provider TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "sproutruns", "observation", `ALTER TABLE sproutruns ADD COLUMN observation TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sproutrunsByPollen ON sproutruns(pollen, startedAt)`); err != nil {
@@ -763,6 +803,35 @@ func decodeSproutRunUsage(raw string) (SproutRunUsage, error) {
 	return usage, nil
 }
 
+func encodeSproutRunObservation(run SproutRun) (string, error) {
+	if run.Outcome == "" && run.FailureCategory == "" && run.ProviderDiagnostic == nil && !run.ProviderRequestAttempted && run.ToolInvocations == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(sproutRunObservation{
+		Outcome:                  run.Outcome,
+		FailureCategory:          run.FailureCategory,
+		ProviderDiagnostic:       run.ProviderDiagnostic,
+		ProviderRequestAttempted: run.ProviderRequestAttempted,
+		ToolInvocations:          run.ToolInvocations,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeSproutRunObservation(raw string) (sproutRunObservation, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return sproutRunObservation{}, nil
+	}
+	var observation sproutRunObservation
+	if err := json.Unmarshal([]byte(raw), &observation); err != nil {
+		return sproutRunObservation{}, err
+	}
+	return observation, nil
+}
+
 // RecordSproutRun upserts one Sprout execution record; call it once when the
 // sprout emerges (status "running") and again when it matures or withers.
 //
@@ -804,26 +873,33 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	if err != nil {
 		return fmt.Errorf("encode sprout run usage: %w", err)
 	}
+	observation, err := encodeSproutRunObservation(run)
+	if err != nil {
+		return fmt.Errorf("encode sprout run observation: %w", err)
+	}
 
 	// Ownership is settled by whichever call first supplies it and is never
 	// reassigned: a run that already names a dispatching subject keeps it, so
 	// no later write can hand a recorded run to a different subject.
 	//
-	// Usage follows the same "later writer must not erase" rule as model: an
-	// opening or compatibility write with no component envelope leaves a
-	// stored value alone. A non-empty envelope settles an initially empty row.
+	// Usage and observation follow the same "later writer must not erase"
+	// rule as model: an opening or compatibility write with no envelope
+	// leaves a stored value alone. A non-empty envelope settles an initially
+	// empty row. Provider is settled the same way as model.
 	const statement = `
-INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET
 	status = excluded.status,
 	pollen = CASE WHEN pollen = '' THEN excluded.pollen ELSE pollen END,
 	substrate = CASE WHEN substrate = '' THEN excluded.substrate ELSE substrate END,
+	provider = COALESCE(NULLIF(excluded.provider, ''), provider),
 	model = COALESCE(NULLIF(excluded.model, ''), model),
 	output = excluded.output,
 	error = excluded.error,
 	finishedAt = excluded.finishedAt,
-	usage = COALESCE(NULLIF(excluded.usage, ''), usage)`
+	usage = COALESCE(NULLIF(excluded.usage, ''), usage),
+	observation = COALESCE(NULLIF(excluded.observation, ''), observation)`
 
 	_, err = s.db.ExecContext(ctx, statement,
 		run.RunID,
@@ -832,6 +908,7 @@ ON CONFLICT(runId) DO UPDATE SET
 		run.Origin,
 		strings.TrimSpace(run.Pollen),
 		strings.TrimSpace(run.Substrate),
+		strings.TrimSpace(run.Provider),
 		run.Model,
 		genotype,
 		transcript,
@@ -841,6 +918,7 @@ ON CONFLICT(runId) DO UPDATE SET
 		run.StartedAt.UTC().Format(time.RFC3339Nano),
 		finishedAt,
 		usage,
+		observation,
 	)
 	if err != nil {
 		return fmt.Errorf("record sprout run: %w", err)
@@ -856,7 +934,7 @@ func (s *Store) LoadSproutRuns(ctx context.Context, sessionID string, limit int)
 	}
 
 	query := `
-SELECT runId, sessionId, stepId, origin, pollen, substrate, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage
+SELECT runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation
 FROM sproutruns`
 	args := []any{}
 	if strings.TrimSpace(sessionID) != "" {
@@ -878,8 +956,8 @@ LIMIT ?`
 	runs := make([]SproutRun, 0)
 	for rows.Next() {
 		var run SproutRun
-		var startedAt, finishedAt, usage string
-		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt, &usage); err != nil {
+		var startedAt, finishedAt, usage, observation string
+		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Provider, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt, &usage, &observation); err != nil {
 			return nil, fmt.Errorf("scan sprout run: %w", err)
 		}
 		if run.Genotype, err = s.dec(run.Genotype, "historydb/sproutruns/genotype"); err != nil {
@@ -905,6 +983,15 @@ LIMIT ?`
 		if run.Usage, err = decodeSproutRunUsage(usage); err != nil {
 			return nil, fmt.Errorf("decode sprout run usage: %w", err)
 		}
+		obs, err := decodeSproutRunObservation(observation)
+		if err != nil {
+			return nil, fmt.Errorf("decode sprout run observation: %w", err)
+		}
+		run.Outcome = obs.Outcome
+		run.FailureCategory = obs.FailureCategory
+		run.ProviderDiagnostic = obs.ProviderDiagnostic
+		run.ProviderRequestAttempted = obs.ProviderRequestAttempted
+		run.ToolInvocations = obs.ToolInvocations
 		runs = append(runs, run)
 	}
 	if err := rows.Err(); err != nil {

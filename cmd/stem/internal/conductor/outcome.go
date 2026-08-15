@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/roots/llm"
 )
@@ -121,6 +122,14 @@ type SproutRunReport struct {
 	// and any genome reduction that chronicling triggers. Its provider and
 	// model name the chronicler mind, which is not the Sprout mind.
 	PostRun PostRunUsage
+	// FailureCategory is the Core-owned Botanist-facing class. Conductor
+	// fills it by calling core.ClassifyFailure with typed facts only.
+	FailureCategory string
+	// ProviderDiagnostic is the credential-free provider explanation, when a
+	// typed provider response exists.
+	ProviderDiagnostic *core.ProviderDiagnostic
+	// ToolInvocations is how many terrarium tool calls the Sprout made.
+	ToolInvocations int
 }
 
 // PostRunUsage is the fail-honest aggregate of every provider request made
@@ -282,41 +291,108 @@ func publishSproutDetached(bus *eventbus.Bus, stepID, sessionID string, budget t
 	})
 }
 
+// applyObservation fills the Core-owned observation fields on a finished
+// report from typed facts. It never parses error strings to decide a category.
+func applyObservation(report *SproutRunReport, runErr error) {
+	if report == nil {
+		return
+	}
+	if report.ProviderDiagnostic == nil {
+		report.ProviderDiagnostic = providerDiagnosticFromError(runErr)
+	}
+	statusCode := 0
+	if report.ProviderDiagnostic != nil {
+		statusCode = report.ProviderDiagnostic.StatusCode
+	}
+	report.FailureCategory = string(core.ClassifyFailure(core.ObservationFacts{
+		Outcome:                  report.Outcome,
+		RunFailed:                runErr != nil,
+		TerrariumOOM:             terrariumOOMFromError(runErr),
+		ProviderRequestAttempted: report.RequestsMade,
+		ProviderStatusCode:       statusCode,
+	}))
+}
+
+func providerDiagnosticFromError(err error) *core.ProviderDiagnostic {
+	var reqErr *llm.RequestError
+	if !errors.As(err, &reqErr) || reqErr == nil {
+		return nil
+	}
+	return &core.ProviderDiagnostic{
+		StatusCode: reqErr.StatusCode,
+		Message:    reqErr.SafeMessage(),
+		Provider:   reqErr.Provider,
+	}
+}
+
+func terrariumOOMFromError(err error) bool {
+	if errors.Is(err, errTerrariumOOM) {
+		return true
+	}
+	if result, ok := commandResultFromError(err); ok {
+		return result.ExitCode == 137
+	}
+	return false
+}
+
+// errTerrariumOOM marks a Terrarium killed with exit 137. Optional: most OOM
+// paths already surface through commandResultFromError with ExitCode 137.
+var errTerrariumOOM = errors.New("terrarium exited 137")
+
 // publishSproutTerminal publishes the single terminal lifecycle event for a
 // sprout run: matured when the run finished (with or without changes, or was
 // skipped as already complete), withered when it failed, timed out, was reaped,
 // or never engaged the task. The
 // event carries enough for a consumer to act on: the step, the outcome, the
-// files changed (or why they could not be measured), and the failure reason
-// when there is one.
-func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID, outcome string, filesModified []string, filesUnmeasured, reason string) {
+// files changed (or why they could not be measured), the structured
+// observation fields, and the failure reason when there is one.
+func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID string, report SproutRunReport, reason string) {
 	if bus == nil {
 		return
 	}
 
+	outcome := report.Outcome
 	eventType := eventbus.EventSproutMatured
 	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut || outcome == SproutOutcomeNoEngagement || outcome == SproutOutcomeReaped {
 		eventType = eventbus.EventSproutWithered
 	}
 
 	data := map[string]interface{}{
-		"stepId":  stepID,
-		"outcome": outcome,
+		"stepId":                   stepID,
+		"outcome":                  outcome,
+		"providerRequestAttempted": report.RequestsMade,
+		"toolInvocations":          report.ToolInvocations,
 	}
-	if filesModified != nil {
+	if report.FailureCategory != "" {
+		data["failureCategory"] = report.FailureCategory
+	}
+	if report.Provider != "" {
+		data["provider"] = report.Provider
+	}
+	if report.Model != "" {
+		data["model"] = report.Model
+	}
+	if report.ProviderDiagnostic != nil {
+		data["providerDiagnostic"] = map[string]interface{}{
+			"statusCode": report.ProviderDiagnostic.StatusCode,
+			"message":    report.ProviderDiagnostic.Message,
+			"provider":   report.ProviderDiagnostic.Provider,
+		}
+	}
+	if report.FilesModified != nil {
 		// Copy without append: append([]string(nil), empty...) collapses a
 		// measured-empty slice to nil, which serializes as null and reads as
 		// "unmeasured" — the opposite of the evidence a no-changes verdict
 		// stands on.
-		copied := make([]string, len(filesModified))
-		copy(copied, filesModified)
+		copied := make([]string, len(report.FilesModified))
+		copy(copied, report.FilesModified)
 		data["filesModified"] = copied
 	}
-	if filesUnmeasured != "" {
+	if report.FilesUnmeasured != "" {
 		// An absent filesModified says nothing about why. A consumer that
 		// cannot tell a substrate which never measures from a measurement that
 		// was cut off has to guess, and the guess it made was "the run failed".
-		data["filesUnmeasured"] = filesUnmeasured
+		data["filesUnmeasured"] = report.FilesUnmeasured
 	}
 	if reason != "" {
 		data["error"] = reason
