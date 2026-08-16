@@ -38,7 +38,9 @@ WebSocket surface and has no knowledge of Go internals. This is what allows the
 UI to ship, version, and deploy independently of the Stem binary. The run
 drill-down renders the Stem's structured observation fields as the primary
 explanation of a run; it does not parse raw error strings to decide a failure
-category. Raw telemetry remains secondary evidence.
+category. Opening a run replaces the garden visualization with that review:
+observation facts, the task transcript, and tool activity sit above the fold.
+Raw Event Pulse and terrarium output stay collapsed until opened.
 
 It leans on three Phase 1 backend capabilities:
 

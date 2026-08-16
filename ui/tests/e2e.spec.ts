@@ -6,7 +6,7 @@
 // mirrors the Go Stem's documented REST + WebSocket surface 1:1.
 
 import { test, expect, type Page } from "@playwright/test";
-import type { Session, SproutRun } from "../src/lib/types";
+import type { EventRecord, Session, SproutRun } from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
 
@@ -33,7 +33,11 @@ function makeSession(overrides: Partial<Session>): Session {
  */
 async function mockStemBackend(
   page: Page,
-  { sessions = [] as Session[], sproutRuns = [] as SproutRun[] } = {},
+  {
+    sessions = [] as Session[],
+    sproutRuns = [] as SproutRun[],
+    events = [] as EventRecord[],
+  } = {},
 ): Promise<{
   lastSessionsAuthHeader: () => string | undefined;
   lastPreferencePatch: () => Record<string, unknown> | undefined;
@@ -112,12 +116,15 @@ async function mockStemBackend(
       });
     },
   );
-  await page.route("**/v1/sessions/*/events", async (route) => {
-    await route.fulfill({
-      status: 200,
-      json: { sessionId: sessionIdFromPath(route.request().url()), events: [] },
-    });
-  });
+  await page.route(
+    (url) => /\/v1\/sessions\/[^/]+\/events$/.test(new URL(url).pathname),
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        json: { sessionId: sessionIdFromPath(route.request().url()), events },
+      });
+    },
+  );
 
   // The gateway's real first frame is `{"type":"connected"}` — see
   // cmd/stem/internal/gateway/gateway.go. Not calling ws.connectToServer()
@@ -201,14 +208,94 @@ test.describe("Command Center sprout-run observation", () => {
     await page.locator(".run-row").click();
     const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
     await expect(drawer).toBeVisible();
+    await expect(drawer.getByTestId("run-observation")).toBeVisible();
     await expect(drawer.getByText("Withered — provider authentication rejected")).toBeVisible();
     await expect(drawer.getByText("openrouter", { exact: true })).toBeVisible();
     await expect(drawer.getByText("attempted", { exact: true })).toBeVisible();
     await expect(drawer.getByText("HTTP 401 / User not found")).toBeVisible();
     await expect(drawer.getByText("Fruit", { exact: true })).toBeVisible();
     await expect(drawer.getByText("none", { exact: true })).toBeVisible();
-    // Raw error remains secondary evidence only.
-    await expect(drawer.getByText("Raw error (secondary)")).toBeVisible();
+    await expect(drawer.getByText("investigate the withered run")).toBeVisible();
+    await expect(drawer.getByTestId("run-tool-activity")).toBeVisible();
+
+    // Raw telemetry stays collapsed; facts are readable without expanding it.
+    const telemetry = drawer.getByTestId("run-telemetry");
+    await expect(telemetry).toBeVisible();
+    await expect(telemetry).not.toHaveAttribute("open");
+    await expect(drawer.getByText("Raw error (secondary)")).toBeHidden();
+    await expect(
+      drawer.getByText("llm returned 401: User not found (provider=openrouter model=anthropic/claude-sonnet-4.6)"),
+    ).toBeHidden();
+    await expect(page.getByLabel("Living orchestration garden")).toHaveCount(0);
+    await expect(page.locator(".ticker-secondary")).toBeVisible();
+    await expect(page.locator(".ticker-secondary")).not.toHaveAttribute("open");
+  });
+
+  test("shows matured-run facts and tool names without expanding telemetry", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-e2e-matured" });
+    const run: SproutRun = {
+      runId: "step-ok",
+      sessionId: session.sessionId,
+      stepId: "step-ok",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4.6",
+      status: "matured",
+      outcome: "complete",
+      failureCategory: "matured",
+      providerRequestAttempted: true,
+      toolInvocations: 2,
+      transcript: "add a clarifying sentence to the guide",
+      startedAt: "2026-08-16T12:00:00Z",
+      finishedAt: "2026-08-16T12:00:08Z",
+      output: "wrote docs/GUIDE.md",
+    };
+    const events: EventRecord[] = [
+      {
+        id: 1,
+        sessionId: session.sessionId,
+        type: "tool-invoked",
+        source: "step-ok",
+        data: { tool: "readFile", status: "success" },
+        createdAt: "2026-08-16T12:00:02Z",
+      },
+      {
+        id: 2,
+        sessionId: session.sessionId,
+        type: "tool-invoked",
+        source: "step-ok",
+        data: { tool: "writeFile", status: "success" },
+        createdAt: "2026-08-16T12:00:05Z",
+      },
+      {
+        id: 3,
+        sessionId: session.sessionId,
+        type: "sprout-matured",
+        source: "step-ok",
+        data: {
+          outcome: "complete",
+          filesModified: ["docs/GUIDE.md"],
+          toolInvocations: 2,
+        },
+        createdAt: "2026-08-16T12:00:08Z",
+      },
+    ];
+
+    await mockStemBackend(page, { sessions: [session], sproutRuns: [run], events });
+    await completeOnboarding(page, testApiKey);
+
+    await page.locator(".run-row").click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByText("Matured — matured")).toBeVisible();
+    await expect(drawer.getByText("complete", { exact: true })).toBeVisible();
+    await expect(drawer.getByTestId("run-observation").getByText("docs/GUIDE.md")).toBeVisible();
+    await expect(drawer.getByText("add a clarifying sentence to the guide")).toBeVisible();
+    await expect(drawer.getByText("readFile", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("writeFile", { exact: true })).toBeVisible();
+    await expect(drawer.getByTestId("run-tool-activity").getByText("success").first()).toBeVisible();
+    await expect(drawer.getByTestId("run-telemetry")).not.toHaveAttribute("open");
+    await expect(drawer.getByText("wrote docs/GUIDE.md")).toBeHidden();
   });
 });
 

@@ -1,14 +1,15 @@
-// Drill-down drawer: everything the history endpoints know about one Sprout
-// execution — the raw terrarium (Docker) output, genotype, model, timings,
-// and the fitness telemetry from any phenotypic-selection events that share
-// its stepId.
+// Run review panel: structured observation first, then the task transcript
+// and tool activity. Raw Event Pulse / terrarium output stays collapsed.
 
 import { useEffect } from "react";
 import {
   diagnosticLine,
-  failureCategoryLabel,
+  filesModifiedFromEvents,
+  fruitLabel,
+  observationLead,
   providerRequestLabel,
   resolvedProvider,
+  toolActivityFromEvents,
   toolInvocationCount,
 } from "../lib/observation";
 import { useStem } from "../state/store";
@@ -53,31 +54,33 @@ export function DrilldownDrawer() {
     .filter((v): v is number => typeof v === "number")
     .at(-1);
 
+  const tools = toolActivityFromEvents(events);
+  const filesModified = filesModifiedFromEvents(events);
+  const fruit = fruitLabel(run, filesModified);
+  const diagnostic = diagnosticLine(run);
+  const toolCount = toolInvocationCount(run);
+
   return (
-    <>
-      <div className="drawer-scrim" onClick={closeDrilldown} />
-      <div className="drawer" role="dialog" aria-label="Sprout run detail">
-        <div className="drawer-head">
-          <div className="drawer-title">
-            <span className={`status-chip ${run.status}`}>{run.status}</span>
-            <h2 title={run.runId}>{run.runId}</h2>
-          </div>
-          <button className="btn-ghost" onClick={closeDrilldown}>
-            ✕ close
-          </button>
+    <section className="run-review glass" role="dialog" aria-label="Sprout run detail">
+      <div className="drawer-head">
+        <div className="drawer-title">
+          <span className={`status-chip ${run.status}`}>{run.status}</span>
+          <h2 title={run.runId}>{run.runId}</h2>
         </div>
+        <button className="btn-ghost" onClick={closeDrilldown}>
+          ✕ close
+        </button>
+      </div>
 
-        <div className="drawer-body">
-          {run.failureCategory ? (
-            <div className="drawer-section">
-              <h3>Observation</h3>
-              <p className="observation-lead">
-                {run.status === "withered" ? "Withered" : run.status} — {failureCategoryLabel(run.failureCategory)}
-              </p>
-            </div>
-          ) : null}
-
+      <div className="drawer-body">
+        <div className="drawer-section" data-testid="run-observation">
+          <h3>Observation</h3>
+          <p className="observation-lead">{observationLead(run)}</p>
           <div className="fact-grid">
+            <div className="fact">
+              <div className="k">Outcome</div>
+              <div className="v">{run.outcome || "—"}</div>
+            </div>
             <div className="fact">
               <div className="k">Provider</div>
               <div className="v">{resolvedProvider(run) || "—"}</div>
@@ -92,16 +95,18 @@ export function DrilldownDrawer() {
             </div>
             <div className="fact">
               <div className="k">Tools</div>
-              <div className="v">{toolInvocationCount(run)}</div>
+              <div className="v">{toolCount}</div>
             </div>
             <div className="fact">
-              <div className="k">Outcome</div>
-              <div className="v">{run.outcome || "—"}</div>
+              <div className="k">Duration</div>
+              <div className="v">{durationOf(run.startedAt, run.finishedAt)}</div>
             </div>
-            {run.failureCategory && run.failureCategory !== "matured" ? (
+            {fruit ? (
               <div className="fact">
                 <div className="k">Fruit</div>
-                <div className="v">none</div>
+                <div className="v" title={fruit}>
+                  {fruit}
+                </div>
               </div>
             ) : null}
             <div className="fact">
@@ -114,15 +119,13 @@ export function DrilldownDrawer() {
             </div>
             <div className="fact">
               <div className="k">Step</div>
-              <div className="v" title={run.stepId}>{run.stepId || "—"}</div>
+              <div className="v" title={run.stepId}>
+                {run.stepId || "—"}
+              </div>
             </div>
             <div className="fact">
               <div className="k">Started</div>
               <div className="v">{fmt(run.startedAt)}</div>
-            </div>
-            <div className="fact">
-              <div className="k">Duration</div>
-              <div className="v">{durationOf(run.startedAt, run.finishedAt)}</div>
             </div>
             {typeof bestScore === "number" ? (
               <div className="fact">
@@ -137,33 +140,51 @@ export function DrilldownDrawer() {
               </div>
             ) : null}
           </div>
-
-          {diagnosticLine(run) ? (
-            <div className="drawer-section">
-              <h3>Diagnostic</h3>
-              <pre className="log-block">{diagnosticLine(run)}</pre>
-            </div>
+          {diagnostic ? (
+            <pre className="log-block diagnostic">{diagnostic}</pre>
           ) : null}
+        </div>
 
-          <div className="drawer-section">
-            <h3>Task transcript</h3>
-            <pre className="log-block">{run.transcript || "(empty)"}</pre>
-          </div>
+        <div className="drawer-section">
+          <h3>Task transcript</h3>
+          <pre className="log-block transcript">{run.transcript || "(empty)"}</pre>
+        </div>
 
+        <div className="drawer-section" data-testid="run-tool-activity">
+          <h3>Tool activity</h3>
+          {tools.length > 0 ? (
+            <ul className="tool-list">
+              {tools.map((tool, i) => (
+                <li className="tool-row" key={`${tool.name}-${i}`}>
+                  <span className="tool-name">{tool.name}</span>
+                  <span className={`tool-status ${tool.status}`}>{tool.status}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="runs-empty">
+              {toolCount === 0
+                ? "No tool invocations recorded."
+                : `${toolCount} invocation${toolCount === 1 ? "" : "s"} recorded; per-tool events are not in this session.`}
+            </p>
+          )}
+        </div>
+
+        <details className="run-telemetry" data-testid="run-telemetry">
+          <summary>Raw Event Pulse and telemetry</summary>
           {run.error ? (
             <div className="drawer-section">
               <h3>Raw error (secondary)</h3>
               <pre className="log-block scorched">{run.error}</pre>
             </div>
           ) : null}
-
           <div className="drawer-section">
             <h3>Raw terrarium output</h3>
             <pre className="log-block">
-              {run.output || (run.status === "running" ? "(still growing…)" : "(no output captured)")}
+              {run.output ||
+                (run.status === "running" ? "(still growing…)" : "(no output captured)")}
             </pre>
           </div>
-
           <div className="drawer-section">
             <h3>Related telemetry ({events.length})</h3>
             {events.length === 0 ? (
@@ -179,8 +200,8 @@ export function DrilldownDrawer() {
               ))
             )}
           </div>
-        </div>
+        </details>
       </div>
-    </>
+    </section>
   );
 }

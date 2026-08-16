@@ -31,7 +31,7 @@ export function CommandCenter() {
         : "EventBus dormant — reconnecting";
 
   return (
-    <div className="shell">
+    <div className={drilldown ? "shell reviewing" : "shell"}>
       <div className="brand glass">
         <TendrilMark className="brand-mark" />
         <span className="brand-name">
@@ -66,11 +66,9 @@ export function CommandCenter() {
 
       <SessionRail />
 
-      <main className="garden-zone">
-        <div style={{ position: "relative", display: "contents" }}>
-          <GardenCanvas />
-        </div>
-        <EventTicker />
+      <main className={drilldown ? "garden-zone reviewing" : "garden-zone"}>
+        {drilldown ? <DrilldownDrawer /> : <GardenCanvas />}
+        <EventTicker collapsed={Boolean(drilldown)} />
       </main>
 
       <ChatPanel />
@@ -83,8 +81,6 @@ export function CommandCenter() {
           re-growing state from history…
         </div>
       ) : null}
-
-      {drilldown ? <DrilldownDrawer /> : null}
     </div>
   );
 }

@@ -128,12 +128,12 @@ App                         gates on stored connection settings
 ├─ Onboarding               welcome screen; validates /health + /v1/phytomers, persists to localStorage
 └─ CommandCenter            app shell; boots the store (WS + hydration), renders the grid
    ├─ SessionRail           left: session list from GET /v1/phytomers; switch/create Tendrils
-   ├─ GardenCanvas          center: the living visualization (the centerpiece)
+   ├─ GardenCanvas          center: the living visualization (moves aside when a run is open)
    │  └─ PlantFigure        one orchestration = one plant (stem, branches, tendril tips)
    │     └─ SelectionArena  a phenotypic-selection step = an arena of competing phenotype pods
-   ├─ EventTicker           center-bottom: raw EventBus "pulse" feed
+   ├─ EventTicker           center-bottom: EventBus pulse; collapsed while a run is open
    ├─ ChatPanel             right: per-session chat (/v1/chat/completions) + sprout-runs list
-   └─ DrilldownDrawer       overlay: raw terrarium output, genotype, fitness, timings for one run
+   └─ DrilldownDrawer       run review: observation facts, task transcript, tool activity; raw telemetry collapsed
 ```
 
 Supporting modules:

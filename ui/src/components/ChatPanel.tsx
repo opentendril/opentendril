@@ -29,6 +29,7 @@ export function ChatPanel() {
   const sendChat = useStem((s) => s.sendChat);
   const updatePreferences = useStem((s) => s.updatePreferences);
   const openDrilldown = useStem((s) => s.openDrilldown);
+  const selectedRunId = useStem((s) => s.drilldown?.run.runId);
 
   const boundSubstrate = activeSession?.preferences?.substrate?.trim() ?? "";
   const [draft, setDraft] = useState("");
@@ -167,7 +168,11 @@ export function ChatPanel() {
             <span className="runs-empty">No executions recorded yet.</span>
           ) : (
             runs.map((run: SproutRun) => (
-              <button className="run-row" key={run.runId} onClick={() => openDrilldown(run)}>
+              <button
+                className={`run-row${selectedRunId === run.runId ? " active" : ""}`}
+                key={run.runId}
+                onClick={() => openDrilldown(run)}
+              >
                 <span className={`run-dot ${run.status}`} />
                 <span className="run-task" title={run.transcript}>
                   {run.transcript || run.runId}

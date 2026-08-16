@@ -119,6 +119,7 @@ export type StemEventType =
   | "sequence-complete"
   | "stream-token"
   | "thought-branch"
+  | "tool-invoked"
   | "sprout-emerged"
   | "sprout-matured"
   | "sprout-withered"
