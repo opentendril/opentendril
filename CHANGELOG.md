@@ -45,6 +45,13 @@ where versions are cut.
 
 ### Added
 
+- **Provider-auth preflight before emergence.** `RunSprout` (CLI and chat) asks Roots
+  for a minimal authenticated provider interaction after the workspace is ready
+  and before `sprout-emerged` or Terrarium creation. An HTTP 401/403/407 becomes
+  a terminal `provider-auth-rejected` run with a credential-free diagnostic,
+  `providerRequestAttempted` reflecting the probe, and zero tool invocations.
+  A successful probe continues the existing emerge path. Mid-run auth failures
+  still use the existing classification path.
 - **Phytomer Substrate preference.** A session can carry a first-class
   `preferences.substrate` (create/PATCH, persisted and merged like
   provider/model/genotype). Greenhouse chat binds and shows that name; the

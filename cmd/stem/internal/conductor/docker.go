@@ -540,6 +540,17 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if plan.provider != "" {
 		providerName = plan.provider
 	}
+
+	// Discover provider authentication rejection on the host, via Roots,
+	// before emergence is declared and before a Terrarium exists. A later
+	// mid-run 401 still uses the existing classification path.
+	if err := applyProviderAuthPreflight(ctx, mind, &report); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return report, err
+	}
+
 	publishSproutEmerged(d.EventBus, stepID, d.SessionID, d.Substrate)
 
 	obs := terrarium.ActivationObserver(func(name string) {

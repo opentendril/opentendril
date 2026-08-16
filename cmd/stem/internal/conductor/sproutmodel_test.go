@@ -60,6 +60,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 	t.Helper()
 
 	origPreflight := runSproutPreflightChecksFn
+	origProbe := probeProviderAuthFn
 	origRepoMap := generateRepoMapFn
 	origMemoryMap := generateMemoryMapFn
 	origEnsureImage := ensureSproutImageFn
@@ -71,6 +72,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 	origMerge := mergeTerrariumCommitFn
 	t.Cleanup(func() {
 		runSproutPreflightChecksFn = origPreflight
+		probeProviderAuthFn = origProbe
 		generateRepoMapFn = origRepoMap
 		generateMemoryMapFn = origMemoryMap
 		ensureSproutImageFn = origEnsureImage
@@ -83,6 +85,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 	})
 
 	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
