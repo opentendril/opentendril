@@ -190,6 +190,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	t.Helper()
 
 	originalPreflight := runSproutPreflightChecksFn
+	originalProbe := probeProviderAuthFn
 	originalRepoMap := generateRepoMapFn
 	originalMemoryMap := generateMemoryMapFn
 	originalEnsureImage := ensureSproutImageFn
@@ -205,6 +206,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	originalMerge := mergeTerrariumCommitFn
 	t.Cleanup(func() {
 		runSproutPreflightChecksFn = originalPreflight
+		probeProviderAuthFn = originalProbe
 		generateRepoMapFn = originalRepoMap
 		generateMemoryMapFn = originalMemoryMap
 		ensureSproutImageFn = originalEnsureImage
@@ -221,6 +223,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	})
 
 	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, workspace string) (string, error) { return "# Repo Map", nil }
 	generateMemoryMapFn = func(ctx context.Context, workspace string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }

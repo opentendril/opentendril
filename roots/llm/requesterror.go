@@ -59,6 +59,12 @@ func (e *RequestError) SafeMessage() string {
 	return e.Body
 }
 
+// NewRequestError builds a typed provider rejection whose Body has already
+// been stripped of bearer tokens and API-key material.
+func NewRequestError(status int, body string, spec ProviderSpec) *RequestError {
+	return newRequestError(status, body, spec, nil)
+}
+
 func newRequestError(status int, body string, spec ProviderSpec, wrapped error) *RequestError {
 	return &RequestError{
 		StatusCode: status,

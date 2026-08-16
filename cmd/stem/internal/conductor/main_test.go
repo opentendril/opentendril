@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 // TestMain isolates the whole package's tests from the operator's real home
@@ -58,9 +60,14 @@ func TestMain(m *testing.M) {
 	// exercise the gVisor logic save and restore this seam themselves.
 	originalGVisorReadyFn := CheckGVisorReadinessFn
 	CheckGVisorReadinessFn = func(context.Context) error { return errors.New("stubbed unready") }
+	// Existing RunSprout tests exercise emerge / Terrarium seams, not a
+	// live provider. The real probe is restored by tests that assert it.
+	originalProbe := probeProviderAuthFn
+	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	exitCode := m.Run()
 
 	// Restore so the process leaves global state as it found it.
+	probeProviderAuthFn = originalProbe
 	CheckGVisorReadinessFn = originalGVisorReadyFn
 	os.RemoveAll(home)
 	os.Exit(exitCode)

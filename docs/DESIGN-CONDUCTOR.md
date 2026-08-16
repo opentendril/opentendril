@@ -36,8 +36,9 @@ For an ordinary local Git `RunSprout`, the exact ordering is:
 4. If the active host worktree is dirty, stash tracked and untracked changes using `git stash save -u` with a run-specific name.
 5. Attempt shadow worktree creation.
 6. On success, execute against the shadow path.
-7. Provider resolution and start occurs **after** workspace isolation is established.
-8. Teardown removes the shadow worktree and restores the host stash. 
+7. Roots issues a minimal authenticated provider interaction for the selected provider/model. An authentication rejection (HTTP 401/403/407) ends the run as `provider-auth-rejected` with no `sprout-emerged` event and no Terrarium.
+8. Provider resolution and start occurs **after** workspace isolation is established, and only after that auth probe succeeds.
+9. Teardown removes the shadow worktree and restores the host stash. 
    - Note: Stash-pop recovery handles the specific untracked-file collision case but does not suppress genuine tracked merge conflicts.
 
 ### TENDRIL_ALLOW_HOST_WORKSPACE

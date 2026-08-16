@@ -351,6 +351,14 @@ func (c *Client) CallWithResult(ctx context.Context, messages []Message) (Result
 	return c.CallStreamWithResult(ctx, messages, nil)
 }
 
+// ProbeAuthentication issues the smallest authenticated chat request this
+// client already knows how to send. Stem uses it to discover a provider
+// authentication rejection without a second HTTP client or a Terrarium.
+func (c *Client) ProbeAuthentication(ctx context.Context) error {
+	_, err := c.CallWithResult(ctx, []Message{{Role: "user", Content: "ok"}})
+	return err
+}
+
 func (c *Client) Call(ctx context.Context, messages []Message) (string, error) {
 	res, err := c.CallWithResult(ctx, messages)
 	return res.Text, err
