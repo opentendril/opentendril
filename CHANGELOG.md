@@ -19,6 +19,12 @@ where versions are cut.
   matching CLI `tendril sprout grow --substrate <name>`. A missing Substrate
   still fails with the existing required-substrate / workspace-absent
   refusal.
+- **Managed clone under a parent git repository.** After the empty-placeholder
+  path started cloning, refresh still used `git rev-parse`, which walks
+  parents. An empty managed directory under Stem home then looked like a
+  repository, refresh ran against the parent, and the Terrarium still mounted
+  an empty `/app`. Clone/refresh now requires `.git` in the checkout
+  directory itself.
 - **Repo-map / Substrate scan under rootless Docker.** A short Greenhouse task
   used the Stem working directory (the principal's home) as the implicit
   Substrate. The Rhizome walk then entered the rootless daemon's containerd

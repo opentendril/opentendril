@@ -2039,9 +2039,11 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		dest = checkout.dir
 	}
 
-	// Reuse a persistent checkout that already exists: refresh it to a clean,
-	// current tree instead of failing to clone into a non-empty directory.
-	if checkout.persistent && isGitRepo(dest) {
+	// Reuse only a checkout that is itself a git repository. git-rev-parse
+	// walks parents, so an empty managed placeholder under Stem home (or
+	// any parent repo) would otherwise be "refreshed" as that parent and
+	// the Terrarium would bind-mount the still-empty directory as /app.
+	if checkout.persistent && checkoutHasGitMetadata(dest) {
 		if err := refreshExistingCheckout(dest, branch, gitEnv, checkout.tendrilOwned); err != nil {
 			return "", false, err
 		}

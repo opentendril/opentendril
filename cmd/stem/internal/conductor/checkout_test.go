@@ -121,6 +121,82 @@ func TestCloneNamedForeignSubstrateCheckoutModes(t *testing.T) {
 	})
 }
 
+// An empty managed placeholder under a parent git repo is not a checkout.
+// Treating it as one (git-rev-parse walks parents) skips clone and leaves
+// the Terrarium mounted on an empty /app.
+func TestCloneNamedForeignSubstrateEmptyManagedUnderParentGitClones(t *testing.T) {
+	ctx := context.Background()
+	src := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+	} {
+		if _, err := runGitCommand(ctx, src, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(src, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "docs", "TERRARIUM.md"), []byte("terrarium notes\n"), 0o644); err != nil {
+		t.Fatalf("write TERRARIUM.md: %v", err)
+	}
+	if _, err := runGitCommand(ctx, src, "add", "-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGitCommand(ctx, src, "commit", "-q", "-m", "init"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	parent := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "stem-home"},
+	} {
+		if _, err := runGitCommand(ctx, parent, args...); err != nil {
+			t.Fatalf("parent git %v: %v", args, err)
+		}
+	}
+
+	managedRoot := filepath.Join(parent, ".tendril", "substrates")
+	placeholder := filepath.Join(managedRoot, "opentendril")
+	if err := os.MkdirAll(placeholder, 0o755); err != nil {
+		t.Fatalf("mkdir placeholder: %v", err)
+	}
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+
+	if isGitRepo(placeholder) {
+		// Parent walk is the trap: the placeholder is not itself a checkout.
+		t.Log("git-rev-parse walks into the parent; clone must ignore that")
+	}
+
+	path, persistent, err := cloneNamedForeignSubstrate("opentendril", src, "main", ResolvedCredential{
+		Checkout: CheckoutSpec{Mode: "managed"},
+	})
+	if err != nil {
+		t.Fatalf("clone empty managed under parent git: %v", err)
+	}
+	if !persistent {
+		t.Fatal("managed checkout should be persistent")
+	}
+	if path != placeholder {
+		t.Fatalf("path = %q, want %q", path, placeholder)
+	}
+	body, err := os.ReadFile(filepath.Join(path, "docs", "TERRARIUM.md"))
+	if err != nil {
+		t.Fatalf("cloned checkout missing docs/TERRARIUM.md: %v", err)
+	}
+	if string(body) != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", body)
+	}
+	if !checkoutHasGitMetadata(path) {
+		t.Fatal("cloned checkout has no .git in its own directory")
+	}
+}
+
 // TestRefreshRefusesToDiscardOperatorWork: a path-mode checkout is the
 // operator's own working copy. Refreshing it hard-resets, which would silently
 // delete uncommitted work — so it is refused, while a Tendril-owned managed
