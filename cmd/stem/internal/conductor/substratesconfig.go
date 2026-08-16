@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -387,6 +388,14 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 
 	explicitURL := strings.TrimSpace(d.SubstrateURL) != ""
 	localPathExists := pathExists(plan.hostPath)
+	if errors.Is(resolutionErr, ErrWorkspaceAbsent) {
+		// Chat/Greenhouse sets only the Substrate name. A managed placeholder
+		// directory then looks like a local workspace and skips clone/fetch,
+		// so the Terrarium bind-mounts an empty /app. CLI copies the named
+		// URL onto the orchestrator and always remotes; treat an unpopulated
+		// managed checkout as absent so the name-only path clones too.
+		localPathExists = false
+	}
 
 	if explicitURL {
 		if plan.cloneURL == "" {

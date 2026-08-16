@@ -74,16 +74,31 @@ func ResolveSubstrateWorkspace(substrate string, spec *SubstrateSpec) (string, e
 		}
 	}
 
+	managed := spec != nil && strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed"
 	info, err := os.Stat(workspace)
-	if err != nil || !info.IsDir() {
-		// Distinguish a missing managed checkout (409) from a bad path (500)
-		if spec != nil && strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)) == "managed" {
+	if err != nil || !info.IsDir() || (managed && !checkoutHasGitMetadata(workspace)) {
+		// Distinguish a missing or empty managed checkout (409) from a bad path (500).
+		// A placeholder directory with no .git is not a checkout: mounting it
+		// gives the Terrarium an empty /app. git-rev-parse walks parents, so
+		// only this directory's own .git counts.
+		if managed {
 			return "", fmt.Errorf("%w: managed checkout for substrate %q is missing", ErrWorkspaceAbsent, substrate)
 		}
 		return "", fmt.Errorf("substrate %q does not resolve to a local workspace directory (operations run against a local checkout)", substrate)
 	}
 
 	return workspace, nil
+}
+
+// checkoutHasGitMetadata reports that path is itself a git checkout — a .git
+// directory or file in THIS directory. git rev-parse walks parents, so an
+// empty managed placeholder under another repository must not count as ready.
+func checkoutHasGitMetadata(path string) bool {
+	info, err := os.Stat(filepath.Join(strings.TrimSpace(path), ".git"))
+	if err != nil {
+		return false
+	}
+	return info.IsDir() || info.Mode().IsRegular()
 }
 
 // MaterializeManagedCheckouts clones or refreshes all managed substrates on startup.
