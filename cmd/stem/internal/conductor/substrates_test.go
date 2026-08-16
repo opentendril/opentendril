@@ -507,6 +507,136 @@ substrates:
 	}
 }
 
+// Same chat-shaped grow when the empty placeholder sits under a parent git
+// repository (Stem home). git-rev-parse would walk up; clone must still
+// populate THIS directory so /app is the Substrate, not an empty mount.
+func TestRunSproutChatPathPopulatesEmptyManagedCheckoutUnderParentGit(t *testing.T) {
+	src := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+	} {
+		if _, err := runGitCommand(ctx, src, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(src, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "docs", "TERRARIUM.md"), []byte("terrarium notes\n"), 0o644); err != nil {
+		t.Fatalf("write TERRARIUM.md: %v", err)
+	}
+	if _, err := runGitCommand(ctx, src, "add", "-A"); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if _, err := runGitCommand(ctx, src, "commit", "-q", "-m", "init"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	parent := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "stem-home"},
+	} {
+		if _, err := runGitCommand(ctx, parent, args...); err != nil {
+			t.Fatalf("parent git %v: %v", args, err)
+		}
+	}
+
+	managedRoot := filepath.Join(parent, ".tendril", "substrates")
+	placeholder := filepath.Join(managedRoot, "opentendril")
+	if err := os.MkdirAll(placeholder, 0o755); err != nil {
+		t.Fatalf("mkdir placeholder: %v", err)
+	}
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+
+	cwd := chdirToTempDir(t)
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), fmt.Sprintf(`
+substrates:
+  opentendril:
+    url: %s
+    branch: main
+    checkout:
+      mode: managed
+`, src))
+
+	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+
+	var mounted string
+	originalPreflight := runSproutPreflightChecksFn
+	originalRepoMap := generateRepoMapFn
+	originalMemoryMap := generateMemoryMapFn
+	originalEnsure := ensureSproutImageFn
+	originalStart := startTerrariumSessionFn
+	originalNewSprout := newSproutFn
+	originalStash := stashHostWorkspaceFn
+	originalCollect := collectStageableFilesFn
+	originalDiff := collectGitDiffFn
+	originalCommit := commitTerrariumExecutionFn
+	originalMerge := mergeTerrariumCommitFn
+	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
+		generateRepoMapFn = originalRepoMap
+		generateMemoryMapFn = originalMemoryMap
+		ensureSproutImageFn = originalEnsure
+		startTerrariumSessionFn = originalStart
+		newSproutFn = originalNewSprout
+		stashHostWorkspaceFn = originalStash
+		collectStageableFilesFn = originalCollect
+		collectGitDiffFn = originalDiff
+		commitTerrariumExecutionFn = originalCommit
+		mergeTerrariumCommitFn = originalMerge
+	})
+	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
+	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
+	ensureSproutImageFn = func(context.Context, string) error { return nil }
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		mounted = mountPath
+		return &stubToolSession{}, nil
+	}
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		return &stubSproutRunner{result: sproutResult{Response: "edited TERRARIUM.md"}}, nil
+	}
+	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
+	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return nil, nil }
+	collectGitDiffFn = func(context.Context, string) (string, error) { return "", nil }
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential) (string, error) {
+		return "", nil
+	}
+	mergeTerrariumCommitFn = func(context.Context, string, string) error { return nil }
+
+	report, err := (&DockerOrchestrator{
+		Substrate:        "opentendril",
+		StepID:           "step-chat-managed-parent",
+		DisableMergeBack: true,
+	}).RunSprout(context.Background(), "edit docs/TERRARIUM.md")
+	if err != nil {
+		t.Fatalf("RunSprout: %v", err)
+	}
+	if report.Output != "edited TERRARIUM.md" {
+		t.Fatalf("output = %q", report.Output)
+	}
+	if mounted == "" {
+		t.Fatal("Terrarium was not given a mount path")
+	}
+	body, err := os.ReadFile(filepath.Join(mounted, "docs", "TERRARIUM.md"))
+	if err != nil {
+		t.Fatalf("mounted workspace missing docs/TERRARIUM.md: %v (mount=%q)", err, mounted)
+	}
+	if string(body) != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", body)
+	}
+	if _, err := os.Stat(filepath.Join(mounted, ".git")); err != nil {
+		t.Fatalf("mounted workspace is not a git checkout: %v", err)
+	}
+}
+
 func TestResolveSubstrateExecutionPlanRefusesStemHomeWithoutASubstrate(t *testing.T) {
 	stemHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(stemHome, ".local", "share", "docker"), 0o755); err != nil {
