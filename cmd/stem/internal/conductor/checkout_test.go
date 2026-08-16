@@ -185,6 +185,58 @@ func TestManagedCheckoutIsTendrilOwned(t *testing.T) {
 	}
 }
 
+func TestRepoRootDoesNotEscapeManagedCheckoutIntoParentGitRepo(t *testing.T) {
+	parent := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "root"},
+	} {
+		if _, err := runGitCommand(ctx, parent, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	managedRoot := filepath.Join(parent, ".tendril", "substrates")
+	checkout := filepath.Join(managedRoot, "demo")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatalf("mkdir checkout: %v", err)
+	}
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+
+	got := repoRoot(checkout)
+	if got != checkout {
+		t.Fatalf("repoRoot(managed checkout) = %q, want the checkout itself, not parent git toplevel %q", got, parent)
+	}
+}
+
+func TestIsUnsuitableImplicitWorkspaceDetectsStemHomeLayout(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "docker"), 0o755); err != nil {
+		t.Fatalf("mkdir docker data-root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir control plane: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".tendril", "api-key"), []byte("test-key\n"), 0o600); err != nil {
+		t.Fatalf("write api-key: %v", err)
+	}
+
+	if !isUnsuitableImplicitWorkspace(home) {
+		t.Fatal("Stem home with rootless Docker data-root and control plane was treated as a Substrate")
+	}
+
+	repo := t.TempDir()
+	if _, err := runGitCommand(context.Background(), repo, "init", "-q"); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	if isUnsuitableImplicitWorkspace(repo) {
+		t.Fatal("a plain git checkout was treated as the Stem working directory")
+	}
+}
+
 func TestMaterializeManagedCheckoutsFailureTolerance(t *testing.T) {
 	ctx := context.Background()
 	src := t.TempDir()

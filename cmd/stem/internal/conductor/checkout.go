@@ -151,6 +151,110 @@ func managedCheckoutDir(name string) string {
 	return filepath.Join(managedCheckoutRoot(), sanitizeTempComponent(name))
 }
 
+// intendedLocalWorkspace is the on-disk directory a named Substrate would use,
+// without requiring that directory to exist yet. Used when workspace
+// resolution fails so the execution plan still does not fall back to the
+// Stem working directory.
+func intendedLocalWorkspace(name string, spec *SubstrateSpec) string {
+	if spec == nil {
+		return ""
+	}
+	mode := strings.ToLower(strings.TrimSpace(spec.Checkout.Mode))
+	if mode != "" && mode != "path" {
+		plan, err := resolveCheckoutPlan(name, spec.Checkout)
+		if err == nil && strings.TrimSpace(plan.dir) != "" {
+			return plan.dir
+		}
+	}
+	if mode == "path" {
+		return expandHome(strings.TrimSpace(spec.Checkout.Path))
+	}
+	return expandHome(strings.TrimSpace(spec.Path))
+}
+
+// uniqueConfiguredSubstrate returns the sole named Substrate when the
+// configuration has exactly one. Greenhouse chat does not name a Substrate;
+// on a governed install that one name is the managed checkout to use.
+func uniqueConfiguredSubstrate(config *SubstratesConfig) (string, bool) {
+	if config == nil || len(config.Substrates) != 1 {
+		return "", false
+	}
+	for name := range config.Substrates {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			return "", false
+		}
+		return trimmed, true
+	}
+	return "", false
+}
+
+// isUnsuitableImplicitWorkspace reports that the process working directory
+// must not be used as a Substrate. The governed Stem runs from its home,
+// which holds the control plane and the rootless Docker data-root. Scanning
+// or bind-mounting that tree is how repo-map generation opened a containerd
+// snapshot workdir, and it would also place credentials in the Terrarium.
+func isUnsuitableImplicitWorkspace(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	if dockerDataRootPresent(trimmed) || controlPlanePresent(trimmed) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	return sameFilePath(trimmed, home) && !isGitRepo(trimmed)
+}
+
+func dockerDataRootPresent(path string) bool {
+	info, err := os.Stat(filepath.Join(path, ".local", "share", "docker"))
+	return err == nil && info.IsDir()
+}
+
+func controlPlanePresent(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".tendril", "api-key"))
+	return err == nil
+}
+
+func escapedManagedCheckout(requested, resolved string) bool {
+	rootAbs, err := filepath.Abs(managedCheckoutRoot())
+	if err != nil {
+		return false
+	}
+	reqAbs, err := filepath.Abs(requested)
+	if err != nil {
+		return false
+	}
+	resAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return false
+	}
+	if !pathIsUnder(reqAbs, rootAbs) && !sameFilePath(reqAbs, rootAbs) {
+		return false
+	}
+	return !pathIsUnder(resAbs, rootAbs) && !sameFilePath(resAbs, rootAbs)
+}
+
+func sameFilePath(a, b string) bool {
+	absA, errA := filepath.Abs(a)
+	absB, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return filepath.Clean(absA) == filepath.Clean(absB)
+}
+
+func pathIsUnder(child, parent string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 // ephemeralCheckoutPath returns a unique throwaway clone path under TempDir.
 func ephemeralCheckoutPath(name string) (string, error) {
 	buf := make([]byte, 4)

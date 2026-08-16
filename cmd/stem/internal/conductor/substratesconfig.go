@@ -306,7 +306,18 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		cloneBranch: strings.TrimSpace(d.SubstrateBranch),
 	}
 	if plan.hostPath == "" {
-		plan.hostPath = getEnvOrDefault("TENDRIL_SUBSTRATE", mustGetwd())
+		if env := strings.TrimSpace(os.Getenv("TENDRIL_SUBSTRATE")); env != "" {
+			plan.hostPath = env
+		} else {
+			plan.hostPath = mustGetwd()
+			if plan.name == "" && isUnsuitableImplicitWorkspace(plan.hostPath) {
+				name, ok := uniqueConfiguredSubstrate(config)
+				if !ok {
+					return nil, fmt.Errorf("substrate is required: %s is the Stem working directory, not a repository checkout", plan.hostPath)
+				}
+				plan.name = name
+			}
+		}
 	}
 
 	var resolutionErr error
@@ -317,6 +328,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 		resolvedPath, err := ResolveSubstrateWorkspace(plan.name, spec)
 		if err != nil {
 			resolutionErr = err
+			// Keep the intended checkout even when it is not on disk yet so
+			// the plan does not fall back to the Stem working directory
+			// (control plane + rootless Docker data-root).
+			if intended := intendedLocalWorkspace(plan.name, spec); intended != "" {
+				plan.hostPath = intended
+			}
 		} else if resolvedPath != "" {
 			plan.hostPath = resolvedPath
 		}

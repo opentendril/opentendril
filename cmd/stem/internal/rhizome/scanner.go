@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -41,6 +42,20 @@ func ScanRepository(ctx context.Context, root string, repositoryName string, sto
 	seen := make(map[string]bool)
 	err = filepath.WalkDir(absoluteRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// One unreadable directory must not wither the whole map. Rootless
+			// Docker's containerd overlay workdirs are mode-restricted from
+			// outside the daemon's user namespace; hitting one used to fail
+			// the scan before any source file was parsed.
+			if path == absoluteRoot {
+				return walkErr
+			}
+			if isScanPermissionDenied(walkErr) {
+				if entry == nil || entry.IsDir() {
+					return filepath.SkipDir
+				}
+				stats.FilesFailed++
+				return nil
+			}
 			return walkErr
 		}
 		if path == absoluteRoot {
@@ -148,7 +163,11 @@ func shouldSkipPath(path string, isDir bool) bool {
 		return true
 	}
 
-	for _, segment := range strings.Split(normalized, "/") {
+	segments := strings.Split(normalized, "/")
+	if isContainerRuntimePath(segments) {
+		return true
+	}
+	for _, segment := range segments {
 		switch strings.ToLower(segment) {
 		case ".git", "node_modules", ".tendrilignore", "venv", ".venv", "vendor", "dist", "build", "__pycache__":
 			return true
@@ -157,6 +176,46 @@ func shouldSkipPath(path string, isDir bool) bool {
 
 	if !isDir && strings.EqualFold(filepath.Base(normalized), ".tendrilignore") {
 		return true
+	}
+	return false
+}
+
+// isContainerRuntimePath reports whether a substrate-relative path is Docker
+// or containerd storage rather than repository source. A governed Stem home
+// sits next to the rootless daemon's data-root; walking into it is how a
+// repo-map scan used to fail on overlay workdirs the Stem user cannot read.
+func isContainerRuntimePath(segments []string) bool {
+	joined := strings.ToLower(strings.Join(segments, "/"))
+	if strings.Contains(joined, ".local/share/docker") {
+		return true
+	}
+	if strings.Contains(joined, "io.containerd.snapshotter") {
+		return true
+	}
+	var hasContainerd, hasSnapshots bool
+	for _, segment := range segments {
+		switch strings.ToLower(segment) {
+		case "containerd":
+			hasContainerd = true
+		case "snapshots":
+			hasSnapshots = true
+		case "overlay2":
+			return true
+		}
+	}
+	return hasContainerd && hasSnapshots
+}
+
+func isScanPermissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsPermission(err) || errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return os.IsPermission(pathErr.Err) || errors.Is(pathErr.Err, os.ErrPermission)
 	}
 	return false
 }
