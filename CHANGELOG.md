@@ -70,6 +70,10 @@ where versions are cut.
 
 ### Changed
 
+- **Greenhouse run review.** Opening a matured or withered Sprout run puts
+  structured observation, the task transcript, and tool activity above the
+  fold in the garden column. The decorative garden and Event Pulse move aside;
+  raw telemetry stays collapsed until opened.
 - **Daemon bind host** is selected by `TERROIR_HOST` (see Breaking).
 - **Stem bearer-key / daemon gate** env var is `BOTANIST_KEY` (see Breaking).
 
