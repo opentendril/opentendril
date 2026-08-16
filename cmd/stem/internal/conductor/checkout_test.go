@@ -261,6 +261,27 @@ func TestManagedCheckoutIsTendrilOwned(t *testing.T) {
 	}
 }
 
+func TestIsManagedCheckoutPath(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+	checkout := filepath.Join(root, "opentendril")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatalf("mkdir checkout: %v", err)
+	}
+	if !isManagedCheckoutPath(checkout) {
+		t.Fatalf("managed checkout %q was not recognized", checkout)
+	}
+	if !isManagedCheckoutPath(root) {
+		t.Fatalf("managed root %q was not recognized", root)
+	}
+	if isManagedCheckoutPath(t.TempDir()) {
+		t.Fatal("an unrelated directory was treated as a managed checkout")
+	}
+	if isManagedCheckoutPath("") {
+		t.Fatal("empty path was treated as a managed checkout")
+	}
+}
+
 func TestRepoRootDoesNotEscapeManagedCheckoutIntoParentGitRepo(t *testing.T) {
 	parent := t.TempDir()
 	ctx := context.Background()

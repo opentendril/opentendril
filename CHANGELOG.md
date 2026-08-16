@@ -10,6 +10,15 @@ where versions are cut.
 
 ### Fixed
 
+- **Chat/WS mounted a `/tmp` shadow instead of the managed checkout.** After
+  the managed Substrate at `~/.tendril/substrates/<name>` was populated, the
+  Greenhouse name-only grow path still created a `/tmp/opentendril-terrarium-*`
+  shadow worktree and passed that as the Docker `-v` source. Rootless Docker
+  cannot see host `/tmp`, so it created an empty directory and `/app` had no
+  `.git` or `docs/`. Chat/WS now bind-mounts the resolved managed checkout
+  itself — the same host path CLI `tendril sprout grow --substrate <name>`
+  already used. A bare name is refused (it would become an empty Docker
+  volume). Stem-home refusal is unchanged.
 - **Empty Terrarium workspace on Greenhouse/chat grow.** Chat copies only the
   Phytomer Substrate name onto the orchestrator. A managed checkout directory
   that existed but had no `.git` (failed materialization, leftover

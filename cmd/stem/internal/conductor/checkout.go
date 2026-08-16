@@ -234,6 +234,27 @@ func controlPlanePresent(path string) bool {
 	return err == nil
 }
 
+// isManagedCheckoutPath reports that path is inside Tendril's managed-checkout
+// tree (~/.tendril/substrates, or TENDRIL_MANAGED_CHECKOUT_ROOT). Chat/WS
+// name-only grow used to wrap this in a /tmp shadow worktree; rootless Docker
+// then bind-mounted an empty directory at /app because that daemon cannot see
+// the host /tmp path. CLI already mounts this directory itself.
+func isManagedCheckoutPath(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	rootAbs, err := filepath.Abs(managedCheckoutRoot())
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(trimmed)
+	if err != nil {
+		return false
+	}
+	return pathIsUnder(pathAbs, rootAbs) || sameFilePath(pathAbs, rootAbs)
+}
+
 func escapedManagedCheckout(requested, resolved string) bool {
 	rootAbs, err := filepath.Abs(managedCheckoutRoot())
 	if err != nil {
