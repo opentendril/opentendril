@@ -1,13 +1,17 @@
 package receptors
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 func TestWriteCoreErr_ConductorWorkspaceAbsentMapsTo409(t *testing.T) {
@@ -38,5 +42,68 @@ func TestWriteCoreErr_OtherCoreErrorsMapCorrectly(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("writeCoreErr(ErrNotFound) got status %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestUpdatePreferencesPersistsAndReturnsSubstrate(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	sess, err := manager.Initiate(context.Background(), session.OriginREST, session.Preferences{Model: "claude-sonnet"})
+	if err != nil {
+		t.Fatalf("initiate: %v", err)
+	}
+
+	handler := NewSessionsHandler(core.NewService(manager), manager, nil, nil)
+	req := httptest.NewRequest(http.MethodPatch, "/v1/phytomers/"+sess.ID, strings.NewReader(`{"preferences":{"substrate":"opentendril"}}`))
+	req.SetPathValue("sessionId", sess.ID)
+	rec := httptest.NewRecorder()
+	handler.updatePreferences(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var got session.Phytomer
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode PATCH body: %v", err)
+	}
+	if got.Preferences.Substrate != "opentendril" {
+		t.Fatalf("PATCH returned preferences = %+v, want substrate opentendril", got.Preferences)
+	}
+	if got.Preferences.Model != "claude-sonnet" {
+		t.Fatalf("PATCH dropped existing model: %+v", got.Preferences)
+	}
+
+	stored, ok := manager.Get(context.Background(), sess.ID)
+	if !ok {
+		t.Fatal("session missing after PATCH")
+	}
+	if stored.Preferences.Substrate != "opentendril" {
+		t.Fatalf("persisted preferences = %+v, want substrate opentendril", stored.Preferences)
+	}
+}
+
+func TestCreateSessionAcceptsPreferencesSubstrate(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	handler := NewSessionsHandler(core.NewService(manager), manager, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/phytomers", strings.NewReader(`{"origin":"ws","preferences":{"substrate":"opentendril"}}`))
+	rec := httptest.NewRecorder()
+	handler.create(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	var got session.Phytomer
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode POST body: %v", err)
+	}
+	if got.Preferences.Substrate != "opentendril" {
+		t.Fatalf("create returned preferences = %+v, want substrate opentendril", got.Preferences)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
@@ -641,6 +642,74 @@ func TestHandleChatCompletionsPublishesTriggerBlockedEvent(t *testing.T) {
 	}
 	if data["reason"] == nil || data["reason"] == "" {
 		t.Error("data.reason is empty")
+	}
+}
+
+func TestApplySessionPreferencesCopiesNamedSubstrate(t *testing.T) {
+	orch := conductor.NewDockerOrchestrator()
+	applySessionPreferences(orch, session.Preferences{
+		Provider:  "local",
+		Model:     "llama3.2",
+		Genotype:  "go-dev",
+		Substrate: "  opentendril  ",
+	})
+	if orch.Provider != "local" || orch.Model != "llama3.2" || orch.Genotype != "go-dev" {
+		t.Fatalf("provider/model/genotype not copied: %+v", orch)
+	}
+	if orch.Substrate != "opentendril" {
+		t.Fatalf("Substrate = %q, want trimmed named substrate opentendril", orch.Substrate)
+	}
+}
+
+func TestApplySessionPreferencesDoesNotInventStemHome(t *testing.T) {
+	orch := conductor.NewDockerOrchestrator()
+	applySessionPreferences(orch, session.Preferences{})
+	if orch.Substrate != "" {
+		t.Fatalf("empty preferences invented Substrate %q; chat must leave it unset", orch.Substrate)
+	}
+}
+
+func TestHandleChatCompletionsRefusesStemHomeWithoutSubstrate(t *testing.T) {
+	t.Setenv("TENDRIL_TRIGGERS_MODE", "disabled")
+	t.Setenv("TENDRIL_SUBSTRATE", "")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir control plane: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmp, ".tendril", "api-key"), []byte("test-key\n"), 0o600); err != nil {
+		t.Fatalf("write api-key: %v", err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(cwd)
+
+	bus := eventbus.New()
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	sess, err := manager.Initiate(context.Background(), session.OriginREST, session.Preferences{})
+	if err != nil {
+		t.Fatalf("initiate: %v", err)
+	}
+
+	handler := handleChatCompletions(bus, manager, nil)
+	body := `{"sessionId":"` + sess.ID + `","messages":[{"role":"user","content":"hello"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatal("chat grew a Sprout with no Substrate; want the required-substrate refusal")
+	}
+	if !strings.Contains(rec.Body.String(), "substrate is required") {
+		t.Fatalf("response = %q, want the existing required-substrate message", rec.Body.String())
 	}
 }
 

@@ -68,16 +68,16 @@ func TestPreferencesMergeAndIsolationBetweenSessions(t *testing.T) {
 	first, _ := m.Initiate(context.Background(), OriginCLI, Preferences{Model: "claude-fable-5"})
 	second, _ := m.Initiate(context.Background(), OriginCLI, Preferences{})
 
-	updated, err := m.UpdatePreferences(context.Background(), first.ID, Preferences{Genotype: "go-dev"})
+	updated, err := m.UpdatePreferences(context.Background(), first.ID, Preferences{Genotype: "go-dev", Substrate: "opentendril"})
 	if err != nil {
 		t.Fatalf("UpdatePreferences: %v", err)
 	}
-	if updated.Preferences.Model != "claude-fable-5" || updated.Preferences.Genotype != "go-dev" {
+	if updated.Preferences.Model != "claude-fable-5" || updated.Preferences.Genotype != "go-dev" || updated.Preferences.Substrate != "opentendril" {
 		t.Fatalf("merge lost fields: %+v", updated.Preferences)
 	}
 
 	other, _ := m.Get(context.Background(), second.ID)
-	if other.Preferences.Model != "" || other.Preferences.Genotype != "" {
+	if other.Preferences.Model != "" || other.Preferences.Genotype != "" || other.Preferences.Substrate != "" {
 		t.Fatalf("preferences leaked across sessions: %+v", other.Preferences)
 	}
 }
@@ -581,8 +581,9 @@ func TestUpdatePreferencesPersistsToStore(t *testing.T) {
 	}
 
 	if _, err := m.UpdatePreferences(context.Background(), s.ID, Preferences{
-		Genotype: "go-dev",
-		Extras:   map[string]string{"tone": "terse"},
+		Genotype:  "go-dev",
+		Substrate: "opentendril",
+		Extras:    map[string]string{"tone": "terse"},
 	}); err != nil {
 		t.Fatalf("UpdatePreferences: %v", err)
 	}
@@ -596,6 +597,9 @@ func TestUpdatePreferencesPersistsToStore(t *testing.T) {
 	}
 	if stored.Preferences.Genotype != "go-dev" {
 		t.Fatalf("store missing Genotype override: %+v", stored.Preferences)
+	}
+	if stored.Preferences.Substrate != "opentendril" {
+		t.Fatalf("store missing Substrate override: %+v", stored.Preferences)
 	}
 	if stored.Preferences.Extras["tone"] != "terse" {
 		t.Fatalf("store missing Extras override: %+v", stored.Preferences)

@@ -190,7 +190,7 @@ func (s *Service) Capabilities() []Capability {
 		},
 		{
 			Name:        CapUpdatePhytomer,
-			Description: "Merge preference overrides (provider, model, genotype, …) into a Phytomer.",
+			Description: "Merge preference overrides (provider, model, genotype, substrate, …) into a Phytomer.",
 			InputSchema: schemaObject(map[string]any{
 				"sessionId":   stringProp("The Phytomer id."),
 				"preferences": preferencesSchema(),
@@ -271,5 +271,6 @@ func preferencesSchema() map[string]any {
 		"model":            stringProp("Model override for this session."),
 		"genotype":         stringProp("Genotype (system-prompt persona) override."),
 		"epigeneticGenome": stringProp("Epigenetic Genome override."),
+		"substrate":        stringProp("Named Substrate or checkout path this Phytomer grows against."),
 	}, nil)
 }

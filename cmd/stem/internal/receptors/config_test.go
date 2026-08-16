@@ -136,3 +136,44 @@ func TestMCPCreateGenotypeRejectsTraversalNames(t *testing.T) {
 		t.Fatalf("traversal name escaped the genotypes directory: %s exists", escaped)
 	}
 }
+
+func TestListSubstratesReturnsConfiguredNames(t *testing.T) {
+	root := chdirTempDir(t)
+	yaml := []byte("substrates:\n  opentendril:\n    path: .\n  docs:\n    path: ./docs\n")
+	if err := os.WriteFile(filepath.Join(root, "substrates.yaml"), yaml, 0o644); err != nil {
+		t.Fatalf("write substrates.yaml: %v", err)
+	}
+
+	handler := NewConfigHandler(core.NewService(nil), filepath.Join(root, ".tendril"))
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/substrates", nil)
+	rec := httptest.NewRecorder()
+	handler.ListSubstrates(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListSubstrates status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Substrates []string `json:"substrates"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(payload.Substrates) != 2 || payload.Substrates[0] != "docs" || payload.Substrates[1] != "opentendril" {
+		t.Fatalf("substrates = %#v, want sorted [docs opentendril]", payload.Substrates)
+	}
+}
+
+func TestListSubstratesEmptyWhenUnconfigured(t *testing.T) {
+	chdirTempDir(t)
+	handler := NewConfigHandler(core.NewService(nil), t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/v1/config/substrates", nil)
+	rec := httptest.NewRecorder()
+	handler.ListSubstrates(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ListSubstrates status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"substrates":[]`) && !strings.Contains(rec.Body.String(), `"substrates": []`) {
+		t.Fatalf("unconfigured list = %s, want empty substrates array", rec.Body.String())
+	}
+}

@@ -131,13 +131,13 @@ func (s *Service) WithSprout(operations SproutOperations) *Service {
 }
 
 // SproutRun validates the request, binds it to a Tendril session (applying
-// the session's provider/model/genotype preferences to the sprout), and runs
-// it to completion via the injected execution port.
+// the session's provider/model/genotype/substrate preferences to the sprout),
+// and runs it to completion via the injected execution port.
 func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunResult, error) {
 	if s.sprout.Run == nil {
 		return SproutRunResult{}, fmt.Errorf("sprout.grow is not wired: construct the Core with WithSprout(SproutOperations{Run: …})")
 	}
-	if strings.TrimSpace(in.Transcript) == "" || strings.TrimSpace(in.Substrate) == "" {
+	if strings.TrimSpace(in.Transcript) == "" {
 		return SproutRunResult{}, fmt.Errorf("transcript and substrate are required")
 	}
 
@@ -162,8 +162,15 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 			spec.Provider = sess.Preferences.Provider
 			spec.Model = sess.Preferences.Model
 			spec.Genotype = sess.Preferences.Genotype
+			if spec.Substrate == "" {
+				spec.Substrate = strings.TrimSpace(sess.Preferences.Substrate)
+			}
 			s.sessions.Touch(ctx, sess.ID)
 		}
+	}
+
+	if spec.Substrate == "" {
+		return SproutRunResult{}, fmt.Errorf("transcript and substrate are required")
 	}
 
 	result := SproutRunResult{StepID: spec.StepID, SessionID: spec.SessionID}

@@ -62,7 +62,7 @@ func TestSessionRoundTrip(t *testing.T) {
 		Origin:       session.OriginCLI,
 		CreatedAt:    now,
 		LastActiveAt: now,
-		Preferences:  session.Preferences{Model: "claude-fable-5", Genotype: "go-dev"},
+		Preferences:  session.Preferences{Model: "claude-fable-5", Genotype: "go-dev", Substrate: "opentendril"},
 	}
 	if err := store.SaveSession(ctx, sess); err != nil {
 		t.Fatalf("SaveSession: %v", err)
@@ -80,7 +80,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	if len(loaded) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(loaded))
 	}
-	if loaded[0].Preferences.Provider != "anthropic" || loaded[0].Preferences.Model != "claude-fable-5" {
+	if loaded[0].Preferences.Provider != "anthropic" || loaded[0].Preferences.Model != "claude-fable-5" || loaded[0].Preferences.Substrate != "opentendril" {
 		t.Fatalf("preferences did not round-trip: %+v", loaded[0].Preferences)
 	}
 
@@ -91,7 +91,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("LoadSession reported missing for a saved session")
 	}
-	if one.Preferences.Provider != "anthropic" || one.Preferences.Genotype != "go-dev" {
+	if one.Preferences.Provider != "anthropic" || one.Preferences.Genotype != "go-dev" || one.Preferences.Substrate != "opentendril" {
 		t.Fatalf("LoadSession preferences mismatch: %+v", one.Preferences)
 	}
 

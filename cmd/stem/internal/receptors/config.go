@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
@@ -253,6 +255,13 @@ func (h *ConfigHandler) Register(mux *http.ServeMux, auth func(http.HandlerFunc)
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/v1/config/substrates", func(w http.ResponseWriter, r *http.Request) {
+		if auth != nil {
+			auth(h.ListSubstrates)(w, r)
+		} else {
+			h.ListSubstrates(w, r)
+		}
+	})
 }
 
 type Trigger struct {
@@ -323,6 +332,35 @@ func (h *ConfigHandler) ListGenotypes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"genotypes": genotypes,
+	})
+}
+
+// ListSubstrates handles GET /v1/config/substrates. It is a view: names only,
+// from the configured substrates.yaml. The adapter does not resolve checkouts.
+func (h *ConfigHandler) ListSubstrates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	names := []string{}
+	config, err := conductor.LoadSubstratesConfig("")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if config != nil {
+		for name := range config.Substrates {
+			if trimmed := strings.TrimSpace(name); trimmed != "" {
+				names = append(names, trimmed)
+			}
+		}
+		sort.Strings(names)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"substrates": names,
 	})
 }
 

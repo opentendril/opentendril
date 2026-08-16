@@ -64,6 +64,16 @@ export function SessionRail() {
                 <span className="origin-chip">{session.origin}</span>
                 <span>{relativeTime(session.lastActiveAt)}</span>
               </span>
+              <span
+                className={`substrate-chip ${session.preferences?.substrate ? "set" : "unset"}`}
+                title={
+                  session.preferences?.substrate
+                    ? `Substrate ${session.preferences.substrate}`
+                    : "No Substrate bound"
+                }
+              >
+                {session.preferences?.substrate || "no substrate"}
+              </span>
             </button>
           ))
         )}

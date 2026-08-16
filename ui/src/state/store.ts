@@ -52,11 +52,13 @@ interface StemStore {
   chatPending: Record<string, boolean>;
   chatError: string | null;
   drilldown: DrilldownTarget | null;
+  configuredSubstrates: string[];
 
   boot: () => void;
   shutdown: () => void;
   selectSession: (sessionId: string) => void;
   createSession: (preferences?: Preferences) => Promise<void>;
+  updatePreferences: (preferences: Preferences) => Promise<void>;
   sendChat: (content: string) => Promise<void>;
   openDrilldown: (run: SproutRun) => void;
   closeDrilldown: () => void;
@@ -173,7 +175,11 @@ export const useStem = create<StemStore>()((set, get) => {
     liveBuffer = [];
     try {
       const conn = currentConnection();
-      const { sessions } = await stemApi.listSessions(conn);
+      const [{ sessions }, substrates] = await Promise.all([
+        stemApi.listSessions(conn),
+        stemApi.substrates(conn).catch(() => ({ substrates: [] as string[] })),
+      ]);
+      set({ configuredSubstrates: substrates.substrates ?? [] });
 
       const stored = window.localStorage.getItem(ACTIVE_SESSION_KEY);
       const active =
@@ -227,6 +233,7 @@ export const useStem = create<StemStore>()((set, get) => {
     chatPending: {},
     chatError: null,
     drilldown: null,
+    configuredSubstrates: [],
 
     boot: () => {
       socket?.close();
@@ -274,6 +281,32 @@ export const useStem = create<StemStore>()((set, get) => {
         eventsBySession: { ...state.eventsBySession, [session.sessionId]: [] },
       }));
       get().selectSession(session.sessionId);
+    },
+
+    updatePreferences: async (preferences) => {
+      const sessionId = get().activeSessionId;
+      if (!sessionId) return;
+      try {
+        const session = await stemApi.updatePreferences(
+          currentConnection(),
+          sessionId,
+          preferences,
+        );
+        set((state) => ({
+          chatError: null,
+          sessions: state.sessions.map((existing) =>
+            existing.sessionId === sessionId ? session : existing,
+          ),
+        }));
+      } catch (err) {
+        set({
+          chatError:
+            err instanceof StemApiError
+              ? `Could not bind Substrate (${err.status}): ${err.message}`
+              : `Could not bind Substrate: ${String(err)}`,
+        });
+        throw err;
+      }
     },
 
     sendChat: async (content) => {

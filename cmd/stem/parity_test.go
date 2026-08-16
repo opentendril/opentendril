@@ -1046,10 +1046,10 @@ func TestBehavioralParity(t *testing.T) {
 			method: "UpdateSessionPreferences",
 			want: core.UpdateSessionInput{
 				SessionID:   sessionID,
-				Preferences: session.Preferences{Model: "claude-sonnet"},
+				Preferences: session.Preferences{Model: "claude-sonnet", Substrate: "opentendril"},
 			},
 			restRequest: func(t *testing.T, serverURL string) *http.Response {
-				body := bytes.NewBufferString(`{"preferences":{"model":"claude-sonnet"}}`)
+				body := bytes.NewBufferString(`{"preferences":{"model":"claude-sonnet","substrate":"opentendril"}}`)
 				req, err := http.NewRequest(http.MethodPatch, serverURL+"/v1/sessions/"+sessionID, body)
 				if err != nil {
 					t.Fatalf("build REST phytomer.update request: %v", err)
@@ -1062,10 +1062,10 @@ func TestBehavioralParity(t *testing.T) {
 			},
 			mcpParams: map[string]any{
 				"sessionId":   sessionID,
-				"preferences": map[string]any{"model": "claude-sonnet"},
+				"preferences": map[string]any{"model": "claude-sonnet", "substrate": "opentendril"},
 			},
 			cliSubcommand: "update",
-			cliArgs:       []string{sessionID, "--model", "claude-sonnet"},
+			cliArgs:       []string{sessionID, "--model", "claude-sonnet", "--substrate", "opentendril"},
 		},
 		{
 			name:   core.CapPhytomerHistory,

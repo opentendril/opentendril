@@ -69,12 +69,13 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `GET /health` | Onboarding reachability check. |
 | `GET /v1/phytomers` | The session rail; also the onboarding key-validation call. |
 | `POST /v1/phytomers` | "+ Sprout" — create a new Tendril session. |
-| `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, …). |
+| `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
 | `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
-| `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). |
+| `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). A Phytomer with `preferences.substrate` set passes that named Substrate into the grow path; an unset Substrate does not fall back to the Stem working directory. |
+| `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the session Substrate control. |
 
 The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` when
 `TENDRIL_DB_LOGGING=false`, since there is no persistent store to read from.

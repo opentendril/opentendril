@@ -6,7 +6,7 @@
 // server, the OpenAPI REST endpoints, and the WebSocket gateway — resolves its
 // traffic through the same Manager, so concurrent conversations coexist without
 // trampling each other's state and each Phytomer carries its own preferences
-// (LLM provider/model overrides, Genotype, Epigenetic Genome).
+// (LLM provider/model overrides, Genotype, Epigenetic Genome, Substrate).
 package session
 
 import (
@@ -66,11 +66,15 @@ var validIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 // Preferences hold per-Phytomer overrides that shape how sprouts execute for
 // this session only. Zero values mean "inherit the global default".
 type Preferences struct {
-	Provider         string            `json:"provider,omitempty"`
-	Model            string            `json:"model,omitempty"`
-	Genotype         string            `json:"genotype,omitempty"`
-	EpigeneticGenome string            `json:"epigeneticGenome,omitempty"`
-	Extras           map[string]string `json:"extras,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Genotype         string `json:"genotype,omitempty"`
+	EpigeneticGenome string `json:"epigeneticGenome,omitempty"`
+	// Substrate is the named Substrate (or checkout path) this Phytomer grows
+	// against. Zero means unset: chat and other implicit grow paths must not
+	// invent the Stem working directory as a stand-in.
+	Substrate string            `json:"substrate,omitempty"`
+	Extras    map[string]string `json:"extras,omitempty"`
 }
 
 // Merge layers overrides on top of the receiver, returning the result.
@@ -87,6 +91,9 @@ func (p Preferences) Merge(overrides Preferences) Preferences {
 	}
 	if strings.TrimSpace(overrides.EpigeneticGenome) != "" {
 		merged.EpigeneticGenome = overrides.EpigeneticGenome
+	}
+	if strings.TrimSpace(overrides.Substrate) != "" {
+		merged.Substrate = overrides.Substrate
 	}
 	if len(overrides.Extras) > 0 {
 		if merged.Extras == nil {

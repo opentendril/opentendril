@@ -31,7 +31,7 @@
 | `Store` | Interface to persist Phytomer sessions and their chat logs (`SaveSession`, `DeleteSession`, `LoadSessions`, `LoadSession`, `AppendMessage`, `LoadMessages`). |
 | `Phytomer` | One stateful interaction thread, including ID, origin, timestamps, and preferences. |
 | `Message` | One unified chat-log entry bound to a Phytomer. |
-| `Preferences` | Per-Phytomer overrides (provider, model, genotype, epigenetic genome, extras). |
+| `Preferences` | Per-Phytomer overrides (provider, model, genotype, epigenetic genome, substrate, extras). |
 | `NewID` | Mints a unique Phytomer session identifier. |
 | `ValidID` | Reports whether an externally supplied session ID is acceptable. |
 | `EnvSessionTTL` | Env var name (`TENDRIL_SESSION_TTL`) for the idle-cache TTL duration string. |

@@ -10,6 +10,7 @@ export interface Preferences {
   model?: string;
   genotype?: string;
   epigeneticGenome?: string;
+  substrate?: string;
   extras?: Record<string, string>;
 }
 

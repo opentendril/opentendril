@@ -54,9 +54,10 @@ func TestSproutRunMintsStepIDAndBindsSession(t *testing.T) {
 
 	// A pre-existing session's preferences must shape the sprout.
 	sess, err := manager.Initiate(context.Background(), session.OriginCLI, session.Preferences{
-		Provider: "local",
-		Model:    "llama3.2",
-		Genotype: "verifier",
+		Provider:  "local",
+		Model:     "llama3.2",
+		Genotype:  "verifier",
+		Substrate: "from-session",
 	})
 	if err != nil {
 		t.Fatalf("sprout session: %v", err)
@@ -81,8 +82,37 @@ func TestSproutRunMintsStepIDAndBindsSession(t *testing.T) {
 	if got.Provider != "local" || got.Model != "llama3.2" || got.Genotype != "verifier" {
 		t.Fatalf("session preferences not applied to spec: %+v", got)
 	}
+	if got.Substrate != "/workspaces/core" {
+		t.Fatalf("explicit substrate overwritten by session preference: %q", got.Substrate)
+	}
 	if result.Status != "matured" || result.Output != "done" || result.SessionID != sess.ID {
 		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestSproutRunUsesSessionSubstrateWhenInputOmitsIt(t *testing.T) {
+	var got core.SproutSpec
+	svc, manager := newSproutService(t, func(_ context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
+		got = spec
+		return core.SproutRunReport{Output: "done", Outcome: "complete"}, nil
+	})
+
+	sess, err := manager.Initiate(context.Background(), session.OriginREST, session.Preferences{
+		Substrate: "opentendril",
+	})
+	if err != nil {
+		t.Fatalf("sprout session: %v", err)
+	}
+
+	if _, err := svc.SproutRun(context.Background(), core.SproutRunInput{
+		Transcript: "fix the flaky test",
+		SessionID:  sess.ID,
+		Origin:     session.OriginREST,
+	}); err != nil {
+		t.Fatalf("SproutRun: %v", err)
+	}
+	if got.Substrate != "opentendril" {
+		t.Fatalf("spec substrate = %q, want session preference opentendril", got.Substrate)
 	}
 }
 
