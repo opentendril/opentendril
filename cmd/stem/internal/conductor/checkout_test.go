@@ -210,6 +210,48 @@ func TestRepoRootDoesNotEscapeManagedCheckoutIntoParentGitRepo(t *testing.T) {
 	if got != checkout {
 		t.Fatalf("repoRoot(managed checkout) = %q, want the checkout itself, not parent git toplevel %q", got, parent)
 	}
+
+	// The empty placeholder is not a checkout, even though git-rev-parse
+	// would walk into the parent. Resolving it as ready is how chat mounted
+	// an empty /app.
+	_, err := ResolveSubstrateWorkspace("demo", &SubstrateSpec{Checkout: CheckoutSpec{Mode: "managed"}})
+	if !errors.Is(err, ErrWorkspaceAbsent) {
+		t.Fatalf("ResolveSubstrateWorkspace(empty managed under parent git) = %v, want ErrWorkspaceAbsent", err)
+	}
+}
+
+func TestResolveSubstrateWorkspaceTreatsEmptyManagedDirAsAbsent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+	placeholder := filepath.Join(root, "opentendril")
+	if err := os.MkdirAll(placeholder, 0o755); err != nil {
+		t.Fatalf("mkdir placeholder: %v", err)
+	}
+
+	spec := &SubstrateSpec{URL: "https://example.com/opentendril.git", Checkout: CheckoutSpec{Mode: "managed"}}
+	_, err := ResolveSubstrateWorkspace("opentendril", spec)
+	if !errors.Is(err, ErrWorkspaceAbsent) {
+		t.Fatalf("empty managed dir resolved: %v, want ErrWorkspaceAbsent", err)
+	}
+
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "init"},
+	} {
+		if _, err := runGitCommand(ctx, placeholder, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	got, err := ResolveSubstrateWorkspace("opentendril", spec)
+	if err != nil {
+		t.Fatalf("populated managed checkout: %v", err)
+	}
+	if got != placeholder {
+		t.Fatalf("resolved path = %q, want %q", got, placeholder)
+	}
 }
 
 func TestIsUnsuitableImplicitWorkspaceDetectsStemHomeLayout(t *testing.T) {

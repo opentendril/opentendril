@@ -10,6 +10,15 @@ where versions are cut.
 
 ### Fixed
 
+- **Empty Terrarium workspace on Greenhouse/chat grow.** Chat copies only the
+  Phytomer Substrate name onto the orchestrator. A managed checkout directory
+  that existed but had no `.git` (failed materialization, leftover
+  placeholder) then counted as a local workspace, so clone/fetch was skipped
+  and Docker bind-mounted an empty `/app`. An unpopulated managed checkout is
+  now treated as absent and cloned from the named Substrate URL before mount,
+  matching CLI `tendril sprout grow --substrate <name>`. A missing Substrate
+  still fails with the existing required-substrate / workspace-absent
+  refusal.
 - **Repo-map / Substrate scan under rootless Docker.** A short Greenhouse task
   used the Stem working directory (the principal's home) as the implicit
   Substrate. The Rhizome walk then entered the rootless daemon's containerd
