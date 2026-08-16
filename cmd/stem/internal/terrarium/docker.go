@@ -107,6 +107,9 @@ func createDockerTerrarium(ctx context.Context, provider TerrariumProvider, spec
 		if source == "" || target == "" {
 			return nil, fmt.Errorf("terrarium mounts require both source and target")
 		}
+		if !filepath.IsAbs(source) {
+			return nil, fmt.Errorf("terrarium bind-mount source %q is not an absolute path; Docker treats a bare name as an empty named volume at /app", source)
+		}
 
 		mountArg := fmt.Sprintf("%s:%s", source, target)
 		if mount.ReadOnly {

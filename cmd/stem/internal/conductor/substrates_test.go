@@ -637,6 +637,206 @@ substrates:
 	}
 }
 
+// Chat-shaped grow on a populated managed checkout must mount THAT directory
+// at /app, not a /tmp/opentendril-terrarium-* shadow worktree. Rootless
+// Docker cannot see host /tmp, so the shadow became an empty named mount.
+func TestRunSproutChatPathMountsPopulatedManagedCheckout(t *testing.T) {
+	managedRoot := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+	checkout := filepath.Join(managedRoot, "opentendril")
+	if err := os.MkdirAll(filepath.Join(checkout, "docs"), 0o755); err != nil {
+		t.Fatalf("mkdir checkout: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, "docs", "TERRARIUM.md"), []byte("terrarium notes\n"), 0o644); err != nil {
+		t.Fatalf("write TERRARIUM.md: %v", err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"add", "-A"},
+		{"commit", "-q", "-m", "init"},
+	} {
+		if _, err := runGitCommand(ctx, checkout, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	cwd := chdirToTempDir(t)
+	// A leftover ./opentendril in the Stem cwd must not win over the managed
+	// checkout. Docker would treat that bare name as an empty named volume.
+	if err := os.MkdirAll(filepath.Join(cwd, "opentendril"), 0o755); err != nil {
+		t.Fatalf("mkdir cwd sibling: %v", err)
+	}
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), `
+substrates:
+  opentendril:
+    url: https://example.com/opentendril.git
+    branch: main
+    checkout:
+      mode: managed
+`)
+
+	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+
+	var mounted string
+	var shadowCalls int
+	originalPreflight := runSproutPreflightChecksFn
+	originalRepoMap := generateRepoMapFn
+	originalMemoryMap := generateMemoryMapFn
+	originalEnsure := ensureSproutImageFn
+	originalStart := startTerrariumSessionFn
+	originalNewSprout := newSproutFn
+	originalStash := stashHostWorkspaceFn
+	originalShadow := createShadowWorktreeFn
+	originalCollect := collectStageableFilesFn
+	originalDiff := collectGitDiffFn
+	originalCommit := commitTerrariumExecutionFn
+	originalMerge := mergeTerrariumCommitFn
+	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
+		generateRepoMapFn = originalRepoMap
+		generateMemoryMapFn = originalMemoryMap
+		ensureSproutImageFn = originalEnsure
+		startTerrariumSessionFn = originalStart
+		newSproutFn = originalNewSprout
+		stashHostWorkspaceFn = originalStash
+		createShadowWorktreeFn = originalShadow
+		collectStageableFilesFn = originalCollect
+		collectGitDiffFn = originalDiff
+		commitTerrariumExecutionFn = originalCommit
+		mergeTerrariumCommitFn = originalMerge
+	})
+	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
+	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
+	ensureSproutImageFn = func(context.Context, string) error { return nil }
+	createShadowWorktreeFn = func(sourcePath, substrateBranch string) (string, error) {
+		shadowCalls++
+		return "", fmt.Errorf("shadow worktree must not be used for a managed checkout")
+	}
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		mounted = mountPath
+		return &stubToolSession{}, nil
+	}
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		return &stubSproutRunner{result: sproutResult{Response: "read TERRARIUM.md"}}, nil
+	}
+	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
+	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return nil, nil }
+	collectGitDiffFn = func(context.Context, string) (string, error) { return "", nil }
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential) (string, error) {
+		return "", nil
+	}
+	mergeTerrariumCommitFn = func(context.Context, string, string) error { return nil }
+
+	report, err := (&DockerOrchestrator{
+		Substrate:        "opentendril",
+		StepID:           "step-chat-populated",
+		DisableMergeBack: true,
+	}).RunSprout(context.Background(), "read docs/TERRARIUM.md")
+	if err != nil {
+		t.Fatalf("RunSprout: %v", err)
+	}
+	if report.Output != "read TERRARIUM.md" {
+		t.Fatalf("output = %q", report.Output)
+	}
+	if shadowCalls != 0 {
+		t.Fatalf("createShadowWorktree called %d time(s); managed checkout must be mounted in place", shadowCalls)
+	}
+	if mounted != checkout {
+		t.Fatalf("mount source = %q, want the managed checkout %q (not a /tmp shadow or cwd sibling)", mounted, checkout)
+	}
+	body, err := os.ReadFile(filepath.Join(mounted, "docs", "TERRARIUM.md"))
+	if err != nil {
+		t.Fatalf("mounted workspace missing docs/TERRARIUM.md: %v (mount=%q)", err, mounted)
+	}
+	if string(body) != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", body)
+	}
+	if _, err := os.Stat(filepath.Join(mounted, ".git")); err != nil {
+		t.Fatalf("mounted workspace is not a git checkout: %v", err)
+	}
+}
+
+func TestResolveSubstrateExecutionPlanNamedDoesNotUseCwdNameSibling(t *testing.T) {
+	managedRoot := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+	checkout := filepath.Join(managedRoot, "opentendril")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatalf("mkdir checkout: %v", err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "init"},
+	} {
+		if _, err := runGitCommand(ctx, checkout, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	cwd := chdirToTempDir(t)
+	if err := os.MkdirAll(filepath.Join(cwd, "opentendril"), 0o755); err != nil {
+		t.Fatalf("mkdir cwd sibling: %v", err)
+	}
+
+	plan, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{Substrate: "opentendril"}, &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"opentendril": {
+				URL:      "https://example.com/opentendril.git",
+				Branch:   "main",
+				Checkout: CheckoutSpec{Mode: "managed"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveSubstrateExecutionPlan: %v", err)
+	}
+	if plan.hostPath != checkout {
+		t.Fatalf("hostPath = %q, want the managed checkout %q, not the empty cwd sibling", plan.hostPath, checkout)
+	}
+	if plan.remoteClone {
+		t.Fatal("a populated managed checkout should stay local")
+	}
+}
+
+func TestAssertTerrariumBindMountSource(t *testing.T) {
+	t.Run("refuses a bare name", func(t *testing.T) {
+		err := assertTerrariumBindMountSource("opentendril")
+		if err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+			t.Fatalf("err = %v, want a refusal of a bare Docker volume name", err)
+		}
+	})
+	t.Run("refuses an empty managed placeholder", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+		placeholder := filepath.Join(root, "opentendril")
+		if err := os.MkdirAll(placeholder, 0o755); err != nil {
+			t.Fatalf("mkdir placeholder: %v", err)
+		}
+		err := assertTerrariumBindMountSource(placeholder)
+		if err == nil || !strings.Contains(err.Error(), "has no .git") {
+			t.Fatalf("err = %v, want a refusal of an empty managed checkout", err)
+		}
+	})
+	t.Run("accepts a populated managed checkout", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+		checkout := filepath.Join(root, "opentendril")
+		if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+			t.Fatalf("mkdir .git: %v", err)
+		}
+		if err := assertTerrariumBindMountSource(checkout); err != nil {
+			t.Fatalf("populated managed checkout refused: %v", err)
+		}
+	})
+}
+
 func TestResolveSubstrateExecutionPlanRefusesStemHomeWithoutASubstrate(t *testing.T) {
 	stemHome := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(stemHome, ".local", "share", "docker"), 0o755); err != nil {

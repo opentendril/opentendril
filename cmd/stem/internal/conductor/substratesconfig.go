@@ -322,7 +322,8 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 	}
 
 	var resolutionErr error
-	if spec, isName := ResolveSubstrate(plan.name, config); isName && spec != nil {
+	spec, isName := ResolveSubstrate(plan.name, config)
+	if isName && spec != nil {
 		plan.named = true
 		plan.readOnly = spec.ReadOnly
 
@@ -337,6 +338,15 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 			}
 		} else if resolvedPath != "" {
 			plan.hostPath = resolvedPath
+		}
+		// A named Substrate is never a relative directory name. A leftover
+		// ./<name> in the Stem cwd (or Docker creating that name as a volume
+		// source) would otherwise become the -v source — an empty /app —
+		// instead of the populated managed checkout.
+		if intended := intendedLocalWorkspace(plan.name, spec); intended != "" {
+			if plan.hostPath == plan.name || !filepath.IsAbs(plan.hostPath) {
+				plan.hostPath = intended
+			}
 		}
 		if plan.cloneURL == "" {
 			plan.cloneURL = strings.TrimSpace(spec.URL)
@@ -412,6 +422,9 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 				return nil, resolutionErr
 			}
 			return nil, fmt.Errorf("substrate path %s does not exist", plan.hostPath)
+		}
+		if abs, err := filepath.Abs(plan.hostPath); err == nil {
+			plan.hostPath = abs
 		}
 		plan.hostPath = repoRoot(plan.hostPath)
 	}

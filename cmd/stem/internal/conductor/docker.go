@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -451,28 +452,38 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 
 		if gitRepo {
-			shadowPath, err := createShadowWorktreeFn(sourcePath, plan.cloneBranch)
-			if err == nil {
-				mountPath = shadowPath
-				injectMycorrhizalCacheFn(sourcePath, shadowPath)
-				cleanup = func() {
-					removeShadowWorktreeFn(sourcePath, shadowPath)
-				}
-			} else if allowHostWorkspace() {
-				fmt.Fprintf(os.Stderr, "⚠️  Failed to create shadow worktree: %v. Using active workspace (%s).\n", err, EnvAllowHostWorkspace)
-				if d.EventBus != nil {
-					d.EventBus.Publish(eventbus.Event{
-						Type:      eventbus.EventHostExecutionActivated,
-						Source:    stepID,
-						SessionID: d.SessionID,
-						Data: map[string]interface{}{
-							"workspace": sourcePath,
-							"stepId":    stepID,
-						},
-					})
-				}
+			if isManagedCheckoutPath(sourcePath) {
+				// Chat/WS name-only grow stays on the local path. It used to
+				// wrap that path in a /tmp shadow worktree
+				// (opentendril-terrarium-<id>). CLI copies the Substrate URL
+				// and mounts the managed checkout itself. Rootless Docker
+				// cannot see host /tmp, so -v /tmp/opentendril-terrarium-*:/app
+				// created an empty directory and tools saw a vacant /app.
+				mountPath = sourcePath
 			} else {
-				return report, fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
+				shadowPath, err := createShadowWorktreeFn(sourcePath, plan.cloneBranch)
+				if err == nil {
+					mountPath = shadowPath
+					injectMycorrhizalCacheFn(sourcePath, shadowPath)
+					cleanup = func() {
+						removeShadowWorktreeFn(sourcePath, shadowPath)
+					}
+				} else if allowHostWorkspace() {
+					fmt.Fprintf(os.Stderr, "⚠️  Failed to create shadow worktree: %v. Using active workspace (%s).\n", err, EnvAllowHostWorkspace)
+					if d.EventBus != nil {
+						d.EventBus.Publish(eventbus.Event{
+							Type:      eventbus.EventHostExecutionActivated,
+							Source:    stepID,
+							SessionID: d.SessionID,
+							Data: map[string]interface{}{
+								"workspace": sourcePath,
+								"stepId":    stepID,
+							},
+						})
+					}
+				} else {
+					return report, fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
+				}
 			}
 		} else {
 			fmt.Fprintf(os.Stderr, "⚠️ Directory %s is not a git repository. Shadow Git terrariuming disabled.\n", sourcePath)
@@ -559,6 +570,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 		releaseWork(nil)
 	}()
+
+	if err := assertTerrariumBindMountSource(mountPath); err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return report, err
+	}
 
 	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, d.Investigation, plan.command, extraEnv, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
@@ -1125,6 +1143,32 @@ func deriveWatchdogTimeout(ctx context.Context) time.Duration {
 		}
 	}
 	return terrariumWatchdogFallback
+}
+
+// assertTerrariumBindMountSource is the last host-side check before docker
+// run -v. A bare name becomes an empty Docker named volume; an unpopulated
+// managed checkout becomes an empty /app. Log the source so an operator can
+// see which host path the Terrarium actually received.
+func assertTerrariumBindMountSource(path string) error {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return fmt.Errorf("terrarium bind-mount source is empty")
+	}
+	if !filepath.IsAbs(trimmed) {
+		return fmt.Errorf("terrarium bind-mount source %q is not an absolute path; Docker treats a bare name as an empty named volume at /app", trimmed)
+	}
+	info, err := os.Stat(trimmed)
+	if err != nil {
+		return fmt.Errorf("terrarium bind-mount source %q: %w", trimmed, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("terrarium bind-mount source %q is not a directory", trimmed)
+	}
+	if isManagedCheckoutPath(trimmed) && !checkoutHasGitMetadata(trimmed) {
+		return fmt.Errorf("managed checkout %q has no .git; refusing to mount an empty /app", trimmed)
+	}
+	log.Printf("[Terrarium] bind-mount source %s -> /app", trimmed)
+	return nil
 }
 
 func startTerrariumSession(ctx context.Context, providerName, imageName string, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {

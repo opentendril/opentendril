@@ -9,6 +9,22 @@ import (
 	"time"
 )
 
+func TestDockerProviderCreateRefusesRelativeMountSource(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := NewDockerProvider().Create(context.Background(), TerrariumSpec{
+		Image:      "opentendril-go:latest",
+		WorkingDir: "/app",
+		Mounts: []MountSpec{
+			{Source: "opentendril", Target: "/app"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+		t.Fatalf("err = %v, want a refusal of a bare Docker volume name", err)
+	}
+}
+
 func TestDockerProviderCreateHonorsTerrariumSpec(t *testing.T) {
 	fake := installFakeDocker(t)
 	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
