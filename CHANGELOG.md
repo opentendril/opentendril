@@ -21,6 +21,12 @@ where versions are cut.
 
 ### Added
 
+- **Phytomer Substrate preference.** A session can carry a first-class
+  `preferences.substrate` (create/PATCH, persisted and merged like
+  provider/model/genotype). Greenhouse chat binds and shows that name; the
+  chat grow path passes it into the Sprout instead of the Stem working
+  directory. An empty Substrate still hits the existing required-substrate
+  refusal.
 - **Sprout-run observation contract.** Finished Sprout runs persist the
   Conductor outcome plus a Core-owned `failureCategory`, a credential-free
   `providerDiagnostic`, `providerRequestAttempted`, and `toolInvocations`.

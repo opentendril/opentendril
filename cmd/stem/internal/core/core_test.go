@@ -79,12 +79,12 @@ func TestSessionLifecycleThroughCore(t *testing.T) {
 	// update
 	updated, err := svc.UpdateSessionPreferences(ctx, core.UpdateSessionInput{
 		SessionID:   created.ID,
-		Preferences: session.Preferences{Genotype: "verifier"},
+		Preferences: session.Preferences{Genotype: "verifier", Substrate: "opentendril"},
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if updated.Preferences.Genotype != "verifier" || updated.Preferences.Model != "claude-sonnet" {
+	if updated.Preferences.Genotype != "verifier" || updated.Preferences.Model != "claude-sonnet" || updated.Preferences.Substrate != "opentendril" {
 		t.Fatalf("update did not merge preferences: %+v", updated.Preferences)
 	}
 

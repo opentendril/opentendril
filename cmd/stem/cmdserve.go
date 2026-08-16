@@ -794,9 +794,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		orch.StepID = stepID
 		orch.EventBus = bus
 		orch.SessionID = sess.ID
-		orch.Provider = sess.Preferences.Provider
-		orch.Model = sess.Preferences.Model
-		orch.Genotype = sess.Preferences.Genotype
+		applySessionPreferences(orch, sess.Preferences)
 		if history != nil {
 			installSproutTerminalHistory(orch, history, context.WithoutCancel(r.Context()), sproutRun)
 		}
@@ -849,6 +847,20 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// applySessionPreferences copies Phytomer overrides onto the orchestrator the
+// chat grow path uses. Substrate is first-class: an empty preference stays
+// empty so the conductor can apply the unique-named-Substrate fallback or the
+// Stem-home refusal. Chat must not invent the Stem working directory here.
+func applySessionPreferences(orch *conductor.DockerOrchestrator, prefs session.Preferences) {
+	if orch == nil {
+		return
+	}
+	orch.Provider = prefs.Provider
+	orch.Model = prefs.Model
+	orch.Genotype = prefs.Genotype
+	orch.Substrate = strings.TrimSpace(prefs.Substrate)
 }
 
 const triggerExecTimeout = 30 * time.Second
@@ -1096,6 +1108,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	})
+	mux.HandleFunc("/v1/config/substrates", guardedAuth(configHandler.ListSubstrates))
 
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
 	// projects the same Core session capabilities as REST and the CLI)

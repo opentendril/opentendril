@@ -103,6 +103,10 @@ export const stemApi = {
     return request<{ genotypes: string[] }>(conn, "/v1/config/genotypes");
   },
 
+  substrates(conn: StemConnection) {
+    return request<{ substrates: string[] }>(conn, "/v1/config/substrates");
+  },
+
   chat(conn: StemConnection, sessionId: string, content: string, model?: string) {
     return request<ChatCompletionResponse>(conn, "/v1/chat/completions", {
       method: "POST",

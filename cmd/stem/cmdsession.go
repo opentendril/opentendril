@@ -199,6 +199,12 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 				return nil, err
 			}
 			prefs["genotype"] = v
+		case "--substrate":
+			v, err := next()
+			if err != nil {
+				return nil, err
+			}
+			prefs["substrate"] = v
 		case "--limit":
 			v, err := next()
 			if err != nil {
@@ -230,10 +236,10 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 }
 
 var sessionCommandHelp = map[string]string{
-	core.CapCreatePhytomer:  "create a new session   (--provider --model --genotype --origin)",
+	core.CapCreatePhytomer:  "create a new session   (--provider --model --genotype --substrate --origin)",
 	core.CapListPhytomers:   "list live sessions",
 	core.CapGetPhytomer:     "get one session        (<id> | --id <id>)",
-	core.CapUpdatePhytomer:  "update preferences     (<id> --provider --model --genotype)",
+	core.CapUpdatePhytomer:  "update preferences     (<id> --provider --model --genotype --substrate)",
 	core.CapDeletePhytomer:  "delete a session       (<id>)",
 	core.CapPhytomerHistory: "show chat history      (<id> --limit N)",
 }

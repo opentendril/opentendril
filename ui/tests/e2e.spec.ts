@@ -34,11 +34,26 @@ function makeSession(overrides: Partial<Session>): Session {
 async function mockStemBackend(
   page: Page,
   { sessions = [] as Session[], sproutRuns = [] as SproutRun[] } = {},
-): Promise<{ lastSessionsAuthHeader: () => string | undefined }> {
+): Promise<{
+  lastSessionsAuthHeader: () => string | undefined;
+  lastPreferencePatch: () => Record<string, unknown> | undefined;
+}> {
   let lastSessionsAuthHeader: string | undefined;
+  let lastPreferencePatch: Record<string, unknown> | undefined;
+  const liveSessions = sessions.map((session) => ({
+    ...session,
+    preferences: { ...session.preferences },
+  }));
 
   await page.route("**/health", async (route) => {
     await route.fulfill({ status: 200, json: { overall: true } });
+  });
+
+  await page.route("**/v1/config/substrates", async (route) => {
+    await route.fulfill({
+      status: 200,
+      json: { substrates: ["opentendril", "docs"] },
+    });
   });
 
   await page.route("**/v1/sessions", async (route) => {
@@ -50,8 +65,35 @@ async function mockStemBackend(
       return;
     }
     lastSessionsAuthHeader = request.headers()["authorization"];
-    await route.fulfill({ status: 200, json: { sessions } });
+    await route.fulfill({ status: 200, json: { sessions: liveSessions } });
   });
+
+  await page.route(
+    (url) => /\/v1\/sessions\/[^/]+$/.test(new URL(url).pathname),
+    async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.continue();
+        return;
+      }
+      const body = route.request().postDataJSON() as {
+        preferences?: Record<string, unknown>;
+      };
+      lastPreferencePatch = body;
+      const id = /\/v1\/sessions\/([^/]+)$/.exec(
+        new URL(route.request().url()).pathname,
+      )?.[1];
+      const session = liveSessions.find((item) => item.sessionId === id);
+      if (!session) {
+        await route.fulfill({ status: 404, body: "session not found" });
+        return;
+      }
+      session.preferences = {
+        ...session.preferences,
+        ...(body.preferences ?? {}),
+      };
+      await route.fulfill({ status: 200, json: session });
+    },
+  );
 
   // Per-session sub-resources hydrateSessionData() reads on boot. Mocked to
   // keep the run quiet; the store already tolerates these failing.
@@ -85,7 +127,10 @@ async function mockStemBackend(
     ws.send(JSON.stringify({ type: "connected" }));
   });
 
-  return { lastSessionsAuthHeader: () => lastSessionsAuthHeader };
+  return {
+    lastSessionsAuthHeader: () => lastSessionsAuthHeader,
+    lastPreferencePatch: () => lastPreferencePatch,
+  };
 }
 
 function sessionIdFromPath(url: string): string {
@@ -210,5 +255,31 @@ test.describe("Command Center session rail", () => {
 
     await expect(page.locator(".session-card")).toHaveCount(0);
     await expect(page.getByText(/No Tendrils yet/)).toBeVisible();
+  });
+});
+
+test.describe("Command Center Substrate binding", () => {
+  test("shows a bound Substrate and persists a named one via PATCH", async ({
+    page,
+  }) => {
+    const session = makeSession({
+      sessionId: "tendril-e2e-soil",
+      preferences: {},
+    });
+    const backend = await mockStemBackend(page, { sessions: [session] });
+    await completeOnboarding(page, testApiKey);
+
+    await expect(page.getByText("no substrate", { exact: true })).toBeVisible();
+    await expect(page.getByText("unbound", { exact: true })).toBeVisible();
+
+    const input = page.getByLabel("Substrate");
+    await input.fill("opentendril");
+    await input.blur();
+
+    await expect(page.getByText("bound: opentendril")).toBeVisible();
+    await expect(page.getByText("opentendril", { exact: true }).first()).toBeVisible();
+
+    const patch = backend.lastPreferencePatch();
+    expect(patch).toEqual({ preferences: { substrate: "opentendril" } });
   });
 });

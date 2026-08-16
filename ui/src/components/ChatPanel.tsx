@@ -12,6 +12,10 @@ function timeOf(iso?: string): string {
 
 export function ChatPanel() {
   const activeSessionId = useStem((s) => s.activeSessionId);
+  const activeSession = useStem((s) =>
+    s.sessions.find((session) => session.sessionId === s.activeSessionId) ?? null,
+  );
+  const configuredSubstrates = useStem((s) => s.configuredSubstrates);
   const messages = useStem((s) =>
     s.activeSessionId ? (s.messagesBySession[s.activeSessionId] ?? []) : [],
   );
@@ -23,20 +27,45 @@ export function ChatPanel() {
   );
   const chatError = useStem((s) => s.chatError);
   const sendChat = useStem((s) => s.sendChat);
+  const updatePreferences = useStem((s) => s.updatePreferences);
   const openDrilldown = useStem((s) => s.openDrilldown);
 
+  const boundSubstrate = activeSession?.preferences?.substrate?.trim() ?? "";
   const [draft, setDraft] = useState("");
+  const [substrateDraft, setSubstrateDraft] = useState(boundSubstrate);
+  const [bindingSubstrate, setBindingSubstrate] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setSubstrateDraft(boundSubstrate);
+  }, [activeSessionId, boundSubstrate]);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [messages.length, pending, activeSessionId]);
 
+  async function persistSubstrate(): Promise<boolean> {
+    const next = substrateDraft.trim();
+    if (!activeSessionId || !next || next === boundSubstrate) return true;
+    setBindingSubstrate(true);
+    try {
+      await updatePreferences({ substrate: next });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      setBindingSubstrate(false);
+    }
+  }
+
   function submit() {
     const content = draft.trim();
     if (!content || pending || !activeSessionId) return;
     setDraft("");
-    void sendChat(content);
+    void (async () => {
+      if (!(await persistSubstrate())) return;
+      await sendChat(content);
+    })();
   }
 
   return (
@@ -48,6 +77,40 @@ export function ChatPanel() {
             {activeSessionId ?? "none"}
           </span>
         </div>
+
+        {activeSessionId ? (
+          <div className="substrate-bind">
+            <label htmlFor="session-substrate">Substrate</label>
+            <input
+              id="session-substrate"
+              list="configured-substrates"
+              value={substrateDraft}
+              placeholder="named substrate"
+              disabled={bindingSubstrate}
+              onChange={(e) => setSubstrateDraft(e.target.value)}
+              onBlur={() => {
+                void persistSubstrate();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void persistSubstrate();
+                }
+              }}
+            />
+            <datalist id="configured-substrates">
+              {configuredSubstrates.map((name) => (
+                <option value={name} key={name} />
+              ))}
+            </datalist>
+            <span
+              className={`substrate-bound ${boundSubstrate ? "set" : "unset"}`}
+              title={boundSubstrate || "No Substrate bound"}
+            >
+              {boundSubstrate ? `bound: ${boundSubstrate}` : "unbound"}
+            </span>
+          </div>
+        ) : null}
 
         <div className="chat-log" ref={logRef}>
           {activeSessionId === null ? (

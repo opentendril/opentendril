@@ -215,6 +215,17 @@ input, textarea, select { font: inherit; }
   letter-spacing: 0.08em;
   font-size: 9px;
 }
+.substrate-chip {
+  display: block;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.substrate-chip.set { color: var(--sap); }
+.substrate-chip.unset { color: var(--ink-faint); }
 .rail-empty { color: var(--ink-faint); font-size: 12px; padding: 10px 4px; line-height: 1.5; }
 
 /* ── garden ────────────────────────────────────────────────────────────── */
@@ -433,6 +444,41 @@ input, textarea, select { font: inherit; }
   gap: 10px;
 }
 .chat-head { display: flex; align-items: center; justify-content: space-between; }
+.substrate-bind {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.substrate-bind label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  flex: none;
+}
+.substrate-bind input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(10, 16, 12, 0.6);
+  color: var(--ink);
+  outline: none;
+}
+.substrate-bind input:focus { border-color: var(--glass-border-bright); }
+.substrate-bound {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.substrate-bound.set { color: var(--sap); }
+.substrate-bound.unset { color: var(--ink-faint); }
 .chat-log {
   flex: 1;
   min-height: 0;
