@@ -8,6 +8,17 @@ where versions are cut.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Repo-map / Substrate scan under rootless Docker.** A short Greenhouse task
+  used the Stem working directory (the principal's home) as the implicit
+  Substrate. The Rhizome walk then entered the rootless daemon's containerd
+  snapshot tree and withered on `permission denied` before any Mycorrhizal
+  request. Unnamed runs now use the unique managed checkout when the implicit
+  path is the Stem home; `repoRoot` will not walk out of a managed checkout
+  into a parent repository; and the scanner skips container runtime trees and
+  unreadable sibling directories instead of failing the whole map.
+
 ### Added
 
 - **Sprout-run observation contract.** Finished Sprout runs persist the

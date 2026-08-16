@@ -11,6 +11,30 @@ import (
 // The index key is the sharp case: committed into a substrate and merged back,
 // a push publishes it. The change set is derived from `git status --porcelain`
 // in the mount, which cannot distinguish OpenTendril's writes from the Sprout's.
+func TestGenerateRepoMapSucceedsOnRootlessContainerdSnapshotLayout(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	snapshotWork := filepath.Join(workspace, ".local", "share", "docker", "containerd", "daemon",
+		"io.containerd.snapshotter.v1.overlayfs", "snapshots", "10", "work", "work")
+	if err := os.MkdirAll(snapshotWork, 0o755); err != nil {
+		t.Fatalf("mkdir snapshot work: %v", err)
+	}
+	if err := os.Chmod(snapshotWork, 0); err != nil {
+		t.Fatalf("chmod snapshot work: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(snapshotWork, 0o755) })
+
+	markdown, err := GenerateRepoMap(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("GenerateRepoMap failed on the containerd snapshot layout: %v", err)
+	}
+	if !strings.Contains(markdown, "main.go") {
+		t.Fatalf("repo map missing main.go:\n%s", markdown)
+	}
+}
+
 func TestGeneratedRuntimeArtifactsAreNeverStaged(t *testing.T) {
 	for _, path := range []string{
 		".tendril/rhizome.key",

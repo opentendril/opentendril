@@ -758,5 +758,13 @@ func repoRoot(path string) string {
 		return path
 	}
 
+	// A managed checkout lives under Tendril's own root. If it is not itself
+	// a git repository, git walks up and can land on the Stem home — which
+	// also holds rootless Docker's containerd snapshots. Stay inside the
+	// checkout so the Rhizome scans the Substrate, not the control plane.
+	if escapedManagedCheckout(path, root) {
+		return path
+	}
+
 	return root
 }

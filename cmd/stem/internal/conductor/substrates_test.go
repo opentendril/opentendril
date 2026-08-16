@@ -223,6 +223,103 @@ substrates:
 	}
 }
 
+func TestResolveSubstrateExecutionPlanUsesUniqueManagedCheckoutFromStemHome(t *testing.T) {
+	stemHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stemHome, ".local", "share", "docker"), 0o755); err != nil {
+		t.Fatalf("mkdir docker data-root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(stemHome, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir control plane: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stemHome, ".tendril", "api-key"), []byte("test-key\n"), 0o600); err != nil {
+		t.Fatalf("write api-key: %v", err)
+	}
+
+	managedRoot := filepath.Join(stemHome, ".tendril", "substrates")
+	checkout := filepath.Join(managedRoot, "opentendril")
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatalf("mkdir managed checkout: %v", err)
+	}
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "Tester"},
+		{"commit", "--allow-empty", "-q", "-m", "init"},
+	} {
+		if _, err := runGitCommand(ctx, checkout, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
+	t.Setenv("HOME", stemHome)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(stemHome); err != nil {
+		t.Fatalf("chdir stem home: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldWD)
+	})
+
+	snapshotWork := filepath.Join(stemHome, ".local", "share", "docker", "containerd", "daemon",
+		"io.containerd.snapshotter.v1.overlayfs", "snapshots", "10", "work", "work")
+	if err := os.MkdirAll(snapshotWork, 0o755); err != nil {
+		t.Fatalf("mkdir snapshot work: %v", err)
+	}
+	if err := os.Chmod(snapshotWork, 0); err != nil {
+		t.Fatalf("chmod snapshot work: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(snapshotWork, 0o755) })
+
+	config := &SubstratesConfig{
+		Substrates: map[string]SubstrateSpec{
+			"opentendril": {
+				URL:      "https://example.com/opentendril.git",
+				Branch:   "main",
+				Checkout: CheckoutSpec{Mode: "managed"},
+			},
+		},
+	}
+
+	plan, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{}, config)
+	if err != nil {
+		t.Fatalf("resolveSubstrateExecutionPlan: %v", err)
+	}
+	if !plan.named || plan.name != "opentendril" {
+		t.Fatalf("plan name = %q named=%v, want the unique managed Substrate", plan.name, plan.named)
+	}
+	if plan.hostPath != checkout {
+		t.Fatalf("hostPath = %q, want the managed checkout %q (not the Stem home)", plan.hostPath, checkout)
+	}
+}
+
+func TestResolveSubstrateExecutionPlanRefusesStemHomeWithoutASubstrate(t *testing.T) {
+	stemHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stemHome, ".local", "share", "docker"), 0o755); err != nil {
+		t.Fatalf("mkdir docker data-root: %v", err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(stemHome); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	_, err = resolveSubstrateExecutionPlan(&DockerOrchestrator{}, &SubstratesConfig{})
+	if err == nil {
+		t.Fatal("expected a refusal when the implicit workspace is the Stem home and no Substrate is configured")
+	}
+	if !strings.Contains(err.Error(), "substrate is required") {
+		t.Fatalf("error = %v, want it to require a Substrate", err)
+	}
+}
+
 func TestRunSproutReadOnlySkipsHostMutations(t *testing.T) {
 	root := t.TempDir()
 	if _, err := runGitCommand(context.Background(), root, "init"); err != nil {
