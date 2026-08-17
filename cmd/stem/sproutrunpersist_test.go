@@ -392,6 +392,86 @@ func TestDaemonDetachedHistorySettlesAfterTerminalObserver(t *testing.T) {
 	}
 }
 
+func TestPersistDispatchSproutRunNotifiesOnlyAfterCommit(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	notified := false
+	ctx := core.WithSproutDispatchHook(context.Background(), func(dispatch core.SproutDispatch) {
+		runs, loadErr := store.LoadSproutRuns(context.Background(), "tendril-dispatch", 10)
+		if loadErr != nil || len(runs) != 1 || runs[0].Status != "running" || runs[0].Pollen != "claude" {
+			t.Fatalf("hook fired before a durable running row: %+v err=%v", runs, loadErr)
+		}
+		if dispatch.SessionID != "tendril-dispatch" || dispatch.StepID != "step-dispatch" {
+			t.Fatalf("dispatch = %+v", dispatch)
+		}
+		notified = true
+	})
+
+	if err := persistDispatchSproutRun(ctx, store, historydb.SproutRun{
+		RunID:     "step-dispatch",
+		SessionID: "tendril-dispatch",
+		StepID:    "step-dispatch",
+		Pollen:    "claude",
+		Substrate: "myrepo",
+		Status:    "running",
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("persistDispatchSproutRun: %v", err)
+	}
+	if !notified {
+		t.Fatal("dispatch hook was not invoked after commit")
+	}
+}
+
+func TestPersistDispatchSproutRunRequiresPhytomer(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	notified := false
+	ctx := core.WithSproutDispatchHook(context.Background(), func(core.SproutDispatch) {
+		notified = true
+	})
+	err = persistDispatchSproutRun(ctx, store, historydb.SproutRun{
+		RunID: "step-no-session", Status: "running",
+	})
+	if err == nil || !strings.Contains(err.Error(), "sessionId") {
+		t.Fatalf("expected sessionId error, got %v", err)
+	}
+	if notified {
+		t.Fatal("ready signal fired without a phytomer")
+	}
+}
+
+func TestPersistDispatchSproutRunNilHistoryDoesNotSignal(t *testing.T) {
+	notified := false
+	ctx := core.WithSproutDispatchHook(context.Background(), func(core.SproutDispatch) {
+		notified = true
+	})
+	if err := persistDispatchSproutRun(ctx, nil, historydb.SproutRun{
+		RunID: "step-1", SessionID: "tendril-1", Status: "running",
+	}); err != nil {
+		t.Fatalf("nil history: %v", err)
+	}
+	if notified {
+		t.Fatal("ready signal fired with no history store")
+	}
+}
+
 func TestOneShotSproutOrchestratorAwaitsRunEnding(t *testing.T) {
 	oneShot := newSproutRunOrchestrator(core.SproutSpec{StepID: "one-shot"}, sproutSubstrateWiring{}, nil, nil)
 	if !oneShot.AwaitsRunEnding {

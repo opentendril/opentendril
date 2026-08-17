@@ -146,12 +146,44 @@ func (h *SproutHandler) run(w http.ResponseWriter, r *http.Request) {
 	// not have named.
 	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
-	result, err := h.core.SproutRun(r.Context(), req)
+	// The execution port notifies only after the opening ownership row is
+	// durable. Flushing X-Phytomer then is the ready signal: a second
+	// connection may open /ws?sessionId=… while this request still blocks
+	// on Terrarium work. Status is committed to 200 at that flush; a later
+	// wither is reported in the JSON body rather than as a new status line.
+	dispatched := false
+	ctx := core.WithSproutDispatchHook(r.Context(), func(dispatch core.SproutDispatch) {
+		announceSproutDispatch(w, dispatch)
+		dispatched = true
+	})
+
+	result, err := h.core.SproutRun(ctx, req)
 	if err != nil {
+		if dispatched {
+			writeJSON(w, http.StatusOK, result)
+			return
+		}
 		writeCoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// announceSproutDispatch exposes the phytomer as soon as dispatch ownership
+// is durable. Flushing the headers is the ready signal for a concurrent
+// watcher. Callers must invoke this only after the history write commits.
+func announceSproutDispatch(w http.ResponseWriter, dispatch core.SproutDispatch) {
+	sessionID := strings.TrimSpace(dispatch.SessionID)
+	if sessionID == "" {
+		return
+	}
+	header := w.Header()
+	header.Set("Content-Type", "application/json")
+	header.Set("X-Phytomer", sessionID)
+	if step := strings.TrimSpace(dispatch.StepID); step != "" {
+		header.Set("X-Step-Id", step)
+	}
+	_ = http.NewResponseController(w).Flush()
 }
 
 // runSproutAsync detaches a sprout run onto a background goroutine and returns
@@ -183,6 +215,9 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Origin = session.OriginREST
+	// Stamped after authorization so the opening row and the execution port
+	// attribute the run to a subject the caller could not have named.
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 	if sessionID != "" {
 		req.SessionID = sessionID
 	} else {
@@ -206,10 +241,10 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 	// Ownership is settled here, before the goroutine detaches: a delegated
 	// caller that polls the instant it receives its 202 must already find a
 	// record attributed to it, or the run it just started would read as
-	// somebody else's.
+	// somebody else's. A persist failure must not produce a ready signal.
 	substrate := strings.TrimSpace(req.Substrate)
 	if h.history != nil {
-		_ = h.history.RecordSproutRun(r.Context(), historydb.SproutRun{
+		if err := h.history.RecordSproutRun(r.Context(), historydb.SproutRun{
 			RunID:      stepID,
 			SessionID:  sessionID,
 			StepID:     stepID,
@@ -219,7 +254,10 @@ func (h *SproutHandler) runSproutAsync(w http.ResponseWriter, r *http.Request) {
 			Transcript: req.Transcript,
 			Status:     "running",
 			StartedAt:  time.Now().UTC(),
-		})
+		}); err != nil {
+			http.Error(w, "failed to record sprout dispatch: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	bgCtx := context.WithoutCancel(r.Context())

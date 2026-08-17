@@ -155,6 +155,25 @@ func TestSproutRunEmptySessionSproutsFresh(t *testing.T) {
 	}
 }
 
+func TestSproutRunRefusesInvalidSessionID(t *testing.T) {
+	called := false
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		called = true
+		return core.SproutRunReport{}, nil
+	})
+	_, err := svc.SproutRun(context.Background(), core.SproutRunInput{
+		Transcript: "t",
+		Substrate:  "s",
+		SessionID:  "not valid!!",
+	})
+	if err == nil || !strings.Contains(err.Error(), "bind phytomer") {
+		t.Fatalf("expected bind phytomer error, got %v", err)
+	}
+	if called {
+		t.Fatal("execution port ran after a phytomer bind failure")
+	}
+}
+
 func TestSproutRunWitheredOnError(t *testing.T) {
 	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
 		return core.SproutRunReport{}, fmt.Errorf("terrarium exploded")

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -37,6 +38,37 @@ func usageComponentFrom(requestsMade bool, usage llm.Usage, provider, model stri
 		Provider:         provider,
 		Model:            model,
 	}
+}
+
+// persistDispatchSproutRun commits the opening ownership row before any
+// Terrarium work and before any "session ready" signal. Status is the
+// existing non-terminal value "running". A later OnTerminal write settles
+// the same runId.
+//
+// When history is nil, persistence is disabled and there is no ready signal:
+// a delegated watcher would have nothing to prove ownership against.
+func persistDispatchSproutRun(ctx context.Context, history *historydb.Store, run historydb.SproutRun) error {
+	if history == nil {
+		return nil
+	}
+	if strings.TrimSpace(run.SessionID) == "" {
+		return fmt.Errorf("sprout dispatch requires a phytomer sessionId")
+	}
+	if strings.TrimSpace(run.Status) == "" {
+		run.Status = "running"
+	}
+	persistCtx := ctx
+	if persistCtx == nil {
+		persistCtx = context.Background()
+	}
+	if err := history.RecordSproutRun(context.WithoutCancel(persistCtx), run); err != nil {
+		return err
+	}
+	core.NotifySproutDispatch(ctx, core.SproutDispatch{
+		SessionID: run.SessionID,
+		StepID:    run.StepID,
+	})
+	return nil
 }
 
 func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, opened historydb.SproutRun, report conductor.SproutRunReport, runErr error) {
