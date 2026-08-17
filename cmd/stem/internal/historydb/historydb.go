@@ -139,7 +139,7 @@ type sproutRunObservation struct {
 // UsageComponent is one fail-honest usage component stored on a Sprout run.
 // Pointer token and cost fields omit when nil so absence stays absence; a
 // pointer to zero remains present so a measured zero is not rewritten as
-// missing. CostAmount is the exact provider-native decimal string. There is
+// missing. CostAmount preserves the exact provider-native decimal string. There is
 // no combined token or monetary total at this layer.
 type UsageComponent struct {
 	RequestsMade     bool    `json:"requestsMade"`
