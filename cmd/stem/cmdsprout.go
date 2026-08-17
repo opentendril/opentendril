@@ -234,6 +234,13 @@ func openSproutRunRecord(ctx context.Context, spec core.SproutSpec, substrate st
 	}
 }
 
+// runSproutTerrarium starts isolation work after dispatch ownership is
+// durable. Tests replace it to observe that the opening row already exists
+// before long-running work begins.
+var runSproutTerrarium = func(ctx context.Context, orch *conductor.DockerOrchestrator, transcript string) (conductor.SproutRunReport, error) {
+	return orch.RunSprout(ctx, transcript)
+}
+
 // newSproutRunOrchestrator builds the conductor used by sproutOperations.
 // A one-shot surface (ambientBus == nil) awaits the ending so a spent growth
 // budget cannot detach into a process that is about to close its history store.
@@ -289,17 +296,17 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			orch := newSproutRunOrchestrator(spec, wiring, bus, ambientBus)
 
 			run := openSproutRunRecord(ctx, spec, wiring.Substrate)
+			if err := persistDispatchSproutRun(ctx, history, run); err != nil {
+				return core.SproutRunReport{}, err
+			}
 			if history != nil {
-				if recordErr := history.RecordSproutRun(context.WithoutCancel(ctx), run); recordErr != nil {
-					log.Printf("[Sprout] Failed to record sprout run: %v", recordErr)
-				}
 				// Terminal writes go through the orchestrator observer so a
 				// detached return leaves this opening row non-terminal and the
 				// later completeRun settles status, output, model, and usage.
 				installSproutTerminalHistory(orch, history, context.WithoutCancel(ctx), run)
 			}
 
-			sproutReport, err := orch.RunSprout(ctx, spec.Transcript)
+			sproutReport, err := runSproutTerrarium(ctx, orch, spec.Transcript)
 
 			return core.SproutRunReport{
 				Output:                   sproutReport.Output,

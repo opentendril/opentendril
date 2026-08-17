@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
@@ -24,11 +25,36 @@ const (
 	wsOtherPhyto = "tendril-other"
 )
 
+type streamFixture struct {
+	server     *httptest.Server
+	bus        *eventbus.Bus
+	store      *historydb.Store
+	credential string
+	token      string
+}
+
 // newStreamFixture stands up the live stream exactly as the daemon mounts it:
 // the shared bearer resolver in front, the observation authority behind it, and
 // a history store recording that "claude" dispatched the run in wsOwnPhyto
 // while "codex" dispatched the one in wsOtherPhyto.
 func newStreamFixture(t *testing.T) (server *httptest.Server, bus *eventbus.Bus, credential string) {
+	t.Helper()
+	fx := newStreamFixtureWithRuns(t, []historydb.SproutRun{
+		{RunID: "own", SessionID: wsOwnPhyto, Pollen: "claude", Substrate: "myrepo", Status: "matured"},
+		{RunID: "other", SessionID: wsOtherPhyto, Pollen: "codex", Substrate: "myrepo", Status: "matured"},
+	}, false)
+	return fx.server, fx.bus, fx.credential
+}
+
+func newDispatchStreamFixture(t *testing.T) streamFixture {
+	t.Helper()
+	return newStreamFixtureWithRuns(t, []historydb.SproutRun{
+		{RunID: "own-dispatch", SessionID: wsOwnPhyto, Pollen: "claude", Substrate: "myrepo", Status: "running"},
+		{RunID: "other-dispatch", SessionID: wsOtherPhyto, Pollen: "codex", Substrate: "myrepo", Status: "running"},
+	}, true)
+}
+
+func newStreamFixtureWithRuns(t *testing.T, runs []historydb.SproutRun, withToken bool) streamFixture {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -46,21 +72,32 @@ func newStreamFixture(t *testing.T) (server *httptest.Server, bus *eventbus.Bus,
 		t.Fatalf("open history: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	for _, run := range []historydb.SproutRun{
-		{RunID: "own", SessionID: wsOwnPhyto, Pollen: "claude", Substrate: "myrepo"},
-		{RunID: "other", SessionID: wsOtherPhyto, Pollen: "codex", Substrate: "myrepo"},
-	} {
-		run.Status = "matured"
+	for _, run := range runs {
 		run.StartedAt = time.Now().UTC()
 		if err := store.RecordSproutRun(context.Background(), run); err != nil {
 			t.Fatalf("record %s: %v", run.RunID, err)
 		}
 	}
 
-	bus = eventbus.New()
+	bus := eventbus.New()
 	t.Cleanup(bus.Shutdown)
+
+	var signer *core.StemSigner
+	token := ""
+	if withToken {
+		signer, err = core.LoadOrCreateStemSigner(dir)
+		if err != nil {
+			t.Fatalf("stem signer: %v", err)
+		}
+		token, err = signer.MintAccessToken("claude", 5*time.Minute, core.AccessTokenScope{})
+		if err != nil {
+			t.Fatalf("mint access token: %v", err)
+		}
+	}
+
 	gate := &receptors.DelegationGate{
 		Pollinators: credentials,
+		Signer:      signer,
 		Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{
 			{Pollen: "claude", OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
 		}),
@@ -68,11 +105,17 @@ func newStreamFixture(t *testing.T) (server *httptest.Server, bus *eventbus.Bus,
 	}
 	watch := receptors.NewWatchAuthority(gate, store)
 
-	handler := withWebSocketAuth(wsAPIKey, credentials, nil, false,
+	handler := withWebSocketAuth(wsAPIKey, credentials, signer, false,
 		watch.StreamMiddleware(gateway.HandleWebSocket(bus)))
-	server = httptest.NewServer(http.HandlerFunc(handler))
+	server := httptest.NewServer(http.HandlerFunc(handler))
 	t.Cleanup(server.Close)
-	return server, bus, secret
+	return streamFixture{
+		server:     server,
+		bus:        bus,
+		store:      store,
+		credential: secret,
+		token:      token,
+	}
 }
 
 // dialStream attempts a WebSocket upgrade and reports the handshake status.
@@ -265,5 +308,161 @@ func TestDelegatedStreamCarriesOnlyItsOwnPhytomer(t *testing.T) {
 	}
 	if frame.Data["mark"] != "mine" {
 		t.Fatalf("first event delivered was %v, want the one belonging to this subject: %s", frame.Data["mark"], payload)
+	}
+}
+
+// TestDelegatedStreamAcceptsDispatchRowBeforeTerminal is the reachability
+// half of dispatch-time ownership: a non-terminal row is enough. If ownership
+// were written only when the run matured, this handshake would stay 403 for
+// the entire live window.
+func TestDelegatedStreamAcceptsDispatchRowBeforeTerminal(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	conn, status := dialStream(t, fx.server, "/ws?sessionId="+wsOwnPhyto, bearerHeader(fx.credential))
+	if conn == nil {
+		t.Fatalf("a dispatch row was not enough to admit the dispatcher: status=%d", status)
+	}
+	if status != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake status = %d, want 101", status)
+	}
+}
+
+func TestDelegatedStreamRefusesAnotherSubjectsDispatchPhytomer(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	conn, status := dialStream(t, fx.server, "/ws?sessionId="+wsOtherPhyto, bearerHeader(fx.credential))
+	if conn != nil {
+		t.Fatal("a delegated caller opened a stream on another subject's in-flight phytomer")
+	}
+	if status != http.StatusForbidden {
+		t.Fatalf("handshake status = %d, want 403", status)
+	}
+}
+
+func TestDelegatedStreamMustNameItsPhytomerWithOnlyDispatchRows(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	conn, status := dialStream(t, fx.server, "/ws", bearerHeader(fx.credential))
+	if conn != nil {
+		t.Fatal("a delegated caller opened the unscoped stream against dispatch-only history")
+	}
+	if status != http.StatusForbidden {
+		t.Fatalf("handshake status = %d, want 403", status)
+	}
+}
+
+func TestOperatorStreamIsUnchangedWithOnlyDispatchRows(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	byHeader, headerStatus := dialStream(t, fx.server, "/ws", bearerHeader(wsAPIKey))
+	if byHeader == nil {
+		t.Fatalf("the Botanist key was refused by header: status=%d", headerStatus)
+	}
+	byQuery, queryStatus := dialStream(t, fx.server, "/ws?key="+wsAPIKey, nil)
+	if byQuery == nil {
+		t.Fatalf("the Botanist key was refused by query parameter: status=%d", queryStatus)
+	}
+}
+
+func TestCredentialInQueryIsNotMistakenForTheOperatorOnDispatchRow(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	conn, status := dialStream(t, fx.server, "/ws?key="+fx.credential, nil)
+	if conn != nil {
+		t.Fatal("a credential presented in the query string was treated as the operator")
+	}
+	if status != http.StatusForbidden {
+		t.Fatalf("handshake status = %d, want 403", status)
+	}
+
+	scoped, scopedStatus := dialStream(t, fx.server, "/ws?key="+fx.credential+"&sessionId="+wsOwnPhyto, nil)
+	if scoped == nil {
+		t.Fatalf("a credential in the query string was refused its own dispatch phytomer: status=%d", scopedStatus)
+	}
+}
+
+func TestAccessTokenOpensDispatchRowOnLoopback(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+	if fx.token == "" {
+		t.Fatal("fixture did not mint an access token")
+	}
+
+	conn, status := dialStream(t, fx.server, "/ws?sessionId="+wsOwnPhyto, bearerHeader(fx.token))
+	if conn == nil {
+		t.Fatalf("an access token was refused a dispatch row: status=%d", status)
+	}
+	if status != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake status = %d, want 101", status)
+	}
+
+	unscoped, unscopedStatus := dialStream(t, fx.server, "/ws", bearerHeader(fx.token))
+	if unscoped != nil {
+		t.Fatal("an access token opened the unscoped stream")
+	}
+	if unscopedStatus != http.StatusForbidden {
+		t.Fatalf("unscoped access-token status = %d, want 403", unscopedStatus)
+	}
+}
+
+// TestGrowDispatchOwnershipAdmitsWatchBeforeTerrarium fails if the opening
+// ownership row is written only when the run matures. The terrarium seam
+// blocks after dispatch; a Pollen holding sprout.watch must already be
+// admitted to that sessionId.
+func TestGrowDispatchOwnershipAdmitsWatchBeforeTerrarium(t *testing.T) {
+	fx := newDispatchStreamFixture(t)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	orig := runSproutTerrarium
+	t.Cleanup(func() { runSproutTerrarium = orig })
+	runSproutTerrarium = func(ctx context.Context, orch *conductor.DockerOrchestrator, transcript string) (conductor.SproutRunReport, error) {
+		close(entered)
+		<-release
+		return conductor.SproutRunReport{Output: "later", Outcome: conductor.SproutOutcomeComplete}, nil
+	}
+
+	ops := sproutOperations(fx.store, fx.bus)
+	spec := core.SproutSpec{
+		StepID:     "step-live",
+		SessionID:  "tendril-live",
+		Transcript: "grow",
+		Substrate:  "myrepo",
+		Origin:     "test",
+	}
+	ctx := core.WithPollen(context.Background(), "claude")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ops.Run(ctx, spec)
+		done <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terrarium seam was not reached")
+	}
+
+	runs, err := fx.store.LoadSproutRuns(context.Background(), "tendril-live", 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != "running" || runs[0].Pollen != "claude" {
+		t.Fatalf("dispatch row missing before Terrarium: %+v err=%v", runs, err)
+	}
+
+	conn, status := dialStream(t, fx.server, "/ws?sessionId=tendril-live", bearerHeader(fx.credential))
+	if conn == nil {
+		t.Fatalf("Pollen was refused its in-flight phytomer: status=%d", status)
+	}
+	if status != http.StatusSwitchingProtocols {
+		t.Fatalf("handshake status = %d, want 101", status)
+	}
+
+	unscoped, unscopedStatus := dialStream(t, fx.server, "/ws", bearerHeader(fx.credential))
+	if unscoped != nil || unscopedStatus != http.StatusForbidden {
+		t.Fatalf("unscoped Pollen during the run: conn=%v status=%d", unscoped != nil, unscopedStatus)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("grow: %v", err)
 	}
 }

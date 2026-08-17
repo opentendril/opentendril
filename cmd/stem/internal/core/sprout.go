@@ -153,20 +153,23 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 		spec.StepID = fmt.Sprintf("step-%d", time.Now().UTC().UnixNano())
 	}
 
-	// Session binding shapes the sprout via the session's preferences. A
-	// resolution failure degrades to a sessionless run — the historic
-	// behavior of every surface — rather than refusing to execute.
+	// Session binding shapes the sprout via the session's preferences and
+	// yields the phytomer id watch admission keys off. A wired manager must
+	// produce a stable id: a bind failure is a refused grow, not a
+	// sessionless run nobody can name on /ws.
 	if s.sessions != nil {
-		if sess, err := s.sessions.GetOrInitiate(ctx, strings.TrimSpace(in.SessionID), in.Origin); err == nil {
-			spec.SessionID = sess.ID
-			spec.Provider = sess.Preferences.Provider
-			spec.Model = sess.Preferences.Model
-			spec.Genotype = sess.Preferences.Genotype
-			if spec.Substrate == "" {
-				spec.Substrate = strings.TrimSpace(sess.Preferences.Substrate)
-			}
-			s.sessions.Touch(ctx, sess.ID)
+		sess, err := s.sessions.GetOrInitiate(ctx, strings.TrimSpace(in.SessionID), in.Origin)
+		if err != nil {
+			return SproutRunResult{}, fmt.Errorf("bind phytomer: %w", err)
 		}
+		spec.SessionID = sess.ID
+		spec.Provider = sess.Preferences.Provider
+		spec.Model = sess.Preferences.Model
+		spec.Genotype = sess.Preferences.Genotype
+		if spec.Substrate == "" {
+			spec.Substrate = strings.TrimSpace(sess.Preferences.Substrate)
+		}
+		s.sessions.Touch(ctx, sess.ID)
 	}
 
 	if spec.Substrate == "" {
