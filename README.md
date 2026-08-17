@@ -8,7 +8,7 @@ Most work on controlling these models addresses what they *say*: prompts, filter
 
 ---
 
-**Artificial Intelligence does not behave like traditional computing.**
+**Synthetic Intelligence does not behave like traditional computing.**
 
 For decades, the software industry has built deterministic systems—rigid state machines where "Tasks," "Scripts," and "Agents" blindly follow instructions and fail if a single parameter deviates. But Large Language Models are not state machines; they are probabilistic, messy, and organic, modeling the very chaotic adaptation seen in natural biology.
 
