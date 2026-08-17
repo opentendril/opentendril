@@ -32,7 +32,7 @@ To understand OpenTendril, you must understand its anatomy:
 
 REST, MCP, and CLI adapters are architecture surfaces translating transport only.
 
-> 📖 **Read the full philosophy:** Explore the [GLOSSARY.md](GLOSSARY.md) and [SYNTHETIC-TAXONOMY.md](SYNTHETIC-TAXONOMY.md) to understand the concept design.
+> 📖 **Read the full philosophy:** Explore the [GLOSSARY.md](GLOSSARY.md) and [SYNTHETIC-TAXONOMY.md](SYNTHETIC-TAXONOMY.md) to understand the conceptual design.
 > 🛠️ **Read the architecture guide:** Check [ARCHITECTURE.md](ARCHITECTURE.md) to understand how these concepts are physically built (Go, Docker, and protocols).
 > 🔌 **Review capabilities:** See [CAPABILITIES.md](CAPABILITIES.md) for the exact current capability set.
 
