@@ -5,7 +5,7 @@ OpenTendril. Where
 [ARCHITECTURE.md §5](../ARCHITECTURE.md) describes the persistent, multi-session
 Go Stem *daemon* (the unified `SessionManager`, the `.tendril/history.db` state
 layer, and the pluggable EventBus), this document describes the **decoupled web
-client** that turns that daemon into a single, living dashboard — and the
+client** that turns that daemon into a single, live dashboard — and the
 Stem-side API contracts the client depends on.
 
 - **Where it lives:** [`ui/`](../ui/) (React 18 + Vite + TypeScript).
