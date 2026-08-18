@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prove the containerized Greenhouse's Compose deployment model:
 # unix (--profile ui) mounts only /run/opentendril read-only; explicit TCP
-# (--profile ui-tcp) has no Unix runtime bind and can start when that path
-# is absent; a missing unix runtime/socket never falls back to TCP.
+# (--profile ui-tcp) has no Unix runtime bind; a missing unix runtime/socket
+# never falls back to TCP. Host /run/opentendril may be present or absent.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,7 +11,8 @@ nginx_template="${root}/ui/nginx/default.conf.template"
 compose_file="${root}/docker-compose.yml"
 failed=0
 tcp_project="ot-gh-tcp-check"
-unix_project="ot-gh-unix-check"
+unix_missing_project="ot-gh-unix-missing"
+workdir="$(mktemp -d)"
 
 pass() { echo "  PASS  $*"; }
 fail() { echo "  FAIL  $*"; failed=1; }
@@ -42,13 +43,13 @@ compose_cmd() {
 
 cleanup() {
   docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp down --remove-orphans >/dev/null 2>&1 || true
-  docker compose -f "$compose_file" -p "$unix_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
+  if [ -n "${unix_missing_file:-}" ]; then
+    docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
+  fi
   if [ -n "${sock_holder:-}" ]; then
     kill "$sock_holder" 2>/dev/null || true
   fi
-  if [ -n "${workdir:-}" ]; then
-    rm -rf "$workdir"
-  fi
+  rm -rf "$workdir"
 }
 trap cleanup EXIT
 
@@ -298,22 +299,22 @@ else:
 sys.exit(1 if errors else 0)
 PY
 
-echo "== Compose TCP starts without /run/opentendril =="
+echo "== Compose TCP starts (host /run/opentendril may exist) =="
 
 if [ -e /run/opentendril ]; then
-  fail "/run/opentendril is absent for the TCP start proof (found it)"
+  pass "host /run/opentendril exists; TCP start must still ignore it"
 else
-  pass "/run/opentendril is absent for the TCP start proof"
+  pass "host /run/opentendril is absent; TCP start must still succeed"
 fi
 
-tcp_up_log="$(mktemp)"
+tcp_up_log="${workdir}/tcp-up.log"
 if env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_GATEWAY_PORT -u UI_BIND \
     STEM_HOST=10.255.255.254 STEM_PORT=9 UI_PORT=4179 \
     docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp \
     up -d --no-build >"$tcp_up_log" 2>&1; then
-  pass "TCP compose up succeeds without /run/opentendril"
+  pass "TCP compose up succeeds regardless of host runtime dir"
 else
-  fail "TCP compose up succeeds without /run/opentendril"
+  fail "TCP compose up succeeds regardless of host runtime dir"
   cat "$tcp_up_log"
 fi
 
@@ -373,46 +374,65 @@ else
   pass "TCP start without STEM_HOST does not fall back to unix"
 fi
 
-echo "== Compose Unix fails closed without /run/opentendril =="
+echo "== Compose Unix fails closed on a guaranteed-missing runtime path =="
 
-if [ -e /run/opentendril ]; then
-  fail "unix missing-dir up cannot run because /run/opentendril exists"
+# Isolated fixture: do not use the production /run/opentendril source, which
+# is expected to exist on a governed host. Prove create_host_path: false
+# against a path that this script never creates.
+missing_src="${workdir}/absent-runtime"
+unix_missing_file="${workdir}/missing-runtime.yml"
+unix_up_log="${workdir}/unix-missing-up.log"
+cat > "$unix_missing_file" <<EOF
+name: ${unix_missing_project}
+services:
+  ui:
+    image: opentendril-ui
+    profiles: ["ui"]
+    volumes:
+      - type: bind
+        source: ${missing_src}
+        target: /run/opentendril
+        read_only: true
+        bind:
+          create_host_path: false
+EOF
+if [ -e "$missing_src" ]; then
+  fail "fixture runtime path stays absent (${missing_src})"
 else
-  unix_up_log="$(mktemp)"
-  if docker compose -f "$compose_file" -p "$unix_project" --profile ui \
-      up -d --no-build >"$unix_up_log" 2>&1; then
-    fail "unix compose up fails when /run/opentendril is missing"
-    docker compose -f "$compose_file" -p "$unix_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
-  else
-    pass "unix compose up fails when /run/opentendril is missing"
-  fi
-  if grep -Eiq 'opentendril|bind|mount|no such file|does not exist' "$unix_up_log"; then
-    pass "unix missing-dir error names the runtime path or bind"
-  else
-    fail "unix missing-dir error names the runtime path or bind"
-    cat "$unix_up_log"
-  fi
-  if grep -Fq "host.docker.internal" "$unix_up_log"; then
-    fail "unix missing-dir error does not mention host.docker.internal"
-  else
-    pass "unix missing-dir error does not mention host.docker.internal"
-  fi
-  if grep -Fq "0.0.0.0" "$unix_up_log"; then
-    fail "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
-  else
-    pass "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
-  fi
-  unix_cid="$(docker compose -f "$compose_file" -p "$unix_project" --profile ui ps -q ui 2>/dev/null || true)"
-  if [ -n "$unix_cid" ]; then
-    fail "unix missing-dir up leaves no container"
-  else
-    pass "unix missing-dir up leaves no container"
-  fi
+  pass "fixture runtime path stays absent"
+fi
+if docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui \
+    up -d --no-build >"$unix_up_log" 2>&1; then
+  fail "unix compose up fails when the runtime bind source is missing"
+  docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
+else
+  pass "unix compose up fails when the runtime bind source is missing"
+fi
+if grep -Eiq 'absent-runtime|bind|mount|no such file|does not exist' "$unix_up_log"; then
+  pass "unix missing-dir error names the runtime path or bind"
+else
+  fail "unix missing-dir error names the runtime path or bind"
+  cat "$unix_up_log"
+fi
+if grep -Fq "host.docker.internal" "$unix_up_log"; then
+  fail "unix missing-dir error does not mention host.docker.internal"
+else
+  pass "unix missing-dir error does not mention host.docker.internal"
+fi
+if grep -Fq "0.0.0.0" "$unix_up_log"; then
+  fail "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
+else
+  pass "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
+fi
+unix_cid="$(docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui ps -q ui 2>/dev/null || true)"
+if [ -n "$unix_cid" ]; then
+  fail "unix missing-dir up leaves no container"
+else
+  pass "unix missing-dir up leaves no container"
 fi
 
 echo "== nginx Unix-socket local mode =="
 
-workdir="$(mktemp -d)"
 sock="${workdir}/stem.sock"
 python3 - "$sock" <<'PY' &
 import os, socket, sys, time
