@@ -2,22 +2,49 @@
 
 OpenTendril is a governed git path and isolation boundary for **Pollinators** —
 external requesters, human or Mycorrhizal, that reach in and ask the organism
-for work. A Pollinator never receives a raw git token. It talks to this Ramet's
-Model Context Protocol server, and the Stem resolves the Substrate,
-authenticates with the credential it holds, and runs the work inside an isolated
-Sprout within a Terrarium.
+for work. A Pollinator never receives a raw git token. It talks to this Ramet
+over the Model Context Protocol. The Stem resolves the Substrate, authenticates
+with the credential it holds, and runs the work inside an isolated Sprout
+within a Terrarium. The Substrate entry names the target repository and the
+environment variable holding the Personal Access Token value. The Stem clones,
+runs and pushes on its own side, while the Sprout doing the work stays sealed
+inside its Terrarium.
 
 ## Architecture
 
-1. The Pollinator connects to the Ramet over the Model Context Protocol.
-2. The Stem loads `~/.tendril/substrates.yaml`.
-3. The Substrate entry names the target repository and the environment variable
-   holding the Personal Access Token value.
-4. The Stem clones, runs and pushes on its own side, while the Sprout doing the
-   work stays sealed inside its Terrarium.
+A governed installation and a single-user installation use different MCP
+executables.
+
+**Governed installation**
+
+```text
+Pollinator
+    -> tendril-mcp
+    -> durable Pollinator root
+    -> short-lived access token
+    -> governed Stem
+    -> governed capabilities
+```
+
+`tendril-mcp` is the Pollinator-side client. It holds that Pollinator's durable
+root, mints short-lived access tokens, and forwards MCP frames to the separately
+owned Stem. Authorization and Pollen derivation stay at the Stem. The client
+cannot construct a Stem and has no in-process mode. Do not launch the protected
+`tendril` binary from a governed Pollinator account.
+
+**Single-user installation**
+
+`tendril mcp` is the supported single-user stdio command. It is a governed
+command surface and stdio bridge that may run in-process as the operator, or
+forward to another-user Stem when a credential and reachable Stem are present.
+
+`tendril setup substrate` writes `~/.tendril/substrates.yaml` and prints a
+single-user MCP snippet for `tendril mcp`. That helper is not the governed
+Pollinator install path.
 
 The generated Substrate is named `default-workspace`. Use it when calling
-`sproutTendril` or `runSequence` for code changes.
+`sproutGrow` or `sequenceGrow` for code changes. Grants still name the
+canonical operation-classes `sprout.grow` and `sequence.grow`.
 
 ## Bootstrap the config
 
@@ -87,19 +114,18 @@ already minted from it age out within their 15-minute cap.
 > **Two kinds of consumer, one location.** The path above is a convention. What
 > reads it depends on which surface the Pollinator speaks.
 >
-> **Where the Stem is the client — MCP.** It reads the durable credential at
-> startup and mints access tokens on demand, because a working session outlives
-> the 15-minute cap. `TENDRIL_POLLINATOR_CREDENTIAL` names the file directly and
-> takes precedence; `TENDRIL_MCP_CREDENTIAL` is honoured next. With neither set the
-> path defaults to `~/.config/tendril/pollinators/<pollen>`, where `<pollen>` comes
-> from `TENDRIL_POLLEN`. A missing file at the default path is the ordinary
-> unconfigured case and is not an error; a missing file at a path you named
-> explicitly is.
+> **MCP credential lookup.** `TENDRIL_POLLINATOR_CREDENTIAL` names the file
+> directly and takes precedence; `TENDRIL_MCP_CREDENTIAL` is honoured next.
+> With neither set the path defaults to `~/.config/tendril/pollinators/<pollen>`,
+> where `<pollen>` comes from `TENDRIL_POLLEN`. A missing file at the default
+> path is the ordinary unconfigured case and is not an error; a missing file at
+> a path you named explicitly is.
 >
-> `TENDRIL_POLLEN` binds a Pollen on the in-process path only. Where the surface
-> forwards to a governed Stem, the presented credential derives the Pollen and the
-> variable has no effect — so the default path does not resolve there. Name the
-> file explicitly with `TENDRIL_POLLINATOR_CREDENTIAL` on a governed install.
+> `TENDRIL_POLLEN` selects the default credential file. On a forwarded or
+> governed connection, the Stem derives Pollen from the presented credential;
+> the variable does not override that authorization identity. On the in-process
+> `tendril mcp` path, `TENDRIL_POLLEN` also binds the session Pollen used for
+> grant lookup.
 >
 > **Where your own process is the client — REST.** None of those variables apply.
 > Your client reads the file itself, presents the credential to
@@ -107,16 +133,34 @@ already minted from it age out within their 15-minute cap.
 > data routes. Follow the location above so `hardiness` can audit the file; no Stem
 > code path reads it on your behalf.
 
-## MCP config snippet
+## MCP config
 
-The setup command emits a JSON block like this:
+### Governed installations
+
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril-mcp",
+      "env": {
+        "TENDRIL_POLLEN": "claude"
+      }
+    }
+  }
+}
+```
+
+Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
+`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
+
+### Single-user installations
 
 ```json
 {
   "mcpServers": {
     "opentendril": {
       "command": "tendril",
-      "args": ["serve", "mcp", "stdio"],
+      "args": ["mcp"],
       "env": {
         "TENDRIL_POLLEN": "claude"
       }
@@ -130,8 +174,8 @@ the binary you installed.
 
 ## Claude Desktop
 
-Open the Claude Desktop MCP config file and paste the snippet into
-`mcpServers`.
+Open the Claude Desktop MCP config file and paste the snippet that matches the
+install shape into `mcpServers`.
 
 Typical paths:
 
@@ -142,8 +186,8 @@ Restart Claude Desktop after saving.
 
 ## Cursor
 
-Add the same JSON snippet to Cursor's MCP settings. Point its MCP server entry
-at `tendril serve mcp stdio`, then restart Cursor so it reloads the server.
+Add the same JSON snippet to Cursor's MCP settings, then restart Cursor so it
+reloads the server.
 
 ## Gemini
 
@@ -152,9 +196,16 @@ setup path is `~/.gemini/config/mcp_config.json`.
 
 ## Using the tools
 
-Once connected, send work to the `default-workspace` Substrate.
+Once connected, send work to the `default-workspace` Substrate using the
+primary MCP identifiers. Grants remain dotted canonical operation-classes.
 
-Example `sproutTendril` call:
+| Grant / Core | Primary MCP tool |
+|---|---|
+| `sprout.grow` | `sproutGrow` |
+| `sequence.grow` | `sequenceGrow` |
+| `git.status` | `gitStatus` |
+
+Example `sproutGrow` call:
 
 ```json
 {
@@ -163,14 +214,20 @@ Example `sproutTendril` call:
 }
 ```
 
-Example `runSequence` call:
+Example `sequenceGrow` call:
 
 ```json
 {
-  "sequence": "sequences/code-change.yaml",
+  "pathOrName": "sequences/code-change.yaml",
   "substrate": "default-workspace"
 }
 ```
+
+The eight compatibility aliases (`runSequence`, `sproutTendril`,
+`createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`,
+`graftSubstrate`, `promotePR`) remain callable. They are deprecated
+compatibility behavior, not the recommended interface, and they carry no
+independent authority.
 
 The Substrate entry keeps the credential with the Stem and lets the Ramet manage
 the clone, the Terrarium and the push, without ever exposing the secret to the

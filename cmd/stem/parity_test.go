@@ -21,9 +21,11 @@ import (
 
 // Interface-parity coverage test. It asserts the governed command
 // capability set is identical across every surface: the canonical registry, the
-// REST adapter, the MCP adapter (projected from the live tools/list response),
-// and the CLI adapter. It goes red the moment someone adds a capability to one
-// surface but not the others.
+// REST adapter, the MCP adapter (declared Core names plus live tools/list
+// primary projections), and the CLI adapter. REST and CLI compare canonical
+// names. MCP live parity is a complete, unique projection: every canonical
+// capability has exactly one primary MCP identifier, and every listed primary
+// maps back to exactly one canonical capability.
 //
 // To see it fail on induced drift, add a name to core.CapabilityNames() (or a
 // stray governed tool to one surface) and run:  go test ./cmd/stem/ -run Parity
@@ -103,9 +105,7 @@ func equalSets(t *testing.T, label string, got, want []string) {
 	}
 }
 
-// mcpGovernedToolNames extracts, from the REAL tools/list response, the names
-// that are governed Core capabilities (ignoring legacy non-core tools).
-func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
+func mcpListedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 	t.Helper()
 	resp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 
@@ -120,17 +120,119 @@ func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
 		t.Fatalf("parse tools/list: %v", err)
 	}
 
-	governed := map[string]bool{}
-	for _, name := range core.CapabilityNames() {
-		governed[name] = true
-	}
-	names := make([]string, 0)
+	names := make([]string, 0, len(parsed.Result.Tools))
 	for _, tool := range parsed.Result.Tools {
-		if governed[tool.Name] {
-			names = append(names, tool.Name)
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+// mcpGovernedToolNames extracts, from the REAL tools/list response, the
+// canonical Core capabilities whose primary MCP projections are listed.
+// Compatibility aliases and canonical dotted names are not counted as extra
+// governed capabilities. Canonical identity is recovered from the projection
+// table (MCPToolName / ResolveMCPToolName), not by reversing camelCase.
+func mcpGovernedToolNames(t *testing.T, mcp *receptors.MCPHandler) []string {
+	t.Helper()
+	primaryToCanonical := make(map[string]string, len(core.CapabilityNames()))
+	for _, canonical := range core.CapabilityNames() {
+		primaryToCanonical[receptors.MCPToolName(canonical)] = canonical
+	}
+
+	names := make([]string, 0)
+	for _, tool := range mcpListedToolNames(t, mcp) {
+		if canonical, ok := primaryToCanonical[tool]; ok {
+			names = append(names, canonical)
 		}
 	}
 	return names
+}
+
+func assertMCPProjectionParity(t *testing.T, mcp *receptors.MCPHandler) {
+	t.Helper()
+	canonicals := core.CapabilityNames()
+	wantPrimary := make(map[string]string, len(canonicals))
+	for _, canonical := range canonicals {
+		primary := receptors.MCPToolName(canonical)
+		if strings.Contains(primary, ".") {
+			t.Errorf("primary MCP projection %q for %q contains '.'", primary, canonical)
+		}
+		if existing, ok := wantPrimary[primary]; ok {
+			t.Errorf("projection collision: %q and %q both project to %q", existing, canonical, primary)
+		}
+		wantPrimary[primary] = canonical
+	}
+
+	listed := mcpListedToolNames(t, mcp)
+	seen := make(map[string]string, len(listed))
+	var listedPrimary []string
+	var listedAliases []string
+	var listedDotted []string
+	for _, name := range listed {
+		if existing, ok := seen[name]; ok {
+			t.Errorf("tools/list name %q listed more than once (also bound as %q)", name, existing)
+		}
+		canonical, ok := receptors.ResolveMCPToolName(name)
+		if !ok {
+			t.Errorf("tools/list name %q does not resolve to a canonical capability", name)
+			seen[name] = ""
+			continue
+		}
+		if other, exists := seen[name]; exists && other != "" && other != canonical {
+			t.Errorf("tools/list name %q maps to both %q and %q", name, other, canonical)
+		}
+		seen[name] = canonical
+
+		switch {
+		case wantPrimary[name] != "":
+			if wantPrimary[name] != canonical {
+				t.Errorf("listed primary %q resolves to %q, want %q", name, canonical, wantPrimary[name])
+			}
+			if strings.Contains(name, ".") {
+				t.Errorf("listed primary MCP name %q contains '.'", name)
+			}
+			listedPrimary = append(listedPrimary, name)
+		case name == canonical:
+			listedDotted = append(listedDotted, name)
+		default:
+			listedAliases = append(listedAliases, name)
+		}
+	}
+
+	var wantPrimaryNames []string
+	for _, canonical := range canonicals {
+		wantPrimaryNames = append(wantPrimaryNames, receptors.MCPToolName(canonical))
+	}
+	equalSets(t, "MCP live primary identifiers vs projection table", listedPrimary, wantPrimaryNames)
+	if len(listedDotted) != 0 {
+		t.Errorf("tools/list published canonical dotted names as extra tools: %v", listedDotted)
+	}
+
+	wantAliases := []string{
+		"runSequence",
+		"sproutTendril",
+		"createGenotype",
+		"viewGenome",
+		"reduceGenome",
+		"injectPlasmid",
+		"graftSubstrate",
+		"promotePR",
+	}
+	equalSets(t, "MCP compatibility aliases vs locked alias set", listedAliases, wantAliases)
+	knownCanonical := make(map[string]struct{}, len(canonicals))
+	for _, canonical := range canonicals {
+		knownCanonical[canonical] = struct{}{}
+	}
+	for _, alias := range listedAliases {
+		canonical, ok := receptors.ResolveMCPToolName(alias)
+		if !ok {
+			t.Errorf("compatibility alias %q does not resolve", alias)
+			continue
+		}
+		if _, exists := knownCanonical[canonical]; !exists {
+			t.Errorf("compatibility alias %q resolves to unknown capability %q", alias, canonical)
+		}
+	}
 }
 
 func TestInterfaceParityCoverage(t *testing.T) {
@@ -140,7 +242,8 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	// Each arm reflects what its surface ACTUALLY wires, independently derived:
 	//   REST — capabilities recorded while mounting routes on the mux
 	//          (sessions + genome + plasmid + graft + trait + sequence + sprout handlers).
-	//   MCP  — names parsed from the live tools/list response.
+	//   MCP  — declared Core names, plus live tools/list primary projections
+	//          resolved through the adapter projection table.
 	//   CLI  — capabilities of the subcommands registered on the command trees
 	//          (`tendril session` + `tendril genome` + `tendril plasmid` + `tendril mesh` + `tendril mesh trait` + `tendril sequence` + `tendril sprout`).
 	restCaps := append(rest.Capabilities(), genomeRest.Capabilities()...)
@@ -164,8 +267,9 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	cliCaps = append(cliCaps, genotypeCLICapabilityNames()...)
 	equalSets(t, "REST adapter (registered routes) vs canonical", restCaps, canonical)
 	equalSets(t, "MCP adapter (declared) vs canonical", mcp.CoreCapabilityNames(), canonical)
-	equalSets(t, "MCP adapter (live tools/list) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
+	equalSets(t, "MCP adapter (live primary projection) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
 	equalSets(t, "CLI adapter (registered subcommands) vs canonical", cliCaps, canonical)
+	assertMCPProjectionParity(t, mcp)
 }
 
 // TestControlPlaneCapabilitiesExcluded asserts that core.CapabilityNames() contains no
@@ -241,7 +345,7 @@ func TestInterfaceParityBehavioral_CreateSession(t *testing.T) {
 	}
 
 	// (c) MCP via tools/call.
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"phytomer.create","arguments":{"preferences":{"model":"claude-sonnet","genotype":"verifier"}}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"phytomerCreate","arguments":{"preferences":{"model":"claude-sonnet","genotype":"verifier"}}}}`))
 	var parsed struct {
 		Result struct {
 			Content []struct {
@@ -957,7 +1061,7 @@ func TestBehavioralParity(t *testing.T) {
 	const parityOrigin = "parity-origin"
 
 	cases := []struct {
-		name   string // capability name; also the MCP tool name
+		name   string // canonical Core capability name
 		method string // mockCore method every surface must invoke exactly once
 		want   any    // the exact typed input every surface must produce
 
@@ -1179,7 +1283,7 @@ func TestBehavioralParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal MCP params: %v", err)
 			}
-			mcpReq := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, tc.name, argsJSON)
+			mcpReq := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, receptors.MCPToolName(tc.name), argsJSON)
 			mcpResp := mcp.ProcessMCPMessage([]byte(mcpReq))
 			var parsed struct {
 				Result struct {
@@ -1278,6 +1382,37 @@ func TestBehavioralParity(t *testing.T) {
 	}
 }
 
+// TestBehavioralParity_CanonicalMCPCallStillAccepted proves tools/call still
+// accepts the canonical dotted capability identifier even though tools/list
+// publishes only the primary camelCase projection.
+func TestBehavioralParity_CanonicalMCPCallStillAccepted(t *testing.T) {
+	mock, _, mcp := newMockParityFixture(t)
+
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"git.status","arguments":{"substrate":"core","origin":"parity-origin"}}}`))
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP git.status response: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP git.status failed: %s", mcpResp)
+	}
+	calls := mock.inputsFor("GitStatus")
+	if len(calls) != 1 {
+		t.Fatalf("MCP git.status: Core.GitStatus called %d times, want 1", len(calls))
+	}
+	want := core.GitStatusInput{Substrate: "core", Origin: "parity-origin"}
+	if !reflect.DeepEqual(calls[0], want) {
+		t.Errorf("MCP git.status: Core.GitStatus received %#v, want %#v", calls[0], want)
+	}
+}
+
 // TestBehavioralParity_GenomeReduce extends the zero-business-logic proof to
 // the genome family: REST, MCP, and the CLI dispatch path
 // must each invoke Core.GenomeReduce exactly once for an equivalent request.
@@ -1304,7 +1439,7 @@ func TestBehavioralParity_GenomeReduce(t *testing.T) {
 
 	// --- MCP (governed name) --------------------------------------------------
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"genome.reduce","arguments":{}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"genomeReduce","arguments":{}}}`))
 	var parsed struct {
 		Result struct {
 			IsError bool `json:"isError"`
@@ -1314,13 +1449,13 @@ func TestBehavioralParity_GenomeReduce(t *testing.T) {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
-		t.Fatalf("parse MCP genome.reduce response: %v", err)
+		t.Fatalf("parse MCP genomeReduce response: %v", err)
 	}
 	if parsed.Error != nil || parsed.Result.IsError {
-		t.Fatalf("MCP genome.reduce failed: %s", mcpResp)
+		t.Fatalf("MCP genomeReduce failed: %s", mcpResp)
 	}
 	if calls := mock.inputsFor("GenomeReduce"); len(calls) != 1 {
-		t.Fatalf("MCP genome.reduce: Core.GenomeReduce called %d times, want 1", len(calls))
+		t.Fatalf("MCP genomeReduce: Core.GenomeReduce called %d times, want 1", len(calls))
 	}
 
 	// --- MCP (deprecated alias reduceGenome routes through the same Core) ----
@@ -1414,7 +1549,7 @@ func TestBehavioralParity_GenotypeCreate(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"genotype.create","arguments":{"name":"test-role","instructions":"You are a test","substrate":"core"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"genotypeCreate","arguments":{"name":"test-role","instructions":"You are a test","substrate":"core"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP genotype.create response: %v", err)
 	}
@@ -1486,7 +1621,7 @@ func TestBehavioralParity_PlasmidInject(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plasmid.inject","arguments":{"name":"go-rules"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plasmidInject","arguments":{"name":"go-rules"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP plasmid.inject response: %v", err)
 	}
@@ -1574,7 +1709,7 @@ func TestBehavioralParity_MeshPromote(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.promote","arguments":{"substrate":"core","branch":"feat/x","prNumber":"42"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"meshPromote","arguments":{"substrate":"core","branch":"feat/x","prNumber":"42"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP mesh.promote response: %v", err)
 	}
@@ -1659,7 +1794,7 @@ func TestBehavioralParity_MeshGraft(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.graft","arguments":{"substrate":"core"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"meshGraft","arguments":{"substrate":"core"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP mesh.graft response: %v", err)
 	}
@@ -1733,7 +1868,7 @@ func TestBehavioralParity_MeshTraits(t *testing.T) {
 	}
 
 	mock.reset()
-	listMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mesh.trait.list","arguments":{}}}`))
+	listMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"meshTraitList","arguments":{}}}`))
 	var listParsed struct {
 		Result struct {
 			Content []struct {
@@ -1810,7 +1945,7 @@ func TestBehavioralParity_MeshTraits(t *testing.T) {
 	}
 
 	mock.reset()
-	acceptMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mesh.trait.accept","arguments":{"traitId":"trait-123"}}}`))
+	acceptMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"meshTraitAccept","arguments":{"traitId":"trait-123"}}}`))
 	if err := json.Unmarshal(acceptMCP, &listParsed); err != nil {
 		t.Fatalf("parse MCP mesh.trait.accept response: %v", err)
 	}
@@ -1880,7 +2015,7 @@ func TestBehavioralParity_MeshTraits(t *testing.T) {
 	}
 
 	mock.reset()
-	rejectMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mesh.trait.reject","arguments":{"traitId":"trait-456"}}}`))
+	rejectMCP := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"meshTraitReject","arguments":{"traitId":"trait-456"}}}`))
 	if err := json.Unmarshal(rejectMCP, &listParsed); err != nil {
 		t.Fatalf("parse MCP mesh.trait.reject response: %v", err)
 	}
@@ -1969,7 +2104,7 @@ func TestBehavioralParity_SequenceRun(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sequence.grow","arguments":{"pathOrName":"deploy","provider":"local"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sequenceGrow","arguments":{"pathOrName":"deploy","provider":"local"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP sequence.grow response: %v", err)
 	}
@@ -2091,7 +2226,7 @@ func TestBehavioralParity_SproutRun(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sprout.grow","arguments":{"transcript":"fix the flaky test","substrate":"/workspaces/core","sessionId":"parity-session-1","origin":"parity-origin"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sproutGrow","arguments":{"transcript":"fix the flaky test","substrate":"/workspaces/core","sessionId":"parity-session-1","origin":"parity-origin"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP sprout.grow response: %v", err)
 	}
@@ -2187,7 +2322,7 @@ func TestBehavioralParity_StomaPass(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stoma.pass","arguments":{"substrate":"core","command":["echo","hello"],"origin":"parity-origin"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"stomaPass","arguments":{"substrate":"core","command":["echo","hello"],"origin":"parity-origin"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP stoma.pass response: %v", err)
 	}
@@ -2260,7 +2395,7 @@ func TestBehavioralParity_SeedGrow(t *testing.T) {
 		} `json:"error"`
 	}
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seed.grow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seedGrow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}}}`))
 	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 		t.Fatalf("parse MCP seed.grow response: %v", err)
 	}
@@ -2415,7 +2550,7 @@ func TestBehavioralParity_Git(t *testing.T) {
 				} `json:"error"`
 			}
 			mock.reset()
-			mcpResp := mcp.ProcessMCPMessage([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, tc.name, tc.mcpArgs)))
+			mcpResp := mcp.ProcessMCPMessage([]byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":%q,"arguments":%s}}`, receptors.MCPToolName(tc.name), tc.mcpArgs)))
 			if err := json.Unmarshal(mcpResp, &parsed); err != nil {
 				t.Fatalf("parse MCP %s response: %v", tc.name, err)
 			}

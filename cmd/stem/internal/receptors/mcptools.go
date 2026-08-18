@@ -29,6 +29,8 @@ func (h *MCPHandler) CoreCapabilityNames() []string {
 }
 
 // coreToolDefs projects the Core capability registry into MCP tool definitions.
+// The listed name is the adapter's primary Pollinator-visible identifier
+// (MCPToolName), not the canonical Core capability name.
 func (h *MCPHandler) coreToolDefs() []map[string]interface{} {
 	if h.core == nil {
 		return nil
@@ -36,7 +38,7 @@ func (h *MCPHandler) coreToolDefs() []map[string]interface{} {
 	defs := make([]map[string]interface{}, 0, len(h.core.Capabilities()))
 	for _, capability := range h.core.Capabilities() {
 		defs = append(defs, map[string]interface{}{
-			"name":        capability.Name,
+			"name":        MCPToolName(capability.Name),
 			"description": capability.Description,
 			"inputSchema": capability.InputSchema,
 		})
@@ -370,8 +372,8 @@ func (h *MCPHandler) handleToolsList(id interface{}) []byte {
 			},
 		},
 	}
-	// Interface parity: project the Core session capabilities as MCP
-	// tools so this surface stays in lockstep with REST and the CLI.
+	// Project one primary MCP identifier per Core capability. Compatibility
+	// aliases stay listed above; canonical dotted names are not republished.
 	tools = append(tools, h.coreToolDefs()...)
 	return h.formatResult(id, map[string]interface{}{
 		"tools": tools,
@@ -387,23 +389,28 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 		return h.formatError(id, -32602, "Invalid params", err.Error())
 	}
 
-	if h.isCoreCapability(params.Name) {
-		// Delegated operation-classes must pass the delegation gate
-		// before the Core is reached — the same per-invocation
-		// authorization the REST adapters apply, keyed by the pollen
-		// bound to this MCP connection at bind-time. Non-delegated
-		// capabilities dispatch untouched (their decision stays the zero
-		// value, which carries no grant).
+	canonical, ok := ResolveMCPToolName(params.Name)
+	if !ok {
+		return h.formatError(id, -32601, "Tool not found", nil)
+	}
+
+	if _, isAlias := mcpCompatibilityAliases[params.Name]; !isAlias {
+		// Primary projection or canonical dotted name: dispatch through the
+		// Core path using the resolved canonical identity. Authorization
+		// always sees that identity, never the transport spelling.
+		if !h.isCoreCapability(canonical) {
+			return h.formatError(id, -32601, "Tool not found", nil)
+		}
 		var decision core.DelegationDecision
 		callCtx := context.Background()
-		if core.IsDelegatedCapability(params.Name) {
-			decision = h.authorizeDelegatedTool(params.Name, params.Arguments)
+		if core.IsDelegatedCapability(canonical) {
+			decision = h.authorizeDelegatedTool(canonical, params.Arguments)
 			if !decision.Authorized {
 				return h.formatDelegationDenied(id, decision)
 			}
 			callCtx = core.WithPollen(callCtx, h.pollen)
 		}
-		if params.Name == core.CapSproutGrow {
+		if canonical == core.CapSproutGrow {
 			// Origin and the pinned stdio session are MCP-surface metadata
 			// (exactly like the REST adapter stamping its own origin), so
 			// the adapter fills unset values before the Core runs.
@@ -417,24 +424,24 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 				params.Arguments["origin"] = session.OriginMCP
 			}
 		}
-		if params.Name == core.CapStomaPass {
+		if canonical == core.CapStomaPass {
 			// stoma.pass alone needs the typed dispatch: its egress
 			// allow-list is grant material with no JSON surface, so the
 			// generic registry decode can never carry it — the adapter
 			// places the authorized grant's allow-list itself.
 			return h.callStomaPass(id, params.Arguments, decision)
 		}
-		if params.Name == core.CapSeedGrow {
+		if canonical == core.CapSeedGrow {
 			// seed.grow carries the same grant-material egress allow-list as
 			// stoma.pass (json:"-"), so it takes the same typed
 			// dispatch: the adapter places the authorized grant's allow-list
 			// itself rather than trusting the generic registry decode.
 			return h.callSeedGrow(id, params.Arguments, decision)
 		}
-		resBytes := h.callCoreCapabilityAs(callCtx, id, params.Name, params.Arguments)
-		if params.Name == core.CapGenotypeCreate && !strings.Contains(string(resBytes), `"isError":true`) {
+		resBytes := h.callCoreCapabilityAs(callCtx, id, canonical, params.Arguments)
+		if canonical == core.CapGenotypeCreate && !strings.Contains(string(resBytes), `"isError":true`) {
 			if err := SyncGenotypeIndex(); err != nil {
-				log.Printf("[MCP] Failed to sync genotype index after %s: %v", params.Name, err)
+				log.Printf("[MCP] Failed to sync genotype index after %s: %v", canonical, err)
 			}
 		}
 		return resBytes

@@ -19,7 +19,7 @@
 - **Plasmid Rule Adapter (`cmd/stem/internal/receptors/plasmid.go`):** Implements `PlasmidHandler`, mapping `GET /v1/plasmids` and `POST /v1/plasmids/inject` to Core plasmid injection.
 - **Mesh Grafting & Trait Adapters (`cmd/stem/internal/receptors/mesh.go`, `cmd/stem/internal/receptors/graft.go`):** Implements `GraftHandler` (`POST /v1/mesh/grafts`, `POST /v1/mesh/promotions`) and `TraitHandler` (`GET /v1/mesh/traits`, `POST /v1/mesh/traits/{id}/accept`, `POST /v1/mesh/traits/{id}/reject`) over Core mesh operations.
 - **Pollinator Token Minting Adapter (`cmd/stem/internal/receptors/pollinatortoken.go`):** Implements `PollinatorTokenHandler` (`POST /v1/pollinator/token`), authenticating durable Pollinator refresh roots to mint short-lived Stem-signed access tokens.
-- **MCP Protocol Surface (`cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance)):** Implements `MCPHandler`, serving stdio/JSON-RPC protocol initializations (`initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call`), dynamically projecting Core capabilities and deprecated legacy tool aliases (`sproutTendril`, `runSequence`, `viewGenome`, `reduceGenome`, `injectPlasmid`, `graftSubstrate`, `promotePR`), maintaining local genotype index files (`index.yaml`), and enforcing bind-time Pollen delegation authorization (`authorizeDelegatedTool`).
+- **MCP Protocol Surface (`cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), `mcpnames.go` (identifier projection), and `mcpgenotypeindex.go` (genotype index maintenance)):** Implements `MCPHandler`, serving stdio/JSON-RPC protocol initializations (`initialize`, `resources/list`, `resources/read`, `tools/list`, `tools/call`), projecting each Core capability as one primary lower-camelCase MCP identifier (`git.status` → `gitStatus`) plus eight deprecated compatibility aliases (`runSequence`, `sproutTendril`, `createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`, `graftSubstrate`, `promotePR`), resolving an inbound transport name to canonical Core identity before authorization or invocation, maintaining local genotype index files (`index.yaml`), and enforcing bind-time Pollen delegation authorization (`authorizeDelegatedTool`) against that canonical operation-class.
 
 **Does not:**
 
@@ -74,7 +74,7 @@ The package exports approximately 108 symbols across exported types, constructor
 
 ## Limitations
 
-- **MCP surface spans three files:** `cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), and `mcpgenotypeindex.go` (genotype index maintenance), separating concerns that are otherwise unrelated.
+- **MCP surface spans four files:** `cmd/stem/internal/receptors/mcp.go` (protocol dispatch), `mcptools.go` (tool projection and deprecated aliases), `mcpnames.go` (identifier projection), and `mcpgenotypeindex.go` (genotype index maintenance), separating concerns that are otherwise unrelated.
 - **Surface Asymmetries:**
   - Asynchronous sprout (`POST /v1/phytomers/{sessionId}/sprout/grow`) and seed growth collection (`GET /v1/seeds/runs/{handle}`) exist on REST handlers (`SproutHandler`, `SeedHandler`) but have no corresponding MCP tool equivalents.
 - **Delegation Gate Posture on Tokens:** `AccessTokenVerifier` and `DelegatedPollen` in `cmd/stem/internal/receptors/config.go` fail closed for unverifiable or missing tokens, but a plain bearer request presenting no Pollen marker header bypasses the delegation gate for ungoverned REST routes.
@@ -82,6 +82,17 @@ The package exports approximately 108 symbols across exported types, constructor
 ## Design & rationale
 
 The design of `cmd/stem/internal/receptors` is guided by the core architecture principle **Core-declares-once, receptors-project-to-both-surfaces**. Core capabilities are declared transport-free in `cmd/stem/internal/core`. The `receptors` package acts as the dual-surface projection layer, translating HTTP requests and JSON-RPC messages into typed Core inputs and ensuring complete REST/MCP interface and behavioral parity (enforced by `cmd/stem/parity_test.go`).
+
+Identifier projection is transport translation. Core does not own MCP naming. An inbound MCP tool name is resolved to exactly one canonical Core capability, then authorized and invoked under that identity:
+
+```text
+MCP transport name
+    -> receptor resolution
+    -> canonical Core capability
+    -> authorization / invocation
+```
+
+Accepted `tools/call` families are exact-match only: a compatibility alias, the primary lower-camelCase projection, or the canonical dotted capability identifier. Unknown, hyphenated, underscored, and case-folded names fail closed. Compatibility aliases carry no independent authority and do not widen a grant. The eight aliases remain supported for existing clients.
 
 The transport surfaces differ in security posture by design:
 - **MCP Surface (`cmd/stem/internal/receptors/mcp.go`):** Operates over stdio as a personal, single-tenant process. The Pollen identity is bound at connection initialization time (`WithDelegation(gate, pollen)`). Delegated tools are authorized against this fixed bind-time Pollen without requiring per-invocation credential headers in tool parameters, preventing callers from self-asserting arbitrary identities.

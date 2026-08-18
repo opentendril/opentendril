@@ -5,10 +5,11 @@ import (
 	"sort"
 )
 
-// Capability names — the canonical identifiers shared verbatim across the CLI,
-// MCP, and REST surfaces. Parity is asserted on this set (see the parity tests
-// under cmd/stem). Adding a name here without wiring every surface, or wiring a
-// surface without a name here, fails CI.
+// Capability names — the canonical governed capability identity. Transports may
+// project that identity according to their adapter contract; Core itself does
+// not own transport naming. Parity is asserted on this set (see the parity
+// tests under cmd/stem). Adding a name here without wiring every surface, or
+// wiring a surface without a name here, fails CI.
 const (
 	CapCreatePhytomer  = "phytomer.create"
 	CapListPhytomers   = "phytomer.list"

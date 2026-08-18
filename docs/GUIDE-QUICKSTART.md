@@ -193,6 +193,14 @@ Read it as a sentence: *the Pollen `claude` may run these operation classes, on
 this Substrate, and nothing else.* Note `git.prune` is absent — it deletes
 branches, and every other operation here is recoverable.
 
+Grants and Core identity stay dotted. The MCP tool name is the lower-camelCase
+projection of that identity:
+
+```text
+Core / grant:  git.status
+MCP tool:      gitStatus
+```
+
 ## 5. Make your first governed call
 
 ```bash
@@ -332,6 +340,15 @@ Only after all of those checks pass does MCP forwarding begin.
 Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
 `TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
 
+A granted `git.status` call uses the primary MCP identifier:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitStatus","arguments":{"substrate":"opentendril"}}}
+```
+
+The Stem authorizes and invokes canonical `git.status`. Do not rewrite the
+grant to `gitStatus`.
+
 ## Single-user installations
 
 `tendril mcp` acts as a governed command surface and stdio bridge. For a
@@ -368,7 +385,7 @@ For the **in-process MCP path**, bind one Pollen with `TENDRIL_POLLEN`. Unset, e
 
 ## Where to go next
 
-Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
+Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. REST and CLI use canonical identity; MCP publishes a lower-camelCase primary identifier that maps one-to-one back to that identity. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
 
 - **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
 - **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
