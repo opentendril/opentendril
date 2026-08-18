@@ -511,6 +511,11 @@ WorkingDirectory=/home/tendril
 # The rootless socket belongs to the tendril user; linger keeps it present.
 Environment=DOCKER_HOST=unix:///run/user/1001/docker.sock
 Environment=XDG_RUNTIME_DIR=/run/user/1001
+# Dedicated runtime directory for the optional local Stem socket.
+# Owned by the Stem principal, mode 0755 (not writable by other users).
+RuntimeDirectory=opentendril
+RuntimeDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/run/opentendril/stem.sock
 ExecStart=/home/tendril/.local/bin/tendril serve
 Restart=on-failure
 
@@ -546,9 +551,22 @@ the Botanist (`BOTANIST_KEY` sets it explicitly when you prefer not to use the
 file). It is not what a Pollinator uses.
 
 The daemon binds **loopback by default** (`TERROIR_HOST` unset → `127.0.0.1`).
+When `TENDRIL_LOCAL_SOCKET` is unset, no Unix-domain socket is created and TCP
+behavior is unchanged. When it is set to an absolute path — the governed unit
+sets `/run/opentendril/stem.sock` — the Stem serves the **same authenticated
+HTTP mux** on that socket as well as on loopback TCP. The socket is transport
+only: connecting to it grants no extra trust. Botanist bearer checks and
+Pollinator credential / access-token semantics are unchanged.
+
+`/run/opentendril` is a systemd `RuntimeDirectory` owned by the Stem principal,
+mode `0755` (other users cannot replace the socket pathname). The socket file
+itself is connectable by local clients. It is not under `/home/tendril` and
+holds no credentials, grants, or other control-plane files.
+
 To expose the REST surface off-host, set `TERROIR_HOST=0.0.0.0` (or a specific
 interface) in the unit's environment — and once off-host, Pollinator data routes
-require short-lived access tokens (see Stage 6).
+require short-lived access tokens (see Stage 6). Off-host classification follows
+the TCP bind only; the local socket does not change it.
 
 **Check:** `curl -s localhost:8080/health` returns a health report.
 
@@ -1006,13 +1024,15 @@ back into your home directory.
   the Stem's user. The boundary is against the accounts that host Pollinators.
 * **It does not replace network perimeter controls when you opt into exposure.**
   The Representational State Transfer surface binds **loopback by default**
-  (`TERROIR_HOST` unset → `127.0.0.1`). Setting `TERROIR_HOST=0.0.0.0` (or another
-  non-loopback address) makes the daemon reachable off-host; at that point
-  durable Pollinator credentials are refused on data routes and callers must
-  present short-lived access tokens, but you should still put a network-facing
-  Ramet behind something that terminates TLS and restricts who can reach the
-  mint and data ports. Per-Pollinator roots already make revocation per-caller
-  rather than a shared-secret rotation.
+  (`TERROIR_HOST` unset → `127.0.0.1`). An optional Unix-domain socket
+  (`TENDRIL_LOCAL_SOCKET`) is local transport for the same authenticated mux;
+  it is not a trust boundary and does not change that default. Setting
+  `TERROIR_HOST=0.0.0.0` (or another non-loopback address) makes the daemon
+  reachable off-host; at that point durable Pollinator credentials are refused
+  on data routes and callers must present short-lived access tokens, but you
+  should still put a network-facing Ramet behind something that terminates TLS
+  and restricts who can reach the mint and data ports. Per-Pollinator roots
+  already make revocation per-caller rather than a shared-secret rotation.
 
 ---
 

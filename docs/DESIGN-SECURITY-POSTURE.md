@@ -215,6 +215,11 @@ Pollinator credential and is not exchanged for access tokens.
 Exposure is self-declaring: there is no separate “require tokens” flag. Narrowing
 the bind is the only opt-out of the hardened posture.
 
+When `TENDRIL_LOCAL_SOCKET` is set to an absolute path, the same authenticated
+mux is also served on that Unix-domain socket. The local listener is transport
+only: it does not change `TERROIR_HOST` semantics or the loopback/off-host
+classification above, and reaching the socket is not authorization.
+
 ### The three surfaces, and which of them is a boundary
 
 Capability parity means the command line, REST and the Model Context Protocol
