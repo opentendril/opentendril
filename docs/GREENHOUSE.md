@@ -168,21 +168,22 @@ host and headless** — it never serves the UI, and the system is fully
 operable with this container absent.
 
 The normal local path uses the Stem's authenticated Unix-domain socket.
-`--profile ui` bind-mounts only `/run/opentendril` into the container,
-read-only, and does not create that path if it is missing. The Greenhouse does
-not use host networking and does not need `host.docker.internal`.
+`--profile ui` bind-mounts only `/var/lib/opentendril-transport` into the
+container, read-only, and does not create that path if it is missing. The
+Greenhouse does not use host networking and does not need
+`host.docker.internal`.
 
 ```
    Operator's browser ── single origin, e.g. http://127.0.0.1:4173
          │
          ▼
-   ┌──────────────────────────────────────────────────────────┐
-   │   ui container (nginx, non-root, read-only)              │
-   │     /            → static ui/dist bundle                 │
-   │     /health /v1* → unix:/run/opentendril/stem.sock       │
-   │     /ws          → unix:/run/opentendril/stem.sock       │
-   └──────────────────────────────────────────────────────────┘
-         │  read-only /run/opentendril
+   ┌──────────────────────────────────────────────────────────────────┐
+   │   ui container (nginx, non-root, read-only)                      │
+   │     /            → static ui/dist bundle                         │
+   │     /health /v1* → unix:/var/lib/opentendril-transport/stem.sock  │
+   │     /ws          → unix:/var/lib/opentendril-transport/stem.sock  │
+   └──────────────────────────────────────────────────────────────────┘
+         │  read-only /var/lib/opentendril-transport
          ▼
    Unified Go Stem (host daemon — headless, loopback TCP unchanged)
 ```
@@ -191,8 +192,9 @@ not use host networking and does not need `host.docker.internal`.
   starts unless `--profile ui` is passed. One command brings it up alongside
   the host Stem: `docker compose --profile ui up -d`.
 - **Local Unix transport:** `/health`, `/v1*`, and `/ws` go through
-  `/run/opentendril/stem.sock` — the same authenticated mux the Stem already
-  serves on loopback TCP. Socket reachability is not authorization.
+  `/var/lib/opentendril-transport/stem.sock` — the same authenticated mux the
+  Stem already serves on loopback TCP. Socket reachability is not
+  authorization.
 - **Single origin, no CORS:** the browser only ever talks to the container, so
   the Stem needs no CORS headers (adding them was explicitly rejected).
   In development, Vite's proxy plays the same role via `STEM_TARGET`.
@@ -208,7 +210,7 @@ not use host networking and does not need `host.docker.internal`.
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
   port binding by default. The only host bind-mount on `--profile ui` is
-  `/run/opentendril` (read-only); `--profile ui-tcp` has none.
+  `/var/lib/opentendril-transport` (read-only); `--profile ui-tcp` has none.
   `/home/tendril`, Botanist key files, Pollinator credentials,
   grants, the protected `tendril` executable, and the Stem's rootless-Docker
   socket are not mounted. The CSP locks `script-src` to `'self'` (no inline
@@ -219,9 +221,9 @@ not use host networking and does not need `host.docker.internal`.
   exfiltration or UI redress.
 - **Explicit TCP mode:** `STEM_HOST=stem.example docker compose --profile ui-tcp up -d`
   selects TCP only. That profile pins `STEM_TRANSPORT=tcp`, requires
-  `STEM_HOST` at container start, and mounts no `/run/opentendril` bind. A
-  missing local socket on `--profile ui` is a transport failure; it does not
-  select TCP.
+  `STEM_HOST` at container start, and mounts no
+  `/var/lib/opentendril-transport` bind. A missing local socket on
+  `--profile ui` is a transport failure; it does not select TCP.
 - **Growth path:** any future server-side layer — BFF, operator auth/SSO,
   enterprise integration, the optional concierge mini-model — grows
   **inside this UI component**, never in the Stem. The Stem's surface stays

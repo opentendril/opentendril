@@ -181,6 +181,7 @@ test.describe("Command Center onboarding", () => {
     await expect(page.getByText(/normal Greenhouse path/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText("stem.sock");
     await expect(page.locator("body")).not.toContainText("/run/opentendril");
+    await expect(page.locator("body")).not.toContainText("/var/lib/opentendril-transport");
   });
 
   test("distinguishes nginx 502 from Botanist 401", async ({ page }) => {

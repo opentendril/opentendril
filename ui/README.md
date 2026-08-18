@@ -38,7 +38,8 @@ same-origin requests.
 The supported local deployment is the **optional, isolated, containerized UI
 front**: a hardened nginx container that serves the built bundle **and**
 reverse-proxies `/v1`, `/health`, and `/ws` (with WebSocket upgrade) to the
-governed Stem through the local Unix socket at `/run/opentendril/stem.sock`.
+governed Stem through the local Unix socket at
+`/var/lib/opentendril-transport/stem.sock`.
 The browser sees a **single origin**, so no CORS configuration exists anywhere
 and the Stem stays headless. Docker is already a core dependency (Tendrils
 sprout into containerized substrates), so this adds no new requirement — and
@@ -51,8 +52,9 @@ docker compose --profile ui up -d     # from the repo root
 ```
 
 Explicit TCP (only when the Stem is intentionally reachable by TCP) is a
-separate Compose profile. It does not mount `/run/opentendril` and can start
-on a host that has no local Stem socket:
+separate Compose profile. It does not mount
+`/var/lib/opentendril-transport` and can start on a host that has no local
+Stem socket:
 
 ```bash
 STEM_HOST=stem.example docker compose --profile ui-tcp up -d
@@ -61,8 +63,8 @@ STEM_HOST=stem.example docker compose --profile ui-tcp up -d
 The local path is:
 
 ```
-browser → 127.0.0.1:4173 → Greenhouse nginx → read-only /run/opentendril
-        → /run/opentendril/stem.sock → the Stem's authenticated mux
+browser → 127.0.0.1:4173 → Greenhouse nginx → read-only /var/lib/opentendril-transport
+        → /var/lib/opentendril-transport/stem.sock → the Stem's authenticated mux
 ```
 
 The Stem can stay bound to `127.0.0.1:8080` (`TERROIR_HOST` unset). The
@@ -77,7 +79,7 @@ peers). Configuration knobs (all optional, via environment):
 | --- | --- | --- |
 | `UI_BIND` | `127.0.0.1` | Host interface to publish on. Loopback-only by default; set `0.0.0.0` for LAN access. |
 | `UI_PORT` | `4173` | Host port for the UI front. |
-| `STEM_SOCKET` | `/run/opentendril/stem.sock` | Stem Unix socket used by `--profile ui`. |
+| `STEM_SOCKET` | `/var/lib/opentendril-transport/stem.sock` | Stem Unix socket used by `--profile ui`. |
 | `STEM_HOST` | required for `--profile ui-tcp` | Stem TCP host. Unused by `--profile ui`. |
 | `STEM_PORT` | `8080` | Stem TCP API port (`--profile ui-tcp`). |
 | `STEM_GATEWAY_PORT` | `9090` | Dedicated `/ws` gateway listener in TCP mode; the proxy falls back to `STEM_PORT` if it is down. |
@@ -86,10 +88,10 @@ peers). Configuration knobs (all optional, via environment):
 operator's `Authorization: Bearer` key passes through untouched and the Stem's
 `withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
 are proxied; nothing else on the host is reachable. `--profile ui` bind-mounts
-only `/run/opentendril`, read-only, and does not create that path if it is
-missing. `--profile ui-tcp` mounts no Unix runtime directory. Neither profile
-mounts `/home/tendril`, Botanist keys, Pollinator credentials, grants, or the
-Stem executable. The container
+only `/var/lib/opentendril-transport`, read-only, and does not create that
+path if it is missing. `--profile ui-tcp` mounts no Unix transport directory.
+Neither profile mounts `/home/tendril`, Botanist keys, Pollinator credentials,
+grants, or the Stem executable. The container
 runs as a non-root user with a read-only root filesystem, all capabilities
 dropped, and `no-new-privileges`. Future server-side layers (BFF, auth,
 enterprise SSO, the concierge) grow **inside this component** — never in the

@@ -5,7 +5,7 @@
 set -eu
 
 TRANSPORT=$(printf '%s' "${STEM_TRANSPORT:-unix}" | tr '[:upper:]' '[:lower:]')
-SOCKET="${STEM_SOCKET:-/run/opentendril/stem.sock}"
+SOCKET="${STEM_SOCKET:-/var/lib/opentendril-transport/stem.sock}"
 OUT="${STEM_UPSTREAMS_CONF:-/tmp/stem-upstreams.conf}"
 
 write_upstreams() {

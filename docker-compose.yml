@@ -27,18 +27,19 @@ services:
     profiles: ["ui"]
     environment:
       STEM_TRANSPORT: unix
-      STEM_SOCKET: ${STEM_SOCKET:-/run/opentendril/stem.sock}
+      STEM_SOCKET: ${STEM_SOCKET:-/var/lib/opentendril-transport/stem.sock}
       UI_BIND: ${UI_BIND:-127.0.0.1}
     volumes:
       - type: bind
-        source: /run/opentendril
-        target: /run/opentendril
+        source: /var/lib/opentendril-transport
+        target: /var/lib/opentendril-transport
         read_only: true
         bind:
           create_host_path: false
 
   # Explicit TCP Greenhouse. Selected only by --profile ui-tcp. No Unix
-  # runtime bind: this service can start when /run/opentendril is absent.
+  # transport bind: this service can start when
+  # /var/lib/opentendril-transport is absent.
   ui-tcp:
     <<: *greenhouse
     profiles: ["ui-tcp"]

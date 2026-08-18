@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Prove the containerized Greenhouse's Compose deployment model:
-# unix (--profile ui) mounts only /run/opentendril read-only; explicit TCP
-# (--profile ui-tcp) has no Unix runtime bind; a missing unix runtime/socket
-# never falls back to TCP. Host /run/opentendril may be present or absent.
+# unix (--profile ui) mounts only /var/lib/opentendril-transport read-only;
+# explicit TCP (--profile ui-tcp) has no Unix transport bind; a missing
+# unix path/socket never falls back to TCP. Host
+# /var/lib/opentendril-transport may be present or absent.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -124,8 +125,8 @@ if env.get("STEM_TRANSPORT") == "unix":
     ok("unix profile pins STEM_TRANSPORT=unix")
 else:
     bad("unix profile pins STEM_TRANSPORT=unix (got %r)" % env.get("STEM_TRANSPORT"))
-if env.get("STEM_SOCKET") == "/run/opentendril/stem.sock":
-    ok("STEM_SOCKET defaults to /run/opentendril/stem.sock")
+if env.get("STEM_SOCKET") == "/var/lib/opentendril-transport/stem.sock":
+    ok("STEM_SOCKET defaults to /var/lib/opentendril-transport/stem.sock")
 else:
     bad("STEM_SOCKET default (got %r)" % env.get("STEM_SOCKET"))
 if env.get("STEM_HOST") in ("", None):
@@ -158,22 +159,32 @@ for vol in ui.get("volumes") or []:
     if vtype == "bind":
         binds.append(vol)
 
+def bind_source(vol):
+    if isinstance(vol, str):
+        return vol.split(":", 1)[0]
+    return vol.get("source")
+
+if any(bind_source(vol) in ("/var/lib", "/var/lib/") for vol in binds):
+    bad("whole /var/lib is not mounted")
+else:
+    ok("whole /var/lib is not mounted")
+
 if len(binds) != 1:
-    bad("only /run/opentendril is bind-mounted (got %s)" % binds)
+    bad("only /var/lib/opentendril-transport is bind-mounted (got %s)" % binds)
     vol = None
 else:
     vol = binds[0]
     if isinstance(vol, str):
-        ok_mount = vol.startswith("/run/opentendril:/run/opentendril") and ":ro" in vol
+        ok_mount = vol.startswith("/var/lib/opentendril-transport:/var/lib/opentendril-transport") and ":ro" in vol
     else:
         source = vol.get("source")
         target = vol.get("target")
         read_only = bool(vol.get("read_only") or vol.get("readOnly"))
-        ok_mount = source == "/run/opentendril" and target == "/run/opentendril" and read_only
+        ok_mount = source == "/var/lib/opentendril-transport" and target == "/var/lib/opentendril-transport" and read_only
     if ok_mount:
-        ok("mounts only /run/opentendril read-only")
+        ok("mounts only /var/lib/opentendril-transport read-only")
     else:
-        bad("mounts only /run/opentendril read-only (got %s)" % vol)
+        bad("mounts only /var/lib/opentendril-transport read-only (got %s)" % vol)
     if isinstance(vol, dict):
         bind = vol.get("bind") or {}
         if bind.get("create_host_path") is False or bind.get("createHostPath") is False:
@@ -194,6 +205,12 @@ if "host.docker.internal" in json.dumps(cfg):
 else:
     ok("rendered unix compose has no host.docker.internal")
 
+unix_blob = json.dumps(cfg)
+if "/run/opentendril" in unix_blob:
+    bad("/run/opentendril is absent from unix compose")
+else:
+    ok("/run/opentendril is absent from unix compose")
+
 forced_ui = forced["services"]["ui"]
 forced_env = forced_ui.get("environment") or {}
 if isinstance(forced_env, list):
@@ -202,10 +219,10 @@ if forced_env.get("STEM_TRANSPORT") == "unix":
     ok("STEM_TRANSPORT=tcp does not retarget --profile ui")
 else:
     bad("STEM_TRANSPORT=tcp does not retarget --profile ui (got %r)" % forced_env.get("STEM_TRANSPORT"))
-if "/run/opentendril" in json.dumps(forced_ui.get("volumes") or []):
-    ok("forcing STEM_TRANSPORT=tcp keeps the unix runtime mount")
+if "/var/lib/opentendril-transport" in json.dumps(forced_ui.get("volumes") or []):
+    ok("forcing STEM_TRANSPORT=tcp keeps the unix transport mount")
 else:
-    bad("forcing STEM_TRANSPORT=tcp keeps the unix runtime mount")
+    bad("forcing STEM_TRANSPORT=tcp keeps the unix transport mount")
 
 sys.exit(1 if errors else 0)
 PY
@@ -270,6 +287,10 @@ if "/run/opentendril" in blob:
     bad("TCP compose does not require /run/opentendril")
 else:
     ok("TCP compose does not require /run/opentendril")
+if "/var/lib/opentendril-transport" in blob:
+    bad("TCP compose does not require /var/lib/opentendril-transport")
+else:
+    ok("TCP compose does not require /var/lib/opentendril-transport")
 
 binds = []
 for vol in svc.get("volumes") or []:
@@ -279,9 +300,9 @@ for vol in svc.get("volumes") or []:
     if vol.get("type") == "bind":
         binds.append(vol)
 if binds:
-    bad("TCP profile has no Unix runtime bind (got %s)" % binds)
+    bad("TCP profile has no Unix transport bind (got %s)" % binds)
 else:
-    ok("TCP profile has no Unix runtime bind")
+    ok("TCP profile has no Unix transport bind")
 
 if "host.docker.internal" in blob:
     bad("TCP compose has no host.docker.internal")
@@ -299,12 +320,12 @@ else:
 sys.exit(1 if errors else 0)
 PY
 
-echo "== Compose TCP starts (host /run/opentendril may exist) =="
+echo "== Compose TCP starts (host transport dir may exist) =="
 
-if [ -e /run/opentendril ]; then
-  pass "host /run/opentendril exists; TCP start must still ignore it"
+if [ -e /var/lib/opentendril-transport ]; then
+  pass "host /var/lib/opentendril-transport exists; TCP start must still ignore it"
 else
-  pass "host /run/opentendril is absent; TCP start must still succeed"
+  pass "host /var/lib/opentendril-transport is absent; TCP start must still succeed"
 fi
 
 tcp_up_log="${workdir}/tcp-up.log"
@@ -312,9 +333,9 @@ if env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_GATEWAY_PORT -u UI_BIND \
     STEM_HOST=10.255.255.254 STEM_PORT=9 UI_PORT=4179 \
     docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp \
     up -d --no-build >"$tcp_up_log" 2>&1; then
-  pass "TCP compose up succeeds regardless of host runtime dir"
+  pass "TCP compose up succeeds regardless of host transport dir"
 else
-  fail "TCP compose up succeeds regardless of host runtime dir"
+  fail "TCP compose up succeeds regardless of host transport dir"
   cat "$tcp_up_log"
 fi
 
@@ -326,6 +347,11 @@ if [ -n "$tcp_cid" ] && [ "$(docker inspect -f '{{.State.Running}}' "$tcp_cid" 2
     fail "running TCP container has no /run/opentendril bind"
   else
     pass "running TCP container has no /run/opentendril bind"
+  fi
+  if printf '%s' "$mounts" | grep -Fq /var/lib/opentendril-transport; then
+    fail "running TCP container has no /var/lib/opentendril-transport bind"
+  else
+    pass "running TCP container has no /var/lib/opentendril-transport bind"
   fi
   net="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$tcp_cid")"
   if [ "$net" = "host" ]; then
@@ -374,13 +400,14 @@ else
   pass "TCP start without STEM_HOST does not fall back to unix"
 fi
 
-echo "== Compose Unix fails closed on a guaranteed-missing runtime path =="
+echo "== Compose Unix fails closed on a guaranteed-missing transport path =="
 
-# Isolated fixture: do not use the production /run/opentendril source, which
-# is expected to exist on a governed host. Prove create_host_path: false
-# against a path that this script never creates.
-missing_src="${workdir}/absent-runtime"
-unix_missing_file="${workdir}/missing-runtime.yml"
+# Isolated fixture: do not use the production
+# /var/lib/opentendril-transport source, which may exist on a governed
+# host. Prove create_host_path: false against a path that this script
+# never creates.
+missing_src="${workdir}/absent-transport"
+unix_missing_file="${workdir}/missing-transport.yml"
 unix_up_log="${workdir}/unix-missing-up.log"
 cat > "$unix_missing_file" <<EOF
 name: ${unix_missing_project}
@@ -391,27 +418,27 @@ services:
     volumes:
       - type: bind
         source: ${missing_src}
-        target: /run/opentendril
+        target: /var/lib/opentendril-transport
         read_only: true
         bind:
           create_host_path: false
 EOF
 if [ -e "$missing_src" ]; then
-  fail "fixture runtime path stays absent (${missing_src})"
+  fail "fixture transport path stays absent (${missing_src})"
 else
-  pass "fixture runtime path stays absent"
+  pass "fixture transport path stays absent"
 fi
 if docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui \
     up -d --no-build >"$unix_up_log" 2>&1; then
-  fail "unix compose up fails when the runtime bind source is missing"
+  fail "unix compose up fails when the transport bind source is missing"
   docker compose -f "$unix_missing_file" -p "$unix_missing_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
 else
-  pass "unix compose up fails when the runtime bind source is missing"
+  pass "unix compose up fails when the transport bind source is missing"
 fi
-if grep -Eiq 'absent-runtime|bind|mount|no such file|does not exist' "$unix_up_log"; then
-  pass "unix missing-dir error names the runtime path or bind"
+if grep -Eiq 'absent-transport|bind|mount|no such file|does not exist' "$unix_up_log"; then
+  pass "unix missing-dir error names the transport path or bind"
 else
-  fail "unix missing-dir error names the runtime path or bind"
+  fail "unix missing-dir error names the transport path or bind"
   cat "$unix_up_log"
 fi
 if grep -Fq "host.docker.internal" "$unix_up_log"; then
@@ -539,22 +566,40 @@ else
   pass "TCP mode without STEM_HOST fails"
 fi
 
-echo "== governed systemd runtime-directory contract =="
+echo "== governed systemd state-directory contract =="
 
 guide="${root}/docs/GUIDE-INSTALL.md"
-assert_file_contains "$guide" "RuntimeDirectory=opentendril" \
-  "governed unit sets RuntimeDirectory=opentendril"
-assert_file_contains "$guide" "RuntimeDirectoryMode=0755" \
-  "governed unit sets RuntimeDirectoryMode=0755"
-assert_file_contains "$guide" "RuntimeDirectoryPreserve=yes" \
-  "governed unit preserves the runtime directory across stop/start"
-assert_file_contains "$guide" "Environment=TENDRIL_LOCAL_SOCKET=/run/opentendril/stem.sock" \
+assert_file_contains "$guide" "StateDirectory=opentendril-transport" \
+  "governed unit sets StateDirectory=opentendril-transport"
+assert_file_contains "$guide" "StateDirectoryMode=0755" \
+  "governed unit sets StateDirectoryMode=0755"
+assert_file_contains "$guide" "Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock" \
   "governed unit sets TENDRIL_LOCAL_SOCKET"
-if grep -Fq "RuntimeDirectoryPreserve=restart" "$guide"; then
-  fail "governed unit uses Preserve=yes, not restart-only"
-else
-  pass "governed unit uses Preserve=yes, not restart-only"
-fi
+assert_file_lacks "$guide" "RuntimeDirectory=opentendril" \
+  "obsolete RuntimeDirectory=opentendril transport contract is absent"
+assert_file_lacks "$guide" "RuntimeDirectoryPreserve" \
+  "RuntimeDirectoryPreserve is not required for this transport"
+assert_file_lacks "$guide" "/run/opentendril" \
+  "governed install no longer documents /run/opentendril"
+
+echo "== Slice 2 defaults name the amended socket path =="
+
+assert_file_contains "${root}/ui/Dockerfile" \
+  "STEM_SOCKET=/var/lib/opentendril-transport/stem.sock" \
+  "Docker image default STEM_SOCKET"
+assert_file_lacks "${root}/ui/Dockerfile" "/run/opentendril" \
+  "Docker image has no /run/opentendril fallback"
+assert_file_contains "$transport_sh" \
+  'SOCKET="${STEM_SOCKET:-/var/lib/opentendril-transport/stem.sock}"' \
+  "nginx transport-selection default"
+assert_file_lacks "$transport_sh" "/run/opentendril" \
+  "nginx transport-selection has no /run/opentendril fallback"
+assert_file_lacks "$compose_file" "/run/opentendril" \
+  "Compose has no /run/opentendril mount or default"
+assert_file_lacks "${root}/docs/GREENHOUSE.md" "/run/opentendril" \
+  "GREENHOUSE.md has no /run/opentendril path"
+assert_file_lacks "${root}/ui/README.md" "/run/opentendril" \
+  "ui/README.md has no /run/opentendril path"
 
 echo "== invalid transport is rejected =="
 if STEM_TRANSPORT=magic STEM_UPSTREAMS_CONF="${workdir}/magic.conf" \

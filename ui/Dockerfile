@@ -6,7 +6,7 @@
 # anywhere. See ui/nginx/default.conf.template.
 #
 # Local default transport is the Stem Unix socket at
-# /run/opentendril/stem.sock. The Stem stays headless: this image is a
+# /var/lib/opentendril-transport/stem.sock. The Stem stays headless: this image is a
 # peer surface, never a dependency. `docker compose --profile ui up` is
 # the intended entrypoint — no local Node/npm required.
 
@@ -29,7 +29,7 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine
 # Restrict substitution to STEM_* so nginx's own $variables are untouched.
 ENV NGINX_ENVSUBST_FILTER="^STEM_"
 ENV STEM_TRANSPORT=unix \
-    STEM_SOCKET=/run/opentendril/stem.sock \
+    STEM_SOCKET=/var/lib/opentendril-transport/stem.sock \
     STEM_HOST= \
     STEM_PORT=8080 \
     STEM_GATEWAY_PORT=9090
