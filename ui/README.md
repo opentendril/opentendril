@@ -50,6 +50,14 @@ docker compose --profile ui up -d     # from the repo root
 # → http://127.0.0.1:4173
 ```
 
+Explicit TCP (only when the Stem is intentionally reachable by TCP) is a
+separate Compose profile. It does not mount `/run/opentendril` and can start
+on a host that has no local Stem socket:
+
+```bash
+STEM_HOST=stem.example docker compose --profile ui-tcp up -d
+```
+
 The local path is:
 
 ```
@@ -69,18 +77,19 @@ peers). Configuration knobs (all optional, via environment):
 | --- | --- | --- |
 | `UI_BIND` | `127.0.0.1` | Host interface to publish on. Loopback-only by default; set `0.0.0.0` for LAN access. |
 | `UI_PORT` | `4173` | Host port for the UI front. |
-| `STEM_TRANSPORT` | `unix` | `unix` (normal local path) or `tcp` (explicit only). A missing socket does not fall back to TCP. |
-| `STEM_SOCKET` | `/run/opentendril/stem.sock` | Stem Unix socket used when `STEM_TRANSPORT=unix`. |
-| `STEM_HOST` | unset | Required only when `STEM_TRANSPORT=tcp`. |
-| `STEM_PORT` | `8080` | Stem TCP API port (TCP mode). |
+| `STEM_SOCKET` | `/run/opentendril/stem.sock` | Stem Unix socket used by `--profile ui`. |
+| `STEM_HOST` | required for `--profile ui-tcp` | Stem TCP host. Unused by `--profile ui`. |
+| `STEM_PORT` | `8080` | Stem TCP API port (`--profile ui-tcp`). |
 | `STEM_GATEWAY_PORT` | `9090` | Dedicated `/ws` gateway listener in TCP mode; the proxy falls back to `STEM_PORT` if it is down. |
 
 **Security posture:** the proxy adds no credentials and bypasses nothing — the
 operator's `Authorization: Bearer` key passes through untouched and the Stem's
 `withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
-are proxied; nothing else on the host is reachable. Compose bind-mounts only
-`/run/opentendril`, read-only; it does not mount `/home/tendril`, Botanist
-keys, Pollinator credentials, grants, or the Stem executable. The container
+are proxied; nothing else on the host is reachable. `--profile ui` bind-mounts
+only `/run/opentendril`, read-only, and does not create that path if it is
+missing. `--profile ui-tcp` mounts no Unix runtime directory. Neither profile
+mounts `/home/tendril`, Botanist keys, Pollinator credentials, grants, or the
+Stem executable. The container
 runs as a non-root user with a read-only root filesystem, all capabilities
 dropped, and `no-new-privileges`. Future server-side layers (BFF, auth,
 enterprise SSO, the concierge) grow **inside this component** — never in the

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Prove the containerized Greenhouse's local Stem transport:
-# default Compose mounts only /run/opentendril read-only, nginx unix mode
-# routes /health /v1 /ws through the socket, TCP is explicit, and a missing
-# socket does not fall back to TCP.
+# Prove the containerized Greenhouse's Compose deployment model:
+# unix (--profile ui) mounts only /run/opentendril read-only; explicit TCP
+# (--profile ui-tcp) has no Unix runtime bind and can start when that path
+# is absent; a missing unix runtime/socket never falls back to TCP.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,6 +10,8 @@ transport_sh="${root}/ui/nginx/15-stem-transport.sh"
 nginx_template="${root}/ui/nginx/default.conf.template"
 compose_file="${root}/docker-compose.yml"
 failed=0
+tcp_project="ot-gh-tcp-check"
+unix_project="ot-gh-unix-check"
 
 pass() { echo "  PASS  $*"; }
 fail() { echo "  FAIL  $*"; failed=1; }
@@ -32,19 +34,37 @@ assert_file_lacks() {
   fi
 }
 
-echo "== Compose default local Greenhouse =="
+compose_cmd() {
+  env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_HOST -u STEM_PORT \
+    -u STEM_GATEWAY_PORT -u UI_BIND -u UI_PORT \
+    docker compose -f "$compose_file" "$@"
+}
 
-# Isolate from a developer's shell STEM_* / UI_* values.
-compose_env=(
-  env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_HOST -u STEM_PORT
-  -u STEM_GATEWAY_PORT -u UI_BIND -u UI_PORT
-)
-compose_json="$("${compose_env[@]}" docker compose --profile ui -f "$compose_file" config --format json)"
+cleanup() {
+  docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp down --remove-orphans >/dev/null 2>&1 || true
+  docker compose -f "$compose_file" -p "$unix_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
+  if [ -n "${sock_holder:-}" ]; then
+    kill "$sock_holder" 2>/dev/null || true
+  fi
+  if [ -n "${workdir:-}" ]; then
+    rm -rf "$workdir"
+  fi
+}
+trap cleanup EXIT
 
-python3 - "$compose_json" <<'PY' || failed=1
+echo "== Compose Unix default (--profile ui) =="
+
+unix_json="$(compose_cmd --profile ui config --format json)"
+# STEM_TRANSPORT=tcp must not retarget the unix profile.
+unix_forced_tcp_json="$(STEM_TRANSPORT=tcp STEM_HOST=host.docker.internal \
+  env -u STEM_SOCKET -u STEM_PORT -u STEM_GATEWAY_PORT -u UI_BIND -u UI_PORT \
+  docker compose -f "$compose_file" --profile ui config --format json)"
+
+python3 - "$unix_json" "$unix_forced_tcp_json" <<'PY' || failed=1
 import json, sys
 
 cfg = json.loads(sys.argv[1])
+forced = json.loads(sys.argv[2])
 ui = cfg["services"]["ui"]
 errors = []
 
@@ -55,21 +75,23 @@ def bad(msg):
     print("  FAIL  " + msg)
     errors.append(msg)
 
-# Host network is forbidden.
+if "ui-tcp" in cfg.get("services", {}):
+    bad("unix profile does not include the TCP service")
+else:
+    ok("unix profile does not include the TCP service")
+
 net = ui.get("network_mode") or ui.get("networkMode")
 if net == "host":
     bad("host network mode is absent")
 else:
     ok("host network mode is absent")
 
-# extra_hosts must not inject host.docker.internal.
 extra = ui.get("extra_hosts") or ui.get("extraHosts") or {}
 if extra:
     bad("default extra_hosts is empty (got %s)" % extra)
 else:
     ok("default extra_hosts is empty")
 
-# Hardening stays in place.
 if ui.get("read_only") is True or ui.get("readOnly") is True:
     ok("read-only root filesystem")
 else:
@@ -87,7 +109,6 @@ if any("no-new-privileges" in str(item) for item in sec):
 else:
     bad("no-new-privileges (got %s)" % sec)
 
-# Loopback publication.
 ports = ui.get("ports") or []
 published = json.dumps(ports)
 if "127.0.0.1" in published and "4173" in published:
@@ -95,25 +116,21 @@ if "127.0.0.1" in published and "4173" in published:
 else:
     bad("loopback UI publication (got %s)" % ports)
 
-# Environment: unix default, no host.docker.internal, no credentials.
 env = ui.get("environment") or {}
 if isinstance(env, list):
     env = dict(item.split("=", 1) for item in env)
-transport = env.get("STEM_TRANSPORT", "")
-socket = env.get("STEM_SOCKET", "")
-host = env.get("STEM_HOST", "")
-if transport == "unix":
-    ok("STEM_TRANSPORT defaults to unix")
+if env.get("STEM_TRANSPORT") == "unix":
+    ok("unix profile pins STEM_TRANSPORT=unix")
 else:
-    bad("STEM_TRANSPORT defaults to unix (got %r)" % transport)
-if socket == "/run/opentendril/stem.sock":
+    bad("unix profile pins STEM_TRANSPORT=unix (got %r)" % env.get("STEM_TRANSPORT"))
+if env.get("STEM_SOCKET") == "/run/opentendril/stem.sock":
     ok("STEM_SOCKET defaults to /run/opentendril/stem.sock")
 else:
-    bad("STEM_SOCKET default (got %r)" % socket)
-if host in ("", None):
-    ok("STEM_HOST is unset by default")
+    bad("STEM_SOCKET default (got %r)" % env.get("STEM_SOCKET"))
+if env.get("STEM_HOST") in ("", None):
+    ok("unix profile does not set STEM_HOST")
 else:
-    bad("STEM_HOST is unset by default (got %r)" % host)
+    bad("unix profile does not set STEM_HOST (got %r)" % env.get("STEM_HOST"))
 if "host.docker.internal" in json.dumps(env):
     bad("default local Greenhouse does not depend on host.docker.internal")
 else:
@@ -126,7 +143,6 @@ if secret_keys:
 else:
     ok("no credentials configured in the container")
 
-# Bind mounts: only the dedicated runtime directory, read-only.
 binds = []
 for vol in ui.get("volumes") or []:
     if isinstance(vol, str):
@@ -143,11 +159,11 @@ for vol in ui.get("volumes") or []:
 
 if len(binds) != 1:
     bad("only /run/opentendril is bind-mounted (got %s)" % binds)
+    vol = None
 else:
     vol = binds[0]
     if isinstance(vol, str):
         ok_mount = vol.startswith("/run/opentendril:/run/opentendril") and ":ro" in vol
-        source, target, read_only = "/run/opentendril", "/run/opentendril", ":ro" in vol
     else:
         source = vol.get("source")
         target = vol.get("target")
@@ -160,9 +176,9 @@ else:
     if isinstance(vol, dict):
         bind = vol.get("bind") or {}
         if bind.get("create_host_path") is False or bind.get("createHostPath") is False:
-            ok("missing host runtime path does not create /run/opentendril")
+            ok("create_host_path remains false")
         else:
-            bad("missing host runtime path does not create /run/opentendril (got %s)" % bind)
+            bad("create_host_path remains false (got %s)" % bind)
 
 forbidden_sources = ("/home/tendril", "/run/user", "docker.sock", ".tendril", "/var/run/docker")
 blob = json.dumps(ui.get("volumes") or [])
@@ -173,12 +189,226 @@ for needle in forbidden_sources:
         ok("no control-plane mount %s" % needle)
 
 if "host.docker.internal" in json.dumps(cfg):
-    bad("rendered compose has no host.docker.internal")
+    bad("rendered unix compose has no host.docker.internal")
 else:
-    ok("rendered compose has no host.docker.internal")
+    ok("rendered unix compose has no host.docker.internal")
+
+forced_ui = forced["services"]["ui"]
+forced_env = forced_ui.get("environment") or {}
+if isinstance(forced_env, list):
+    forced_env = dict(item.split("=", 1) for item in forced_env)
+if forced_env.get("STEM_TRANSPORT") == "unix":
+    ok("STEM_TRANSPORT=tcp does not retarget --profile ui")
+else:
+    bad("STEM_TRANSPORT=tcp does not retarget --profile ui (got %r)" % forced_env.get("STEM_TRANSPORT"))
+if "/run/opentendril" in json.dumps(forced_ui.get("volumes") or []):
+    ok("forcing STEM_TRANSPORT=tcp keeps the unix runtime mount")
+else:
+    bad("forcing STEM_TRANSPORT=tcp keeps the unix runtime mount")
 
 sys.exit(1 if errors else 0)
 PY
+
+echo "== Compose explicit TCP (--profile ui-tcp) =="
+
+tcp_json="$(env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_PORT -u STEM_GATEWAY_PORT \
+  -u UI_BIND -u UI_PORT STEM_HOST=10.255.255.254 \
+  docker compose -f "$compose_file" --profile ui-tcp config --format json)"
+tcp_nohost_json="$(compose_cmd --profile ui-tcp config --format json)"
+
+python3 - "$tcp_json" "$tcp_nohost_json" <<'PY' || failed=1
+import json, sys
+
+cfg = json.loads(sys.argv[1])
+empty = json.loads(sys.argv[2])
+svc = cfg["services"]["ui-tcp"]
+errors = []
+
+def ok(msg):
+    print("  PASS  " + msg)
+
+def bad(msg):
+    print("  FAIL  " + msg)
+    errors.append(msg)
+
+if "ui" in cfg.get("services", {}):
+    bad("TCP profile does not include the unix service")
+else:
+    ok("TCP profile does not include the unix service")
+
+if (svc.get("network_mode") or svc.get("networkMode")) == "host":
+    bad("TCP profile has no host network")
+else:
+    ok("TCP profile has no host network")
+
+if svc.get("read_only") is True or svc.get("readOnly") is True:
+    ok("TCP profile keeps a read-only root filesystem")
+else:
+    bad("TCP profile keeps a read-only root filesystem")
+
+cap_drop = svc.get("cap_drop") or svc.get("capDrop") or []
+if "ALL" in cap_drop:
+    ok("TCP profile drops all capabilities")
+else:
+    bad("TCP profile drops all capabilities")
+
+env = svc.get("environment") or {}
+if isinstance(env, list):
+    env = dict(item.split("=", 1) for item in env)
+if env.get("STEM_TRANSPORT") == "tcp":
+    ok("TCP profile pins STEM_TRANSPORT=tcp")
+else:
+    bad("TCP profile pins STEM_TRANSPORT=tcp (got %r)" % env.get("STEM_TRANSPORT"))
+if env.get("STEM_HOST") == "10.255.255.254":
+    ok("TCP profile interpolates STEM_HOST")
+else:
+    bad("TCP profile interpolates STEM_HOST (got %r)" % env.get("STEM_HOST"))
+
+blob = json.dumps(cfg)
+if "/run/opentendril" in blob:
+    bad("TCP compose does not require /run/opentendril")
+else:
+    ok("TCP compose does not require /run/opentendril")
+
+binds = []
+for vol in svc.get("volumes") or []:
+    if isinstance(vol, str):
+        binds.append(vol)
+        continue
+    if vol.get("type") == "bind":
+        binds.append(vol)
+if binds:
+    bad("TCP profile has no Unix runtime bind (got %s)" % binds)
+else:
+    ok("TCP profile has no Unix runtime bind")
+
+if "host.docker.internal" in blob:
+    bad("TCP compose has no host.docker.internal")
+else:
+    ok("TCP compose has no host.docker.internal")
+
+empty_env = empty["services"]["ui-tcp"].get("environment") or {}
+if isinstance(empty_env, list):
+    empty_env = dict(item.split("=", 1) for item in empty_env)
+if empty_env.get("STEM_HOST") in ("", None):
+    ok("TCP compose config allows empty STEM_HOST (enforced at start)")
+else:
+    bad("TCP compose config empty STEM_HOST (got %r)" % empty_env.get("STEM_HOST"))
+
+sys.exit(1 if errors else 0)
+PY
+
+echo "== Compose TCP starts without /run/opentendril =="
+
+if [ -e /run/opentendril ]; then
+  fail "/run/opentendril is absent for the TCP start proof (found it)"
+else
+  pass "/run/opentendril is absent for the TCP start proof"
+fi
+
+tcp_up_log="$(mktemp)"
+if env -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_GATEWAY_PORT -u UI_BIND \
+    STEM_HOST=10.255.255.254 STEM_PORT=9 UI_PORT=4179 \
+    docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp \
+    up -d --no-build >"$tcp_up_log" 2>&1; then
+  pass "TCP compose up succeeds without /run/opentendril"
+else
+  fail "TCP compose up succeeds without /run/opentendril"
+  cat "$tcp_up_log"
+fi
+
+tcp_cid="$(docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp ps -q ui-tcp 2>/dev/null || true)"
+if [ -n "$tcp_cid" ] && [ "$(docker inspect -f '{{.State.Running}}' "$tcp_cid" 2>/dev/null || echo false)" = "true" ]; then
+  pass "TCP container is running"
+  mounts="$(docker inspect -f '{{json .Mounts}}' "$tcp_cid")"
+  if printf '%s' "$mounts" | grep -Fq /run/opentendril; then
+    fail "running TCP container has no /run/opentendril bind"
+  else
+    pass "running TCP container has no /run/opentendril bind"
+  fi
+  net="$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$tcp_cid")"
+  if [ "$net" = "host" ]; then
+    fail "running TCP container is not host-networked"
+  else
+    pass "running TCP container is not host-networked"
+  fi
+  upstreams="$(docker exec "$tcp_cid" cat /tmp/stem-upstreams.conf)"
+  if printf '%s' "$upstreams" | grep -Fq "server 10.255.255.254:9;"; then
+    pass "generated nginx upstreams use TCP only"
+  else
+    fail "generated nginx upstreams use TCP only"
+    printf '%s\n' "$upstreams"
+  fi
+  if printf '%s' "$upstreams" | grep -Fq "unix:"; then
+    fail "generated TCP upstreams contain no unix: server"
+  else
+    pass "generated TCP upstreams contain no unix: server"
+  fi
+else
+  fail "TCP container is running"
+fi
+
+docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp down --remove-orphans >/dev/null 2>&1 || true
+
+echo "== Compose TCP requires STEM_HOST at start =="
+
+nohost_log="$(mktemp)"
+if env -u STEM_HOST -u STEM_TRANSPORT -u STEM_SOCKET -u STEM_PORT \
+    -u STEM_GATEWAY_PORT -u UI_BIND -u UI_PORT \
+    docker compose -f "$compose_file" -p "$tcp_project" --profile ui-tcp \
+    run --rm --no-deps -T ui-tcp >"$nohost_log" 2>&1; then
+  fail "TCP start without STEM_HOST fails"
+else
+  pass "TCP start without STEM_HOST fails"
+fi
+if grep -Fq "STEM_TRANSPORT=tcp requires STEM_HOST" "$nohost_log"; then
+  pass "TCP start names the missing STEM_HOST"
+else
+  fail "TCP start names the missing STEM_HOST"
+  cat "$nohost_log"
+fi
+if grep -Fq "unix:" "$nohost_log"; then
+  fail "TCP start without STEM_HOST does not fall back to unix"
+else
+  pass "TCP start without STEM_HOST does not fall back to unix"
+fi
+
+echo "== Compose Unix fails closed without /run/opentendril =="
+
+if [ -e /run/opentendril ]; then
+  fail "unix missing-dir up cannot run because /run/opentendril exists"
+else
+  unix_up_log="$(mktemp)"
+  if docker compose -f "$compose_file" -p "$unix_project" --profile ui \
+      up -d --no-build >"$unix_up_log" 2>&1; then
+    fail "unix compose up fails when /run/opentendril is missing"
+    docker compose -f "$compose_file" -p "$unix_project" --profile ui down --remove-orphans >/dev/null 2>&1 || true
+  else
+    pass "unix compose up fails when /run/opentendril is missing"
+  fi
+  if grep -Eiq 'opentendril|bind|mount|no such file|does not exist' "$unix_up_log"; then
+    pass "unix missing-dir error names the runtime path or bind"
+  else
+    fail "unix missing-dir error names the runtime path or bind"
+    cat "$unix_up_log"
+  fi
+  if grep -Fq "host.docker.internal" "$unix_up_log"; then
+    fail "unix missing-dir error does not mention host.docker.internal"
+  else
+    pass "unix missing-dir error does not mention host.docker.internal"
+  fi
+  if grep -Fq "0.0.0.0" "$unix_up_log"; then
+    fail "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
+  else
+    pass "unix missing-dir error does not recommend TERROIR_HOST=0.0.0.0"
+  fi
+  unix_cid="$(docker compose -f "$compose_file" -p "$unix_project" --profile ui ps -q ui 2>/dev/null || true)"
+  if [ -n "$unix_cid" ]; then
+    fail "unix missing-dir up leaves no container"
+  else
+    pass "unix missing-dir up leaves no container"
+  fi
+fi
 
 echo "== nginx Unix-socket local mode =="
 
@@ -196,11 +426,6 @@ while True:
     time.sleep(60)
 PY
 sock_holder=$!
-cleanup() {
-  kill "$sock_holder" 2>/dev/null || true
-  rm -rf "$workdir"
-}
-trap cleanup EXIT
 for _ in $(seq 1 50); do
   [ -S "$sock" ] && break
   sleep 0.05
@@ -222,7 +447,6 @@ assert_file_contains "$unix_out" "unix:${sock}" "unix upstream names the socket"
 assert_file_lacks "$unix_out" "host.docker.internal" "unix mode ignores STEM_HOST"
 assert_file_lacks "$unix_out" ":8080" "unix mode does not emit a TCP port"
 
-# Combined rendered view: generated upstreams + the committed template.
 rendered_unix="${workdir}/unix-nginx.conf"
 cat "$unix_out" "$nginx_template" > "$rendered_unix"
 
@@ -273,7 +497,7 @@ else
   fail "missing socket reports a transport failure"
 fi
 
-echo "== explicit TCP mode =="
+echo "== explicit TCP selector script =="
 
 tcp_out="${workdir}/tcp-upstreams.conf"
 if STEM_TRANSPORT=tcp STEM_HOST=stem.example STEM_PORT=8080 STEM_GATEWAY_PORT=9090 \

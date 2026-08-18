@@ -167,10 +167,10 @@ surface, giving the browser a single origin. The Stem itself stays **on the
 host and headless** — it never serves the UI, and the system is fully
 operable with this container absent.
 
-The normal local path uses the Stem's authenticated Unix-domain socket. Compose
-bind-mounts only `/run/opentendril` into the container, read-only. The
-Greenhouse does not use host networking and does not need
-`host.docker.internal`.
+The normal local path uses the Stem's authenticated Unix-domain socket.
+`--profile ui` bind-mounts only `/run/opentendril` into the container,
+read-only, and does not create that path if it is missing. The Greenhouse does
+not use host networking and does not need `host.docker.internal`.
 
 ```
    Operator's browser ── single origin, e.g. http://127.0.0.1:4173
@@ -202,13 +202,14 @@ Greenhouse does not use host networking and does not need
   Greenhouse holds no Botanist key.
 - **WebSocket upgrade:** the `/ws` proxy speaks HTTP/1.1 with
   `Upgrade`/`Connection` headers against the same Unix socket. Explicit TCP
-  mode (`STEM_TRANSPORT=tcp`) still prefers the dedicated gateway listener
+  mode (`--profile ui-tcp`) still prefers the dedicated gateway listener
   (`:9090`) and falls back to the main API mux (`:8080`) — mirroring the
   Stem's own graceful gateway-bind degradation (§4).
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
-  port binding by default. The only host bind-mount is `/run/opentendril`
-  (read-only). `/home/tendril`, Botanist key files, Pollinator credentials,
+  port binding by default. The only host bind-mount on `--profile ui` is
+  `/run/opentendril` (read-only); `--profile ui-tcp` has none.
+  `/home/tendril`, Botanist key files, Pollinator credentials,
   grants, the protected `tendril` executable, and the Stem's rootless-Docker
   socket are not mounted. The CSP locks `script-src` to `'self'` (no inline
   scripts, no `eval`) and splits `style-src` so `<style>` tags/stylesheets
@@ -216,9 +217,11 @@ Greenhouse does not use host networking and does not need
   attributes keep `'unsafe-inline'` (`style-src-attr`) — an XSS payload can
   no longer inject an arbitrary `<style>` element for CSS-based
   exfiltration or UI redress.
-- **Explicit TCP mode:** set `STEM_TRANSPORT=tcp` and `STEM_HOST` only when
-  the Stem is intentionally reachable by TCP. A missing local socket is a
-  transport failure; it does not select TCP.
+- **Explicit TCP mode:** `STEM_HOST=stem.example docker compose --profile ui-tcp up -d`
+  selects TCP only. That profile pins `STEM_TRANSPORT=tcp`, requires
+  `STEM_HOST` at container start, and mounts no `/run/opentendril` bind. A
+  missing local socket on `--profile ui` is a transport failure; it does not
+  select TCP.
 - **Growth path:** any future server-side layer — BFF, operator auth/SSO,
   enterprise integration, the optional concierge mini-model — grows
   **inside this UI component**, never in the Stem. The Stem's surface stays
