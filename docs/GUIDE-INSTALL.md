@@ -148,6 +148,17 @@ root-equivalent group makes every later stage cosmetic.
 Prerequisites: Go 1.24+ (on the build account only), Docker, Git, and an LLM —
 local [Ollama](https://ollama.ai) by default, or a cloud provider key.
 
+A governed installation that connects an MCP-speaking Pollinator uses two
+executables. They are not interchangeable.
+
+| Executable | Role |
+|---|---|
+| **`tendril`** | The full Stem/operator executable. It may construct and run a Stem. It is owned by the Stem principal and is not on any Pollinator-hosting account's PATH. |
+| **`tendril-mcp`** | The restricted MCP client/bridge. The ordinary Pollinator-hosting account may run it. It holds that Pollinator's durable root, mints and caches short-lived access tokens derived from it, holds no Botanist or Stem credential or authority, cannot construct a Stem, authenticates to the separately owned governed Stem, and receives only authority derived from that Stem. |
+
+Stage 3 places `tendril` under the Stem principal. Stage 8 installs `tendril-mcp`
+for the ordinary account.
+
 ---
 
 ## Stage 1 — Create the Stem's principal
@@ -260,6 +271,10 @@ install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
 install -o tendril -g tendril -m 750 cmd/stem/tendril /home/tendril/.local/bin/tendril
 rm cmd/stem/tendril
 ```
+
+Do not copy this binary onto a Pollinator-hosting account's PATH, and do not run
+`make install` for that account. That target is the single-user full-binary
+install. The ordinary account installs `tendril-mcp` in Stage 8.
 
 ```bash
 # [root] the home itself must not be traversable by other accounts
@@ -557,17 +572,77 @@ in all three places it appears.
 > **Mechanism, not an invariant.** How a Pollinator reaches the Stem is decided
 > by the delegation gate rather than by this guide.
 
-> [!CAUTION]
-> **Do not use `tendril mcp` here.** That subcommand starts an **in-process Stem
-> as whoever runs it**, reading `./.tendril` from that caller's working
-> directory. It does not connect to the Stem running as `tendril`. Pointing a
-> Pollinator at it puts a second, ungoverned Stem on your own account.
+The ordinary Pollinator-hosting account does not receive the protected `tendril`
+binary. It builds and installs the restricted client from a source checkout:
 
-A credential-bearing Pollinator reaches the Stem over the Representational State
-Transfer surface. It is admitted only on routes that consult the delegation
-authorizer per invocation, with the Substrate in hand; every other route —
-including the Model Context Protocol endpoint at `POST /v1` — refuses it by
-default rather than running the request as ordinary traffic:
+```bash
+# as the ordinary (Pollinator-hosting) account
+make install-mcp-client
+```
+
+That installs only `~/.local/bin/tendril-mcp` for the invoking account. It does
+not install, copy, or expose the full `tendril` Stem binary, and it does not
+touch `/home/tendril/.local/bin/tendril`.
+
+**Check:**
+
+```bash
+command -v tendril
+# no result
+
+command -v tendril-mcp
+# ~/.local/bin/tendril-mcp
+```
+
+> [!CAUTION]
+> **Do not use `tendril mcp` here.** That subcommand belongs to the full Stem
+> executable. A governed installation does not put that binary on the ordinary
+> account, and must not. The supported MCP client for this installation is
+> `tendril-mcp`.
+
+`tendril-mcp` is a stdio MCP bridge. An MCP-speaking Pollinator launches it; it
+loads that Pollinator's durable root, mints a short-lived access token with the
+governed Stem, and forwards MCP frames only after that preflight succeeds.
+Authorization and Pollen derivation stay at the Stem. The client cannot
+construct a Stem and has no in-process mode.
+
+Credential lookup, first match wins:
+
+1. `TENDRIL_POLLINATOR_CREDENTIAL`
+2. `TENDRIL_MCP_CREDENTIAL`
+3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
+
+Startup fails closed when there is no credential, the credential file is unsafe,
+no Stem answers, ownership is not established, the answering Stem has the
+caller's UID, or the Stem refuses the root. Only after all of those checks pass
+does MCP forwarding begin.
+
+Place the durable root issued in Stage 6 where that lookup will find it, mode
+`0600`, owned by the ordinary account. Then point an MCP-speaking Pollinator at
+the client:
+
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril-mcp",
+      "env": {
+        "TENDRIL_POLLEN": "<pollen>"
+      }
+    }
+  }
+}
+```
+
+Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
+`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
+
+A credential-bearing Pollinator can also reach the Stem over the
+Representational State Transfer surface. It is admitted only on routes that
+consult the delegation authorizer per invocation, with the Substrate in hand;
+every other route — including the Model Context Protocol endpoint at `POST /v1`
+— refuses a direct credential-bearing caller by default rather than running the
+request as ordinary traffic:
 
 ```console
 $ curl -X POST localhost:8080/v1 -H "Authorization: Bearer tendril_root_…" …
@@ -622,14 +697,9 @@ operation-class "git.prune", substrate "myrepo"
 The Pollen in that message was derived from the credential, not claimed by the
 caller. That is the boundary working.
 
-> [!NOTE]
-> **A Model Context Protocol client has no per-Pollinator path in this
-> configuration.** The stdio transport runs the Stem as the caller, and the
-> hypertext endpoint refuses credential-bearing callers. Such a client can only
-> reach this Stem using the Botanist's own bearer key, which is full access and
-> defeats per-Pollinator identity. If your Pollinator speaks only that protocol,
-> see the single-principal configuration under Variations and accept that
-> delegation there is advisory.
+Direct `POST /v1` remains refused for a credential-bearing caller. The
+per-Pollinator MCP path is `tendril-mcp`, which authenticates to the governed
+Stem and forwards only after the Stem accepts the root.
 
 ### Handing off a bounded Seed
 
@@ -818,9 +888,10 @@ Docker does not. Configure the provider instead of installing a rootless daemon.
 *Removes Stages 1, 2 and 9; changes 3 through 7.*
 
 Install into a repository checkout and run `tendril serve` there. Setup takes
-minutes and everything works, including `tendril mcp` over stdio — which is the
-one thing the governed configuration cannot offer a Model Context Protocol
-client.
+minutes and everything works, including `tendril mcp` over stdio. That
+in-process MCP path is the single-user client. A governed installation uses
+`tendril-mcp` instead and does not put the full binary on the Pollinator
+account's PATH.
 
 **This fails P1, P2 and P3.** The Stem's credentials, its grants and its issued
 credential store all sit in a directory your own account owns. A Pollinator

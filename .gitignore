@@ -54,6 +54,9 @@ cmd/stem/tendril-cli
 cmd/stem/server.log
 cmd/stem/dist/
 
+# Restricted MCP client build artifact
+cmd/tendril-mcp/tendril-mcp
+
 # Release build output (reproducible via `make release` / release.yml)
 dist/
 

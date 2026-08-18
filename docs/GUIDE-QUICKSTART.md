@@ -51,9 +51,16 @@ different instructions.
 command -v tendril
 ```
 
-- **Nothing on your path** — you have a **governed** installation. The binary
-  belongs to the Stem's own account, at mode 750, so that you cannot run or
-  replace it. That is the design working. Continue below.
+- **Nothing on your path** — you have a **governed** installation. The full
+  Stem binary belongs to the Stem's own account, at mode 750, so that you
+  cannot run or replace it. That is the design working. A governed
+  installation may also have the restricted client on this account:
+
+  ```bash
+  command -v tendril-mcp
+  ```
+
+  Continue below.
 - **A path is printed** — you have a **single-user** installation. Skip to
   [Single-user installations](#single-user-installations).
 
@@ -249,6 +256,11 @@ A frequent confusion, worth stating plainly:
 They are separate on purpose. It is why a Pollinator cannot approve its own
 pending confirmation.
 
+## 8. Connect over MCP
+
+The supported MCP client on this installation is `tendril-mcp`, not
+`tendril mcp`. See [Model Context Protocol over stdio](#model-context-protocol-over-stdio).
+
 ---
 
 # Single-user installations
@@ -270,23 +282,82 @@ tendril chat            # interactive session
 
 # Model Context Protocol over stdio
 
-`tendril mcp` acts as a governed command surface and stdio bridge. It determines its mode based on the environment and credentials:
+## Governed installations
+
+The supported MCP client is `tendril-mcp`. Do not use `tendril mcp` here.
+
+```text
+MCP-speaking Pollinator
+    -> tendril-mcp stdio client
+    -> durable Pollinator root
+    -> automatic short-lived access token
+    -> separately owned governed Stem
+    -> governed capabilities
+```
+
+`tendril-mcp` holds that Pollinator's durable root and mints short-lived access
+tokens automatically. Authorization and Pollen derivation stay at the governed
+Stem. The client cannot construct a Stem and has no in-process mode.
+
+Credential lookup, first match wins:
+
+1. `TENDRIL_POLLINATOR_CREDENTIAL`
+2. `TENDRIL_MCP_CREDENTIAL`
+3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
+
+Startup fails closed when:
+
+- no credential is configured;
+- the credential file is unsafe;
+- the Stem is unavailable;
+- ownership is not established;
+- the answering Stem has the caller's UID;
+- the Stem refuses the root.
+
+Only after all of those checks pass does MCP forwarding begin.
+
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril-mcp",
+      "env": {
+        "TENDRIL_POLLEN": "<pollen>"
+      }
+    }
+  }
+}
+```
+
+Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
+`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
+
+## Single-user installations
+
+`tendril mcp` acts as a governed command surface and stdio bridge. For a
+single-user (in-process) installation, it is the natural editor integration.
+It determines its mode based on the environment and credentials:
 
 - If a governed other-user Stem is reachable and a durable Pollinator credential is provided, it **forwards** MCP frames to that Stem. Authorization and Pollen derivation happen at the governed Stem; local grants and `TENDRIL_POLLEN` do not govern the forwarded connection.
 - If such a Stem is owned by another principal and no credential is available, it **refuses** to start rather than creating a competing local Stem.
 - If no governed other-user Stem is reachable, or if the reachable Stem belongs to the caller, or if explicitly forced via `TENDRIL_MCP_IN_PROCESS=1`, it starts an **in-process Stem** reading its control plane from the caller's working directory.
 
+That in-process fallback belongs to `tendril mcp` only. It is not a property of
+`tendril-mcp`.
+
 Credential lookup for forwarding mode checks:
+
 1. `TENDRIL_POLLINATOR_CREDENTIAL`
 2. `TENDRIL_MCP_CREDENTIAL`
 3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
 
-For a single-user (in-process) installation, it is the natural editor integration:
-
 ```json
 {
   "mcpServers": {
-    "opentendril": { "command": "tendril", "args": ["mcp"] }
+    "opentendril": {
+      "command": "tendril",
+      "args": ["mcp"]
+    }
   }
 }
 ```
