@@ -167,42 +167,58 @@ surface, giving the browser a single origin. The Stem itself stays **on the
 host and headless** — it never serves the UI, and the system is fully
 operable with this container absent.
 
+The normal local path uses the Stem's authenticated Unix-domain socket. Compose
+bind-mounts only `/run/opentendril` into the container, read-only. The
+Greenhouse does not use host networking and does not need
+`host.docker.internal`.
+
 ```
    Operator's browser ── single origin, e.g. http://127.0.0.1:4173
          │
          ▼
-   ┌───────────────────────────────────────────────┐
-   │   ui container (nginx, non-root, read-only)   │   docker compose --profile ui
-   │     /            → static ui/dist bundle      │
-   │     /health /v1* → host.docker.internal:8080  │
-   │     /ws          → host.docker.internal:9090  │   (falls back to :8080)
-   └───────────────────────────────────────────────┘
-         │  host-gateway
+   ┌──────────────────────────────────────────────────────────┐
+   │   ui container (nginx, non-root, read-only)              │
+   │     /            → static ui/dist bundle                 │
+   │     /health /v1* → unix:/run/opentendril/stem.sock       │
+   │     /ws          → unix:/run/opentendril/stem.sock       │
+   └──────────────────────────────────────────────────────────┘
+         │  read-only /run/opentendril
          ▼
-   Unified Go Stem (host daemon — headless, unchanged)
+   Unified Go Stem (host daemon — headless, loopback TCP unchanged)
 ```
 
 - **Opt-in:** the `ui` compose service sits behind the `ui` profile and never
   starts unless `--profile ui` is passed. One command brings it up alongside
   the host Stem: `docker compose --profile ui up -d`.
+- **Local Unix transport:** `/health`, `/v1*`, and `/ws` go through
+  `/run/opentendril/stem.sock` — the same authenticated mux the Stem already
+  serves on loopback TCP. Socket reachability is not authorization.
 - **Single origin, no CORS:** the browser only ever talks to the container, so
   the Stem needs no CORS headers (adding them was explicitly rejected).
   In development, Vite's proxy plays the same role via `STEM_TARGET`.
 - **Auth preserved:** the proxy forwards the operator's bearer key untouched;
   the Stem's `withAPIKeyAuth` remains the sole authority. Only `/health`,
-  `/v1*`, and `/ws` are proxied — nothing else on the host is reachable.
+  `/v1*`, and `/ws` are proxied — nothing else on the host is reachable. The
+  Greenhouse holds no Botanist key.
 - **WebSocket upgrade:** the `/ws` proxy speaks HTTP/1.1 with
-  `Upgrade`/`Connection` headers, prefers the dedicated gateway listener
-  (`:9090`), and falls back to the main API mux (`:8080`) — mirroring the
+  `Upgrade`/`Connection` headers against the same Unix socket. Explicit TCP
+  mode (`STEM_TRANSPORT=tcp`) still prefers the dedicated gateway listener
+  (`:9090`) and falls back to the main API mux (`:8080`) — mirroring the
   Stem's own graceful gateway-bind degradation (§4).
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
-  port binding by default. The CSP locks `script-src` to `'self'` (no inline
-  scripts, no `eval`) and, since the posture audit, splits `style-src` so
-  `<style>` tags/stylesheets are `'self'`-only (`style-src-elem`) while only
-  React's inline `style=""` attributes keep `'unsafe-inline'`
-  (`style-src-attr`) — an XSS payload can no longer inject an arbitrary
-  `<style>` element for CSS-based exfiltration or UI redress.
+  port binding by default. The only host bind-mount is `/run/opentendril`
+  (read-only). `/home/tendril`, Botanist key files, Pollinator credentials,
+  grants, the protected `tendril` executable, and the Stem's rootless-Docker
+  socket are not mounted. The CSP locks `script-src` to `'self'` (no inline
+  scripts, no `eval`) and splits `style-src` so `<style>` tags/stylesheets
+  are `'self'`-only (`style-src-elem`) while only React's inline `style=""`
+  attributes keep `'unsafe-inline'` (`style-src-attr`) — an XSS payload can
+  no longer inject an arbitrary `<style>` element for CSS-based
+  exfiltration or UI redress.
+- **Explicit TCP mode:** set `STEM_TRANSPORT=tcp` and `STEM_HOST` only when
+  the Stem is intentionally reachable by TCP. A missing local socket is a
+  transport failure; it does not select TCP.
 - **Growth path:** any future server-side layer — BFF, operator auth/SSO,
   enterprise integration, the optional concierge mini-model — grows
   **inside this UI component**, never in the Stem. The Stem's surface stays

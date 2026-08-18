@@ -173,6 +173,75 @@ test.describe("Command Center onboarding", () => {
     // The key collected during onboarding is the one actually sent.
     expect(backend.lastSessionsAuthHeader()).toBe(`Bearer ${testApiKey}`);
   });
+
+  test("same-origin onboarding does not ask for a Stem socket path", async ({ page }) => {
+    await mockStemBackend(page, { sessions: [] });
+    await page.goto("/");
+    await expect(page.getByLabel("Stem address")).toHaveValue("");
+    await expect(page.getByText(/normal Greenhouse path/)).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("stem.sock");
+    await expect(page.locator("body")).not.toContainText("/run/opentendril");
+  });
+
+  test("distinguishes nginx 502 from Botanist 401", async ({ page }) => {
+    await page.route("**/health", async (route) => {
+      await route.fulfill({ status: 502, body: "Bad Gateway" });
+    });
+    await page.goto("/");
+    await page.getByLabel("Botanist key").fill(testApiKey);
+    await page.getByRole("button", { name: "Take root" }).click();
+    await expect(
+      page.getByText("Greenhouse cannot reach the configured Stem transport"),
+    ).toBeVisible();
+    await expect(page.getByText("Botanist key rejected")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Uproot" })).toHaveCount(0);
+  });
+
+  test("distinguishes nginx 504 from Botanist 401", async ({ page }) => {
+    await page.route("**/health", async (route) => {
+      await route.fulfill({ status: 504, body: "Gateway Timeout" });
+    });
+    await page.goto("/");
+    await page.getByLabel("Botanist key").fill(testApiKey);
+    await page.getByRole("button", { name: "Take root" }).click();
+    await expect(
+      page.getByText("Greenhouse cannot reach the configured Stem transport"),
+    ).toBeVisible();
+    await expect(page.getByText("Botanist key rejected")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Uproot" })).toHaveCount(0);
+  });
+
+  test("keeps degraded Stem 503 distinct from transport failure", async ({ page }) => {
+    await page.route("**/health", async (route) => {
+      await route.fulfill({ status: 503, json: { overall: false } });
+    });
+    await page.goto("/");
+    await page.getByLabel("Botanist key").fill(testApiKey);
+    await page.getByRole("button", { name: "Take root" }).click();
+    await expect(page.getByText("Stem answered but reports degraded health")).toBeVisible();
+    await expect(
+      page.getByText("Greenhouse cannot reach the configured Stem transport"),
+    ).toHaveCount(0);
+    await expect(page.getByText("Botanist key rejected")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Uproot" })).toHaveCount(0);
+  });
+
+  test("reports Botanist 401 after a reachable Stem health check", async ({ page }) => {
+    await page.route("**/health", async (route) => {
+      await route.fulfill({ status: 200, json: { overall: true } });
+    });
+    await page.route("**/v1/sessions", async (route) => {
+      await route.fulfill({ status: 401, body: "unauthorized" });
+    });
+    await page.goto("/");
+    await page.getByLabel("Botanist key").fill("wrong-key");
+    await page.getByRole("button", { name: "Take root" }).click();
+    await expect(page.getByText("Botanist key rejected")).toBeVisible();
+    await expect(
+      page.getByText("Greenhouse cannot reach the configured Stem transport"),
+    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Uproot" })).toHaveCount(0);
+  });
 });
 
 test.describe("Command Center sprout-run observation", () => {

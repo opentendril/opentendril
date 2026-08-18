@@ -563,6 +563,11 @@ mode `0755` (other users cannot replace the socket pathname). The socket file
 itself is connectable by local clients. It is not under `/home/tendril` and
 holds no credentials, grants, or other control-plane files.
 
+The containerized Greenhouse (`docker compose --profile ui up -d`) reaches this
+socket through a read-only mount of `/run/opentendril`. The browser talks only
+to the Greenhouse origin (`http://127.0.0.1:4173` by default). The Stem stays
+on loopback TCP when `TERROIR_HOST` is unset. See [GREENHOUSE.md](./GREENHOUSE.md).
+
 To expose the REST surface off-host, set `TERROIR_HOST=0.0.0.0` (or a specific
 interface) in the unit's environment — and once off-host, Pollinator data routes
 require short-lived access tokens (see Stage 6). Off-host classification follows
