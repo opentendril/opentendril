@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -374,6 +375,173 @@ func TestUnsetLocalSocketCreatesNothing(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("empty path created files: %v", entries)
 	}
+}
+
+func TestConcurrentStaleStartupAtMostOneWins(t *testing.T) {
+	path := testUnixSocketPath(t)
+	mux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	const attempts = 8
+	const workers = 8
+	for attempt := 0; attempt < attempts; attempt++ {
+		leaveStaleUnixSocket(t, path)
+
+		start := make(chan struct{})
+		results := make(chan struct {
+			sock *localSocket
+			err  error
+		}, workers)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				sock, err := openLocalSocket(path)
+				results <- struct {
+					sock *localSocket
+					err  error
+				}{sock, err}
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		var winners []*localSocket
+		var loserErrs []error
+		for result := range results {
+			if result.err == nil {
+				winners = append(winners, result.sock)
+				continue
+			}
+			loserErrs = append(loserErrs, result.err)
+		}
+		if len(winners) != 1 {
+			for _, winner := range winners {
+				_ = winner.Close()
+			}
+			t.Fatalf("attempt %d: winners=%d losers=%d, want exactly one winner", attempt, len(winners), len(loserErrs))
+		}
+		if len(loserErrs) != workers-1 {
+			_ = winners[0].Close()
+			t.Fatalf("attempt %d: loser count=%d, want %d", attempt, len(loserErrs), workers-1)
+		}
+		for _, err := range loserErrs {
+			if !strings.Contains(err.Error(), "already in use") {
+				_ = winners[0].Close()
+				t.Fatalf("attempt %d: loser error %v, want already in use", attempt, err)
+			}
+		}
+
+		winner := winners[0]
+		winnerID := winner.id
+		winner.server = &http.Server{Handler: mux}
+		go serveLocalSocket(winner)
+
+		resp := getUnix(t, path, "/ready", "")
+		if resp.StatusCode != http.StatusNoContent {
+			_ = winner.Close()
+			t.Fatalf("attempt %d: winner /ready status = %d, want 204", attempt, resp.StatusCode)
+		}
+
+		current, ok := fileIdentityFromPath(path)
+		if !ok || current != winnerID {
+			_ = winner.Close()
+			t.Fatalf("attempt %d: winner pathname no longer names the winner's socket", attempt)
+		}
+		if live, err := unixSocketIsLive(path); err != nil || !live {
+			_ = winner.Close()
+			t.Fatalf("attempt %d: winner is not reachable after losers returned: live=%v err=%v", attempt, live, err)
+		}
+
+		if err := winner.Close(); err != nil {
+			t.Fatalf("attempt %d: close winner: %v", attempt, err)
+		}
+	}
+}
+
+func TestLocalSocketCloseDoesNotRemoveSuccessor(t *testing.T) {
+	t.Run("successor socket", func(t *testing.T) {
+		path := testUnixSocketPath(t)
+		sock, err := openLocalSocket(path)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		ownerID := sock.id
+
+		if err := os.Remove(path); err != nil {
+			_ = sock.Close()
+			t.Fatalf("unlink owner name: %v", err)
+		}
+		successor, err := net.Listen("unix", path)
+		if err != nil {
+			_ = sock.Close()
+			t.Fatalf("bind successor: %v", err)
+		}
+		t.Cleanup(func() { _ = successor.Close() })
+		if unixLn, ok := successor.(*net.UnixListener); ok {
+			unixLn.SetUnlinkOnClose(false)
+		}
+		successorID, ok := fileIdentityFromPath(path)
+		if !ok {
+			_ = sock.Close()
+			t.Fatal("successor identity missing")
+		}
+		if successorID == ownerID {
+			_ = sock.Close()
+			t.Fatal("successor reused the owner's inode")
+		}
+
+		if err := sock.Close(); err != nil {
+			t.Fatalf("close owner: %v", err)
+		}
+
+		got, ok := fileIdentityFromPath(path)
+		if !ok {
+			t.Fatal("owner cleanup removed the successor socket")
+		}
+		if got != successorID {
+			t.Fatalf("successor identity changed: got %+v want %+v", got, successorID)
+		}
+		conn, err := net.Dial("unix", path)
+		if err != nil {
+			t.Fatalf("successor is not reachable after owner cleanup: %v", err)
+		}
+		_ = conn.Close()
+	})
+
+	t.Run("successor file", func(t *testing.T) {
+		path := testUnixSocketPath(t)
+		sock, err := openLocalSocket(path)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		if err := os.Remove(path); err != nil {
+			_ = sock.Close()
+			t.Fatalf("unlink owner name: %v", err)
+		}
+		const payload = "successor-not-ours"
+		if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
+			_ = sock.Close()
+			t.Fatalf("write successor: %v", err)
+		}
+
+		if err := sock.Close(); err != nil {
+			t.Fatalf("close owner: %v", err)
+		}
+
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("owner cleanup removed the successor file: %v", err)
+		}
+		if string(got) != payload {
+			t.Fatalf("successor contents = %q, want %q", got, payload)
+		}
+	})
 }
 
 func TestLocalSocketDoesNotChangeTCPBindPosture(t *testing.T) {
