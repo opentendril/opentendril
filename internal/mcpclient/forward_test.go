@@ -302,3 +302,100 @@ func TestForwarder(t *testing.T) {
 		}
 	})
 }
+
+func TestForwarderPreflight(t *testing.T) {
+	t.Run("valid root caches token and later Forward does not remint", func(t *testing.T) {
+		var mintCount, v1Count int
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/pollinator/token", func(w http.ResponseWriter, r *http.Request) {
+			mintCount++
+			if r.Header.Get("Authorization") != "Bearer valid-root" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token":     "preflight-token",
+				"expiresAt": time.Now().Add(2 * time.Minute),
+			})
+		})
+		mux.HandleFunc("POST /v1", func(w http.ResponseWriter, r *http.Request) {
+			v1Count++
+			if r.Header.Get("Authorization") != "Bearer preflight-token" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"ok"}`))
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+
+		f := NewForwarder("valid-root")
+		f.BaseURL = server.URL
+
+		if err := f.Preflight(); err != nil {
+			t.Fatalf("preflight: %v", err)
+		}
+		if mintCount != 1 {
+			t.Fatalf("preflight mint count = %d, want 1", mintCount)
+		}
+		if v1Count != 0 {
+			t.Fatalf("preflight sent /v1 %d times", v1Count)
+		}
+		if f.token != "preflight-token" {
+			t.Fatalf("cached token = %q, want preflight-token", f.token)
+		}
+		if time.Now().Add(1 * time.Minute).After(f.expiresAt) {
+			t.Fatalf("cached expiry %v is too soon to be reused", f.expiresAt)
+		}
+
+		resp := f.Forward([]byte(`{"jsonrpc":"2.0","id":1}`))
+		if mintCount != 1 {
+			t.Fatalf("Forward reminted; mint count = %d, want 1", mintCount)
+		}
+		if v1Count != 1 {
+			t.Fatalf("/v1 calls = %d, want 1", v1Count)
+		}
+		if !strings.Contains(string(resp), `"result":"ok"`) {
+			t.Fatalf("forward after preflight: %s", resp)
+		}
+	})
+
+	t.Run("refused root fails without sending /v1 or leaking the secret", func(t *testing.T) {
+		secret := "tendril_refresh_MUST_NOT_LEAK_preflight"
+		var mintCount, v1Count int
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /v1/pollinator/token", func(w http.ResponseWriter, r *http.Request) {
+			mintCount++
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		})
+		mux.HandleFunc("POST /v1", func(w http.ResponseWriter, r *http.Request) {
+			v1Count++
+		})
+		server := httptest.NewServer(mux)
+		t.Cleanup(server.Close)
+
+		f := NewForwarder(secret)
+		f.BaseURL = server.URL
+
+		err := f.Preflight()
+		if err == nil {
+			t.Fatal("expected refused root to fail preflight")
+		}
+		if !strings.Contains(err.Error(), "the Stem refused you") {
+			t.Fatalf("error must name the credential refusal, got %v", err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatal("durable root leaked into the preflight error")
+		}
+		if mintCount != 1 {
+			t.Fatalf("mint count = %d, want 1", mintCount)
+		}
+		if v1Count != 0 {
+			t.Fatalf("refused preflight sent /v1 %d times", v1Count)
+		}
+		if f.token != "" {
+			t.Fatalf("refused preflight cached a token %q", f.token)
+		}
+	})
+}
