@@ -1,13 +1,11 @@
-package main
+package mcpclient
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +15,10 @@ type minimalMCPRequest struct {
 	ID interface{} `json:"id"`
 }
 
-type MCPForwarder struct {
+// Forwarder mints a short-lived Pollinator access token from a durable root
+// and forwards raw MCP frames to the Stem. It owns transport only: no
+// capability, grant, or Stem-construction logic.
+type Forwarder struct {
 	BaseURL    string
 	RootCred   string
 	HTTPClient *http.Client
@@ -27,40 +28,22 @@ type MCPForwarder struct {
 	expiresAt time.Time
 }
 
-func resolveStemAddress(fallbackHost string) string {
-	host := strings.TrimSpace(os.Getenv("TERROIR_HOST"))
-	if host == "" {
-		if fallbackHost != "" {
-			host = fallbackHost
-		} else {
-			host = "127.0.0.1"
-		}
-	} else if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	return net.JoinHostPort(host, port)
-}
-
-// mcpForwardingTimeout is generous because a forwarded frame may be a long-running invocation.
+// forwardingTimeout is generous because a forwarded frame may be a long-running invocation.
 // It is deliberately not linked to the access-token lifetime.
-const mcpForwardingTimeout = 15 * time.Minute
+const forwardingTimeout = 15 * time.Minute
 
-func NewMCPForwarder(rootCred string) *MCPForwarder {
-	addr := resolveStemAddress("")
+// NewForwarder builds a client pointed at the resolved Stem address.
+func NewForwarder(rootCred string) *Forwarder {
+	addr := ResolveStemAddress("")
 
-	return &MCPForwarder{
+	return &Forwarder{
 		BaseURL:    "http://" + addr,
 		RootCred:   rootCred,
-		HTTPClient: &http.Client{Timeout: mcpForwardingTimeout},
+		HTTPClient: &http.Client{Timeout: forwardingTimeout},
 	}
 }
 
-func (f *MCPForwarder) mintToken() (string, time.Time, error) {
+func (f *Forwarder) mintToken() (string, time.Time, error) {
 	req, err := http.NewRequest(http.MethodPost, f.BaseURL+"/v1/pollinator/token", nil)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("build mint request: %w", err)
@@ -93,7 +76,7 @@ func (f *MCPForwarder) mintToken() (string, time.Time, error) {
 	return mintResp.Token, mintResp.ExpiresAt, nil
 }
 
-func (f *MCPForwarder) ensureToken() (string, error) {
+func (f *Forwarder) ensureToken() (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -112,7 +95,10 @@ func (f *MCPForwarder) ensureToken() (string, error) {
 	return f.token, nil
 }
 
-func (f *MCPForwarder) Forward(reqBytes []byte) []byte {
+// Forward sends one MCP request frame to the Stem and returns the response
+// bytes, or a protocol-shaped error frame. A 401 causes exactly one remint
+// and one retry.
+func (f *Forwarder) Forward(reqBytes []byte) []byte {
 	var minimal minimalMCPRequest
 	_ = json.Unmarshal(reqBytes, &minimal)
 	reqID := minimal.ID
@@ -150,7 +136,7 @@ func (f *MCPForwarder) Forward(reqBytes []byte) []byte {
 	return respBytes
 }
 
-func (f *MCPForwarder) doRequest(reqBytes []byte, token string) ([]byte, bool, error) {
+func (f *Forwarder) doRequest(reqBytes []byte, token string) ([]byte, bool, error) {
 	req, err := http.NewRequest(http.MethodPost, f.BaseURL+"/v1", bytes.NewReader(reqBytes))
 	if err != nil {
 		return nil, false, fmt.Errorf("build forward request: %w", err)
@@ -182,7 +168,7 @@ func (f *MCPForwarder) doRequest(reqBytes []byte, token string) ([]byte, bool, e
 	return body, false, nil
 }
 
-func (f *MCPForwarder) formatError(id interface{}, code int, message string) []byte {
+func (f *Forwarder) formatError(id interface{}, code int, message string) []byte {
 	type errFrame struct {
 		JSONRPC string      `json:"jsonrpc"`
 		ID      interface{} `json:"id"`
