@@ -14,6 +14,17 @@ type Status =
   | { kind: "err"; text: string }
   | { kind: "ok"; text: string };
 
+const greenhouseUnreachable =
+  "Greenhouse cannot reach the configured Stem transport";
+
+/** Classify a /health failure without treating transport errors as auth failures. */
+export function diagnoseHealthFailure(err: unknown): string {
+  if (err instanceof StemApiError && err.status === 503) {
+    return "Stem answered but reports degraded health";
+  }
+  return greenhouseUnreachable;
+}
+
 export function Onboarding() {
   const configure = useConnection((s) => s.configure);
   const [operatorName, setOperatorName] = useState("");
@@ -27,15 +38,8 @@ export function Onboarding() {
     try {
       await stemApi.health(conn);
     } catch (err) {
-      setStatus({
-        kind: "err",
-        text:
-          err instanceof StemApiError && err.status === 503
-            ? "The Stem answered but reports degraded health — you can still connect after checking it."
-            : "No Stem answered at that address. Is `tendril serve` running?",
-      });
-      if (!(err instanceof StemApiError)) return;
-      if (err.status !== 503) return;
+      setStatus({ kind: "err", text: diagnoseHealthFailure(err) });
+      return;
     }
 
     setStatus({ kind: "busy", text: "Verifying operator key…" });
@@ -45,7 +49,7 @@ export function Onboarding() {
       if (err instanceof StemApiError && err.status === 401) {
         setStatus({
           kind: "err",
-          text: "The Stem rejected that key. Paste the BOTANIST_KEY value your administrator gave you.",
+          text: "Botanist key rejected",
         });
         return;
       }
@@ -101,9 +105,10 @@ export function Onboarding() {
             spellCheck={false}
           />
           <span className="hint">
-            Empty means the Stem that serves this page (or the dev proxy).
-            Only set a full URL like http://stem.local:8080 if the Stem lives
-            elsewhere and allows cross-origin requests.
+            Empty uses this page's origin — the normal Greenhouse path.
+            The browser talks only to this origin. Set a full URL only if you
+            intentionally reach a separate Stem that allows cross-origin
+            requests.
           </span>
         </div>
 

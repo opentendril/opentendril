@@ -511,11 +511,12 @@ WorkingDirectory=/home/tendril
 # The rootless socket belongs to the tendril user; linger keeps it present.
 Environment=DOCKER_HOST=unix:///run/user/1001/docker.sock
 Environment=XDG_RUNTIME_DIR=/run/user/1001
-# Dedicated runtime directory for the optional local Stem socket.
+# Dedicated state directory for the optional local Stem socket.
 # Owned by the Stem principal, mode 0755 (not writable by other users).
-RuntimeDirectory=opentendril
-RuntimeDirectoryMode=0755
-Environment=TENDRIL_LOCAL_SOCKET=/run/opentendril/stem.sock
+# Contains only local transport artifacts.
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
 ExecStart=/home/tendril/.local/bin/tendril serve
 Restart=on-failure
 
@@ -553,15 +554,23 @@ file). It is not what a Pollinator uses.
 The daemon binds **loopback by default** (`TERROIR_HOST` unset → `127.0.0.1`).
 When `TENDRIL_LOCAL_SOCKET` is unset, no Unix-domain socket is created and TCP
 behavior is unchanged. When it is set to an absolute path — the governed unit
-sets `/run/opentendril/stem.sock` — the Stem serves the **same authenticated
-HTTP mux** on that socket as well as on loopback TCP. The socket is transport
-only: connecting to it grants no extra trust. Botanist bearer checks and
-Pollinator credential / access-token semantics are unchanged.
+sets `/var/lib/opentendril-transport/stem.sock` — the Stem serves the **same
+authenticated HTTP mux** on that socket as well as on loopback TCP. The socket
+is transport only: connecting to it grants no extra trust. Botanist bearer
+checks and Pollinator credential / access-token semantics are unchanged.
 
-`/run/opentendril` is a systemd `RuntimeDirectory` owned by the Stem principal,
-mode `0755` (other users cannot replace the socket pathname). The socket file
-itself is connectable by local clients. It is not under `/home/tendril` and
-holds no credentials, grants, or other control-plane files.
+`/var/lib/opentendril-transport` is a systemd `StateDirectory` owned by the
+Stem principal, mode `0755` (other users cannot replace the socket pathname).
+It contains only local transport artifacts: no Botanist key, Pollinator
+credentials, grants, provider credentials, or other Stem control-plane state.
+The socket file itself is connectable by local clients. It is not under
+`/home/tendril`.
+
+The containerized Greenhouse (`docker compose --profile ui up -d`) reaches this
+socket through a read-only mount of `/var/lib/opentendril-transport` only. The
+browser talks only to the Greenhouse origin (`http://127.0.0.1:4173` by
+default). The Stem stays on loopback TCP when `TERROIR_HOST` is unset. See
+[GREENHOUSE.md](./GREENHOUSE.md).
 
 To expose the REST surface off-host, set `TERROIR_HOST=0.0.0.0` (or a specific
 interface) in the unit's environment — and once off-host, Pollinator data routes

@@ -1,31 +1,54 @@
 name: opentendril
 
+x-greenhouse: &greenhouse
+  build: ui
+  image: opentendril-ui
+  ports:
+    - "${UI_BIND:-127.0.0.1}:${UI_PORT:-4173}:8080"
+  read_only: true
+  tmpfs:
+    - /tmp
+    - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+  restart: unless-stopped
+
 services:
+  # Normal governed-local Greenhouse. Unix transport is pinned; STEM_TRANSPORT
+  # in the caller environment cannot switch this service to TCP.
   ui:
-    build: ui
+    <<: *greenhouse
     profiles: ["ui"]
-    ports:
-      - "${UI_BIND:-127.0.0.1}:${UI_PORT:-4173}:8080"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     environment:
-      STEM_HOST: ${STEM_HOST:-host.docker.internal}
+      STEM_TRANSPORT: unix
+      STEM_SOCKET: ${STEM_SOCKET:-/var/lib/opentendril-transport/stem.sock}
+      UI_BIND: ${UI_BIND:-127.0.0.1}
+    volumes:
+      - type: bind
+        source: /var/lib/opentendril-transport
+        target: /var/lib/opentendril-transport
+        read_only: true
+        bind:
+          create_host_path: false
+
+  # Explicit TCP Greenhouse. Selected only by --profile ui-tcp. No Unix
+  # transport bind: this service can start when
+  # /var/lib/opentendril-transport is absent.
+  ui-tcp:
+    <<: *greenhouse
+    profiles: ["ui-tcp"]
+    environment:
+      STEM_TRANSPORT: tcp
+      STEM_HOST: ${STEM_HOST:-}
       STEM_PORT: ${STEM_PORT:-8080}
       STEM_GATEWAY_PORT: ${STEM_GATEWAY_PORT:-9090}
       UI_BIND: ${UI_BIND:-127.0.0.1}
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    restart: unless-stopped
 
   test-go:
     image: golang:1.26

@@ -2,12 +2,13 @@
 #
 # Multi-stage build: Node compiles the static bundle, then a minimal
 # unprivileged nginx serves it AND reverse-proxies the Stem's API surface
-# (/v1, /health, /ws) to the *host* Stem — giving the browser a single
-# origin with no CORS anywhere. See ui/nginx/default.conf.template.
+# (/v1, /health, /ws) — giving the browser a single origin with no CORS
+# anywhere. See ui/nginx/default.conf.template.
 #
-# The Stem stays headless (#158): this image is a peer surface, never a
-# dependency. `docker compose --profile ui up` is the intended entrypoint —
-# no local Node/npm required.
+# Local default transport is the Stem Unix socket at
+# /var/lib/opentendril-transport/stem.sock. The Stem stays headless: this image is a
+# peer surface, never a dependency. `docker compose --profile ui up` is
+# the intended entrypoint — no local Node/npm required.
 
 # ---- Stage 1: build ui/dist ------------------------------------------------
 FROM node:22-alpine AS build
@@ -27,11 +28,14 @@ FROM nginxinc/nginx-unprivileged:1.27-alpine
 # The entrypoint renders /etc/nginx/templates/*.template with envsubst.
 # Restrict substitution to STEM_* so nginx's own $variables are untouched.
 ENV NGINX_ENVSUBST_FILTER="^STEM_"
-ENV STEM_HOST=host.docker.internal \
+ENV STEM_TRANSPORT=unix \
+    STEM_SOCKET=/var/lib/opentendril-transport/stem.sock \
+    STEM_HOST= \
     STEM_PORT=8080 \
     STEM_GATEWAY_PORT=9090
 
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --chmod=755 nginx/15-stem-transport.sh /docker-entrypoint.d/15-stem-transport.sh
 COPY --chmod=755 nginx/30-check-bind.sh /docker-entrypoint.d/30-check-bind.sh
 COPY --from=build /app/dist /usr/share/nginx/html
 

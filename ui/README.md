@@ -35,42 +35,71 @@ same-origin requests.
 
 ### Production — the containerized UI front (recommended)
 
-The supported deployment is the **optional, isolated, containerized UI front**
-(issue #160): a hardened nginx container that serves the built bundle **and**
+The supported local deployment is the **optional, isolated, containerized UI
+front**: a hardened nginx container that serves the built bundle **and**
 reverse-proxies `/v1`, `/health`, and `/ws` (with WebSocket upgrade) to the
-**host** Stem via `host.docker.internal`. The browser sees a **single origin**,
-so no CORS configuration exists anywhere and the Stem stays headless (#158).
-Docker is already a core dependency (Tendrils sprout into containerized
-substrates), so this adds no new requirement — and no local Node/npm is needed;
-the image builds the bundle itself in a multi-stage build.
+governed Stem through the local Unix socket at
+`/var/lib/opentendril-transport/stem.sock`.
+The browser sees a **single origin**, so no CORS configuration exists anywhere
+and the Stem stays headless. Docker is already a core dependency (Tendrils
+sprout into containerized substrates), so this adds no new requirement — and
+no local Node/npm is needed; the image builds the bundle itself in a
+multi-stage build.
 
 ```bash
 docker compose --profile ui up -d     # from the repo root
 # → http://127.0.0.1:4173
 ```
 
+Explicit TCP (only when the Stem is intentionally reachable by TCP) is a
+separate Compose profile. It does not mount
+`/var/lib/opentendril-transport` and can start on a host that has no local
+Stem socket:
+
+```bash
+STEM_HOST=stem.example docker compose --profile ui-tcp up -d
+```
+
+The local path is:
+
+```
+browser → 127.0.0.1:4173 → Greenhouse nginx → read-only /var/lib/opentendril-transport
+        → /var/lib/opentendril-transport/stem.sock → the Stem's authenticated mux
+```
+
+The Stem can stay bound to `127.0.0.1:8080` (`TERROIR_HOST` unset). The
+Greenhouse does not use host networking and does not reach the Stem through
+`host.docker.internal`.
+
 The service is **opt-in**: without `--profile ui` it never starts, and the
 system is 100% operable without it (CLI / MCP / OpenAPI are capability-parity
-peers, #159). Configuration knobs (all optional, via environment):
+peers). Configuration knobs (all optional, via environment):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `UI_BIND` | `127.0.0.1` | Host interface to publish on. Loopback-only by default; set `0.0.0.0` for LAN access. |
 | `UI_PORT` | `4173` | Host port for the UI front. |
-| `STEM_HOST` | `host.docker.internal` | Where the container finds the Stem. |
-| `STEM_PORT` | `8080` | The Stem's main API port. |
-| `STEM_GATEWAY_PORT` | `9090` | The dedicated `/ws` gateway listener; the proxy falls back to `STEM_PORT` automatically if it is down. |
+| `STEM_SOCKET` | `/var/lib/opentendril-transport/stem.sock` | Stem Unix socket used by `--profile ui`. |
+| `STEM_HOST` | required for `--profile ui-tcp` | Stem TCP host. Unused by `--profile ui`. |
+| `STEM_PORT` | `8080` | Stem TCP API port (`--profile ui-tcp`). |
+| `STEM_GATEWAY_PORT` | `9090` | Dedicated `/ws` gateway listener in TCP mode; the proxy falls back to `STEM_PORT` if it is down. |
 
 **Security posture:** the proxy adds no credentials and bypasses nothing — the
 operator's `Authorization: Bearer` key passes through untouched and the Stem's
 `withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
-are proxied; nothing else on the host is reachable. The container runs as a
-non-root user with a read-only root filesystem, all capabilities dropped, and
-`no-new-privileges`. Future server-side layers (BFF, auth, enterprise SSO, the
-#164 concierge) grow **inside this component** — never in the Stem.
+are proxied; nothing else on the host is reachable. `--profile ui` bind-mounts
+only `/var/lib/opentendril-transport`, read-only, and does not create that
+path if it is missing. `--profile ui-tcp` mounts no Unix transport directory.
+Neither profile mounts `/home/tendril`, Botanist keys, Pollinator credentials,
+grants, or the Stem executable. The container
+runs as a non-root user with a read-only root filesystem, all capabilities
+dropped, and `no-new-privileges`. Future server-side layers (BFF, auth,
+enterprise SSO, the concierge) grow **inside this component** — never in the
+Stem.
 
-With the container in front, the operator leaves the **Stem address** blank in
-onboarding (same origin) and enters only the operator API key.
+With the container in front, the operator opens `http://127.0.0.1:4173`,
+leaves the **Stem address** blank (same origin), and enters only the Botanist
+key. The browser never configures a filesystem socket.
 
 ### Manual static build (alternative)
 
