@@ -148,12 +148,13 @@ root-equivalent group makes every later stage cosmetic.
 Prerequisites: Go 1.24+ (on the build account only), Docker, Git, and an LLM —
 local [Ollama](https://ollama.ai) by default, or a cloud provider key.
 
-A governed installation uses two executables. They are not interchangeable.
+A governed installation that connects an MCP-speaking Pollinator uses two
+executables. They are not interchangeable.
 
 | Executable | Role |
 |---|---|
 | **`tendril`** | The full Stem/operator executable. It may construct and run a Stem. It is owned by the Stem principal and is not on any Pollinator-hosting account's PATH. |
-| **`tendril-mcp`** | The restricted MCP client/bridge. The ordinary Pollinator-hosting account may run it. It holds only that Pollinator's durable root, cannot construct a Stem, authenticates to the separately owned governed Stem, and receives only authority derived from that Stem. |
+| **`tendril-mcp`** | The restricted MCP client/bridge. The ordinary Pollinator-hosting account may run it. It holds that Pollinator's durable root, mints and caches short-lived access tokens derived from it, holds no Botanist or Stem credential or authority, cannot construct a Stem, authenticates to the separately owned governed Stem, and receives only authority derived from that Stem. |
 
 Stage 3 places `tendril` under the Stem principal. Stage 8 installs `tendril-mcp`
 for the ordinary account.
@@ -613,7 +614,8 @@ Credential lookup, first match wins:
 
 Startup fails closed when there is no credential, the credential file is unsafe,
 no Stem answers, ownership is not established, the answering Stem has the
-caller's UID, or the Stem refuses the root. Only then does MCP forwarding begin.
+caller's UID, or the Stem refuses the root. Only after all of those checks pass
+does MCP forwarding begin.
 
 Place the durable root issued in Stage 6 where that lookup will find it, mode
 `0600`, owned by the ordinary account. Then point an MCP-speaking Pollinator at

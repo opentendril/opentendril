@@ -314,7 +314,7 @@ Startup fails closed when:
 - the answering Stem has the caller's UID;
 - the Stem refuses the root.
 
-Only then does MCP forwarding begin.
+Only after all of those checks pass does MCP forwarding begin.
 
 ```json
 {
