@@ -287,10 +287,17 @@ func runServeCmd(ctx context.Context, args []string) {
 		Handler: mux,
 	}
 
+	// Optional local transport: the same authenticated mux, not a second
+	// authority. Failure here must not take the TCP Stem down.
+	localSock := startOptionalLocalSocket(mux, os.Getenv(EnvLocalSocket))
+
 	go func() {
 		<-ctx.Done()
 		log.Println("Shutting down API server...")
 		server.Shutdown(context.Background())
+		if err := localSock.Close(); err != nil {
+			log.Printf("⚠️ Failed to close local Stem socket: %v", err)
+		}
 		// Drain telemetry sinks, then release the history database.
 		bus.Shutdown()
 		if history != nil {
@@ -474,7 +481,8 @@ func scheduledRunFirer(coreSvc core.Core, sessions *session.Manager, triggersDir
 const EnvBotanistKey = "BOTANIST_KEY"
 
 // EnvTerroirHost names the bind address for the Stem's network habitat. One
-// name only; unset means loopback (127.0.0.1).
+// name only; unset means loopback (127.0.0.1). Off-host classification uses
+// this TCP bind only; an optional local Unix socket does not change it.
 const EnvTerroirHost = "TERROIR_HOST"
 
 // resolveServeAPIKey returns the Stem bearer from EnvBotanistKey, or "" when unset.
