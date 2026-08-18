@@ -15,6 +15,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/internal/mcpclient"
 )
 
 // `tendril hardiness` — what this Terroir can actually withstand.
@@ -142,7 +143,7 @@ func runHardinessCmd(ctx context.Context, args []string) {
 // escalate to its principal, and does not write its binary. It simply declines
 // to involve it — and nothing in the graded output would mention that.
 func coResidentStemObservation(ctx context.Context) string {
-	probe := probeStemOwner(ctx)
+	probe := mcpclient.ProbeOwner(ctx)
 	if !probe.Reached || probe.Owner == nil {
 		// Nothing answering, or answering without publishing an owner, does not
 		// establish a second principal. Silence beats a guess.

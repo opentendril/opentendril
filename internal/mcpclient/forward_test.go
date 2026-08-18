@@ -1,4 +1,4 @@
-package main
+package mcpclient
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestMCPForwarder(t *testing.T) {
+func TestForwarder(t *testing.T) {
 	var (
 		mintCount     int
 		v1Count       int
@@ -59,7 +59,7 @@ func TestMCPForwarder(t *testing.T) {
 		v1ReturnBytes = nil
 		v1Received = nil
 
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.BaseURL = server.URL
 
 		req := []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}`)
@@ -78,7 +78,7 @@ func TestMCPForwarder(t *testing.T) {
 		v1Count = 0
 		v1ReturnBytes = nil
 
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.BaseURL = server.URL
 
 		// Set token to expire in 30 seconds
@@ -100,7 +100,7 @@ func TestMCPForwarder(t *testing.T) {
 		mintCount = 0
 		v1Calls := 0
 
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.token = "initial-token"
 		f.expiresAt = time.Now().Add(1 * time.Hour) // won't naturally expire
 
@@ -148,7 +148,7 @@ func TestMCPForwarder(t *testing.T) {
 		mintCount = 0
 		v1Calls := 0
 
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.token = "initial-token"
 		f.expiresAt = time.Now().Add(1 * time.Hour)
 
@@ -197,7 +197,7 @@ func TestMCPForwarder(t *testing.T) {
 	})
 
 	t.Run("Unreachable Stem message", func(t *testing.T) {
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.BaseURL = "http://127.0.0.1:0" // Unreachable
 
 		req := []byte(`{"jsonrpc":"2.0","id":3}`)
@@ -209,7 +209,7 @@ func TestMCPForwarder(t *testing.T) {
 	})
 
 	t.Run("Refused credential message", func(t *testing.T) {
-		f := NewMCPForwarder("invalid-root")
+		f := NewForwarder("invalid-root")
 		f.BaseURL = server.URL
 
 		req := []byte(`{"jsonrpc":"2.0","id":4}`)
@@ -221,7 +221,7 @@ func TestMCPForwarder(t *testing.T) {
 	})
 
 	t.Run("Every failure path returns valid protocol frame carrying ID", func(t *testing.T) {
-		f := NewMCPForwarder("invalid-root")
+		f := NewForwarder("invalid-root")
 		f.BaseURL = server.URL
 
 		req := []byte(`{"jsonrpc":"2.0","id":5}`)
@@ -247,7 +247,7 @@ func TestMCPForwarder(t *testing.T) {
 	})
 
 	t.Run("No secret material appears in any output stream", func(t *testing.T) {
-		f := NewMCPForwarder("super-secret-root")
+		f := NewForwarder("super-secret-root")
 		f.BaseURL = server.URL
 		f.token = "super-secret-token"
 		f.expiresAt = time.Now().Add(1 * time.Hour)
@@ -288,7 +288,7 @@ func TestMCPForwarder(t *testing.T) {
 	})
 
 	t.Run("Large frame round-trips", func(t *testing.T) {
-		f := NewMCPForwarder("valid-root")
+		f := NewForwarder("valid-root")
 		f.BaseURL = server.URL
 
 		largeStr := strings.Repeat("a", 1024*1024*5) // 5MB

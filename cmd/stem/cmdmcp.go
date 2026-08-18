@@ -12,6 +12,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/internal/mcpclient"
 	"strings"
 )
 
@@ -30,7 +31,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 	// Intake the durable root credential if configured (consumed in slice 2).
 	// A malformed or over-permissive credential file is a startup failure, not
 	// a silent downgrade, so a user trying to configure one is told why it failed.
-	rootCred, credErr := loadMCPCredential()
+	rootCred, credErr := mcpclient.LoadCredential()
 	if credErr != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", credErr)
 		os.Exit(1)
@@ -46,11 +47,11 @@ func runMCPCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	var forwarder *MCPForwarder
+	var forwarder *mcpclient.Forwarder
 	var handler *receptors.MCPHandler
 
 	if decision.Mode == mcpModeForward {
-		forwarder = NewMCPForwarder(rootCred)
+		forwarder = mcpclient.NewForwarder(rootCred)
 
 		// Nothing below is constructed, so nothing below is announced. The Stem
 		// being forwarded to is the control plane for this connection: it loads
@@ -59,7 +60,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 		// built here would govern none of the forwarded frames, and describing
 		// one would assert an authorization this surface does not perform.
 		fmt.Fprintf(os.Stderr, "🔏 Delegation is governed by the Stem at %s: a presented credential derives its Pollen there. Local grants and %s do not affect this connection.\n",
-			resolveStemAddress(""), envPollen)
+			mcpclient.ResolveStemAddress(""), envPollen)
 	} else {
 		var release func()
 		handler, release = newInProcessMCPHandler(ctx)

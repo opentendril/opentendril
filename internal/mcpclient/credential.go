@@ -1,4 +1,4 @@
-package main
+package mcpclient
 
 import (
 	"fmt"
@@ -7,20 +7,24 @@ import (
 	"strings"
 )
 
-const envMCPCredential = "TENDRIL_MCP_CREDENTIAL"
-const envPollinatorCredential = "TENDRIL_POLLINATOR_CREDENTIAL"
+// EnvMCPCredential is the second-priority path to a durable Pollinator root.
+const EnvMCPCredential = "TENDRIL_MCP_CREDENTIAL"
 
-// loadMCPCredential reads a durable root credential. It checks TENDRIL_POLLINATOR_CREDENTIAL,
-// then TENDRIL_MCP_CREDENTIAL. If both are unset, it defaults to
-// ~/.config/tendril/pollinators/<pollen> (using TENDRIL_POLLEN).
-// If no path is found or the default path does not exist, it returns an empty string
-// and no error (the ordinary, unconfigured case). It refuses files that are
-// missing (if explicitly requested) or too permissive (any group or other permission),
-// returning a safe error that names the path and mode but never the secret.
-func loadMCPCredential() (string, error) {
-	path := strings.TrimSpace(os.Getenv(envPollinatorCredential))
+// EnvPollinatorCredential is the first-priority path to a durable Pollinator root.
+const EnvPollinatorCredential = "TENDRIL_POLLINATOR_CREDENTIAL"
+
+// LoadCredential reads a durable root credential. It checks
+// TENDRIL_POLLINATOR_CREDENTIAL, then TENDRIL_MCP_CREDENTIAL. If both are
+// unset, it defaults to ~/.config/tendril/pollinators/<pollen> (using
+// TENDRIL_POLLEN). If no path is found or the default path does not exist, it
+// returns an empty string and no error (the ordinary, unconfigured case). It
+// refuses files that are missing (if explicitly requested) or too permissive
+// (any group or other permission), returning a safe error that names the path
+// and mode but never the secret.
+func LoadCredential() (string, error) {
+	path := strings.TrimSpace(os.Getenv(EnvPollinatorCredential))
 	if path == "" {
-		path = strings.TrimSpace(os.Getenv(envMCPCredential))
+		path = strings.TrimSpace(os.Getenv(EnvMCPCredential))
 	}
 
 	isDefault := false
