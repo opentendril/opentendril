@@ -126,7 +126,9 @@ Add the following configuration:
 
 Once connected, the client can drive the Stem's governed capabilities directly.
 Governed commands declared by `core.CapabilityNames()` are projected across
-CLI, REST, and MCP and mechanically parity-checked.
+CLI, REST, and MCP and mechanically parity-checked. MCP publishes
+lower-camelCase transport identifiers (`gitStatus`) that map one-to-one back
+to those canonical names (`git.status`).
 
 Explicitly, views (such as `sprout.watch`) and control-plane operations are distinct
 and are not part of governed command parity.

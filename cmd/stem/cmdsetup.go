@@ -111,7 +111,7 @@ func runSetupSubstrateCmd() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintln(os.Stderr, "Use the default-workspace Substrate when calling sproutTendril or runSequence.")
+	fmt.Fprintln(os.Stderr, "Use the default-workspace Substrate when calling sproutGrow or sequenceGrow.")
 }
 
 func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string, error) {
@@ -196,7 +196,7 @@ func substrateMCPConfigSnippet() setupMCPConfigSnippet {
 		MCPServers: map[string]setupMCPServer{
 			"opentendril": {
 				Command: "tendril",
-				Args:    []string{"serve", "mcp", "stdio"},
+				Args:    []string{"mcp"},
 			},
 		},
 	}

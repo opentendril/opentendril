@@ -113,6 +113,20 @@ synthesizes a file and invokes a governed capability.
 
 ## 3. Interface Parity
 
+`core.CapabilityNames()` is the canonical governed capability identity. Grant
+operation-classes stay those dotted names. REST and CLI continue to use
+canonical identity as applicable. The MCP receptor translates transport only:
+it publishes one deterministic lower-camelCase primary identifier per Core
+capability, and that identifier maps one-to-one back to the canonical name.
+
+Examples:
+
+| Canonical Core / grant operation-class | Primary MCP tool |
+|---|---|
+| `git.status` | `gitStatus` |
+| `sprout.grow` | `sproutGrow` |
+| `git.branch.list` | `gitBranchList` |
+
 The governed command capability set is independently checked across four
 architectural surfaces — Core, REST, MCP, and CLI — using five independently
 derived observations (MCP is checked two ways):
@@ -120,28 +134,38 @@ derived observations (MCP is checked two ways):
 1. **Core registry** — `core.CapabilityNames()`
 2. **REST adapter** — capabilities from each receptor handler's `Capabilities()`
    method, reflecting what is actually mounted on the HTTP mux
-3. **MCP adapter (declared)** — `mcp.CoreCapabilityNames()`
-4. **MCP adapter (live)** — tool names extracted from a real `tools/list`
-   JSON-RPC response
+3. **MCP adapter (declared)** — `mcp.CoreCapabilityNames()`, the canonical set
+   the adapter projects
+4. **MCP adapter (live)** — primary `tools/list` identifiers resolved through
+   the adapter projection table back to `CapabilityNames()`. Compatibility
+   aliases are not counted as extra governed capabilities.
 5. **CLI adapter** — subcommand names collected from each CLI registration
    function
 
-`TestInterfaceParityCoverage` in `cmd/stem/parity_test.go` asserts set equality
-across all of these. It goes red the moment:
+`TestInterfaceParityCoverage` in `cmd/stem/parity_test.go` asserts REST and CLI
+set equality against the canonical names, and MCP complete/unique projection
+against that same set. It goes red the moment:
 
 - a governed capability is added to one surface but not the others, or
 - a Core capability exists that an adapter failed to project, or
-- an adapter exposes a governed capability that Core does not declare.
+- an adapter exposes a governed capability that Core does not declare, or
+- a listed primary MCP identifier does not map back to exactly one canonical
+  Core capability.
+
+MCP parity is not literal string equality of tool name and Core name.
+Authorization and grant lookup always receive the canonical operation-class
+(`git.status`), never the transport identifier (`gitStatus`).
 
 Behavioral parity is also tested: `TestBehavioralParity_*` tests assert that
 equivalent REST, MCP, and CLI requests decode to identical typed inputs and call
 the same Core methods exactly once, proving adapters carry zero independent
-business logic.
+business logic. MCP behavioral arms invoke the primary identifier.
 
 **What parity does not cover.** Parity applies only to governed commands from
 `CapabilityNames()`. It does not apply to views (`sprout.watch`), control-plane
-operations, or legacy/non-Core transport tools that may exist outside the
-governed set.
+operations, or compatibility aliases that may exist on MCP outside the
+governed set. Those aliases resolve to existing canonical capabilities and
+carry no independent authority.
 
 ---
 

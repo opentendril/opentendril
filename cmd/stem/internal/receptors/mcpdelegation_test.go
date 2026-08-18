@@ -49,6 +49,10 @@ func newMCPDelegationTestHandler(t *testing.T) (*MCPHandler, *eventbus.Bus, *ato
 				executed.Add(1)
 				return core.GitCommitResult{Status: "committed", CommitHash: "abc123"}, nil
 			},
+			Status: func(ctx context.Context, spec core.GitStatusSpec) (core.GitStatusResult, error) {
+				executed.Add(1)
+				return core.GitStatusResult{Branch: "main", Clean: true, CommitAllowed: true}, nil
+			},
 		})
 
 	bus := eventbus.New()
@@ -106,13 +110,15 @@ func mcpCallTool(t *testing.T, handler *MCPHandler, name string, args map[string
 }
 
 // delegatedToolCalls enumerates every MCP path that reaches a delegated
-// operation-class: the three canonical capability tools plus the deprecated
-// sproutTendril alias (which reaches sprout.grow).
+// operation-class: canonical dotted names, primary projections, and the
+// deprecated sproutTendril alias (which reaches sprout.grow).
 func delegatedToolCalls() map[string]map[string]any {
 	return map[string]map[string]any{
 		core.CapSproutGrow: {"transcript": "grow", "substrate": "core"},
 		core.CapStomaPass:  {"substrate": "core", "command": []string{"gofmt", "-l", "."}},
 		core.CapGitCommit:  {"substrate": "core", "message": "delegated commit"},
+		"sproutGrow":       {"transcript": "grow", "substrate": "core"},
+		"gitCommit":        {"substrate": "core", "message": "delegated commit"},
 		"sproutTendril":    {"transcript": "grow", "substrate": "core"},
 	}
 }
@@ -379,5 +385,118 @@ func TestMCPStomaPassIgnoresArgumentEgress(t *testing.T) {
 	}
 	if len(stomaSpec.Egress) != 0 {
 		t.Fatalf("run egress = %v, want empty (deny-all): tool arguments must never widen egress", stomaSpec.Egress)
+	}
+}
+
+// TestMCPPrimaryNameAuthorizesAsCanonicalOperationClass proves a primary MCP
+// identifier authorizes as the canonical operation-class, never as the
+// transport spelling.
+func TestMCPPrimaryNameAuthorizesAsCanonicalOperationClass(t *testing.T) {
+	cases := []struct {
+		tool      string
+		canonical string
+		args      map[string]any
+	}{
+		{tool: "sproutGrow", canonical: core.CapSproutGrow, args: map[string]any{"transcript": "grow", "substrate": "core"}},
+		{tool: "gitCommit", canonical: core.CapGitCommit, args: map[string]any{"substrate": "core", "message": "delegated commit"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.tool, func(t *testing.T) {
+			handler, bus, executed, _ := newMCPDelegationTestHandler(t)
+			gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
+			handler = handler.WithDelegation(gate, "mcp-Pollinator")
+
+			text, isError := mcpCallTool(t, handler, tc.tool, tc.args)
+			if isError {
+				t.Fatalf("%s with a covering canonical grant was denied: %q", tc.tool, text)
+			}
+			if executed.Load() != 1 {
+				t.Fatalf("%s executed %d run(s), want 1", tc.tool, executed.Load())
+			}
+			event, found := lastDelegationEvent(bus)
+			if !found {
+				t.Fatal("authorized primary invocation left no audit event")
+			}
+			if event.Type != eventbus.EventDelegationAuthorized {
+				t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationAuthorized)
+			}
+			if event.Data["operationClass"] != tc.canonical {
+				t.Fatalf("audit event operation-class = %v, want %s", event.Data["operationClass"], tc.canonical)
+			}
+			if event.Data["operationClass"] == tc.tool {
+				t.Fatalf("authorization used the transport name %q", tc.tool)
+			}
+		})
+	}
+}
+
+// TestMCPPrimaryNameDeniedWithoutCanonicalGrant proves a transport identifier
+// cannot bypass a grant: gitStatus is denied when the grant does not contain
+// git.status, and the denial is recorded against the canonical class.
+func TestMCPPrimaryNameDeniedWithoutCanonicalGrant(t *testing.T) {
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
+	grant := mcpDelegationGrant()
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{grant}), Bus: bus}
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
+
+	text, isError := mcpCallTool(t, handler, "gitStatus", map[string]any{
+		"substrate": "core",
+	})
+	if !isError {
+		t.Fatalf("gitStatus without a git.status grant was not denied: %q", text)
+	}
+	if !strings.Contains(text, "delegation denied") {
+		t.Fatalf("gitStatus denial text = %q, want a delegation-denied explanation", text)
+	}
+	if executed.Load() != 0 {
+		t.Fatal("gitStatus without a git.status grant still executed")
+	}
+
+	event, found := lastDelegationEvent(bus)
+	if !found {
+		t.Fatal("denied gitStatus left no audit event")
+	}
+	if event.Type != eventbus.EventDelegationDenied {
+		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationDenied)
+	}
+	if event.Data["operationClass"] != core.CapGitStatus {
+		t.Fatalf("audit event operation-class = %v, want %s", event.Data["operationClass"], core.CapGitStatus)
+	}
+}
+
+// TestMCPCallRejectsUnapprovedTransportNames proves tools/call fails closed on
+// hyphenated, underscored, case-folded, and unknown names.
+func TestMCPCallRejectsUnapprovedTransportNames(t *testing.T) {
+	handler, _, executed, _ := newMCPDelegationTestHandler(t)
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: nil}
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
+
+	for _, name := range []string{"git_status", "git-status", "GitStatus", "git.status.extra", "noSuchTool"} {
+		payload, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params":  map[string]any{"name": name, "arguments": map[string]any{"substrate": "core"}},
+		})
+		if err != nil {
+			t.Fatalf("marshal tools/call %s: %v", name, err)
+		}
+		var response struct {
+			Error *mcpError `json:"error"`
+		}
+		if err := json.Unmarshal(handler.ProcessMCPMessage(payload), &response); err != nil {
+			t.Fatalf("decode tools/call %s response: %v", name, err)
+		}
+		if response.Error == nil {
+			t.Errorf("tools/call %s succeeded, want Tool not found", name)
+			continue
+		}
+		if response.Error.Code != -32601 {
+			t.Errorf("tools/call %s error code = %d, want -32601", name, response.Error.Code)
+		}
+	}
+	if executed.Load() != 0 {
+		t.Fatalf("unapproved names executed %d run(s), want 0", executed.Load())
 	}
 }

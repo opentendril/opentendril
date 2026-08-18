@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func TestSubstrateMCPConfigSnippet(t *testing.T) {
+	snippet := substrateMCPConfigSnippet()
+	server, ok := snippet.MCPServers["opentendril"]
+	if !ok {
+		t.Fatal("snippet missing opentendril server")
+	}
+	if server.Command != "tendril" {
+		t.Fatalf("command = %q, want tendril", server.Command)
+	}
+	if len(server.Args) != 1 || server.Args[0] != "mcp" {
+		t.Fatalf("args = %v, want [mcp]", server.Args)
+	}
+	for _, arg := range server.Args {
+		if arg == "serve" || arg == "stdio" {
+			t.Fatalf("single-user snippet still advertises tendril serve mcp stdio: %v", server.Args)
+		}
+	}
+}
+
 func TestFormatAgentSubstratesYAML(t *testing.T) {
 	t.Run("pat uses compact scalar form", func(t *testing.T) {
 		out := formatSubstratesYAML(substrateChoices{

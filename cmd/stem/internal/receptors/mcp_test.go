@@ -252,6 +252,52 @@ func chdirTempDir(t *testing.T) string {
 	return dir
 }
 
+func TestMCPToolsListPublishesPrimaryProjection(t *testing.T) {
+	handler, _, _, _ := newMCPDelegationTestHandler(t)
+
+	resp := handler.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	var parsed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		t.Fatalf("parse tools/list: %v", err)
+	}
+
+	listed := make(map[string]int, len(parsed.Result.Tools))
+	for _, tool := range parsed.Result.Tools {
+		listed[tool.Name]++
+	}
+
+	for _, canonical := range core.CapabilityNames() {
+		primary := MCPToolName(canonical)
+		if listed[primary] != 1 {
+			t.Errorf("tools/list primary %q (for %q) listed %d times, want 1", primary, canonical, listed[primary])
+		}
+		if listed[canonical] != 0 {
+			t.Errorf("tools/list published canonical dotted name %q as an extra tool", canonical)
+		}
+	}
+
+	aliases := []string{
+		"runSequence", "sproutTendril", "createGenotype", "viewGenome",
+		"reduceGenome", "injectPlasmid", "graftSubstrate", "promotePR",
+	}
+	for _, alias := range aliases {
+		if listed[alias] != 1 {
+			t.Errorf("tools/list compatibility alias %q listed %d times, want 1", alias, listed[alias])
+		}
+	}
+	for _, rejected := range []string{"git_status", "git-status", "GitStatus"} {
+		if listed[rejected] != 0 {
+			t.Errorf("tools/list published unapproved name %q", rejected)
+		}
+	}
+}
+
 func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 	t.Helper()
 
