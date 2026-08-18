@@ -79,6 +79,7 @@ func TestProbeOwner_NothingAnswers(t *testing.T) {
 
 func TestProbeOwner_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// dwell: keep the handler open beyond ProbeOwner's 2-second timeout
 		time.Sleep(3 * time.Second)
 	}))
 	t.Cleanup(server.Close)
