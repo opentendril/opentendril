@@ -539,6 +539,23 @@ else
   pass "TCP mode without STEM_HOST fails"
 fi
 
+echo "== governed systemd runtime-directory contract =="
+
+guide="${root}/docs/GUIDE-INSTALL.md"
+assert_file_contains "$guide" "RuntimeDirectory=opentendril" \
+  "governed unit sets RuntimeDirectory=opentendril"
+assert_file_contains "$guide" "RuntimeDirectoryMode=0755" \
+  "governed unit sets RuntimeDirectoryMode=0755"
+assert_file_contains "$guide" "RuntimeDirectoryPreserve=yes" \
+  "governed unit preserves the runtime directory across stop/start"
+assert_file_contains "$guide" "Environment=TENDRIL_LOCAL_SOCKET=/run/opentendril/stem.sock" \
+  "governed unit sets TENDRIL_LOCAL_SOCKET"
+if grep -Fq "RuntimeDirectoryPreserve=restart" "$guide"; then
+  fail "governed unit uses Preserve=yes, not restart-only"
+else
+  pass "governed unit uses Preserve=yes, not restart-only"
+fi
+
 echo "== invalid transport is rejected =="
 if STEM_TRANSPORT=magic STEM_UPSTREAMS_CONF="${workdir}/magic.conf" \
     sh "$transport_sh" >/dev/null 2>&1; then

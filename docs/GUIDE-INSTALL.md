@@ -515,6 +515,9 @@ Environment=XDG_RUNTIME_DIR=/run/user/1001
 # Owned by the Stem principal, mode 0755 (not writable by other users).
 RuntimeDirectory=opentendril
 RuntimeDirectoryMode=0755
+# Keep the directory across stop/start so a Greenhouse bind mount still
+# sees a replacement stem.sock. /run itself remains volatile across reboot.
+RuntimeDirectoryPreserve=yes
 Environment=TENDRIL_LOCAL_SOCKET=/run/opentendril/stem.sock
 ExecStart=/home/tendril/.local/bin/tendril serve
 Restart=on-failure
@@ -559,9 +562,13 @@ only: connecting to it grants no extra trust. Botanist bearer checks and
 Pollinator credential / access-token semantics are unchanged.
 
 `/run/opentendril` is a systemd `RuntimeDirectory` owned by the Stem principal,
-mode `0755` (other users cannot replace the socket pathname). The socket file
-itself is connectable by local clients. It is not under `/home/tendril` and
-holds no credentials, grants, or other control-plane files.
+mode `0755` (other users cannot replace the socket pathname).
+`RuntimeDirectoryPreserve=yes` keeps that directory for the service lifetime
+across stop/start and automatic restart, so a local Greenhouse bind mount
+continues to observe a replacement `stem.sock` without a container restart.
+The directory is still under `/run` and is not preserved across reboot. The
+socket file itself is connectable by local clients. It is not under
+`/home/tendril` and holds no credentials, grants, or other control-plane files.
 
 The containerized Greenhouse (`docker compose --profile ui up -d`) reaches this
 socket through a read-only mount of `/run/opentendril`. The browser talks only
