@@ -1,11 +1,12 @@
 # Declared phony so the committed root `stem`/`tendril` binaries don't make
 # these targets look "up to date" and get skipped (which broke `make install`).
-.PHONY: stem install stem-all build up down health test-stem test-all hooks hygiene clean check-all help
+.PHONY: stem install mcp-client install-mcp-client stem-all build up down health test-stem test-all hooks hygiene clean check-all help
 
 # --- Stem Binaries ---
 STEM_VERSION := 0.2.0
 STEM_DIR := cmd/stem
 DIST_DIR := cmd/stem/dist
+MCP_CLIENT_DIR := cmd/tendril-mcp
 
 stem: ## Build the tendril binary (does not install it)
 	@echo "🌱 Building the Stem for $$(go env GOOS)/$$(go env GOARCH)..."
@@ -28,6 +29,25 @@ install: stem ## Build, then install tendril to your own ~/.local/bin
 	@echo "✅ Installed: ~/.local/bin/tendril"
 	@echo "   This is a SINGLE-USER install — the Stem will run as you."
 	@echo "   Run 'tendril hardiness' to see what that means for the delegation boundary."
+	@echo "   Ensure ~/.local/bin is on your PATH."
+
+mcp-client: ## Build the restricted tendril-mcp client (does not install it)
+	@echo "🌱 Building the MCP client for $$(go env GOOS)/$$(go env GOARCH)..."
+	@cd $(MCP_CLIENT_DIR) && go build -ldflags="-s -w" -o tendril-mcp .
+	@echo ""
+	@echo "✅ Built: $(MCP_CLIENT_DIR)/tendril-mcp"
+	@echo "   Nothing has been installed. This is the restricted MCP client only."
+	@echo "   It cannot construct a Stem. To put it on an ordinary account's PATH:"
+	@echo ""
+	@echo "     make install-mcp-client"
+	@echo ""
+
+install-mcp-client: mcp-client ## Build, then install only tendril-mcp to your own ~/.local/bin
+	@mkdir -p ~/.local/bin
+	@mv $(MCP_CLIENT_DIR)/tendril-mcp ~/.local/bin/tendril-mcp
+	@echo "✅ Installed: ~/.local/bin/tendril-mcp"
+	@echo "   This installs ONLY the restricted MCP client."
+	@echo "   It does not install, copy, or expose the full tendril Stem binary."
 	@echo "   Ensure ~/.local/bin is on your PATH."
 
 stem-all: ## Cross-compile Stem for linux and macOS
@@ -73,10 +93,10 @@ check-all: ## Full pre-merge gate: clean build + all tests + source hygiene (see
 	$(MAKE) hygiene
 
 clean: ## Remove build artifacts
-	rm -rf $(DIST_DIR) cmd/stem/tendril
+	rm -rf $(DIST_DIR) cmd/stem/tendril cmd/tendril-mcp/tendril-mcp
 	docker compose down -v --remove-orphans
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
 .DEFAULT_GOAL := help
