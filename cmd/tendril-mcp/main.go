@@ -20,7 +20,7 @@ func main() {
 }
 
 // run loads a durable Pollinator root, refuses to proceed unless a separately
-// owned governed Stem answers, then forwards stdio MCP frames to that Stem.
+// owned governed Stem accepts it, then forwards stdio MCP frames to that Stem.
 func run(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	root, err := mcpclient.LoadCredential()
 	if err != nil {
@@ -43,6 +43,9 @@ func run(ctx context.Context, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	forwarder := mcpclient.NewForwarder(root)
+	if err := forwarder.Preflight(); err != nil {
+		return err
+	}
 	fmt.Fprintf(errOut, "forwarding to the governed Stem at %s; authorization stays there\n", probe.Address)
 
 	scanner := bufio.NewScanner(in)

@@ -95,6 +95,14 @@ func (f *Forwarder) ensureToken() (string, error) {
 	return f.token, nil
 }
 
+// Preflight presents the durable root to the Stem and caches the minted
+// short-lived access token. It does not send an MCP /v1 frame. A later
+// Forward reuses the cached token until it is near expiry.
+func (f *Forwarder) Preflight() error {
+	_, err := f.ensureToken()
+	return err
+}
+
 // Forward sends one MCP request frame to the Stem and returns the response
 // bytes, or a protocol-shaped error frame. A 401 causes exactly one remint
 // and one retry.

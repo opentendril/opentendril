@@ -255,7 +255,10 @@ func TestValidCredentialSeparatelyOwnedStemForwardsMCP(t *testing.T) {
 		t.Fatalf("tools/list missing tool name: %s", lines[1])
 	}
 
-	_, _, v1N, bodies, v1Auths, _ := traffic.snapshot()
+	_, mintN, v1N, bodies, v1Auths, _ := traffic.snapshot()
+	if mintN != 1 {
+		t.Fatalf("token mint calls = %d, want 1 (startup preflight caches the token)", mintN)
+	}
 	if v1N != 2 {
 		t.Fatalf("/v1 calls = %d, want 2", v1N)
 	}
@@ -400,6 +403,38 @@ func TestUnsafeCredentialFailsClosed(t *testing.T) {
 	_, mintN, v1N, _, _, _ := traffic.snapshot()
 	if mintN != 0 || v1N != 0 {
 		t.Fatalf("forwarding started: mint=%d v1=%d", mintN, v1N)
+	}
+}
+
+func TestRejectedCredentialFailsAtStartup(t *testing.T) {
+	secret := "tendril_refresh_MUST_NOT_LEAK_rejected"
+	setDurableCredential(t, secret)
+	owner := otherOwner()
+	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "accepted-root"})
+
+	stdout, stderr, err := runStdio(t, context.Background(), initFrame+"\n")
+	if err == nil {
+		t.Fatal("expected fail-closed when the Stem refuses the durable root")
+	}
+	if stdout != "" {
+		t.Fatalf("expected empty stdout, got %q", stdout)
+	}
+	if strings.Contains(stderr, "forwarding to the governed Stem") {
+		t.Fatalf("forwarding-ready message emitted before authentication: %q", stderr)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "the Stem refused you") {
+		t.Fatalf("error must name the credential refusal, got %v", err)
+	}
+	if strings.Contains(msg, secret) || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
+		t.Fatal("durable root leaked into error, stdout, or stderr")
+	}
+	_, mintN, v1N, _, _, _ := traffic.snapshot()
+	if mintN == 0 {
+		t.Fatal("startup must present the durable root to the Stem")
+	}
+	if v1N != 0 {
+		t.Fatalf("startup authentication must not send /v1, got %d", v1N)
 	}
 }
 
