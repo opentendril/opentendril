@@ -8,37 +8,37 @@ import (
 )
 
 // lockedPrimaryMCPNames is the authoritative current projection table: one
-// primary underscore identifier per core.CapabilityNames() entry.
+// primary lower-camelCase identifier per core.CapabilityNames() entry.
 var lockedPrimaryMCPNames = map[string]string{
-	"phytomer.create":   "phytomer_create",
-	"phytomer.list":     "phytomer_list",
-	"phytomer.get":      "phytomer_get",
-	"phytomer.update":   "phytomer_update",
-	"phytomer.delete":   "phytomer_delete",
-	"phytomer.history":  "phytomer_history",
-	"genome.view":       "genome_view",
-	"genome.reduce":     "genome_reduce",
-	"genome.evolve":     "genome_evolve",
-	"genotype.create":   "genotype_create",
-	"plasmid.list":      "plasmid_list",
-	"plasmid.inject":    "plasmid_inject",
-	"mesh.graft":        "mesh_graft",
-	"mesh.promote":      "mesh_promote",
-	"mesh.trait.list":   "mesh_trait_list",
-	"mesh.trait.accept": "mesh_trait_accept",
-	"mesh.trait.reject": "mesh_trait_reject",
-	"sequence.list":     "sequence_list",
-	"sequence.grow":     "sequence_grow",
-	"sprout.grow":       "sprout_grow",
-	"stoma.pass":        "stoma_pass",
-	"seed.grow":         "seed_grow",
-	"git.commit":        "git_commit",
-	"git.push":          "git_push",
-	"git.pr":            "git_pr",
-	"git.branch":        "git_branch",
-	"git.status":        "git_status",
-	"git.branch.list":   "git_branch_list",
-	"git.prune":         "git_prune",
+	"phytomer.create":   "phytomerCreate",
+	"phytomer.list":     "phytomerList",
+	"phytomer.get":      "phytomerGet",
+	"phytomer.update":   "phytomerUpdate",
+	"phytomer.delete":   "phytomerDelete",
+	"phytomer.history":  "phytomerHistory",
+	"genome.view":       "genomeView",
+	"genome.reduce":     "genomeReduce",
+	"genome.evolve":     "genomeEvolve",
+	"genotype.create":   "genotypeCreate",
+	"plasmid.list":      "plasmidList",
+	"plasmid.inject":    "plasmidInject",
+	"mesh.graft":        "meshGraft",
+	"mesh.promote":      "meshPromote",
+	"mesh.trait.list":   "meshTraitList",
+	"mesh.trait.accept": "meshTraitAccept",
+	"mesh.trait.reject": "meshTraitReject",
+	"sequence.list":     "sequenceList",
+	"sequence.grow":     "sequenceGrow",
+	"sprout.grow":       "sproutGrow",
+	"stoma.pass":        "stomaPass",
+	"seed.grow":         "seedGrow",
+	"git.commit":        "gitCommit",
+	"git.push":          "gitPush",
+	"git.pr":            "gitPr",
+	"git.branch":        "gitBranch",
+	"git.status":        "gitStatus",
+	"git.branch.list":   "gitBranchList",
+	"git.prune":         "gitPrune",
 }
 
 var lockedCompatibilityAliases = map[string]string{
@@ -139,6 +139,7 @@ func TestResolveMCPToolNameRejectsUnknown(t *testing.T) {
 	rejected := []string{
 		"",
 		"git-status",
+		"git_status",
 		"GitStatus",
 		"git.status.extra",
 		"GIT_STATUS",
@@ -150,12 +151,17 @@ func TestResolveMCPToolNameRejectsUnknown(t *testing.T) {
 		"status",
 		" git.status",
 		"git.status ",
+		" gitStatus",
+		"gitStatus ",
 		"git_status ",
 		"unknown_tool",
 		"sprout.tendril",
+		"sprout_grow",
 		"run_sequence",
 		"RunSequence",
 		"GIT.STATUS",
+		"mesh_trait_list",
+		"sequence_grow",
 	}
 	for _, name := range rejected {
 		if got, ok := ResolveMCPToolName(name); ok {
@@ -164,18 +170,28 @@ func TestResolveMCPToolNameRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestResolveMCPToolNameDoesNotInvertUnderscores(t *testing.T) {
-	canonicals := []string{"foo_bar.baz"}
-	got, ok := resolveMCPToolNameAgainst("foo_bar_baz", canonicals, nil)
-	if !ok || got != "foo_bar.baz" {
-		t.Fatalf("Resolve(%q) = (%q, %v), want (%q, true)", "foo_bar_baz", got, ok, "foo_bar.baz")
+func TestResolveMCPToolNameDoesNotReverseCamelCase(t *testing.T) {
+	canonicals := []string{"mesh.trait.list"}
+	got, ok := resolveMCPToolNameAgainst("meshTraitList", canonicals, nil)
+	if !ok || got != "mesh.trait.list" {
+		t.Fatalf("Resolve(%q) = (%q, %v), want (%q, true)", "meshTraitList", got, ok, "mesh.trait.list")
 	}
-	inverted := strings.ReplaceAll("foo_bar_baz", "_", ".")
-	if inverted == got {
-		t.Fatalf("resolution inverted '_' to produce %q", got)
+
+	// Heuristic reverse-camelCase of meshTraitList could invent these
+	// spellings. They must not resolve unless they are themselves a
+	// canonical name or a primary projection in the supplied set.
+	invented := []string{
+		"mesh.traitList",
+		"meshTrait.list",
+		"MeshTraitList",
+		"meshtraitlist",
+		"mesh_trait_list",
+		"mesh-trait-list",
 	}
-	if invertedGot, invertedOK := resolveMCPToolNameAgainst(inverted, canonicals, nil); invertedOK {
-		t.Fatalf("mechanical inversion %q resolved to %q", inverted, invertedGot)
+	for _, name := range invented {
+		if invertedGot, invertedOK := resolveMCPToolNameAgainst(name, canonicals, nil); invertedOK {
+			t.Errorf("heuristic reverse %q resolved to %q", name, invertedGot)
+		}
 	}
 }
 
@@ -193,20 +209,20 @@ func TestMCPIdentifierAcceptedNamesAreUnique(t *testing.T) {
 }
 
 func TestMCPIdentifierFutureProjectionCollision(t *testing.T) {
-	canonicals := []string{"foo.bar_baz", "foo_bar.baz"}
-	if MCPToolName(canonicals[0]) != "foo_bar_baz" || MCPToolName(canonicals[1]) != "foo_bar_baz" {
+	canonicals := []string{"foo.bar.baz", "fooBar.baz"}
+	if MCPToolName(canonicals[0]) != "fooBarBaz" || MCPToolName(canonicals[1]) != "fooBarBaz" {
 		t.Fatalf("fixture does not collide: %q %q", MCPToolName(canonicals[0]), MCPToolName(canonicals[1]))
 	}
 	if _, err := mcpNameBindings(canonicals, nil); err == nil {
-		t.Fatal("expected projection collision for foo.bar_baz and foo_bar.baz")
+		t.Fatal("expected projection collision for foo.bar.baz and fooBar.baz")
 	}
 }
 
 func TestMCPIdentifierAliasCollision(t *testing.T) {
 	canonicals := []string{core.CapGitStatus, core.CapSproutGrow}
-	aliases := map[string]string{"git_status": core.CapSproutGrow}
+	aliases := map[string]string{"gitStatus": core.CapSproutGrow}
 	if _, err := mcpNameBindings(canonicals, aliases); err == nil {
-		t.Fatal("expected alias collision: git_status must not resolve to both git.status and sprout.grow")
+		t.Fatal("expected alias collision: gitStatus must not resolve to both git.status and sprout.grow")
 	}
 }
 
@@ -216,17 +232,17 @@ func TestMCPIdentifierAllowsUnderscoreInCanonical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical name containing '_' was rejected: %v", err)
 	}
-	if got := bindings["foo_bar_baz"]; got != "foo_bar.baz" {
-		t.Fatalf("foo_bar_baz -> %q, want foo_bar.baz", got)
+	if got := bindings["foo_barBaz"]; got != "foo_bar.baz" {
+		t.Fatalf("foo_barBaz -> %q, want foo_bar.baz", got)
 	}
-	if got := MCPToolName("foo_bar.baz"); got != "foo_bar_baz" {
-		t.Fatalf("MCPToolName(foo_bar.baz) = %q, want foo_bar_baz", got)
+	if got := MCPToolName("foo_bar.baz"); got != "foo_barBaz" {
+		t.Fatalf("MCPToolName(foo_bar.baz) = %q, want foo_barBaz", got)
 	}
 }
 
 func TestMCPIdentifierSameCapabilityOverlap(t *testing.T) {
-	canonicals := []string{"seed_grow"}
-	aliases := map[string]string{"seed_grow": "seed_grow"}
+	canonicals := []string{core.CapSproutGrow}
+	aliases := map[string]string{"sproutGrow": core.CapSproutGrow}
 	if _, err := mcpNameBindings(canonicals, aliases); err != nil {
 		t.Fatalf("same-capability alias/primary/canonical overlap rejected: %v", err)
 	}

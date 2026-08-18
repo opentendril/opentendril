@@ -3,6 +3,8 @@ package receptors
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
@@ -22,24 +24,46 @@ var mcpCompatibilityAliases = map[string]string{
 }
 
 // MCPToolName returns the primary Pollinator-visible MCP identifier for a
-// canonical Core capability name by replacing every "." with "_".
+// canonical Core capability name: split on ".", keep the first segment,
+// capitalize the first character of each following segment, and concatenate
+// with no delimiter.
+//
+//	git.status      -> gitStatus
+//	git.branch.list -> gitBranchList
 //
 // Uniqueness is a property of the capability set, not of this transform: two
 // different canonical names must never share one primary identifier.
 func MCPToolName(canonical string) string {
-	return strings.ReplaceAll(canonical, ".", "_")
+	parts := strings.Split(canonical, ".")
+	if len(parts) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(parts[0])
+	for _, part := range parts[1:] {
+		b.WriteString(capitalizeFirst(part))
+	}
+	return b.String()
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	r, size := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[size:]
 }
 
 // ResolveMCPToolName maps an inbound MCP tool name to exactly one canonical
 // Core capability. Accepted families, in order:
 //
 //  1. deprecated compatibility aliases
-//  2. primary underscore projections of core.CapabilityNames()
+//  2. primary camelCase projections of core.CapabilityNames()
 //  3. the canonical capability identifiers themselves
 //
-// Unknown, empty, hyphenated, and case-folded names fail closed. Primary
-// names are looked up from the live CapabilityNames() projection set; they
-// are not recovered by replacing "_" with ".".
+// Unknown, empty, hyphenated, underscored, and case-folded names fail closed.
+// Primary names are looked up from the live CapabilityNames() projection set;
+// they are not recovered by reversing camelCase or by replacing "_" with ".".
 func ResolveMCPToolName(name string) (string, bool) {
 	return resolveMCPToolNameAgainst(name, core.CapabilityNames(), mcpCompatibilityAliases)
 }
