@@ -17,17 +17,13 @@ exists to make possible.
 Substrate at the same time, without coordinating their timing, and each task
 works independently and arrives as its own Git-reviewable Fruit.**
 
-
-The previous objective established that one unattended bounded run can work
-without Botanist intervention, remain observable, stay inside its boundary, and
-arrive in Git for review.
-
+One unattended bounded run can already work without Botanist intervention,
+remain observable, stay inside its boundary, and arrive in Git for review.
 
 That autonomy does not yet compose. Managed runs against the same Substrate
 currently share mutable checkout state. If the Botanist must serialize work
 manually to prevent one run disturbing another, the Botanist is still part of
 the execution scheduler.
-
 
 The next capability is therefore independent work in flight. Concurrent Sprouts
 may begin from the same Substrate revision and may even edit the same source, but
@@ -40,7 +36,6 @@ where work can be silently lost.
 
 A recorded concurrency exercise against the same managed Substrate demonstrates
 all of the following with real tasks that each produce work:
-
 
 - **Two runs from the same Pollen can overlap in execution.** A single Pollinator
   can delegate more than one task without manually waiting for the first to end.
@@ -64,12 +59,10 @@ all of the following with real tasks that each produce work:
 - **The runs remain separately observable.** Their lifecycle, reach, terminal
   result, and Fruit can be correlated independently while they overlap.
 
-
 A mechanism that only detects the unsafe case and refuses or serializes the
 second run is a valid safety improvement, but it does **not** satisfy this
 objective. The capability is multiple independent pieces of work in flight, not
 merely an honest declaration that only one is supported.
-
 
 Whether the resulting Fruit is worth accepting remains a separate Botanist
 decision. Two perfectly isolated runs may legitimately produce conflicting or
