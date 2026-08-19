@@ -1,7 +1,6 @@
 # Example control-plane grants. Copy to .tendril/grants.yaml (the Stem's own
 # directory — never inside a cloned repository, so a repo cannot widen its own
-# access). A grant authorises one Pollen to run specific git operations
-# on specific substrates. No grant = denied (secure default).
+# access). A grant authorises one Pollen to run bounded operation classes (e.g., git commands, Sprout execution, observation Views) on specific substrates. No grant = denied (secure default).
 
 grants:
   claude:                                  # the Pollen
