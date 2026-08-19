@@ -7,7 +7,7 @@
 Gives a **Pollinator** the governed git path: `git.status`, `git.branch.list`,
 `git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`, plus
 `sprout.watch` for observing the runs it dispatched. Every delegated call is
-authorised against the grants in `.tendril/grants.yaml`.
+authorised against the grants stored in the Stem-owned control-plane `.tendril/grants.yaml` and are never loaded from a Substrate checkout.
 
 `TENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
 set here, in the trusted launch configuration, and **never** by the Pollinator
