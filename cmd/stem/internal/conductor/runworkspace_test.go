@@ -4,9 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func prepareRunWorkspaceTest(t *testing.T) (string, string) {
@@ -236,13 +239,32 @@ func TestRunWorkspaceCleanupRequiresExactBaseAndRunID(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceRootUsesStemHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	want := filepath.Join(home, ".tendril", "run-workspaces")
+	if got := runWorkspaceRoot(); got != want {
+		t.Fatalf("run workspace root = %q, want HOME-derived %q", got, want)
+	}
+}
+
+func TestRunWorkspaceIdentityHasNoPollen(t *testing.T) {
+	if _, found := reflect.TypeOf(RunWorkspace{}).FieldByName("Pollen"); found {
+		t.Fatal("run-workspace identity contains Pollen")
+	}
+	first := runWorkspacePath("/tendril/run-workspaces", "/managed/base", "step-1")
+	second := runWorkspacePath("/tendril/run-workspaces", "/managed/base", "step-1")
+	if first != second {
+		t.Fatalf("run-workspace identity is not stable: %q != %q", first, second)
+	}
+}
+
 func TestRunWorkspaceRejectsRootSymlinkIntoRepository(t *testing.T) {
 	repo, base := prepareRunWorkspaceTest(t)
-	linkedRoot := filepath.Join(t.TempDir(), "run-workspaces")
-	if err := os.Symlink(repo, linkedRoot); err != nil {
-		t.Fatalf("create root symlink: %v", err)
+	if err := os.Symlink(repo, filepath.Join(os.Getenv("HOME"), ".tendril")); err != nil {
+		t.Fatalf("create Tendril state symlink: %v", err)
 	}
-	t.Setenv(runWorkspaceRootEnv, linkedRoot)
 
 	if _, err := CreateRunWorkspace(context.Background(), repo, "symlink", base); err == nil {
 		t.Fatal("run workspace root symlink into repository was accepted")
@@ -258,7 +280,7 @@ func TestRunWorkspaceUsesGitTopLevelForContainment(t *testing.T) {
 	if err := os.Mkdir(subdirectory, 0o755); err != nil {
 		t.Fatalf("create repository subdirectory: %v", err)
 	}
-	t.Setenv(runWorkspaceRootEnv, filepath.Join(repo, "run-workspaces"))
+	t.Setenv("HOME", filepath.Join(repo, "home"))
 
 	if _, err := CreateRunWorkspace(context.Background(), subdirectory, "subdirectory", base); err == nil {
 		t.Fatal("workspace inside Git top-level was accepted from a repository subdirectory")
@@ -328,7 +350,7 @@ func TestRunWorkspaceRefusesUnrelatedOwnedCollision(t *testing.T) {
 	assertGitClean(t, repo)
 }
 
-func TestRunWorkspaceReclaimsUnusedBranchAndKeepsFruit(t *testing.T) {
+func TestRunWorkspaceReclaimsOnlyUnusedBranchAndKeepsFruitRegardlessOfCredential(t *testing.T) {
 	ctx := context.Background()
 	repo, base := prepareRunWorkspaceTest(t)
 
@@ -363,7 +385,7 @@ func TestRunWorkspaceReclaimsUnusedBranchAndKeepsFruit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fruit branch: %v", err)
 	}
-	if err := fruit.Cleanup(ctx, ResolvedCredential{}); err != nil {
+	if err := fruit.Cleanup(ctx, ResolvedCredential{Method: CredentialPAT, TokenValue: "credential-must-not-trigger-forge-reclamation"}); err != nil {
 		t.Fatalf("cleanup fruit workspace: %v", err)
 	}
 	if !branchExists(t, repo, fruit.Branch) {
@@ -397,6 +419,64 @@ func TestRunWorkspaceCleanupRefusesUncommittedWork(t *testing.T) {
 	assertFileContents(t, filepath.Join(workspace.Path, "shared.txt"), "uncommitted\n")
 	if !branchExists(t, repo, workspace.Branch) {
 		t.Fatal("cleanup removed the branch holding uncommitted run state")
+	}
+}
+
+func TestRunWorkspaceLocksSerializePerManagedBase(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "base")
+	unlockBase := lockRunWorkspaceGit(base)
+
+	contender := make(chan func(), 1)
+	go func() {
+		contender <- lockRunWorkspaceGit(base)
+	}()
+	select {
+	case unlock := <-contender:
+		unlock()
+		unlockBase()
+		t.Fatal("same-base lifecycle mutations were not serialized")
+	case <-time.After(time.Second):
+	}
+
+	unlockBase()
+	select {
+	case unlock := <-contender:
+		unlock()
+	case <-time.After(time.Second):
+		t.Fatal("same-base lock did not release")
+	}
+}
+
+func TestRunWorkspaceLocksDoNotSerializeDifferentManagedBases(t *testing.T) {
+	baseA := filepath.Join(t.TempDir(), "base-a")
+	baseB := filepath.Join(t.TempDir(), "base-b")
+	unlockA := lockRunWorkspaceGit(baseA)
+
+	acquiredB := make(chan func(), 1)
+	go func() {
+		acquiredB <- lockRunWorkspaceGit(baseB)
+	}()
+	select {
+	case unlockB := <-acquiredB:
+		unlockB()
+	case <-time.After(time.Second):
+		unlockA()
+		t.Fatal("different managed bases shared an allocation lock")
+	}
+	unlockA()
+}
+
+func TestRunWorkspaceHasNoDirectBranchDeletion(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve run-workspace test path")
+	}
+	source, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "runworkspace.go"))
+	if err != nil {
+		t.Fatalf("read runworkspace.go: %v", err)
+	}
+	if strings.Contains(string(source), `"branch", "-D"`) || strings.Contains(string(source), `"branch", "-d"`) {
+		t.Fatal("runworkspace.go contains a direct branch deletion command")
 	}
 }
 

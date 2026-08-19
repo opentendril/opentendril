@@ -48,6 +48,43 @@ func branchHasNoWork(ctx context.Context, repository string, ref OwnedRef) bool 
 	return strings.TrimSpace(out) == "0"
 }
 
+// ReclaimOwnedRefIfNoWork removes an owned branch only when it has produced no
+// commits beyond its recorded base. This narrow lifecycle primitive is for
+// teardown paths whose responsibility ends with the workspace; committed Fruit
+// remains available for review regardless of forge evidence or credentials.
+func ReclaimOwnedRefIfNoWork(ctx context.Context, repository string, ref OwnedRef) ReclaimOutcome {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	outcome := ReclaimOutcome{Branch: ref.Branch}
+
+	if current, err := runGitCommitCommandFn(ctx, repository, "branch", "--show-current"); err == nil {
+		if strings.TrimSpace(current) == ref.Branch {
+			outcome.Reason = "checked out here"
+			return outcome
+		}
+	}
+	if out, err := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+ref.Branch); err == nil {
+		if strings.TrimSpace(out) != "" {
+			outcome.Reason = "checked out in another workspace"
+			return outcome
+		}
+	}
+	if !branchHasNoWork(ctx, repository, ref) {
+		outcome.Reason = "carries committed Fruit"
+		return outcome
+	}
+
+	if _, err := runGitCommitCommandFn(ctx, repository, "branch", "-D", ref.Branch); err != nil {
+		outcome.Reason = fmt.Sprintf("reclamation failed: %v", err)
+		return outcome
+	}
+	outcome.Reclaimed = true
+	outcome.Reason = "no commits beyond its base — nothing to lose"
+	_ = ForgetOwnedRef(repository, ref.Branch)
+	return outcome
+}
+
 // ReclaimOwnedRef decides and acts on a single owned reference. It never
 // reclaims the branch currently checked out, and never one held by another
 // workspace — those belong to work in progress.

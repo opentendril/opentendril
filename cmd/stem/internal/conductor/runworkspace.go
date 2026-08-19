@@ -12,8 +12,6 @@ import (
 	"sync"
 )
 
-const runWorkspaceRootEnv = "TENDRIL_RUN_WORKSPACE_ROOT"
-
 // RunWorkspace is the mutable filesystem state for one Sprout run. Its
 // identity is the backing repository plus StepID; it deliberately has no
 // Pollen field because concurrent runs from one Pollen must remain distinct.
@@ -34,23 +32,23 @@ type RunWorkspace struct {
 	RunID string
 }
 
-// runWorkspaceGitMu covers only Git metadata allocation and removal. It is
-// never held while a Sprout uses the workspace, so autonomous execution is not
-// serialized by this lifecycle primitive.
-var runWorkspaceGitMu sync.Mutex
+// runWorkspaceGitLocks covers only Git metadata allocation and removal. The
+// key is the canonical managed-base path, so unrelated Substrates do not block
+// each other. No lock is held while a Sprout uses its workspace.
+var runWorkspaceGitLocks sync.Map
 
-// runWorkspaceRoot returns the Tendril-owned root for run worktrees. The
-// override is useful for tests and controlled installations; the production
-// default is under the Stem user's home, never host /tmp.
+func lockRunWorkspaceGit(repository string) func() {
+	value, _ := runWorkspaceGitLocks.LoadOrStore(filepath.Clean(repository), &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
+}
+
+// runWorkspaceRoot returns the Tendril-owned root for run worktrees. It uses
+// the same Stem state location as the owned-reference registry and is never
+// host /tmp.
 func runWorkspaceRoot() string {
-	if root := strings.TrimSpace(os.Getenv(runWorkspaceRootEnv)); root != "" {
-		return root
-	}
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return ""
-	}
-	return filepath.Join(home, ".tendril", "run-workspaces")
+	return filepath.Join(expandHome("~/.tendril"), "run-workspaces")
 }
 
 // CreateRunWorkspace allocates a linked Git worktree for one run. startRevision
@@ -99,8 +97,8 @@ func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision s
 		return RunWorkspace{}, fmt.Errorf("run workspace path %q is inside the managed repository %q", path, base)
 	}
 
-	runWorkspaceGitMu.Lock()
-	defer runWorkspaceGitMu.Unlock()
+	unlockGit := lockRunWorkspaceGit(base)
+	defer unlockGit()
 
 	if _, err := os.Lstat(path); err == nil {
 		return RunWorkspace{}, fmt.Errorf("run workspace path %q already exists", path)
@@ -140,9 +138,9 @@ func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision s
 		RunID:      runID,
 		Pending:    true,
 	}
-	// Reserve ownership before Git mutation. If the process ends after this
-	// point, the existing owned-ref lifecycle can forget the absent branch;
-	// there is no unregistered Git allocation window.
+	// Reserve ownership before Git mutation. Pending protects this allocation
+	// window, and rollback/retry reconciles the owned state where it is safe to
+	// do so. Cross-process and crash hardening remain outside this slice.
 	if err := RegisterOwnedRef(owned); err != nil {
 		return RunWorkspace{}, fmt.Errorf("register ownership for run workspace %q: %w", branch, err)
 	}
@@ -176,10 +174,10 @@ func CreateRunWorkspace(ctx context.Context, repository, stepID, startRevision s
 	}, nil
 }
 
-// Cleanup removes this run's linked worktree and then applies the existing
-// owned-reference reclamation rules. A branch with no work is reclaimed; a
-// branch carrying committed Fruit remains available for review.
-func (workspace RunWorkspace) Cleanup(ctx context.Context, credential ResolvedCredential) error {
+// Cleanup removes this run's linked worktree and then applies no-work-only
+// owned-reference reclamation. A branch with no work is reclaimed; a branch
+// carrying committed Fruit remains available for review.
+func (workspace RunWorkspace) Cleanup(ctx context.Context, _ ResolvedCredential) error {
 	base := filepath.Clean(strings.TrimSpace(workspace.Repository))
 	branch := strings.TrimSpace(workspace.Branch)
 	path := filepath.Clean(strings.TrimSpace(workspace.Path))
@@ -187,8 +185,12 @@ func (workspace RunWorkspace) Cleanup(ctx context.Context, credential ResolvedCr
 		return fmt.Errorf("run workspace cleanup requires repository, branch, path, base commit, and run ID")
 	}
 
-	runWorkspaceGitMu.Lock()
-	defer runWorkspaceGitMu.Unlock()
+	base, err := absoluteRunWorkspaceRepository(ctx, workspace.Repository)
+	if err != nil {
+		return err
+	}
+	unlockGit := lockRunWorkspaceGit(base)
+	defer unlockGit()
 
 	owned, ownedOK := runWorkspaceOwnedRef(base, branch, workspace.BaseCommit)
 	if ownedOK && owned.RunID != workspace.RunID {
@@ -238,7 +240,10 @@ func (workspace RunWorkspace) Cleanup(ctx context.Context, credential ResolvedCr
 		_ = ForgetOwnedRef(base, branch)
 		return nil
 	}
-	outcome := ReclaimOwnedRef(ctx, base, owned, credential)
+	// Run-workspace teardown is intentionally narrower than general owned-ref
+	// reclamation: committed Fruit is the run's output and must remain even if
+	// a forge could prove its pull request merged.
+	outcome := ReclaimOwnedRefIfNoWork(ctx, base, owned)
 	if outcome.Reclaimed {
 		return nil
 	}
@@ -365,11 +370,15 @@ func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path st
 	}
 
 	if runWorkspaceBranchExists(ctx, owned.Repository, owned.Branch) {
-		if !branchHasNoWork(ctx, owned.Repository, owned) {
-			return fmt.Errorf("preserved run workspace branch %q because it carries commits", owned.Branch)
-		}
-		if _, err := runGitCommand(ctx, owned.Repository, "branch", "-D", owned.Branch); err != nil {
-			return fmt.Errorf("remove partially allocated run workspace branch: %w", err)
+		outcome := ReclaimOwnedRefIfNoWork(ctx, owned.Repository, owned)
+		if !outcome.Reclaimed {
+			if outcome.Reason == "carries committed Fruit" {
+				owned.Pending = false
+				if err := RegisterOwnedRef(owned); err != nil {
+					return fmt.Errorf("preserved run workspace branch %q but could not finalize ownership: %w", owned.Branch, err)
+				}
+			}
+			return fmt.Errorf("preserved run workspace branch %q: %s", owned.Branch, outcome.Reason)
 		}
 	}
 	return forgetRunWorkspaceOwnedRef(owned.Repository, owned.Branch, owned.RunID)
@@ -380,7 +389,7 @@ func reclaimRunWorkspaceCollision(ctx context.Context, repository, branch string
 	if !ok {
 		return "the branch is not an owned Sprout isolation branch", false
 	}
-	outcome := ReclaimOwnedRef(ctx, repository, ref, ResolvedCredential{})
+	outcome := ReclaimOwnedRefIfNoWork(ctx, repository, ref)
 	return outcome.Reason, outcome.Reclaimed
 }
 
