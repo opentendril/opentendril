@@ -1,38 +1,72 @@
-# Model Context Protocol configuration
+# MCP Client Configuration Examples
 
-`mcp-config.json` wires two servers, and the distinction between them matters.
+This document provides example configurations for the Model Context Protocol (MCP) client, used by Pollinators to interact with an OpenTendril Stem. The `mcp-config.json` file in this directory contains a typical configuration for a governed installation.
 
-## `opentendril` — this Ramet, as a governed surface
+## Governed Installations
 
-Gives a **Pollinator** the governed git path: `git.status`, `git.branch.list`,
-`git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`, plus
-`sprout.watch` for observing the runs it dispatched. Every delegated call is
-authorised against the grants in `.tendril/grants.yaml`.
+For governed OpenTendril installations, the Pollinator-side client (`tendril-mcp`) is used to communicate with the Stem. The `mcp-config.json` file in this directory is configured for this scenario:
 
-`TENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
-set here, in the trusted launch configuration, and **never** by the Pollinator
-itself: a Pollen a caller could name is a workspace a caller could claim. Give
-each Pollinator its own block with its own Pollen, and grant it explicitly:
-
-```yaml
-# .tendril/grants.yaml
-grants:
-  claude:
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.watch]
-    substrates: [opentendril]
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril-mcp",
+      "env": {
+        "TENDRIL_POLLEN": "claude"
+      }
+    }
+  }
+}
 ```
 
-No grant, no access. `git.prune` is deliberately absent from the default set —
-it deletes branches, and every other operation is recoverable.
+Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or `TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
 
-## `github` — a third-party Symbiotic Nodule
+## Single-User Installations
 
-`@modelcontextprotocol/server-github` is an external service, and
-`GITHUB_PERSONAL_ACCESS_TOKEN` is **that server's own** variable name, not
-Tendril's. Tendril's canonical variable is `GITHUB_TOKEN` (see `AGENTS.md`),
-which is what the `${GITHUB_TOKEN}` reference passes through — so one token,
-named as each side expects.
+For single-user installations, the `tendril mcp` command is used directly. An example configuration would look like this:
 
-This server is read-heavy and separate from the governed path: it does not pass
-through the grant model, so anything it can write is ungoverned. Prefer the
-`opentendril` server for anything that changes the Substrate.
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril",
+      "args": ["mcp"],
+      "env": {
+        "TENDRIL_POLLEN": "claude"
+      }
+    }
+  }
+}
+```
+
+If `tendril` is not on your `PATH`, replace `command` with the absolute path to the binary you installed.
+
+## Using the Tools
+
+Once connected, send work to the `default-workspace` Substrate using the primary MCP identifiers. Grants still name the canonical operation-classes.
+
+| Grant / Core | Primary MCP tool |
+|---|---|
+| `sprout.grow` | `sproutGrow` |
+| `sequence.grow` | `sequenceGrow` |
+| `git.status` | `gitStatus` |
+
+Example `sproutGrow` call:
+
+```json
+{
+  "transcript": "Update the parser to handle the new field.",
+  "substrate": "default-workspace"
+}
+```
+
+Example `sequenceGrow` call:
+
+```json
+{
+  "pathOrName": "sequences/code-change.yaml",
+  "substrate": "default-workspace"
+}
+```
+
+The eight compatibility aliases (`runSequence`, `sproutTendril`, `createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`, `graftSubstrate`, `promotePR`) remain callable. They are deprecated compatibility behavior, not the recommended interface, and they carry no independent authority.
