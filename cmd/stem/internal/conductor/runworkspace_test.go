@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 func prepareRunWorkspaceTest(t *testing.T) (string, string) {
@@ -293,20 +292,46 @@ func TestRunWorkspaceUsesGitTopLevelForContainment(t *testing.T) {
 func TestRunWorkspaceFailedGitAllocationRollsBack(t *testing.T) {
 	ctx := context.Background()
 	repo, base := prepareRunWorkspaceTest(t)
+	unrelatedBranch := "sprout/task-unrelated"
+	if _, err := runGitCommand(ctx, repo, "branch", unrelatedBranch, base); err != nil {
+		t.Fatalf("create unrelated branch: %v", err)
+	}
+	if err := RegisterOwnedRef(OwnedRef{
+		Repository: repo,
+		Branch:     unrelatedBranch,
+		Purpose:    PurposeDelegatedWorkspace,
+		Pollen:     "unrelated-pollen",
+		Base:       base,
+	}); err != nil {
+		t.Fatalf("register unrelated branch: %v", err)
+	}
 	hook := filepath.Join(repo, ".git", "hooks", "post-checkout")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("write failing checkout hook: %v", err)
 	}
 
-	if _, err := CreateRunWorkspace(ctx, repo, "hook-failure", base); err == nil {
+	_, allocationErr := CreateRunWorkspace(ctx, repo, "hook-failure", base)
+	if allocationErr == nil {
 		t.Fatal("worktree allocation with a failing Git hook succeeded")
+	}
+	if strings.Contains(allocationErr.Error(), "rollback also failed") {
+		t.Fatalf("failed allocation reported a false rollback failure: %v", allocationErr)
+	}
+	if !strings.Contains(allocationErr.Error(), "git worktree add") {
+		t.Fatalf("failed allocation did not report the original allocation failure: %v", allocationErr)
 	}
 	if branchExists(t, repo, "sprout/task-hook-failure") {
 		t.Fatal("failed allocation left its branch behind")
 	}
-	if refs := OwnedRefsFor(repo); len(refs) != 0 {
-		t.Fatalf("failed allocation left ownership behind: %+v", refs)
+	if !branchExists(t, repo, unrelatedBranch) {
+		t.Fatal("failed allocation changed an unrelated branch")
 	}
+	refs := OwnedRefsFor(repo)
+	if len(refs) != 1 || refs[0].Branch != unrelatedBranch || refs[0].Pollen != "unrelated-pollen" {
+		t.Fatalf("failed allocation changed unrelated ownership or left its reservation: %+v", refs)
+	}
+	assertFileContents(t, filepath.Join(repo, "shared.txt"), "base\n")
+	assertGitClean(t, repo)
 }
 
 func TestRunWorkspaceRefusesUnownedBranchCollision(t *testing.T) {
@@ -424,46 +449,32 @@ func TestRunWorkspaceCleanupRefusesUncommittedWork(t *testing.T) {
 
 func TestRunWorkspaceLocksSerializePerManagedBase(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "base")
-	unlockBase := lockRunWorkspaceGit(base)
-
-	contender := make(chan func(), 1)
-	go func() {
-		contender <- lockRunWorkspaceGit(base)
-	}()
-	select {
-	case unlock := <-contender:
-		unlock()
-		unlockBase()
-		t.Fatal("same-base lifecycle mutations were not serialized")
-	case <-time.After(time.Second):
+	mutex := runWorkspaceGitMutexFor(base)
+	if same := runWorkspaceGitMutexFor(filepath.Join(base, ".")); same != mutex {
+		t.Fatal("canonical same-base keys resolved to different mutexes")
 	}
-
-	unlockBase()
-	select {
-	case unlock := <-contender:
-		unlock()
-	case <-time.After(time.Second):
-		t.Fatal("same-base lock did not release")
+	unlock := lockRunWorkspaceGit(filepath.Join(base, "."))
+	defer unlock()
+	if mutex.TryLock() {
+		mutex.Unlock()
+		t.Fatal("same-base mutex TryLock succeeded while lifecycle lock was held")
 	}
 }
 
 func TestRunWorkspaceLocksDoNotSerializeDifferentManagedBases(t *testing.T) {
 	baseA := filepath.Join(t.TempDir(), "base-a")
 	baseB := filepath.Join(t.TempDir(), "base-b")
-	unlockA := lockRunWorkspaceGit(baseA)
-
-	acquiredB := make(chan func(), 1)
-	go func() {
-		acquiredB <- lockRunWorkspaceGit(baseB)
-	}()
-	select {
-	case unlockB := <-acquiredB:
-		unlockB()
-	case <-time.After(time.Second):
-		unlockA()
-		t.Fatal("different managed bases shared an allocation lock")
+	mutexA := runWorkspaceGitMutexFor(baseA)
+	mutexB := runWorkspaceGitMutexFor(baseB)
+	if mutexA == mutexB {
+		t.Fatal("different managed bases resolved to the same mutex")
 	}
-	unlockA()
+	mutexA.Lock()
+	defer mutexA.Unlock()
+	if !mutexB.TryLock() {
+		t.Fatal("different managed-base mutex was blocked by the first base")
+	}
+	mutexB.Unlock()
 }
 
 func TestRunWorkspaceHasNoDirectBranchDeletion(t *testing.T) {

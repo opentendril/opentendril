@@ -37,9 +37,13 @@ type RunWorkspace struct {
 // each other. No lock is held while a Sprout uses its workspace.
 var runWorkspaceGitLocks sync.Map
 
-func lockRunWorkspaceGit(repository string) func() {
+func runWorkspaceGitMutexFor(repository string) *sync.Mutex {
 	value, _ := runWorkspaceGitLocks.LoadOrStore(filepath.Clean(repository), &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
+	return value.(*sync.Mutex)
+}
+
+func lockRunWorkspaceGit(repository string) func() {
+	mutex := runWorkspaceGitMutexFor(repository)
 	mutex.Lock()
 	return mutex.Unlock
 }
@@ -371,15 +375,16 @@ func rollbackRunWorkspaceAllocation(ctx context.Context, owned OwnedRef, path st
 
 	if runWorkspaceBranchExists(ctx, owned.Repository, owned.Branch) {
 		outcome := ReclaimOwnedRefIfNoWork(ctx, owned.Repository, owned)
-		if !outcome.Reclaimed {
-			if outcome.Reason == "carries committed Fruit" {
-				owned.Pending = false
-				if err := RegisterOwnedRef(owned); err != nil {
-					return fmt.Errorf("preserved run workspace branch %q but could not finalize ownership: %w", owned.Branch, err)
-				}
-			}
-			return fmt.Errorf("preserved run workspace branch %q: %s", owned.Branch, outcome.Reason)
+		if outcome.Reclaimed {
+			return nil
 		}
+		if outcome.Reason == "carries committed Fruit" {
+			owned.Pending = false
+			if err := RegisterOwnedRef(owned); err != nil {
+				return fmt.Errorf("preserved run workspace branch %q but could not finalize ownership: %w", owned.Branch, err)
+			}
+		}
+		return fmt.Errorf("preserved run workspace branch %q: %s", owned.Branch, outcome.Reason)
 	}
 	return forgetRunWorkspaceOwnedRef(owned.Repository, owned.Branch, owned.RunID)
 }
