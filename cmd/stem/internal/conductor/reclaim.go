@@ -140,6 +140,10 @@ func ReclaimOwnedRefs(ctx context.Context, repository string, credential Resolve
 	}
 	outcomes := make([]ReclaimOutcome, 0, len(refs))
 	for _, ref := range refs {
+		if ref.Pending {
+			outcomes = append(outcomes, ReclaimOutcome{Branch: ref.Branch, Reason: "allocation is still pending"})
+			continue
+		}
 		// A registered branch that no longer exists is simply forgotten: the
 		// registry should not accumulate its own kind of litter.
 		if _, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "--verify", "--quiet", "refs/heads/"+ref.Branch); err != nil {
