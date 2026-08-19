@@ -5,8 +5,8 @@
 ## `opentendril` — this Ramet, as a governed surface
 
 Gives a **Pollinator** the governed git path: `git.status`, `git.branch.list`,
-`git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`, plus
-`sprout.watch` for observing the runs it dispatched. Every delegated call is
+`git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`. Additionally,
+`sprout.watch` may be granted for observing the runs it dispatched, though it is not a governed command. Every delegated call is
 authorised against the grants in `.tendril/grants.yaml`.
 
 `TENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
