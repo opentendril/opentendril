@@ -438,6 +438,8 @@ substrates:
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 
 	var mounted string
+	var mountedNotes string
+	var mountedHasGit bool
 	originalPreflight := runSproutPreflightChecksFn
 	originalRepoMap := generateRepoMapFn
 	originalMemoryMap := generateMemoryMapFn
@@ -468,6 +470,13 @@ substrates:
 	ensureSproutImageFn = func(context.Context, string) error { return nil }
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		mounted = mountPath
+		body, err := os.ReadFile(filepath.Join(mountPath, "docs", "TERRARIUM.md"))
+		if err != nil {
+			return nil, err
+		}
+		mountedNotes = string(body)
+		_, err = os.Stat(filepath.Join(mountPath, ".git"))
+		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
 	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
@@ -495,15 +504,11 @@ substrates:
 	if mounted == "" {
 		t.Fatal("Terrarium was not given a mount path")
 	}
-	body, err := os.ReadFile(filepath.Join(mounted, "docs", "TERRARIUM.md"))
-	if err != nil {
-		t.Fatalf("mounted workspace missing docs/TERRARIUM.md: %v (mount=%q)", err, mounted)
+	if mountedNotes != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", mountedNotes)
 	}
-	if string(body) != "terrarium notes\n" {
-		t.Fatalf("TERRARIUM.md = %q", body)
-	}
-	if _, err := os.Stat(filepath.Join(mounted, ".git")); err != nil {
-		t.Fatalf("mounted workspace is not a git checkout: %v", err)
+	if !mountedHasGit {
+		t.Fatal("mounted workspace is not a git checkout")
 	}
 }
 
@@ -568,6 +573,8 @@ substrates:
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 
 	var mounted string
+	var mountedNotes string
+	var mountedHasGit bool
 	originalPreflight := runSproutPreflightChecksFn
 	originalRepoMap := generateRepoMapFn
 	originalMemoryMap := generateMemoryMapFn
@@ -598,6 +605,13 @@ substrates:
 	ensureSproutImageFn = func(context.Context, string) error { return nil }
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		mounted = mountPath
+		body, err := os.ReadFile(filepath.Join(mountPath, "docs", "TERRARIUM.md"))
+		if err != nil {
+			return nil, err
+		}
+		mountedNotes = string(body)
+		_, err = os.Stat(filepath.Join(mountPath, ".git"))
+		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
 	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
@@ -625,21 +639,17 @@ substrates:
 	if mounted == "" {
 		t.Fatal("Terrarium was not given a mount path")
 	}
-	body, err := os.ReadFile(filepath.Join(mounted, "docs", "TERRARIUM.md"))
-	if err != nil {
-		t.Fatalf("mounted workspace missing docs/TERRARIUM.md: %v (mount=%q)", err, mounted)
+	if mountedNotes != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", mountedNotes)
 	}
-	if string(body) != "terrarium notes\n" {
-		t.Fatalf("TERRARIUM.md = %q", body)
-	}
-	if _, err := os.Stat(filepath.Join(mounted, ".git")); err != nil {
-		t.Fatalf("mounted workspace is not a git checkout: %v", err)
+	if !mountedHasGit {
+		t.Fatal("mounted workspace is not a git checkout")
 	}
 }
 
-// Chat-shaped grow on a populated managed checkout must mount THAT directory
-// at /app, not a /tmp/opentendril-terrarium-* shadow worktree. Rootless
-// Docker cannot see host /tmp, so the shadow became an empty named mount.
+// Chat-shaped grow on a populated managed checkout must mount a run-scoped
+// workspace at /app while keeping the persistent managed checkout as the Git
+// backing source.
 func TestRunSproutChatPathMountsPopulatedManagedCheckout(t *testing.T) {
 	managedRoot := t.TempDir()
 	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", managedRoot)
@@ -682,6 +692,10 @@ substrates:
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 
 	var mounted string
+	var genotypeRoot string
+	var runBranch string
+	var mountedTerrariumNotes string
+	var mountedHasGit bool
 	var shadowCalls int
 	originalPreflight := runSproutPreflightChecksFn
 	originalRepoMap := generateRepoMapFn
@@ -719,9 +733,22 @@ substrates:
 	}
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		mounted = mountPath
+		branch, err := runGitCommand(context.Background(), mountPath, "branch", "--show-current")
+		if err != nil {
+			return nil, err
+		}
+		runBranch = strings.TrimSpace(branch)
+		body, err := os.ReadFile(filepath.Join(mountPath, "docs", "TERRARIUM.md"))
+		if err != nil {
+			return nil, err
+		}
+		mountedTerrariumNotes = string(body)
+		_, err = os.Stat(filepath.Join(mountPath, ".git"))
+		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeSourceRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		genotypeRoot = genotypeSourceRoot
 		return &stubSproutRunner{result: sproutResult{Response: "read TERRARIUM.md"}}, nil
 	}
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
@@ -746,18 +773,20 @@ substrates:
 	if shadowCalls != 0 {
 		t.Fatalf("createShadowWorktree called %d time(s); managed checkout must be mounted in place", shadowCalls)
 	}
-	if mounted != checkout {
-		t.Fatalf("mount source = %q, want the managed checkout %q (not a /tmp shadow or cwd sibling)", mounted, checkout)
+	if mounted == checkout {
+		t.Fatalf("mount source = %q, want a run-scoped workspace rather than the managed checkout %q", mounted, checkout)
 	}
-	body, err := os.ReadFile(filepath.Join(mounted, "docs", "TERRARIUM.md"))
-	if err != nil {
-		t.Fatalf("mounted workspace missing docs/TERRARIUM.md: %v (mount=%q)", err, mounted)
+	if genotypeRoot != checkout {
+		t.Fatalf("genotype root = %q, want the persistent managed checkout %q", genotypeRoot, checkout)
 	}
-	if string(body) != "terrarium notes\n" {
-		t.Fatalf("TERRARIUM.md = %q", body)
+	if runBranch != "sprout/task-step-chat-populated" {
+		t.Fatalf("run workspace branch = %q, want %q", runBranch, "sprout/task-step-chat-populated")
 	}
-	if _, err := os.Stat(filepath.Join(mounted, ".git")); err != nil {
-		t.Fatalf("mounted workspace is not a git checkout: %v", err)
+	if mountedTerrariumNotes != "terrarium notes\n" {
+		t.Fatalf("TERRARIUM.md = %q", mountedTerrariumNotes)
+	}
+	if !mountedHasGit {
+		t.Fatal("mounted workspace is not a git checkout")
 	}
 }
 
