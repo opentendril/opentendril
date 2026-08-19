@@ -13,53 +13,67 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can grant an LLM full freedom inside a Terrarium, be asked for
-nothing while it works, and find that everything it did arrived in Git for
-review — with nothing outside the boundary touched.**
+**A Botanist can delegate multiple autonomous tasks against the same managed
+Substrate at the same time, without coordinating their timing, and each task
+works independently and arrives as its own Git-reviewable Fruit.**
 
-The claim is *stop approving*. Being interrupted for permission is what makes
-delegation not worth doing: approve every step and you have saved nothing, approve
-nothing and you are gambling. The offer is full freedom inside, because the escape
-is what is controlled rather than each action. Everything else this repository
-contains exists to make that offer safe to accept.
+
+The previous objective established that one unattended bounded run can work
+without Botanist intervention, remain observable, stay inside its boundary, and
+arrive in Git for review.
+
+
+That autonomy does not yet compose. Managed runs against the same Substrate
+currently share mutable checkout state. If the Botanist must serialize work
+manually to prevent one run disturbing another, the Botanist is still part of
+the execution scheduler.
+
+
+The next capability is therefore independent work in flight. Concurrent Sprouts
+may begin from the same Substrate revision and may even edit the same source, but
+one run's execution state must not reset, overwrite, stash, restore, or otherwise
+alter another run's execution state. Any resulting source conflict belongs at
+Fruit review, where the Botanist can see and resolve it, not inside execution
+where work can be silently lost.
 
 ## Done when
 
-A recorded series of unattended runs on real tasks against this repository, each
-one carrying:
+A recorded concurrency exercise against the same managed Substrate demonstrates
+all of the following with real tasks that each produce work:
 
-- **How many times the Botanist was asked for anything.** The target is none. A
-  run that interrupted is a run that did not deliver the claim, whatever else it
-  achieved.
-- **Whether the run could be watched while it happened**, not only reconstructed
-  afterwards. Being asked for nothing is only tolerable if looking is always
-  available — an unobservable run is not autonomy, it is the blindness that makes
-  delegation feel reckless, and it is the specific complaint that sends people
-  back to approving every step. *Stop being asked* and *keep being able to look*
-  are opposite requirements and the claim needs both.
-- **What the run reached** — files changed, commands executed, credentials
-  issued, tokens and money spent, network attempted.
-- **Whether anything outside the declared boundary was touched.** This is the
-  number. It is Tendril's claim and nobody else's.
-- **That the work arrived in Git** — as commits on a branch, reviewable and
-  revertible, rather than as changes already applied somewhere.
-- **Whether the change was worth accepting** — recorded *separately*, and never
-  reported as Tendril's number. Whether the work is any good is the LLM's
-  business and the Botanist's gate. Conflating the two would make this project
-  accountable for model quality, which is the scope error that produced the
-  backlog this file replaced.
 
-**A run that produced no work does not count.** Containment is trivially perfect
-on a run that did nothing, so a run only counts toward the figure if it actually
-changed something. Without that condition the number is satisfiable by a broken
-system, which is the same vacuity that has been found in test after test here.
+- **Two runs from the same Pollen can overlap in execution.** A single Pollinator
+  can delegate more than one task without manually waiting for the first to end.
+- **Runs from different Pollen can overlap in execution.** Isolation does not
+  depend on all work belonging to one caller.
+- **Concurrent runs do not share mutable execution state.** No run resets,
+  stashes, restores, overwrites, changes branch state for, or otherwise mutates
+  another run's working state.
+- **Overlapping source edits remain independent during execution.** Two runs may
+  change the same source from the same starting revision; any conflict appears
+  later as competing Fruit rather than one run destroying or absorbing the
+  other's work.
+- **Failure is isolated.** A run that withers or otherwise fails does not damage,
+  roll back, or contaminate a concurrent successful run.
+- **Every successful run produces its own Fruit.** Each result has independently
+  identifiable branch and commit state, is reviewable and revertible, and does
+  not modify `main`.
+- **The Botanist coordinates none of the execution after delegation.** Starting
+  concurrent work does not introduce per-run approval, retry, cleanup, or
+  sequencing duties.
+- **The runs remain separately observable.** Their lifecycle, reach, terminal
+  result, and Fruit can be correlated independently while they overlap.
 
-The figure is published rather than asserted, including when it is bad. A poor
-number honestly measured is the most useful thing this project can produce,
-because everything hardened so far sits underneath a claim nothing has checked.
 
-*(How many runs constitutes the series is the Botanist's call. Enough to see a
-pattern rather than an anecdote; few enough to actually be run.)*
+A mechanism that only detects the unsafe case and refuses or serializes the
+second run is a valid safety improvement, but it does **not** satisfy this
+objective. The capability is multiple independent pieces of work in flight, not
+merely an honest declaration that only one is supported.
+
+
+Whether the resulting Fruit is worth accepting remains a separate Botanist
+decision. Two perfectly isolated runs may legitimately produce conflicting or
+poor work; that is not an isolation failure.
 
 ---
 
