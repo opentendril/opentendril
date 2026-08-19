@@ -57,6 +57,12 @@ type OwnedRef struct {
 	// Base is the commit the branch was cut from, which is what makes "has
 	// this produced anything yet" answerable without a network call.
 	Base string `json:"base,omitempty"`
+	// RunID distinguishes successive run allocations that reuse a step-scoped
+	// branch after an earlier run has been reclaimed.
+	RunID string `json:"runId,omitempty"`
+	// Pending marks a reservation made before the linked worktree exists. The
+	// reaper leaves it alone during this short allocation window.
+	Pending bool `json:"pending,omitempty"`
 	// CreatedAt records when, so an operator can see the age of anything left
 	// behind.
 	CreatedAt time.Time `json:"createdAt"`
