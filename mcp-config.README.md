@@ -5,8 +5,8 @@
 ## `opentendril` — this Ramet, as a governed surface
 
 Gives a **Pollinator** the governed git path: `git.status`, `git.branch.list`,
-`git.branch`, `git.commit`, `git.push`, `git.pr`, `git.prune`, plus
-`sprout.watch` for observing the runs it dispatched. Every delegated call is
+`git.branch`, `git.commit`, `git.push`, `git.pr`, plus
+`sprout.grow` and `sequence.grow` for managing sprouts and sequences. Every delegated call is
 authorised against the grants in `.tendril/grants.yaml`.
 
 `TENDRIL_POLLEN` binds the **Pollen** — the identity the grant names. It is
@@ -18,7 +18,7 @@ each Pollinator its own block with its own Pollen, and grant it explicitly:
 # .tendril/grants.yaml
 grants:
   claude:
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.watch]
+    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.grow, sequence.grow]
     substrates: [opentendril]
 ```
 
