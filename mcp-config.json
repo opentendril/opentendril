@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "opentendril": {
-      "command": "tendril",
-      "args": ["serve", "mcp", "stdio"],
+      "command": "tendril-mcp",
       "env": {
-        "OPENTENDRIL_POLLEN": "claude"
+        "TENDRIL_POLLEN": "claude"
       }
     },
     "github": {
