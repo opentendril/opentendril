@@ -58,7 +58,7 @@ Terrarium provider isolation and Git shadow-worktree isolation are separate mech
 
 ## Remote Substrates
 
-- Managed/path checkouts may persist.
+- Managed and path checkouts persist but use distinct execution lifecycles.
 - Ephemeral checkout mode uses a fresh directory.
 - Remote-cloned substrate paths are Tendril-resolved working copies. They are not the Botanist's active local checkout.
 
@@ -83,9 +83,12 @@ Git operations are normally Stem-side. Sealed Sprouts do not receive the Substra
 ## Fruit and State Externalization
 
 Reviewable Fruit requires completed execution with measured modifications, no run error, not readonly, not investigation-only, and actual changes.
-- This results in a Terrarium execution commit.
+- This results in a Terrarium execution commit on a run-specific branch (`sprout/task-<stepID>`).
+- Managed remote publication pushes to that run-specific branch. The source/default branch remains the starting source and is not advanced automatically.
+- For local managed execution, committed Fruit remains on the run-specific local branch and is reviewable there.
+- `SproutRunReport` carries `FruitBranch` and `FruitCommit` when a managed run creates committed reviewable Fruit, retaining this identity even if remote publication fails.
+- Failure isolation is run-scoped: teardown or publication failure for one managed run must not delete or mutate another run's worktree, branch, or Fruit.
 - `DisableMergeBack` may leave the commit isolated.
-- A remote clone may publish its Terrarium commit.
 - Local merge-back may internally merge the Terrarium commit into the source branch.
 - Internal merge-back is not Botanist acceptance. Final review and acceptance remains human-controlled.
 
@@ -94,12 +97,19 @@ Reviewable Fruit requires completed execution with measured modifications, no ru
 Adaptation/history-driven genome behavior is separate from Epigenetic Chronicler behavior. 
 For reviewable successful Fruit with a diff, the Chronicler consumes the Sprout transcript, diff, and session logs and distills durable learnings.
 
-## Concurrency Constraints
+## Managed Run Workspaces
 
-- One managed checkout directory exists per named managed Substrate.
-- Refresh/stash/worktree operations are not serialized per managed Substrate.
-- Concurrent runs against that same managed checkout can interfere.
-- Ephemeral checkout mode uses separate directories.
+- The managed checkout is a persistent Tendril-owned base repository / Git backing store, not the writable Terrarium execution workspace.
+- Each writable managed Sprout run receives its own linked Git worktree keyed by step/run identity.
+- The run workspace lives under the Tendril-owned `~/.tendril/run-workspaces/` (not `/tmp`) and uses `sprout/task-<stepID>`.
+- The run workspace starts from an explicitly resolved commit.
+- Sprout mutation, measurement, commit, generated execution inputs, and managed Fruit creation operate against the run workspace.
+- The persistent managed checkout may still be fetched/refreshed/reset to its configured starting branch. That refresh does not reset an already-running Sprout's work.
+- Shared managed-base Git metadata operations (materialization, start-commit resolution, run-worktree allocation) use a short per-managed-base lock.
+- The lock is NOT held across Sprout execution, provider calls, Terrarium lifetime, or autonomous file mutation. Execution is not locked or serialized.
+- Cleanup is run-specific: the run's linked worktree is removed at actual lifecycle ending. A detached return does not destroy a still-running workspace.
+- A run branch with no work may be reclaimed by the owned-ref lifecycle; a branch carrying committed Fruit remains available for review.
+- Delegated Git per-Pollen workspaces under `~/.tendril/workspaces/` are a separate mechanism from managed Sprout RunWorkspaces.
 
 ## Budgets and Detached Work
 

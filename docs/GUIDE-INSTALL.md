@@ -85,13 +85,14 @@ Two consequences to hold on to:
   pointing the control plane there would drop the bearer key, the credential
   store and `grants.yaml` into version control, beside files a Sprout can edit.
 
-Two paths resolve against **home** rather than the working directory. Because
-this guide sets both to `/home/tendril`, they coincide:
+Three paths resolve against **home** rather than the working directory. Because
+this guide sets them all to `/home/tendril`, they coincide:
 
 | Path | Holds |
 |---|---|
-| `/home/tendril/.tendril/substrates/<name>` | the Stem's own clone of each Substrate |
-| `/home/tendril/.tendril/workspaces/` | isolated per-Pollen working trees |
+| `/home/tendril/.tendril/substrates/<name>` | the Stem's own clone (managed base) of each Substrate |
+| `/home/tendril/.tendril/run-workspaces/` | run-scoped managed Sprout worktrees |
+| `/home/tendril/.tendril/workspaces/` | delegated per-Pollen workspaces |
 
 ---
 
@@ -102,36 +103,33 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 
 ```
    your account                              the Stem (tendril)
-   ~/…/opentendril                           ~/.tendril/substrates/opentendril
-   you edit here                             the Stem works in managed clone
-             │                                          │
+   ~/…/opentendril                           ~/.tendril/substrates/opentendril (managed base)
+   you edit here                                        │
+             │                                          ├── run workspace A → Fruit A
+             │                                          ├── run workspace B → Fruit B
              │  push / fetch                            │  publish (push or API commit)
              └──────────────►  remote  ◄────────────────┘
                         source of truth
 ```
 
-* **The Stem makes a change** → it works in its managed clone/workspace. Commits, pushes, and PR creation are distinct operations. `git.commit` in local mode requires a subsequent `git.push` to publish, while API commit mode publishes directly. `git.pr` opens a pull request separately. Final merge is Botanist-controlled.
+* **The Stem makes a change** → it works in its own run workspace. Commits, pushes, and PR creation are distinct operations. `git.commit` in local mode requires a subsequent `git.push` to publish, while API commit mode publishes directly. `git.pr` opens a pull request separately. Final merge is Botanist-controlled.
 * **You make a change** → you push. The Stem picks it up on its next run: a
   managed checkout is fetched and hard-reset to the target branch before every
   run.
 
 > [!WARNING]
-> **Never hand-edit the Stem's clone.** It is Tendril-owned; the next run resets
-> it and discards uncommitted changes without asking. Your clone is the one you
-> edit.
+> **Never hand-edit the Stem's clone.** It is Tendril-owned backing state and may
+> be refreshed/reset. That reset applies to the backing checkout and does not
+> discard active RunWorkspace state. Your clone is the one you edit.
 
 > [!IMPORTANT]
-> **One run at a time per managed Substrate.** A managed checkout is one
-> directory per Substrate, and a run resets it, stashes in it, and adds a
-> worktree for the configured branch. A second run starting against the same
-> Substrate before the first finishes will discard its work, pop the wrong
-> stash, or be refused the branch — and nothing serialises them or reports the
-> collision.
->
-> This bounds Substrates, not callers. Several Pollen may work at once, and
-> several Substrates may run at once; two runs against one managed Substrate
-> may not. A Substrate using `checkout: mode: ephemeral` gets a fresh directory
-> per run and is not affected.
+> **Multiple managed runs may execute concurrently against the same Substrate.**
+> - The managed clone is the persistent Tendril-owned base.
+> - Each writable managed run gets an independent RunWorkspace.
+> - Multiple managed runs may be in execution against the same managed Substrate without sharing a working tree.
+> - The shared base is used only for backing Git state and short metadata operations.
+> - Each successful managed run retains/publishes its own `sprout/task-<stepID>` Fruit.
+> - The Botanist reviews each Fruit separately.
 
 The boundary and the workflow are the same mechanism here — nothing needs to be
 shared between the accounts, because everything already travels through the
