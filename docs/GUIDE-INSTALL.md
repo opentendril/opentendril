@@ -142,8 +142,11 @@ Commands marked **[root]** need `sudo`; the rest run as the named user. **Do the
 stages in order** — container access comes first, because a user in a
 root-equivalent group makes every later stage cosmetic.
 
-Prerequisites: Go 1.24+ (on the build account only), Docker, Git, and an LLM —
-local [Ollama](https://ollama.ai) by default, or a cloud provider key.
+Prerequisites:
+- Go 1.24+ (on the build account only), Docker, Git, and an LLM — local [Ollama](https://ollama.ai) by default, or a cloud provider key.
+- Access to the target GitHub repository.
+- Authority necessary to create and install the GitHub App used by the secure-default path.
+- Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
 
 A governed installation that connects an MCP-speaking Pollinator uses two
 executables. They are not interchangeable.
@@ -384,19 +387,27 @@ it walks you through a cloud provider and its key.
 
 Create the GitHub App and download its private key **before** this step.
 That procedure is [GUIDE-GIT-CONNECTION.md Path B](./GUIDE-GIT-CONNECTION.md#path-b--github-app).
-This stage does not create the App. You must already have the downloaded `.pem`
-and the App ID.
+This stage does not create the App. You must already have the `.pem` file and the
+App ID from your browser session.
+
+Because that browser session may be on a different administrative machine, you
+must transfer the private key to this headless installation host. Do not save or
+copy the key into your own home directory on the installation host; doing so
+exposes it to the Pollinator-hosting account.
+
+Instead, transfer it directly to a neutral, ephemeral path such as `/tmp/app.pem`.
+(For example, by using `scp` directly to `/tmp/app.pem`, or by opening an editor
+at that path and pasting the key contents).
 
 Use a **fresh** private key for that App. Never carry forward one that has lived
 in an account hosting Pollinators: changing a file's owner does not change who
 has already copied it.
 
 ```bash
-# [root] install the downloaded key as the Stem's, then destroy your copy.
-# Replace app.private-key.pem with the filename GitHub saved in Downloads.
-install -o tendril -g tendril -m 600 ~/Downloads/app.private-key.pem \
+# [root] install the transferred key as the Stem's, then destroy the temporary copy.
+install -o tendril -g tendril -m 600 /tmp/app.pem \
   /home/tendril/.tendril/app.pem
-shred -u ~/Downloads/app.private-key.pem
+shred -u /tmp/app.pem
 ```
 
 **Check:** `sudo -u tendril test -r /home/tendril/.tendril/app.pem && echo ok`
