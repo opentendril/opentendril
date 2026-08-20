@@ -391,24 +391,29 @@ This stage does not create the App. You must already have the `.pem` file and th
 App ID from your browser session.
 
 Because that browser session may be on a different administrative machine, you
-must transfer the private key to this headless installation host. Do not save or
-copy the key into your own home directory on the installation host; doing so
-exposes it to the Pollinator-hosting account.
-
-Instead, transfer it directly to a neutral, ephemeral path such as `/tmp/app.pem`.
-(For example, by using `scp` directly to `/tmp/app.pem`, or by opening an editor
-at that path and pasting the key contents).
+must transfer the private key to this headless installation host. **Do not copy
+or stage the key through the Pollinator-hosting account** (for example, by using
+`scp` into your own home directory or opening a temporary file with your own
+user), as doing so exposes the credential to that account.
 
 Use a **fresh** private key for that App. Never carry forward one that has lived
 in an account hosting Pollinators: changing a file's owner does not change who
 has already copied it.
 
+To keep the credential exclusive to the Stem, write it directly into the
+control plane using a privileged command. Paste the private key from your
+browser session into this interactive prompt (press `Enter`, then `Ctrl+D` when done):
+
 ```bash
-# [root] install the transferred key as the Stem's, then destroy the temporary copy.
-install -o tendril -g tendril -m 600 /tmp/app.pem \
-  /home/tendril/.tendril/app.pem
-shred -u /tmp/app.pem
+# [root] Write the key directly as the Stem principal.
+# umask 077 ensures the resulting file is mode 0600.
+sudo -u tendril sh -c 'umask 077 && cat > /home/tendril/.tendril/app.pem'
 ```
+
+*(If you must use a transfer mechanism like `scp`, it must be executed through a
+trusted administrative context—such as connecting directly as `root`—that does
+not expose the PEM to the Pollinator-hosting account. A shared location like
+`/tmp` is not neutral with respect to Unix file ownership.)*
 
 **Check:** `sudo -u tendril test -r /home/tendril/.tendril/app.pem && echo ok`
 prints `ok`, while `cat /home/tendril/.tendril/app.pem` as your own account is
