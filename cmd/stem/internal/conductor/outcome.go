@@ -130,6 +130,15 @@ type SproutRunReport struct {
 	ProviderDiagnostic *core.ProviderDiagnostic
 	// ToolInvocations is how many terrarium tool calls the Sprout made.
 	ToolInvocations int
+	// FruitBranch is the run-specific Fruit branch on which reviewable changes
+	// were committed. It is non-empty only when this run produced a reviewable
+	// commit: the outcome is complete, the commit was created, and the branch
+	// is independently revertible. Empty for ephemeral, investigation,
+	// no-changes, and failed runs.
+	FruitBranch string
+	// FruitCommit is the commit hash created by this run on FruitBranch.
+	// It is non-empty exactly when FruitBranch is non-empty.
+	FruitCommit string
 }
 
 // PostRunUsage is the fail-honest aggregate of every provider request made
@@ -396,6 +405,12 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID string, report S
 	}
 	if reason != "" {
 		data["error"] = reason
+	}
+	if report.FruitBranch != "" {
+		data["fruitBranch"] = report.FruitBranch
+	}
+	if report.FruitCommit != "" {
+		data["fruitCommit"] = report.FruitCommit
 	}
 
 	bus.Publish(eventbus.Event{
