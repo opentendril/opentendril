@@ -195,9 +195,54 @@ usermod --add-subuids 165536-231071 --add-subgids 165536-231071 tendril
 A rootless daemon runs as an ordinary user, so a container cannot become root on
 the host. This is what stops container access from being an escalation path.
 
+On Ubuntu 24.04 LTS this stage needs **Docker Engine** from
+https://download.docker.com/linux/ubuntu: `docker-ce`, `docker-ce-cli`,
+`containerd.io`, and `docker-ce-rootless-extras`. `docker-ce-rootless-extras`
+is the package that provides `dockerd-rootless-setuptool.sh`.
+
+> [!CAUTION]
+> **Do not `apt-get install docker.io`.** Ubuntu's `docker.io` package is not
+> the governed path: it does not ship `dockerd-rootless-setuptool.sh`, and it
+> starts a rootful daemon. If `docker.io` is already installed, remove it
+> before adding Docker's repository — the two stacks conflict.
+
 ```bash
-# [root] prerequisites
+# [root] Ubuntu 24.04 LTS — Docker Engine. docker-ce-rootless-extras provides
+#        dockerd-rootless-setuptool.sh.
+apt-get remove -y docker.io
+apt-get update && apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: noble
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras
+```
+
+```bash
+# [root] rootless prerequisites
 apt-get update && apt-get install -y uidmap slirp4netns dbus-user-session
+```
+
+If `command -v dockerd-rootless-setuptool.sh` prints nothing, the wrong Docker
+package is installed. Ubuntu `docker.io` does not provide the script. Docker
+Engine's `docker-ce-rootless-extras` from
+https://download.docker.com/linux/ubuntu does.
+
+The `docker-ce` package starts a rootful `docker.service`. If that unit is
+present — from this install or from leftover `docker.io` — disable it before
+the setuptool:
+
+```bash
+# [root] rootful docker.service must be off before the setuptool
+systemctl disable --now docker.service docker.socket
 ```
 
 ```bash
