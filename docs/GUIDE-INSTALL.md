@@ -382,22 +382,30 @@ it walks you through a cloud provider and its key.
 > **Serves P3.** The Substrate's `checkout` mode is *constrained by P1* —
 > `mode: path` cannot work once the Stem cannot read your home.
 
-Generate a **fresh** private key for your GitHub App. Never carry forward one
-that has lived in an account hosting Pollinators: changing a file's owner does
-not change who has already copied it.
+Create the GitHub App and download its private key **before** this step.
+That procedure is [GUIDE-GIT-CONNECTION.md Path B](./GUIDE-GIT-CONNECTION.md#path-b--github-app).
+This stage does not create the App. You must already have the downloaded `.pem`
+and the App ID.
+
+Use a **fresh** private key for that App. Never carry forward one that has lived
+in an account hosting Pollinators: changing a file's owner does not change who
+has already copied it.
 
 ```bash
-# [root] install the downloaded key as the Stem's, then destroy your copy
-install -o tendril -g tendril -m 600 ~/Downloads/<app>.private-key.pem \
+# [root] install the downloaded key as the Stem's, then destroy your copy.
+# Replace app.private-key.pem with the filename GitHub saved in Downloads.
+install -o tendril -g tendril -m 600 ~/Downloads/app.private-key.pem \
   /home/tendril/.tendril/app.pem
-shred -u ~/Downloads/<app>.private-key.pem
+shred -u ~/Downloads/app.private-key.pem
 ```
 
 **Check:** `sudo -u tendril test -r /home/tendril/.tendril/app.pem && echo ok`
 prints `ok`, while `cat /home/tendril/.tendril/app.pem` as your own account is
 denied.
 
-Then write the connection and the grant together:
+Then write the connection and the grant together. Replace `123456` with the
+App ID from Path B, and `myorg/myrepo` with the repository the App is
+installed on:
 
 ```bash
 # as tendril, in /home/tendril
@@ -405,7 +413,7 @@ tendril git setup \
   --substrate myrepo \
   --repo myorg/myrepo \
   --posture app \
-  --app-id <id> \
+  --app-id 123456 \
   --key /home/tendril/.tendril/app.pem \
   --grant-pollen claude
 ```
