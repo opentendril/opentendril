@@ -1085,13 +1085,33 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return report, changes, commitErr
 			}
 
+			// Record Fruit identity immediately after the commit is created,
+			// before any push or merge. This means failure to publish does
+			// not erase the identity of work that is already committed.
+			if managedRun {
+				report.FruitBranch = managedWorkspace.Branch
+				report.FruitCommit = strings.TrimSpace(commitHash)
+			}
+
 			if d.DisableMergeBack || (managedRun && !plan.remoteClone) {
-				report.Output = commitHash
+				report.Output = sproutResult.Response
 				return report, changes, runErr
 			}
 
 			if plan.remoteClone {
-				if pushErr := pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID); pushErr != nil {
+				// For a managed remote run, publication targets the run-specific
+				// Fruit branch (managedWorkspace.Branch), never the configured
+				// source branch. The source branch is the STARTING POINT, not
+				// the target. allowDefaultBranchCommit must not redirect managed
+				// Fruit onto the default branch — the isolation is structural,
+				// not dependent on the protected-branch detection.
+				var pushErr error
+				if managedRun {
+					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, managedWorkspace.Branch, plan.credential, false, stepID)
+				} else {
+					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID)
+				}
+				if pushErr != nil {
 					report.Outcome = ""
 					if runErr != nil {
 						return report, changes, errors.Join(runErr, pushErr)
