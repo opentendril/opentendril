@@ -13,60 +13,74 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can delegate multiple autonomous tasks against the same managed
-Substrate at the same time, without coordinating their timing, and each task
-works independently and arrives as its own Git-reviewable Fruit.**
+**A Botanist unfamiliar with OpenTendril can go from a clean machine to one
+accepted Git-reviewable Fruit using the documented secure-default path, without
+OpenTendril-internal knowledge or undocumented repair.**
 
-One unattended bounded run can already work without Botanist intervention,
-remain observable, stay inside its boundary, and arrive in Git for review.
+The governed execution boundary can now support unattended, observable and
+concurrent work once OpenTendril is running. The next constraint is reaching
+that state without relying on the knowledge of the people who built it.
 
-That autonomy does not yet compose. Managed runs against the same Substrate
-currently share mutable checkout state. If the Botanist must serialize work
-manually to prevent one run disturbing another, the Botanist is still part of
-the execution scheduler.
+Installation, configuration and first use are part of the autonomy boundary. If
+the Botanist must understand OpenTendril internals, discover hidden prerequisites,
+repair configuration by hand, know which daemon must be restarted, query internal
+APIs, or manually correlate opaque identifiers to understand what is happening,
+then the organism still depends on expert supervision before useful delegation
+can begin.
 
-The next capability is therefore independent work in flight. Concurrent Sprouts
-may begin from the same Substrate revision and may even edit the same source, but
-one run's execution state must not reset, overwrite, stash, restore, or otherwise
-alter another run's execution state. Any resulting source conflict belongs at
-Fruit review, where the Botanist can see and resolve it, not inside execution
-where work can be silently lost.
+The target is therefore a short, secure and observable first-use path. Deterministic
+work should be automated where practical; questions should be asked only when
+Botanist intent is genuinely required. The secure path is the normal path, not an
+advanced configuration the Botanist must discover after setup.
 
 ## Done when
 
-A recorded concurrency exercise against the same managed Substrate demonstrates
-all of the following with real tasks that each produce work:
+A recorded exercise beginning from a clean machine and following only the
+documented user-facing path demonstrates all of the following:
 
-- **Two runs from the same Pollen can overlap in execution.** A single Pollinator
-  can delegate more than one task without manually waiting for the first to end.
-- **Runs from different Pollen can overlap in execution.** Isolation does not
-  depend on all work belonging to one caller.
-- **Concurrent runs do not share mutable execution state.** No run resets,
-  stashes, restores, overwrites, changes branch state for, or otherwise mutates
-  another run's working state.
-- **Overlapping source edits remain independent during execution.** Two runs may
-  change the same source from the same starting revision; any conflict appears
-  later as competing Fruit rather than one run destroying or absorbing the
-  other's work.
-- **Failure is isolated.** A run that withers or otherwise fails does not damage,
-  roll back, or contaminate a concurrent successful run.
-- **Every successful run produces its own Fruit.** Each result has independently
-  identifiable branch and commit state, is reviewable and revertible, and does
-  not modify `main`.
-- **The Botanist coordinates none of the execution after delegation.** Starting
-  concurrent work does not introduce per-run approval, retry, cleanup, or
-  sequencing duties.
-- **The runs remain separately observable.** Their lifecycle, reach, terminal
-  result, and Fruit can be correlated independently while they overlap.
+- **Prerequisites are discoverable.** Everything required before installation is
+  stated or detected. A missing prerequisite produces an actionable diagnosis
+  rather than requiring repository or source-code investigation.
+- **The secure-default installation produces a usable governed Stem.** The
+  Botanist does not need to weaken filesystem, credential, Terrarium or network
+  boundaries merely to reach a first useful run.
+- **Required configuration is understandable from the user-facing path.**
+  Provider, Substrate, Pollinator and other required first-run choices can be
+  completed without knowing OpenTendril's implementation structure or editing
+  undocumented internal state.
+- **A real task can be delegated through a documented supported interface.**
+  The Botanist does not need private API knowledge, database access, source-code
+  knowledge or ad-hoc shell repair to start useful work.
+- **The first run is immediately observable from an ordinary terminal.** One
+  documented command is sufficient to follow relevant activity from dispatch
+  through terminal state and Fruit. It exposes useful identity, Substrate,
+  lifecycle, progress, tool/activity, structured failure and Fruit information
+  without exposing raw model reasoning.
+- **The resulting Fruit is easy to locate and review.** A successful run produces
+  independently identifiable Git branch and commit state, leaves `main`
+  unchanged, and gives the Botanist enough information to review and either
+  accept or reject the work.
+- **No undocumented recovery knowledge is required.** Success does not depend on
+  knowing to restart a daemon, alter hidden files, inspect service internals,
+  issue raw HTTP requests, query persistence directly or manually reconstruct
+  execution state from unrelated logs.
+- **The headless path stands on its own.** Greenhouse or another graphical
+  interface may improve the experience, but the governed Stem can be installed,
+  operated, observed and diagnosed without requiring that optional interface.
+- **The measurement records friction rather than hiding it.** Prerequisites,
+  ambiguity, failures, manual interventions, working time and waiting time are
+  recorded. Any intervention that depends on existing OpenTendril expertise is
+  counted as a failure of the first-use path, not silently supplied by the
+  tester.
 
-A mechanism that only detects the unsafe case and refuses or serializes the
-second run is a valid safety improvement, but it does **not** satisfy this
-objective. The capability is multiple independent pieces of work in flight, not
-merely an honest declaration that only one is supported.
+The first exercise establishes the baseline; it does not need to meet an
+arbitrary elapsed-time target. Subsequent work should remove measured friction
+until the capability above is demonstrated without expert intervention.
 
-Whether the resulting Fruit is worth accepting remains a separate Botanist
-decision. Two perfectly isolated runs may legitimately produce conflicting or
-poor work; that is not an isolation failure.
+A path that succeeds only because the tester already knows OpenTendril does not
+satisfy this objective. Likewise, replacing understandable terminal operation
+with a mandatory graphical setup surface does not by itself satisfy it:
+simplicity and observability are the capability, not any particular interface.
 
 ---
 
