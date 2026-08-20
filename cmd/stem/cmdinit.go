@@ -19,41 +19,49 @@ func runInitCmd(args []string) {
 
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Step 1: Detect Ollama
+	// Step 1: Detect Ollama. A reachable instance is local even with zero models.
 	fmt.Println("\n🔍 Scanning for local LLM providers...")
-	ollamaModels := getOllamaModels()
+	probe := probeOllama()
 
 	defaultProvider := "anthropic"
 	localModel := ""
 	inferenceURL := ""
 
-	if len(ollamaModels) > 0 {
-		fmt.Printf("✅ Detected local Ollama with %d model(s):\n", len(ollamaModels))
-		for i, m := range ollamaModels {
-			fmt.Printf("  %d) %s\n", i+1, m)
-		}
-		fmt.Println("Would you like to use Ollama for local, private execution? (y/n)")
-		fmt.Print("> ")
-		if scanner.Scan() {
-			ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
-			if ans == "y" || ans == "yes" {
-				defaultProvider = "local"
-				inferenceURL = defaultLocalInferenceURL()
-				localModel = selectOllamaModel(ollamaModels)
-				// Let user override model choice
-				fmt.Printf("Auto-selected model: %s\n", localModel)
-				fmt.Printf("Press Enter to use it, or type a different model name: ")
-				if scanner.Scan() {
-					if override := strings.TrimSpace(scanner.Text()); override != "" {
-						localModel = override
-					}
-				}
-				if !containsModel(ollamaModels, localModel) {
-					fmt.Printf("⚠️  Model %q is not in Ollama's local model list.\n", localModel)
-					fmt.Printf("   Pull it first with: ollama pull %s\n", localModel)
-				}
-				fmt.Printf("✅ Using Ollama model: %s\n", localModel)
+	if probe.reachable {
+		if len(probe.models) > 0 {
+			fmt.Printf("✅ Detected local Ollama with %d model(s):\n", len(probe.models))
+			for i, m := range probe.models {
+				fmt.Printf("  %d) %s\n", i+1, m)
 			}
+		} else {
+			fmt.Println("✅ Detected local Ollama at localhost:11434.")
+			fmt.Printf("   No models pulled yet. Pull one with: ollama pull %s\n", defaultOllamaModel)
+		}
+		fmt.Println("Would you like to use Ollama for local, private execution? (Y/n)")
+		fmt.Print("> ")
+		ans := ""
+		if scanner.Scan() {
+			ans = scanner.Text()
+		}
+		if acceptLocalOllama(ans) {
+			defaultProvider = "local"
+			inferenceURL = defaultLocalInferenceURL()
+			localModel = selectOllamaModel(probe.models)
+			if localModel == "" {
+				localModel = defaultOllamaModel
+			}
+			fmt.Printf("Auto-selected model: %s\n", localModel)
+			fmt.Printf("Press Enter to use it, or type a different model name: ")
+			if scanner.Scan() {
+				if override := strings.TrimSpace(scanner.Text()); override != "" {
+					localModel = override
+				}
+			}
+			if !containsModel(probe.models, localModel) {
+				fmt.Printf("⚠️  Model %q is not in Ollama's local model list.\n", localModel)
+				fmt.Printf("   Pull it first with: ollama pull %s\n", localModel)
+			}
+			fmt.Printf("✅ Using Ollama model: %s\n", localModel)
 		}
 	} else {
 		fmt.Println("ℹ️  No local Ollama instance detected at localhost:11434.")
@@ -323,33 +331,58 @@ func upsertEnvFile(path string, keys []string, values map[string]string) error {
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
-func getOllamaModels() []string {
-	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://localhost:11434/api/tags")
+const defaultOllamaModel = "llama3.2"
+const ollamaTagsURL = "http://localhost:11434/api/tags"
+
+type ollamaProbe struct {
+	reachable bool
+	models    []string
+}
+
+func probeOllama() ollamaProbe {
+	return probeOllamaURL(&http.Client{Timeout: 2 * time.Second}, ollamaTagsURL)
+}
+
+// probeOllamaURL reports whether an Ollama instance answered. HTTP 200 with a
+// valid tags body is a local instance even when the model list is empty.
+func probeOllamaURL(client *http.Client, tagsURL string) ollamaProbe {
+	if client == nil {
+		return ollamaProbe{}
+	}
+	resp, err := client.Get(tagsURL)
 	if err != nil {
-		return nil
+		return ollamaProbe{}
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return nil
+		return ollamaProbe{}
 	}
-
 	var data struct {
 		Models []struct {
 			Name string `json:"name"`
 		} `json:"models"`
 	}
-
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil
+		return ollamaProbe{}
 	}
-
-	var models []string
+	models := make([]string, 0, len(data.Models))
 	for _, m := range data.Models {
-		models = append(models, m.Name)
+		if m.Name != "" {
+			models = append(models, m.Name)
+		}
 	}
-	return models
+	return ollamaProbe{reachable: true, models: models}
+}
+
+// acceptLocalOllama is the Ollama-first default: empty, y, and yes stay local.
+// Only an explicit n/no declines to a cloud provider.
+func acceptLocalOllama(ans string) bool {
+	switch strings.ToLower(strings.TrimSpace(ans)) {
+	case "n", "no":
+		return false
+	default:
+		return true
+	}
 }
 
 func selectOllamaModel(models []string) string {
