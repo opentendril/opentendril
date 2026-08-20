@@ -83,13 +83,15 @@ Git operations are normally Stem-side. Sealed Sprouts do not receive the Substra
 ## Fruit and State Externalization
 
 Reviewable Fruit requires completed execution with measured modifications, no run error, not readonly, not investigation-only, and actual changes.
-- This results in a Terrarium execution commit on a run-specific branch (`sprout/task-<stepID>`).
-- Managed remote publication pushes to that run-specific branch. The source/default branch remains the starting source and is not advanced automatically.
-- For local managed execution, committed Fruit remains on the run-specific local branch and is reviewable there.
-- `SproutRunReport` carries `FruitBranch` and `FruitCommit` when a managed run creates committed reviewable Fruit, retaining this identity even if remote publication fails.
+- Reviewable Fruit results in a Terrarium execution commit.
+- For writable managed runs, that commit is created on the run-specific `sprout/task-<stepID>` branch.
+- Managed remote publication targets that run-specific branch.
+- Managed local Fruit remains on that run-specific local branch.
+- The configured source/default branch is the managed run's starting source and is not advanced by managed Fruit publication.
+- `SproutRunReport.FruitBranch` and `FruitCommit` describe managed committed Fruit, retaining this identity even if remote publication fails.
+- Ordinary non-managed local merge-back and non-managed remote publication retain their existing semantics.
 - Failure isolation is run-scoped: teardown or publication failure for one managed run must not delete or mutate another run's worktree, branch, or Fruit.
 - `DisableMergeBack` may leave the commit isolated.
-- Local merge-back may internally merge the Terrarium commit into the source branch.
 - Internal merge-back is not Botanist acceptance. Final review and acceptance remains human-controlled.
 
 ## Chronicler

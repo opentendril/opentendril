@@ -101,21 +101,20 @@ this guide sets them all to `/home/tendril`, they coincide:
 A separate principal cannot read your home directory, so it cannot work in your
 clone. It gets its own, and **the remote is the only thing the two share**.
 
-```
+```text
    your account                              the Stem (tendril)
    ~/…/opentendril                           ~/.tendril/substrates/opentendril (managed base)
    you edit here                                        │
              │                                          ├── run workspace A → Fruit A
              │                                          ├── run workspace B → Fruit B
-             │  push / fetch                            │  publish (push or API commit)
+             │  push / fetch                            │  publish managed Fruit
              └──────────────►  remote  ◄────────────────┘
                         source of truth
 ```
 
-* **The Stem makes a change** → it works in its own run workspace. Commits, pushes, and PR creation are distinct operations. `git.commit` in local mode requires a subsequent `git.push` to publish, while API commit mode publishes directly. `git.pr` opens a pull request separately. Final merge is Botanist-controlled.
-* **You make a change** → you push. The Stem picks it up on its next run: a
-  managed checkout is fetched and hard-reset to the target branch before every
-  run.
+* **A managed Sprout makes a change** → it uses the Tendril-owned managed base as Git backing state, executes writable work in an independent `~/.tendril/run-workspaces/` worktree, and produces managed Fruit on a `sprout/task-<stepID>` branch.
+* **A Pollinator invokes delegated Git capabilities** → it works in a per-Pollen delegated workspace under `~/.tendril/workspaces/`. Operations like `git.commit`, `git.push`, and `git.pr` belong to this delegated Git ladder; they are NOT managed Sprout RunWorkspaces.
+* **You make a change** → you work in your own clone and push to the remote. The Stem picks it up on its next run: the managed base is fetched and hard-reset to the target branch.
 
 > [!WARNING]
 > **Never hand-edit the Stem's clone.** It is Tendril-owned backing state and may
@@ -128,7 +127,7 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 > - Each writable managed run gets an independent RunWorkspace.
 > - Multiple managed runs may be in execution against the same managed Substrate without sharing a working tree.
 > - The shared base is used only for backing Git state and short metadata operations.
-> - Each successful managed run retains/publishes its own `sprout/task-<stepID>` Fruit.
+> - Each managed run that produces committed reviewable Fruit retains/publishes its own `sprout/task-<stepID>` Fruit.
 > - The Botanist reviews each Fruit separately.
 
 The boundary and the workflow are the same mechanism here — nothing needs to be
