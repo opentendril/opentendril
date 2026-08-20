@@ -140,7 +140,10 @@ Tendril never needs it.
 
 ### 1. Create the App (once)
 
-GitHub → Settings → Developer settings → GitHub Apps → New GitHub App.
+GitHub App registration, installation, and private-key generation are GitHub web
+administration actions, not a Tendril terminal command.
+
+In your browser, navigate to GitHub → Settings → Developer settings → GitHub Apps → New GitHub App.
 Repository permissions: **Contents: Read and write**, **Pull requests: Read and
 write**, **Metadata: Read** (required). Generate a private key (`.pem`) and note
 the **App ID**. Install the App on the repositories it should manage.
