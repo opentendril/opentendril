@@ -365,11 +365,13 @@ empty file here is what makes the wizard write where the Stem will look:
 # as tendril, in /home/tendril
 touch /home/tendril/.env
 chmod 600 /home/tendril/.env
+ollama pull llama3.2
 tendril init
 ```
 
-The wizard is Ollama-first: it detects a local instance and defaults to fully
-local inference. Decline and it walks you through a cloud provider and its key.
+The wizard is Ollama-first: it detects a running local instance — including one
+with no models pulled yet — and defaults to fully local inference. Decline and
+it walks you through a cloud provider and its key.
 
 **Check:** `grep DEFAULT_LLM_PROVIDER /home/tendril/.env` prints your choice.
 
