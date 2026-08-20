@@ -192,7 +192,22 @@ func isWritableManagedRun(path string, plan *substrateExecutionPlan, investigati
 	return isManagedCheckoutPath(path)
 }
 
+var (
+	beforeResolveManagedRunStartCommitLock = func() {}
+	readManagedRunStartCommitFn            = readManagedRunStartCommit
+)
+
 func resolveManagedRunStartCommit(ctx context.Context, sourcePath string) (string, error) {
+	// The managed checkout may be refreshed by another named run. Resolve HEAD
+	// under the same short Git metadata lock used by materialization and run
+	// workspace allocation, but never carry the lock into Sprout execution.
+	beforeResolveManagedRunStartCommitLock()
+	unlockGit := lockRunWorkspaceGit(sourcePath)
+	defer unlockGit()
+	return readManagedRunStartCommitFn(ctx, sourcePath)
+}
+
+func readManagedRunStartCommit(ctx context.Context, sourcePath string) (string, error) {
 	commit, err := runGitCommand(ctx, sourcePath, "rev-parse", "HEAD^{commit}")
 	if err != nil {
 		return "", fmt.Errorf("resolve managed checkout start commit: %w", err)
@@ -1913,7 +1928,17 @@ func copyMycorrhizalCache(ctx context.Context, sourcePath, runPath string) ([]st
 			continue
 		}
 		dstDir := filepath.Join(runPath, dir)
-		cmd := exec.CommandContext(ctx, "cp", "-r", "--", srcDir, dstDir)
+		if err := os.Mkdir(dstDir, 0o755); err != nil {
+			if os.IsExist(err) {
+				// A linked worktree may already contain a tracked dependency
+				// tree. It belongs to Git, so do not place a host cache beneath
+				// it or register it for disposable-run cleanup.
+				continue
+			}
+			return copied, fmt.Errorf("claim Mycorrhizal cache %s: %w", dir, err)
+		}
+		sourceContents := filepath.Clean(srcDir) + string(filepath.Separator) + "."
+		cmd := exec.CommandContext(ctx, "cp", "-r", "--", sourceContents, dstDir)
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ Failed to copy mycorrhizal cache %s: %v\n", dir, err)
 			if _, statErr := os.Lstat(dstDir); statErr == nil {
@@ -2416,18 +2441,11 @@ func cloneForeignSubstrate(url, branch string) (string, error) {
 // path plus whether that path is persistent (managed/path checkout) — the caller
 // removes only non-persistent (ephemeral) checkouts.
 func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredential) (string, bool, error) {
-	dest, err := ResolveSubstrateWorkspace(name, &SubstrateSpec{Checkout: cred.Checkout})
-	if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
-		mode := strings.ToLower(strings.TrimSpace(cred.Checkout.Mode))
-		if mode != "" && mode != "ephemeral" {
-			return "", false, err
-		}
-	}
-
 	checkout, err := resolveCheckoutPlan(name, cred.Checkout)
 	if err != nil {
 		return "", false, err
 	}
+	dest := ""
 
 	// Resolve git auth (mints a fresh GitHub App token when needed). The token
 	// travels only in the process environment via an inline credential helper —
@@ -2446,22 +2464,64 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		dest = checkout.dir
 	}
 
-	// Reuse only a checkout that is itself a git repository. git-rev-parse
-	// walks parents, so an empty managed placeholder under Stem home (or
-	// any parent repo) would otherwise be "refreshed" as that parent and
-	// the Terrarium would bind-mount the still-empty directory as /app.
-	if checkout.persistent && checkoutHasGitMetadata(dest) {
-		if err := refreshExistingCheckout(dest, branch, gitEnv, checkout.tendrilOwned); err != nil {
+	if checkout.persistent && checkout.tendrilOwned {
+		// Managed checkout materialization mutates shared Git state. Reuse the
+		// RunWorkspace metadata lock for only this short section; CreateRunWorkspace
+		// acquires the same lock later, so release it before workspace allocation.
+		dest = checkout.dir
+		unlockGit := lockRunWorkspaceGit(dest)
+		defer unlockGit()
+		if err := materializeManagedCheckoutFn(name, dest, url, branch, cred, gitEnv); err != nil {
 			return "", false, err
 		}
 		return dest, true, nil
 	}
+
+	// Path checkouts remain operator-owned and ephemeral checkouts remain
+	// throwaway. Neither participates in the managed-base lock.
 	if checkout.persistent {
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return "", false, fmt.Errorf("prepare checkout dir: %w", err)
+		dest, err = ResolveSubstrateWorkspace(name, &SubstrateSpec{Checkout: cred.Checkout})
+		if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
+			return "", false, err
 		}
 	}
+	existing := checkout.persistent && checkoutHasGitMetadata(dest)
+	if err := materializeCheckout(dest, url, branch, gitEnv, checkout.tendrilOwned, existing); err != nil {
+		return "", false, err
+	}
 
+	return dest, checkout.persistent, nil
+}
+
+var (
+	refreshExistingCheckoutFn    = refreshExistingCheckout
+	cloneCheckoutFn              = cloneCheckout
+	materializeManagedCheckoutFn = materializeManagedCheckout
+)
+
+func materializeManagedCheckout(name, dest, url, branch string, cred ResolvedCredential, gitEnv []string) error {
+	// Reuse only a checkout that is itself a git repository. git-rev-parse
+	// walks parents, so an empty managed placeholder under Stem home (or
+	// any parent repo) would otherwise be "refreshed" as that parent and
+	// the Terrarium would bind-mount the still-empty directory as /app.
+	resolved, err := ResolveSubstrateWorkspace(name, &SubstrateSpec{Checkout: cred.Checkout})
+	if err != nil && !errors.Is(err, ErrWorkspaceAbsent) {
+		return err
+	}
+	return materializeCheckout(dest, url, branch, gitEnv, true, strings.TrimSpace(resolved) != "")
+}
+
+func materializeCheckout(dest, url, branch string, gitEnv []string, tendrilOwned, existing bool) error {
+	if existing {
+		return refreshExistingCheckoutFn(dest, branch, gitEnv, tendrilOwned)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("prepare checkout dir: %w", err)
+	}
+	return cloneCheckoutFn(dest, url, branch, gitEnv)
+}
+
+func cloneCheckout(dest, url, branch string, gitEnv []string) error {
 	args := []string{"-c", "protocol.ext.allow=never", "clone"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
@@ -2473,10 +2533,9 @@ func cloneNamedForeignSubstrate(name, url, branch string, cred ResolvedCredentia
 		cmd.Env = append(os.Environ(), gitEnv...)
 	}
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", false, fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
+		return fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
 	}
-
-	return dest, checkout.persistent, nil
+	return nil
 }
 
 func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {

@@ -38,7 +38,14 @@ type RunWorkspace struct {
 var runWorkspaceGitLocks sync.Map
 
 func runWorkspaceGitMutexFor(repository string) *sync.Mutex {
-	value, _ := runWorkspaceGitLocks.LoadOrStore(filepath.Clean(repository), &sync.Mutex{})
+	key := strings.TrimSpace(repository)
+	if absolute, err := filepath.Abs(key); err == nil {
+		key = absolute
+	}
+	if resolved, err := resolveRunWorkspacePath(key); err == nil {
+		key = resolved
+	}
+	value, _ := runWorkspaceGitLocks.LoadOrStore(filepath.Clean(key), &sync.Mutex{})
 	return value.(*sync.Mutex)
 }
 

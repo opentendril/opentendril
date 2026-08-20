@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,6 +94,56 @@ func (runner *managedWritingRunner) Run(ctx context.Context, taskPrompt string) 
 	}
 }
 
+func (runner *managedWritingRunner) setWorkspace(workspace string) {
+	runner.workspace = workspace
+}
+
+type managedLockProbeRunner struct {
+	repository string
+	observed   chan bool
+}
+
+func (runner *managedLockProbeRunner) Run(context.Context, string) (sproutResult, error) {
+	mutex := runWorkspaceGitMutexFor(runner.repository)
+	available := mutex.TryLock()
+	if available {
+		mutex.Unlock()
+	}
+	runner.observed <- available
+	return sproutResult{Response: "lock probe"}, nil
+}
+
+type managedTrackedCacheProbeRunner struct {
+	workspace string
+	observed  chan error
+}
+
+func (runner *managedTrackedCacheProbeRunner) setWorkspace(workspace string) {
+	runner.workspace = workspace
+}
+
+func (runner *managedTrackedCacheProbeRunner) Run(context.Context, string) (sproutResult, error) {
+	var probeErr error
+	if _, err := os.Stat(filepath.Join(runner.workspace, "vendor", "vendor")); err == nil {
+		probeErr = errors.New("tracked vendor cache was nested as vendor/vendor")
+	} else if !os.IsNotExist(err) {
+		probeErr = fmt.Errorf("inspect nested tracked vendor cache: %w", err)
+	}
+	if probeErr == nil {
+		contents, err := os.ReadFile(filepath.Join(runner.workspace, "vendor", "cache.txt"))
+		if err != nil {
+			probeErr = fmt.Errorf("read tracked vendor cache: %w", err)
+		} else if string(contents) != "tracked dependency\n" {
+			probeErr = fmt.Errorf("tracked vendor cache = %q", contents)
+		}
+	}
+	runner.observed <- probeErr
+	if probeErr != nil {
+		return sproutResult{}, probeErr
+	}
+	return sproutResult{Response: "tracked cache preserved"}, nil
+}
+
 func (runner *managedWritingRunner) releaseRun() {
 	runner.releaseOn.Do(func() { close(runner.release) })
 }
@@ -174,9 +225,11 @@ func installManagedRunSeams(t *testing.T, capture *managedRunCapture, runners ma
 		if !ok {
 			return nil, errors.New("missing managed test runner for " + stepID)
 		}
+		if setter, ok := runner.(interface{ setWorkspace(string) }); ok {
+			setter.setWorkspace(workspace)
+		}
 		file := ""
 		if writing, ok := runner.(*managedWritingRunner); ok {
-			writing.workspace = workspace
 			file = writing.file
 		}
 		if err := capture.remember(stepID, workspace, sourcePath, file); err != nil {
@@ -296,6 +349,70 @@ func TestRunSproutManagedRunUsesIndependentWorkspaceAndBackingSource(t *testing.
 	}
 }
 
+func TestCopyMycorrhizalCacheCopiesAbsentDestination(t *testing.T) {
+	source := t.TempDir()
+	runPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "vendor"), 0o755); err != nil {
+		t.Fatalf("create source cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "vendor", "cache.txt"), []byte("host cache\n"), 0o644); err != nil {
+		t.Fatalf("write source cache: %v", err)
+	}
+
+	copied, err := copyMycorrhizalCache(context.Background(), source, runPath)
+	if err != nil {
+		t.Fatalf("copy absent cache: %v", err)
+	}
+	want := filepath.Join(runPath, "vendor")
+	if len(copied) != 1 || copied[0] != want {
+		t.Fatalf("copied cache paths = %v, want [%q]", copied, want)
+	}
+	if _, err := os.Stat(filepath.Join(runPath, "vendor", "vendor")); !os.IsNotExist(err) {
+		t.Fatalf("absent destination was nested as vendor/vendor, stat err = %v", err)
+	}
+	assertFileContents(t, filepath.Join(runPath, "vendor", "cache.txt"), "host cache\n")
+
+	state, err := newRunWorkspaceCacheState(runPath, want)
+	if err != nil {
+		t.Fatalf("snapshot copied cache: %v", err)
+	}
+	if err := state.cleanup(); err != nil {
+		t.Fatalf("cleanup copied cache: %v", err)
+	}
+	if _, err := os.Stat(want); !os.IsNotExist(err) {
+		t.Fatalf("copied cache was not removed, stat err = %v", err)
+	}
+}
+
+func TestCopyMycorrhizalCacheLeavesExistingDestinationUntouched(t *testing.T) {
+	source := t.TempDir()
+	runPath := t.TempDir()
+	for _, root := range []string{source, runPath} {
+		if err := os.MkdirAll(filepath.Join(root, "vendor"), 0o755); err != nil {
+			t.Fatalf("create %s vendor: %v", root, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(source, "vendor", "cache.txt"), []byte("host cache\n"), 0o644); err != nil {
+		t.Fatalf("write source cache: %v", err)
+	}
+	existing := filepath.Join(runPath, "vendor", "cache.txt")
+	if err := os.WriteFile(existing, []byte("tracked dependency\n"), 0o644); err != nil {
+		t.Fatalf("write existing run-worktree cache: %v", err)
+	}
+
+	copied, err := copyMycorrhizalCache(context.Background(), source, runPath)
+	if err != nil {
+		t.Fatalf("copy over existing cache: %v", err)
+	}
+	if len(copied) != 0 {
+		t.Fatalf("existing cache was registered as disposable: %v", copied)
+	}
+	if _, err := os.Stat(filepath.Join(runPath, "vendor", "vendor")); !os.IsNotExist(err) {
+		t.Fatalf("existing vendor was nested as vendor/vendor, stat err = %v", err)
+	}
+	assertFileContents(t, existing, "tracked dependency\n")
+}
+
 func TestManagedRunCopiesMycorrhizalCacheWithoutMutatingBase(t *testing.T) {
 	repository := prepareManagedRunRepository(t)
 	cachePath := filepath.Join(repository, "vendor", "cache.txt")
@@ -319,14 +436,134 @@ func TestManagedRunCopiesMycorrhizalCacheWithoutMutatingBase(t *testing.T) {
 		t.Fatalf("managed cache RunSprout: %v", err)
 	}
 	if !capture.cacheVisible(stepID) {
-		t.Fatal("managed RunWorkspace did not receive the copied Mycorrhizal cache")
+		mount, _, _ := capture.get(stepID)
+		entries, _ := os.ReadDir(filepath.Join(mount, "vendor"))
+		t.Fatalf("managed RunWorkspace did not receive the copied Mycorrhizal cache at %q: %v", mount, entries)
 	}
-	if got, err := os.ReadFile(cachePath); err != nil {
-		t.Fatalf("read persistent cache: %v", err)
-	} else if string(got) != "cached dependency\n" {
-		t.Fatalf("persistent cache changed to %q", got)
+	mount, _, _ := capture.get(stepID)
+	if _, err := os.Stat(mount); !os.IsNotExist(err) {
+		t.Fatalf("unchanged copied cache left its run workspace behind, stat err = %v", err)
 	}
+	assertFileContents(t, cachePath, "cached dependency\n")
 	assertManagedBaseClean(t, repository)
+}
+
+func TestManagedRunDoesNotCopyOverTrackedVendor(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	cachePath := filepath.Join(repository, "vendor", "cache.txt")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("create tracked vendor directory: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("tracked dependency\n"), 0o644); err != nil {
+		t.Fatalf("write tracked vendor cache: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repository, "add", "vendor/cache.txt"); err != nil {
+		t.Fatalf("stage tracked vendor cache: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repository, "commit", "-q", "-m", "tracked vendor"); err != nil {
+		t.Fatalf("commit tracked vendor cache: %v", err)
+	}
+
+	var copied []string
+	originalCopy := copyMycorrhizalCacheFn
+	t.Cleanup(func() { copyMycorrhizalCacheFn = originalCopy })
+	copyMycorrhizalCacheFn = func(ctx context.Context, sourcePath, runPath string) ([]string, error) {
+		paths, err := originalCopy(ctx, sourcePath, runPath)
+		copied = append([]string(nil), paths...)
+		return paths, err
+	}
+
+	stepID := "tracked-vendor"
+	probe := &managedTrackedCacheProbeRunner{observed: make(chan error, 1)}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: probe})
+	if _, err := (&DockerOrchestrator{Substrate: repository, StepID: stepID, DisableMergeBack: true}).RunSprout(context.Background(), "use tracked vendor"); err != nil {
+		t.Fatalf("managed tracked vendor RunSprout: %v", err)
+	}
+	if err := <-probe.observed; err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range copied {
+		if filepath.Base(path) == "vendor" {
+			t.Fatalf("tracked vendor was registered as a disposable cache: %v", copied)
+		}
+	}
+	mount, _, _ := capture.get(stepID)
+	if _, err := os.Stat(mount); !os.IsNotExist(err) {
+		t.Fatalf("tracked vendor run left its workspace behind, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, "vendor", "vendor")); !os.IsNotExist(err) {
+		t.Fatalf("managed base grew a nested vendor/vendor, stat err = %v", err)
+	}
+	assertFileContents(t, cachePath, "tracked dependency\n")
+	assertManagedBaseClean(t, repository)
+}
+
+func TestManagedRunPreservesModifiedCopiedCache(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	cachePath := filepath.Join(repository, "vendor", "cache.txt")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("create ignored vendor directory: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("host cache\n"), 0o644); err != nil {
+		t.Fatalf("write ignored vendor cache: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, ".git", "info", "exclude"), []byte("/vendor/\n"), 0o644); err != nil {
+		t.Fatalf("ignore vendor cache: %v", err)
+	}
+
+	stepID := "modified-copied-cache"
+	runner := newManagedWritingRunner("vendor/cache.txt")
+	runner.releaseRun()
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+	if _, err := (&DockerOrchestrator{Substrate: repository, StepID: stepID, DisableMergeBack: true}).RunSprout(context.Background(), "modify copied cache"); err == nil {
+		t.Fatal("modified copied cache cleanup succeeded; it should preserve the run workspace")
+	}
+	mount, _, _ := capture.get(stepID)
+	if _, err := os.Stat(mount); err != nil {
+		t.Fatalf("modified copied cache workspace was removed: %v", err)
+	}
+	assertFileContents(t, cachePath, "host cache\n")
+	assertManagedBaseClean(t, repository)
+
+	// This workspace is intentionally preserved for review; remove only the
+	// known run-owned worktree after restoring its generated cache content.
+	if err := os.WriteFile(filepath.Join(mount, "vendor", "cache.txt"), []byte("host cache\n"), 0o644); err != nil {
+		t.Fatalf("restore preserved cache before cleanup: %v", err)
+	}
+	baseCommit, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve managed base commit for cleanup: %v", err)
+	}
+	workspace := RunWorkspace{
+		Repository: repository,
+		Path:       mount,
+		Branch:     "sprout/task-" + stepID,
+		BaseCommit: strings.TrimSpace(baseCommit),
+	}
+	owned, ok := runWorkspaceOwnedRef(repository, workspace.Branch, workspace.BaseCommit)
+	if !ok {
+		t.Fatal("preserved run workspace ownership was not recorded")
+	}
+	workspace.RunID = owned.RunID
+	if err := workspace.Cleanup(context.Background(), ResolvedCredential{}); err != nil {
+		t.Fatalf("cleanup preserved cache workspace after restoring it: %v", err)
+	}
+}
+
+func TestManagedRunDoesNotHoldBaseGitLockDuringSproutExecution(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	stepID := "lock-free-execution"
+	probe := &managedLockProbeRunner{repository: repository, observed: make(chan bool, 1)}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: probe})
+	if _, err := (&DockerOrchestrator{Substrate: repository, StepID: stepID, DisableMergeBack: true}).RunSprout(context.Background(), "probe execution lock"); err != nil {
+		t.Fatalf("managed lock probe RunSprout: %v", err)
+	}
+	if !<-probe.observed {
+		t.Fatal("RunWorkspace Git metadata lock remained held during autonomous Sprout execution")
+	}
 }
 
 func TestManagedRunWorkspacesOverlapAndCleanupIsIndependent(t *testing.T) {
