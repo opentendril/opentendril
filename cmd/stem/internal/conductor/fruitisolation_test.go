@@ -529,21 +529,63 @@ func TestLocalManagedFruitSurvivesCleanupSourceUnchanged(t *testing.T) {
 	}
 }
 
-// TestFailedManagedRunDoesNotDamageSuccessfulRunFruit proves that a failed
-// overlapping run cannot delete, move, or overwrite a successful run's Fruit.
+// managedErrorRunner is a sproutRunner that signals started, blocks until
+// released, then returns a deliberate execution error without writing any
+// files. It is used to prove that a genuinely failing overlapping run cannot
+// damage a concurrently successful run's Fruit branch.
+type managedErrorRunner struct {
+	runErr  error
+	started chan struct{}
+	release chan struct{}
+}
+
+func newManagedErrorRunner(err error) *managedErrorRunner {
+	return &managedErrorRunner{
+		runErr:  err,
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (r *managedErrorRunner) releaseRun() {
+	select {
+	case <-r.release:
+	default:
+		close(r.release)
+	}
+}
+
+func (r *managedErrorRunner) Run(ctx context.Context, _ string) (sproutResult, error) {
+	close(r.started)
+	select {
+	case <-r.release:
+		return sproutResult{}, r.runErr
+	case <-ctx.Done():
+		return sproutResult{}, ctx.Err()
+	}
+}
+
+// TestFailedManagedRunDoesNotDamageSuccessfulRunFruit proves that a genuinely
+// failing overlapping run — one that returns a deliberate execution error —
+// cannot delete, move, or overwrite a successful concurrent run's Fruit.
+// Both runs are live in distinct RunWorkspaces simultaneously; only A succeeds.
 func TestFailedManagedRunDoesNotDamageSuccessfulRunFruit(t *testing.T) {
 	repository := prepareManagedRunRepository(t)
 	successID := "success-fruit"
 	failID := "fail-run"
 
+	deliberateErr := errors.New("deliberate execution failure for fail-run")
+
 	successRunner := newManagedWritingRunner("success.txt")
-	failRunner := newManagedWritingRunner("fail.txt")
+	// failRunner returns a deliberate error and never writes any files.
+	failRunner := newManagedErrorRunner(deliberateErr)
 	capture := newManagedRunCapture()
 
 	installManagedRunSeams(t, capture,
 		map[string]sproutRunner{successID: successRunner, failID: failRunner})
 
 	type result struct {
+		stepID string
 		report SproutRunReport
 		err    error
 	}
@@ -556,37 +598,55 @@ func TestFailedManagedRunDoesNotDamageSuccessfulRunFruit(t *testing.T) {
 				Substrate: repository,
 				StepID:    stepID,
 			}).RunSprout(context.Background(), "work")
-			results <- result{report: report, err: err}
+			results <- result{stepID: stepID, report: report, err: err}
 		}(stepID)
 	}
 
-	// Wait for both to start.
+	// Wait for both to start — proving both RunWorkspaces are live simultaneously
+	// before either is released.
 	<-successRunner.started
 	<-failRunner.started
 
-	// Record both mounts before releasing.
+	// Verify both runs have distinct live worktrees while they overlap.
 	successMount, _, _ := capture.get(successID)
 	failMount, _, _ := capture.get(failID)
 	if successMount == "" || failMount == "" {
 		t.Fatalf("mounts not captured: success=%q fail=%q", successMount, failMount)
 	}
 	if successMount == failMount {
-		t.Fatalf("overlapping runs share the same worktree %q", successMount)
+		t.Fatalf("overlapping runs share the same worktree %q; must be isolated", successMount)
 	}
 
-	// Release both runs; fail run produces no files so it results in no-changes.
+	// Release success first, then fail — order does not affect correctness.
 	successRunner.releaseRun()
 	failRunner.releaseRun()
 
 	// Collect both results.
 	wantFruitBranch := "sprout/task-" + successID
 	for i := 0; i < 2; i++ {
-		<-results
+		r := <-results
+		if r.stepID == failID {
+			// Fail run: must carry no fabricated Fruit identity (it never
+			// committed any Fruit before the error), and must be failed.
+			if r.report.Outcome != "" && r.report.Outcome != SproutOutcomeFailed {
+				t.Errorf("fail run outcome = %q, want %q or empty", r.report.Outcome, SproutOutcomeFailed)
+			}
+			if r.report.FruitBranch != "" {
+				t.Errorf("fail run FruitBranch = %q, want empty (no committed Fruit before failure)", r.report.FruitBranch)
+			}
+			if r.report.FruitCommit != "" {
+				t.Errorf("fail run FruitCommit = %q, want empty (no committed Fruit before failure)", r.report.FruitCommit)
+			}
+			// The error must wrap deliberateErr.
+			if r.err == nil || !errors.Is(r.err, deliberateErr) {
+				t.Errorf("fail run error = %v; want errors.Is(err, deliberateErr) to be true", r.err)
+			}
+		}
 	}
 
 	// Success Fruit branch must still exist in the repository.
 	if !branchExists(t, repository, wantFruitBranch) {
-		t.Errorf("success Fruit branch %q was lost; fail run cleanup must not delete another run's branch", wantFruitBranch)
+		t.Errorf("success Fruit branch %q was lost; failed overlapping run cleanup must not delete another run's branch", wantFruitBranch)
 	}
 
 	// Main/configured source branch must be unchanged.
@@ -594,9 +654,10 @@ func TestFailedManagedRunDoesNotDamageSuccessfulRunFruit(t *testing.T) {
 }
 
 // TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit verifies the
-// core isolation scenario: two managed runs each edit the same source file from
-// the same base commit, completing successfully with distinct competing commits
-// that are both independent descendants of the original.
+// core isolation scenario: two managed runs each edit the SAME EXISTING TRACKED
+// file (seed.txt) from the same base commit, writing different content. Both
+// complete successfully with distinct competing commits, each a direct descendant
+// of the common base, each containing only its own version of the file.
 func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testing.T) {
 	repository := prepareManagedRunRepository(t)
 	baseCommit, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
@@ -605,13 +666,17 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 	}
 	baseCommit = strings.TrimSpace(baseCommit)
 
+	// Confirm seed.txt exists and is tracked at the baseline.
+	if _, err := runGitCommand(context.Background(), repository, "show", "HEAD:seed.txt"); err != nil {
+		t.Fatalf("baseline seed.txt missing from HEAD: %v", err)
+	}
+
 	stepA := "compete-a"
 	stepB := "compete-b"
 
-	// Both runs write to the same file (seed.txt already exists as tracked).
-	// Use "shared-edit.txt" as new file both create, so both show as reviewable.
-	runnerA := newManagedWritingRunner("shared-edit.txt")
-	runnerB := newManagedWritingRunner("shared-edit.txt")
+	// Both runs modify the same existing tracked file (seed.txt) with distinct content.
+	runnerA := newManagedWritingRunner("seed.txt")
+	runnerB := newManagedWritingRunner("seed.txt")
 	capture := newManagedRunCapture()
 
 	installManagedRunSeams(t, capture,
@@ -628,7 +693,7 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 			report, err := (&DockerOrchestrator{
 				Substrate: repository,
 				StepID:    stepID,
-			}).RunSprout(context.Background(), "edit shared file")
+			}).RunSprout(context.Background(), "edit existing tracked file")
 			results <- result{report: report, err: err}
 		}(stepID)
 	}
@@ -642,12 +707,14 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 		t.Fatalf("runs share the same worktree: %q", mountA)
 	}
 
-	// Write different content to the shared file in each workspace.
-	if err := os.WriteFile(filepath.Join(mountA, "shared-edit.txt"), []byte("edit-a\n"), 0o644); err != nil {
-		t.Fatalf("write A: %v", err)
+	// Write competing content to the same tracked file in each isolated workspace.
+	const contentA = "version-a\n"
+	const contentB = "version-b\n"
+	if err := os.WriteFile(filepath.Join(mountA, "seed.txt"), []byte(contentA), 0o644); err != nil {
+		t.Fatalf("write A seed.txt: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(mountB, "shared-edit.txt"), []byte("edit-b\n"), 0o644); err != nil {
-		t.Fatalf("write B: %v", err)
+	if err := os.WriteFile(filepath.Join(mountB, "seed.txt"), []byte(contentB), 0o644); err != nil {
+		t.Fatalf("write B seed.txt: %v", err)
 	}
 
 	runnerA.releaseRun()
@@ -670,13 +737,11 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 			reportA = r.report
 		case "sprout/task-" + stepB:
 			reportB = r.report
-		default:
-			// DisableMergeBack is false for these (local managed), so FruitBranch
-			// is only set for managed runs; the existing branch check covers it.
 		}
 	}
 
 	// Both Fruit branches must exist.
+	ctx := context.Background()
 	if !branchExists(t, repository, "sprout/task-"+stepA) {
 		t.Errorf("Fruit branch for run A %q does not exist", "sprout/task-"+stepA)
 	}
@@ -684,10 +749,8 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 		t.Errorf("Fruit branch for run B %q does not exist", "sprout/task-"+stepB)
 	}
 
-	// Both commits must be descendants of the common base.
-	ctx := context.Background()
+	// Each commit must be a direct descendant of the common base.
 	if reportA.FruitCommit != "" {
-		// merge-base --is-ancestor <ancestor> <descendant> exits 0 iff ancestor is an ancestor of descendant.
 		if _, err := runGitCommand(ctx, repository, "merge-base", "--is-ancestor", baseCommit, reportA.FruitCommit); err != nil {
 			t.Errorf("run A Fruit commit %q is not a descendant of base %q", reportA.FruitCommit, baseCommit)
 		}
@@ -696,6 +759,39 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 		if _, err := runGitCommand(ctx, repository, "merge-base", "--is-ancestor", baseCommit, reportB.FruitCommit); err != nil {
 			t.Errorf("run B Fruit commit %q is not a descendant of base %q", reportB.FruitCommit, baseCommit)
 		}
+	}
+
+	// Each Fruit branch must contain only its own version of seed.txt.
+	wantA := strings.TrimSpace(contentA)
+	wantB := strings.TrimSpace(contentB)
+	if reportA.FruitCommit != "" {
+		got, err := runGitCommand(ctx, repository, "show", reportA.FruitCommit+":seed.txt")
+		if err != nil {
+			t.Errorf("show run A seed.txt: %v", err)
+		} else if got != wantA {
+			t.Errorf("run A Fruit seed.txt = %q, want %q", got, wantA)
+		}
+		// Must not contain run B's version.
+		if strings.Contains(got, wantB) {
+			t.Errorf("run A Fruit seed.txt contains run B's content %q", wantB)
+		}
+	}
+	if reportB.FruitCommit != "" {
+		got, err := runGitCommand(ctx, repository, "show", reportB.FruitCommit+":seed.txt")
+		if err != nil {
+			t.Errorf("show run B seed.txt: %v", err)
+		} else if got != wantB {
+			t.Errorf("run B Fruit seed.txt = %q, want %q", got, wantB)
+		}
+		// Must not contain run A's version.
+		if strings.Contains(got, wantA) {
+			t.Errorf("run B Fruit seed.txt contains run A's content %q", wantA)
+		}
+	}
+
+	// Commits must be distinct (competing descendants, not the same object).
+	if reportA.FruitCommit != "" && reportB.FruitCommit != "" && reportA.FruitCommit == reportB.FruitCommit {
+		t.Errorf("both runs produced the same Fruit commit %q; want competing independent descendants", reportA.FruitCommit)
 	}
 
 	// Source branch (main) must remain at the original commit.
@@ -707,7 +803,15 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 }
 
 // TestPublicationFailureDoesNotDamageOtherRunFruit proves that when one run's
-// remote push fails, the other run's Fruit (already pushed) is unaffected.
+// remote push fails with a deterministic injected error:
+//   - the failing run returns an error satisfying errors.Is(err, pushFailErr)
+//   - its terminal outcome is SproutOutcomeFailed
+//   - its local FruitBranch and FruitCommit are retained (the commit was already
+//     created; publication failure does not erase committed work)
+//   - the failing run's Fruit branch was not pushed to the remote
+//   - the previously successful run's remote Fruit branch and commit are unchanged
+//   - remote main/configured source remains at the initial commit
+//   - the withered terminal event for the failing run carries its local Fruit identity
 func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
@@ -728,25 +832,41 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 
 	runnerGood := newManagedWritingRunner("good.txt")
 	runnerFail := newManagedWritingRunner("fail.txt")
-	captureGood := newManagedRunCapture()
-	captureFail := newManagedRunCapture()
+	// Both runners are pre-released. Install seams once for both so that
+	// collectStageableFilesFn finds each run's file from the same shared map.
+	runnerGood.releaseRun()
+	runnerFail.releaseRun()
+	capture := newManagedRunCapture()
+	installRemoteManagedRunSeams(t, capture,
+		map[string]sproutRunner{stepGood: runnerGood, stepFail: runnerFail})
 
-	// Use the real push fn, but intercept it for the fail step.
+	// Track whether the push path was actually reached for the fail step.
+	var pushCalledForFail bool
+
+	// Intercept push: succeed for the good run, inject pushFailErr for the fail run.
 	origPush := pushTerrariumCommitFn
 	t.Cleanup(func() { pushTerrariumCommitFn = origPush })
 	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {
 		if stepID == stepFail {
+			pushCalledForFail = true
 			return pushFailErr
 		}
 		return origPush(ctx, mountPath, branch, cred, allowDefaultBranchCommit, stepID)
 	}
 
+	bus := eventbus.New()
+	events := recordSproutLifecycle(bus)
+
 	// Run the good run first (complete successfully with pushed Fruit).
-	runnerGood.releaseRun()
-	installRemoteManagedRunSeams(t, captureGood, map[string]sproutRunner{stepGood: runnerGood})
+	// SubstrateURL is set so that the plan-resolution step always treats this
+	// as a remote-clone run, even when the managed checkout already exists on
+	// disk from a previous run in the same test (which would otherwise set
+	// remoteClone=false and bypass the push path).
 	reportGood, err := (&DockerOrchestrator{
-		Substrate: "repo",
-		StepID:    stepGood,
+		Substrate:    "repo",
+		SubstrateURL: remote,
+		StepID:       stepGood,
+		EventBus:     bus,
 	}).RunSprout(context.Background(), "good work")
 	if err != nil {
 		t.Fatalf("good RunSprout: %v", err)
@@ -759,17 +879,69 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 		t.Fatalf("good Fruit not pushed; refs: %v", resolveRemoteRefs(t, remote))
 	}
 
-	// Now run the fail run (push fails for it).
-	runnerFail.releaseRun()
-	installRemoteManagedRunSeams(t, captureFail, map[string]sproutRunner{stepFail: runnerFail})
-	_, err = (&DockerOrchestrator{
-		Substrate: "repo",
-		StepID:    stepFail,
+	// Run the fail run: its push is intercepted with pushFailErr.
+	// SubstrateURL forces remoteClone=true even on the persistent checkout.
+	reportFail, failErr := (&DockerOrchestrator{
+		Substrate:    "repo",
+		SubstrateURL: remote,
+		StepID:       stepFail,
+		EventBus:     bus,
 	}).RunSprout(context.Background(), "fail work")
-	// The fail run may or may not error depending on whether it produced
-	// reviewable Fruit (the file may be absent). Either way, the good run's
-	// Fruit must be intact.
-	t.Logf("fail run returned: %v", err)
+
+	// The push path must have been reached for the fail step.
+	if !pushCalledForFail {
+		t.Fatal("push was not called for the fail step; the publication path was not exercised")
+	}
+
+	// The fail run must return an error wrapping pushFailErr.
+	if failErr == nil {
+		t.Fatalf("fail RunSprout returned nil error; want an error wrapping pushFailErr")
+	}
+	if !errors.Is(failErr, pushFailErr) {
+		t.Errorf("fail RunSprout error = %v; want errors.Is(err, pushFailErr) to be true", failErr)
+	}
+
+	// The failing run's terminal outcome must be SproutOutcomeFailed.
+	if reportFail.Outcome != SproutOutcomeFailed {
+		t.Errorf("fail run outcome = %q, want %q", reportFail.Outcome, SproutOutcomeFailed)
+	}
+
+	// The failing run must retain its LOCAL Fruit identity: the commit was
+	// already created before the push was attempted, so publication failure
+	// must not erase the branch/commit fields.
+	wantFailBranch := "sprout/task-" + stepFail
+	if reportFail.FruitBranch != wantFailBranch {
+		t.Errorf("fail run FruitBranch = %q, want %q (local committed Fruit must be retained)", reportFail.FruitBranch, wantFailBranch)
+	}
+	if reportFail.FruitCommit == "" {
+		t.Errorf("fail run FruitCommit is empty; local committed Fruit identity must be retained despite push failure")
+	}
+
+	// The failing run's Fruit branch must NOT appear on the remote.
+	if got := remoteRef(t, remote, wantFailBranch); got != "" {
+		t.Errorf("fail run Fruit branch %q appears on remote at %q; push failed so it must be absent", wantFailBranch, got)
+	}
+
+	// The withered terminal event for the failing run must carry its local
+	// Fruit identity so consumers can locate the locally-committed work.
+	withered := filterEvents(*events, eventbus.EventSproutWithered)
+	var failWithered *eventbus.Event
+	for i := range withered {
+		if withered[i].Data["stepId"] == stepFail {
+			copy := withered[i]
+			failWithered = &copy
+			break
+		}
+	}
+	if failWithered == nil {
+		t.Fatalf("no withered event for stepId %q; fail run must publish a withered terminal event", stepFail)
+	}
+	if got := failWithered.Data["fruitBranch"]; got != wantFailBranch {
+		t.Errorf("withered event fruitBranch = %v, want %q", got, wantFailBranch)
+	}
+	if got := failWithered.Data["fruitCommit"]; got != reportFail.FruitCommit {
+		t.Errorf("withered event fruitCommit = %v, want %q", got, reportFail.FruitCommit)
+	}
 
 	// Good run's Fruit must still be intact on the remote.
 	afterGoodFruit := remoteRef(t, remote, "sprout/task-"+stepGood)
@@ -978,21 +1150,28 @@ func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
 		t.Errorf("ephemeral run FruitBranch = %q, want empty (not managed)", report.FruitBranch)
 	}
 
-	// The push must target the configured source branch (feat), not a sprout/task-* branch.
-	if capturedPushBranch != "" && strings.HasPrefix(capturedPushBranch, "sprout/task-") {
-		t.Errorf("ephemeral push targeted run branch %q; must use configured source branch", capturedPushBranch)
+	// The push must target exactly the configured source branch ("feat"),
+	// never a sprout/task-* run branch. This is the explicit contract:
+	// non-managed (ephemeral) publication semantics are unchanged.
+	if capturedPushBranch != "feat" {
+		t.Errorf("ephemeral push branch = %q, want exactly %q (configured source branch)", capturedPushBranch, "feat")
 	}
 	_ = ephemeralMount
 }
 
-// TestSamePollensRetainSeparateFruit proves that two managed runs from the same
-// conceptual Pollen identity retain separate Fruit by step/run scoping, not Pollen
-// scoping. (Pollen identity in the DockerOrchestrator would be a substrate-level
-// config; here we verify run-workspace identity is step-scoped regardless.)
-func TestSamePollensRetainSeparateFruit(t *testing.T) {
+// TestManagedStepsRetainStepScopedFruitIdentity proves that Fruit identity is
+// step/run scoped: two sequential managed runs from the same substrate, each
+// with a distinct StepID, produce distinct FruitBranch and FruitCommit values.
+//
+// This test does NOT prove same-Pollen vs. different-Pollen concurrency: the
+// DockerOrchestrator Conductor seam carries no Pollen identity, so Pollen
+// isolation is above this layer. That property is evidence for the final
+// OBJECTIVE concurrency exercise and is not demonstrated by a unit/integration
+// test at this seam.
+func TestManagedStepsRetainStepScopedFruitIdentity(t *testing.T) {
 	repository := prepareManagedRunRepository(t)
-	stepA := "pollen-a-step1"
-	stepB := "pollen-a-step2"
+	stepA := "step-identity-a"
+	stepB := "step-identity-b"
 
 	runnerA := newManagedWritingRunner("a.txt")
 	runnerB := newManagedWritingRunner("b.txt")
@@ -1001,7 +1180,7 @@ func TestSamePollensRetainSeparateFruit(t *testing.T) {
 	capture := newManagedRunCapture()
 	installManagedRunSeams(t, capture, map[string]sproutRunner{stepA: runnerA, stepB: runnerB})
 
-	// Run sequentially (same conceptual Pollen, different steps).
+	// Run sequentially: two steps, same substrate, different StepIDs.
 	reportA, err := (&DockerOrchestrator{Substrate: repository, StepID: stepA}).RunSprout(context.Background(), "step 1")
 	if err != nil {
 		t.Fatalf("step A: %v", err)
@@ -1011,12 +1190,12 @@ func TestSamePollensRetainSeparateFruit(t *testing.T) {
 		t.Fatalf("step B: %v", err)
 	}
 
-	// Each step has its own Fruit identity.
+	// Each step has its own step-scoped Fruit identity.
 	if reportA.FruitBranch == reportB.FruitBranch {
-		t.Errorf("same-Pollen steps share FruitBranch %q; want step-scoped identity", reportA.FruitBranch)
+		t.Errorf("steps share FruitBranch %q; want step-scoped identity", reportA.FruitBranch)
 	}
 	if reportA.FruitCommit != "" && reportB.FruitCommit != "" && reportA.FruitCommit == reportB.FruitCommit {
-		t.Errorf("same-Pollen steps share FruitCommit %q; want distinct commits", reportA.FruitCommit)
+		t.Errorf("steps share FruitCommit %q; want distinct commits", reportA.FruitCommit)
 	}
 
 	assertManagedBaseClean(t, repository)
