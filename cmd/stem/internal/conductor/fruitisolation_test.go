@@ -621,15 +621,32 @@ func TestFailedManagedRunDoesNotDamageSuccessfulRunFruit(t *testing.T) {
 	successRunner.releaseRun()
 	failRunner.releaseRun()
 
-	// Collect both results.
+	// Collect both results. Capture the success report for post-loop assertions.
 	wantFruitBranch := "sprout/task-" + successID
+	var successReport SproutRunReport
 	for i := 0; i < 2; i++ {
 		r := <-results
-		if r.stepID == failID {
+		switch r.stepID {
+		case successID:
+			// Success run: must complete with reviewable Fruit identity.
+			if r.err != nil {
+				t.Errorf("success run error = %v; want nil", r.err)
+			}
+			if r.report.Outcome != SproutOutcomeComplete {
+				t.Errorf("success run outcome = %q, want %q", r.report.Outcome, SproutOutcomeComplete)
+			}
+			if r.report.FruitBranch != wantFruitBranch {
+				t.Errorf("success run FruitBranch = %q, want %q", r.report.FruitBranch, wantFruitBranch)
+			}
+			if r.report.FruitCommit == "" {
+				t.Errorf("success run FruitCommit is empty; want a non-empty commit hash")
+			}
+			successReport = r.report
+		case failID:
 			// Fail run: must carry no fabricated Fruit identity (it never
-			// committed any Fruit before the error), and must be failed.
-			if r.report.Outcome != "" && r.report.Outcome != SproutOutcomeFailed {
-				t.Errorf("fail run outcome = %q, want %q or empty", r.report.Outcome, SproutOutcomeFailed)
+			// committed any Fruit before the error) and must report failed.
+			if r.report.Outcome != SproutOutcomeFailed {
+				t.Errorf("fail run outcome = %q, want %q", r.report.Outcome, SproutOutcomeFailed)
 			}
 			if r.report.FruitBranch != "" {
 				t.Errorf("fail run FruitBranch = %q, want empty (no committed Fruit before failure)", r.report.FruitBranch)
@@ -649,7 +666,18 @@ func TestFailedManagedRunDoesNotDamageSuccessfulRunFruit(t *testing.T) {
 		t.Errorf("success Fruit branch %q was lost; failed overlapping run cleanup must not delete another run's branch", wantFruitBranch)
 	}
 
-	// Main/configured source branch must be unchanged.
+	// The local Fruit branch must resolve to exactly the commit the success run
+	// reported — proving the branch pointer was not moved by the overlapping
+	// failed run's teardown.
+	if successReport.FruitCommit != "" {
+		got, err := runGitCommand(context.Background(), repository, "rev-parse", wantFruitBranch)
+		if err != nil {
+			t.Errorf("resolve local Fruit branch %q: %v", wantFruitBranch, err)
+		} else if got != successReport.FruitCommit {
+			t.Errorf("local Fruit branch %q resolves to %q, want %q (successReport.FruitCommit)", wantFruitBranch, got, successReport.FruitCommit)
+		}
+	}
+
 	assertManagedBaseClean(t, repository)
 }
 
@@ -749,15 +777,25 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 		t.Errorf("Fruit branch for run B %q does not exist", "sprout/task-"+stepB)
 	}
 
-	// Each commit must be a direct descendant of the common base.
+	// Each Fruit commit must be a DIRECT descendant of the common base — its
+	// single parent must be exactly baseCommit. merge-base --is-ancestor would
+	// accept any ancestor; rev-parse HASH^ checks the literal parent pointer.
 	if reportA.FruitCommit != "" {
-		if _, err := runGitCommand(ctx, repository, "merge-base", "--is-ancestor", baseCommit, reportA.FruitCommit); err != nil {
-			t.Errorf("run A Fruit commit %q is not a descendant of base %q", reportA.FruitCommit, baseCommit)
+		parentA, err := runGitCommand(ctx, repository, "rev-parse", reportA.FruitCommit+"^")
+		if err != nil {
+			t.Errorf("resolve parent of run A Fruit commit %q: %v", reportA.FruitCommit, err)
+		} else if parentA != baseCommit {
+			t.Errorf("run A Fruit commit %q parent = %q, want baseCommit %q (must be a direct descendant)",
+				reportA.FruitCommit, parentA, baseCommit)
 		}
 	}
 	if reportB.FruitCommit != "" {
-		if _, err := runGitCommand(ctx, repository, "merge-base", "--is-ancestor", baseCommit, reportB.FruitCommit); err != nil {
-			t.Errorf("run B Fruit commit %q is not a descendant of base %q", reportB.FruitCommit, baseCommit)
+		parentB, err := runGitCommand(ctx, repository, "rev-parse", reportB.FruitCommit+"^")
+		if err != nil {
+			t.Errorf("resolve parent of run B Fruit commit %q: %v", reportB.FruitCommit, err)
+		} else if parentB != baseCommit {
+			t.Errorf("run B Fruit commit %q parent = %q, want baseCommit %q (must be a direct descendant)",
+				reportB.FruitCommit, parentB, baseCommit)
 		}
 	}
 
@@ -915,6 +953,25 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 	}
 	if reportFail.FruitCommit == "" {
 		t.Errorf("fail run FruitCommit is empty; local committed Fruit identity must be retained despite push failure")
+	}
+
+	// Prove the Fruit commit is physically present in the persistent managed
+	// checkout. The push failed so the remote has no copy, but the local branch
+	// must still point to exactly reportFail.FruitCommit.
+	{
+		_, failSourcePath, _ := capture.get(stepFail)
+		if failSourcePath == "" {
+			t.Errorf("could not resolve sourcePath for stepFail from capture; cannot verify local Fruit ref")
+		} else {
+			localRef, refErr := runGitCommand(context.Background(), failSourcePath, "rev-parse", "refs/heads/"+wantFailBranch)
+			if refErr != nil {
+				t.Errorf("local branch %q not found in managed checkout %q after push failure: %v",
+					wantFailBranch, failSourcePath, refErr)
+			} else if localRef != reportFail.FruitCommit {
+				t.Errorf("local branch %q resolves to %q, want %q (reportFail.FruitCommit)",
+					wantFailBranch, localRef, reportFail.FruitCommit)
+			}
+		}
 	}
 
 	// The failing run's Fruit branch must NOT appear on the remote.
