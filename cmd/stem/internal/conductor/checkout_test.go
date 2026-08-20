@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -194,6 +195,282 @@ func TestCloneNamedForeignSubstrateEmptyManagedUnderParentGitClones(t *testing.T
 	}
 	if !checkoutHasGitMetadata(path) {
 		t.Fatal("cloned checkout has no .git in its own directory")
+	}
+}
+
+func TestManagedCheckoutMaterializationSerializesSameBase(t *testing.T) {
+	chdirToTempDir(t)
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", "managed-checkouts")
+	checkout := managedCheckoutDir("same-base")
+	absCheckout, err := filepath.Abs(checkout)
+	if err != nil {
+		t.Fatalf("resolve managed checkout path: %v", err)
+	}
+
+	originalMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = originalMaterialize })
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	materializeManagedCheckoutFn = func(string, string, string, string, ResolvedCredential, []string) error {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		once.Do(func() { close(entered) })
+		<-release
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil
+	}
+
+	results := make(chan error, 2)
+	start := func() {
+		_, _, err := cloneNamedForeignSubstrate("same-base", "unused", "main", ResolvedCredential{
+			Checkout: CheckoutSpec{Mode: "managed"},
+		})
+		results <- err
+	}
+	go start()
+	<-entered
+	go start()
+
+	mutex := runWorkspaceGitMutexFor(absCheckout)
+	if mutex.TryLock() {
+		mutex.Unlock()
+		t.Fatal("managed materialization did not hold the RunWorkspace Git lock")
+	}
+
+	close(release)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("managed materialization: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxActive != 1 {
+		t.Fatalf("same-base materialization max concurrency = %d, want 1", maxActive)
+	}
+}
+
+func TestManagedCheckoutMaterializationDifferentBasesRemainIndependent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+
+	originalMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = originalMaterialize })
+
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	active, maxActive := 0, 0
+	materializeManagedCheckoutFn = func(dest, _ string, _ string, _ string, _ ResolvedCredential, _ []string) error {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+		entered <- dest
+		<-release
+		mu.Lock()
+		active--
+		mu.Unlock()
+		return nil
+	}
+
+	results := make(chan error, 2)
+	for _, name := range []string{"base-a", "base-b"} {
+		go func(name string) {
+			_, _, err := cloneNamedForeignSubstrate(name, "unused", "main", ResolvedCredential{
+				Checkout: CheckoutSpec{Mode: "managed"},
+			})
+			results <- err
+		}(name)
+	}
+	first := <-entered
+	second := <-entered
+	if first == second {
+		t.Fatalf("different managed bases shared materialization destination %q", first)
+	}
+	close(release)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("managed materialization: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if maxActive != 2 {
+		t.Fatalf("different-base materialization max concurrency = %d, want 2", maxActive)
+	}
+}
+
+func TestManagedCheckoutInitialCloneCannotRaceIntoTwoClones(t *testing.T) {
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", t.TempDir())
+	checkout := managedCheckoutDir("absent")
+
+	originalMaterialize := materializeManagedCheckoutFn
+	originalClone := cloneCheckoutFn
+	originalRefresh := refreshExistingCheckoutFn
+	t.Cleanup(func() {
+		materializeManagedCheckoutFn = originalMaterialize
+		cloneCheckoutFn = originalClone
+		refreshExistingCheckoutFn = originalRefresh
+	})
+
+	cloneStarted := make(chan struct{})
+	releaseClone := make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	cloneCalls, refreshCalls := 0, 0
+	cloneCheckoutFn = func(dest, _ string, _ string, _ []string) error {
+		mu.Lock()
+		cloneCalls++
+		mu.Unlock()
+		once.Do(func() { close(cloneStarted) })
+		<-releaseClone
+		return os.MkdirAll(filepath.Join(dest, ".git"), 0o755)
+	}
+	refreshExistingCheckoutFn = func(string, string, []string, bool) error {
+		mu.Lock()
+		refreshCalls++
+		mu.Unlock()
+		return nil
+	}
+
+	results := make(chan error, 2)
+	start := func() {
+		_, _, err := cloneNamedForeignSubstrate("absent", "unused", "main", ResolvedCredential{
+			Checkout: CheckoutSpec{Mode: "managed"},
+		})
+		results <- err
+	}
+	go start()
+	<-cloneStarted
+	go start()
+
+	mutex := runWorkspaceGitMutexFor(checkout)
+	if mutex.TryLock() {
+		mutex.Unlock()
+		t.Fatal("initial managed clone did not hold the RunWorkspace Git lock")
+	}
+	close(releaseClone)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("managed clone: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if cloneCalls != 1 || refreshCalls != 1 {
+		t.Fatalf("initial managed materialization calls = clone %d, refresh %d; want clone 1 then refresh 1", cloneCalls, refreshCalls)
+	}
+}
+
+func TestManagedStartCommitResolutionHoldsBaseGitLock(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	originalRead := readManagedRunStartCommitFn
+	t.Cleanup(func() { readManagedRunStartCommitFn = originalRead })
+
+	readManagedRunStartCommitFn = func(ctx context.Context, sourcePath string) (string, error) {
+		mutex := runWorkspaceGitMutexFor(sourcePath)
+		if mutex.TryLock() {
+			mutex.Unlock()
+			t.Fatal("managed start-commit resolution did not hold the RunWorkspace Git lock")
+		}
+		return originalRead(ctx, sourcePath)
+	}
+
+	commit, err := resolveManagedRunStartCommit(context.Background(), repository)
+	if err != nil || strings.TrimSpace(commit) == "" {
+		t.Fatalf("managed start commit resolution = %q, %v", commit, err)
+	}
+}
+
+func TestManagedStartCommitResolutionWaitsForMaterializationLock(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	originalRefresh := refreshExistingCheckoutFn
+	originalBefore := beforeResolveManagedRunStartCommitLock
+	originalRead := readManagedRunStartCommitFn
+	t.Cleanup(func() {
+		refreshExistingCheckoutFn = originalRefresh
+		beforeResolveManagedRunStartCommitLock = originalBefore
+		readManagedRunStartCommitFn = originalRead
+	})
+
+	if runWorkspaceGitMutexFor(repository) != runWorkspaceGitMutexFor(managedCheckoutDir("managed")) {
+		t.Fatal("start-commit resolution and managed refresh used different Git metadata locks")
+	}
+
+	refreshEntered := make(chan struct{})
+	releaseRefresh := make(chan struct{})
+	refreshExistingCheckoutFn = func(string, string, []string, bool) error {
+		close(refreshEntered)
+		<-releaseRefresh
+		return nil
+	}
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		_, _, err := cloneNamedForeignSubstrate("managed", "unused", "main", ResolvedCredential{
+			Checkout: CheckoutSpec{Mode: "managed"},
+		})
+		refreshDone <- err
+	}()
+	<-refreshEntered
+
+	attempted := make(chan struct{})
+	readStarted := make(chan struct{})
+	beforeResolveManagedRunStartCommitLock = func() { close(attempted) }
+	readManagedRunStartCommitFn = func(ctx context.Context, sourcePath string) (string, error) {
+		close(readStarted)
+		return originalRead(ctx, sourcePath)
+	}
+
+	resolved := make(chan struct {
+		commit string
+		err    error
+	}, 1)
+	go func() {
+		commit, err := resolveManagedRunStartCommit(context.Background(), repository)
+		resolved <- struct {
+			commit string
+			err    error
+		}{commit: commit, err: err}
+	}()
+
+	mutex := runWorkspaceGitMutexFor(repository)
+	if mutex.TryLock() {
+		mutex.Unlock()
+		t.Fatal("managed refresh did not hold the lock while start commit resolution was pending")
+	}
+
+	select {
+	case <-attempted:
+		select {
+		case <-readStarted:
+			t.Fatal("managed start-commit HEAD read overlapped a managed refresh")
+		default:
+		}
+	case <-readStarted:
+		t.Fatal("managed start-commit HEAD read started without taking the Git metadata lock")
+	}
+
+	close(releaseRefresh)
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("managed refresh: %v", err)
+	}
+	result := <-resolved
+	if result.err != nil || strings.TrimSpace(result.commit) == "" {
+		t.Fatalf("managed start commit resolution = %q, %v; want a commit after refresh", result.commit, result.err)
 	}
 }
 
