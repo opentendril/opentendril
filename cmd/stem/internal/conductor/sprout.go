@@ -370,14 +370,11 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			tokensPublished := make(chan struct{})
 			go func() {
 				defer close(tokensPublished)
-				for token := range tokenChan {
+				for range tokenChan {
 					a.eventBus.Publish(eventbus.Event{
 						Type:      eventbus.EventStreamToken,
 						Source:    a.stepID,
 						SessionID: a.sessionID,
-						Data: map[string]interface{}{
-							"token": token,
-						},
 					})
 				}
 			}()

@@ -256,8 +256,7 @@ pods. Payload field names below match the Go publishers exactly.
 | `phenotypic-selection` | `phase:"generation"`, `generation`, `population` | A fresh generation of **phenotype pods germinate** around the ring; the ring pulses. |
 | `phenotypic-selection` | `phase:"evaluated"`, `survivors`, `withered`, `bestScore`, `alphaScore`, `alphaBranch` | The fittest **`survivors` pods stay lit green; the rest compost** (fall and fade). Best score labelled. |
 | `phenotypic-selection` | `phase:"complete"`, `alphaBranch`, `alphaScore` | The **AlphaPhenotype crowns gold** (bright glow) with its fitness score. |
-| `stream-token` | `source=stepId`, `data.type` `stream.start`/`stream.end` | A **sap shimmer** flows up the active branch/stem while tokens stream; `stream.end` clears it. |
-| `thought-branch` | `thought` | An ephemeral **whisper** tooltip fades in and out over the plant. |
+| `stream-token` | `source=stepId`, `data.type` `stream.start`/`stream.end` | Active step branch glows and pulses sap. |
 | `sequence-complete` | `sequence` | The plant **fruits** — crown blooms gold, marked matured. |
 | `sequence-failure` | `stepId`, `error` | The branch **scorches** red; the plant is marked withered with the failure detail. |
 | `health-*`, `terrarium-oom`, `terrarium-timeout`, `api-key-invalid`, `rhizome-update`, `xylem-transport`, `hormonal-trigger` | — | **Ambient weather.** These refresh the plant's liveness and surface in the Event Pulse ticker; they do not grow dedicated structures. |

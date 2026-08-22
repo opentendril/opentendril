@@ -39,8 +39,13 @@ func TestStripPrivateReasoning(t *testing.T) {
 		},
 		{
 			name:     "orphan closing tag",
-			input:    "Some </thought> text",
-			expected: "Some </thought> text",
+			input:    "private</thought>public",
+			expected: "public",
+		},
+		{
+			name:     "inverted tags",
+			input:    "private</thought>public<thought>secret",
+			expected: "public",
 		},
 	}
 
@@ -74,6 +79,12 @@ Here is the result.`
 	result := SanitizeSproutTranscript(transcript)
 	if result != expected {
 		t.Errorf("expected:\n%s\n\ngot:\n%s", expected, result)
+	}
+
+	unstructured := `Here is some <thought>private</thought> text without role markers.`
+	expectedUnstructured := `Here is some  text without role markers.`
+	if got := SanitizeSproutTranscript(unstructured); got != expectedUnstructured {
+		t.Errorf("unstructured expected %q, got %q", expectedUnstructured, got)
 	}
 }
 

@@ -136,11 +136,9 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 			if len(event.Data) > 0 {
 				msg["data"] = event.Data
 			}
-			if event.Type == eventbus.EventStreamToken {
-				if token, ok := event.Data["token"]; ok {
-					msg["content"] = token
-				}
-			}
+			// Raw provider chunks are no longer published in EventStreamToken, and
+			// thought-branch is removed from the EventBus registry. The WebSocket envelope
+			// contains only type, timestamp, source, sessionId, and safe data.
 			payload, err := json.Marshal(msg)
 			if err != nil {
 				return

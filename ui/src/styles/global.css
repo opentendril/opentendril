@@ -371,25 +371,6 @@ input, textarea, select { font: inherit; }
   animation: sap-flow 700ms linear infinite;
 }
 
-.whisper {
-  position: absolute;
-  max-width: 200px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  background: var(--glass-strong);
-  border: 1px solid var(--glass-border);
-  font-size: 11px;
-  line-height: 1.45;
-  color: var(--ink-mute);
-  animation: whisper-fade 6s ease forwards;
-  pointer-events: none;
-}
-@keyframes whisper-fade {
-  0% { opacity: 0; transform: translateY(6px); }
-  8% { opacity: 1; transform: translateY(0); }
-  80% { opacity: 1; }
-  100% { opacity: 0; transform: translateY(-8px); }
-}
 
 /* ── event pulse ticker ── */
 .ticker {

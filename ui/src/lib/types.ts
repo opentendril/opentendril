@@ -102,8 +102,6 @@ export interface StemEvent {
   source?: string;
   sessionId?: string;
   data?: Record<string, unknown>;
-  /** gateway copies data.token / data.thought here for stream-token / thought-branch */
-  content?: string;
 }
 
 // Registered EventBus types (eventbus.go). phenotypic-selection is emitted by
@@ -118,7 +116,6 @@ export type StemEventType =
   | "sequence-failure"
   | "sequence-complete"
   | "stream-token"
-  | "thought-branch"
   | "tool-invoked"
   | "sprout-emerged"
   | "sprout-matured"
