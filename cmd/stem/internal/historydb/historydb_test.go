@@ -605,3 +605,182 @@ func TestHistoryRetentionDaysFromEnv(t *testing.T) {
 		t.Errorf("non-positive expected 0, got %d", got)
 	}
 }
+
+func TestNewWritesSanitizePrivateReasoningWithRedactionOff(t *testing.T) {
+	t.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	_ = store.RecordEvent(ctx, eventbus.Event{
+		SessionID: "s1", Type: eventbus.EventStreamToken, Data: map[string]any{"token": "<thought>private</thought>", "content": "public"},
+	})
+	_ = store.RecordEvent(ctx, eventbus.Event{
+		SessionID: "s1", Type: "thought-branch", Data: map[string]any{"thought": "private"},
+	})
+	_ = store.RecordEvent(ctx, eventbus.Event{
+		SessionID: "s1", Type: eventbus.EventSproutTranscript, Data: map[string]any{"transcript": "start <thought>private</thought> end"},
+	})
+	_ = store.AppendMessage(ctx, session.Message{
+		SessionID: "s1", Role: "assistant", Content: "start <thought>private</thought> end",
+	})
+	_ = store.RecordSproutRun(ctx, SproutRun{
+		RunID: "r1", SessionID: "s1", Status: "running", StartedAt: time.Now(),
+		Transcript: "run start <thought>private</thought> end",
+		Output:     "out start <thought>private</thought> end",
+	})
+
+	raw, err := sql.Open("sqlite", store.Path())
+	if err != nil {
+		t.Fatalf("Raw sql.Open: %v", err)
+	}
+	defer raw.Close()
+
+	var ciphertextMsg string
+	if err := raw.QueryRow("SELECT content FROM messages WHERE sessionId='s1' AND role='assistant' LIMIT 1").Scan(&ciphertextMsg); err != nil {
+		t.Fatalf("Raw select msg: %v", err)
+	}
+	plaintextMsgBytes, err := store.cipher.Decrypt(ciphertextMsg, []byte("historydb/messages/content"), heartwood.LegacyPlaintext)
+	plaintextMsg := string(plaintextMsgBytes)
+	if err != nil {
+		t.Fatalf("Decrypt msg: %v", err)
+	}
+	if strings.Contains(plaintextMsg, "private") {
+		t.Errorf("Assistant message contains private reasoning on disk: %q", plaintextMsg)
+	}
+
+	var ciphertextTrans, ciphertextOut string
+	if err := raw.QueryRow("SELECT transcript, output FROM sproutruns WHERE runId='r1' LIMIT 1").Scan(&ciphertextTrans, &ciphertextOut); err != nil {
+		t.Fatalf("Raw select sproutrun: %v", err)
+	}
+	plaintextTransBytes, _ := store.cipher.Decrypt(ciphertextTrans, []byte("historydb/sproutruns/transcript"), heartwood.LegacyPlaintext)
+	plaintextTrans := string(plaintextTransBytes)
+	if strings.Contains(plaintextTrans, "private") {
+		t.Errorf("SproutRun transcript contains private reasoning on disk: %q", plaintextTrans)
+	}
+	plaintextOutBytes, _ := store.cipher.Decrypt(ciphertextOut, []byte("historydb/sproutruns/output"), heartwood.LegacyPlaintext)
+	plaintextOut := string(plaintextOutBytes)
+	if strings.Contains(plaintextOut, "private") {
+		t.Errorf("SproutRun output contains private reasoning on disk: %q", plaintextOut)
+	}
+
+	rows, err := raw.Query("SELECT type, data FROM events WHERE sessionId='s1'")
+	if err != nil {
+		t.Fatalf("Raw select events: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var eType, eDataCipher string
+		if err := rows.Scan(&eType, &eDataCipher); err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+		eDataPlainBytes, _ := store.cipher.Decrypt(eDataCipher, []byte("historydb/events/data"), heartwood.LegacyPlaintext)
+		eDataPlain := string(eDataPlainBytes)
+		if strings.Contains(eDataPlain, "private") {
+			t.Errorf("Event %s contains private reasoning on disk: %q", eType, eDataPlain)
+		}
+	}
+}
+
+func TestLegacyReadsSanitizePrivateReasoning(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.db.Exec(`INSERT INTO messages (sessionId, role, content, model, createdAt) VALUES ('s2', 'assistant', 'legacy <thought>private</thought> msg', 'mod', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert msg: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO messages (sessionId, role, content, model, createdAt) VALUES ('s2', 'user', 'user <thought>private</thought> msg', 'mod', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert msg: %v", err)
+	}
+
+	if _, err := store.db.Exec(`INSERT INTO events (sessionId, type, data, createdAt) VALUES ('s2', 'stream-token', '{"token":"<thought>private</thought>","content":"public"}', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert event: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO events (sessionId, type, data, createdAt) VALUES ('s2', 'thought-branch', '{"thought":"private"}', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert event: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO events (sessionId, type, data, createdAt) VALUES ('s2', 'sprout-transcript', '{"transcript":"start <thought>private</thought> end"}', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert event: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO events (sessionId, type, data, createdAt) VALUES ('s2', 'tool-invoked', '{"observation":"safe"}', '2023-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("Raw insert event: %v", err)
+	}
+
+	if _, err := store.db.Exec(`INSERT INTO sproutruns (runId, sessionId, status, startedAt, transcript, output) VALUES ('r2', 's2', 'matured', '2023-01-01T00:00:00Z', 'start <thought>private</thought> end', 'out <thought>private</thought> end')`); err != nil {
+		t.Fatalf("Raw insert sproutrun: %v", err)
+	}
+
+	msgs, err := store.LoadMessages(ctx, "s2", 10)
+	if err != nil {
+		t.Fatalf("LoadMessages: %v", err)
+	}
+	for _, m := range msgs {
+		if m.Role == "assistant" && strings.Contains(m.Content, "private") {
+			t.Errorf("assistant message was not sanitized: %q", m.Content)
+		}
+		if m.Role == "user" && !strings.Contains(m.Content, "private") {
+			t.Errorf("user message was altered: %q", m.Content)
+		}
+	}
+
+	events, err := store.LoadEvents(ctx, "s2", 10)
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	var hasStream, hasThoughtBranch, hasTranscript, hasTool bool
+	for _, e := range events {
+		if e.Type == string(eventbus.EventStreamToken) {
+			hasStream = true
+			if _, ok := e.Data["token"]; ok {
+				t.Errorf("stream token data still has token field")
+			}
+			if _, ok := e.Data["content"]; ok {
+				t.Errorf("stream token data still has content field")
+			}
+		}
+		if e.Type == "thought-branch" {
+			hasThoughtBranch = true
+			if _, ok := e.Data["thought"]; ok {
+				t.Errorf("thought-branch event still has thought field")
+			}
+		}
+		if e.Type == string(eventbus.EventSproutTranscript) {
+			hasTranscript = true
+			if trans, ok := e.Data["transcript"].(string); ok && strings.Contains(trans, "private") {
+				t.Errorf("transcript event was not sanitized: %v", e.Data)
+			}
+		}
+		if e.Type == string(eventbus.EventToolInvoked) {
+			hasTool = true
+			if obs, ok := e.Data["observation"].(string); !ok || obs != "safe" {
+				t.Errorf("unrelated evidence was not preserved: %v", e.Data)
+			}
+		}
+	}
+	if !hasStream {
+		t.Errorf("expected stream token event")
+	}
+	if !hasThoughtBranch {
+		t.Errorf("expected thought-branch event")
+	}
+	if !hasTranscript {
+		t.Errorf("expected transcript event")
+	}
+	if !hasTool {
+		t.Errorf("expected tool event")
+	}
+
+	runs, err := store.LoadSproutRuns(ctx, "s2", 10)
+	if err != nil {
+		t.Fatalf("LoadSproutRuns: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("Expected 1 sproutrun, got %d", len(runs))
+	}
+	if strings.Contains(runs[0].Transcript, "private") {
+		t.Errorf("sproutrun transcript was not sanitized: %q", runs[0].Transcript)
+	}
+	if strings.Contains(runs[0].Output, "private") {
+		t.Errorf("sproutrun output was not sanitized: %q", runs[0].Output)
+	}
+}

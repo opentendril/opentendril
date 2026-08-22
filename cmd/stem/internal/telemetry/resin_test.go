@@ -296,3 +296,40 @@ func TestPublishDoesNotBlockOnSlowResin(t *testing.T) {
 		t.Errorf("Publish blocked for %v while Resin mutex was held; want < 1 s", elapsed)
 	}
 }
+
+func TestResinSanitizesPrivateReasoningWithRedactionOff(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "resin.log")
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sink, err := InitResinSink(bus, ResinConfig{Enabled: true}, logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	os.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	defer os.Unsetenv("TENDRIL_TELEMETRY_REDACTION")
+
+	ev := eventbus.Event{
+		Type:   eventbus.EventSproutTranscript,
+		Source: "test-source",
+		Data: map[string]interface{}{
+			"transcript": "start <thought>private</thought> end",
+		},
+	}
+
+	sink.handle(ev)
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(content), "private") {
+		t.Errorf("resin output contains private reasoning despite redaction being off: %s", string(content))
+	}
+	if !strings.Contains(string(content), "start  end") {
+		t.Errorf("resin output did not preserve public parts of the transcript: %s", string(content))
+	}
+}

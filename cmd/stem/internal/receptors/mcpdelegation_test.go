@@ -500,3 +500,68 @@ func TestMCPCallRejectsUnapprovedTransportNames(t *testing.T) {
 		t.Fatalf("unapproved names executed %d run(s), want 0", executed.Load())
 	}
 }
+
+// TestGovernedSproutGrowthDoesNotRelyOnAdapterFiltering proves that the MCP
+// surface (adapter) does not implement its own private-reasoning filter.
+// The governed sprout.grow capability delegates to Core.SproutRun; if the
+// core returns raw reasoning (e.g. via a stub), the adapter passes it through,
+// proving the security boundary is structural (in the Core) rather than
+// repeated in the adapter.
+func TestGovernedSproutGrowthDoesNotRelyOnAdapterFiltering(t *testing.T) {
+	chdirTempDir(t)
+	sessions, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+
+	coreSvc := core.NewService(sessions).
+		WithSprout(core.SproutOperations{
+			Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
+				return core.SproutRunReport{
+					Output:  "grown <thought>private</thought>",
+					Outcome: "complete",
+				}, nil
+			},
+		})
+
+	bus := eventbus.New()
+	handler := NewMCPHandler().WithSessions(sessions, nil).WithCore(coreSvc)
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{mcpDelegationGrant()}), Bus: bus}
+	handler = handler.WithDelegation(gate, "mcp-Pollinator")
+
+	payload, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]any{"name": "sproutGrow", "arguments": map[string]any{"transcript": "grow", "substrate": "core"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal tools/call: %v", err)
+	}
+
+	var response struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(handler.ProcessMCPMessage(payload), &response); err != nil {
+		t.Fatalf("decode MCP response: %v", err)
+	}
+
+	if len(response.Result.Content) == 0 {
+		t.Fatalf("MCP response had no content")
+	}
+
+	var inner struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(response.Result.Content[0].Text), &inner); err != nil {
+		t.Fatalf("decode inner JSON from MCP text: %v", err)
+	}
+
+	if !strings.Contains(inner.Output, "<thought>private</thought>") {
+		t.Fatalf("MCP response filtered private reasoning (adapter should not have its own filter). Got output: %q", inner.Output)
+	}
+}

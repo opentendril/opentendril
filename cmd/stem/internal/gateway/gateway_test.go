@@ -72,10 +72,10 @@ func TestHandleWebSocketForwardsAllEventTypes(t *testing.T) {
 	}
 }
 
-// TestGatewayNeverProjectsRawModelText proves that the WebSocket gateway never
-// projects raw model chunks into the top-level 'content' field. A stream-token
-// event is a pure cadence signal.
-func TestGatewayNeverProjectsRawModelText(t *testing.T) {
+// TestGatewayDoesNotInventContentForStreamToken proves that the WebSocket gateway
+// correctly handles content-free stream-token events without inventing a
+// top-level 'content' field. A stream-token event is a pure cadence signal.
+func TestGatewayDoesNotInventContentForStreamToken(t *testing.T) {
 	bus := eventbus.New()
 	server := httptest.NewServer(HandleWebSocket(bus))
 	defer server.Close()
@@ -93,13 +93,12 @@ func TestGatewayNeverProjectsRawModelText(t *testing.T) {
 		t.Fatalf("read connected message: %v", err)
 	}
 
-	// Publish stream-token with raw text (should be ignored by gateway)
+	// Publish a content-free stream-token (the current producer contract)
 	bus.Publish(eventbus.Event{
-		Type:   eventbus.EventStreamToken,
-		Source: "step-1",
-		Data: map[string]interface{}{
-			"token": "<thought>private chunk",
-		},
+		Type:      eventbus.EventStreamToken,
+		Source:    "step-1",
+		SessionID: "s1",
+		Data:      map[string]interface{}{},
 	})
 
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))

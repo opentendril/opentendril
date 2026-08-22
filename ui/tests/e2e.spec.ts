@@ -367,6 +367,37 @@ test.describe("Command Center sprout-run observation", () => {
     await expect(drawer.getByTestId("run-telemetry")).not.toHaveAttribute("open");
     await expect(drawer.getByText("wrote docs/GUIDE.md")).toBeHidden();
   });
+
+  test("never attempts to parse or render private reasoning as whispers", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-e2e-private" });
+    const run: SproutRun = {
+      runId: "step-private",
+      sessionId: session.sessionId,
+      stepId: "step-private",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4.6",
+      status: "matured",
+      outcome: "complete",
+      failureCategory: "matured",
+      providerRequestAttempted: true,
+      toolInvocations: 0,
+      transcript: "start <thought>private reasoning</thought> end",
+      startedAt: "2026-08-16T12:00:00Z",
+      finishedAt: "2026-08-16T12:00:08Z",
+      output: "output <thought>private reasoning</thought> end",
+    };
+
+    await mockStemBackend(page, { sessions: [session], sproutRuns: [run] });
+    await completeOnboarding(page, testApiKey);
+
+    await page.locator(".run-row").click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    
+    // The UI should treat '<thought>' as literal text, not HTML or a parsed whisper.
+    await expect(drawer.getByText("start <thought>private reasoning</thought> end")).toBeVisible();
+  });
 });
 
 test.describe("Command Center EventBus connection", () => {
