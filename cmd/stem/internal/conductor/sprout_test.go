@@ -563,15 +563,22 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	}
 
 	published := map[eventbus.EventType]int{}
+	var streamEvents []eventbus.Event
 	for _, event := range history {
 		published[event.Type]++
+		if event.Type == eventbus.EventStreamToken {
+			streamEvents = append(streamEvents, event)
+		}
 	}
 	if published[eventbus.EventStreamToken] == 0 {
 		t.Errorf("no %s events: the Sprout did not stream, so liveness is unobservable (got %v)", eventbus.EventStreamToken, published)
 	}
-	if published[eventbus.EventThoughtBranch] == 0 {
-		t.Errorf("no %s events: reasoning is unobservable (got %v)", eventbus.EventThoughtBranch, published)
+	for _, e := range streamEvents {
+		if token, ok := e.Data["token"]; ok {
+			t.Errorf("stream-token event contains raw token: %q (expected pure cadence signal)", token)
+		}
 	}
+
 }
 
 // A run's actual actions must be observable, not just its bookends. Before
@@ -845,15 +852,6 @@ func TestAgentRunsNativeToolLoop(t *testing.T) {
 		t.Fatalf("transcript missing thought block")
 	}
 
-	var thoughtEvents []eventbus.Event
-	for _, event := range bus.History(100) {
-		if event.Type == eventbus.EventThoughtBranch {
-			thoughtEvents = append(thoughtEvents, event)
-		}
-	}
-	if len(thoughtEvents) != 2 {
-		t.Fatalf("expected 2 thought events, got %d", len(thoughtEvents))
-	}
 }
 
 func TestNativeSystemPrompt(t *testing.T) {

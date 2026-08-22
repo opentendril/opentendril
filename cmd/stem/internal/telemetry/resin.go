@@ -86,9 +86,9 @@ func (s *ResinSink) handle(event eventbus.Event) {
 	}
 	defer file.Close()
 
-	evToLog := event
+	evToLog := SanitizeObservationEvent(event)
 	if !RedactionDisabled() {
-		evToLog = RedactEvent(event)
+		evToLog = RedactEvent(evToLog)
 	}
 
 	payload, err := json.Marshal(evToLog)

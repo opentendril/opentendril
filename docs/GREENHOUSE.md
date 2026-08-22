@@ -104,8 +104,7 @@ frame is JSON of the shape:
   "timestamp": "2026-07-07T…Z",
   "source": "parallel-sprouting",
   "sessionId": "tendril-…",          // omitted when the event carries none
-  "data": { "sproutIndex": 2, "branchName": "…" },
-  "content": "…"                      // convenience copy of data.token / data.thought
+  "data": { /* event payload */ }
 }
 ```
 

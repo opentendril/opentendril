@@ -14,7 +14,6 @@
 //   phenotypic-selection {phase:"start"|"generation"|"evaluated"|"complete", ...}
 //                                                         → arena of pods competes; alpha crowns
 //   stream-token        (source = stepId)                 → sap shimmer up the active branch
-//   thought-branch      {thought}                         → ephemeral leaf whisper
 //   sequence-complete / sequence-failure                  → plant fruits / branch scorches
 
 import type { StemEvent } from "../lib/types";
@@ -65,12 +64,6 @@ export interface Branch {
   failed?: boolean;
 }
 
-export interface Whisper {
-  id: number;
-  text: string;
-  at: number;
-}
-
 export interface Plant {
   key: string;
   label: string;
@@ -80,7 +73,6 @@ export interface Plant {
   branches: Branch[];
   streamingStepId?: string;
   streamPulseAt: number;
-  whispers: Whisper[];
   complete?: boolean;
   failed?: boolean;
   failureDetail?: string;
@@ -88,13 +80,11 @@ export interface Plant {
 
 export interface GardenState {
   plants: Record<string, Plant>;
-  whisperSeq: number;
 }
 
-export const emptyGarden: GardenState = { plants: {}, whisperSeq: 0 };
+export const emptyGarden: GardenState = { plants: {} };
 
 const MAX_PLANTS = 8;
-const MAX_WHISPERS = 3;
 
 function num(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
@@ -132,7 +122,6 @@ function ensurePlant(state: GardenState, event: StemEvent, at: number): Plant | 
       lastEventAt: at,
       branches: [],
       streamPulseAt: 0,
-      whispers: [],
     };
     state.plants[id.key] = plant;
     prunePlants(state);
@@ -271,7 +260,6 @@ export function applyGardenEvent(state: GardenState, event: StemEvent): GardenSt
   const at = event.timestamp ? Date.parse(event.timestamp) : Date.now();
   const next: GardenState = {
     plants: { ...state.plants },
-    whisperSeq: state.whisperSeq,
   };
 
   const existing = plantKeyFor(event);
@@ -287,7 +275,6 @@ export function applyGardenEvent(state: GardenState, event: StemEvent): GardenSt
           ? { ...b.arena, pods: b.arena.pods.map((p) => ({ ...p })) }
           : undefined,
       })),
-      whispers: [...source.whispers],
     };
   }
 
@@ -331,17 +318,6 @@ export function applyGardenEvent(state: GardenState, event: StemEvent): GardenSt
       plant.streamPulseAt = at;
       const kind = str(event.data?.["type"]);
       if (kind === "stream.end") plant.streamingStepId = undefined;
-      break;
-    }
-    case "thought-branch": {
-      const thought = str(event.data?.["thought"]) ?? event.content;
-      if (thought) {
-        next.whisperSeq += 1;
-        plant.whispers = [
-          ...plant.whispers.slice(-(MAX_WHISPERS - 1)),
-          { id: next.whisperSeq, text: thought.slice(0, 160), at },
-        ];
-      }
       break;
     }
     case "sequence-complete": {

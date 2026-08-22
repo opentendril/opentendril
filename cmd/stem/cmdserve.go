@@ -815,7 +815,7 @@ func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history
 			Type:      eventbus.EventStreamToken,
 			Source:    stepID,
 			SessionID: sess.ID,
-			Data:      map[string]interface{}{"type": "stream.end", "content": output},
+			Data:      map[string]interface{}{"type": "stream.end"},
 		})
 
 		if err != nil {

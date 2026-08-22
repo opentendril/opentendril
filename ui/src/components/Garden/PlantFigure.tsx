@@ -241,16 +241,6 @@ export function PlantFigure({ plant }: { plant: Plant }) {
         </g>
       </svg>
 
-      {plant.whispers.map((w, i) => (
-        <div
-          key={w.id}
-          className="whisper"
-          style={{ top: 12 + i * 52, left: 8, right: 8, maxWidth: "unset" }}
-        >
-          {w.text}
-        </div>
-      ))}
-
       <div className="plant-label">
         {plant.label} <span className={`state ${state.cls}`}>· {state.text}</span>
       </div>
