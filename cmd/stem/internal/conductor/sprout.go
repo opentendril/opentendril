@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 	"github.com/opentendril/opentendril/data/genotypes"
 	"github.com/opentendril/opentendril/roots/llm"
 )
@@ -447,18 +448,6 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			return a.finishedResult(runUsage, usageStarted), err
 		}
 
-		thoughtContent := extractThought(response)
-		if thoughtContent != "" && a.eventBus != nil {
-			a.eventBus.Publish(eventbus.Event{
-				Type:      eventbus.EventThoughtBranch,
-				Source:    a.stepID,
-				SessionID: a.sessionID,
-				Data: map[string]interface{}{
-					"thought": thoughtContent,
-				},
-			})
-		}
-
 		a.msgMu.Lock()
 		a.messages = append(a.messages, llm.Message{
 			Role:      "assistant",
@@ -533,7 +522,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 
 		if a.nativeClient != nil && !isToolCall {
 			if strings.TrimSpace(finalResponse) != "" {
-				finalResponse = stripThoughtBlock(finalResponse)
+				finalResponse = telemetry.StripPrivateReasoning(finalResponse)
 				finalResponse, actionResult = extractActionResult(finalResponse)
 			}
 		}
@@ -543,8 +532,8 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
 			result := a.finishedResult(runUsage, usageStarted)
-			result.Response = strings.TrimSpace(finalResponse)
-			result.Transcript = a.transcript.String()
+			result.Response = telemetry.StripPrivateReasoning(strings.TrimSpace(finalResponse))
+			result.Transcript = telemetry.SanitizeSproutTranscript(a.transcript.String())
 			result.ActionResult = actionResult
 			result.Protocol = reportedProtocol
 			return result, nil
@@ -555,8 +544,8 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 			reportedProtocol := a.protocol
 			a.msgMu.RUnlock()
 			result := a.finishedResult(runUsage, usageStarted)
-			result.Response = strings.TrimSpace(response)
-			result.Transcript = a.transcript.String()
+			result.Response = telemetry.StripPrivateReasoning(strings.TrimSpace(response))
+			result.Transcript = telemetry.SanitizeSproutTranscript(a.transcript.String())
 			result.ActionResult = actionResult
 			result.Protocol = reportedProtocol
 			return result, nil
@@ -691,18 +680,6 @@ func (a *Sprout) LastExchange() (request, response string) {
 	return request, response
 }
 
-func extractThought(response string) string {
-	start := strings.Index(response, "<thought>")
-	if start == -1 {
-		return ""
-	}
-	end := strings.Index(response, "</thought>")
-	if end == -1 {
-		return strings.TrimSpace(response[start+9:])
-	}
-	return strings.TrimSpace(response[start+9 : end])
-}
-
 func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, string, error) {
 	if strings.TrimSpace(call.Tool) == "" {
 		return ToolResponse{}, "", fmt.Errorf("empty tool call received from model")
@@ -823,7 +800,7 @@ func (a *Sprout) publishTranscript() {
 	if a.eventBus == nil {
 		return
 	}
-	transcript := strings.TrimSpace(a.transcript.String())
+	transcript := telemetry.SanitizeSproutTranscript(strings.TrimSpace(a.transcript.String()))
 	if transcript == "" {
 		return
 	}
@@ -1131,7 +1108,7 @@ type modelResponse struct {
 var errUnusableReply = errors.New("model reply attempted a tool call that could not be read")
 
 func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult, error) {
-	trimmed := stripThoughtBlock(strings.TrimSpace(content))
+	trimmed := telemetry.StripPrivateReasoning(strings.TrimSpace(content))
 
 	// Checked before anything else: a reply carrying both a tool call and a
 	// closing statement is asking for the call, and reading the statement
@@ -1274,27 +1251,6 @@ func extractActionResult(finalText string) (string, *ActionResult) {
 		}
 	}
 	return finalText, nil
-}
-
-func stripThoughtBlock(content string) string {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return ""
-	}
-	for {
-		start := strings.Index(trimmed, "<thought>")
-		end := strings.Index(trimmed, "</thought>")
-		if start != -1 {
-			if end != -1 {
-				trimmed = strings.TrimSpace(trimmed[:start] + trimmed[end+10:])
-			} else {
-				trimmed = strings.TrimSpace(trimmed[:start])
-			}
-		} else {
-			break
-		}
-	}
-	return trimmed
 }
 
 // repairToolCallMissingBraces recovers a tool call whose trailing closing

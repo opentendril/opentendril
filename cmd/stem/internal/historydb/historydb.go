@@ -603,7 +603,12 @@ VALUES (?, ?, ?, ?, ?)`
 		createdAt = time.Now().UTC()
 	}
 
-	encContent, err := s.enc(msg.Content, "historydb/messages/content")
+	content := msg.Content
+	if msg.Role == "assistant" {
+		content = telemetry.StripPrivateReasoning(content)
+	}
+
+	encContent, err := s.enc(content, "historydb/messages/content")
 	if err != nil {
 		return fmt.Errorf("encrypt message content: %w", err)
 	}
@@ -653,6 +658,9 @@ ORDER BY id ASC`
 		if msg.Content, err = s.dec(msg.Content, "historydb/messages/content"); err != nil {
 			return nil, fmt.Errorf("decrypt message content: %w", err)
 		}
+		if msg.Role == "assistant" {
+			msg.Content = telemetry.StripPrivateReasoning(msg.Content)
+		}
 		if msg.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 			return nil, fmt.Errorf("parse message createdAt: %w", err)
 		}
@@ -679,9 +687,9 @@ func (s *Store) Consume(event eventbus.Event) {
 
 // RecordEvent writes one EventBus telemetry event.
 func (s *Store) RecordEvent(ctx context.Context, event eventbus.Event) error {
-	ev := event
+	ev := telemetry.SanitizeObservationEvent(event)
 	if !telemetry.RedactionDisabled() {
-		ev = telemetry.RedactEvent(event)
+		ev = telemetry.RedactEvent(ev)
 	}
 
 	data := "{}"
@@ -770,6 +778,14 @@ ORDER BY id ASC`
 		if record.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
 			return nil, fmt.Errorf("parse event createdAt: %w", err)
 		}
+
+		e := eventbus.Event{
+			Type: eventbus.EventType(record.Type),
+			Data: record.Data,
+		}
+		e = telemetry.SanitizeObservationEvent(e)
+		record.Data = e.Data
+
 		records = append(records, record)
 	}
 	if err := rows.Err(); err != nil {
@@ -857,11 +873,13 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	if err != nil {
 		return fmt.Errorf("encrypt sprout run genotype: %w", err)
 	}
-	transcript, err := s.enc(run.Transcript, "historydb/sproutruns/transcript")
+	transcriptRaw := telemetry.SanitizeSproutTranscript(run.Transcript)
+	transcript, err := s.enc(transcriptRaw, "historydb/sproutruns/transcript")
 	if err != nil {
 		return fmt.Errorf("encrypt sprout run transcript: %w", err)
 	}
-	output, err := s.enc(run.Output, "historydb/sproutruns/output")
+	outputRaw := telemetry.StripPrivateReasoning(run.Output)
+	output, err := s.enc(outputRaw, "historydb/sproutruns/output")
 	if err != nil {
 		return fmt.Errorf("encrypt sprout run output: %w", err)
 	}
@@ -966,9 +984,11 @@ LIMIT ?`
 		if run.Transcript, err = s.dec(run.Transcript, "historydb/sproutruns/transcript"); err != nil {
 			return nil, fmt.Errorf("decrypt sprout run transcript: %w", err)
 		}
+		run.Transcript = telemetry.SanitizeSproutTranscript(run.Transcript)
 		if run.Output, err = s.dec(run.Output, "historydb/sproutruns/output"); err != nil {
 			return nil, fmt.Errorf("decrypt sprout run output: %w", err)
 		}
+		run.Output = telemetry.StripPrivateReasoning(run.Output)
 		if run.Error, err = s.dec(run.Error, "historydb/sproutruns/error"); err != nil {
 			return nil, fmt.Errorf("decrypt sprout run error: %w", err)
 		}

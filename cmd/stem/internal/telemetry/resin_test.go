@@ -43,9 +43,9 @@ func TestInitResinSinkWritesStructuredLog(t *testing.T) {
 func publishResinEvents(bus *eventbus.Bus, n int) {
 	for i := 0; i < n; i++ {
 		bus.Publish(eventbus.Event{
-			Type:   eventbus.EventStreamToken,
+			Type:   eventbus.EventToolInvoked,
 			Source: "amber-test",
-			Data:   map[string]interface{}{"token": strings.Repeat("x", 100)},
+			Data:   map[string]interface{}{"args": strings.Repeat("x", 100)},
 		})
 	}
 }
@@ -129,8 +129,8 @@ func TestResinHardensIntoAmber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decompress archive: %v", err)
 	}
-	if !strings.Contains(string(content), `"type":"stream-token"`) {
-		t.Fatalf("archive content = %q, want structured stream-token events", string(content))
+	if !strings.Contains(string(content), `"type":"tool-invoked"`) {
+		t.Fatalf("archive content = %q, want structured tool-invoked events", string(content))
 	}
 
 	// Drain the sink so all 10 events are flushed, then check active log size.

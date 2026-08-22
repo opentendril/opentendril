@@ -141,11 +141,6 @@ func HandleWebSocket(bus *eventbus.Bus) http.HandlerFunc {
 					msg["content"] = token
 				}
 			}
-			if event.Type == eventbus.EventThoughtBranch {
-				if thought, ok := event.Data["thought"]; ok {
-					msg["content"] = thought
-				}
-			}
 			payload, err := json.Marshal(msg)
 			if err != nil {
 				return
