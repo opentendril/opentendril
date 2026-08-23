@@ -365,6 +365,32 @@ jobs:
       - name: Compile tag-excluded tests
         run: go vet -tags livegithub ./...
 
+  # Unconditional: VERSION identity is not path-filtered. A malformed or
+  # inconsistent VERSION must fail Native PR Gate even when the path filter
+  # selected no implementation jobs. Do not add an `if:` here.
+  version-contract:
+    name: Version Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run release-version tests
+        shell: bash
+        run: bash scripts/release-version-test.sh
+
+      - name: Check canonical VERSION
+        shell: bash
+        run: |
+          set -euo pipefail
+          before="$(cat VERSION)"
+          bash scripts/release-version.sh check
+          bash scripts/release-version.sh current
+          bash scripts/release-version.sh next patch >/dev/null
+          bash scripts/release-version.sh next minor >/dev/null
+          bash scripts/release-version.sh next major >/dev/null
+          after="$(cat VERSION)"
+          test "${before}" = "${after}"
+
   # This job's NAME is a required status check in the "Protect Default"
   # ruleset. Renaming it makes the required context never report and leaves
   # every pull request unmergeable.
@@ -377,6 +403,7 @@ jobs:
       - sprout-python-tests
       - stem-go
       - sprout-typescript-tests
+      - version-contract
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -416,6 +443,13 @@ jobs:
                 ;;
             esac
           }
+
+          # Always required. The flag is the literal true, not a path-filter
+          # output, so a docs-only change cannot green this gate over a
+          # malformed VERSION.
+          require "version-contract" \
+            "true" \
+            "${{ needs.version-contract.result }}"
 
           require "sprout-python" \
             "${{ needs.changes.outputs['sprout-python'] }}" \
