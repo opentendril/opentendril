@@ -1,18 +1,77 @@
-name: Release
+name: Publish Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
 jobs:
-  release:
+  bind:
+    name: Bind publication source
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      source-sha: ${{ steps.classify.outputs.source-sha }}
+      version: ${{ steps.classify.outputs.version }}
+      intended-tag: ${{ steps.classify.outputs.intended-tag }}
+      state: ${{ steps.classify.outputs.state }}
+    steps:
+      - name: Require maintainer dispatch on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "Publish Release accepts only workflow_dispatch."
+            exit 1
+          fi
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "Publish Release may operate only on main (got ${{ github.ref }})."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+
+      - name: Bind source and classify publication
+        id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "${source_sha}"
+          bash scripts/release-version.sh publication-state "${source_sha}" | tee -a "$GITHUB_OUTPUT"
+
+  verify:
+    name: Release verification
+    needs: bind
+    uses: ./.github/workflows/ci.yml
+    with:
+      force_full_verification: true
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish
+    needs: [bind, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bind.outputs.source-sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -20,6 +79,19 @@ jobs:
           # Keep in lockstep with ci.yml — never ship public release binaries
           # built with an end-of-life toolchain (EOL Go carries known stdlib CVEs).
           go-version: '1.26.x'
+
+      - name: Recheck remote main and intended tag
+        id: prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="${{ needs.bind.outputs.source-sha }}"
+          test "$(git rev-parse HEAD)" = "${source_sha}"
+          version="$(bash scripts/release-version.sh current)"
+          tag="$(bash scripts/release-version.sh intended-tag)"
+          test "${version}" = "${{ needs.bind.outputs.version }}"
+          test "${tag}" = "${{ needs.bind.outputs.intended-tag }}"
+          bash scripts/release-version.sh publication-state "${source_sha}" | tee -a "$GITHUB_OUTPUT"
 
       # Each platform archive contains two independently built executables
       # from the root Go module:
@@ -29,6 +101,7 @@ jobs:
       # each other. Archives contain only those two files — not the source
       # tree, scripts, Docker Compose files, or Greenhouse.
       - name: Build platform archives
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -42,6 +115,7 @@ jobs:
             tar -C "${staging}" -czf "dist/opentendril-${os}-${arch}.tar.gz" tendril tendril-mcp
             rm -rf "${staging}"
           done
+          want="$(printf '%s\n' tendril tendril-mcp)"
           for archive in \
             opentendril-linux-amd64.tar.gz \
             opentendril-linux-arm64.tar.gz \
@@ -49,6 +123,12 @@ jobs:
             opentendril-darwin-arm64.tar.gz
           do
             test -f "dist/${archive}"
+            got="$(tar -tzf "dist/${archive}" | sed '/\/$/d' | sort)"
+            if [ "${got}" != "${want}" ]; then
+              echo "archive ${archive} contents are not exactly tendril and tendril-mcp:"
+              printf '%s\n' "${got}"
+              exit 1
+            fi
           done
           (
             cd dist
@@ -60,10 +140,45 @@ jobs:
               > checksums.txt
           )
 
+      - name: Recheck remote main and intended tag before public mutation
+        id: pretag
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="${{ needs.bind.outputs.source-sha }}"
+          bash scripts/release-version.sh publication-state "${source_sha}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Create annotated tag when absent
+        if: ${{ steps.pretag.outputs.state == 'first-publication' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.bind.outputs.intended-tag }}"
+          source_sha="${{ needs.bind.outputs.source-sha }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" "${source_sha}" -m "OpenTendril ${tag}"
+          git push origin "refs/tags/${tag}"
+
+      - name: Require intended tag at the publication source
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="${{ needs.bind.outputs.source-sha }}"
+          state="$(bash scripts/release-version.sh publication-state "${source_sha}" | sed -n 's/^state=//p')"
+          if [ "${state}" != "safe-retry" ]; then
+            echo "refusing GitHub Release until intended tag exists at ${source_sha} (state=${state:-<empty>})."
+            exit 1
+          fi
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.bind.outputs.intended-tag }}
+          target_commitish: ${{ needs.bind.outputs.source-sha }}
+          name: OpenTendril ${{ needs.bind.outputs.intended-tag }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
             dist/opentendril-linux-amd64.tar.gz
             dist/opentendril-linux-arm64.tar.gz
@@ -71,7 +186,7 @@ jobs:
             dist/opentendril-darwin-arm64.tar.gz
             dist/checksums.txt
           body: |
-            ## OpenTendril ${{ github.ref_name }}
+            ## OpenTendril ${{ needs.bind.outputs.intended-tag }}
 
             Self-hosted AI coding assistant. Point it at any project. Talk to it. It reads, edits, and commits.
 

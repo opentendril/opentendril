@@ -168,7 +168,7 @@ fi
 if grep -vE '^[[:space:]]*#' "${tool}" | grep -Eq 'git[[:space:]]+(tag|push|commit|merge|reset|rebase|fetch|pull|branch|update-ref)|gh[[:space:]]+(pr|release)|git[[:space:]]+push'; then
   fail "release-version.sh contains a mutating git/gh invocation"
 else
-  pass "release-version.sh has no tag/push/commit/PR/publication invocation"
+  pass "release-version.sh has no tag/push/commit/PR/GitHub-release invocation"
 fi
 
 # --- Makefile no longer owns a numeric version. -----------------------------
@@ -446,6 +446,389 @@ expect_failure "unknown command fails" "${calc_repo}" not-a-command
 expect_failure "next without a kind fails" "${calc_repo}" next
 expect_failure "bump with an invalid kind fails" "${calc_repo}" bump hotfix
 expect_failure "current rejects extra arguments" "${calc_repo}" current extra
+expect_failure "intended-tag rejects extra arguments" "${calc_repo}" intended-tag extra
+expect_failure "publication-state without a SHA fails" "${calc_repo}" publication-state
+expect_failure "publication-state rejects a short SHA" "${calc_repo}" publication-state abcdef
+expect_failure "publication-state rejects extra arguments" "${calc_repo}" publication-state "$(git -C "${calc_repo}" rev-parse HEAD)" extra
+
+# --- Publication identity and state machine. --------------------------------
+
+kv() {
+  sed -n "s/^${1}=//p" "${stdout_file}" | head -n 1
+}
+
+head_sha() {
+  git -C "$1" rev-parse HEAD
+}
+
+remote_tags_list() {
+  local remote_url
+  remote_url="$(git -C "$1" remote get-url origin)"
+  if [ -d "${remote_url}" ]; then
+    git --git-dir="${remote_url}" tag | sort | tr '\n' ' '
+  else
+    printf '%s\n' "<unreachable>"
+  fi
+}
+
+expect_publication_state() {
+  local name="$1" repo="$2" source="$3" want_state="$4"
+  local version_before tags_before remote_tags_before tree_before
+  version_before="$(cat "${repo}/VERSION")"
+  tags_before="$(git -C "${repo}" tag | sort | tr '\n' ' ')"
+  remote_tags_before="$(remote_tags_list "${repo}")"
+  tree_before="$(file_checksums "${repo}")"
+
+  run_tool_capture "${repo}" publication-state "${source}"
+  if [ "${status}" -ne 0 ]; then
+    fail "${name}" "exit ${status}; stderr: $(tr '\n' ' ' <"${stderr_file}")"
+    return
+  fi
+  if [ "$(kv state)" != "${want_state}" ]; then
+    fail "${name}" "state=$(kv state) want=${want_state}; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return
+  fi
+  if [ "$(kv source-sha)" != "${source}" ]; then
+    fail "${name}" "source-sha=$(kv source-sha) want=${source}"
+    return
+  fi
+  if [ "$(cat "${repo}/VERSION")" != "${version_before}" ]; then
+    fail "${name}" "publication-state mutated VERSION"
+    return
+  fi
+  if [ "$(git -C "${repo}" tag | sort | tr '\n' ' ')" != "${tags_before}" ]; then
+    fail "${name}" "publication-state mutated local tags"
+    return
+  fi
+  if [ "$(remote_tags_list "${repo}")" != "${remote_tags_before}" ]; then
+    fail "${name}" "publication-state mutated remote tags"
+    return
+  fi
+  if [ "$(file_checksums "${repo}")" != "${tree_before}" ]; then
+    fail "${name}" "publication-state mutated the worktree"
+    return
+  fi
+  pass "${name}"
+}
+
+expect_publication_failure() {
+  local name="$1" repo="$2" source="$3" needle="$4"
+  local version_before tags_before remote_tags_before tree_before
+  version_before="$(cat "${repo}/VERSION")"
+  tags_before="$(git -C "${repo}" tag | sort | tr '\n' ' ')"
+  remote_tags_before="$(remote_tags_list "${repo}")"
+  tree_before="$(file_checksums "${repo}")"
+
+  run_tool_capture "${repo}" publication-state "${source}"
+  if [ "${status}" -eq 0 ]; then
+    fail "${name}" "expected failure; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return
+  fi
+  if ! grep -F -q "${needle}" "${stderr_file}"; then
+    fail "${name}" "stderr lacked ${needle@Q}: $(tr '\n' ' ' <"${stderr_file}")"
+    return
+  fi
+  if [ "$(cat "${repo}/VERSION")" != "${version_before}" ]; then
+    fail "${name}" "failed publication-state mutated VERSION"
+    return
+  fi
+  if [ "$(git -C "${repo}" tag | sort | tr '\n' ' ')" != "${tags_before}" ]; then
+    fail "${name}" "failed publication-state mutated local tags"
+    return
+  fi
+  if [ "$(remote_tags_list "${repo}")" != "${remote_tags_before}" ]; then
+    fail "${name}" "failed publication-state mutated remote tags"
+    return
+  fi
+  if [ "$(file_checksums "${repo}")" != "${tree_before}" ]; then
+    fail "${name}" "failed publication-state mutated the worktree"
+    return
+  fi
+  pass "${name}"
+}
+
+advance_remote_main() {
+  local repo="$1"
+  printf 'advance\n' >>"${repo}/unrelated.txt"
+  git -C "${repo}" add unrelated.txt
+  git -C "${repo}" commit -q -m advance
+  git -C "${repo}" push -q origin HEAD:main
+}
+
+push_tag_at_other_commit() {
+  local repo="$1" version="$2"
+  git -C "${repo}" commit --allow-empty -q -m "not-main"
+  git -C "${repo}" tag -a "v${version}" HEAD -m "v${version}"
+  git -C "${repo}" push -q origin "refs/tags/v${version}"
+  git -C "${repo}" reset -q --hard HEAD~1
+}
+
+if [ "$(cat "${repo_root}/VERSION")" = "0.2.0" ]; then
+  pass "repository VERSION remains 0.2.0"
+else
+  fail "repository VERSION remains 0.2.0" "got=$(tr '\n' ' ' <"${repo_root}/VERSION")"
+fi
+
+expect_stdout "intended-tag from 0.2.0" "${calc_repo}" "v0.2.0" intended-tag
+(
+  cd "${repo_root}"
+  repo_tag="$("${tool}" intended-tag)"
+  if [ "${repo_tag}" = "v0.2.0" ]; then
+    pass "repository intended-tag is v0.2.0"
+  else
+    fail "repository intended-tag is v0.2.0" "got=${repo_tag@Q}"
+  fi
+)
+
+malformed_pub="$(mktemp -d "${tmp_root}/malformed-pub.XXXXXX")"
+malformed_pub_repo="$(build_fixture "${malformed_pub}" "0.2.0" "0.2.0" "0.2.0")"
+malformed_pub_sha="$(head_sha "${malformed_pub_repo}")"
+printf 'v0.2.0\n' >"${malformed_pub_repo}/VERSION"
+expect_publication_failure "malformed VERSION fails publication-state" \
+  "${malformed_pub_repo}" "${malformed_pub_sha}" "not a stable MAJOR.MINOR.PATCH"
+
+first="$(mktemp -d "${tmp_root}/first.XXXXXX")"
+first_repo="$(build_fixture "${first}" "0.3.0" "0.3.0" "0.2.0")"
+first_sha="$(head_sha "${first_repo}")"
+git -C "${first_repo}" tag v9.9.9
+expect_publication_state "absent intended tag is first-publication" \
+  "${first_repo}" "${first_sha}" "first-publication"
+if [ "$(kv intended-tag)" = "v0.3.0" ] && [ "$(kv version)" = "0.3.0" ] && [ -z "$(kv tag-commit)" ]; then
+  pass "first-publication reports v0.3.0 and empty tag-commit"
+else
+  fail "first-publication reports v0.3.0 and empty tag-commit" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+# Local-only intended tag must not look like a retry or a conflict.
+local_only="$(mktemp -d "${tmp_root}/local-only.XXXXXX")"
+local_only_repo="$(build_fixture "${local_only}" "0.3.0" "0.3.0" "0.2.0")"
+local_only_sha="$(head_sha "${local_only_repo}")"
+git -C "${local_only_repo}" tag -a v0.3.0 "${local_only_sha}" -m "local-only"
+expect_publication_state "local-only intended tag is not remote authority" \
+  "${local_only_repo}" "${local_only_sha}" "first-publication"
+
+retry="$(mktemp -d "${tmp_root}/retry.XXXXXX")"
+retry_repo="$(build_fixture "${retry}" "0.3.0" "0.3.0" "0.2.0" "0.3.0")"
+retry_sha="$(head_sha "${retry_repo}")"
+git -C "${retry_repo}" commit --allow-empty -q -m "local-other"
+git -C "${retry_repo}" tag -a v0.3.0 HEAD -m "local-other"
+git -C "${retry_repo}" tag v9.9.9
+git -C "${retry_repo}" reset -q --hard "${retry_sha}"
+expect_publication_state "intended tag at exact source commit is safe-retry" \
+  "${retry_repo}" "${retry_sha}" "safe-retry"
+if [ "$(kv tag-commit)" = "${retry_sha}" ]; then
+  pass "safe-retry reports the remote tag commit"
+else
+  fail "safe-retry reports the remote tag commit" "tag-commit=$(kv tag-commit) want=${retry_sha}"
+fi
+
+conflict="$(mktemp -d "${tmp_root}/conflict.XXXXXX")"
+conflict_repo="$(build_fixture "${conflict}" "0.3.0" "0.3.0" "0.2.0")"
+conflict_sha="$(head_sha "${conflict_repo}")"
+push_tag_at_other_commit "${conflict_repo}" "0.3.0"
+expect_publication_failure "intended tag at another commit fails closed" \
+  "${conflict_repo}" "${conflict_sha}" "refusing to move or overwrite it"
+
+stale="$(mktemp -d "${tmp_root}/stale-main.XXXXXX")"
+stale_repo="$(build_fixture "${stale}" "0.3.0" "0.3.0" "0.2.0")"
+stale_sha="$(head_sha "${stale_repo}")"
+advance_remote_main "${stale_repo}"
+expect_publication_failure "stale publication source fails closed" \
+  "${stale_repo}" "${stale_sha}" "refusing to publish a stale commit"
+
+nonmono="$(mktemp -d "${tmp_root}/nonmono.XXXXXX")"
+nonmono_repo="$(build_fixture "${nonmono}" "0.4.0" "0.4.0" "0.2.0")"
+nonmono_sha="$(head_sha "${nonmono_repo}")"
+expect_publication_failure "non-monotonic VERSION fails publication-state" \
+  "${nonmono_repo}" "${nonmono_sha}" "not a single patch, minor, or major increment"
+
+unpub="$(mktemp -d "${tmp_root}/unpub.XXXXXX")"
+unpub_repo="$(build_fixture "${unpub}" "0.2.0" "0.2.0")"
+unpub_sha="$(head_sha "${unpub_repo}")"
+expect_publication_state "absent history is first-publication of VERSION" \
+  "${unpub_repo}" "${unpub_sha}" "first-publication"
+
+unreachable_pub="$(mktemp -d "${tmp_root}/unreachable-pub.XXXXXX")"
+unreachable_pub_repo="$(build_fixture "${unreachable_pub}" "0.3.0" "0.3.0" "0.2.0")"
+unreachable_pub_sha="$(head_sha "${unreachable_pub_repo}")"
+git -C "${unreachable_pub_repo}" tag v9.9.9
+git -C "${unreachable_pub_repo}" remote set-url origin "${unreachable_pub}/missing-remote.git"
+expect_publication_failure "authoritative remote-query failure fails publication-state" \
+  "${unreachable_pub_repo}" "${unreachable_pub_sha}" "failed to query"
+if grep -q "no published release tags" "${stderr_file}"; then
+  fail "publication-state must not treat a failed remote query as empty tag history" \
+    "stderr: $(tr '\n' ' ' <"${stderr_file}")"
+else
+  pass "publication-state does not confuse a failed query with empty published history"
+fi
+if grep -q "refusing to publish a stale commit" "${stderr_file}"; then
+  fail "publication-state must not treat a failed main query as stale-main" \
+    "stderr: $(tr '\n' ' ' <"${stderr_file}")"
+else
+  pass "publication-state does not confuse a failed query with stale-main"
+fi
+
+# --- Workflow contracts (static; do not dispatch or tag). -------------------
+
+ci_yml="${repo_root}/.github/workflows/ci.yml"
+release_yml="${repo_root}/.github/workflows/release.yml"
+docker_yml="${repo_root}/.github/workflows/docker-publish.yml"
+
+on_block() {
+  awk '
+    /^on:/ {p=1; next}
+    p && /^[a-zA-Z]/ {exit}
+    p {print}
+  ' "$1"
+}
+
+ci_on="$(on_block "${ci_yml}")"
+if printf '%s\n' "${ci_on}" | grep -q 'workflow_dispatch:' &&
+  printf '%s\n' "${ci_on}" | grep -q 'workflow_call:' &&
+  printf '%s\n' "${ci_on}" | grep -q 'pull_request:' &&
+  printf '%s\n' "${ci_on}" | grep -q 'push:'; then
+  pass "ci.yml keeps dispatch, pull_request, push, and adds workflow_call"
+else
+  fail "ci.yml keeps dispatch, pull_request, push, and adds workflow_call" "on=${ci_on}"
+fi
+
+if grep -q 'force_full_verification:' "${ci_yml}" &&
+  grep -q 'inputs.force_full_verification' "${ci_yml}"; then
+  pass "ci.yml publication mode can force full native verification"
+else
+  fail "ci.yml publication mode can force full native verification"
+fi
+
+if grep -F 'github.event_name' "${ci_yml}" | grep -q 'pull_request' &&
+  grep -A30 'Detect required native checks' "${ci_yml}" | grep -q 'sprout-python=true' &&
+  grep -A30 'Detect required native checks' "${ci_yml}" | grep -q 'stem-go=true' &&
+  grep -A30 'Detect required native checks' "${ci_yml}" | grep -q 'sprout-typescript=true'; then
+  pass "ci.yml ordinary non-PR path still forces complete native checks"
+else
+  fail "ci.yml ordinary non-PR path still forces complete native checks"
+fi
+
+gate_names="$(grep -c 'name: Native PR Gate' "${ci_yml}" || true)"
+if [ "${gate_names}" = "1" ]; then
+  pass "Native PR Gate remains exactly named Native PR Gate"
+else
+  fail "Native PR Gate remains exactly named Native PR Gate" "count=${gate_names}"
+fi
+
+version_contract_job="$(awk '
+  $0 ~ /^  version-contract:/ {p=1}
+  p && $0 ~ /^  [a-zA-Z0-9_.-]+:/ && $0 !~ /^  version-contract:/ {exit}
+  p {print}
+' "${ci_yml}")"
+if printf '%s\n' "${version_contract_job}" | grep -qE '^[[:space:]]+if:'; then
+  fail "Version Contract remains unconditional" "job has if:"
+else
+  pass "Version Contract remains unconditional"
+fi
+
+if printf '%s\n' "${version_contract_job}" | grep -q 'name: Version Contract'; then
+  pass "Version Contract job name is unchanged"
+else
+  fail "Version Contract job name is unchanged"
+fi
+
+release_on="$(on_block "${release_yml}")"
+if printf '%s\n' "${release_on}" | grep -q 'workflow_dispatch:' &&
+  ! printf '%s\n' "${release_on}" | grep -q 'push:' &&
+  ! printf '%s\n' "${release_on}" | grep -q 'tags:' &&
+  ! printf '%s\n' "${release_on}" | grep -q "v\\*"; then
+  pass "release.yml is explicit workflow_dispatch without a v* push trigger"
+else
+  fail "release.yml is explicit workflow_dispatch without a v* push trigger" "on=${release_on}"
+fi
+
+if grep -q 'uses: ./.github/workflows/ci.yml' "${release_yml}" &&
+  grep -q 'force_full_verification: true' "${release_yml}"; then
+  pass "release.yml invokes reusable CI with full verification"
+else
+  fail "release.yml invokes reusable CI with full verification"
+fi
+
+if grep -q 'github.ref_name' "${release_yml}"; then
+  fail "release identity is derived from VERSION, not github.ref_name"
+else
+  pass "release identity is derived from VERSION, not github.ref_name"
+fi
+
+if grep -q 'release-version.sh publication-state' "${release_yml}" &&
+  grep -q 'release-version.sh intended-tag' "${release_yml}" &&
+  grep -q 'release-version.sh current' "${release_yml}"; then
+  pass "release.yml derives identity through the release-version helper"
+else
+  fail "release.yml derives identity through the release-version helper"
+fi
+
+if grep -q 'name: OpenTendril ${{ needs.bind.outputs.intended-tag }}' "${release_yml}"; then
+  pass "GitHub Release title is OpenTendril v<VERSION>"
+else
+  fail "GitHub Release title is OpenTendril v<VERSION>"
+fi
+
+if grep -q 'git tag -a' "${release_yml}" &&
+  grep -q 'git push origin "refs/tags/${tag}"' "${release_yml}"; then
+  pass "new public tags are annotated and pushed without force"
+else
+  fail "new public tags are annotated and pushed without force"
+fi
+
+if grep -q "steps.pretag.outputs.state == 'first-publication'" "${release_yml}" &&
+  grep -q 'safe-retry' "${release_yml}"; then
+  pass "tag creation is gated to first-publication; retry requires the existing tag"
+else
+  fail "tag creation is gated to first-publication; retry requires the existing tag"
+fi
+
+mutating_force="$(grep -nE 'git[[:space:]]+tag[[:space:]]+(-f|--force)|git[[:space:]]+push.*--force|git[[:space:]]+push[[:space:]]+-f |--force-with-lease|git[[:space:]]+tag[[:space:]]+-d|git[[:space:]]+push.*--delete|git[[:space:]]+update-ref' "${release_yml}" "${tool}" || true)"
+if [ -n "${mutating_force}" ]; then
+  fail "no force-update or tag-delete path exists" "${mutating_force}"
+else
+  pass "no force-update or tag-delete path exists"
+fi
+
+for archive in \
+  opentendril-linux-amd64.tar.gz \
+  opentendril-linux-arm64.tar.gz \
+  opentendril-darwin-amd64.tar.gz \
+  opentendril-darwin-arm64.tar.gz \
+  checksums.txt
+do
+  if grep -q "${archive}" "${release_yml}"; then
+    pass "release artifact name ${archive} is preserved"
+  else
+    fail "release artifact name ${archive} is preserved"
+  fi
+done
+
+if grep -q 'go build -ldflags="-s -w" -o "${staging}/tendril" ./cmd/stem' "${release_yml}" &&
+  grep -q 'go build -ldflags="-s -w" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp' "${release_yml}" &&
+  grep -q 'tar -C "${staging}" -czf "dist/opentendril-${os}-${arch}.tar.gz" tendril tendril-mcp' "${release_yml}"; then
+  pass "release archives still contain independently built tendril and tendril-mcp"
+else
+  fail "release archives still contain independently built tendril and tendril-mcp"
+fi
+
+if grep -q 'sha256sum' "${release_yml}"; then
+  pass "SHA-256 checksum generation is preserved"
+else
+  fail "SHA-256 checksum generation is preserved"
+fi
+
+if git -C "${repo_root}" diff HEAD -- "${docker_yml}" | grep -q .; then
+  fail "docker-publish.yml is unchanged"
+else
+  pass "docker-publish.yml is unchanged"
+fi
+
+if git -C "${repo_root}" diff HEAD --name-only | grep -qE 'VERSION'; then
+  fail "VERSION is not mutated by this slice"
+else
+  pass "VERSION is not mutated by this slice"
+fi
 
 echo
 if [ "${failures}" -gt 0 ]; then
