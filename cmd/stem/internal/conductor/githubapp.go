@@ -31,9 +31,22 @@ var (
 	githubGraphQLURL    = "https://api.github.com/graphql"
 	githubAppHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-	appTokenMu    sync.Mutex
-	appTokenCache = map[string]cachedAppToken{}
+	githubEndpointMu sync.RWMutex
+	appTokenMu       sync.Mutex
+	appTokenCache    = map[string]cachedAppToken{}
 )
+
+func currentGitHubAPIBaseURL() string {
+	githubEndpointMu.RLock()
+	defer githubEndpointMu.RUnlock()
+	return githubAPIBaseURL
+}
+
+func currentGitHubGraphQLURL() string {
+	githubEndpointMu.RLock()
+	defer githubEndpointMu.RUnlock()
+	return githubGraphQLURL
+}
 
 type cachedAppToken struct {
 	token  string
@@ -128,7 +141,7 @@ func parseOwnerRepo(remoteURL string) (owner, repo string, err error) {
 }
 
 func githubAppAPIGet(ctx context.Context, path, jwt string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubAPIBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentGitHubAPIBaseURL()+path, nil)
 	if err != nil {
 		return err
 	}
@@ -138,7 +151,7 @@ func githubAppAPIGet(ctx context.Context, path, jwt string, out any) error {
 }
 
 func githubAppAPIPost(ctx context.Context, path, jwt string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, githubAPIBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, currentGitHubAPIBaseURL()+path, nil)
 	if err != nil {
 		return err
 	}
@@ -173,7 +186,7 @@ func githubGraphQLPost(ctx context.Context, installationToken, query string, var
 		return fmt.Errorf("encode github graphql request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, githubGraphQLURL, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, currentGitHubGraphQLURL(), strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
@@ -232,7 +245,7 @@ func githubRESTRequest(ctx context.Context, method, path, token string, body any
 		payload = strings.NewReader(string(encoded))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, githubAPIBaseURL+path, payload)
+	req, err := http.NewRequestWithContext(ctx, method, currentGitHubAPIBaseURL()+path, payload)
 	if err != nil {
 		return err
 	}
@@ -260,6 +273,18 @@ func githubRESTRequest(ctx context.Context, method, path, token string, body any
 	return nil
 }
 
+// githubAppHTTPError is a non-2xx GitHub App REST response. Verification maps
+// Status onto secret-safe diagnostics and must not print Body.
+type githubAppHTTPError struct {
+	Path   string
+	Status int
+	Body   string
+}
+
+func (e *githubAppHTTPError) Error() string {
+	return fmt.Sprintf("github app api %s returned %d: %s", e.Path, e.Status, strings.TrimSpace(e.Body))
+}
+
 func doGithubAppRequest(req *http.Request, out any) error {
 	resp, err := githubAppHTTPClient.Do(req)
 	if err != nil {
@@ -268,7 +293,7 @@ func doGithubAppRequest(req *http.Request, out any) error {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("github app api %s returned %d: %s", req.URL.Path, resp.StatusCode, strings.TrimSpace(string(body)))
+		return &githubAppHTTPError{Path: req.URL.Path, Status: resp.StatusCode, Body: string(body)}
 	}
 	if out != nil {
 		if err := json.Unmarshal(body, out); err != nil {
@@ -276,6 +301,33 @@ func doGithubAppRequest(req *http.Request, out any) error {
 		}
 	}
 	return nil
+}
+
+// RedirectGitHubAPIBaseURL points GitHub REST calls at baseURL and returns a
+// restore function. Tests use this with an httptest server; production callers
+// must not.
+func RedirectGitHubAPIBaseURL(baseURL string) func() {
+	githubEndpointMu.Lock()
+	orig := githubAPIBaseURL
+	githubAPIBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	githubEndpointMu.Unlock()
+	return func() {
+		githubEndpointMu.Lock()
+		githubAPIBaseURL = orig
+		githubEndpointMu.Unlock()
+	}
+}
+
+func redirectGitHubGraphQLURL(url string) func() {
+	githubEndpointMu.Lock()
+	orig := githubGraphQLURL
+	githubGraphQLURL = url
+	githubEndpointMu.Unlock()
+	return func() {
+		githubEndpointMu.Lock()
+		githubGraphQLURL = orig
+		githubEndpointMu.Unlock()
+	}
 }
 
 // resolveInstallationID returns the configured installation id, or discovers it
@@ -349,4 +401,192 @@ func githubAppInstallationToken(ctx context.Context, app AppCredential, repoURL 
 	}
 	appTokenCache[cacheKey] = cachedAppToken{token: tokenResp.Token, expiry: expiry.Add(-1 * time.Minute)}
 	return tokenResp.Token, nil
+}
+
+// VerifyGitHubAppRemoteAccess proves the App credential can authenticate to
+// repoURL without minting an installation token and without mutating the
+// remote (no branch, commit, push, or pull request).
+//
+// It reuses the existing App authentication path: PEM load/parse, JWT mint,
+// and repository installation lookup. Success requires a valid App JWT and a
+// repository installation for repoURL.
+func VerifyGitHubAppRemoteAccess(ctx context.Context, app AppCredential, repoURL string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	pemBytes, err := appPrivateKeyPEM(app)
+	if err != nil {
+		return fmt.Errorf("GitHub App private key is unusable: %w", err)
+	}
+	key, err := loadRSAPrivateKey(pemBytes)
+	if err != nil {
+		return fmt.Errorf("GitHub App private key is malformed: %w", err)
+	}
+	jwt, err := mintAppJWT(app.AppID, key, time.Now())
+	if err != nil {
+		return fmt.Errorf("GitHub App credentials could not mint a JWT: %w", err)
+	}
+
+	if err := githubAppAPIGet(ctx, "/app", jwt, nil); err != nil {
+		return classifyAppCredentialError(err)
+	}
+
+	owner, repo, err := parseOwnerRepo(repoURL)
+	if err != nil {
+		return err
+	}
+
+	var installation struct {
+		ID int64 `json:"id"`
+	}
+	installPath := fmt.Sprintf("/repos/%s/%s/installation", owner, repo)
+	if err := githubAppAPIGet(ctx, installPath, jwt, &installation); err != nil {
+		return classifyAppInstallationError(ctx, err, owner, repo)
+	}
+	if installation.ID == 0 {
+		return fmt.Errorf("GitHub App is not installed on %s/%s", owner, repo)
+	}
+	return nil
+}
+
+func classifyAppCredentialError(err error) error {
+	var httpErr *githubAppHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return fmt.Errorf("GitHub rejected the App credentials (HTTP %d). Check that appId matches the private key", httpErr.Status)
+		}
+	}
+	return fmt.Errorf("GitHub App remote verification failed: %s", redactCredentialMaterial(err.Error()))
+}
+
+func classifyAppInstallationError(ctx context.Context, err error, owner, repo string) error {
+	var httpErr *githubAppHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return fmt.Errorf("GitHub rejected the App credentials (HTTP %d). Check that appId matches the private key", httpErr.Status)
+		case http.StatusNotFound:
+			visible, probeErr := githubRepoPubliclyVisible(ctx, owner, repo)
+			if probeErr != nil {
+				return fmt.Errorf("GitHub App is not installed on %s/%s, or the repository does not exist or is inaccessible", owner, repo)
+			}
+			if visible {
+				return fmt.Errorf("GitHub App is not installed on %s/%s", owner, repo)
+			}
+			return fmt.Errorf("repository %s/%s does not exist or is inaccessible", owner, repo)
+		}
+	}
+	return fmt.Errorf("GitHub App remote verification failed: %s", redactCredentialMaterial(err.Error()))
+}
+
+// githubRepoPubliclyVisible reports whether GET /repos/{owner}/{repo} succeeds
+// without credentials. A public repository that exists returns true; a missing
+// or private repository returns false. Used only to distinguish "App not
+// installed" from "repository does not exist or is inaccessible" after an
+// installation lookup 404. It never sends App credentials.
+func githubRepoPubliclyVisible(ctx context.Context, owner, repo string) (bool, error) {
+	path := fmt.Sprintf("/repos/%s/%s", owner, repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentGitHubAPIBaseURL()+path, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := githubAppHTTPClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("github app api request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		return false, &githubAppHTTPError{Path: req.URL.Path, Status: resp.StatusCode}
+	}
+}
+
+func redactCredentialMaterial(s string) string {
+	if s == "" {
+		return s
+	}
+	if i := strings.Index(s, "-----BEGIN "); i >= 0 {
+		if j := strings.Index(s[i:], "-----END "); j >= 0 {
+			rest := s[i+j:]
+			if k := strings.Index(rest[9:], "-----"); k >= 0 {
+				s = s[:i] + "[redacted-pem]" + rest[9+k+5:]
+			} else {
+				s = s[:i] + "[redacted-pem]"
+			}
+		} else {
+			s = s[:i] + "[redacted-pem]"
+		}
+	}
+	s = redactPrefixedSecrets(s, "ghs_")
+	s = redactPrefixedSecrets(s, "ghp_")
+	s = redactPrefixedSecrets(s, "github_pat_")
+	s = redactJWTMaterial(s)
+	return s
+}
+
+func redactPrefixedSecrets(s, prefix string) string {
+	var b strings.Builder
+	start := 0
+	for {
+		i := strings.Index(s[start:], prefix)
+		if i < 0 {
+			b.WriteString(s[start:])
+			return b.String()
+		}
+		i += start
+		b.WriteString(s[start:i])
+		b.WriteString(prefix)
+		b.WriteString("[redacted]")
+		end := i + len(prefix)
+		for end < len(s) {
+			c := s[end]
+			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+				end++
+				continue
+			}
+			break
+		}
+		start = end
+	}
+}
+
+func redactJWTMaterial(s string) string {
+	const header = "eyJ"
+	start := 0
+	for {
+		i := strings.Index(s[start:], header)
+		if i < 0 {
+			return s
+		}
+		i += start
+		end := i
+		dots := 0
+		for end < len(s) {
+			c := s[end]
+			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+				end++
+				continue
+			}
+			if c == '.' {
+				dots++
+				end++
+				continue
+			}
+			break
+		}
+		if dots >= 2 {
+			s = s[:i] + "[redacted-jwt]" + s[end:]
+			start = i + len("[redacted-jwt]")
+			continue
+		}
+		start = i + len(header)
+	}
 }

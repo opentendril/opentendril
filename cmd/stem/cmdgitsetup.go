@@ -1,15 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 
-	"bufio"
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
-	"os/user"
 )
 
 // `tendril git setup` — one command that stands up a git connection so neither
@@ -56,7 +56,7 @@ func runGitSetup(ctx context.Context, args []string) {
 		return
 	}
 	if opts.verify {
-		if !runGitSetupVerify(opts) {
+		if !runGitSetupVerify(ctx, opts) {
 			os.Exit(1)
 		}
 		return
@@ -284,11 +284,17 @@ func envOrDefault(v, def string) string {
 	return v
 }
 
+// verifyGitHubAppRemoteAccess is the Conductor remote-readiness probe. The CLI
+// adapter reports the result; tests may replace this function.
+var verifyGitHubAppRemoteAccess = conductor.VerifyGitHubAppRemoteAccess
+
 // runGitSetupVerify loads the written config, resolves the substrate's
-// credential, and reports whether the authentication material is actually
-// present — a side-effect-free configuration check (it never creates a commit).
-// Returns true when the connection looks ready.
-func runGitSetupVerify(o gitSetupOptions) bool {
+// credential, and for the GitHub App posture proves the credential can
+// authenticate to the configured remote. The check is side-effect-free: it
+// never creates a branch, commit, push, or pull request. GitHub authentication
+// lives in the Conductor; this adapter only orchestrates and reports.
+// Returns true when the connection is ready.
+func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 	cfg, err := conductor.LoadSubstratesConfig(o.dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ load substrates config: %v\n", err)
@@ -317,6 +323,12 @@ func runGitSetupVerify(o gitSetupOptions) bool {
 			ready = false
 		} else {
 			fmt.Printf("  ✅ private key present: %s\n", cred.App.PrivateKeyPath)
+			if err := verifyGitHubAppRemoteAccess(ctx, cred.App, spec.URL); err != nil {
+				fmt.Fprintf(os.Stderr, "❌ remote verification failed: %v\n", err)
+				ready = false
+			} else {
+				fmt.Println("  ✅ authenticated to the configured repository")
+			}
 		}
 	case conductor.CredentialPAT:
 		if strings.TrimSpace(cred.TokenValue) == "" {
@@ -333,9 +345,13 @@ func runGitSetupVerify(o gitSetupOptions) bool {
 		fmt.Printf("  identity:     %s <%s>\n", cred.Identity.Name, cred.Identity.Email)
 	}
 	if ready {
-		fmt.Println("✅ Connection configured; authentication material present.")
+		if cred.Method == conductor.CredentialApp {
+			fmt.Println("✅ Connection configured; authenticated to the remote repository.")
+		} else {
+			fmt.Println("✅ Connection configured; authentication material present.")
+		}
 	} else {
-		fmt.Println("⚠️  Connection configured, but authentication material is missing (see above).")
+		fmt.Println("⚠️  Connection configured, but it is not ready (see above).")
 	}
 	return ready
 }
@@ -417,5 +433,5 @@ func printGitSetupUsage() {
 	fmt.Println()
 	fmt.Println("  --dir <path>          Where to write config (default: current directory)")
 	fmt.Println("  --force               Overwrite existing config files, and skip the confirmation")
-	fmt.Println("  --verify              Check an existing connection's credentials (no commit is made)")
+	fmt.Println("  --verify              Authenticate the configured connection to its remote (no mutation)")
 }

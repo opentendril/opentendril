@@ -1,6 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,4 +265,257 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+type gitHubCall struct {
+	Method        string
+	Path          string
+	Authorization string
+}
+
+func genSetupKeyPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+}
+
+func writeAppVerifyFixture(t *testing.T, appID, repo string, pemBytes []byte) string {
+	t.Helper()
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "app.pem")
+	if err := os.WriteFile(keyPath, pemBytes, 0o600); err != nil {
+		t.Fatalf("write pem: %v", err)
+	}
+	opts := gitSetupOptions{
+		posture: "app", substrate: "garden", repo: repo,
+		appID: appID, keyPath: keyPath, checkout: "managed",
+	}
+	if err := os.WriteFile(filepath.Join(dir, "substrates.yaml"), []byte(renderSubstratesYAML(opts)), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return dir
+}
+
+func captureVerifyOutput(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = outW, errW
+	outDone := make(chan string)
+	errDone := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(outR)
+		outDone <- buf.String()
+	}()
+	go func() {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(errR)
+		errDone <- buf.String()
+	}()
+	fn()
+	_ = outW.Close()
+	_ = errW.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	return <-outDone, <-errDone
+}
+
+func startSetupVerifyFake(t *testing.T, appStatus, installStatus, repoStatus int, leakyBody string, calls *[]gitHubCall) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*calls = append(*calls, gitHubCall{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization")})
+		switch {
+		case r.URL.Path == "/app":
+			if appStatus != 0 && appStatus != http.StatusOK {
+				w.WriteHeader(appStatus)
+				_, _ = w.Write([]byte(leakyBody))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			if installStatus != 0 && installStatus != http.StatusOK {
+				w.WriteHeader(installStatus)
+				_, _ = w.Write([]byte(leakyBody))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99001})
+		case strings.HasPrefix(r.URL.Path, "/repos/"):
+			status := repoStatus
+			if status == 0 {
+				status = http.StatusOK
+			}
+			w.WriteHeader(status)
+			if status == http.StatusOK {
+				_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	restore := conductor.RedirectGitHubAPIBaseURL(srv.URL)
+	t.Cleanup(restore)
+}
+
+func assertNoMutatingCalls(t *testing.T, calls []gitHubCall) {
+	t.Helper()
+	for _, call := range calls {
+		switch call.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+		default:
+			t.Errorf("mutating GitHub HTTP method %s %s", call.Method, call.Path)
+		}
+		path := strings.ToLower(call.Path)
+		for _, banned := range []string{"access_tokens", "/git/", "/pulls", "/issues", "/merges"} {
+			if strings.Contains(path, banned) {
+				t.Errorf("mutating GitHub HTTP path %s %s", call.Method, call.Path)
+			}
+		}
+	}
+}
+
+func secretsFromCalls(calls []gitHubCall) []string {
+	var secrets []string
+	for _, call := range calls {
+		if auth := strings.TrimSpace(call.Authorization); auth != "" {
+			secrets = append(secrets, auth)
+			if bearer, ok := strings.CutPrefix(auth, "Bearer "); ok {
+				secrets = append(secrets, bearer)
+			}
+		}
+	}
+	return secrets
+}
+
+func TestRunGitSetupVerifyAppRemoteSuccess(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusOK, http.StatusOK, http.StatusOK, "", &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("expected verify success")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(stdout, "authenticated to the remote repository") {
+		t.Fatalf("stdout = %q, want remote authentication success", stdout)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_", "BEGIN RSA PRIVATE KEY")...)
+}
+
+func TestRunGitSetupVerifyAppWrongAppID(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "881199", "acme/widget", genSetupKeyPEM(t))
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusUnauthorized, 0, 0, `{"message":"Bad credentials","token":"ghs_LEAKME_INSTALL"}`, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("wrong App ID should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "rejected the App credentials") {
+		t.Fatalf("output = %q, want rejected App credentials", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_LEAKME_INSTALL")...)
+}
+
+func TestRunGitSetupVerifyAppMalformedPEM(t *testing.T) {
+	const marker = "SECRETPEM-TEST-MARKER"
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", []byte("-----BEGIN RSA PRIVATE KEY-----\n"+marker+"\n-----END RSA PRIVATE KEY-----\n"))
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusOK, http.StatusOK, http.StatusOK, "", &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("malformed PEM should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "malformed") {
+		t.Fatalf("output = %q, want malformed PEM", out)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("malformed PEM must not call GitHub, got %+v", calls)
+	}
+	assertNoSecretSubstrings(t, out, marker)
+}
+
+func TestRunGitSetupVerifyAppNotInstalled(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusOK, http.StatusNotFound, http.StatusOK, `{"token":"ghs_LEAKME_INSTALL"}`, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("missing installation should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "not installed on acme/widget") {
+		t.Fatalf("output = %q, want not installed", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_LEAKME_INSTALL")...)
+}
+
+func TestRunGitSetupVerifyAppInaccessibleRepo(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusOK, http.StatusNotFound, http.StatusNotFound, "", &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("inaccessible repository should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "does not exist or is inaccessible") {
+		t.Fatalf("output = %q, want inaccessible repository", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, secretsFromCalls(calls)...)
+}
+
+func TestGitSetupCLIContainsNoGitHubAuthImplementation(t *testing.T) {
+	src, err := os.ReadFile("cmdgitsetup.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(src)
+	for _, banned := range []string{
+		"crypto/rsa",
+		"encoding/pem",
+		"mintAppJWT",
+		"loadRSAPrivateKey",
+		"/access_tokens",
+		"githubAppAPI",
+		"RS256",
+	} {
+		if strings.Contains(text, banned) {
+			t.Errorf("CLI adapter contains GitHub auth implementation %q", banned)
+		}
+	}
+}
+
+func assertNoSecretSubstrings(t *testing.T, text string, secrets ...string) {
+	t.Helper()
+	for _, secret := range secrets {
+		if secret != "" && strings.Contains(text, secret) {
+			t.Errorf("secret material appeared in output %q", text)
+		}
+	}
 }

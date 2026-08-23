@@ -122,9 +122,7 @@ func TestResolveDefaultBranchPrefersAPI(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	orig := githubAPIBaseURL
-	githubAPIBaseURL = srv.URL
-	defer func() { githubAPIBaseURL = orig }()
+	defer RedirectGitHubAPIBaseURL(srv.URL)()
 	appTokenMu.Lock()
 	appTokenCache = map[string]cachedAppToken{}
 	appTokenMu.Unlock()

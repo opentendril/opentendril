@@ -419,17 +419,20 @@ not expose the PEM to the Pollinator-hosting account. A shared location like
 prints `ok`, while `cat /home/tendril/.tendril/app.pem` as your own account is
 denied.
 
-Then write the connection and the grant together. Replace `123456` with the
-App ID from Path B, and `myorg/myrepo` with the repository the App is
-installed on:
+Then write the connection and the grant together. Set `APP_ID` and `REPO` to
+the real App ID and `owner/repo` from Path B before running the command. The
+shell substitutions refuse to run while either is unset, so the example
+identity cannot be executed by accident:
 
 ```bash
 # as tendril, in /home/tendril
+: "${APP_ID:?set APP_ID to the GitHub App ID from Path B}"
+: "${REPO:?set REPO to owner/repo the App is installed on}"
 tendril git setup \
   --substrate myrepo \
-  --repo myorg/myrepo \
+  --repo "$REPO" \
   --posture app \
-  --app-id 123456 \
+  --app-id "$APP_ID" \
   --key /home/tendril/.tendril/app.pem \
   --grant-pollen claude
 ```
@@ -465,8 +468,10 @@ grants:
     #                                   # an hour if unresolved.
 ```
 
-**Check:** `tendril git setup --substrate myrepo --repo myorg/myrepo --verify`
-reports the connection ready.
+**Check:** `tendril git setup --verify --substrate myrepo`
+reports the connection ready only after authenticating to the configured
+repository. A wrong App ID, unusable private key, missing installation, or
+inaccessible repository fails the check.
 
 ### Commit signing
 
