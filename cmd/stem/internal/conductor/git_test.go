@@ -421,10 +421,8 @@ func fakeGitHubAppAndGraphQLServer(t *testing.T, oid string) (installCalls, toke
 	}))
 	t.Cleanup(srv.Close)
 
-	origBase, origGraphQL := githubAPIBaseURL, githubGraphQLURL
-	githubAPIBaseURL = srv.URL
-	githubGraphQLURL = srv.URL + "/graphql"
-	t.Cleanup(func() { githubAPIBaseURL = origBase; githubGraphQLURL = origGraphQL })
+	t.Cleanup(RedirectGitHubAPIBaseURL(srv.URL))
+	t.Cleanup(redirectGitHubGraphQLURL(srv.URL + "/graphql"))
 
 	appTokenMu.Lock()
 	appTokenCache = map[string]cachedAppToken{}
@@ -678,9 +676,7 @@ func newFakePullRequestAPI(t *testing.T, defaultBranch string, existing []map[st
 	}))
 	t.Cleanup(srv.Close)
 
-	origBase := githubAPIBaseURL
-	githubAPIBaseURL = srv.URL
-	t.Cleanup(func() { githubAPIBaseURL = origBase })
+	t.Cleanup(RedirectGitHubAPIBaseURL(srv.URL))
 
 	appTokenMu.Lock()
 	appTokenCache = map[string]cachedAppToken{}

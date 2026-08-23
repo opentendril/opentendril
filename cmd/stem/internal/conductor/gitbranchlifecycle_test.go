@@ -60,9 +60,7 @@ func newFakeForge(t *testing.T, forge *fakeForge) {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	orig := githubAPIBaseURL
-	githubAPIBaseURL = srv.URL
-	t.Cleanup(func() { githubAPIBaseURL = orig })
+	t.Cleanup(RedirectGitHubAPIBaseURL(srv.URL))
 	appTokenMu.Lock()
 	appTokenCache = map[string]cachedAppToken{}
 	appTokenMu.Unlock()
