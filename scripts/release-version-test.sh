@@ -343,7 +343,70 @@ fi
 
 unpublished="$(mktemp -d "${tmp_root}/unpublished.XXXXXX")"
 unpublished_repo="$(build_fixture "${unpublished}" "0.2.0" "0.2.0")"
+expect_stdout "check treats a successful empty remote listing as unpublished, not as a query failure" "${unpublished_repo}" "0.2.0" check
 expect_failure "bump fails when remote has no published tags" "${unpublished_repo}" bump minor
+
+# --- Configured remote whose URL cannot be queried fails closed. ------------
+# Distinct from "zero published tags": origin is configured, but ls-remote
+# cannot read it. That must not be mistaken for empty history.
+
+unreachable="$(mktemp -d "${tmp_root}/unreachable.XXXXXX")"
+unreachable_repo="$(build_fixture "${unreachable}" "0.2.0" "0.2.0" "0.2.0")"
+git -C "${unreachable_repo}" tag v9.9.9
+git -C "${unreachable_repo}" remote set-url origin "${unreachable}/missing-remote.git"
+printf 'keep-me-too\n' >"${unreachable_repo}/extra.txt"
+
+unreachable_version_before="$(cat "${unreachable_repo}/VERSION")"
+unreachable_tags_before="$(git -C "${unreachable_repo}" tag | sort | tr '\n' ' ')"
+unreachable_tree_before="$(file_checksums "${unreachable_repo}")"
+
+run_tool_capture "${unreachable_repo}" check
+if [ "${status}" -eq 0 ]; then
+  fail "check fails when the configured remote cannot be queried" "unexpected success; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+elif grep -q "failed to query published tags on origin" "${stderr_file}"; then
+  pass "check fails when the configured remote cannot be queried"
+else
+  fail "check fails when the configured remote cannot be queried" "stderr lacked the query-failure diagnostic: $(tr '\n' ' ' <"${stderr_file}")"
+fi
+if grep -q "no published release tags" "${stderr_file}"; then
+  fail "check must not treat a failed remote query as empty tag history" "stderr: $(tr '\n' ' ' <"${stderr_file}")"
+else
+  pass "check does not confuse a failed query with empty published history"
+fi
+
+run_tool_capture "${unreachable_repo}" bump minor
+if [ "${status}" -eq 0 ]; then
+  fail "bump minor fails when the configured remote cannot be queried" "unexpected success; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+elif grep -q "failed to query published tags on origin" "${stderr_file}"; then
+  pass "bump minor fails when the configured remote cannot be queried"
+else
+  fail "bump minor fails when the configured remote cannot be queried" "stderr lacked the query-failure diagnostic: $(tr '\n' ' ' <"${stderr_file}")"
+fi
+if grep -q "no published release tags" "${stderr_file}"; then
+  fail "bump must not treat a failed remote query as empty tag history" "stderr: $(tr '\n' ' ' <"${stderr_file}")"
+else
+  pass "bump does not confuse a failed query with empty published history"
+fi
+
+if [ "$(cat "${unreachable_repo}/VERSION")" = "${unreachable_version_before}" ]; then
+  pass "unreachable-remote failure leaves VERSION unchanged"
+else
+  fail "unreachable-remote failure mutated VERSION" "got=$(cat "${unreachable_repo}/VERSION" | tr '\n' ' ')"
+fi
+
+unreachable_tags_after="$(git -C "${unreachable_repo}" tag | sort | tr '\n' ' ')"
+if [ "${unreachable_tags_before}" = "${unreachable_tags_after}" ]; then
+  pass "unreachable-remote failure does not mutate local tags"
+else
+  fail "unreachable-remote failure mutated local tags" "before=${unreachable_tags_before@Q} after=${unreachable_tags_after@Q}"
+fi
+
+unreachable_tree_after="$(file_checksums "${unreachable_repo}")"
+if [ "${unreachable_tree_before}" = "${unreachable_tree_after}" ]; then
+  pass "unreachable-remote failure does not mutate other files"
+else
+  fail "unreachable-remote failure mutated the worktree" "$(comm -3 <(printf '%s\n' "${unreachable_tree_before}") <(printf '%s\n' "${unreachable_tree_after}") | tr '\n' ' ')"
+fi
 
 too_far="$(mktemp -d "${tmp_root}/toofar.XXXXXX")"
 too_far_repo="$(build_fixture "${too_far}" "0.2.0" "0.4.0" "0.2.0")"

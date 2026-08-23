@@ -113,9 +113,28 @@ require_remote() {
 
 # Highest stable vMAJOR.MINOR.PATCH tag on the remote. Empty if none exist.
 # Local tags are ignored: only git ls-remote output is used.
+#
+# The ls-remote exit status is checked BEFORE the listing is parsed. Feeding
+# `git ls-remote` through process substitution would hide a failed query as an
+# empty listing, and check/bump would then treat "could not read history" as
+# "there is no published history."
 published_baseline() {
   local remote="$1"
+  local listing err url detail
   local sha ref tag latest=""
+
+  listing="$(mktemp)"
+  err="$(mktemp)"
+  if ! git ls-remote --tags "${remote}" >"${listing}" 2>"${err}"; then
+    url="$(git remote get-url "${remote}" 2>/dev/null || printf '%s' "${remote}")"
+    detail="$(tr '\n' ' ' <"${err}" | sed 's/[[:space:]]\{1,\}/ /g; s/^ //; s/ $//')"
+    rm -f "${listing}" "${err}"
+    if [ -n "${detail}" ]; then
+      die "failed to query published tags on ${remote} (${url}): ${detail}"
+    fi
+    die "failed to query published tags on ${remote} (${url})"
+  fi
+  rm -f "${err}"
 
   while IFS=$'\t' read -r sha ref; do
     [ -n "${ref}" ] || continue
@@ -130,7 +149,8 @@ published_baseline() {
         fi
         ;;
     esac
-  done < <(git ls-remote --tags "${remote}")
+  done <"${listing}"
+  rm -f "${listing}"
 
   printf '%s\n' "${latest}"
 }
