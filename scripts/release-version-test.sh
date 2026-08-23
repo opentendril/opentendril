@@ -2,9 +2,12 @@
 # Isolated tests for scripts/release-version.sh.
 #
 # Fixture repositories and remotes stand in for published tag history so a
-# stale or conflicting local tag cannot masquerade as authority. The script
-# under test is invoked against those fixtures, never against the caller's
-# checkout, and it must not create tags, push, or otherwise mutate Git state.
+# stale or conflicting local tag cannot masquerade as authority. Historical
+# cases invoke the script against those fixtures. Caller-repository identity
+# is derived from the live VERSION file: current, intended-tag, and check
+# must agree with it whether the checkout is aligned to the published
+# baseline or prepared one permitted increment ahead. Read-only operations
+# must not create tags, push, or otherwise mutate VERSION or Git state.
 #
 # Usage: scripts/release-version-test.sh
 set -euo pipefail
@@ -154,6 +157,27 @@ file_checksums() {
     done
   ) | sort
 }
+
+# Snapshot of the caller repository's VERSION bytes and Git identity. A
+# VERSION that already differs from HEAD is a legitimate prepared state,
+# not a failure; the suite only requires that read-only operations leave
+# that state unchanged.
+capture_caller_state() {
+  printf 'head=%s\n' "$(git -C "${repo_root}" rev-parse HEAD)"
+  printf 'version-sha256=%s\n' "$(sha256sum "${repo_root}/VERSION" | awk '{print $1}')"
+  printf 'status-porcelain\n'
+  git -C "${repo_root}" status --porcelain
+  printf 'diff-head\n'
+  git -C "${repo_root}" diff HEAD --
+  printf 'diff-cached\n'
+  git -C "${repo_root}" diff --cached --
+  printf 'local-tags\n'
+  git -C "${repo_root}" tag --list | LC_ALL=C sort
+}
+
+caller_state_before="${tmp_root}/caller-state-before"
+caller_state_after="${tmp_root}/caller-state-after"
+capture_caller_state >"${caller_state_before}"
 
 # --- Static contract: the tool must not mutate Git state. -------------------
 
@@ -563,22 +587,15 @@ push_tag_at_other_commit() {
   git -C "${repo}" reset -q --hard HEAD~1
 }
 
-if [ "$(cat "${repo_root}/VERSION")" = "0.2.0" ]; then
-  pass "repository VERSION remains 0.2.0"
-else
-  fail "repository VERSION remains 0.2.0" "got=$(tr '\n' ' ' <"${repo_root}/VERSION")"
-fi
-
+# Caller identity is derived from the live VERSION file. A prepared
+# checkout may differ from HEAD by exactly that file; that is not a
+# test failure. check is the authority for whether the value is an
+# allowed aligned or prepared state.
+caller_version="$(cat "${repo_root}/VERSION")"
+expect_stdout "current reports the caller repository VERSION" "${repo_root}" "${caller_version}" current
 expect_stdout "intended-tag from 0.2.0" "${calc_repo}" "v0.2.0" intended-tag
-(
-  cd "${repo_root}"
-  repo_tag="$("${tool}" intended-tag)"
-  if [ "${repo_tag}" = "v0.2.0" ]; then
-    pass "repository intended-tag is v0.2.0"
-  else
-    fail "repository intended-tag is v0.2.0" "got=${repo_tag@Q}"
-  fi
-)
+expect_stdout "intended-tag is v plus the caller repository VERSION" "${repo_root}" "v${caller_version}" intended-tag
+expect_stdout "check accepts the caller repository VERSION" "${repo_root}" "${caller_version}" check
 
 malformed_pub="$(mktemp -d "${tmp_root}/malformed-pub.XXXXXX")"
 malformed_pub_repo="$(build_fixture "${malformed_pub}" "0.2.0" "0.2.0" "0.2.0")"
@@ -824,10 +841,12 @@ else
   pass "docker-publish.yml is unchanged"
 fi
 
-if git -C "${repo_root}" diff HEAD --name-only | grep -qE 'VERSION'; then
-  fail "VERSION is not mutated by this slice"
+capture_caller_state >"${caller_state_after}"
+if cmp -s "${caller_state_before}" "${caller_state_after}"; then
+  pass "read-only release-version operations do not mutate caller VERSION or Git state"
 else
-  pass "VERSION is not mutated by this slice"
+  fail "read-only release-version operations do not mutate caller VERSION or Git state" \
+    "$(diff -u "${caller_state_before}" "${caller_state_after}" | tr '\n' ' ')"
 fi
 
 echo
