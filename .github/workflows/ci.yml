@@ -2,6 +2,13 @@ name: CI
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      force_full_verification:
+        description: "Force every native check instead of pull-request changed-path routing. Publication uses this so a missing PR diff cannot skip repository verification."
+        type: boolean
+        required: false
+        default: false
   pull_request:
     branches: [main]
   push:
@@ -44,7 +51,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Ordinary pull requests keep changed-path routing. Everything else
+          # — push, manual dispatch, and reusable-workflow publication — must
+          # exercise the complete native suite. Publication also passes
+          # force_full_verification so a future path-filter change cannot
+          # silently weaken the release invocation.
+          force_full=false
           if [ "${{ github.event_name }}" != "pull_request" ]; then
+            force_full=true
+          fi
+          if [ "${{ inputs.force_full_verification }}" = "true" ]; then
+            force_full=true
+          fi
+
+          if [ "${force_full}" = "true" ]; then
             echo "sprout-python=true" >> "$GITHUB_OUTPUT"
             echo "stem-go=true" >> "$GITHUB_OUTPUT"
             echo "sprout-typescript=true" >> "$GITHUB_OUTPUT"
@@ -388,6 +408,8 @@ jobs:
           bash scripts/release-version.sh next patch >/dev/null
           bash scripts/release-version.sh next minor >/dev/null
           bash scripts/release-version.sh next major >/dev/null
+          tag="$(bash scripts/release-version.sh intended-tag)"
+          test "${tag}" = "v${before}"
           after="$(cat VERSION)"
           test "${before}" = "${after}"
 
