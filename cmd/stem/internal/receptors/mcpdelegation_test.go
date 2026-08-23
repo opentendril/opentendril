@@ -501,13 +501,12 @@ func TestMCPCallRejectsUnapprovedTransportNames(t *testing.T) {
 	}
 }
 
-// TestGovernedSproutGrowthDoesNotRelyOnAdapterFiltering proves that the MCP
+// TestMCPAdapterRelaysExecutionOutputWithoutItsOwnPrivacyFilter proves that the MCP
 // surface (adapter) does not implement its own private-reasoning filter.
-// The governed sprout.grow capability delegates to Core.SproutRun; if the
-// core returns raw reasoning (e.g. via a stub), the adapter passes it through,
-// proving the security boundary is structural (in the Core) rather than
-// repeated in the adapter.
-func TestGovernedSproutGrowthDoesNotRelyOnAdapterFiltering(t *testing.T) {
+// The Sprout/Conductor execution boundary must return safe output.
+// Stem Core relays that execution result.
+// MCP is a transport adapter and does not independently filter it.
+func TestMCPAdapterRelaysExecutionOutputWithoutItsOwnPrivacyFilter(t *testing.T) {
 	chdirTempDir(t)
 	sessions, err := session.NewManager(context.Background(), nil)
 	if err != nil {
