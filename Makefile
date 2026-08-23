@@ -3,7 +3,12 @@
 .PHONY: stem install mcp-client install-mcp-client stem-all build up down health test-stem test-all hooks hygiene clean check-all help
 
 # --- Stem Binaries ---
-STEM_VERSION := 0.2.0
+# Canonical release identity is the root VERSION file. Artifact names read it
+# from there so this Makefile cannot drift to a second numeric version.
+STEM_VERSION := $(shell cat VERSION)
+ifeq ($(strip $(STEM_VERSION)),)
+$(error canonical VERSION is missing or empty)
+endif
 STEM_DIR := cmd/stem
 DIST_DIR := cmd/stem/dist
 MCP_CLIENT_DIR := cmd/tendril-mcp
