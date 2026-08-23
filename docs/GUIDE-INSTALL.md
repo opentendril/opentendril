@@ -50,8 +50,8 @@ instantiates the value in bold; [Variations](#variations) covers the rest.
 
 | Axis | Options | Constrained by |
 |---|---|---|
-| Binary provenance | **compiled from source** / precompiled release / package manager | — |
-| Build principal | **a separate build account** / the Stem's own account | — |
+| Binary provenance | **verified precompiled release** / compiled from source / package manager | — |
+| Build principal | **none — the release is obtained, not compiled** / a separate build account / the Stem's own account | — |
 | Binary location | **the Stem's own home** / a system location | P5 only |
 | Lifecycle | **system service** / user service / foreground | — |
 | State directory | **a conventional home** / a service state directory | — |
@@ -142,24 +142,17 @@ Commands marked **[root]** need `sudo`; the rest run as the named user. **Do the
 stages in order** — container access comes first, because a user in a
 root-equivalent group makes every later stage cosmetic.
 
-Prerequisites:
-- Go 1.24+ (on the build account only), Docker, Git, and an LLM — local [Ollama](https://ollama.ai) by default, or a cloud provider key.
-- GNU Make (`make`) on the build account. This source-build workflow requires it: Stage 3 runs `make stem`, and Stage 8 runs `make install-mcp-client`.
+Prerequisites for the normal path:
+- A Terrarium provider. This guide instantiates rootless Docker Engine in Stage 2.
+- Git, where the Stem clones and manages Substrates.
+- An LLM — local [Ollama](https://ollama.ai) by default, or a cloud provider key.
 - Access to the target GitHub repository.
 - Authority necessary to create and install the GitHub App used by the secure-default path.
 - Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
 
-Confirm GNU Make is on the build account before Stage 3:
-
-```bash
-command -v make
-```
-
-If that prints nothing, install it on Ubuntu/Debian:
-
-```bash
-sudo apt-get install make
-```
+The normal path obtains a **verified precompiled OpenTendril release**. It does
+not clone this repository, does not install Go, and does not install GNU Make.
+Those belong only to the [source-build variation](#compile-from-source).
 
 A governed installation that connects an MCP-speaking Pollinator uses two
 executables. They are not interchangeable.
@@ -303,8 +296,8 @@ Sprout images on demand, so this costs a slow first run rather than any work.
 ## Stage 3 — Obtain and place the binary
 
 > **Serves P5.** Axes: binary provenance, build principal and binary location
-> (*all free*) — this guide instantiates *compiled from source on a separate
-> build account, installed into the Stem's own home*.
+> (*all free*) — this guide instantiates *a verified precompiled OpenTendril
+> release, installed into the Stem's own home*.
 
 What P5 requires is only that no Pollinator-hosting account can write the binary
 or any directory on the path used to reach it. A binary owned by `tendril` inside
@@ -312,22 +305,40 @@ a home that other accounts cannot traverse satisfies that; so does a root-owned
 binary in a system location. Neither is more secure than the other, and the
 choice is logistics — see Variations.
 
-Build on an account that has the toolchain. The Stem's account needs no compiler
-and no source tree:
+The current OpenTendril release is **v0.3.0**. Each platform archive contains two
+independent executables, `tendril` and `tendril-mcp`, and nothing else. This
+worked path is Linux amd64. The same release also publishes
+`opentendril-linux-arm64.tar.gz`, `opentendril-darwin-amd64.tar.gz`, and
+`opentendril-darwin-arm64.tar.gz`. Substitute the matching archive name; the
+checksum file and verification step are the same.
+
+Obtain the archive and `checksums.txt` from the same release. Verify the
+selected archive **before** extracting or installing it. Then install **only**
+`tendril` into the Stem principal's executable path. Do not place the full
+`tendril` executable on a Pollinator-hosting account's PATH. Stage 8 installs
+the restricted `tendril-mcp` client for that account.
 
 ```bash
-# as your own (build) account
-git clone https://github.com/opentendril/opentendril.git
-cd opentendril
-make stem                      # builds cmd/stem/tendril with the project's flags
-```
-
-```bash
-# [root] hand it over. 0750 and not 0755: no account other than the Stem should
-#        run this binary, so no account other than the Stem is given the ability.
-install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
-install -o tendril -g tendril -m 750 cmd/stem/tendril /home/tendril/.local/bin/tendril
-rm cmd/stem/tendril
+# [root] Linux amd64. Verify the archive before extracting or installing it.
+# The subshell exits on checksum failure, so extract/install do not run.
+RELEASE=v0.3.0
+ARCHIVE=opentendril-linux-amd64.tar.gz
+WORKDIR=$(mktemp -d)
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril
+  # 0750 and not 0755: no account other than the Stem should run this binary,
+  # so no account other than the Stem is given the ability.
+  install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
+  install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
+)
+rm -rf "$WORKDIR"
 ```
 
 Do not copy this binary onto a Pollinator-hosting account's PATH, and do not run
@@ -348,8 +359,8 @@ sudo -u tendril -i tendril hardiness
 Among the findings you should see the executable-integrity line reporting that
 nothing on the resolution chain is writable by others.
 
-Repeat this stage whenever you rebuild — it is how a change developed in your
-clone reaches the running Stem.
+To replace these executables later, follow [Upgrade](#upgrade). Do not rerun
+this stage as a way of reinitializing the Stem.
 
 ---
 
@@ -686,16 +697,36 @@ in all three places it appears.
 > by the delegation gate rather than by this guide.
 
 The ordinary Pollinator-hosting account does not receive the protected `tendril`
-binary. It builds and installs the restricted client from a source checkout:
+binary. It installs **only** `tendril-mcp` from a verified release archive — the
+same bundle Stage 3 used, independently downloaded and checksum-verified on this
+account. Do not run `make install-mcp-client` on the normal path.
 
 ```bash
 # as the ordinary (Pollinator-hosting) account
-make install-mcp-client
+# The subshell exits on checksum failure, so extract/install do not run.
+RELEASE=v0.3.0
+ARCHIVE=opentendril-linux-amd64.tar.gz
+WORKDIR=$(mktemp -d)
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril-mcp
+  install -d -m 755 "$HOME/.local/bin"
+  install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
+  # Do not extract or install tendril. The full Stem executable stays with the Stem principal.
+)
+rm -rf "$WORKDIR"
 ```
 
 That installs only `~/.local/bin/tendril-mcp` for the invoking account. It does
 not install, copy, or expose the full `tendril` Stem binary, and it does not
-touch `/home/tendril/.local/bin/tendril`.
+touch `/home/tendril/.local/bin/tendril`. Ensure `~/.local/bin` is on this
+account's PATH.
 
 **Check:**
 
@@ -892,12 +923,19 @@ sudo -u tendril -i tendril hardiness
 Expect no weak findings, ending with: *"This Terroir is hardy: the delegation
 boundary is enforced by the operating system."*
 
+A governed Pollinator-hosting account following Stage 8 has `tendril-mcp` and
+not `tendril`. That is the intended outcome: `command -v tendril` prints
+nothing. The Stem-side report above remains the authoritative P5 reading.
+
+If this account *does* resolve a `tendril` executable — a single-user install,
+or a leftover copy — run the caller's-view report from your home:
+
 ```bash
 # as your own account, from your own home — the caller's view
 cd ~ && tendril hardiness
 ```
 
-This run must report **no readable credential files**. The check opens each
+That run must report **no readable credential files**. The check opens each
 candidate rather than inspecting its mode, because permission can be satisfied
 through group membership, and it examines the invoking user's own home as well as
 the control plane. If anything ever left credential material in your `~/.tendril`,
@@ -939,27 +977,142 @@ $ tendril hardiness
 
 ---
 
+## Upgrade
+
+Replacing the installed executables does not reinitialize the Stem. **Do not
+rerun `tendril init`.** Existing durable configuration and state remain in
+place, including `.env`, `.tendril/`, GitHub App credentials, Pollinator
+credentials, grants, Substrate definitions, and other runtime state.
+
+1. Obtain the newer release archive and its `checksums.txt` from the same tag.
+2. Verify the archive with SHA-256 **before** replacing anything.
+3. Stop the Stem.
+4. Replace the protected `tendril` at the Stage 3 path, keeping the same owner
+   and mode.
+5. If the Pollinator-hosting account has `tendril-mcp`, replace that executable
+   the same way as Stage 8.
+6. Restart the Stem.
+7. Run the existing health and hardiness checks.
+
+Stop the Stem, then replace the protected executable. Substitute the newer
+release tag for `RELEASE`.
+
+```bash
+# [root] Linux amd64 — substitute the newer release tag.
+# The subshell exits on checksum failure, so extract/install do not run.
+RELEASE=v0.3.0
+ARCHIVE=opentendril-linux-amd64.tar.gz
+WORKDIR=$(mktemp -d)
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril
+  systemctl stop tendril
+  install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
+)
+rm -rf "$WORKDIR"
+```
+
+If Stage 8 installed `tendril-mcp`, replace it from a separately verified
+archive on the Pollinator-hosting account. Do not copy the full `tendril`
+executable onto that account's PATH.
+
+```bash
+# as the ordinary (Pollinator-hosting) account — same RELEASE as above
+# The subshell exits on checksum failure, so extract/install do not run.
+RELEASE=v0.3.0
+ARCHIVE=opentendril-linux-amd64.tar.gz
+WORKDIR=$(mktemp -d)
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril-mcp
+  install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
+)
+rm -rf "$WORKDIR"
+```
+
+Then restart the Stem and run the existing checks:
+
+```bash
+# [root]
+systemctl start tendril
+curl -s localhost:8080/health
+sudo -u tendril -i tendril hardiness
+```
+
+No installer daemon, package manager, or background updater is part of this
+path.
+
+---
+
 ## Variations
 
 Each entry changes only the steps named. Choose an axis value once and keep it
 consistent — these are global choices, not per-step ones.
 
-### Precompiled release instead of a source build
+### Compile from source
 
-*Changes Stage 3. Invariants unaffected.*
+*Advanced / developer. Changes Stage 3 and, if used, Stage 8. Invariants
+unaffected.*
 
-Download the release artifact rather than building it, verify its checksum, then
-install it exactly as Stage 3 does. The build account and its toolchain become
-unnecessary. Updating means fetching a new artifact rather than rebuilding.
+The normal path uses a verified OpenTendril release. Compiling from source is an
+advanced/developer variation. It is not required to install or run the Stem.
+
+This variation depends on:
+
+- Git
+- GNU Make
+- Go 1.25.0, matching the `go` directive in the repository's `go.mod`. Install
+  Go from the [upstream Go installation instructions](https://go.dev/doc/install).
+
+It also requires an OpenTendril source checkout. The Stem's account needs no
+compiler and no source tree.
+
+```bash
+# as your own (build) account
+git clone https://github.com/opentendril/opentendril.git
+cd opentendril
+make stem                      # builds cmd/stem/tendril with the project's flags
+```
+
+```bash
+# [root] hand it over. 0750 and not 0755: no account other than the Stem should
+#        run this binary, so no account other than the Stem is given the ability.
+install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
+install -o tendril -g tendril -m 750 cmd/stem/tendril /home/tendril/.local/bin/tendril
+rm cmd/stem/tendril
+```
+
+Do not copy this binary onto a Pollinator-hosting account's PATH, and do not run
+`make install` for that account. That target is the single-user full-binary
+install. For a governed Pollinator on this variation, install only
+`tendril-mcp` from the same checkout:
+
+```bash
+# as the ordinary (Pollinator-hosting) account, from the source checkout
+make install-mcp-client
+```
 
 ### The Stem builds its own binary
 
 *Changes Stage 3. Invariants unaffected.*
 
-Give the `tendril` account a Go toolchain and its own source clone — kept
-separate from any managed checkout, which is reset on every run. It then builds
-and installs into its own `~/.local/bin` with no cross-account handoff. The cost
-is a compiler and a build path inside the account you are hardening.
+Give the `tendril` account the source-build dependencies above and its own
+source clone — kept separate from any managed checkout, which is reset on every
+run. It then builds and installs into its own `~/.local/bin` with no
+cross-account handoff. The cost is a compiler and a build path inside the
+account you are hardening.
 
 ### A system binary location
 

@@ -52,6 +52,11 @@ The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **T
 **[docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md) is the installation guide**, and the source
 of truth for what a sound installation is.
 
+The normal secure-default path installs a **verified precompiled OpenTendril
+release** and runs the Stem headless. It does not require cloning this
+repository, installing Go, or installing GNU Make. Compiling from source is an
+advanced/developer variation documented in that guide.
+
 It does not prescribe one procedure. What makes an installation sound is a set of
 measurable properties — whether the Stem holds credentials no caller can read,
 whether a caller can escalate to it, whether anything else can replace the binary
@@ -79,7 +84,7 @@ Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers 
  external clients
     │
     ▼
- CLI / REST / MCP adapter (e.g. tendril mcp / tendril serve)
+ CLI / REST / MCP adapter (e.g. tendril serve, tendril-mcp, tendril mcp)
     │
     ▼
  Stem / Core authority
@@ -99,20 +104,47 @@ Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprou
 OpenTendril acts as a headless backend. You can connect it to your favorite developer tools using either the **Model Context Protocol (MCP)** or its **OpenAI-Compatible API**.
 
 ### 1. Claude Code, Claude Desktop & Cursor (via MCP)
-`tendril mcp` acts as a governed command surface and stdio bridge. It determines its mode dynamically:
-- With a configured credential and another-user governed Stem, it **forwards** traffic securely to that Stem.
-- Otherwise, it operates in-process locally or refuses connection if appropriate. See [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) for details.
 
-**Claude Code (CLI) — one command:**
+A governed installation and a single-user installation use different MCP
+executables. They are not interchangeable.
+
+**Governed installation (the hardened path).** The Pollinator-hosting account
+runs `tendril-mcp`, the restricted bridge. It authenticates to a separately
+owned Stem and cannot construct a Stem. Do not put the full `tendril`
+executable on that account's PATH, and do not launch `tendril mcp` from it.
+See [docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md) Stage 8.
+
+**Claude Code (CLI):**
 ```bash
-claude mcp add opentendril -- tendril mcp
+claude mcp add opentendril -- tendril-mcp
 ```
 
 **Claude Desktop / Cursor** — edit your MCP configuration file:
 - **Claude Desktop (Mac):** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Claude Desktop (Linux):** `~/.config/Claude/claude_desktop_config.json`
 
-Add the following configuration:
+```json
+{
+  "mcpServers": {
+    "opentendril": {
+      "command": "tendril-mcp",
+      "env": {
+        "TENDRIL_POLLEN": "<pollen>"
+      }
+    }
+  }
+}
+```
+
+**Single-user installation.** `tendril mcp` is the in-process / same-principal
+stdio surface. It may forward to another-user Stem when a credential is
+configured, or operate locally. That command belongs to the full Stem
+executable. See [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md).
+
+```bash
+claude mcp add opentendril -- tendril mcp
+```
+
 ```json
 {
   "mcpServers": {
