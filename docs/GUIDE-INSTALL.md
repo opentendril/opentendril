@@ -320,23 +320,24 @@ the restricted `tendril-mcp` client for that account.
 
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
+# The subshell exits on checksum failure, so extract/install do not run.
 RELEASE=v0.3.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
-cd "$WORKDIR"
-curl -fsSL -o "$ARCHIVE" \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-curl -fsSL -o checksums.txt \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-# Must print: opentendril-linux-amd64.tar.gz: OK
-# Stop here if it does not.
-grep "${ARCHIVE}$" checksums.txt | sha256sum -c
-tar -xzf "$ARCHIVE" tendril
-# 0750 and not 0755: no account other than the Stem should run this binary,
-# so no account other than the Stem is given the ability.
-install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
-install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
-cd /
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril
+  # 0750 and not 0755: no account other than the Stem should run this binary,
+  # so no account other than the Stem is given the ability.
+  install -d -o tendril -g tendril -m 750 /home/tendril/.local/bin
+  install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
+)
 rm -rf "$WORKDIR"
 ```
 
@@ -702,22 +703,23 @@ account. Do not run `make install-mcp-client` on the normal path.
 
 ```bash
 # as the ordinary (Pollinator-hosting) account
+# The subshell exits on checksum failure, so extract/install do not run.
 RELEASE=v0.3.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
-cd "$WORKDIR"
-curl -fsSL -o "$ARCHIVE" \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-curl -fsSL -o checksums.txt \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-# Must print: opentendril-linux-amd64.tar.gz: OK
-# Stop here if it does not.
-grep "${ARCHIVE}$" checksums.txt | sha256sum -c
-tar -xzf "$ARCHIVE" tendril-mcp
-install -d -m 755 "$HOME/.local/bin"
-install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
-# Do not extract or install tendril. The full Stem executable stays with the Stem principal.
-cd /
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril-mcp
+  install -d -m 755 "$HOME/.local/bin"
+  install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
+  # Do not extract or install tendril. The full Stem executable stays with the Stem principal.
+)
 rm -rf "$WORKDIR"
 ```
 
@@ -997,21 +999,22 @@ release tag for `RELEASE`.
 
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
+# The subshell exits on checksum failure, so extract/install do not run.
 RELEASE=v0.3.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
-cd "$WORKDIR"
-curl -fsSL -o "$ARCHIVE" \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-curl -fsSL -o checksums.txt \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-# Must print: opentendril-linux-amd64.tar.gz: OK
-# Stop here if it does not.
-grep "${ARCHIVE}$" checksums.txt | sha256sum -c
-tar -xzf "$ARCHIVE" tendril
-systemctl stop tendril
-install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
-cd /
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril
+  systemctl stop tendril
+  install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
+)
 rm -rf "$WORKDIR"
 ```
 
@@ -1021,20 +1024,21 @@ executable onto that account's PATH.
 
 ```bash
 # as the ordinary (Pollinator-hosting) account — same RELEASE as above
+# The subshell exits on checksum failure, so extract/install do not run.
 RELEASE=v0.3.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
-cd "$WORKDIR"
-curl -fsSL -o "$ARCHIVE" \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-curl -fsSL -o checksums.txt \
-  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-# Must print: opentendril-linux-amd64.tar.gz: OK
-# Stop here if it does not.
-grep "${ARCHIVE}$" checksums.txt | sha256sum -c
-tar -xzf "$ARCHIVE" tendril-mcp
-install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
-cd /
+(
+  set -euo pipefail
+  cd "$WORKDIR"
+  curl -fsSL -o "$ARCHIVE" \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
+  curl -fsSL -o checksums.txt \
+    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
+  tar -xzf "$ARCHIVE" tendril-mcp
+  install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
+)
 rm -rf "$WORKDIR"
 ```
 
