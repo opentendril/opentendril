@@ -144,9 +144,22 @@ root-equivalent group makes every later stage cosmetic.
 
 Prerequisites:
 - Go 1.24+ (on the build account only), Docker, Git, and an LLM — local [Ollama](https://ollama.ai) by default, or a cloud provider key.
+- GNU Make (`make`) on the build account. This source-build workflow requires it: Stage 3 runs `make stem`, and Stage 8 runs `make install-mcp-client`.
 - Access to the target GitHub repository.
 - Authority necessary to create and install the GitHub App used by the secure-default path.
 - Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
+
+Confirm GNU Make is on the build account before Stage 3:
+
+```bash
+command -v make
+```
+
+If that prints nothing, install it on Ubuntu/Debian:
+
+```bash
+sudo apt-get install make
+```
 
 A governed installation that connects an MCP-speaking Pollinator uses two
 executables. They are not interchangeable.
