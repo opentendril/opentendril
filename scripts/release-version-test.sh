@@ -689,7 +689,6 @@ fi
 
 ci_yml="${repo_root}/.github/workflows/ci.yml"
 release_yml="${repo_root}/.github/workflows/release.yml"
-docker_yml="${repo_root}/.github/workflows/docker-publish.yml"
 
 on_block() {
   awk '
@@ -835,11 +834,11 @@ else
   fail "SHA-256 checksum generation is preserved"
 fi
 
-# Docker publication is a reusable workflow called by Publish Release after
-# GitHub Release publication. GITHUB_TOKEN cannot start a second workflow via
-# release:published. Prove the handoff statically and by executing the bind
-# and source-equality scripts locally. Do not dispatch, tag, log into GHCR,
-# or push an image.
+# Governed publication ends after the GitHub Release. There is currently no
+# defined headless OpenTendril product Docker image, so Publish Release must
+# not invoke a Docker/GHCR publication job and docker-publish.yml must not
+# exist. Prove that statically. Do not dispatch, tag, log into GHCR, or push
+# an image.
 
 job_block() {
   local file="$1" job="$2"
@@ -850,394 +849,126 @@ job_block() {
   ' "${file}"
 }
 
-docker_caller="$(job_block "${release_yml}" "docker")"
-if printf '%s\n' "${docker_caller}" | grep -q 'uses: ./.github/workflows/docker-publish.yml'; then
-  pass "release.yml invokes docker-publish.yml as a reusable workflow"
+release_jobs="$(awk '
+  /^jobs:/ {p=1; next}
+  p && /^[a-zA-Z]/ {exit}
+  p && /^  [A-Za-z0-9_.-]+:/ { sub(/:$/, "", $1); print $1 }
+' "${release_yml}")"
+want_jobs="$(printf '%s\n' bind verify publish)"
+if [ "${release_jobs}" = "${want_jobs}" ]; then
+  pass "Publish Release jobs remain bind, then verify, then publish"
 else
-  fail "release.yml invokes docker-publish.yml as a reusable workflow" "job=${docker_caller}"
+  fail "Publish Release jobs remain bind, then verify, then publish" \
+    "jobs=$(printf '%s' "${release_jobs}" | tr '\n' ' ')"
 fi
 
-if printf '%s\n' "${docker_caller}" | grep -q 'needs: \[bind, publish\]'; then
-  pass "Docker invocation depends on bind and successful publish"
+if [ -e "${repo_root}/.github/workflows/docker-publish.yml" ]; then
+  fail ".github/workflows/docker-publish.yml is absent"
 else
-  fail "Docker invocation depends on bind and successful publish" "job=${docker_caller}"
+  pass ".github/workflows/docker-publish.yml is absent"
 fi
 
-if printf '%s\n' "${docker_caller}" | grep -qE '^[[:space:]]+if:'; then
-  fail "Docker invocation is not independently skipped past a failed publish"
+if grep -q 'docker-publish.yml' "${release_yml}"; then
+  fail "release.yml does not invoke docker-publish.yml" \
+    "$(grep -n 'docker-publish.yml' "${release_yml}" | tr '\n' ' ')"
 else
-  pass "Docker invocation is not independently skipped past a failed publish"
+  pass "release.yml does not invoke docker-publish.yml"
 fi
 
-if printf '%s\n' "${docker_caller}" | grep -F -q 'release_tag: ${{ needs.bind.outputs.intended-tag }}'; then
-  pass "Docker release_tag is the bound intended-tag"
+docker_job="$(job_block "${release_yml}" "docker")"
+if [ -n "${docker_job}" ]; then
+  fail "Publish Release has no Docker/GHCR publication job" "job=${docker_job}"
 else
-  fail "Docker release_tag is the bound intended-tag" "job=${docker_caller}"
+  pass "Publish Release has no Docker/GHCR publication job"
 fi
 
-if printf '%s\n' "${docker_caller}" | grep -F -q 'source_sha: ${{ needs.bind.outputs.source-sha }}'; then
-  pass "Docker source_sha is the bound source-sha"
+if grep -q 'packages: write' "${release_yml}"; then
+  fail "no production GHCR/Docker coupling remains" \
+    "$(grep -n 'packages: write' "${release_yml}" | tr '\n' ' ')"
 else
-  fail "Docker source_sha is the bound source-sha" "job=${docker_caller}"
+  pass "no production GHCR/Docker coupling remains"
 fi
 
-if printf '%s\n' "${docker_caller}" | grep -q 'packages: write' &&
-  printf '%s\n' "${docker_caller}" | grep -q 'contents: read'; then
-  pass "Docker caller grants contents read and packages write"
+if grep -Eq 'ghcr\.io|docker/login-action|docker/build-push-action|docker/metadata-action' "${release_yml}"; then
+  fail "release.yml has no GHCR login, metadata, or image push" \
+    "$(grep -nE 'ghcr\.io|docker/login-action|docker/build-push-action|docker/metadata-action' "${release_yml}" | tr '\n' ' ')"
 else
-  fail "Docker caller grants contents read and packages write" "job=${docker_caller}"
+  pass "release.yml has no GHCR login, metadata, or image push"
 fi
 
+if grep -q 'ui/Dockerfile' "${release_yml}"; then
+  fail "release.yml does not redirect Docker publication to ui/Dockerfile"
+else
+  pass "release.yml does not redirect Docker publication to ui/Dockerfile"
+fi
+
+bind_job="$(job_block "${release_yml}" "bind")"
+verify_job="$(job_block "${release_yml}" "verify")"
 publish_job="$(job_block "${release_yml}" "publish")"
+
+if printf '%s\n' "${bind_job}" | grep -q 'github.event_name' &&
+  printf '%s\n' "${bind_job}" | grep -q 'workflow_dispatch' &&
+  printf '%s\n' "${bind_job}" | grep -q 'refs/heads/main' &&
+  ! printf '%s\n' "${release_on}" | grep -q 'push:' &&
+  ! printf '%s\n' "${release_on}" | grep -q 'workflow_call:'; then
+  pass "Publish Release remains workflow_dispatch-only for maintainer publication"
+else
+  fail "Publish Release remains workflow_dispatch-only for maintainer publication" \
+    "bind=$(printf '%s' "${bind_job}" | tr '\n' ' ') on=${release_on}"
+fi
+
+if printf '%s\n' "${bind_job}" | grep -q 'release-version.sh publication-state' &&
+  printf '%s\n' "${bind_job}" | grep -q 'bash scripts/release-version.sh publication-state' &&
+  ! grep -q 'github.ref_name' "${release_yml}"; then
+  pass "canonical VERSION remains the release identity authority"
+else
+  fail "canonical VERSION remains the release identity authority"
+fi
+
+if printf '%s\n' "${verify_job}" | grep -qE '^[[:space:]]+needs: bind[[:space:]]*$' &&
+  printf '%s\n' "${verify_job}" | grep -q 'uses: ./.github/workflows/ci.yml' &&
+  printf '%s\n' "${verify_job}" | grep -q 'force_full_verification: true'; then
+  pass "existing bind/verify/publish ordering remains: verify follows bind"
+else
+  fail "existing bind/verify/publish ordering remains: verify follows bind" \
+    "job=${verify_job}"
+fi
+
+if printf '%s\n' "${publish_job}" | grep -q 'needs: \[bind, verify\]'; then
+  pass "the publish job still depends on successful bind + verification"
+else
+  fail "the publish job still depends on successful bind + verification" "job=${publish_job}"
+fi
+
+if grep -q 'Recheck remote main and intended tag' "${release_yml}" &&
+  grep -q 'Recheck remote main and intended tag before public mutation' "${release_yml}" &&
+  grep -q 'release-version.sh publication-state' "${release_yml}"; then
+  pass "stale-main protection remains"
+else
+  fail "stale-main protection remains"
+fi
+
+if printf '%s\n' "${publish_job}" | grep -q 'uses: softprops/action-gh-release@v2' &&
+  printf '%s\n' "${publish_job}" | grep -q 'name: Create Release' &&
+  ! printf '%s\n' "${publish_job}" | grep -qE '^[[:space:]]+uses: \./\.github/workflows/'; then
+  pass "GitHub Release publication remains the terminal public-distribution operation"
+else
+  fail "GitHub Release publication remains the terminal public-distribution operation" \
+    "job=${publish_job}"
+fi
+
 if printf '%s\n' "${publish_job}" | grep -q 'packages: write'; then
   fail "publish job does not grant packages write"
 else
   pass "publish job does not grant packages write"
 fi
 
-if grep -q 'secrets: inherit' "${release_yml}" "${docker_yml}" ||
-  grep -Ei 'personal[[:space:]_-]*access[[:space:]_-]*token|repository_dispatch' "${release_yml}" "${docker_yml}" ||
-  grep -E 'secrets\.[A-Za-z0-9_]+' "${release_yml}" "${docker_yml}" | grep -v 'secrets.GITHUB_TOKEN' | grep -q .; then
+if grep -q 'secrets: inherit' "${release_yml}" ||
+  grep -Ei 'personal[[:space:]_-]*access[[:space:]_-]*token|repository_dispatch' "${release_yml}" ||
+  grep -E 'secrets\.[A-Za-z0-9_]+' "${release_yml}" | grep -v 'secrets.GITHUB_TOKEN' | grep -q .; then
   fail "no PAT, personal credential, or second publication token is introduced"
 else
   pass "no PAT, personal credential, or second publication token is introduced"
-fi
-
-docker_on="$(on_block "${docker_yml}")"
-if printf '%s\n' "${docker_on}" | grep -q 'workflow_call:' &&
-  printf '%s\n' "${docker_on}" | grep -q 'release_tag:' &&
-  printf '%s\n' "${docker_on}" | grep -q 'source_sha:' &&
-  printf '%s\n' "${docker_on}" | grep -q 'required: true' &&
-  printf '%s\n' "${docker_on}" | grep -q 'type: string' &&
-  ! printf '%s\n' "${docker_on}" | grep -q 'workflow_dispatch:' &&
-  ! printf '%s\n' "${docker_on}" | grep -q 'types: \[published\]' &&
-  ! printf '%s\n' "${docker_on}" | grep -q 'push:' &&
-  ! printf '%s\n' "${docker_on}" | grep -q 'tags:' &&
-  ! printf '%s\n' "${docker_on}" | grep -q "v\\*"; then
-  pass "docker-publish.yml is a workflow_call reusable workflow with required tag and SHA inputs"
-else
-  fail "docker-publish.yml is a workflow_call reusable workflow with required tag and SHA inputs" \
-    "on=${docker_on}"
-fi
-
-if grep -q 'workflow_dispatch:' "${docker_yml}"; then
-  fail "docker-publish.yml has no workflow_dispatch publication path"
-else
-  pass "docker-publish.yml has no workflow_dispatch publication path"
-fi
-
-if grep -q 'types: \[published\]' "${docker_yml}" ||
-  grep -q 'github.event.release' "${docker_yml}"; then
-  fail "docker-publish.yml has no release-published production trigger"
-else
-  pass "docker-publish.yml has no release-published production trigger"
-fi
-
-if grep -E -q 'github\.(ref_name|sha)|github\.ref[^.]|is_default_branch' "${docker_yml}"; then
-  fail "docker identity does not use implicit ref, sha, or is_default_branch" \
-    "$(grep -nE 'github\.(ref_name|sha)|github\.ref[^.]|is_default_branch' "${docker_yml}" | tr '\n' ' ')"
-else
-  pass "docker identity does not use implicit ref, sha, or is_default_branch"
-fi
-
-if grep -E -q '(^|[^[:alnum:]_])VERSION([^[:alnum:]_]|$)|release-version\.sh' "${docker_yml}"; then
-  fail "docker-publish.yml does not use VERSION as a release-version authority"
-else
-  pass "docker-publish.yml does not use VERSION as a release-version authority"
-fi
-
-if grep -E -q '^[[:space:]]+REGISTRY: ghcr.io[[:space:]]*$' "${docker_yml}"; then
-  pass "docker registry remains ghcr.io"
-else
-  fail "docker registry remains ghcr.io"
-fi
-
-if grep -F -q 'IMAGE_NAME: ${{ github.repository }}' "${docker_yml}"; then
-  pass "docker image name remains github.repository"
-else
-  fail "docker image name remains github.repository"
-fi
-
-if grep -F -q 'images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}' "${docker_yml}"; then
-  pass "docker metadata images remain registry/image-name"
-else
-  fail "docker metadata images remain registry/image-name"
-fi
-
-if grep -F -q 'type=raw,value=${{ steps.bind.outputs.version }}' "${docker_yml}"; then
-  pass "stable docker tag is the bound release SemVer"
-else
-  fail "stable docker tag is the bound release SemVer"
-fi
-
-if grep -F -q 'type=raw,value=latest' "${docker_yml}" &&
-  grep -E -q '^[[:space:]]+latest=false[[:space:]]*$' "${docker_yml}"; then
-  pass "stable release publishes latest without is_default_branch"
-else
-  fail "stable release publishes latest without is_default_branch"
-fi
-
-if grep -F -q 'ref: refs/tags/${{ steps.bind.outputs.tag }}' "${docker_yml}"; then
-  pass "docker checkout is bound to the published Release tag"
-else
-  fail "docker checkout is bound to the published Release tag"
-fi
-
-if grep -q 'docker/build-push-action' "${docker_yml}" &&
-  grep -E -q '^[[:space:]]+push: true[[:space:]]*$' "${docker_yml}"; then
-  pass "docker push remains the production publication action"
-else
-  fail "docker push remains the production publication action"
-fi
-
-docker_step_line() {
-  grep -nE "^[[:space:]]+- name: ${1}$" "${docker_yml}" | head -n 1 | cut -d: -f1
-}
-
-bind_line="$(docker_step_line 'Bind Docker publication identity')"
-checkout_line="$(docker_step_line 'Checkout published release source')"
-match_line="$(docker_step_line 'Require checked-out source matches publication SHA')"
-login_line="$(docker_step_line 'Log in to the Container registry')"
-meta_line="$(docker_step_line 'Extract metadata \(tags, labels\) for Docker')"
-push_line="$(docker_step_line 'Build and push Docker image')"
-login_uses_line="$(grep -n 'docker/login-action' "${docker_yml}" | head -n 1 | cut -d: -f1)"
-push_uses_line="$(grep -n 'docker/build-push-action' "${docker_yml}" | head -n 1 | cut -d: -f1)"
-
-if [ -n "${bind_line}" ] && [ -n "${checkout_line}" ] && [ -n "${match_line}" ] &&
-  [ -n "${login_line}" ] && [ -n "${meta_line}" ] && [ -n "${push_line}" ] &&
-  [ "${bind_line}" -lt "${checkout_line}" ] &&
-  [ "${checkout_line}" -lt "${match_line}" ] &&
-  [ "${match_line}" -lt "${login_line}" ] &&
-  [ "${login_line}" -lt "${meta_line}" ] &&
-  [ "${meta_line}" -lt "${push_line}" ] &&
-  [ -n "${login_uses_line}" ] && [ -n "${push_uses_line}" ] &&
-  [ "${match_line}" -lt "${login_uses_line}" ] &&
-  [ "${match_line}" -lt "${push_uses_line}" ]; then
-  pass "bind, checkout, and source equality precede registry login, metadata, and push"
-else
-  fail "bind, checkout, and source equality precede registry login, metadata, and push" \
-    "bind=${bind_line} checkout=${checkout_line} match=${match_line} login=${login_line} meta=${meta_line} push=${push_line}"
-fi
-
-extract_step_run() {
-  local step_name="$1"
-  awk -v name="${step_name}" '
-    $0 ~ "^[[:space:]]+- name: " name "[[:space:]]*$" {step=1}
-    step && $0 ~ /^[[:space:]]+- name:/ && $0 !~ name {exit}
-    step && $0 ~ /^[[:space:]]+run: \|[[:space:]]*$/ {run=1; next}
-    run {
-      if ($0 ~ /^          /) {
-        print substr($0, 11)
-        next
-      }
-      if ($0 ~ /^[[:space:]]*$/) {
-        print
-        next
-      }
-      exit
-    }
-  ' "${docker_yml}"
-}
-
-valid_source_sha="0123456789abcdef0123456789abcdef01234567"
-docker_bind_script="${tmp_root}/docker-bind.sh"
-docker_bind_out="${tmp_root}/docker-bind-out"
-extract_step_run "Bind Docker publication identity" >"${docker_bind_script}"
-if [ -s "${docker_bind_script}" ] &&
-  grep -F -q 'RELEASE_TAG: ${{ inputs.release_tag }}' "${docker_yml}" &&
-  grep -F -q 'SOURCE_SHA: ${{ inputs.source_sha }}' "${docker_yml}" &&
-  grep -F -q 'tag="${RELEASE_TAG:-}"' "${docker_bind_script}" &&
-  grep -F -q 'source_sha="${SOURCE_SHA:-}"' "${docker_bind_script}"; then
-  pass "docker bind script is extractable from workflow_call inputs"
-else
-  fail "docker bind script is extractable from workflow_call inputs"
-fi
-
-run_docker_bind() {
-  : >"${docker_bind_out}"
-  set +e
-  RELEASE_TAG="$1" SOURCE_SHA="$2" GITHUB_OUTPUT="${docker_bind_out}" bash "${docker_bind_script}" \
-    >"${stdout_file}" 2>"${stderr_file}"
-  status=$?
-  set -e
-}
-
-expect_docker_bind_ok() {
-  local name="$1" tag="$2" sha="$3" want_version="$4"
-  run_docker_bind "${tag}" "${sha}"
-  if [ "${status}" -ne 0 ]; then
-    fail "${name}" "exit ${status}; stderr: $(tr '\n' ' ' <"${stderr_file}")"
-    return
-  fi
-  if [ "$(sed -n 's/^tag=//p' "${docker_bind_out}" | head -n 1)" != "${tag}" ]; then
-    fail "${name}" "tag output=$(tr '\n' ' ' <"${docker_bind_out}") want tag=${tag}"
-    return
-  fi
-  if [ "$(sed -n 's/^version=//p' "${docker_bind_out}" | head -n 1)" != "${want_version}" ]; then
-    fail "${name}" "version output=$(tr '\n' ' ' <"${docker_bind_out}") want version=${want_version}"
-    return
-  fi
-  if [ "$(sed -n 's/^source-sha=//p' "${docker_bind_out}" | head -n 1)" != "${sha}" ]; then
-    fail "${name}" "source-sha output=$(tr '\n' ' ' <"${docker_bind_out}") want source-sha=${sha}"
-    return
-  fi
-  pass "${name}"
-}
-
-expect_docker_bind_fail() {
-  local name="$1" tag="$2" sha="$3" needle="$4"
-  run_docker_bind "${tag}" "${sha}"
-  if [ "${status}" -eq 0 ]; then
-    fail "${name}" "expected failure; output=$(tr '\n' ' ' <"${docker_bind_out}")"
-    return
-  fi
-  if ! grep -F -q "${needle}" "${stderr_file}"; then
-    fail "${name}" "stderr lacked ${needle@Q}: $(tr '\n' ' ' <"${stderr_file}")"
-    return
-  fi
-  if grep -qE '^(tag|version|source-sha)=' "${docker_bind_out}"; then
-    fail "${name}" "failed bind wrote outputs: $(tr '\n' ' ' <"${docker_bind_out}")"
-    return
-  fi
-  pass "${name}"
-}
-
-expect_docker_bind_ok "v0.3.0 maps to Docker SemVer 0.3.0" "v0.3.0" "${valid_source_sha}" "0.3.0"
-expect_docker_bind_ok "v1.2.3 maps to Docker SemVer 1.2.3" "v1.2.3" "${valid_source_sha}" "1.2.3"
-
-uppercase_sha="0123456789ABCDEF0123456789ABCDEF01234567"
-run_docker_bind "v0.3.0" "${uppercase_sha}"
-if [ "${status}" -eq 0 ] &&
-  [ "$(sed -n 's/^source-sha=//p' "${docker_bind_out}" | head -n 1)" = "${valid_source_sha}" ]; then
-  pass "docker source SHA is normalized to lowercase"
-else
-  fail "docker source SHA is normalized to lowercase" \
-    "status=${status} output=$(tr '\n' ' ' <"${docker_bind_out}")"
-fi
-
-expect_docker_bind_fail "absent production release identity fails closed" \
-  "" "${valid_source_sha}" "published release identity is absent"
-
-: >"${docker_bind_out}"
-set +e
-env -u RELEASE_TAG SOURCE_SHA="${valid_source_sha}" GITHUB_OUTPUT="${docker_bind_out}" \
-  bash "${docker_bind_script}" >"${stdout_file}" 2>"${stderr_file}"
-status=$?
-set -e
-if [ "${status}" -eq 0 ]; then
-  fail "unset production release identity fails closed" "unexpected success"
-elif ! grep -q "published release identity is absent" "${stderr_file}"; then
-  fail "unset production release identity fails closed" \
-    "stderr: $(tr '\n' ' ' <"${stderr_file}")"
-elif grep -qE '^(tag|version|source-sha)=' "${docker_bind_out}"; then
-  fail "unset production release identity fails closed" \
-    "failed bind wrote outputs: $(tr '\n' ' ' <"${docker_bind_out}")"
-else
-  pass "unset production release identity fails closed"
-fi
-
-malformed_release_tags=(
-  "0.3.0"
-  "v0.3"
-  "v0.3.0-rc.1"
-  "v0.3.0.1"
-  "v0.3.0+build.1"
-  "latest"
-  "v01.2.0"
-  "v0.02.0"
-  "v0.3.00"
-  "vv0.3.0"
-  "refs/tags/v0.3.0"
-  " v0.3.0"
-  "v0.3.0 "
-)
-malformed_tag_id=0
-for tag in "${malformed_release_tags[@]}"; do
-  malformed_tag_id=$((malformed_tag_id + 1))
-  expect_docker_bind_fail "malformed production release identity fails closed (${malformed_tag_id})" \
-    "${tag}" "${valid_source_sha}" "not a stable vMAJOR.MINOR.PATCH tag"
-done
-
-expect_docker_bind_fail "absent production source SHA fails closed" \
-  "v0.3.0" "" "publication source SHA is absent"
-
-: >"${docker_bind_out}"
-set +e
-env -u SOURCE_SHA RELEASE_TAG="v0.3.0" GITHUB_OUTPUT="${docker_bind_out}" \
-  bash "${docker_bind_script}" >"${stdout_file}" 2>"${stderr_file}"
-status=$?
-set -e
-if [ "${status}" -eq 0 ]; then
-  fail "unset production source SHA fails closed" "unexpected success"
-elif ! grep -q "publication source SHA is absent" "${stderr_file}"; then
-  fail "unset production source SHA fails closed" \
-    "stderr: $(tr '\n' ' ' <"${stderr_file}")"
-elif grep -qE '^(tag|version|source-sha)=' "${docker_bind_out}"; then
-  fail "unset production source SHA fails closed" \
-    "failed bind wrote outputs: $(tr '\n' ' ' <"${docker_bind_out}")"
-else
-  pass "unset production source SHA fails closed"
-fi
-
-malformed_source_shas=(
-  "abcdef"
-  "0123456789abcdef0123456789abcdef0123456"
-  "0123456789abcdef0123456789abcdef012345678"
-  "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-)
-malformed_sha_id=0
-for sha in "${malformed_source_shas[@]}"; do
-  malformed_sha_id=$((malformed_sha_id + 1))
-  expect_docker_bind_fail "malformed production source SHA fails closed (${malformed_sha_id})" \
-    "v0.3.0" "${sha}" "publication source SHA is not a full commit"
-done
-
-docker_match_script="${tmp_root}/docker-match.sh"
-extract_step_run "Require checked-out source matches publication SHA" >"${docker_match_script}"
-if [ -s "${docker_match_script}" ] &&
-  grep -F -q 'git rev-parse HEAD' "${docker_match_script}"; then
-  pass "docker source-equality script is extractable"
-else
-  fail "docker source-equality script is extractable"
-fi
-
-match_work="$(mktemp -d "${tmp_root}/docker-match.XXXXXX")"
-init_repo "${match_work}"
-printf 'payload\n' >"${match_work}/file.txt"
-git -C "${match_work}" add file.txt
-git -C "${match_work}" commit -q -m "source"
-match_head="$(git -C "${match_work}" rev-parse HEAD)"
-other_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-
-set +e
-(
-  cd "${match_work}"
-  SOURCE_SHA="${match_head}" bash "${docker_match_script}"
-) >"${stdout_file}" 2>"${stderr_file}"
-status=$?
-set -e
-if [ "${status}" -eq 0 ]; then
-  pass "matching checked-out HEAD and source SHA is accepted"
-else
-  fail "matching checked-out HEAD and source SHA is accepted" \
-    "exit ${status}; stderr: $(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-set +e
-(
-  cd "${match_work}"
-  SOURCE_SHA="${other_sha}" bash "${docker_match_script}"
-) >"${stdout_file}" 2>"${stderr_file}"
-status=$?
-set -e
-if [ "${status}" -eq 0 ]; then
-  fail "tag/SHA mismatch fails closed before login" "unexpected success"
-elif grep -F -q "does not match publication source ${other_sha}" "${stderr_file}"; then
-  pass "tag/SHA mismatch fails closed before login"
-else
-  fail "tag/SHA mismatch fails closed before login" \
-    "stderr: $(tr '\n' ' ' <"${stderr_file}")"
 fi
 
 capture_caller_state >"${caller_state_after}"

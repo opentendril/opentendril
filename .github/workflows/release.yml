@@ -207,14 +207,3 @@ jobs:
             | Linux ARM64 | `opentendril-linux-arm64.tar.gz` |
             | macOS Intel | `opentendril-darwin-amd64.tar.gz` |
             | macOS Apple Silicon | `opentendril-darwin-arm64.tar.gz` |
-
-  docker:
-    name: Publish Docker image
-    needs: [bind, publish]
-    uses: ./.github/workflows/docker-publish.yml
-    with:
-      release_tag: ${{ needs.bind.outputs.intended-tag }}
-      source_sha: ${{ needs.bind.outputs.source-sha }}
-    permissions:
-      contents: read
-      packages: write
