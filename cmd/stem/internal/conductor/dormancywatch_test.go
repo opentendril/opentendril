@@ -371,7 +371,7 @@ func TestDormancyCaptureArtifactContainsExpectedSections(t *testing.T) {
 	}
 	snapshot := &stubSnapshot{
 		req:  "last user message",
-		resp: "last assistant reply",
+		resp: "<thought>private reasoning</thought>last assistant reply",
 	}
 
 	run := dormancy.RunKey{Step: "step-abc", Session: "session-xyz"}
@@ -409,6 +409,10 @@ func TestDormancyCaptureArtifactContainsExpectedSections(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("capture artifact does not contain %q\nfull content:\n%s", want, text)
 		}
+	}
+
+	if strings.Contains(text, "private reasoning") {
+		t.Errorf("capture artifact leaked private reasoning\nfull content:\n%s", text)
 	}
 }
 

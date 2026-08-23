@@ -16,7 +16,6 @@ const TYPE_COLOR: Record<string, string> = {
   "api-key-invalid": "var(--scorch)",
   "health-degraded": "var(--scorch)",
   "health-recovered": "var(--chlorophyll)",
-  "thought-branch": "var(--spore)",
   "tool-invoked": "var(--sap)",
 };
 
@@ -32,7 +31,6 @@ function detailOf(event: StemEvent): string {
   if (typeof d["detail"] === "string" && d["detail"]) parts.push(String(d["detail"]));
   if (typeof d["tool"] === "string") parts.push(String(d["tool"]));
   if (typeof d["status"] === "string") parts.push(String(d["status"]));
-  if (event.content) parts.push(String(event.content));
   if (parts.length === 0 && event.source) parts.push(event.source);
   return parts.join(" · ").slice(0, 220);
 }

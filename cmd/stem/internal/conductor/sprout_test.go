@@ -13,9 +13,10 @@ import (
 )
 
 type fakeLLM struct {
-	responses []string
-	calls     [][]llm.Message
-	response  string
+	responses    []string
+	calls        [][]llm.Message
+	response     string
+	streamChunks []string
 }
 
 func (f *fakeLLM) Call(ctx context.Context, messages []llm.Message) (string, error) {
@@ -36,6 +37,16 @@ func (f *fakeLLM) CallStream(ctx context.Context, messages []llm.Message, tokenC
 	callCopy := make([]llm.Message, len(messages))
 	copy(callCopy, messages)
 	f.calls = append(f.calls, callCopy)
+
+	if len(f.streamChunks) > 0 {
+		if tokenChan != nil {
+			for _, chunk := range f.streamChunks {
+				tokenChan <- chunk
+			}
+			close(tokenChan)
+		}
+		return strings.Join(f.streamChunks, ""), nil
+	}
 
 	response := f.response
 	if len(f.responses) > 0 {
@@ -563,14 +574,102 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	}
 
 	published := map[eventbus.EventType]int{}
+	var streamEvents []eventbus.Event
 	for _, event := range history {
 		published[event.Type]++
+		if event.Type == eventbus.EventStreamToken {
+			streamEvents = append(streamEvents, event)
+		}
 	}
 	if published[eventbus.EventStreamToken] == 0 {
 		t.Errorf("no %s events: the Sprout did not stream, so liveness is unobservable (got %v)", eventbus.EventStreamToken, published)
 	}
-	if published[eventbus.EventThoughtBranch] == 0 {
-		t.Errorf("no %s events: reasoning is unobservable (got %v)", eventbus.EventThoughtBranch, published)
+	for _, e := range streamEvents {
+		if token, ok := e.Data["token"]; ok {
+			t.Errorf("stream-token event contains raw token: %q (expected pure cadence signal)", token)
+		}
+	}
+
+}
+
+func TestAgentPublishesStreamTokensWithoutContent(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		streamChunks: []string{"<thought>chunk 1</thought>", "<thought>chunk 2</thought>", "done"},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout returned error: %v", err)
+	}
+	if _, err := sprout.Run(context.Background(), "do the thing"); err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+
+	history := bus.History(100)
+	var streamEvents []eventbus.Event
+	for _, event := range history {
+		if event.Type == eventbus.EventStreamToken {
+			streamEvents = append(streamEvents, event)
+		}
+	}
+
+	if len(streamEvents) != 3 {
+		t.Fatalf("expected exactly 3 %s cadence events, got %d", eventbus.EventStreamToken, len(streamEvents))
+	}
+	for i, e := range streamEvents {
+		if _, ok := e.Data["token"]; ok {
+			t.Errorf("stream event %d contains token", i)
+		}
+		if _, ok := e.Data["content"]; ok {
+			t.Errorf("stream event %d contains content", i)
+		}
+	}
+}
+
+func TestAgentRetainsPrivateCognitionForNextTurn(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{
+		responses: []string{
+			"<thought>private planning</thought>{\"tool\":\"readFile\",\"arguments\":{\"path\":\"README.md\"}}",
+			"{\"final\":\"done\"}",
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout returned error: %v", err)
+	}
+
+	result, err := sprout.Run(context.Background(), "do the thing")
+	if err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+
+	if len(client.calls) != 2 {
+		t.Fatalf("expected 2 turns, got %d", len(client.calls))
+	}
+
+	lastCall := client.calls[1]
+	assistantMsg := lastCall[len(lastCall)-2]
+	if assistantMsg.Role != "assistant" {
+		t.Fatalf("expected assistant message before tool observation, got %s", assistantMsg.Role)
+	}
+	if !strings.Contains(assistantMsg.Content, "private planning") {
+		t.Errorf("next provider request does not retain private cognition; assistant message: %q", assistantMsg.Content)
+	}
+
+	if strings.Contains(result.Response, "private planning") {
+		t.Errorf("public result contains private cognition: %q", result.Response)
+	}
+	if strings.Contains(result.Transcript, "private planning") {
+		t.Errorf("public transcript contains private cognition: %q", result.Transcript)
 	}
 }
 
@@ -845,15 +944,6 @@ func TestAgentRunsNativeToolLoop(t *testing.T) {
 		t.Fatalf("transcript missing thought block")
 	}
 
-	var thoughtEvents []eventbus.Event
-	for _, event := range bus.History(100) {
-		if event.Type == eventbus.EventThoughtBranch {
-			thoughtEvents = append(thoughtEvents, event)
-		}
-	}
-	if len(thoughtEvents) != 2 {
-		t.Fatalf("expected 2 thought events, got %d", len(thoughtEvents))
-	}
 }
 
 func TestNativeSystemPrompt(t *testing.T) {

@@ -120,6 +120,7 @@ type transporterSink struct {
 }
 
 func (s *transporterSink) Consume(event eventbus.Event) {
+	event = SanitizeObservationEvent(event)
 	var err error
 	for attempt := 1; attempt <= telemetryRetryAttempts; attempt++ {
 		err = s.transporter.Emit(event)

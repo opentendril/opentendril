@@ -367,6 +367,55 @@ test.describe("Command Center sprout-run observation", () => {
     await expect(drawer.getByTestId("run-telemetry")).not.toHaveAttribute("open");
     await expect(drawer.getByText("wrote docs/GUIDE.md")).toBeHidden();
   });
+
+  test("models the sanitized backend contract with no whisper presentation", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-e2e-private" });
+    const run: SproutRun = {
+      runId: "step-private",
+      sessionId: session.sessionId,
+      stepId: "step-private",
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4.6",
+      status: "matured",
+      outcome: "complete",
+      failureCategory: "matured",
+      providerRequestAttempted: true,
+      toolInvocations: 0,
+      transcript: "start thinking",
+      startedAt: "2026-08-16T12:00:00Z",
+      finishedAt: "2026-08-16T12:00:08Z",
+      output: "final sanitized safe evidence",
+    };
+    const events: EventRecord[] = [
+      {
+        id: 1,
+        sessionId: session.sessionId,
+        type: "thought-branch",
+        source: "step-private",
+        data: { active: true, model: "anthropic/claude-sonnet-4.6" },
+        createdAt: "2026-08-16T12:00:02Z",
+      },
+    ];
+
+    await mockStemBackend(page, { sessions: [session], sproutRuns: [run], events });
+    await completeOnboarding(page, testApiKey);
+
+    await page.locator(".run-row").click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    
+    // UI proves no `.whisper` reasoning presentation exists
+    await expect(drawer.locator(".whisper")).toHaveCount(0);
+    // UI proves no `private reasoning` text is visible
+    await expect(drawer.getByText("private reasoning")).toHaveCount(0);
+    await expect(drawer.getByText("<thought>")).toHaveCount(0);
+    
+    // useful safe run-review evidence remains visible in telemetry.
+    const telemetry = drawer.getByTestId("run-telemetry");
+    await telemetry.click();
+    await expect(drawer.getByText("final sanitized safe evidence")).toBeVisible();
+  });
 });
 
 test.describe("Command Center EventBus connection", () => {

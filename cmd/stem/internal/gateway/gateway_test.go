@@ -72,6 +72,53 @@ func TestHandleWebSocketForwardsAllEventTypes(t *testing.T) {
 	}
 }
 
+// TestGatewayDoesNotInventContentForStreamToken proves that the WebSocket gateway
+// correctly handles content-free stream-token events without inventing a
+// top-level 'content' field. A stream-token event is a pure cadence signal.
+func TestGatewayDoesNotInventContentForStreamToken(t *testing.T) {
+	bus := eventbus.New()
+	server := httptest.NewServer(HandleWebSocket(bus))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	// drain handshake
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read connected message: %v", err)
+	}
+
+	// Publish a content-free stream-token (the current producer contract)
+	bus.Publish(eventbus.Event{
+		Type:      eventbus.EventStreamToken,
+		Source:    "step-1",
+		SessionID: "s1",
+		Data:      map[string]interface{}{},
+	})
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, eventPayload, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read event message: %v", err)
+	}
+
+	var eventMsg map[string]interface{}
+	if err := json.Unmarshal(eventPayload, &eventMsg); err != nil {
+		t.Fatalf("decode event message: %v", err)
+	}
+	if eventMsg["type"] != "stream-token" {
+		t.Fatalf("event type = %v, want stream-token", eventMsg["type"])
+	}
+	if content, ok := eventMsg["content"]; ok {
+		t.Fatalf("expected stream-token to NOT project content, got: %v", content)
+	}
+}
+
 func TestGatewayUnsubscribesOnClose(t *testing.T) {
 	bus := eventbus.New()
 	server := httptest.NewServer(HandleWebSocket(bus))

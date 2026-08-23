@@ -186,7 +186,6 @@ var observedTypes = []eventbus.EventType{
 	eventbus.EventMycorrhizalRequestBegun,
 	eventbus.EventStreamToken,
 	eventbus.EventToolInvoked,
-	eventbus.EventThoughtBranch,
 	eventbus.EventSproutDetached,
 	eventbus.EventSproutMatured,
 	eventbus.EventSproutWithered,
@@ -266,13 +265,6 @@ func (w *Watcher) Observe(event eventbus.Event) {
 		} else {
 			record.inertTools++
 		}
-	case eventbus.EventThoughtBranch:
-		// Retained for the readout, deliberately not a suppressor. A thought
-		// is emitted from a completed model turn, which has already streamed
-		// its tokens, so it suppresses nothing the stream did not already
-		// suppress — and on its own it is as repeatable as a repeated tool
-		// call, without a fingerprint established as comparable. Admitting it
-		// would add a forgeable suppressor for no signal.
 	case eventbus.EventSproutDetached:
 		// The Stem stopped waiting; the Sprout did not stop growing. This is
 		// emphatically NOT an ending, and treating it as one would blind the

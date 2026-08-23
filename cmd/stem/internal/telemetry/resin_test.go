@@ -43,9 +43,9 @@ func TestInitResinSinkWritesStructuredLog(t *testing.T) {
 func publishResinEvents(bus *eventbus.Bus, n int) {
 	for i := 0; i < n; i++ {
 		bus.Publish(eventbus.Event{
-			Type:   eventbus.EventStreamToken,
+			Type:   eventbus.EventToolInvoked,
 			Source: "amber-test",
-			Data:   map[string]interface{}{"token": strings.Repeat("x", 100)},
+			Data:   map[string]interface{}{"args": strings.Repeat("x", 100)},
 		})
 	}
 }
@@ -129,8 +129,8 @@ func TestResinHardensIntoAmber(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decompress archive: %v", err)
 	}
-	if !strings.Contains(string(content), `"type":"stream-token"`) {
-		t.Fatalf("archive content = %q, want structured stream-token events", string(content))
+	if !strings.Contains(string(content), `"type":"tool-invoked"`) {
+		t.Fatalf("archive content = %q, want structured tool-invoked events", string(content))
 	}
 
 	// Drain the sink so all 10 events are flushed, then check active log size.
@@ -294,5 +294,42 @@ func TestPublishDoesNotBlockOnSlowResin(t *testing.T) {
 	// channel send and returns immediately.
 	if elapsed > time.Second {
 		t.Errorf("Publish blocked for %v while Resin mutex was held; want < 1 s", elapsed)
+	}
+}
+
+func TestResinSanitizesPrivateReasoningWithRedactionOff(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "resin.log")
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sink, err := InitResinSink(bus, ResinConfig{Enabled: true}, logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	os.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	defer os.Unsetenv("TENDRIL_TELEMETRY_REDACTION")
+
+	ev := eventbus.Event{
+		Type:   eventbus.EventSproutTranscript,
+		Source: "test-source",
+		Data: map[string]interface{}{
+			"transcript": "start <thought>private</thought> end",
+		},
+	}
+
+	sink.handle(ev)
+
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(content), "private") {
+		t.Errorf("resin output contains private reasoning despite redaction being off: %s", string(content))
+	}
+	if !strings.Contains(string(content), "start  end") {
+		t.Errorf("resin output did not preserve public parts of the transcript: %s", string(content))
 	}
 }

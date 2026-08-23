@@ -3,6 +3,7 @@ package telemetry
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,5 +188,29 @@ func TestTransporterSinkRetrySleepsBetweenAttempts(t *testing.T) {
 		if d != telemetryRetryBackoff {
 			t.Errorf("Expected sleep %d to be %v, got %v", i, telemetryRetryBackoff, d)
 		}
+	}
+}
+
+func TestTransporterSinkSanitizesPrivateReasoningEvenIfRedactionIsOff(t *testing.T) {
+	os.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	defer os.Unsetenv("TENDRIL_TELEMETRY_REDACTION")
+
+	mock := &mockTransporter{}
+	sink := &transporterSink{transporter: mock} // bypass wrapper to simulate raw transporter
+
+	event := eventbus.Event{
+		Type: eventbus.EventSproutTranscript,
+		Data: map[string]interface{}{
+			"transcript": "start <thought>private text</thought> end",
+		},
+	}
+	sink.Consume(event)
+
+	trans, _ := mock.lastEvent.Data["transcript"].(string)
+	if strings.Contains(trans, "private text") {
+		t.Errorf("Transporter received raw private text despite it being mandatory privacy sanitization: %q", trans)
+	}
+	if !strings.Contains(trans, "start  end") {
+		t.Errorf("Transporter did not preserve public transcript parts: %q", trans)
 	}
 }

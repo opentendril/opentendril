@@ -342,7 +342,7 @@ func TestWatcherPublishesOnlyDormancyReports(t *testing.T) {
 
 	last := steadyStream(watcher, probeRun, at(0), time.Second, 6)
 	watcher.Observe(toolAt(probeRun, last.Add(time.Second), "read_file", map[string]any{"path": "a.go"}))
-	watcher.Observe(eventbus.Event{Type: eventbus.EventThoughtBranch, Timestamp: last.Add(2 * time.Second), Source: probeRun.Step, SessionID: probeRun.Session})
+
 	watcher.Tick(context.Background(), last.Add(time.Hour))
 	watcher.Observe(eventbus.Event{Type: eventbus.EventSproutWithered, Timestamp: last.Add(2 * time.Hour), Source: probeRun.Step, SessionID: probeRun.Session})
 	watcher.Tick(context.Background(), last.Add(3*time.Hour))

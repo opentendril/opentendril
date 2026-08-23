@@ -127,6 +127,7 @@ func dormancyCaptureArtifact(ctx context.Context, run dormancy.RunKey, inspector
 	if snapshot != nil {
 		req, resp := snapshot.LastExchange()
 		req = telemetry.RedactString(req)
+		resp = telemetry.StripPrivateReasoning(resp)
 		resp = telemetry.RedactString(resp)
 		if strings.TrimSpace(req) == "" {
 			sb.WriteString("(no request recorded yet)\n")
