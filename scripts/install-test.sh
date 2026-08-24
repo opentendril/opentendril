@@ -412,8 +412,12 @@ assert_success_local() {
     fail "${name}: success output missing tendril init"
     return
   fi
-  if ! grep -q 'docs/GUIDE-INSTALL.md' "${stdout_file}"; then
-    fail "${name}: success output missing GUIDE-INSTALL.md"
+  if ! grep -Fq 'https://github.com/opentendril/opentendril/blob/main/docs/GUIDE-INSTALL.md' "${stdout_file}"; then
+    fail "${name}: success output missing public GUIDE-INSTALL.md URL" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return
+  fi
+  if ! grep -Fq 'https://github.com/opentendril/opentendril/blob/main/docs/GUIDE-QUICKSTART.md' "${stdout_file}"; then
+    fail "${name}: success output missing public GUIDE-QUICKSTART.md URL" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
     return
   fi
   if grep -qi 'this is a governed' "${stdout_file}"; then

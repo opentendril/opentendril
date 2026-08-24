@@ -285,8 +285,8 @@ print_success() {
   printf '  tendril init\n'
   printf '\n'
   printf 'First-use documentation:\n'
-  printf '  docs/GUIDE-INSTALL.md\n'
-  printf '  docs/GUIDE-QUICKSTART.md\n'
+  printf '  https://github.com/opentendril/opentendril/blob/main/docs/GUIDE-INSTALL.md\n'
+  printf '  https://github.com/opentendril/opentendril/blob/main/docs/GUIDE-QUICKSTART.md\n'
   if ! path_has_dest; then
     printf '\n'
     printf '%s is not on PATH. Add it for this shell:\n' "$dest_dir"
