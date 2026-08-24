@@ -850,10 +850,11 @@ Representational State Transfer surface. It is admitted only on routes that
 consult the delegation authorizer per invocation, with the Substrate in hand;
 every other route — including the Model Context Protocol endpoint at `POST /v1`
 — refuses a direct credential-bearing caller by default rather than running the
-request as ordinary traffic:
+request as ordinary traffic. On a loopback bind the bearer may be the durable
+root (`tendril_refresh_…`); off-host binds require a minted access token.
 
 ```console
-$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer tendril_refresh_…" …
+$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer <pollinator-credential>" …
 HTTP/1.1 403 Forbidden
 delegation denied: this endpoint exposes no delegable operation-class
 ```
@@ -887,7 +888,7 @@ unfiltered feed.
 
 ```bash
 curl -X POST http://localhost:8080/v1/git/status \
-  -H "Authorization: Bearer tendril_refresh_…" \
+  -H "Authorization: Bearer <pollinator-credential>" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo"}'
 ```
@@ -896,7 +897,7 @@ curl -X POST http://localhost:8080/v1/git/status \
 the reason:
 
 ```console
-$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer tendril_refresh_…" …
+$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer <pollinator-credential>" …
 HTTP/1.1 403 Forbidden
 delegation denied: no active grant covers Pollen "claude",
 operation-class "git.prune", substrate "myrepo"
