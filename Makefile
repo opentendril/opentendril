@@ -1,6 +1,6 @@
 # Declared phony so the committed root `stem`/`tendril` binaries don't make
 # these targets look "up to date" and get skipped (which broke `make install`).
-.PHONY: stem install mcp-client install-mcp-client stem-all build up down health test-stem test-all hooks hygiene clean check-all help
+.PHONY: stem install mcp-client install-mcp-client stem-all build up down health test-stem test-install test-all hooks hygiene clean check-all help
 
 # --- Stem Binaries ---
 # Canonical release identity is the root VERSION file. Artifact names read it
@@ -81,6 +81,9 @@ health: ## Check service health
 test-stem: ## Run Go tests in a sterile Docker container
 	docker compose --profile test run --rm test-go
 
+test-install: ## Run first-party local installer tests (no network, no host mutation)
+	bash scripts/install-test.sh
+
 test-all: test-stem ## Run all tests
 
 hooks: ## Install the repo's git hooks (gofmt-on-commit + source-hygiene guards)
@@ -94,6 +97,7 @@ hygiene: ## Run the source-hygiene guards locally, mirroring what CI enforces on
 
 check-all: ## Full pre-merge gate: clean build + all tests + source hygiene (see .github/CONTRIBUTING.md / TESTING.md)
 	$(MAKE) stem
+	$(MAKE) test-install
 	$(MAKE) test-all
 	$(MAKE) hygiene
 

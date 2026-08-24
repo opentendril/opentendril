@@ -413,6 +413,20 @@ jobs:
           after="$(cat VERSION)"
           test "${before}" = "${after}"
 
+  # Unconditional: the public local installer is a bootstrap contract, not
+  # path-filtered. A broken checksum or platform-selection path must fail
+  # Native PR Gate even when the path filter selected no implementation jobs.
+  # Do not add an `if:` here.
+  installer-contract:
+    name: Installer Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run installer tests
+        shell: bash
+        run: bash scripts/install-test.sh
+
   # This job's NAME is a required status check in the "Protect Default"
   # ruleset. Renaming it makes the required context never report and leaves
   # every pull request unmergeable.
@@ -426,6 +440,7 @@ jobs:
       - stem-go
       - sprout-typescript-tests
       - version-contract
+      - installer-contract
     if: ${{ always() }}
     steps:
       - name: Finalize Required Check
@@ -472,6 +487,13 @@ jobs:
           require "version-contract" \
             "true" \
             "${{ needs.version-contract.result }}"
+
+          # Always required. The flag is the literal true, not a path-filter
+          # output, so a docs-only change cannot green this gate over a
+          # broken public installer.
+          require "installer-contract" \
+            "true" \
+            "${{ needs.installer-contract.result }}"
 
           require "sprout-python" \
             "${{ needs.changes.outputs['sprout-python'] }}" \
