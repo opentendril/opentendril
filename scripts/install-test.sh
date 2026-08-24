@@ -38,6 +38,10 @@ need_host_cmd chmod
 need_host_cmd rm
 need_host_cmd cat
 need_host_cmd tr
+need_host_cmd id
+need_host_cmd stat
+need_host_cmd grep
+need_host_cmd touch
 
 real_home="${HOME}"
 host_tendril=""
@@ -46,6 +50,18 @@ if [ -f "${real_home}/.local/bin/tendril" ]; then
   host_tendril="${real_home}/.local/bin/tendril"
   host_tendril_hash="$(sha256sum "${host_tendril}")"
 fi
+
+host_unit_path="/etc/systemd/system/tendril.service"
+host_sudoers_path="/etc/sudoers.d/opentendril-p2"
+host_unit_before="absent"
+host_sudoers_before="absent"
+if [ -e "${host_unit_path}" ]; then
+  host_unit_before="$(stat -c '%s %Y' "${host_unit_path}" 2>/dev/null || echo present)"
+fi
+if [ -e "${host_sudoers_path}" ]; then
+  host_sudoers_before="$(stat -c '%s %Y' "${host_sudoers_path}" 2>/dev/null || echo present)"
+fi
+host_tendril_home_before="$(ls -la /home/tendril 2>/dev/null || echo '__missing__')"
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/install-test.XXXXXX")"
 trap 'rm -rf "${tmp_root}"' EXIT
@@ -91,6 +107,7 @@ CHECKSUM_TOOL=sha256sum
 
 write_exec() {
   local path=$1
+  rm -f "${path}"
   cat >"${path}"
   chmod +x "${path}"
 }
@@ -102,14 +119,17 @@ setup_shims() {
   real_cp="$(type -P cp)"
   real_sha256="$(type -P sha256sum)"
 
-  ln -s "$(type -P mkdir)" "${SHIM_DIR}/mkdir"
-  ln -s "$(type -P mktemp)" "${SHIM_DIR}/mktemp"
-  ln -s "$(type -P chmod)" "${SHIM_DIR}/chmod"
-  ln -s "$(type -P rm)" "${SHIM_DIR}/rm"
-  ln -s "$(type -P cat)" "${SHIM_DIR}/cat"
-  ln -s "$(type -P tr)" "${SHIM_DIR}/tr"
+  ln -sfn "$(type -P mkdir)" "${SHIM_DIR}/mkdir"
+  ln -sfn "$(type -P mktemp)" "${SHIM_DIR}/mktemp"
+  ln -sfn "$(type -P chmod)" "${SHIM_DIR}/chmod"
+  ln -sfn "$(type -P rm)" "${SHIM_DIR}/rm"
+  ln -sfn "$(type -P cat)" "${SHIM_DIR}/cat"
+  ln -sfn "$(type -P tr)" "${SHIM_DIR}/tr"
+  ln -sfn "$(type -P id)" "${SHIM_DIR}/id"
+  ln -sfn "$(type -P grep)" "${SHIM_DIR}/grep"
+  ln -sfn "$(type -P touch)" "${SHIM_DIR}/touch"
   # GNU tar decompresses .gz by execing gzip from PATH.
-  ln -s "$(type -P gzip)" "${SHIM_DIR}/gzip"
+  ln -sfn "$(type -P gzip)" "${SHIM_DIR}/gzip"
 
   write_exec "${SHIM_DIR}/uname" <<'EOF'
 #!/bin/sh
@@ -727,11 +747,1543 @@ fi
 
 new_case
 run_installer --governed
-assert_failure_no_extract "--governed is reserved and installs nothing"
-if grep -q 'reserved' "${stderr_file}" && grep -q 'LOCAL / SINGLE-PRINCIPAL' "${stderr_file}"; then
-  pass "--governed refusal names LOCAL / SINGLE-PRINCIPAL"
+assert_failure_no_extract "--governed requires root"
+if grep -q 'requires root' "${stderr_file}"; then
+  pass "--governed without root names the uid 0 requirement"
 else
-  fail "--governed refusal names LOCAL / SINGLE-PRINCIPAL" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fail "--governed without root names the uid 0 requirement" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+if events_match '^CMD (apt-get |adduser |usermod |loginctl |systemctl )'; then
+  fail "--governed without root must not mutate the host" "events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+# --- governed helpers -------------------------------------------------------
+
+HOSTFS=""
+GOVERNED_SUDO_USER=""
+
+write_os_release() {
+  local id=$1
+  local version=$2
+  mkdir -p "${HOSTFS}/etc"
+  cat >"${HOSTFS}/etc/os-release" <<EOF
+PRETTY_NAME="${id} ${version}"
+NAME="${id}"
+ID=${id}
+VERSION_ID="${version}"
+EOF
+}
+
+setup_governed_host() {
+  HOSTFS="${ROOT}/hostfs"
+  mkdir -p \
+    "${HOSTFS}/etc/apt/keyrings" \
+    "${HOSTFS}/etc/apt/sources.list.d" \
+    "${HOSTFS}/etc/systemd/system" \
+    "${HOSTFS}/etc/sudoers.d" \
+    "${HOSTFS}/home/alice" \
+    "${HOSTFS}/root" \
+    "${HOSTFS}/run/user" \
+    "${HOSTFS}/var/lib" \
+    "${HOSTFS}/proc/sys/kernel" \
+    "${ROOT}/state/pkg" \
+    "${ROOT}/state/active" \
+    "${ROOT}/state/enabled" \
+    "${ROOT}/state/masked" \
+    "${ROOT}/meta/owners"
+  printf '0\n' >"${ROOT}/euid"
+  printf '6.8.0-generic\n' >"${HOSTFS}/proc/sys/kernel/osrelease"
+  write_os_release ubuntu 24.04
+  cat >"${HOSTFS}/etc/passwd" <<'EOF'
+root:x:0:0:root:/root:/bin/bash
+alice:x:1000:1000:Alice:/home/alice:/bin/bash
+EOF
+  cat >"${HOSTFS}/etc/shadow" <<'EOF'
+root:*:19600:0:99999:7:::
+alice:!:19600:0:99999:7:::
+EOF
+  cat >"${HOSTFS}/etc/group" <<'EOF'
+root:x:0:
+alice:x:1000:
+EOF
+  cat >"${HOSTFS}/etc/subuid" <<'EOF'
+alice:100000:65536
+EOF
+  cat >"${HOSTFS}/etc/subgid" <<'EOF'
+alice:100000:65536
+EOF
+  mkdir -p "${ROOT}/meta/owners"
+  printf 'alice\n' >"${ROOT}/meta/owners/%home%alice"
+  printf 'dummy-docker-gpg\n' >"${FIXTURE_DIR}/docker-gpg"
+  cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (ALL : ALL) ALL
+EOF
+  GOVERNED_SUDO_USER=""
+}
+
+new_governed_case() {
+  new_case
+  setup_governed_host
+}
+
+setup_governed_shims() {
+  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch
+  setup_shims
+  real_stat="$(type -P stat)"
+  real_mkdir="$(type -P mkdir)"
+  real_chmod="$(type -P chmod)"
+  real_rm="$(type -P rm)"
+  real_cat="$(type -P cat)"
+  real_install="$(type -P install)"
+  real_cp="$(type -P cp)"
+  real_touch="$(type -P touch)"
+  ln -sf "$(type -P true)" "${SHIM_DIR}/true"
+  ln -sf "$(type -P false)" "${SHIM_DIR}/false"
+
+  cat >"${SHIM_DIR}/hostpath.lib" <<EOF
+ROOT="${ROOT}"
+HOSTFS="${HOSTFS}"
+EVENTS="${events_file}"
+hostpath() {
+  p=\$1
+  case "\$p" in
+    /etc/*|/home/*|/run/*|/var/*|/proc/sys/kernel/osrelease)
+      printf '%s%s' "${HOSTFS}" "\$p"
+      ;;
+    *)
+      printf '%s' "\$p"
+      ;;
+  esac
+}
+owner_key() {
+  printf '%s' "\$1" | tr '/' '%'
+}
+set_owner() {
+  p=\$1
+  u=\$2
+  ${real_mkdir} -p "${ROOT}/meta/owners"
+  printf '%s\\n' "\$u" > "${ROOT}/meta/owners/\$(owner_key "\$p")"
+}
+get_owner() {
+  p=\$1
+  f="${ROOT}/meta/owners/\$(owner_key "\$p")"
+  if [ -f "\$f" ]; then
+    ${real_cat} "\$f"
+  else
+    printf 'root\\n'
+  fi
+}
+logcmd() {
+  printf 'CMD %s\\n' "\$*" >> "${events_file}"
+}
+EOF
+  chmod 0644 "${SHIM_DIR}/hostpath.lib"
+
+  write_exec "${SHIM_DIR}/id" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd id "\$*"
+uid_only=0
+groups=0
+gid_name=0
+user=""
+for a in "\$@"; do
+  case "\$a" in
+    -u) uid_only=1 ;;
+    -Gn) groups=1 ;;
+    -gn) gid_name=1 ;;
+    -G) groups=1 ;;
+    -g) gid_name=1 ;;
+    -n) ;;
+    -*) ;;
+    *) user=\$a ;;
+  esac
+done
+if [ "\$uid_only" -eq 1 ]; then
+  if [ -z "\$user" ]; then
+    ${real_cat} "${ROOT}/euid"
+    exit 0
+  fi
+  line=\$(grep "^\$user:" "${HOSTFS}/etc/passwd") || exit 1
+  IFS=: read -r _n _x uid _rest <<LINE
+\$line
+LINE
+  printf '%s\\n' "\$uid"
+  exit 0
+fi
+if [ "\$groups" -eq 1 ]; then
+  if [ -f "${ROOT}/state/groups-\$user" ]; then
+    ${real_cat} "${ROOT}/state/groups-\$user"
+    exit 0
+  fi
+  printf '%s\\n' "\$user"
+  exit 0
+fi
+if [ "\$gid_name" -eq 1 ]; then
+  printf '%s\\n' "\$user"
+  exit 0
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/getent" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd getent "\$*"
+db=\$1
+key=\$2
+case "\$db" in
+  passwd)
+    grep "^\$key:" "${HOSTFS}/etc/passwd" && exit 0
+    exit 2
+    ;;
+  shadow)
+    grep "^\$key:" "${HOSTFS}/etc/shadow" && exit 0
+    exit 2
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+EOF
+
+  write_exec "${SHIM_DIR}/cat" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+if [ \$# -eq 0 ]; then
+  exec ${real_cat}
+fi
+logcmd cat "\$*"
+for a in "\$@"; do
+  ${real_cat} "\$(hostpath "\$a")" || exit 1
+done
+EOF
+
+  write_exec "${SHIM_DIR}/stat" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd stat "\$*"
+fmt=""
+if [ "\$1" = "-c" ]; then
+  fmt=\$2
+  shift 2
+fi
+path=\$1
+rpath=\$(hostpath "\$path")
+if [ -n "\$fmt" ]; then
+  case "\$fmt" in
+    %F)
+      if [ -d "\$rpath" ]; then
+        printf 'directory\\n'
+      elif [ -f "\$rpath" ]; then
+        printf 'regular file\\n'
+      elif [ -S "\$rpath" ]; then
+        printf 'socket\\n'
+      else
+        exec ${real_stat} -c '%F' "\$rpath"
+      fi
+      ;;
+    %U)
+      get_owner "\$path"
+      ;;
+    %a)
+      ${real_stat} -c '%a' "\$rpath"
+      ;;
+    *)
+      exec ${real_stat} -c "\$fmt" "\$rpath"
+      ;;
+  esac
+  exit 0
+fi
+exec ${real_stat} "\$rpath"
+EOF
+
+  write_exec "${SHIM_DIR}/mkdir" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd mkdir "\$*"
+args=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *) args="\$args \$(hostpath "\$a")" ;;
+  esac
+done
+# shellcheck disable=SC2086
+exec ${real_mkdir} \$args
+EOF
+
+  write_exec "${SHIM_DIR}/chmod" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd chmod "\$*"
+mode=""
+targets=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) ;;
+    *)
+      if [ -z "\$mode" ]; then
+        mode=\$a
+      else
+        targets="\$targets \$(hostpath "\$a")"
+      fi
+      ;;
+  esac
+done
+# shellcheck disable=SC2086
+exec ${real_chmod} "\$mode" \$targets
+EOF
+
+  write_exec "${SHIM_DIR}/rm" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd rm "\$*"
+args=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *) args="\$args \$(hostpath "\$a")" ;;
+  esac
+done
+# shellcheck disable=SC2086
+exec ${real_rm} \$args
+EOF
+
+  write_exec "${SHIM_DIR}/cp" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd cp "\$*"
+src=""
+dest=""
+prev=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) ;;
+    *)
+      if [ -n "\$dest" ]; then
+        src="\$src \$dest"
+      fi
+      dest=\$a
+      ;;
+  esac
+  prev=\$a
+done
+exec ${real_cp} "\$src" "\$(hostpath "\$dest")"
+EOF
+
+  write_exec "${SHIM_DIR}/install" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd install "\$*"
+directory=0
+mode=0755
+owner=""
+group=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -d) directory=1; shift ;;
+    -m) mode=\$2; shift 2 ;;
+    -o) owner=\$2; shift 2 ;;
+    -g) group=\$2; shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ "\$directory" -eq 1 ]; then
+  for dest in "\$@"; do
+    rdest=\$(hostpath "\$dest")
+    ${real_mkdir} -p "\$rdest"
+    ${real_chmod} "\$mode" "\$rdest" || true
+    if [ -n "\$owner" ]; then
+      set_owner "\$dest" "\$owner"
+    fi
+  done
+  exit 0
+fi
+if [ \$# -lt 2 ]; then
+  exit 1
+fi
+src=\$1
+dest=\$2
+rdest=\$(hostpath "\$dest")
+parent=\${rdest%/*}
+${real_mkdir} -p "\$parent"
+${real_install} -m "\$mode" "\$src" "\$rdest"
+if [ -n "\$owner" ]; then
+  set_owner "\$dest" "\$owner"
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/curl" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+out=""
+url=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -o|--output)
+      out=\$2
+      shift 2
+      ;;
+    --output=*)
+      out=\${1#--output=}
+      shift
+      ;;
+    --proto)
+      shift 2
+      ;;
+    --proto=*|-fsSL|-f|-s|-S|-L|--tlsv1.2)
+      shift
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      url=\$1
+      shift
+      ;;
+  esac
+done
+printf 'CMD curl %s\\n' "\$url" >> "${events_file}"
+case "\$url" in
+  https://github.com/opentendril/opentendril/releases/*) ;;
+  https://download.docker.com/linux/ubuntu/gpg) ;;
+  *)
+    printf 'curl shim: refusing URL: %s\\n' "\$url" >&2
+    exit 1
+    ;;
+esac
+if [ "\$url" = "https://download.docker.com/linux/ubuntu/gpg" ]; then
+  src="${FIXTURE_DIR}/docker-gpg"
+else
+  base=\${url##*/}
+  if [ "\$base" = checksums.txt ] && [ -f "${ROOT}/fail-checksums-download" ]; then
+    exit 1
+  fi
+  case "\$base" in
+    *.tar.gz)
+      if [ -f "${ROOT}/fail-archive-download" ]; then
+        exit 1
+      fi
+      ;;
+  esac
+  src="${FIXTURE_DIR}/\$base"
+fi
+if [ ! -f "\$src" ]; then
+  printf 'curl shim: missing fixture %s\\n' "\$src" >&2
+  exit 1
+fi
+if [ -z "\$out" ]; then
+  printf 'curl shim: no -o path\\n' >&2
+  exit 1
+fi
+${real_cp} "\$src" "\$out"
+EOF
+
+  write_exec "${SHIM_DIR}/dpkg" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd dpkg "\$*"
+if [ "\$1" = "--print-architecture" ]; then
+  printf 'amd64\\n'
+  exit 0
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/dpkg-query" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd dpkg-query "\$*"
+pkg=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -W|--show) shift ;;
+    -f|--showformat) shift 2 ;;
+    -f*) shift ;;
+    *) pkg=\$1; shift ;;
+  esac
+done
+if [ -n "\$pkg" ] && [ -f "${ROOT}/state/pkg/\$pkg" ]; then
+  printf 'install ok installed\\n'
+  exit 0
+fi
+exit 1
+EOF
+
+  write_exec "${SHIM_DIR}/apt-get" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd apt-get "\$*"
+if [ "\$1" = update ]; then
+  exit 0
+fi
+if [ "\$1" = install ]; then
+  shift
+  ${real_mkdir} -p "${ROOT}/state/pkg"
+  for p in "\$@"; do
+    case "\$p" in
+      -*) ;;
+      *) ${real_touch} "${ROOT}/state/pkg/\$p" ;;
+    esac
+  done
+  exit 0
+fi
+if [ "\$1" = remove ]; then
+  printf 'apt-get remove is forbidden in governed tests\\n' >&2
+  exit 1
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/systemctl" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd systemctl "\$*"
+user_mode=0
+now=0
+action=""
+units=""
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    --user) user_mode=1; shift ;;
+    --now) now=1; shift ;;
+    is-active|is-enabled|mask|unmask|disable|enable|start|stop|daemon-reload)
+      action=\$1
+      shift
+      ;;
+    *)
+      units="\$units \$1"
+      shift
+      ;;
+  esac
+done
+norm() {
+  u=\$1
+  case "\$u" in
+    *.service|*.socket) printf '%s\\n' "\$u" ;;
+    docker) printf 'docker.service\\n' ;;
+    *) printf '%s.service\\n' "\$u" ;;
+  esac
+}
+set -- \$units
+case "\$action" in
+  is-active)
+    u=\$(norm "\$1")
+    if [ "\$user_mode" -eq 0 ] && [ -f "${ROOT}/state/active/\$u" ]; then
+      printf 'active\\n'
+      exit 0
+    fi
+    printf 'inactive\\n'
+    exit 3
+    ;;
+  is-enabled)
+    u=\$(norm "\$1")
+    if [ "\$user_mode" -eq 0 ] && [ -f "${ROOT}/state/masked/\$u" ]; then
+      printf 'masked\\n'
+      exit 1
+    fi
+    if [ "\$user_mode" -eq 0 ] && [ -f "${ROOT}/state/enabled/\$u" ]; then
+      printf 'enabled\\n'
+      exit 0
+    fi
+    printf 'disabled\\n'
+    exit 1
+    ;;
+  mask)
+    if [ -f "${ROOT}/state/mask-fail" ]; then
+      printf 'Failed to mask unit\\n' >&2
+      exit 1
+    fi
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_touch} "${ROOT}/state/masked/\$n"
+      ${real_rm} -f "${ROOT}/state/active/\$n" "${ROOT}/state/enabled/\$n"
+    done
+    exit 0
+    ;;
+  unmask)
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_rm} -f "${ROOT}/state/masked/\$n"
+    done
+    exit 0
+    ;;
+  disable)
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_rm} -f "${ROOT}/state/enabled/\$n"
+      if [ "\$now" -eq 1 ]; then
+        ${real_rm} -f "${ROOT}/state/active/\$n"
+      fi
+    done
+    exit 0
+    ;;
+  enable)
+    if [ "\$user_mode" -eq 1 ]; then
+      ${real_touch} "${ROOT}/state/user-docker-enabled"
+      exit 0
+    fi
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_touch} "${ROOT}/state/enabled/\$n"
+      if [ "\$now" -eq 1 ]; then
+        ${real_touch} "${ROOT}/state/active/\$n"
+      fi
+    done
+    exit 0
+    ;;
+  start)
+    if [ "\$user_mode" -eq 1 ]; then
+      ${real_touch} "${ROOT}/state/user-docker-started"
+      exit 0
+    fi
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_touch} "${ROOT}/state/active/\$n"
+    done
+    exit 0
+    ;;
+  stop)
+    for u in "\$@"; do
+      n=\$(norm "\$u")
+      ${real_rm} -f "${ROOT}/state/active/\$n"
+    done
+    exit 0
+    ;;
+  daemon-reload)
+    ${real_touch} "${ROOT}/state/daemon-reload"
+    exit 0
+    ;;
+esac
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/adduser" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd adduser "\$*"
+user=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) ;;
+    *) user=\$a ;;
+  esac
+done
+if [ -z "\$user" ]; then
+  exit 1
+fi
+if grep -q "^\$user:" "${HOSTFS}/etc/passwd"; then
+  exit 1
+fi
+printf '%s:x:2001:2001:OpenTendril Stem:/home/%s:/bin/bash\\n' "\$user" "\$user" >> "${HOSTFS}/etc/passwd"
+printf '%s:!:19600:0:99999:7:::\\n' "\$user" >> "${HOSTFS}/etc/shadow"
+printf '%s:x:2001:\\n' "\$user" >> "${HOSTFS}/etc/group"
+${real_mkdir} -p "${HOSTFS}/home/\$user"
+set_owner "/home/\$user" "\$user"
+if [ ! -f "${ROOT}/state/adduser-no-subid" ]; then
+  printf '%s:165536:65536\\n' "\$user" >> "${HOSTFS}/etc/subuid"
+  printf '%s:165536:65536\\n' "\$user" >> "${HOSTFS}/etc/subgid"
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/usermod" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd usermod "\$*"
+user=""
+for a in "\$@"; do
+  case "\$a" in
+    --add-subuids|--add-subgids) shift ;;
+    -*) ;;
+    *) user=\$a ;;
+  esac
+done
+if [ -z "\$user" ]; then
+  user=\${$#}
+fi
+if ! grep -q "^\$user:" "${HOSTFS}/etc/subuid"; then
+  printf '%s:165536:65536\\n' "\$user" >> "${HOSTFS}/etc/subuid"
+fi
+if ! grep -q "^\$user:" "${HOSTFS}/etc/subgid"; then
+  printf '%s:165536:65536\\n' "\$user" >> "${HOSTFS}/etc/subgid"
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/loginctl" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd loginctl "\$*"
+if [ "\$1" = enable-linger ]; then
+  ${real_touch} "${ROOT}/state/linger-\$2"
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/docker" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd docker "\$*"
+if [ -f "${ROOT}/state/docker-info-fail" ]; then
+  exit 1
+fi
+if [ -f "${ROOT}/state/docker-info" ]; then
+  ${real_cat} "${ROOT}/state/docker-info"
+  exit 0
+fi
+if [ -f "${ROOT}/state/docker-rootless-ready" ]; then
+  printf '[name=seccomp,name=rootless,name=cgroupns]\\n'
+  exit 0
+fi
+exit 1
+EOF
+
+  write_exec "${SHIM_DIR}/dockerd-rootless-setuptool.sh" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd dockerd-rootless-setuptool.sh "\$*"
+if [ -f "${ROOT}/state/docker-setup-fail" ]; then
+  exit 1
+fi
+if [ "\$1" = install ]; then
+  ${real_mkdir} -p "${HOSTFS}/run/user/2001"
+  ${real_touch} "${ROOT}/state/docker-rootless-ready"
+  exit 0
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/sudo" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd sudo "\$*"
+user=""
+nonint=0
+list=0
+kill_ts=0
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -u) user=\$2; shift 2 ;;
+    -U) shift 2 ;;
+    -H|-n)
+      if [ "\$1" = -n ]; then
+        nonint=1
+      fi
+      shift
+      ;;
+    -l) list=1; shift ;;
+    -K) kill_ts=1; shift ;;
+    --) shift; break ;;
+    *=*) export "\$1"; shift ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+if [ "\$kill_ts" -eq 1 ]; then
+  ${real_touch} "${ROOT}/state/sudo-k-\${user:-self}"
+  exit 0
+fi
+if [ "\$list" -eq 1 ]; then
+  if [ -f "${ROOT}/state/sudo-l-fail" ]; then
+    printf 'sudo: unable to initialize policy plugin\\n' >&2
+    exit 1
+  fi
+  ${real_cat} "${ROOT}/state/sudo-l"
+  exit 0
+fi
+if [ "\$nonint" -eq 1 ] && [ "\$user" = tendril ]; then
+  if [ -f "${ROOT}/state/passwordless-tendril" ]; then
+    exec "\$@"
+  fi
+  printf 'sudo: a password is required\\n' >&2
+  exit 1
+fi
+if [ \$# -eq 0 ]; then
+  exit 0
+fi
+exec "\$@"
+EOF
+
+  write_exec "${SHIM_DIR}/visudo" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd visudo "\$*"
+if [ "\$1" = -c ] && [ "\$2" = -f ]; then
+  if [ ! -f "\$3" ]; then
+    exit 1
+  fi
+  grep timestamp_timeout "\$3" >/dev/null || exit 1
+  exit 0
+fi
+exit 0
+EOF
+}
+
+run_governed_installer() {
+  : >"${events_file}"
+  setup_governed_shims
+  local env_args=(
+    env -i
+    HOME="${HOSTFS}/root"
+    PATH="${SHIM_DIR}"
+    TMPDIR="${TMP_DIR}"
+    LC_ALL=C
+    UNAME_S="${UNAME_S}"
+    UNAME_M="${UNAME_M}"
+  )
+  if [ -n "${WSL_DISTRO}" ]; then
+    env_args+=(WSL_DISTRO_NAME="${WSL_DISTRO}")
+  fi
+  if [ -n "${PIN_VERSION}" ]; then
+    env_args+=(OPENTENDRIL_VERSION="${PIN_VERSION}")
+  fi
+  if [ -n "${GOVERNED_SUDO_USER}" ]; then
+    env_args+=(SUDO_USER="${GOVERNED_SUDO_USER}")
+  fi
+  set +e
+  (
+    cd "${ROOT}" || exit 1
+    "${env_args[@]}" /bin/sh "${installer}" --governed "$@"
+  ) >"${stdout_file}" 2>"${stderr_file}"
+  status=$?
+  set -e
+}
+
+assert_no_host_mutation() {
+  local name=$1
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo |systemctl )' "${events_file}"; then
+    fail "${name}: privileged command ran after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD install .*(/home/tendril|/etc/systemd|/etc/sudoers|/etc/apt)' "${events_file}"; then
+    fail "${name}: install mutated host paths after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if [ -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] || [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "${name}: placed executables after a pre-mutation failure"
+    return 1
+  fi
+  return 0
+}
+
+assert_no_host_write() {
+  local name=$1
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo )' "${events_file}"; then
+    fail "${name}: write command ran after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD systemctl (mask |unmask |disable|enable |start |stop |daemon-reload)' "${events_file}"; then
+    fail "${name}: systemctl write ran after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD systemctl --user ' "${events_file}"; then
+    fail "${name}: user systemctl ran after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD install .*(/home/tendril|/etc/systemd|/etc/sudoers|/etc/apt)' "${events_file}"; then
+    fail "${name}: install mutated host paths after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
+}
+
+assert_governed_failure() {
+  local name=$1
+  if [ "${status}" -eq 0 ]; then
+    fail "${name}: expected failure" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  if grep -q '^Posture:     GOVERNED$' "${stdout_file}" || grep -q '^Posture:   GOVERNED$' "${stdout_file}"; then
+    fail "${name}: reported GOVERNED success" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  return 0
+}
+
+preseed_tendril_user() {
+  if ! grep -q '^tendril:' "${HOSTFS}/etc/passwd"; then
+    printf 'tendril:x:2001:2001:OpenTendril Stem:/home/tendril:/bin/bash\n' >>"${HOSTFS}/etc/passwd"
+    printf 'tendril:!:19600:0:99999:7:::\n' >>"${HOSTFS}/etc/shadow"
+    printf 'tendril:x:2001:\n' >>"${HOSTFS}/etc/group"
+  fi
+  mkdir -p "${HOSTFS}/home/tendril"
+  mkdir -p "${ROOT}/meta/owners"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril"
+  if [ "${1:-}" = with-subid ]; then
+    if ! grep -q '^tendril:' "${HOSTFS}/etc/subuid"; then
+      printf 'tendril:165536:65536\n' >>"${HOSTFS}/etc/subuid"
+      printf 'tendril:165536:65536\n' >>"${HOSTFS}/etc/subgid"
+    fi
+  fi
+}
+
+mark_docker_engine_packages() {
+  touch \
+    "${ROOT}/state/pkg/docker-ce" \
+    "${ROOT}/state/pkg/docker-ce-cli" \
+    "${ROOT}/state/pkg/containerd.io" \
+    "${ROOT}/state/pkg/docker-ce-rootless-extras"
+}
+
+# --- governed cases ---------------------------------------------------------
+
+new_governed_case
+printf '1000\n' >"${ROOT}/euid"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "governed requires root (shimmed uid)"; then
+  if grep -q 'requires root' "${stderr_file}"; then
+    if assert_no_host_mutation "governed requires root (shimmed uid)"; then
+      pass "governed requires root (shimmed uid)"
+    fi
+  else
+    fail "governed requires root (shimmed uid): message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+run_governed_installer
+if assert_governed_failure "direct root without Pollinator identity fails"; then
+  if grep -q -- '--pollinator-user' "${stderr_file}"; then
+    if assert_no_host_mutation "direct root without Pollinator identity fails"; then
+      pass "direct root without Pollinator identity fails"
+    fi
+  else
+    fail "direct root without Pollinator identity fails: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+run_governed_installer --pollinator-user root
+if assert_governed_failure "root Pollinator rejected"; then
+  if grep -qi 'cannot be root\|uid 0\|--pollinator-user' "${stderr_file}"; then
+    if assert_no_host_mutation "root Pollinator rejected"; then
+      pass "root Pollinator rejected"
+    fi
+  else
+    fail "root Pollinator rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+run_governed_installer --pollinator-user tendril
+if assert_governed_failure "tendril Pollinator rejected"; then
+  if grep -q 'cannot be tendril' "${stderr_file}"; then
+    if assert_no_host_mutation "tendril Pollinator rejected"; then
+      pass "tendril Pollinator rejected"
+    fi
+  else
+    fail "tendril Pollinator rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+run_governed_installer --pollinator-user nosuch
+if assert_governed_failure "unknown Pollinator rejected"; then
+  if grep -q "does not exist" "${stderr_file}"; then
+    if assert_no_host_mutation "unknown Pollinator rejected"; then
+      pass "unknown Pollinator rejected"
+    fi
+  else
+    fail "unknown Pollinator rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+WSL_DISTRO=Ubuntu
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "WSL governed rejected before mutation"; then
+  if grep -q 'does not support WSL' "${stderr_file}"; then
+    if assert_no_host_mutation "WSL governed rejected before mutation"; then
+      pass "WSL governed rejected before mutation"
+    fi
+  else
+    fail "WSL governed rejected before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+UNAME_S=Darwin
+UNAME_M=arm64
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "Darwin governed rejected before mutation"; then
+  if grep -qi 'Darwin\|requires Linux' "${stderr_file}"; then
+    if assert_no_host_mutation "Darwin governed rejected before mutation"; then
+      pass "Darwin governed rejected before mutation"
+    fi
+  else
+    fail "Darwin governed rejected before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release debian 12
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "non-Ubuntu Linux governed rejected"; then
+  if grep -q 'requires Ubuntu' "${stderr_file}"; then
+    if assert_no_host_mutation "non-Ubuntu Linux governed rejected"; then
+      pass "non-Ubuntu Linux governed rejected"
+    fi
+  else
+    fail "non-Ubuntu Linux governed rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 22.04
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "wrong Ubuntu release rejected"; then
+  if grep -q '24.04' "${stderr_file}"; then
+    if assert_no_host_mutation "wrong Ubuntu release rejected"; then
+      pass "wrong Ubuntu release rejected"
+    fi
+  else
+    fail "wrong Ubuntu release rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+UNAME_M=aarch64
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "governed arm64 rejected"; then
+  if grep -q 'amd64' "${stderr_file}"; then
+    if assert_no_host_mutation "governed arm64 rejected"; then
+      pass "governed arm64 rejected"
+    fi
+  else
+    fail "governed arm64 rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/active/docker.service"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "pre-existing active rootful docker.service fails before mutation"; then
+  if grep -q 'docker.service is active' "${stderr_file}"; then
+    if assert_no_host_write "pre-existing active rootful docker.service fails before mutation"; then
+      pass "pre-existing active rootful docker.service fails before mutation"
+    fi
+  else
+    fail "pre-existing active rootful docker.service fails before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/active/docker.socket"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "pre-existing rootful docker.socket fails before mutation"; then
+  if grep -q 'docker.socket is active' "${stderr_file}"; then
+    if assert_no_host_write "pre-existing rootful docker.socket fails before mutation"; then
+      pass "pre-existing rootful docker.socket fails before mutation"
+    fi
+  else
+    fail "pre-existing rootful docker.socket fails before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/pkg/docker.io"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "unsafe docker.io posture fails closed"; then
+  if grep -q 'docker.io' "${stderr_file}"; then
+    if assert_no_host_write "unsafe docker.io posture fails closed"; then
+      pass "unsafe docker.io posture fails closed"
+    fi
+  else
+    fail "unsafe docker.io posture fails closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+printf '[name=seccomp]\n' >"${ROOT}/state/docker-info"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "usable rootful Docker CLI fails closed"; then
+  if grep -qi 'rootful' "${stderr_file}"; then
+    if assert_no_host_write "usable rootful Docker CLI fails closed"; then
+      pass "usable rootful Docker CLI fails closed"
+    fi
+  else
+    fail "usable rootful Docker CLI fails closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/enabled/docker.service"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "enabled rootful docker.service fails closed"; then
+  if grep -qi 'enabled' "${stderr_file}"; then
+    if assert_no_host_write "enabled rootful docker.service fails closed"; then
+      pass "enabled rootful docker.service fails closed"
+    fi
+  else
+    fail "enabled rootful docker.service fails closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+printf 'tendril:x:2001:2001:OpenTendril Stem:/opt/tendril:/bin/bash\n' >>"${HOSTFS}/etc/passwd"
+printf 'tendril:!:19600:0:99999:7:::\n' >>"${HOSTFS}/etc/shadow"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "conflicting tendril home fails rather than rewrite"; then
+  if grep -q '/opt/tendril' "${stderr_file}"; then
+    if ! events_match '^CMD adduser '; then
+      if ! events_match '^CMD usermod '; then
+        pass "conflicting tendril home fails rather than rewrite"
+      else
+        fail "conflicting tendril home fails rather than rewrite: usermod ran"
+      fi
+    else
+      fail "conflicting tendril home fails rather than rewrite: adduser ran"
+    fi
+  else
+    fail "conflicting tendril home fails rather than rewrite: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+printf 'tendril:x:110:110:OpenTendril Stem:/home/tendril:/usr/sbin/nologin\n' >>"${HOSTFS}/etc/passwd"
+printf 'tendril:!:19600:0:99999:7:::\n' >>"${HOSTFS}/etc/shadow"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "conflicting tendril system uid fails rather than rewrite"; then
+  if grep -q 'system account' "${stderr_file}"; then
+    if ! events_match '^CMD adduser '; then
+      pass "conflicting tendril system uid fails rather than rewrite"
+    else
+      fail "conflicting tendril system uid fails rather than rewrite: adduser ran"
+    fi
+  else
+    fail "conflicting tendril system uid fails rather than rewrite: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+hash="$(file_hash "${FIXTURE_DIR}/bundle.tar.gz")"
+cat >"${FIXTURE_DIR}/checksums.txt" <<EOF
+0000000000000000000000000000000000000000000000000000000000000000  opentendril-linux-amd64.tar.gz
+${hash}  opentendril-linux-arm64.tar.gz
+EOF
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "checksum failure prevents executable placement"; then
+  if grep -q 'SHA-256 mismatch' "${stderr_file}"; then
+    if [ ! -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] && [ ! -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+      if ! events_match '^CMD tar '; then
+        pass "checksum failure prevents executable placement"
+      else
+        fail "checksum failure prevents executable placement: tar ran"
+      fi
+    else
+      fail "checksum failure prevents executable placement: binaries exist"
+    fi
+  else
+    fail "checksum failure prevents executable placement: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/mask-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "systemctl mask failure fails before Docker Engine packages"; then
+  if events_match 'CMD apt-get install .*docker-ce'; then
+    fail "systemctl mask failure fails before Docker Engine packages: docker-ce was installed" "events=$(tr '\n' ' ' <"${events_file}")"
+  elif events_match '^CMD adduser '; then
+    fail "systemctl mask failure fails before Docker Engine packages: adduser ran" "events=$(tr '\n' ' ' <"${events_file}")"
+  elif events_match '^CMD dockerd-rootless'; then
+    fail "systemctl mask failure fails before Docker Engine packages: rootless setup ran"
+  elif events_match '^CMD visudo '; then
+    fail "systemctl mask failure fails before Docker Engine packages: visudo ran"
+  elif [ -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] || [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "systemctl mask failure fails before Docker Engine packages: binaries were placed"
+  elif [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    fail "systemctl mask failure fails before Docker Engine packages: unit was installed"
+  elif grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+    fail "systemctl mask failure fails before Docker Engine packages: reported GOVERNED success"
+  else
+    pass "systemctl mask failure fails before Docker Engine packages"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/docker-setup-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "Docker setup failure cannot leave rootful daemon active"; then
+  if [ ! -f "${ROOT}/state/active/docker.service" ] && [ ! -f "${ROOT}/state/active/docker.socket" ]; then
+    if events_match '^CMD systemctl mask docker.service'; then
+      if ! grep -Eq '^CMD systemctl (enable |start )docker\.service' "${events_file}"; then
+        pass "Docker setup failure cannot leave rootful daemon active"
+      else
+        fail "Docker setup failure cannot leave rootful daemon active: started/enabled rootful" "events=$(tr '\n' ' ' <"${events_file}")"
+      fi
+    else
+      fail "Docker setup failure cannot leave rootful daemon active: did not mask" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
+  else
+    fail "Docker setup failure cannot leave rootful daemon active: unit left active"
+  fi
+fi
+
+# --- success path -----------------------------------------------------------
+
+assert_governed_success_core() {
+  local name=$1
+  if [ "${status}" -ne 0 ]; then
+    fail "${name}" "exit ${status}; stderr=$(tr '\n' ' ' <"${stderr_file}")"
+    return 1
+  fi
+  if ! grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+    fail "${name}: success output missing GOVERNED" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  if grep -q 'LOCAL / SINGLE-PRINCIPAL' "${stdout_file}"; then
+    fail "${name}: governed success described as LOCAL"
+    return 1
+  fi
+  return 0
+}
+
+new_governed_case
+run_governed_installer --pollinator-user alice --version v0.3.0
+if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
+  pass "explicit --pollinator-user defines the Pollinator account"
+  if events_match 'CMD curl https://github.com/opentendril/opentendril/releases/download/v0.3.0/opentendril-linux-amd64.tar.gz'; then
+    pass "governed --version composes with release pinning"
+  else
+    fail "governed --version composes with release pinning" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match '^CMD adduser .* tendril$'; then
+    pass "clean host creates tendril"
+  else
+    fail "clean host creates tendril" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if grep -q '^tendril:x:2001:2001:' "${HOSTFS}/etc/passwd" && grep -q '^tendril:!' "${HOSTFS}/etc/shadow"; then
+    pass "tendril has intended home/login posture"
+  else
+    fail "tendril has intended home/login posture" "passwd=$(tr '\n' ' ' <"${HOSTFS}/etc/passwd")"
+  fi
+  if grep -q '^tendril:' "${HOSTFS}/etc/subuid" && grep -q '^tendril:' "${HOSTFS}/etc/subgid" && [ -f "${ROOT}/state/linger-tendril" ]; then
+    pass "subordinate UID/GID and linger setup occur"
+  else
+    fail "subordinate UID/GID and linger setup occur"
+  fi
+  if events_match '^CMD dockerd-rootless-setuptool.sh install'; then
+    pass "tendril rootless setup occurs"
+  else
+    fail "tendril rootless setup occurs" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if [ ! -f "${ROOT}/state/active/docker.service" ] && [ ! -f "${ROOT}/state/active/docker.socket" ]; then
+    pass "rootful units are not left active after successful bootstrap"
+  else
+    fail "rootful units are not left active after successful bootstrap"
+  fi
+  if grep -Eq '^CMD systemctl (enable |start )docker\.service' "${events_file}"; then
+    fail "success enabled or started rootful docker.service" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "success does not enable or start rootful docker.service"
+  fi
+  stem="${HOSTFS}/home/tendril/.local/bin/tendril"
+  mcp="${HOSTFS}/home/alice/.local/bin/tendril-mcp"
+  pollinator_tendril="${HOSTFS}/home/alice/.local/bin/tendril"
+  if [ -f "${stem}" ] && [ "$(cat "${stem}")" = "tendril-payload" ]; then
+    pass "Stem gets only protected tendril"
+  else
+    fail "Stem gets only protected tendril"
+  fi
+  if [ -f "${mcp}" ] && [ "$(cat "${mcp}")" = "mcp-payload" ]; then
+    pass "Pollinator gets only tendril-mcp"
+  else
+    fail "Pollinator gets only tendril-mcp"
+  fi
+  if [ ! -e "${pollinator_tendril}" ]; then
+    pass "full tendril never reaches Pollinator destination"
+  else
+    fail "full tendril never reaches Pollinator destination"
+  fi
+  if events_match '^CMD install -o tendril -g tendril -m 0750 .* /home/tendril/.local/bin/tendril$'; then
+    pass "Stem ownership/mode are requested correctly"
+  else
+    fail "Stem ownership/mode are requested correctly" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match '^CMD install -o alice -g alice -m 0755 .* /home/alice/.local/bin/tendril-mcp$'; then
+    pass "Pollinator ownership/mode are requested correctly"
+  else
+    fail "Pollinator ownership/mode are requested correctly" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match '^CMD sudo .* -K' || events_match '^CMD sudo -u alice sudo -K'; then
+    pass "cached sudo state is invalidated"
+  else
+    # the logged command is the full argv
+    if grep -Eq '^CMD sudo .* -K' "${events_file}"; then
+      pass "cached sudo state is invalidated"
+    else
+      fail "cached sudo state is invalidated" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
+  fi
+  if grep -Eq '^CMD sudo .* -n -u tendril true' "${events_file}"; then
+    pass "accepted posture proves sudo -n escalation does not work"
+  else
+    fail "accepted posture proves sudo -n escalation does not work" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  unit="${HOSTFS}/etc/systemd/system/tendril.service"
+  if [ -f "${unit}" ]; then
+    if grep -q 'WorkingDirectory=/home/tendril' "${unit}" \
+      && grep -q 'ExecStart=/home/tendril/.local/bin/tendril serve' "${unit}" \
+      && grep -q 'DOCKER_HOST=unix:///run/user/2001/docker.sock' "${unit}" \
+      && grep -q 'XDG_RUNTIME_DIR=/run/user/2001' "${unit}" \
+      && grep -q 'TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock' "${unit}" \
+      && grep -q 'StateDirectory=opentendril-transport' "${unit}" \
+      && grep -q 'User=tendril' "${unit}" \
+      && grep -q 'Group=tendril' "${unit}"; then
+      if grep -q '/run/user/1001' "${unit}"; then
+        fail "generated unit hard-codes uid 1001"
+      else
+        pass "generated unit uses actual tendril UID and protected ExecStart"
+      fi
+    else
+      fail "generated unit uses actual tendril UID and protected ExecStart" "unit=$(tr '\n' ' ' <"${unit}")"
+    fi
+  else
+    fail "generated unit uses actual tendril UID and protected ExecStart: missing unit"
+  fi
+  if grep -Eq '^CMD systemctl (enable |start )tendril' "${events_file}"; then
+    fail "unit is started or enabled before configuration" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "unit is not started before configuration"
+  fi
+  if grep -q 'systemctl enable --now tendril' "${stdout_file}" \
+    && grep -q 'cd /home/tendril' "${stdout_file}" \
+    && grep -q 'Interactive login as tendril is not required' "${stdout_file}"; then
+    pass "next-steps print Stem commands from /home/tendril without auto-init"
+  else
+    fail "next-steps print Stem commands from /home/tendril without auto-init" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  mask_line="$(grep -n '^CMD systemctl mask docker.service' "${events_file}" | head -n1 | cut -d: -f1 || true)"
+  apt_line="$(grep -n '^CMD apt-get install .*docker-ce' "${events_file}" | head -n1 | cut -d: -f1 || true)"
+  if [ -n "${mask_line}" ] && [ -n "${apt_line}" ] && [ "${mask_line}" -lt "${apt_line}" ]; then
+    pass "rootful units are masked before Docker Engine packages"
+  else
+    fail "rootful units are masked before Docker Engine packages" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match 'CMD curl https://download.docker.com/linux/ubuntu/gpg'; then
+    pass "Docker bootstrap uses the official Docker GPG URL"
+  else
+    fail "Docker bootstrap uses the official Docker GPG URL" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if [ -f "${HOSTFS}/home/tendril/.env" ] && [ -d "${HOSTFS}/home/tendril/.tendril" ]; then
+    pass "control-plane scaffolding is created when absent"
+  else
+    fail "control-plane scaffolding is created when absent"
+  fi
+fi
+
+new_governed_case
+GOVERNED_SUDO_USER=alice
+run_governed_installer
+if assert_governed_success_core "SUDO_USER resolves a valid Pollinator"; then
+  if [ -f "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    pass "SUDO_USER resolves a valid Pollinator"
+  else
+    fail "SUDO_USER resolves a valid Pollinator: missing tendril-mcp"
+  fi
+fi
+
+new_governed_case
+printf 'bob:x:1001:1001:Bob:/home/bob:/bin/bash\n' >>"${HOSTFS}/etc/passwd"
+printf 'bob:!:19600:0:99999:7:::\n' >>"${HOSTFS}/etc/shadow"
+mkdir -p "${HOSTFS}/home/bob"
+printf 'bob\n' >"${ROOT}/meta/owners/%home%bob"
+GOVERNED_SUDO_USER=bob
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "explicit --pollinator-user overrides SUDO_USER"; then
+  if [ -f "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ] && [ ! -e "${HOSTFS}/home/bob/.local/bin/tendril-mcp" ]; then
+    pass "explicit --pollinator-user overrides SUDO_USER"
+  else
+    fail "explicit --pollinator-user overrides SUDO_USER"
+  fi
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "existing compatible tendril user is accepted"; then
+  if events_match '^CMD adduser '; then
+    fail "existing compatible tendril user is accepted: adduser ran"
+  else
+    pass "existing compatible tendril user is accepted"
+  fi
+fi
+
+new_governed_case
+preseed_tendril_user
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "existing tendril without subids gets usermod"; then
+  if events_match '^CMD usermod '; then
+    pass "existing tendril without subids gets usermod"
+  else
+    fail "existing tendril without subids gets usermod" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+fi
+
+new_governed_case
+mark_docker_engine_packages
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "installer-compatible docker-ce packages are not rejected"; then
+  pass "installer-compatible docker-ce packages are not rejected"
+  if grep -Eq '^CMD systemctl (enable |start )docker\.service' "${events_file}"; then
+    fail "compatible package run enabled rootful Docker"
+  else
+    pass "compatible package run does not enable rootful Docker"
+  fi
+fi
+
+new_governed_case
+mkdir -p "${HOSTFS}/home/alice/.local/bin"
+printf 'leftover-tendril\n' >"${HOSTFS}/home/alice/.local/bin/tendril"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "pre-existing Pollinator tendril is diagnosed not deleted"; then
+  if [ "$(cat "${HOSTFS}/home/alice/.local/bin/tendril")" = "leftover-tendril" ]; then
+    pass "pre-existing Pollinator tendril is diagnosed not deleted"
+  else
+    fail "pre-existing Pollinator tendril is diagnosed not deleted: file changed"
+  fi
+fi
+
+new_governed_case
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (ALL) NOPASSWD: ALL
+EOF
+touch "${ROOT}/state/passwordless-tendril"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "passwordless Pollinator escalation fails governance"; then
+  if grep -qi 'P2\|passwordless\|non-interactively' "${stderr_file}"; then
+    pass "passwordless Pollinator escalation fails governance"
+  else
+    fail "passwordless Pollinator escalation fails governance: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+  if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+    fail "passwordless Pollinator escalation reported GOVERNED success"
+  fi
+fi
+
+new_governed_case
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (root) NOPASSWD: /bin/sh
+EOF
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "indirect root NOPASSWD fails P2"; then
+  if grep -qi 'P2\|passwordless\|NOPASSWD\|root' "${stderr_file}"; then
+    if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+      fail "indirect root NOPASSWD fails P2: reported GOVERNED success"
+    else
+      pass "indirect root NOPASSWD fails P2"
+    fi
+  else
+    fail "indirect root NOPASSWD fails P2: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/sudo-l-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "unreadable sudo policy fails P2 closed"; then
+  if grep -qi 'sudo policy\|refusing to classify' "${stderr_file}"; then
+    if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+      fail "unreadable sudo policy fails P2 closed: reported GOVERNED success"
+    else
+      pass "unreadable sudo policy fails P2 closed"
+    fi
+  else
+    fail "unreadable sudo policy fails P2 closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+setup_governed_shims
+write_exec "${SHIM_DIR}/docker" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd docker "\$*"
+case "\${DOCKER_HOST:-}" in
+  unix:///run/user/*)
+    printf '[name=seccomp]\\n'
+    exit 0
+    ;;
+esac
+exit 1
+EOF
+set +e
+(
+  cd "${ROOT}" || exit 1
+  env -i HOME="${HOSTFS}/root" PATH="${SHIM_DIR}" TMPDIR="${TMP_DIR}" LC_ALL=C \
+    UNAME_S=Linux UNAME_M=x86_64 \
+    /bin/sh "${installer}" --governed --pollinator-user alice
+) >"${stdout_file}" 2>"${stderr_file}"
+status=$?
+set -e
+if assert_governed_failure "missing rootless result fails governance"; then
+  if grep -qi 'not rootless' "${stderr_file}"; then
+    pass "missing rootless result fails governance"
+  else
+    fail "missing rootless result fails governance: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+# --- rerun / idempotence ----------------------------------------------------
+
+new_governed_case
+run_governed_installer --pollinator-user alice
+if [ "${status}" -ne 0 ]; then
+  fail "rerun fixture first install" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+else
+  printf 'SENTINEL-ENV\n' >"${HOSTFS}/home/tendril/.env"
+  printf 'SENTINEL-DOT\n' >"${HOSTFS}/home/tendril/.tendril/marker"
+  printf 'SENTINEL-KEY\n' >"${HOSTFS}/home/tendril/.tendril/app.pem"
+  printf 'SENTINEL-GRANT\n' >"${HOSTFS}/home/tendril/.tendril/grants.yaml"
+  printf 'SENTINEL-CRED\n' >"${HOSTFS}/home/tendril/.tendril/credentials"
+  printf 'SENTINEL-SUB\n' >"${HOSTFS}/home/tendril/substrates.yaml"
+  mkdir -p "${HOSTFS}/home/tendril/.tendril/substrates/myrepo"
+  printf 'SENTINEL-REPO\n' >"${HOSTFS}/home/tendril/.tendril/substrates/myrepo/HEAD"
+  mkdir -p "${HOSTFS}/home/tendril/.tendril/workspaces"
+  printf 'SENTINEL-WS\n' >"${HOSTFS}/home/tendril/.tendril/workspaces/ws1"
+  mkdir -p "${HOSTFS}/home/tendril/.tendril/run-workspaces"
+  printf 'SENTINEL-RW\n' >"${HOSTFS}/home/tendril/.tendril/run-workspaces/rw1"
+  run_governed_installer --pollinator-user alice
+  if assert_governed_success_core "rerun completes without destructive recreation"; then
+    pass "rerun completes without destructive recreation"
+    if [ "$(cat "${HOSTFS}/home/tendril/.env")" = "SENTINEL-ENV" ]; then
+      pass "existing .env sentinel preserved"
+    else
+      fail "existing .env sentinel preserved" "content=$(cat "${HOSTFS}/home/tendril/.env")"
+    fi
+    if [ "$(cat "${HOSTFS}/home/tendril/.tendril/marker")" = "SENTINEL-DOT" ]; then
+      pass "existing .tendril sentinel preserved"
+    else
+      fail "existing .tendril sentinel preserved"
+    fi
+    if [ "$(cat "${HOSTFS}/home/tendril/.tendril/app.pem")" = "SENTINEL-KEY" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/.tendril/grants.yaml")" = "SENTINEL-GRANT" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/.tendril/credentials")" = "SENTINEL-CRED" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/substrates.yaml")" = "SENTINEL-SUB" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/.tendril/substrates/myrepo/HEAD")" = "SENTINEL-REPO" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/.tendril/workspaces/ws1")" = "SENTINEL-WS" ] \
+      && [ "$(cat "${HOSTFS}/home/tendril/.tendril/run-workspaces/rw1")" = "SENTINEL-RW" ]; then
+      pass "credential/grant/Substrate/workspace fixtures preserved"
+    else
+      fail "credential/grant/Substrate/workspace fixtures preserved"
+    fi
+    if grep -Eq '^CMD systemctl (enable |start )docker\.service' "${events_file}"; then
+      fail "rerun does not enable rootful Docker" "events=$(tr '\n' ' ' <"${events_file}")"
+    else
+      pass "rerun does not enable rootful Docker"
+    fi
+    if events_match '^CMD adduser '; then
+      fail "rerun recreated the tendril account"
+    fi
+  fi
 fi
 
 # --- host isolation ---------------------------------------------------------
@@ -749,6 +2301,31 @@ else
   else
     pass "tests did not create a host tendril binary"
   fi
+fi
+
+host_unit_after="absent"
+host_sudoers_after="absent"
+if [ -e "${host_unit_path}" ]; then
+  host_unit_after="$(stat -c '%s %Y' "${host_unit_path}" 2>/dev/null || echo present)"
+fi
+if [ -e "${host_sudoers_path}" ]; then
+  host_sudoers_after="$(stat -c '%s %Y' "${host_sudoers_path}" 2>/dev/null || echo present)"
+fi
+if [ "${host_unit_after}" = "${host_unit_before}" ]; then
+  pass "host systemd unit was not mutated"
+else
+  fail "host systemd unit was not mutated" "before=${host_unit_before} after=${host_unit_after}"
+fi
+if [ "${host_sudoers_after}" = "${host_sudoers_before}" ]; then
+  pass "host sudoers snippet was not mutated"
+else
+  fail "host sudoers snippet was not mutated" "before=${host_sudoers_before} after=${host_sudoers_after}"
+fi
+host_tendril_home_after="$(ls -la /home/tendril 2>/dev/null || echo '__missing__')"
+if [ "${host_tendril_home_after}" = "${host_tendril_home_before}" ]; then
+  pass "host /home/tendril was not mutated"
+else
+  fail "host /home/tendril was not mutated"
 fi
 
 if [ "${failures}" -gt 0 ]; then
