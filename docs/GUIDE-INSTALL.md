@@ -24,6 +24,12 @@ configuration, not a failed installation. Hardening is opt-out here, so the
 report informs your judgement rather than substituting for it. Its exit status is
 always zero.
 
+The first-party installer is the current automated realization of this guide's
+normal path. The short public entrypoint is
+[GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md). This document remains the
+source of truth for the invariants below, the detailed/manual procedure,
+rationale, variations, and troubleshooting.
+
 ---
 
 ## The invariants
@@ -165,6 +171,31 @@ executables. They are not interchangeable.
 Stage 3 places `tendril` under the Stem principal. Stage 8 installs `tendril-mcp`
 for the ordinary account.
 
+### First-party installer
+
+The published `install.sh` from the current OpenTendril release (**v0.3.1**) is
+the automated realization of this procedure's host-bootstrap steps.
+
+- **Local / evaluation** installs the full `tendril` executable for this
+  account. That posture is LOCAL / SINGLE-PRINCIPAL. It does not claim the
+  governed boundary. Qualified on Linux amd64, Linux arm64, WSL2 amd64, WSL2
+  arm64, macOS Intel, and macOS Apple Silicon.
+- **Governed** is qualified on Ubuntu 24.04 LTS, Linux amd64, systemd, and
+  rootless Docker. It creates the Stem principal, establishes rootless Docker,
+  places protected `tendril` and Pollinator-only `tendril-mcp`, installs the
+  system unit without starting it, and applies the Stage 9 administrative
+  posture. It does not run `tendril init` and does not start the Stem. WSL and
+  macOS are not governed.
+
+Pin the governed installer to v0.3.1, download `install.sh` and
+`checksums.txt`, verify `install.sh` against that checksum file, then invoke it
+with `--governed`. Do not pipe it into `sudo sh`. The copyable sequence is in
+[GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md).
+
+The stages below remain the detailed/manual reference for the same boundary,
+including configuration, Git connection, Pollinator credentials, and service
+start.
+
 ---
 
 ## Stage 1 — Create the Stem's principal
@@ -305,12 +336,15 @@ a home that other accounts cannot traverse satisfies that; so does a root-owned
 binary in a system location. Neither is more secure than the other, and the
 choice is logistics — see Variations.
 
-The current OpenTendril release is **v0.3.0**. Each platform archive contains two
+The current OpenTendril release is **v0.3.1**. Each platform archive contains two
 independent executables, `tendril` and `tendril-mcp`, and nothing else. This
 worked path is Linux amd64. The same release also publishes
 `opentendril-linux-arm64.tar.gz`, `opentendril-darwin-amd64.tar.gz`, and
 `opentendril-darwin-arm64.tar.gz`. Substitute the matching archive name; the
 checksum file and verification step are the same.
+
+If you used the first-party installer in governed mode, this stage is already
+done. The commands below are the manual procedure.
 
 Obtain the archive and `checksums.txt` from the same release. Verify the
 selected archive **before** extracting or installing it. Then install **only**
@@ -321,7 +355,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.0
+RELEASE=v0.3.1
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -704,7 +738,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.0
+RELEASE=v0.3.1
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1000,7 +1034,7 @@ release tag for `RELEASE`.
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.0
+RELEASE=v0.3.1
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1025,7 +1059,7 @@ executable onto that account's PATH.
 ```bash
 # as the ordinary (Pollinator-hosting) account — same RELEASE as above
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.0
+RELEASE=v0.3.1
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1153,11 +1187,15 @@ Docker does not. Configure the provider instead of installing a rootless daemon.
 
 *Removes Stages 1, 2 and 9; changes 3 through 7.*
 
-Install into a repository checkout and run `tendril serve` there. Setup takes
-minutes and everything works, including `tendril mcp` over stdio. That
-in-process MCP path is the single-user client. A governed installation uses
-`tendril-mcp` instead and does not put the full binary on the Pollinator
-account's PATH.
+The first-party installer in local mode is the usual path for this posture
+([GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md)). It places `tendril` at
+`~/.local/bin/tendril` and does not claim the governed boundary.
+
+Installing into a repository checkout and running `tendril serve` there is the
+same posture. Setup takes minutes and everything works, including `tendril mcp`
+over stdio. That in-process MCP path is the single-user client. A governed
+installation uses `tendril-mcp` instead and does not put the full binary on the
+Pollinator account's PATH.
 
 **This fails P1, P2 and P3.** The Stem's credentials, its grants and its issued
 credential store all sit in a directory your own account owns. A Pollinator
@@ -1181,7 +1219,8 @@ git check-ignore -v .tendril/api-key .tendril/pollinators.json .tendril/grants.y
 
 ## Moving from a single principal to a separate one
 
-Install fresh, then decommission — do not move the old installation.
+Install the governed posture, then decommission the single-principal runtime —
+do not relocate its control plane.
 
 The configuration has to change anyway (`checkout: mode: path` stops working,
 workspaces relocate), and moving a private key does not un-expose it: `mv`
@@ -1193,21 +1232,24 @@ changes who owns a file and says nothing about who has already copied it.
 > ignored runtime state. Removing it destroys part of the working tree. The
 > user-level `~/.tendril` is the one that goes.
 
-**1. Stop and remove any old service.** An earlier `install.sh` registers
-`opentendril.service` running as *your* user; left enabled it competes for port
-8080 and can silently start an ungoverned Stem:
+**1. Stop any Stem still running as the ordinary account.** A leftover process
+or unit that still serves as that account competes for port 8080 and can start
+an ungoverned Stem beside the governed one. Do not disable `tendril.service` —
+that unit belongs to the governed Stem.
 
 ```bash
-# [root]
-systemctl disable --now opentendril
-rm /etc/systemd/system/opentendril.service
-systemctl daemon-reload
+# as the ordinary account — stop a foreground Stem in this session
+# Ctrl-C the `tendril serve` process if it is running
+
+# [root] list units if a leftover system unit still starts a Stem as this
+# account; disable only that leftover unit, not tendril.service
+systemctl list-units --type=service --all
 ```
 
 **2. Revoke credentials**, so one dies even if a copy survives:
 
 ```bash
-# from the directory the old Stem actually ran in
+# from the directory the single-principal Stem actually ran in
 tendril pollinator list
 tendril pollinator revoke --pollen <each listed pollen>
 ```
@@ -1220,7 +1262,9 @@ shred -u ~/.tendril/*.pem
 rm -rf ~/.tendril
 ```
 
-**4. Remove old binaries**, so nothing on `$PATH` starts an ungoverned Stem:
+**4. Remove the ordinary account's full `tendril` executable**, so nothing on
+`$PATH` starts an ungoverned Stem. A governed Pollinator-hosting account uses
+`tendril-mcp`, not `tendril`.
 
 ```bash
 which -a tendril
@@ -1286,6 +1330,8 @@ back into your home directory.
 
 ## Related documents
 
+* [GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md) — short public installation
+  entrypoint (local/evaluation and governed).
 * [GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md) — connection postures,
   signing, and what each grant operation-class permits.
 * [GUIDE-HOST-TENDRIL.md](./GUIDE-HOST-TENDRIL.md) — running a Tendril directly on the Stem

@@ -49,20 +49,56 @@ The Stem coordinates **Sprouts** (ephemeral execution bodies) running inside **T
 
 ## 🚀 Installing
 
-**[docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md) is the installation guide**, and the source
-of truth for what a sound installation is.
+**Start at [docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md).** It is
+the short public installation entrypoint. Two postures; they are not the same
+thing.
 
-The normal secure-default path installs a **verified precompiled OpenTendril
-release** and runs the Stem headless. It does not require cloning this
-repository, installing Go, or installing GNU Make. Compiling from source is an
-advanced/developer variation documented in that guide.
+| Posture | What it is | Qualified on |
+|---|---|---|
+| **Local / evaluation** | LOCAL / SINGLE-PRINCIPAL. The Stem runs as this account. It does not claim the governed boundary. | Linux amd64, Linux arm64, WSL2 amd64, WSL2 arm64, macOS Intel, macOS Apple Silicon |
+| **Governed** | Separate Stem principal; protected `tendril`; Pollinator-only `tendril-mcp`. | Ubuntu 24.04 LTS, Linux amd64, systemd, rootless Docker |
 
-It does not prescribe one procedure. What makes an installation sound is a set of
-measurable properties — whether the Stem holds credentials no caller can read,
-whether a caller can escalate to it, whether anything else can replace the binary
-it runs. The guide states those properties, works through the most hardened
-configuration in full, and shows which choices can be made differently without
-weakening any of them.
+WSL and macOS are not governed. Neither path requires cloning this repository,
+installing Go, or installing GNU Make.
+
+### Local / evaluation
+
+```bash
+curl -fsSL \
+  https://github.com/opentendril/opentendril/releases/latest/download/install.sh \
+  | sh
+```
+
+Then `tendril hardiness` and `tendril init`. First session:
+[docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md).
+
+### Governed
+
+Pin **v0.3.1**. Download `install.sh` and `checksums.txt`, verify the installer,
+read it, then run it with `--governed`. Do not pipe the installer into
+`sudo sh`. The full sequence is in
+[docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md):
+
+```bash
+curl -fsSL -o install.sh \
+  https://github.com/opentendril/opentendril/releases/download/v0.3.1/install.sh
+curl -fsSL -o checksums.txt \
+  https://github.com/opentendril/opentendril/releases/download/v0.3.1/checksums.txt
+grep 'install.sh$' checksums.txt | sha256sum -c
+# read install.sh, then:
+sudo sh install.sh \
+  --governed \
+  --pollinator-user <ordinary-user> \
+  --version v0.3.1
+```
+
+### Hardened / manual reference
+
+**[docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md)** is the source of truth for
+the P1-P5 invariants, the detailed/manual procedure, rationale, variations,
+and troubleshooting. The first-party installer is the automated realization of
+that normal path. Compiling from source is an advanced/developer variation
+documented there.
 
 Whichever way you install, this tells you what you actually have:
 
