@@ -134,6 +134,51 @@ func TestRenderGrantsYAMLParses(t *testing.T) {
 	}
 }
 
+// TestGitSetupGrantRemainsGitOnly is the first-use regression: git setup
+// --grant-pollen writes the delegated Git loop and nothing else. seed.grow,
+// sprout.watch, and sprout.grow stay absent until the Botanist grants them
+// explicitly.
+func TestGitSetupGrantRemainsGitOnly(t *testing.T) {
+	dir := t.TempDir()
+	tendrilDir := filepath.Join(dir, ".tendril")
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	opts := gitSetupOptions{substrate: "myrepo", grantPollen: "claude"}
+	if err := upsertGrants(filepath.Join(tendrilDir, "grants.yaml"), opts); err != nil {
+		t.Fatalf("upsertGrants: %v", err)
+	}
+
+	out := renderGrantsYAML(opts)
+	for _, banned := range []string{core.CapSeedGrow, core.CapSproutWatch, core.CapSproutGrow} {
+		if strings.Contains(out, banned) {
+			t.Errorf("generated git grant contains %s:\n%s", banned, out)
+		}
+	}
+
+	grants, err := core.LoadDelegationGrants(tendrilDir)
+	if err != nil {
+		t.Fatalf("load grants: %v", err)
+	}
+	if len(grants) != 1 {
+		t.Fatalf("grant count = %d, want 1", len(grants))
+	}
+	classes := grants[0].OperationClasses
+	if len(classes) != 6 {
+		t.Errorf("operation-classes = %v, want the six git classes", classes)
+	}
+	for _, banned := range []string{core.CapSeedGrow, core.CapSproutWatch, core.CapSproutGrow} {
+		if contains(classes, banned) {
+			t.Errorf("git setup grant includes %s: %v", banned, classes)
+		}
+	}
+	for _, want := range []string{core.CapGitStatus, core.CapGitBranchList, core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
+		if !contains(classes, want) {
+			t.Errorf("git setup grant missing %s: %v", want, classes)
+		}
+	}
+}
+
 // TestUpsertMergesMultipleConnections proves a second setup run for a different
 // repo is additive: both connections resolve from the one substrates.yaml, and
 // a pre-existing comment survives the node-level merge.

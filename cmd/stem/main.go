@@ -162,7 +162,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "llm", "List or test the configured local LLM provider")
 	fmt.Printf("  %-11s  %s\n", "assess", "Probe local hardware and judge which local models fit")
 	fmt.Printf("  %-11s  %s\n", "mesh", "Manage mesh grafting keys and tokens")
-	fmt.Printf("  %-11s  %s\n", "delegation", "Approve, deny, or list pending confirm-above delegation requests")
+	fmt.Printf("  %-11s  %s\n", "delegation", "Grant, inspect, or revoke durable grants; approve pending confirmations")
 	fmt.Printf("  %-11s  %s\n", "mcp", "Start the MCP JSON-RPC stdio server")
 	fmt.Printf("  %-11s  %s\n", "init", "Run the Developer Onboarding Wizard")
 	fmt.Printf("  %-11s  %s\n", "serve", "Start the Go Stem Orchestrator API or MCP stdio bridge")

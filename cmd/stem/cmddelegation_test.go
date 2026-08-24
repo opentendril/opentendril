@@ -58,6 +58,24 @@ func TestDelegationCLIArguments(t *testing.T) {
 			wantExit:   1,
 			wantStderr: "missing pending confirmation id. Usage: tendril delegation deny <id>\n",
 		},
+		{
+			name:       "grant missing pollen",
+			args:       []string{"grant", "--substrate", "myrepo", "--operation", "seed.grow"},
+			wantExit:   1,
+			wantStderr: "missing --pollen",
+		},
+		{
+			name:       "grant missing operation",
+			args:       []string{"grant", "--pollen", "claude", "--substrate", "myrepo"},
+			wantExit:   1,
+			wantStderr: "missing --operation",
+		},
+		{
+			name:       "revoke missing substrate",
+			args:       []string{"revoke", "--pollen", "claude", "--operation", "seed.grow"},
+			wantExit:   1,
+			wantStderr: "missing --substrate",
+		},
 	}
 
 	for _, tt := range tests {
