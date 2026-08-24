@@ -136,6 +136,7 @@ setup_shims() {
 case "$1" in
   -s) printf '%s\n' "${UNAME_S:-Linux}" ;;
   -m) printf '%s\n' "${UNAME_M:-x86_64}" ;;
+  -r) printf '%s\n' "${UNAME_R:-6.8.0-generic}" ;;
   *) printf '%s\n' "${UNAME_S:-Linux}" ;;
 esac
 EOF
@@ -786,6 +787,8 @@ setup_governed_host() {
     "${HOSTFS}/run/user" \
     "${HOSTFS}/var/lib" \
     "${HOSTFS}/proc/sys/kernel" \
+    "${HOSTFS}/sys/module/nf_tables" \
+    "${HOSTFS}/lib/modules/6.8.0-generic" \
     "${ROOT}/state/pkg" \
     "${ROOT}/state/active" \
     "${ROOT}/state/enabled" \
@@ -793,6 +796,8 @@ setup_governed_host() {
     "${ROOT}/meta/owners"
   printf '0\n' >"${ROOT}/euid"
   printf '6.8.0-generic\n' >"${HOSTFS}/proc/sys/kernel/osrelease"
+  printf 'nf_tables 217088 0 - Live 0x0000000000000000\n' >"${HOSTFS}/proc/modules"
+  : >"${HOSTFS}/lib/modules/6.8.0-generic/modules.builtin"
   write_os_release ubuntu 24.04
   cat >"${HOSTFS}/etc/passwd" <<'EOF'
 root:x:0:0:root:/root:/bin/bash
@@ -848,7 +853,7 @@ EVENTS="${events_file}"
 hostpath() {
   p=\$1
   case "\$p" in
-    /etc/*|/home/*|/run/*|/var/*|/proc/sys/kernel/osrelease)
+    /etc/*|/home/*|/run/*|/var/*|/proc/sys/kernel/osrelease|/proc/modules|/sys/module/*|/lib/modules/*)
       printf '%s%s' "${HOSTFS}" "\$p"
       ;;
     *)
@@ -879,6 +884,17 @@ logcmd() {
 }
 EOF
   chmod 0644 "${SHIM_DIR}/hostpath.lib"
+
+  write_exec "${SHIM_DIR}/uname" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+case "\$1" in
+  -s) printf '%s\\n' "${UNAME_S:-Linux}" ;;
+  -m) printf '%s\\n' "${UNAME_M:-x86_64}" ;;
+  -r) ${real_cat} "${HOSTFS}/proc/sys/kernel/osrelease" ;;
+  *) printf '%s\\n' "${UNAME_S:-Linux}" ;;
+esac
+EOF
 
   write_exec "${SHIM_DIR}/id" <<EOF
 #!/bin/sh
@@ -1443,10 +1459,60 @@ fi
 exit 1
 EOF
 
+  write_exec "${SHIM_DIR}/iptables" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd iptables "\$*"
+if [ "\$1" = --version ]; then
+  if [ -f "${ROOT}/state/iptables-version" ]; then
+    ${real_cat} "${ROOT}/state/iptables-version"
+    exit 0
+  fi
+  printf 'iptables v1.8.10 (nf_tables)\\n'
+  exit 0
+fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/modprobe" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd modprobe "\$*"
+mod=\$1
+if [ -z "\$mod" ]; then
+  exit 1
+fi
+if [ -f "${ROOT}/state/modprobe-fail" ]; then
+  printf 'modprobe: FATAL: Module %s not found.\\n' "\$mod" >&2
+  exit 1
+fi
+if [ -f "${ROOT}/state/modprobe-unverified" ]; then
+  exit 0
+fi
+mods=\$(hostpath /proc/modules)
+${real_mkdir} -p "\$(dirname "\$mods")"
+if [ ! -f "\$mods" ]; then
+  : >"\$mods"
+fi
+if ! grep -q "^\$mod " "\$mods" 2>/dev/null; then
+  printf '%s 0 0 - Live 0x0\\n' "\$mod" >>"\$mods"
+fi
+${real_mkdir} -p "\$(hostpath /sys/module/\$mod)"
+exit 0
+EOF
+
   write_exec "${SHIM_DIR}/dockerd-rootless-setuptool.sh" <<EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd dockerd-rootless-setuptool.sh "\$*"
+for a in "\$@"; do
+  case "\$a" in
+    --skip-iptables)
+      printf 'test forbidden: --skip-iptables\\n' >&2
+      exit 1
+      ;;
+  esac
+done
 if [ -f "${ROOT}/state/docker-setup-fail" ]; then
   exit 1
 fi
@@ -1628,6 +1694,46 @@ mark_docker_engine_packages() {
     "${ROOT}/state/pkg/docker-ce-cli" \
     "${ROOT}/state/pkg/containerd.io" \
     "${ROOT}/state/pkg/docker-ce-rootless-extras"
+}
+
+clear_loaded_netfilter() {
+  mkdir -p "${HOSTFS}/lib/modules/6.8.0-generic"
+  : >"${HOSTFS}/proc/modules"
+  rm -rf "${HOSTFS}/sys/module/nf_tables" "${HOSTFS}/sys/module/ip_tables"
+  : >"${HOSTFS}/lib/modules/6.8.0-generic/modules.builtin"
+}
+
+assert_no_post_netfilter_mutation() {
+  local name=$1
+  if events_match '^CMD adduser '; then
+    fail "${name}: adduser ran"
+    return 1
+  fi
+  if events_match 'CMD apt-get install .*docker-ce'; then
+    fail "${name}: docker-ce was installed" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_match '^CMD dockerd-rootless'; then
+    fail "${name}: rootless setup ran"
+    return 1
+  fi
+  if [ -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] || [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "${name}: binaries were placed"
+    return 1
+  fi
+  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    fail "${name}: unit was installed"
+    return 1
+  fi
+  if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+    fail "${name}: reported GOVERNED success"
+    return 1
+  fi
+  if grep -q -- '--skip-iptables' "${events_file}" "${stderr_file}" "${stdout_file}"; then
+    fail "${name}: mentioned or used --skip-iptables"
+    return 1
+  fi
+  return 0
 }
 
 # --- governed cases ---------------------------------------------------------
@@ -1907,6 +2013,42 @@ if assert_governed_failure "systemctl mask failure fails before Docker Engine pa
 fi
 
 new_governed_case
+clear_loaded_netfilter
+touch "${ROOT}/state/modprobe-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "nft missing module and failed modprobe fails closed"; then
+  if grep -qi 'failed to load kernel module nf_tables' "${stderr_file}"; then
+    if assert_no_post_netfilter_mutation "nft missing module and failed modprobe fails closed"; then
+      if events_match '^CMD modprobe nf_tables$'; then
+        pass "nft missing module and failed modprobe fails closed"
+      else
+        fail "nft missing module and failed modprobe fails closed: did not invoke modprobe nf_tables" "events=$(tr '\n' ' ' <"${events_file}")"
+      fi
+    fi
+  else
+    fail "nft missing module and failed modprobe fails closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+clear_loaded_netfilter
+touch "${ROOT}/state/modprobe-unverified"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "modprobe success without observable module fails closed"; then
+  if grep -qi 'returned success but the module is not loaded' "${stderr_file}"; then
+    if assert_no_post_netfilter_mutation "modprobe success without observable module fails closed"; then
+      if events_match '^CMD modprobe nf_tables$'; then
+        pass "modprobe success without observable module fails closed"
+      else
+        fail "modprobe success without observable module fails closed: did not invoke modprobe nf_tables" "events=$(tr '\n' ' ' <"${events_file}")"
+      fi
+    fi
+  else
+    fail "modprobe success without observable module fails closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
 touch "${ROOT}/state/docker-setup-fail"
 run_governed_installer --pollinator-user alice
 if assert_governed_failure "Docker setup failure cannot leave rootful daemon active"; then
@@ -2076,6 +2218,76 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   else
     fail "control-plane scaffolding is created when absent"
   fi
+  if events_match 'CMD apt-get install .*kmod' && events_match 'CMD apt-get install .*iptables'; then
+    pass "kmod and iptables are installed as netfilter prerequisites"
+  else
+    fail "kmod and iptables are installed as netfilter prerequisites" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if grep -q -- '--skip-iptables' "${events_file}"; then
+    fail "clean bootstrap used --skip-iptables" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "clean bootstrap does not pass --skip-iptables"
+  fi
+fi
+
+# --- netfilter prerequisite -------------------------------------------------
+
+new_governed_case
+clear_loaded_netfilter
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "nft missing module is loaded via modprobe"; then
+  if events_match '^CMD modprobe nf_tables$'; then
+    if grep -q '^nf_tables ' "${HOSTFS}/proc/modules" && [ -d "${HOSTFS}/sys/module/nf_tables" ]; then
+      pass "nft missing module is loaded via modprobe"
+    else
+      fail "nft missing module is loaded via modprobe: module state not observed after load" "modules=$(tr '\n' ' ' <"${HOSTFS}/proc/modules")"
+    fi
+  else
+    fail "nft missing module is loaded via modprobe: did not invoke modprobe nf_tables" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if grep -q -- '--skip-iptables' "${events_file}"; then
+    fail "nft missing-module path used --skip-iptables"
+  fi
+fi
+
+new_governed_case
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "already-loaded nf_tables is accepted"; then
+  if events_match '^CMD modprobe '; then
+    fail "already-loaded nf_tables is accepted: unnecessary modprobe" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "already-loaded nf_tables is accepted"
+  fi
+fi
+
+new_governed_case
+clear_loaded_netfilter
+printf 'kernel/net/netfilter/nf_tables.ko\n' >"${HOSTFS}/lib/modules/6.8.0-generic/modules.builtin"
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "builtin nf_tables is accepted without modprobe"; then
+  if events_match '^CMD modprobe '; then
+    fail "builtin nf_tables is accepted without modprobe: modprobe ran" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "builtin nf_tables is accepted without modprobe"
+  fi
+fi
+
+new_governed_case
+clear_loaded_netfilter
+printf 'iptables v1.8.10 (legacy)\n' >"${ROOT}/state/iptables-version"
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "legacy iptables selects ip_tables"; then
+  if events_match '^CMD modprobe ip_tables$' && ! events_match '^CMD modprobe nf_tables$'; then
+    pass "legacy iptables selects ip_tables"
+  else
+    fail "legacy iptables selects ip_tables" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+fi
+
+if grep -q -- '--skip-iptables' "${installer}"; then
+  fail "installer source never uses --skip-iptables"
+else
+  pass "installer source never uses --skip-iptables"
 fi
 
 new_governed_case

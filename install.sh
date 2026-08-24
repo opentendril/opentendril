@@ -647,8 +647,82 @@ apt_install() {
 install_prereq_packages() {
   require_cmd apt-get
   DEBIAN_FRONTEND=noninteractive apt-get update </dev/null || die "apt-get update failed"
-  apt_install ca-certificates curl git uidmap slirp4netns dbus-user-session
+  apt_install ca-certificates curl git uidmap slirp4netns dbus-user-session kmod iptables
   require_cmd curl
+  require_cmd modprobe
+  require_cmd iptables
+}
+
+# Rootless Docker's setup tool requires nf_tables unless iptables --version
+# reports the legacy backend, in which case it requires ip_tables.
+select_rootless_netfilter_module() {
+  require_cmd iptables
+  _ipt_ver=$(iptables --version </dev/null 2>/dev/null) || die "cannot read iptables --version; refusing to guess the rootless Docker netfilter module"
+  [ -n "$_ipt_ver" ] || die "iptables --version produced no output; refusing to guess the rootless Docker netfilter module"
+  netfilter_module=nf_tables
+  case "$_ipt_ver" in
+    *legacy*) netfilter_module=ip_tables ;;
+  esac
+}
+
+kernel_module_is_present() {
+  _km=$1
+  [ -n "$_km" ] || return 1
+  _proc_mods=$(cat /proc/modules 2>/dev/null) || _proc_mods=
+  if [ -n "$_proc_mods" ]; then
+    while IFS= read -r _kmline || [ -n "${_kmline:-}" ]; do
+      _kmname=${_kmline%% *}
+      if [ "$_kmname" = "$_km" ]; then
+        return 0
+      fi
+      _kmline=
+    done <<EOF
+${_proc_mods}
+EOF
+  fi
+  if fs_exists "/sys/module/${_km}"; then
+    return 0
+  fi
+  _krel=$(uname -r 2>/dev/null) || _krel=
+  if [ -n "$_krel" ]; then
+    _builtin_text=$(cat "/lib/modules/${_krel}/modules.builtin" 2>/dev/null) || _builtin_text=
+    if [ -n "$_builtin_text" ]; then
+      _kmsuffix="/${_km}.ko"
+      while IFS= read -r _bline || [ -n "${_bline:-}" ]; do
+        case "$_bline" in
+          *"${_kmsuffix}")
+            return 0
+            ;;
+        esac
+        _bline=
+      done <<EOF
+${_builtin_text}
+EOF
+    fi
+  fi
+  return 1
+}
+
+ensure_rootless_netfilter() {
+  require_cmd cat
+  require_cmd uname
+  require_cmd modprobe
+  select_rootless_netfilter_module
+  case "$netfilter_module" in
+    nf_tables|ip_tables) ;;
+    *)
+      die "internal error: unexpected netfilter module ${netfilter_module}"
+      ;;
+  esac
+  if kernel_module_is_present "$netfilter_module"; then
+    return 0
+  fi
+  if ! modprobe "$netfilter_module" </dev/null; then
+    die "failed to load kernel module ${netfilter_module} required for rootless Docker. Governed installation will not skip iptables checks or continue without it."
+  fi
+  if ! kernel_module_is_present "$netfilter_module"; then
+    die "modprobe ${netfilter_module} returned success but the module is not loaded or built-in; refusing to continue"
+  fi
 }
 
 install_docker_engine() {
@@ -963,6 +1037,7 @@ install_governed() {
   archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
   prepare_workdir governed_cleanup
   install_prereq_packages
+  ensure_rootless_netfilter
   obtain_verified_archive
   mask_rootful_docker
   ensure_tendril_principal
