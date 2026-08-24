@@ -4,11 +4,13 @@ This covers what to do **once OpenTendril is installed**: confirming the Stem is
 live, obtaining a credential, and making your first governed call.
 
 > [!IMPORTANT]
-> **Installation is not here.** It lives in
-> **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)**, which is the source of truth for what a
-> sound installation is — the properties that decide whether the delegation
-> boundary is enforced by the operating system or merely recorded, and the
-> configurations that satisfy them.
+> **Installation is not here.** If OpenTendril is not installed yet, start with
+> **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** — the short public
+> entrypoint for local/evaluation and governed installation.
+> **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** is the deeper hardened/manual
+> reference: the properties that decide whether the delegation boundary is
+> enforced by the operating system or merely recorded, and the configurations
+> that satisfy them.
 
 ---
 
@@ -64,7 +66,9 @@ command -v tendril
 - **A path is printed** — you have a **single-user** installation. Skip to
   [Single-user installations](#single-user-installations).
 
-If you are unsure which you built, `docs/GUIDE-INSTALL.md` describes both.
+If you are unsure which you have,
+[GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md) names the two postures;
+[GUIDE-INSTALL.md](GUIDE-INSTALL.md) is the detailed reference.
 
 ---
 
@@ -387,6 +391,7 @@ For the **in-process MCP path**, bind one Pollen with `TENDRIL_POLLEN`. Unset, e
 
 Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. REST and CLI use canonical identity; MCP publishes a lower-camelCase primary identifier that maps one-to-one back to that identity. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
 
+- **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** — short install entrypoint
 - **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
 - **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
 - `tendril --help` (or `sudo -u tendril -i tendril --help`) — every command
