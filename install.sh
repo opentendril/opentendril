@@ -11,10 +11,11 @@
 # tendril-mcp under the Pollinator-hosting account. Does not start an
 # unconfigured Stem.
 #
-# This script must work when supplied on stdin:
+# This script must work when supplied on stdin for LOCAL installation:
 #   curl -fsSL <release>/install.sh | sh
-#   curl -fsSL <release>/install.sh | sudo sh -s -- --governed --pollinator-user <user>
 # Do not consult $0 as a filesystem path.
+# Governed installation is invoked from an already-obtained installer:
+#   sudo sh install.sh --governed --pollinator-user <user>
 
 set -eu
 
@@ -66,7 +67,6 @@ Usage:
   curl -fsSL <url>/install.sh | sh -s -- --version <tag>
 
   sudo sh install.sh --governed --pollinator-user <user> [--version <tag>]
-  curl -fsSL <url>/install.sh | sudo sh -s -- --governed --pollinator-user <user>
 
 Options:
   --version <tag>              Pin to one GitHub Release (v0.3.0 or 0.3.0).
@@ -453,6 +453,23 @@ unit_is_enabled() {
   return 1
 }
 
+unit_is_masked() {
+  _en=$(systemctl is-enabled "$1" </dev/null 2>/dev/null) || true
+  [ "$_en" = masked ]
+}
+
+mask_rootful_docker() {
+  require_cmd systemctl
+  systemctl mask docker.service docker.socket </dev/null || die "failed to mask rootful Docker units (docker.service, docker.socket); refusing to install Docker Engine packages"
+  docker_units_guarded=1
+  if ! unit_is_masked docker.service; then
+    die "docker.service is not masked; refusing to install Docker Engine packages"
+  fi
+  if ! unit_is_masked docker.socket; then
+    die "docker.socket is not masked; refusing to install Docker Engine packages"
+  fi
+}
+
 rootful_cli_usable() {
   command -v docker >/dev/null 2>&1 || return 1
   _opts=$(DOCKER_HOST= docker info --format '{{.SecurityOptions}}' </dev/null 2>/dev/null) || return 1
@@ -637,6 +654,7 @@ install_prereq_packages() {
 install_docker_engine() {
   require_cmd apt-get
   require_cmd systemctl
+  mask_rootful_docker
   install -m 0755 -d /etc/apt/keyrings </dev/null || die "failed to create /etc/apt/keyrings"
   download_docker_gpg "${workdir}/docker.asc"
   install -m 0644 "${workdir}/docker.asc" /etc/apt/keyrings/docker.asc </dev/null || die "failed to install the Docker repository key"
@@ -651,8 +669,6 @@ Architectures: ${_arch}
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
   install -m 0644 "${workdir}/docker.sources" /etc/apt/sources.list.d/docker.sources </dev/null || die "failed to install the Docker apt source"
-  docker_units_guarded=1
-  systemctl mask docker.service docker.socket </dev/null || true
   DEBIAN_FRONTEND=noninteractive apt-get update </dev/null || die "apt-get update failed after adding the Docker repository"
   apt_install docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras
   systemctl disable --now docker.service docker.socket </dev/null || true
@@ -787,17 +803,52 @@ EOF
   systemctl daemon-reload </dev/null || die "systemctl daemon-reload failed"
 }
 
-listing_has_passwordless_stem() {
-  _listing=$1
-  case "$_listing" in
-    *NOPASSWD*)
-      case "$_listing" in
-        *'(ALL)'*|*'(ALL : ALL)'*|*'(tendril)'*|*'NOPASSWD: ALL'*|*'NOPASSWD:ALL'*)
-          return 0
-          ;;
-      esac
+nopasswd_runas_is_privileged() {
+  _runas=$1
+  _runas_user=${_runas%%:*}
+  while :; do
+    case "$_runas_user" in
+      ' '*) _runas_user=${_runas_user# } ;;
+      *) break ;;
+    esac
+  done
+  while :; do
+    case "$_runas_user" in
+      *' ') _runas_user=${_runas_user% } ;;
+      *) break ;;
+    esac
+  done
+  _runas_user=$(printf '%s' "$_runas_user" | tr 'A-Z' 'a-z')
+  case "$_runas_user" in
+    ''|all|root|"$STEM_USER"|*','*|*'%'*|*'/'*|*'!'*)
+      return 0
       ;;
   esac
+  return 1
+}
+
+sudo_listing_has_passwordless_privilege() {
+  _listing=$1
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      *NOPASSWD*)
+        case "$_line" in
+          *'('*)
+            _after=${_line#*(}
+            _runas=${_after%%)*}
+            if nopasswd_runas_is_privileged "$_runas"; then
+              return 0
+            fi
+            ;;
+          *)
+            return 0
+            ;;
+        esac
+        ;;
+    esac
+  done <<EOF
+${_listing}
+EOF
   return 1
 }
 
@@ -805,9 +856,19 @@ enforce_p2() {
   require_cmd sudo
   require_cmd visudo
   sudo -u "$pollinator_user" sudo -K </dev/null 2>/dev/null || true
-  _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>/dev/null) || _listing=
-  if listing_has_passwordless_stem "$_listing"; then
-    die "Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become ${STEM_USER}. That violates P2 (unattended escalation). Remove NOPASSWD rules that allow this account to run commands as ${STEM_USER}. Governed installation will not loosen sudo policy."
+  _listing_status=0
+  _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>&1) || _listing_status=$?
+  if [ "$_listing_status" -ne 0 ]; then
+    case "$_listing" in
+      *'not allowed to run sudo'*)
+        ;;
+      *)
+        die "failed to read sudo policy for ${pollinator_user} (sudo -l -U exited ${_listing_status}); refusing to classify the P2 posture"
+        ;;
+    esac
+  fi
+  if sudo_listing_has_passwordless_privilege "$_listing"; then
+    die "Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Remove NOPASSWD rules that allow this account to run commands as root, ${STEM_USER}, or ALL. Governed installation will not loosen sudo policy."
   fi
   case "$_listing" in
     *'not allowed to run sudo'*|'')
@@ -903,6 +964,7 @@ install_governed() {
   prepare_workdir governed_cleanup
   install_prereq_packages
   obtain_verified_archive
+  mask_rootful_docker
   ensure_tendril_principal
   install_docker_engine
   establish_rootless_docker

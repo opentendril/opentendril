@@ -1294,6 +1294,10 @@ case "\$action" in
     exit 1
     ;;
   mask)
+    if [ -f "${ROOT}/state/mask-fail" ]; then
+      printf 'Failed to mask unit\\n' >&2
+      exit 1
+    fi
     for u in "\$@"; do
       n=\$(norm "\$u")
       ${real_touch} "${ROOT}/state/masked/\$n"
@@ -1485,6 +1489,10 @@ if [ "\$kill_ts" -eq 1 ]; then
   exit 0
 fi
 if [ "\$list" -eq 1 ]; then
+  if [ -f "${ROOT}/state/sudo-l-fail" ]; then
+    printf 'sudo: unable to initialize policy plugin\\n' >&2
+    exit 1
+  fi
   ${real_cat} "${ROOT}/state/sudo-l"
   exit 0
 fi
@@ -1876,6 +1884,29 @@ if assert_governed_failure "checksum failure prevents executable placement"; the
 fi
 
 new_governed_case
+touch "${ROOT}/state/mask-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "systemctl mask failure fails before Docker Engine packages"; then
+  if events_match 'CMD apt-get install .*docker-ce'; then
+    fail "systemctl mask failure fails before Docker Engine packages: docker-ce was installed" "events=$(tr '\n' ' ' <"${events_file}")"
+  elif events_match '^CMD adduser '; then
+    fail "systemctl mask failure fails before Docker Engine packages: adduser ran" "events=$(tr '\n' ' ' <"${events_file}")"
+  elif events_match '^CMD dockerd-rootless'; then
+    fail "systemctl mask failure fails before Docker Engine packages: rootless setup ran"
+  elif events_match '^CMD visudo '; then
+    fail "systemctl mask failure fails before Docker Engine packages: visudo ran"
+  elif [ -e "${HOSTFS}/home/tendril/.local/bin/tendril" ] || [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "systemctl mask failure fails before Docker Engine packages: binaries were placed"
+  elif [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    fail "systemctl mask failure fails before Docker Engine packages: unit was installed"
+  elif grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+    fail "systemctl mask failure fails before Docker Engine packages: reported GOVERNED success"
+  else
+    pass "systemctl mask failure fails before Docker Engine packages"
+  fi
+fi
+
+new_governed_case
 touch "${ROOT}/state/docker-setup-fail"
 run_governed_installer --pollinator-user alice
 if assert_governed_failure "Docker setup failure cannot leave rootful daemon active"; then
@@ -2134,6 +2165,39 @@ if assert_governed_failure "passwordless Pollinator escalation fails governance"
   fi
   if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
     fail "passwordless Pollinator escalation reported GOVERNED success"
+  fi
+fi
+
+new_governed_case
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (root) NOPASSWD: /bin/sh
+EOF
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "indirect root NOPASSWD fails P2"; then
+  if grep -qi 'P2\|passwordless\|NOPASSWD\|root' "${stderr_file}"; then
+    if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+      fail "indirect root NOPASSWD fails P2: reported GOVERNED success"
+    else
+      pass "indirect root NOPASSWD fails P2"
+    fi
+  else
+    fail "indirect root NOPASSWD fails P2: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/sudo-l-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "unreadable sudo policy fails P2 closed"; then
+  if grep -qi 'sudo policy\|refusing to classify' "${stderr_file}"; then
+    if grep -q 'Posture:     GOVERNED' "${stdout_file}"; then
+      fail "unreadable sudo policy fails P2 closed: reported GOVERNED success"
+    else
+      pass "unreadable sudo policy fails P2 closed"
+    fi
+  else
+    fail "unreadable sudo policy fails P2 closed: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
   fi
 fi
 
