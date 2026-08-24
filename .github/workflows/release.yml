@@ -96,10 +96,16 @@ jobs:
       # Each platform archive contains two independently built executables
       # from the root Go module:
       #   ./cmd/stem        -> tendril      (full Stem/operator executable)
-      #   ./cmd/tendril-mcp -> tendril-mcp  (restricted Pollinator-side MCP bridge)
+      #   ./cmd/tendril-mcp -> tendril-mcp  (restricted governed Pollinator bridge)
       # They are not interchangeable and must not be copied or renamed into
       # each other. Archives contain only those two files — not the source
       # tree, scripts, Docker Compose files, or Greenhouse.
+      #
+      # install.sh is staged from the tracked first-party installer. Do not
+      # generate or maintain a second installer implementation. The staged
+      # bytes must match the tracked file. checksums.txt covers the four
+      # archives and install.sh. GitHub Release remains the terminal public
+      # distribution surface.
       - name: Build platform archives
         shell: bash
         run: |
@@ -130,6 +136,12 @@ jobs:
               exit 1
             fi
           done
+          test -f install.sh
+          cp install.sh dist/install.sh
+          if ! cmp -s install.sh dist/install.sh; then
+            echo "staged dist/install.sh is not byte-identical to tracked install.sh"
+            exit 1
+          fi
           (
             cd dist
             sha256sum \
@@ -137,8 +149,74 @@ jobs:
               opentendril-linux-arm64.tar.gz \
               opentendril-darwin-amd64.tar.gz \
               opentendril-darwin-arm64.tar.gz \
+              install.sh \
               > checksums.txt
           )
+          if ! cmp -s install.sh dist/install.sh; then
+            echo "checksum generation mutated staged install.sh"
+            exit 1
+          fi
+          want_assets="$(printf '%s\n' \
+            checksums.txt \
+            install.sh \
+            opentendril-darwin-amd64.tar.gz \
+            opentendril-darwin-arm64.tar.gz \
+            opentendril-linux-amd64.tar.gz \
+            opentendril-linux-arm64.tar.gz)"
+          got_assets="$(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
+          if [ "${got_assets}" != "${want_assets}" ]; then
+            echo "release staging does not contain exactly the intended assets:"
+            printf '%s\n' "${got_assets}"
+            exit 1
+          fi
+          want_checksums="$(printf '%s\n' \
+            install.sh \
+            opentendril-darwin-amd64.tar.gz \
+            opentendril-darwin-arm64.tar.gz \
+            opentendril-linux-amd64.tar.gz \
+            opentendril-linux-arm64.tar.gz)"
+          checksum_lines="$(wc -l < dist/checksums.txt | tr -d '[:space:]')"
+          if [ "${checksum_lines}" != "5" ]; then
+            echo "checksums.txt must contain exactly 5 SHA-256 entries (got ${checksum_lines}):"
+            cat dist/checksums.txt
+            exit 1
+          fi
+          if grep -Ev '^[0-9a-f]{64}  (opentendril-(linux|darwin)-(amd64|arm64)\.tar\.gz|install\.sh)$' dist/checksums.txt | grep -q .; then
+            echo "checksums.txt contains a line that is not a SHA-256 entry for an intended asset:"
+            cat dist/checksums.txt
+            exit 1
+          fi
+          got_checksums="$(awk '{print $2}' dist/checksums.txt | sort)"
+          if [ "${got_checksums}" != "${want_checksums}" ]; then
+            echo "checksums.txt does not name exactly the intended assets:"
+            cat dist/checksums.txt
+            exit 1
+          fi
+          (
+            cd dist
+            sha256sum -c checksums.txt
+          )
+          # Publication uses the files: list, not "everything in dist/".
+          # Fail closed if Create Release inputs drift from the staged set.
+          for asset in \
+            opentendril-linux-amd64.tar.gz \
+            opentendril-linux-arm64.tar.gz \
+            opentendril-darwin-amd64.tar.gz \
+            opentendril-darwin-arm64.tar.gz \
+            install.sh \
+            checksums.txt
+          do
+            if ! grep -q "^            dist/${asset}$" .github/workflows/release.yml; then
+              echo "Create Release files: list is missing dist/${asset}"
+              exit 1
+            fi
+          done
+          publish_count="$(grep -c '^            dist/' .github/workflows/release.yml || true)"
+          if [ "${publish_count}" != "6" ]; then
+            echo "Create Release files: list must name exactly 6 dist/ assets (got ${publish_count})"
+            grep -n '^            dist/' .github/workflows/release.yml || true
+            exit 1
+          fi
 
       - name: Recheck remote main and intended tag before public mutation
         id: pretag
@@ -184,26 +262,29 @@ jobs:
             dist/opentendril-linux-arm64.tar.gz
             dist/opentendril-darwin-amd64.tar.gz
             dist/opentendril-darwin-arm64.tar.gz
+            dist/install.sh
             dist/checksums.txt
           body: |
             ## OpenTendril ${{ needs.bind.outputs.intended-tag }}
 
             Self-hosted AI coding assistant. Point it at any project. Talk to it. It reads, edits, and commits.
 
-            Install from the platform archive for your machine. The installation guide is `docs/GUIDE-INSTALL.md` in this repository; follow that document rather than improvising from this release text.
+            `install.sh` is the installation entrypoint. It is not the Stem and it is not the Pollinator bridge.
 
-            Each archive contains two distinct executables:
+            Each platform archive contains two distinct executables:
             - `tendril` — the full Stem/operator executable
-            - `tendril-mcp` — the restricted Pollinator-side MCP bridge
+            - `tendril-mcp` — the restricted governed Pollinator bridge
 
             They are not interchangeable. A governed Pollinator uses `tendril-mcp`, not a copy of `tendril`.
 
-            Verify downloaded archives against `checksums.txt` (SHA-256) before installing.
+            Verify `install.sh` and the downloaded archives against `checksums.txt` (SHA-256) before installing. The installation guide is `docs/GUIDE-INSTALL.md` in this repository; follow that document rather than improvising from this release text.
 
-            ### Archives
-            | Platform | Archive |
-            |----------|---------|
-            | Linux x86_64 | `opentendril-linux-amd64.tar.gz` |
-            | Linux ARM64 | `opentendril-linux-arm64.tar.gz` |
-            | macOS Intel | `opentendril-darwin-amd64.tar.gz` |
-            | macOS Apple Silicon | `opentendril-darwin-arm64.tar.gz` |
+            ### Release assets
+            | Asset | Purpose |
+            |-------|---------|
+            | `install.sh` | installation entrypoint |
+            | `opentendril-linux-amd64.tar.gz` | Linux x86_64 (`tendril` and `tendril-mcp`) |
+            | `opentendril-linux-arm64.tar.gz` | Linux ARM64 (`tendril` and `tendril-mcp`) |
+            | `opentendril-darwin-amd64.tar.gz` | macOS Intel (`tendril` and `tendril-mcp`) |
+            | `opentendril-darwin-arm64.tar.gz` | macOS Apple Silicon (`tendril` and `tendril-mcp`) |
+            | `checksums.txt` | SHA-256 of `install.sh` and the four platform archives |
