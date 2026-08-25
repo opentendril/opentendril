@@ -69,13 +69,18 @@ authorizes observation without authorizing execution.
 Current view:
 
 - **`sprout.watch`** — authorizes watching a Phytomer's run records, persisted
-  events, and live stream. Defined as `CapSproutWatch` in the registry
-  constants, with a doc comment stating it is deliberately absent from
+  events, live stream, and the headless current-state watch at
+  `GET /v1/phytomers/{phytomerId}/watch`. Defined as `CapSproutWatch` in the
+  registry constants, with a doc comment stating it is deliberately absent from
   `CapabilityNames()` and the parity registry. Because it is not in
   `CapabilityNames()`, the parity test never evaluates it. Its own
   authorization semantics are exercised in `watch_test.go`, which verifies
   that a delegated caller must hold a `sprout.watch` grant for every Substrate
-  targeted by a Phytomer's runs.
+  targeted by a Phytomer's runs. A Seed-owned Phytomer is observable under this
+  same rule even before the first Sprout exists. The watch view emits current
+  safe state immediately as Server-Sent Events and follows that Phytomer until
+  the associated Seed is terminal; it does not accept Fruit and does not grant
+  `seed.grow`. There is no `seed.watch` operation-class.
 
 ### Control-plane operations
 
@@ -301,7 +306,12 @@ controlled aperture in the isolation wall).
 
 ### Seed
 
-Grow a Seed — activate a product-level goal.
+Grow a Seed — activate a product-level goal. Each Seed growth has one canonical
+Phytomer execution context. The Seed handle and Phytomer ID are distinct:
+dispatch and collection use the handle (`seed.grow`); observation of that
+growth uses the Phytomer ID under `sprout.watch`. Observation does not execute
+the Seed and does not accept Fruit. `seed.grow` and `sprout.watch` remain
+separately grantable.
 
 ### Git
 

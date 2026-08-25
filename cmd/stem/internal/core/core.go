@@ -77,6 +77,10 @@ type Core interface {
 	PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error)
 	GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error)
 	OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error)
+	// ObservePhytomer is the transport-free current-state view of one
+	// Seed-owned Phytomer. It is not a governed Pollinator command. Safety
+	// projection — which persisted fields may be released — is owned here.
+	ObservePhytomer(ctx context.Context, phytomerID string) (PhytomerObservation, error)
 	// Git family: commit a substrate's workspace under its configured commit
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.
@@ -197,6 +201,7 @@ type Service struct {
 	git        GitOperations
 
 	seedPersist   SeedPersistence
+	observation   PhytomerObservationSource
 	seedMu        sync.Mutex
 	preparedSeeds map[string]*preparedSeed
 	// newPreparedSeedToken, when set, replaces crypto/rand token minting.

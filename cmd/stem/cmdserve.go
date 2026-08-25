@@ -248,6 +248,7 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithStoma(stomaOperations()).
 		WithSeed(seedOperations(history, bus)).
 		WithSeedPersistence(seedPersistence(history)).
+		WithPhytomerObservationSource(phytomerObservationSource(history)).
 		WithGit(gitOperations())
 
 	meshServer := mesh.NewServer(resolveRepoRoot(""))

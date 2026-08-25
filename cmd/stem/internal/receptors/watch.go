@@ -1,19 +1,25 @@
 package receptors
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 )
 
 // WatchAuthority decides who may observe a phytomer — its stored run records,
-// its persisted events, and its live stream. All three surfaces route through
-// this one type, because three copies of an ownership rule are three rules, and
-// the widening this exists to prevent would appear in whichever copy was
-// forgotten.
+// its persisted events, its live stream, and the headless current-state watch.
+// All of those surfaces route through this one type, because copies of an
+// ownership rule are extra rules, and the widening this exists to prevent
+// would appear in whichever copy was forgotten.
 //
 // Two subjects reach it. The operator holds the Stem's own key and no Pollen:
 // it is scoped to nothing and keeps the whole view it has always had. A
@@ -68,46 +74,64 @@ func (a *WatchAuthority) Observer(w http.ResponseWriter, r *http.Request) (polle
 // entirely the observer's or it is not the observer's at all — and a phytomer
 // nothing was ever dispatched into belongs to nobody, which denies.
 func (a *WatchAuthority) AuthorizePhytomer(w http.ResponseWriter, r *http.Request, pollen, sessionID string) bool {
+	if err := a.checkPhytomer(r.Context(), pollen, sessionID); err != nil {
+		writeWatchAuthError(w, err)
+		return false
+	}
+	return true
+}
+
+type watchAuthError struct {
+	status int
+	msg    string
+}
+
+func (e watchAuthError) Error() string { return e.msg }
+
+func writeWatchAuthError(w http.ResponseWriter, err error) {
+	var authErr watchAuthError
+	if errors.As(err, &authErr) {
+		http.Error(w, authErr.msg, authErr.status)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (a *WatchAuthority) checkPhytomer(ctx context.Context, pollen, sessionID string) error {
 	store := a.store()
 	if store == nil {
-		http.Error(w, "delegation denied: no run record is available to establish ownership", http.StatusForbidden)
-		return false
+		return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: no run record is available to establish ownership"}
 	}
 
 	sessionID = strings.TrimSpace(sessionID)
-	seed, hasSeed, err := store.GetSeedRunByPhytomer(r.Context(), sessionID)
+	seed, hasSeed, err := store.GetSeedRunByPhytomer(ctx, sessionID)
 	if err != nil {
-		http.Error(w, "failed to read seed ownership: "+err.Error(), http.StatusInternalServerError)
-		return false
+		return watchAuthError{status: http.StatusInternalServerError, msg: "failed to read seed ownership: " + err.Error()}
 	}
 
-	owners, err := store.SproutRunOwners(r.Context(), sessionID)
+	owners, err := store.SproutRunOwners(ctx, sessionID)
 	if err != nil {
-		http.Error(w, "failed to read run ownership: "+err.Error(), http.StatusInternalServerError)
-		return false
+		return watchAuthError{status: http.StatusInternalServerError, msg: "failed to read run ownership: " + err.Error()}
 	}
 
 	if hasSeed {
 		if seed.Pollen != pollen {
-			http.Error(w, "delegation denied: this phytomer carries a run dispatched by another subject", http.StatusForbidden)
-			return false
+			return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: this phytomer carries a run dispatched by another subject"}
 		}
 		if !seedSproutOwnershipAgrees(seed, owners) {
-			http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
-			return false
+			return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: seed and sprout ownership evidence disagree"}
 		}
-		return a.authorizeSubstrates(w, pollen, []string{seed.Substrate})
+		return a.checkSubstrates(pollen, []string{seed.Substrate})
 	}
 
 	substrates := make([]string, 0, len(owners))
 	for _, owner := range owners {
 		if owner.Pollen != pollen {
-			http.Error(w, "delegation denied: this phytomer carries a run dispatched by another subject", http.StatusForbidden)
-			return false
+			return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: this phytomer carries a run dispatched by another subject"}
 		}
 		substrates = append(substrates, owner.Substrate)
 	}
-	return a.authorizeSubstrates(w, pollen, substrates)
+	return a.checkSubstrates(pollen, substrates)
 }
 
 // AuthorizeRuns releases the subset of a phytomer's run records that the
@@ -215,9 +239,16 @@ func (a *WatchAuthority) StreamMiddleware(next http.HandlerFunc) http.HandlerFun
 // not cover it. An empty set means the observer dispatched nothing here and is
 // refused before any grant is consulted.
 func (a *WatchAuthority) authorizeSubstrates(w http.ResponseWriter, pollen string, substrates []string) bool {
-	if len(substrates) == 0 {
-		http.Error(w, "delegation denied: nothing in this phytomer was dispatched by Pollen \""+pollen+"\"", http.StatusForbidden)
+	if err := a.checkSubstrates(pollen, substrates); err != nil {
+		writeWatchAuthError(w, err)
 		return false
+	}
+	return true
+}
+
+func (a *WatchAuthority) checkSubstrates(pollen string, substrates []string) error {
+	if len(substrates) == 0 {
+		return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: nothing in this phytomer was dispatched by Pollen \"" + pollen + "\""}
 	}
 	for _, substrate := range substrates {
 		decision := a.gate().Authorize(core.DelegationRequest{
@@ -227,9 +258,167 @@ func (a *WatchAuthority) authorizeSubstrates(w http.ResponseWriter, pollen strin
 			Impact:         core.CapabilityImpact(core.CapSproutWatch),
 		})
 		if !decision.Authorized {
-			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
-			return false
+			return watchAuthError{status: http.StatusForbidden, msg: "delegation denied: " + decision.Reason}
 		}
 	}
-	return true
+	return nil
+}
+
+const defaultPhytomerWatchPoll = 250 * time.Millisecond
+
+func (h *SessionsHandler) phytomerWatchPoll() time.Duration {
+	if h != nil && h.watchPoll > 0 {
+		return h.watchPoll
+	}
+	return defaultPhytomerWatchPoll
+}
+
+// phytomerWatch is the headless current-state observation view:
+// GET /v1/phytomers/{sessionId}/watch
+//
+// Authorization is the existing sprout.watch phytomer rule. The REST adapter
+// authenticates, authorizes, routes, invokes Core.ObservePhytomer, and frames
+// the result as Server-Sent Events. Current durable state is authoritative;
+// EventBus wakeups and a bounded poll only prompt a re-read. Safe-field
+// selection and Sprout ordering live in Core, not here.
+func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) {
+	if h.history == nil {
+		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		return
+	}
+
+	sessionID := strings.TrimSpace(r.PathValue("sessionId"))
+	pollen, ok := h.watch.Observer(w, r)
+	if !ok {
+		return
+	}
+	if pollen != "" && !h.watch.AuthorizePhytomer(w, r, pollen, sessionID) {
+		return
+	}
+	if h.core == nil {
+		writePhytomerObservationErr(w, core.ErrPhytomerObservationNotWired)
+		return
+	}
+
+	obs, err := h.core.ObservePhytomer(r.Context(), sessionID)
+	if err != nil {
+		writePhytomerObservationErr(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	ctx := r.Context()
+	wake := make(chan struct{}, 1)
+	unsub := h.subscribePhytomerWake(sessionID, wake)
+	defer unsub()
+
+	ticker := time.NewTicker(h.phytomerWatchPoll())
+	defer ticker.Stop()
+
+	var last string
+	emit := func(current core.PhytomerObservation) (stop bool) {
+		payload, err := json.Marshal(current)
+		if err != nil {
+			return true
+		}
+		encoded := string(payload)
+		if encoded == last {
+			return core.SeedStatusIsTerminal(current.Status)
+		}
+		last = encoded
+		if err := writeSSE(w, "observation", payload); err != nil {
+			return true
+		}
+		return core.SeedStatusIsTerminal(current.Status)
+	}
+
+	if emit(obs) {
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-wake:
+		case <-ticker.C:
+		}
+
+		if pollen != "" {
+			if err := h.watch.checkPhytomer(ctx, pollen, sessionID); err != nil {
+				_ = writeSSE(w, "error", []byte(`{"error":"delegation denied"}`))
+				return
+			}
+		}
+
+		current, err := h.core.ObservePhytomer(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+				_ = writeSSE(w, "error", []byte(`{"error":"observation closed"}`))
+			}
+			return
+		}
+		if emit(current) {
+			return
+		}
+	}
+}
+
+func writePhytomerObservationErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, core.ErrPhytomerObservationNotFound) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, core.ErrPhytomerObservationNotWired) {
+		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		return
+	}
+	if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func (h *SessionsHandler) subscribePhytomerWake(sessionID string, wake chan struct{}) func() {
+	if h == nil || h.bus == nil {
+		return func() {}
+	}
+	types := []eventbus.EventType{
+		eventbus.EventSproutEmerged,
+		eventbus.EventSproutMatured,
+		eventbus.EventSproutWithered,
+		eventbus.EventMycorrhizalRequestBegun,
+		eventbus.EventToolInvoked,
+		eventbus.EventSproutDetached,
+	}
+	unsubs := make([]func(), 0, len(types))
+	for _, typ := range types {
+		unsubs = append(unsubs, h.bus.Subscribe(typ, func(ev eventbus.Event) {
+			if ev.SessionID != sessionID {
+				return
+			}
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}))
+	}
+	return func() {
+		for _, unsub := range unsubs {
+			unsub()
+		}
+	}
+}
+
+func writeSSE(w http.ResponseWriter, event string, data []byte) error {
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	return http.NewResponseController(w).Flush()
 }

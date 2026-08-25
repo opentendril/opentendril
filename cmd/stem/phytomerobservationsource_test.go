@@ -1,0 +1,62 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
+)
+
+func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	hostile := "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT"
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-hostile", Pollen: "claude", PhytomerID: "tendril-hostile",
+		Substrate: "myrepo", Status: "withered", Goal: "PRIVATE_PROMPT_CONTENT",
+		Diff: "internal path /home/operator/private", Logs: "Authorization: Bearer secret-token",
+		Error: hostile, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{
+		RunID: "run-hostile", SessionID: "tendril-hostile", StepID: "run-hostile",
+		Pollen: "claude", Substrate: "myrepo", Status: "withered",
+		Transcript: "private reasoning", Output: "chain-of-thought hidden",
+		Error: "Authorization: Bearer secret-token", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record sprout: %v", err)
+	}
+
+	src := phytomerObservationSource(store)
+	seed, found, err := src.SeedByPhytomer(context.Background(), "tendril-hostile")
+	if err != nil || !found {
+		t.Fatalf("seed evidence found=%v err=%v", found, err)
+	}
+	if seed.Error != hostile || seed.Goal == "" || seed.Diff == "" || seed.Logs == "" {
+		t.Fatalf("source dropped seed evidence Core must refuse: %+v", seed)
+	}
+	sprouts, err := src.SproutsByPhytomer(context.Background(), "tendril-hostile")
+	if err != nil || len(sprouts) != 1 {
+		t.Fatalf("sprout evidence = %d err=%v", len(sprouts), err)
+	}
+	if sprouts[0].Transcript == "" || sprouts[0].Output == "" || sprouts[0].Error == "" {
+		t.Fatalf("source dropped sprout evidence Core must refuse: %+v", sprouts[0])
+	}
+	if sprouts[0].Pollen != "claude" || sprouts[0].Substrate != "myrepo" {
+		t.Fatalf("source dropped sprout ownership evidence: %+v", sprouts[0])
+	}
+}
+
+func TestPhytomerObservationSourceNilHistoryIsUnwired(t *testing.T) {
+	src := phytomerObservationSource(nil)
+	if src.SeedByPhytomer != nil || src.SproutsByPhytomer != nil {
+		t.Fatal("nil history still wired an observation source")
+	}
+}

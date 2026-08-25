@@ -21,17 +21,22 @@ import (
 // The six governed capabilities (see core.CapabilityNames) route through the
 // transport-free core.Core; this handler only translates HTTP↔core and holds
 // no business logic for them. The manager/history/bus references remain for the
-// ungoverned read routes (events, sprout-runs) and the async sequence trigger,
-// which are follow-up capabilities not yet part of the parity registry.
+// ungoverned read routes (events, sprout-runs, watch) and the async sequence
+// trigger, which are follow-up capabilities not yet part of the parity registry.
 type SessionsHandler struct {
 	core    core.Core
 	manager *session.Manager
 	history *historydb.Store
 	bus     *eventbus.Bus
-	// watch decides who may observe a phytomer's events and run records. A nil
-	// authority denies every delegated observer and leaves the operator's view
-	// unchanged.
+	// watch decides who may observe a phytomer's events, run records, and
+	// headless current-state watch. A nil authority denies every delegated
+	// observer and leaves the operator's view unchanged.
 	watch *WatchAuthority
+	// watchPoll is the bounded interval used to re-read durable current state
+	// while a phytomer watch is open. Zero selects the default. EventBus
+	// wakeups can prompt a re-read sooner; this interval is the fallback so
+	// Seed settlement is not missed when no event is published.
+	watchPoll time.Duration
 	// registered accumulates the governed capability names actually mounted by
 	// Register, so Capabilities() reflects the wired routes (not the canonical
 	// list) — the independence the parity coverage test relies on.
@@ -145,6 +150,7 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 	for pattern, handler := range map[string]http.HandlerFunc{
 		"GET /v1/phytomers/{sessionId}/events":      h.events,
 		"GET /v1/phytomers/{sessionId}/sprout-runs": h.sproutRuns,
+		"GET /v1/phytomers/{sessionId}/watch":       h.phytomerWatch,
 	} {
 		mux.HandleFunc(pattern, observeAuth(handler))
 		mux.HandleFunc(sessionAlias(pattern), observeAuth(handler))
