@@ -70,6 +70,7 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 
 	res, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 3,
+		SessionID: "tendril-seed-one",
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
@@ -102,6 +103,7 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 
 	res, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: repo, Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 3,
+		SessionID: "tendril-seed-exhausted",
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
@@ -136,6 +138,7 @@ func TestRunSeedWitheredOnBuildError(t *testing.T) {
 
 	res, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 3,
+		SessionID: "tendril-seed-withered",
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
@@ -162,6 +165,7 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 
 	res, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 3,
+		SessionID: "tendril-seed-verify-infra",
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
@@ -181,7 +185,190 @@ func TestRunSeedRequiresGitSubstrate(t *testing.T) {
 
 	if _, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: dir, Goal: "g", Verify: []string{"true"}, MaxIterations: 2,
+		SessionID: "tendril-seed-nongit",
 	}); err == nil {
 		t.Fatal("a non-git substrate was accepted; seed.grow needs a branch + diff")
 	}
+}
+
+func TestRunSeedRequiresPhytomer(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	if _, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "g", Verify: []string{"true"}, MaxIterations: 1,
+	}); err == nil {
+		t.Fatal("a sessionless Seed was accepted")
+	}
+}
+
+func TestRunSeedIterationsShareOnePhytomer(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var seen []string
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		seen = append(seen, orch.SessionID)
+		if !localBranchExists(orch.Substrate, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, orch.Substrate, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "ok"}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "still failing", false, nil
+	}
+
+	const phytomer = "tendril-seed-shared"
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 3,
+		SessionID: phytomer,
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Iterations != 3 || len(seen) != 3 {
+		t.Fatalf("iterations=%d builds=%d, want 3/3", res.Iterations, len(seen))
+	}
+	for i, id := range seen {
+		if id != phytomer {
+			t.Fatalf("iteration %d sessionID = %q, want %q", i+1, id, phytomer)
+		}
+	}
+}
+
+func TestTwoSeedsUseDistinctPhytomers(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	seedBuildFn = fakeBuild(new([]string))
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	first, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "one", Verify: []string{"true"}, MaxIterations: 1,
+		SessionID: "tendril-seed-a",
+	})
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "two", Verify: []string{"true"}, MaxIterations: 1,
+		SessionID: "tendril-seed-b",
+	})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if first.Status != SeedStatusSatisfied || second.Status != SeedStatusSatisfied {
+		t.Fatalf("statuses = %q / %q", first.Status, second.Status)
+	}
+}
+
+func TestPrepareSproutRunsBeforeTerrariumWork(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var order []string
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		order = append(order, "build:"+orch.StepID)
+		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	_, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "g", Verify: []string{"true"}, MaxIterations: 2,
+		SessionID: "tendril-seed-prep",
+		PrepareSprout: func(_ context.Context, orch *DockerOrchestrator, iteration int) error {
+			orch.StepID = "iter-" + itoa(iteration)
+			order = append(order, "prep:"+orch.StepID)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if len(order) < 2 || order[0] != "prep:iter-1" || order[1] != "build:iter-1" {
+		t.Fatalf("order = %v, want prep before build", order)
+	}
+}
+
+func TestSeedFruitCommitIsNotInventedFromUnchangedBranch(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	seedBuildFn = fakeBuild(new([]string))
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "g", Verify: []string{"true"}, MaxIterations: 1,
+		SessionID: "tendril-seed-nochange",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Branch == "" {
+		t.Fatal("expected a reviewable seed branch even when unchanged")
+	}
+	if res.Commit != "" {
+		t.Fatalf("invented commit %q from a no-change seed branch", res.Commit)
+	}
+}
+
+func TestSeedFruitCommitIsTheBranchTipWhenWorkExists(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		if !localBranchExists(orch.Substrate, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, orch.Substrate, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		if _, err := runGitCommand(ctx, orch.Substrate, "checkout", orch.SubstrateBranch); err != nil {
+			return SproutRunReport{}, err
+		}
+		path := filepath.Join(orch.Substrate, "fruit.txt")
+		if err := os.WriteFile(path, []byte("grown\n"), 0o644); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, orch.Substrate, "add", "fruit.txt"); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, orch.Substrate, "commit", "-m", "seed fruit"); err != nil {
+			return SproutRunReport{}, err
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "g", Verify: []string{"true"}, MaxIterations: 1,
+		SessionID: "tendril-seed-fruit",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Commit == "" {
+		t.Fatal("expected the real Fruit commit SHA")
+	}
+	tip, err := runGitCommand(context.Background(), repo, "rev-parse", res.Branch)
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	if res.Commit != strings.TrimSpace(tip) {
+		t.Fatalf("commit = %q, want branch tip %q", res.Commit, strings.TrimSpace(tip))
+	}
+	head, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("rev-parse main: %v", err)
+	}
+	if res.Commit == strings.TrimSpace(head) {
+		t.Fatal("Fruit commit was the pre-run HEAD")
+	}
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }

@@ -145,7 +145,7 @@ func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
 	// Egress is grant material: it has no JSON surface on the input type, so the
 	// decode above can never have populated it. It is set below — and only below
 	// — from an authorized delegation grant.
-	_, egress, ok := h.authorizeSeed(w, r, req.Substrate)
+	pollen, egress, ok := h.authorizeSeed(w, r, req.Substrate)
 	if !ok {
 		return
 	}
@@ -153,6 +153,7 @@ func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
 	result, err := h.core.SeedGrow(r.Context(), req)
 	if err != nil {
@@ -178,30 +179,34 @@ func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
+
+	growth, err := h.core.PrepareSeed(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	req.PhytomerID = growth.PhytomerID
 
 	handle := fmt.Sprintf("seed-%d", time.Now().UTC().UnixNano())
 	started := time.Now().UTC()
-	if h.history != nil {
-		_ = h.history.RecordSeedRun(r.Context(), historydb.SeedRun{
-			Handle:    handle,
-			Pollen:    pollen,
-			Substrate: strings.TrimSpace(req.Substrate),
-			Goal:      strings.TrimSpace(req.Goal),
-			Status:    "running",
-			StartedAt: started,
-		})
+	opening := historydb.SeedRun{
+		Handle:     handle,
+		Pollen:     pollen,
+		PhytomerID: growth.PhytomerID,
+		Substrate:  strings.TrimSpace(req.Substrate),
+		Goal:       strings.TrimSpace(req.Goal),
+		Status:     "running",
+		StartedAt:  started,
+	}
+	if err := recordSeedRunFn(r.Context(), h.history, opening); err != nil {
+		http.Error(w, "failed to persist seed ownership: "+err.Error(), http.StatusServiceUnavailable)
+		return
 	}
 
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
-		record := historydb.SeedRun{
-			Handle:     handle,
-			Pollen:     pollen,
-			Substrate:  strings.TrimSpace(req.Substrate),
-			Goal:       strings.TrimSpace(req.Goal),
-			StartedAt:  started,
-			FinishedAt: time.Now().UTC(),
-		}
+		record := opening
 		result, err := h.core.SeedGrow(bgCtx, req)
 		if err != nil {
 			record.Status = "withered"
@@ -209,17 +214,30 @@ func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 		} else {
 			record.Status = result.Status
 			record.Iterations = result.Iterations
+			record.PhytomerID = result.PhytomerID
 			record.Branch = result.Branch
+			record.Commit = result.Commit
 			record.Diff = result.Diff
 			record.Logs = result.Logs
 		}
 		record.FinishedAt = time.Now().UTC()
-		if h.history != nil {
-			_ = h.history.RecordSeedRun(bgCtx, record)
-		}
+		_ = recordSeedRunFn(bgCtx, h.history, record)
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"handle": handle, "status": "running"})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"handle":     handle,
+		"phytomerId": growth.PhytomerID,
+		"status":     "running",
+	})
+}
+
+// recordSeedRunFn persists one Seed run. The opening write is the dispatch
+// ownership contract: a failure here must not be reported as 202 Accepted.
+var recordSeedRunFn = func(ctx context.Context, store *historydb.Store, run historydb.SeedRun) error {
+	if store == nil {
+		return fmt.Errorf("seed run history is not available")
+	}
+	return store.RecordSeedRun(ctx, run)
 }
 
 // collect returns the reviewable Fruit for a dispatched growth by handle. It is

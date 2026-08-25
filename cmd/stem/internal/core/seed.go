@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // The seed/grow capability family: grow a Seed — a bounded, well-specified
@@ -77,6 +79,10 @@ type SeedGrowInput struct {
 	// after the delegation authorizer has matched a grant, so no transport
 	// input can ever widen egress (deny-all remains the default).
 	Egress []string `json:"-"`
+	// PhytomerID reuses an already-opened Seed Phytomer. It has no JSON
+	// surface: a caller cannot name the execution context. The Stem sets this
+	// after PrepareSeed so async dispatch and the later grow share one identity.
+	PhytomerID string `json:"-"`
 }
 
 // SeedSpec is the fully resolved, transport-free Seed handed to the
@@ -91,6 +97,15 @@ type SeedSpec struct {
 	// Egress is the grant-supplied allow-list bounding Stem-mediated reach;
 	// empty means deny-all.
 	Egress []string
+	// PhytomerID is the Stem-created canonical Phytomer for this Seed growth.
+	PhytomerID string
+}
+
+// SeedGrowth is the Stem-owned lifecycle envelope for one Seed: the canonical
+// Phytomer identity plus the resolved spec. It is not a governed capability.
+type SeedGrowth struct {
+	PhytomerID string
+	Spec       SeedSpec
 }
 
 // SeedGrowResult is the reviewable outcome of a grown Seed — the Fruit the
@@ -100,8 +115,14 @@ type SeedGrowResult struct {
 	Status string `json:"status"`
 	// Iterations is how many build/verify passes ran.
 	Iterations int `json:"iterations"`
+	// PhytomerID is the Stem-created execution/observation identity for this
+	// Seed growth. It is distinct from the async Seed handle.
+	PhytomerID string `json:"phytomerId"`
 	// Branch is the reconciled branch the work landed on, for review.
 	Branch string `json:"branch,omitempty"`
+	// Commit is the independently identifiable Fruit commit SHA when Seed
+	// execution actually produced one. Empty when the branch has no Seed change.
+	Commit string `json:"commit,omitempty"`
 	// Diff is the unified diff of the work, carried home for review (Phloem).
 	Diff string `json:"diff,omitempty"`
 	// Logs is the captured transcript/verify output (Xylem).
@@ -126,30 +147,58 @@ func (s *Service) WithSeed(operations SeedOperations) *Service {
 	return s
 }
 
-// SeedGrow validates the request and grows the Seed via the injected execution
-// port. Bounds are clamped to Stem-owned caps here, so a caller can only ever
-// narrow — never widen — what a grant already permits.
+// PrepareSeed validates the request and establishes exactly one canonical
+// Phytomer for the Seed growth. Sync SeedGrow and async dispatch share this
+// path so they cannot mint separate identities.
+func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error) {
+	spec, err := resolveSeedSpec(in)
+	if err != nil {
+		return SeedGrowth{}, err
+	}
+	spec, err = s.bindSeedPhytomer(ctx, spec, in.PhytomerID)
+	if err != nil {
+		return SeedGrowth{}, err
+	}
+	return SeedGrowth{PhytomerID: spec.PhytomerID, Spec: spec}, nil
+}
+
+// SeedGrow validates the request, establishes the canonical Phytomer, and
+// grows the Seed via the injected execution port. Bounds are clamped to
+// Stem-owned caps here, so a caller can only ever narrow — never widen — what
+// a grant already permits.
 func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error) {
 	if s.seed.Run == nil {
 		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
 	}
+	growth, err := s.PrepareSeed(ctx, in)
+	if err != nil {
+		return SeedGrowResult{}, err
+	}
+	result, err := s.seed.Run(ctx, growth.Spec)
+	if result.PhytomerID == "" {
+		result.PhytomerID = growth.PhytomerID
+	}
+	return result, err
+}
+
+func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
 	if strings.TrimSpace(in.Substrate) == "" {
-		return SeedGrowResult{}, fmt.Errorf("substrate is required")
+		return SeedSpec{}, fmt.Errorf("substrate is required")
 	}
 	if strings.TrimSpace(in.Goal) == "" {
-		return SeedGrowResult{}, fmt.Errorf("goal is required (the intent handed to the builder)")
+		return SeedSpec{}, fmt.Errorf("goal is required (the intent handed to the builder)")
 	}
 	// Argument tokens pass through verbatim (a token may legitimately carry
 	// whitespace); only the executable token must be non-blank.
 	verify := append([]string(nil), in.Verify...)
 	if len(verify) == 0 || strings.TrimSpace(verify[0]) == "" {
-		return SeedGrowResult{}, fmt.Errorf("verify is required (an argv vector whose exit-0 defines success)")
+		return SeedSpec{}, fmt.Errorf("verify is required (an argv vector whose exit-0 defines success)")
 	}
 	if in.MaxIterations < 0 {
-		return SeedGrowResult{}, fmt.Errorf("maxIterations must not be negative")
+		return SeedSpec{}, fmt.Errorf("maxIterations must not be negative")
 	}
 	if in.TimeoutSeconds < 0 {
-		return SeedGrowResult{}, fmt.Errorf("timeoutSeconds must not be negative")
+		return SeedSpec{}, fmt.Errorf("timeoutSeconds must not be negative")
 	}
 
 	maxIterations := seedDefaultMaxIterations
@@ -168,7 +217,7 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 		timeout = seedMaximumTimeout
 	}
 
-	spec := SeedSpec{
+	return SeedSpec{
 		Substrate:     strings.TrimSpace(in.Substrate),
 		Goal:          strings.TrimSpace(in.Goal),
 		Verify:        verify,
@@ -176,8 +225,29 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 		Timeout:       timeout,
 		Origin:        in.Origin,
 		Egress:        append([]string(nil), in.Egress...),
+	}, nil
+}
+
+func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec, existingID string) (SeedSpec, error) {
+	if s.sessions == nil {
+		return SeedSpec{}, fmt.Errorf("seed.grow requires a phytomer session manager")
 	}
-	return s.seed.Run(ctx, spec)
+	existingID = strings.TrimSpace(existingID)
+	if existingID != "" {
+		sess, ok := s.sessions.Get(ctx, existingID)
+		if !ok {
+			return SeedSpec{}, fmt.Errorf("seed phytomer %s: %w", existingID, ErrNotFound)
+		}
+		spec.PhytomerID = sess.ID
+		s.sessions.Touch(ctx, sess.ID)
+		return spec, nil
+	}
+	sess, err := s.sessions.Initiate(ctx, spec.Origin, session.Preferences{Substrate: spec.Substrate})
+	if err != nil {
+		return SeedSpec{}, fmt.Errorf("establish seed phytomer: %w", err)
+	}
+	spec.PhytomerID = sess.ID
+	return spec, nil
 }
 
 // seedCapabilities declares the seed family's registry entry, bound to this

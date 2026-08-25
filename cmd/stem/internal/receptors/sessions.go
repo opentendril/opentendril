@@ -312,7 +312,7 @@ func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 	// limit above is applied before the narrowing, so a busy phytomer answers
 	// with the observer's share of one page rather than a page of its own.
 	if pollen != "" {
-		runs, ok = h.watch.AuthorizeRuns(w, r, pollen, runs)
+		runs, ok = h.watch.AuthorizeRuns(w, r, pollen, sessionID, runs)
 		if !ok {
 			return
 		}

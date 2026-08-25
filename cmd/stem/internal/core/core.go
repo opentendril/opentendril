@@ -71,6 +71,10 @@ type Core interface {
 	// goal and iterating until a verify predicate passes, within iteration/time
 	// bounds. Runs through the injected SeedOperations execution port.
 	SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error)
+	// PrepareSeed is the Stem-internal Seed lifecycle open: it validates the
+	// request and establishes the canonical Phytomer for that growth. It is
+	// not a governed Pollinator command.
+	PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error)
 	// Git family: commit a substrate's workspace under its configured commit
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.

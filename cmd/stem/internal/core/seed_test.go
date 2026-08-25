@@ -3,16 +3,23 @@ package core
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // newSeedService wires a Service with a stubbed seed port and returns the
 // captured spec of the last grow.
 func newSeedService(t *testing.T) (*Service, *SeedSpec) {
 	t.Helper()
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
 	captured := &SeedSpec{}
-	svc := NewService(nil).WithSeed(SeedOperations{
+	svc := NewService(manager).WithSeed(SeedOperations{
 		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
 			*captured = spec
 			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1}, nil
@@ -144,5 +151,140 @@ func TestSeedEgressThreadedFromGrantMaterial(t *testing.T) {
 func TestSeedGrowIsDelegated(t *testing.T) {
 	if !IsDelegatedCapability(CapSeedGrow) {
 		t.Fatal("seed.grow is not in the delegated set; it would run ungoverned on delegated surfaces")
+	}
+}
+
+func TestSeedGrowEstablishesOneCanonicalPhytomer(t *testing.T) {
+	svc, captured := newSeedService(t)
+
+	result, err := svc.SeedGrow(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if result.PhytomerID == "" || !strings.HasPrefix(result.PhytomerID, session.IDPrefix) {
+		t.Fatalf("phytomerId = %q, want a Stem-created phytomer identity", result.PhytomerID)
+	}
+	if captured.PhytomerID != result.PhytomerID {
+		t.Fatalf("spec phytomer %q != result phytomer %q", captured.PhytomerID, result.PhytomerID)
+	}
+}
+
+func TestTwoSeedsReceiveDistinctPhytomers(t *testing.T) {
+	svc, _ := newSeedService(t)
+	first, err := svc.SeedGrow(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("first grow: %v", err)
+	}
+	second, err := svc.SeedGrow(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("second grow: %v", err)
+	}
+	if first.PhytomerID == "" || second.PhytomerID == "" {
+		t.Fatal("a Seed grew without a Phytomer")
+	}
+	if first.PhytomerID == second.PhytomerID {
+		t.Fatalf("two Seeds shared phytomer %q", first.PhytomerID)
+	}
+}
+
+func TestConcurrentSeedsReceiveDistinctPhytomers(t *testing.T) {
+	svc, _ := newSeedService(t)
+	const n = 8
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			result, err := svc.SeedGrow(context.Background(), validSeedInput())
+			if err != nil {
+				t.Errorf("grow %d: %v", i, err)
+				return
+			}
+			ids[i] = result.PhytomerID
+		}()
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	for i, id := range ids {
+		if id == "" {
+			t.Fatalf("grow %d produced no phytomer", i)
+		}
+		if seen[id] {
+			t.Fatalf("phytomer %q was issued more than once", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestPrepareSeedThenGrowReusesTheSamePhytomer(t *testing.T) {
+	svc, captured := newSeedService(t)
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if growth.PhytomerID == "" {
+		t.Fatal("prepare minted no phytomer")
+	}
+
+	in := validSeedInput()
+	in.PhytomerID = growth.PhytomerID
+	result, err := svc.SeedGrow(context.Background(), in)
+	if err != nil {
+		t.Fatalf("grow prepared: %v", err)
+	}
+	if result.PhytomerID != growth.PhytomerID || captured.PhytomerID != growth.PhytomerID {
+		t.Fatalf("prepared phytomer %q was not reused (result=%q spec=%q)", growth.PhytomerID, result.PhytomerID, captured.PhytomerID)
+	}
+}
+
+func TestCallerCannotSupplySeedPhytomerIdentity(t *testing.T) {
+	svc, captured := newSeedService(t)
+	_, err := svc.Invoke(context.Background(), CapSeedGrow, map[string]any{
+		"substrate":  "core",
+		"goal":       "make the tests pass",
+		"verify":     []any{"true"},
+		"phytomerId": "tendril-forged",
+		"PhytomerID": "tendril-forged",
+		"sessionId":  "tendril-forged",
+	})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if captured.PhytomerID == "tendril-forged" {
+		t.Fatal("caller-supplied phytomer identity reached the execution port")
+	}
+	if captured.PhytomerID == "" {
+		t.Fatal("Stem did not create a phytomer")
+	}
+}
+
+func TestSeedPollenIsNotACallerField(t *testing.T) {
+	svc, _ := newSeedService(t)
+	ctx := WithPollen(context.Background(), "granted-pollen")
+	_, err := svc.Invoke(ctx, CapSeedGrow, map[string]any{
+		"substrate": "core",
+		"goal":      "make the tests pass",
+		"verify":    []any{"true"},
+		"pollen":    "attacker",
+		"Pollen":    "attacker",
+	})
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if got := PollenFromContext(ctx); got != "granted-pollen" {
+		t.Fatalf("context pollen = %q, want granted-pollen", got)
+	}
+}
+
+func TestPrepareSeedIsNotAGovernedCapability(t *testing.T) {
+	for _, name := range CapabilityNames() {
+		if name == "seed.prepare" || name == "seed.watch" {
+			t.Fatalf("governed registry includes %q", name)
+		}
+	}
+	if IsDelegatedCapability("seed.watch") || IsDelegatedCapability("seed.prepare") {
+		t.Fatal("a Seed observation/prepare command was added to the delegated set")
 	}
 }

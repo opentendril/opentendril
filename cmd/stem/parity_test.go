@@ -577,11 +577,28 @@ func (m *mockCore) StomaPass(_ context.Context, in core.StomaPassInput) (core.St
 	}, nil
 }
 
+func (m *mockCore) PrepareSeed(_ context.Context, in core.SeedGrowInput) (core.SeedGrowth, error) {
+	m.record("PrepareSeed", in)
+	return core.SeedGrowth{
+		PhytomerID: "tendril-mock-seed",
+		Spec: core.SeedSpec{
+			Substrate:     in.Substrate,
+			Goal:          in.Goal,
+			Verify:        in.Verify,
+			MaxIterations: in.MaxIterations,
+			Origin:        in.Origin,
+			Egress:        append([]string(nil), in.Egress...),
+			PhytomerID:    "tendril-mock-seed",
+		},
+	}, nil
+}
+
 func (m *mockCore) SeedGrow(_ context.Context, in core.SeedGrowInput) (core.SeedGrowResult, error) {
 	m.record("SeedGrow", in)
 	return core.SeedGrowResult{
 		Status:     core.SeedStatusSatisfied,
 		Iterations: 1,
+		PhytomerID: "tendril-mock-seed",
 		Branch:     "feat/mock",
 	}, nil
 }

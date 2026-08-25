@@ -3,6 +3,7 @@ package receptors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // newSeedAsyncHandler builds a SeedHandler over a Core whose seed executor
@@ -21,11 +23,16 @@ import (
 func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.ServeMux, *historydb.Store) {
 	t.Helper()
 
-	coreSvc := core.NewService(nil).WithSeed(core.SeedOperations{
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
 		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
 			return core.SeedGrowResult{
 				Status: core.SeedStatusSatisfied, Iterations: 1,
-				Branch: "tendril/seed-x", Diff: "the diff", Logs: "the logs",
+				PhytomerID: spec.PhytomerID,
+				Branch:     "tendril/seed-x", Diff: "the diff", Logs: "the logs",
 			}, nil
 		},
 	})
@@ -89,19 +96,37 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 		t.Fatalf("dispatch status = %d, want 202: %s", rec.Code, rec.Body.String())
 	}
 	var accepted struct {
-		Handle string `json:"handle"`
-		Status string `json:"status"`
+		Handle     string `json:"handle"`
+		PhytomerID string `json:"phytomerId"`
+		Status     string `json:"status"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
 		t.Fatalf("decode 202: %v", err)
 	}
-	if accepted.Handle == "" || accepted.Status != "running" {
-		t.Fatalf("202 payload = %+v, want a handle and status running", accepted)
+	if accepted.Handle == "" || accepted.Status != "running" || accepted.PhytomerID == "" {
+		t.Fatalf("202 payload = %+v, want handle, phytomerId, and status running", accepted)
+	}
+	if !strings.HasPrefix(accepted.PhytomerID, session.IDPrefix) {
+		t.Fatalf("phytomerId %q was not Stem-created", accepted.PhytomerID)
+	}
+
+	opening, found, err := store.GetSeedRun(context.Background(), accepted.Handle)
+	if err != nil || !found {
+		t.Fatalf("opening row: found=%v err=%v", found, err)
+	}
+	if opening.PhytomerID != accepted.PhytomerID || opening.Pollen != "local-pollinator" {
+		t.Fatalf("opening ownership = %+v", opening)
+	}
+	if _, found, err := store.GetSeedRunByPhytomer(context.Background(), accepted.PhytomerID); err != nil || !found {
+		t.Fatalf("phytomer lookup before sprout: found=%v err=%v", found, err)
 	}
 
 	settled := waitForSeedRun(t, store, accepted.Handle)
 	if settled.Status != core.SeedStatusSatisfied {
 		t.Fatalf("settled status = %q, want satisfied", settled.Status)
+	}
+	if settled.PhytomerID != accepted.PhytomerID {
+		t.Fatalf("collected phytomer %q != dispatch phytomer %q", settled.PhytomerID, accepted.PhytomerID)
 	}
 
 	collect := httptest.NewRequest(http.MethodGet, "/v1/seeds/runs/"+accepted.Handle, nil)
@@ -117,6 +142,9 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 	}
 	if fruit.Status != core.SeedStatusSatisfied || fruit.Branch != "tendril/seed-x" || fruit.Diff != "the diff" {
 		t.Fatalf("collected Fruit = %+v", fruit)
+	}
+	if fruit.PhytomerID != accepted.PhytomerID {
+		t.Fatalf("collect phytomer %q != dispatch phytomer %q", fruit.PhytomerID, accepted.PhytomerID)
 	}
 }
 
@@ -154,6 +182,74 @@ func TestSeedCollectScopedToDispatchingSubject(t *testing.T) {
 	mux.ServeHTTP(crec, collect)
 	if crec.Code != http.StatusForbidden {
 		t.Fatalf("cross-subject collect status = %d, want 403: %s", crec.Code, crec.Body.String())
+	}
+}
+
+func TestSeedAsyncPersistFailureDoesNotAccept(t *testing.T) {
+	mux, _ := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
+	original := recordSeedRunFn
+	t.Cleanup(func() { recordSeedRunFn = original })
+	recordSeedRunFn = func(context.Context, *historydb.Store, historydb.SeedRun) error {
+		return fmt.Errorf("disk full")
+	}
+
+	rec := dispatchSeedAsync(t, mux, "local-pollinator")
+	if rec.Code == http.StatusAccepted {
+		t.Fatalf("persist failure returned 202: %s", rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSeedAsyncCallerCannotSupplyOwnership(t *testing.T) {
+	mux, store := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["go","test","./..."],"pollen":"attacker","phytomerId":"tendril-forged"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(body))
+	req.Header.Set(PollenHeader, "local-pollinator")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	var accepted struct {
+		Handle     string `json:"handle"`
+		PhytomerID string `json:"phytomerId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if accepted.PhytomerID == "tendril-forged" {
+		t.Fatal("caller-supplied phytomer identity was accepted")
+	}
+	run := waitForSeedRun(t, store, accepted.Handle)
+	if run.Pollen != "local-pollinator" {
+		t.Fatalf("recorded pollen = %q, want authenticated subject", run.Pollen)
+	}
+	if run.PhytomerID != accepted.PhytomerID {
+		t.Fatalf("recorded phytomer %q != dispatch %q", run.PhytomerID, accepted.PhytomerID)
+	}
+}
+
+func TestSeedAsyncWithoutHistoryDoesNotAccept(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			t.Fatal("execution must not start when ownership cannot be persisted")
+			return core.SeedGrowResult{}, nil
+		},
+	})
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("local-pollinator")}), Bus: eventbus.New()}
+	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+
+	rec := dispatchSeedAsync(t, mux, "local-pollinator")
+	if rec.Code == http.StatusAccepted {
+		t.Fatalf("missing history still returned 202: %s", rec.Body.String())
 	}
 }
 
