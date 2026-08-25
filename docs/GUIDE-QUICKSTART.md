@@ -190,6 +190,20 @@ for ordinary first use:
 sudo -u tendril -i tendril delegation grants --pollen claude --substrate myrepo
 ```
 
+After Git setup the grant is Git-only. The Botanist then grants `seed.grow` and
+`sprout.watch` explicitly, using the same Pollen and Substrate names:
+
+```bash
+sudo -u tendril -i tendril delegation grant \
+  --pollen claude \
+  --substrate myrepo \
+  --operation seed.grow \
+  --operation sprout.watch
+```
+
+If the Stem is already running, restart it so the new grant is read. Then
+inspect again:
+
 ```text
 pollen: claude
   substrates: [myrepo]
@@ -197,10 +211,8 @@ pollen: claude
 ```
 
 Read it as a sentence: *the Pollen `claude` may run these operation classes, on
-this Substrate, and nothing else.* After Git setup the grant is Git-only; the
-Botanist then grants `seed.grow` and `sprout.watch` explicitly with
-`tendril delegation grant`. Note `git.prune` and `sprout.grow` are absent —
-deletion and raw Sprout dispatch are not part of the first-use grant.
+this Substrate, and nothing else.* Note `git.prune` and `sprout.grow` are
+absent — deletion and raw Sprout dispatch are not part of the first-use grant.
 
 Grants and Core identity stay dotted. The MCP tool name is the lower-camelCase
 projection of that identity:
@@ -253,25 +265,47 @@ curl -s -X POST localhost:8080/v1/seeds/grow/async \
   -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
 ```
 
-Collect the Fruit with `seed.grow`. Collection is scoped to the Pollen that
-dispatched the handle:
+The Stem accepts the dispatch with HTTP 202 and returns three fields:
+
+```json
+{"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
+```
+
+`handle` is the Fruit-collection identity. `phytomerId` is the
+lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
+from that response. Do not invent an ID, inspect a database, or correlate
+identities by hand.
+
+Immediately observe that exact Phytomer. `sprout.watch` authorises this stream;
+it does not collect Fruit and does not grant `seed.grow`.
+
+```bash
+curl -N \
+  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The stream is Server-Sent Events. After authenticating it emits the current safe
+observation immediately, then follows durable state until the Seed is
+`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
+terminal Seed returns that terminal current state and closes.
+
+The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
+When the Stem actually produced Fruit, the same stream includes `branch` and
+`commit`. Those fields stay absent until those facts exist. `main` is not
+modified.
+
+When the documented workflow needs the collection view, use the Seed handle
+from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
+that dispatched it:
 
 ```bash
 curl -s localhost:8080/v1/seeds/runs/<handle> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-The response names status (`satisfied`, `exhausted`, or `withered`) and the
-reviewable branch. `main` is unchanged. Inspect that branch as Fruit.
-
-`sprout.watch` is a separate grant. It does not collect Seed Fruit; it authorises
-watching Phytomer run records this Pollen dispatched, for this Substrate. A
-delegated watch names the Phytomer and does not see another Pollen's runs:
-
-```bash
-curl -s localhost:8080/v1/phytomers/<sessionId>/sprout-runs \
-  -H "Authorization: Bearer $TOKEN"
-```
+Review the resulting Git Fruit on the reported branch. `main` remains unchanged
+until a human merges.
 
 An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
 MCP tool name is `seedGrow`; the grant stays `seed.grow`.

@@ -101,4 +101,6 @@ the Stem. When configuration is complete, start it:
 systemctl enable --now tendril
 ```
 
-The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md).
+The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md):
+dispatch a Seed with the Pollinator credential, watch that Phytomer, and review
+the Git Fruit. `main` stays unchanged until a human merges.

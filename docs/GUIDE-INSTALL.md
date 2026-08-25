@@ -541,10 +541,11 @@ pollen: claude
 ```
 
 `seed.grow` is the bounded task hand-off. `sprout.watch` is the read side: it
-lets this Pollen watch runs it dispatched — the stored record, the persisted
-events, and the live stream — and nothing anyone else dispatched. Granting
-`seed.grow` does not imply `sprout.watch`. `sprout.grow` is not part of this
-first-use grant.
+lets this Pollen observe the Phytomer the Stem created for that Seed — first
+through `GET /v1/phytomers/{phytomerId}/watch`, and also the stored run
+records, persisted events, and live stream — and nothing anyone else
+dispatched. Granting `seed.grow` does not imply `sprout.watch`. `sprout.grow`
+is not part of this first-use grant.
 
 Revoke the same way if you need to take an operation back:
 
@@ -872,19 +873,21 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/git/prune` | `git.prune` |
 | `POST /v1/stoma/pass` | `stoma.pass` |
 | `POST /v1/seeds/grow` | `seed.grow` |
+| `POST /v1/seeds/grow/async` | `seed.grow` |
+| `GET /v1/seeds/runs/{handle}` | `seed.grow` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
-| `GET /v1/phytomers/{id}/sprout-runs` | `sprout.watch` |
-| `GET /v1/phytomers/{id}/events` | `sprout.watch` |
-| `GET /ws?sessionId={id}` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/watch` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/sprout-runs` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/events` | `sprout.watch` |
+| `GET /ws?sessionId={phytomerId}` | `sprout.watch` |
 
-A `sprout.watch` grant releases only what the Pollen's own runs put there, and
-only for the substrates those runs targeted. `sprout-runs` narrows to the
-caller's own records. A phytomer's events and its live stream are session-wide
-and name no owner individually, so they are released whole or not at all: every
-run in the phytomer must be the caller's, and a phytomer nothing was dispatched
-into belongs to nobody. A delegated stream must name the phytomer it watches and
-receives only that phytomer's events; the Botanist key still opens the
-unfiltered feed.
+A `sprout.watch` grant releases only what this Pollen dispatched, and only for
+the Substrate that grant covers. `GET /v1/phytomers/{phytomerId}/watch` is the
+headless current-state stream for the Seed-owned Phytomer named in the path.
+`sprout-runs` narrows to the caller's own records. A phytomer's events and its
+live stream are session-wide and name no owner individually, so they are
+released whole or not at all. The Botanist key still opens the unfiltered feed
+and is not given to the Pollinator.
 
 ```bash
 curl -X POST http://localhost:8080/v1/git/status \
@@ -939,45 +942,59 @@ curl -s -X POST localhost:8080/v1/seeds/grow/async \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
-#   → {"handle":"seed-…","status":"running"}
 ```
 
-Collect the Fruit with the same credential. Collection is `seed.grow`, scoped to
-the Pollen that dispatched the handle:
+The Stem accepts the dispatch with HTTP 202 and returns three fields:
+
+```json
+{"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
+```
+
+`handle` is the Fruit-collection identity. `phytomerId` is the
+lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
+from that response. Do not invent an ID, inspect a database, or correlate
+identities by hand.
+
+Immediately observe that exact Phytomer. `sprout.watch` authorises this stream;
+it does not collect Fruit and does not grant `seed.grow`.
+
+```bash
+curl -N \
+  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The stream is Server-Sent Events. After authenticating it emits the current safe
+observation immediately, then follows durable state until the Seed is
+`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
+terminal Seed returns that terminal current state and closes.
+
+The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
+When the Stem actually produced Fruit, the same stream includes `branch` and
+`commit`. Those fields stay absent until those facts exist. `main` is not
+modified.
+
+When the documented workflow needs the collection view, use the Seed handle
+from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
+that dispatched it:
 
 ```bash
 curl -s localhost:8080/v1/seeds/runs/<handle> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-A settled Seed reports `satisfied` (verify passed), `exhausted` (bounds spent), or
-`withered` (the Sprout failed). The response names the reviewable branch; `main`
-is not modified. One Pollinator can never read another's handle.
+A settled Seed reports `satisfied` (verify passed), `exhausted` (bounds spent),
+or `withered` (the Sprout failed). Review the resulting Git Fruit on the
+reported branch. `main` remains unchanged until a human merges. One Pollinator
+can never read another's handle.
 
 The same routes exist for a synchronous grow (`POST /v1/seeds/grow`); the async
-handle is the ordinary-terminal way to dispatch and come back for Fruit.
+dispatch is the ordinary-terminal first-use path.
 
 An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
-MCP tool name is `seedGrow`; the grant stays `seed.grow`.
-
-### Observing the delegated run
-
-`sprout.watch` is independent of `seed.grow`. It authorises watching Phytomer run
-records, persisted events, and the live stream for work this Pollen dispatched —
-and only that work. A phytomer's events and live stream are session-wide, so they
-are released only when every run on that Phytomer belongs to the caller and the
-caller holds `sprout.watch` for every Substrate those runs targeted. A delegated
-stream must name the Phytomer (`sessionId`); the Botanist key still opens the
-unfiltered feed and is not given to the Pollinator.
-
-```bash
-# Own run records for a Phytomer this Pollen dispatched into.
-curl -s localhost:8080/v1/phytomers/<sessionId>/sprout-runs \
-  -H "Authorization: Bearer $TOKEN"
-```
-
-Fruit collection (`GET /v1/seeds/runs/{handle}`) stays on `seed.grow`. Watching
-Phytomer runs stays on `sprout.watch`. Granting one does not grant the other.
+MCP tool name is `seedGrow`; the grant stays `seed.grow`. Granting `seed.grow`
+does not grant `sprout.watch`, and granting `sprout.watch` does not grant
+`seed.grow`.
 
 ---
 
