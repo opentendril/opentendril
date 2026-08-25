@@ -113,6 +113,8 @@ func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservat
 			for _, run := range runs {
 				evidence := core.SproutObservationEvidence{
 					RunID:                    run.RunID,
+					Pollen:                   run.Pollen,
+					Substrate:                run.Substrate,
 					Status:                   run.Status,
 					Provider:                 run.Provider,
 					Model:                    run.Model,

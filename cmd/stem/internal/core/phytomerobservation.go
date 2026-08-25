@@ -16,6 +16,11 @@ var ErrPhytomerObservationNotWired = errors.New("phytomer observation is not wir
 // associated with the named Phytomer.
 var ErrPhytomerObservationNotFound = errors.New("no seed growth is associated with this phytomer")
 
+// ErrPhytomerObservationOwnershipConflict is returned when Sprout evidence
+// disagrees with the Seed's Pollen or Substrate. It is a transport-free
+// fail-closed safety invariant, not a sprout.watch grant decision.
+var ErrPhytomerObservationOwnershipConflict = errors.New("phytomer observation ownership evidence disagrees")
+
 // PhytomerObservation is the transport-free current-state projection of one
 // Seed-owned Phytomer. A sprout.watch observer may see these facts when they
 // actually exist: identities, Seed lifecycle, iteration progress, actual
@@ -70,10 +75,13 @@ type SeedObservationEvidence struct {
 
 // SproutObservationEvidence is durable Sprout state the current-state
 // projection may consult. It includes persisted fields that are not part of
-// the public observation (transcript, output, raw error). StartedAt is used
-// only to order the public Sprout list.
+// the public observation (transcript, output, raw error). Pollen and
+// Substrate are compared against the Seed before any Sprout is released.
+// StartedAt is used only to order the public Sprout list.
 type SproutObservationEvidence struct {
 	RunID                    string
+	Pollen                   string
+	Substrate                string
 	Status                   string
 	Provider                 string
 	Model                    string
@@ -104,7 +112,8 @@ func (s *Service) WithPhytomerObservationSource(src PhytomerObservationSource) *
 
 // ObservePhytomer returns the safe current-state observation of one Seed-owned
 // Phytomer. It is a view, not a governed command. Which persisted fields may
-// be released is decided here, not by a transport adapter.
+// be released is decided here, not by a transport adapter. Sprout rows that
+// disagree with the Seed's Pollen or Substrate fail closed.
 func (s *Service) ObservePhytomer(ctx context.Context, phytomerID string) (PhytomerObservation, error) {
 	if s == nil || s.observation.SeedByPhytomer == nil || s.observation.SproutsByPhytomer == nil {
 		return PhytomerObservation{}, ErrPhytomerObservationNotWired
@@ -120,7 +129,7 @@ func (s *Service) ObservePhytomer(ctx context.Context, phytomerID string) (Phyto
 	if err != nil {
 		return PhytomerObservation{}, err
 	}
-	return ProjectPhytomerObservation(seed, sprouts), nil
+	return ProjectPhytomerObservation(seed, sprouts)
 }
 
 // ProjectPhytomerObservation composes the safe current-state view from Seed
@@ -128,7 +137,13 @@ func (s *Service) ObservePhytomer(ctx context.Context, phytomerID string) (Phyto
 // only the observation contract; it does not derive a commit from a branch,
 // synthesize a Sprout, rewrite missing provider activity as zero/success, or
 // release raw Seed error, transcript, output, diff, logs, or goal text.
-func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutObservationEvidence) PhytomerObservation {
+//
+// Every Sprout row must carry the Seed's Pollen and Substrate. Any
+// disagreement fails closed and releases no observation.
+func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutObservationEvidence) (PhytomerObservation, error) {
+	if err := phytomerObservationOwnershipAgrees(seed, sprouts); err != nil {
+		return PhytomerObservation{}, err
+	}
 	obs := PhytomerObservation{
 		Pollen:     strings.TrimSpace(seed.Pollen),
 		Substrate:  strings.TrimSpace(seed.Substrate),
@@ -140,7 +155,7 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 		Commit:     strings.TrimSpace(seed.Commit),
 	}
 	if len(sprouts) == 0 {
-		return obs
+		return obs, nil
 	}
 	ordered := append([]SproutObservationEvidence(nil), sprouts...)
 	sort.Slice(ordered, func(i, j int) bool {
@@ -168,7 +183,18 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 		out = append(out, sprout)
 	}
 	obs.Sprouts = out
-	return obs
+	return obs, nil
+}
+
+func phytomerObservationOwnershipAgrees(seed SeedObservationEvidence, sprouts []SproutObservationEvidence) error {
+	pollen := strings.TrimSpace(seed.Pollen)
+	substrate := strings.TrimSpace(seed.Substrate)
+	for _, sprout := range sprouts {
+		if strings.TrimSpace(sprout.Pollen) != pollen || strings.TrimSpace(sprout.Substrate) != substrate {
+			return ErrPhytomerObservationOwnershipConflict
+		}
+	}
+	return nil
 }
 
 // SeedStatusIsTerminal reports whether a Seed status is a terminal growth

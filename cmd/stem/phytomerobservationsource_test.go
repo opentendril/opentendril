@@ -49,6 +49,9 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	if sprouts[0].Transcript == "" || sprouts[0].Output == "" || sprouts[0].Error == "" {
 		t.Fatalf("source dropped sprout evidence Core must refuse: %+v", sprouts[0])
 	}
+	if sprouts[0].Pollen != "claude" || sprouts[0].Substrate != "myrepo" {
+		t.Fatalf("source dropped sprout ownership evidence: %+v", sprouts[0])
+	}
 }
 
 func TestPhytomerObservationSourceNilHistoryIsUnwired(t *testing.T) {

@@ -358,6 +358,9 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 
 		current, err := h.core.ObservePhytomer(ctx, sessionID)
 		if err != nil {
+			if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+				_ = writeSSE(w, "error", []byte(`{"error":"observation closed"}`))
+			}
 			return
 		}
 		if emit(current) {
@@ -373,6 +376,10 @@ func writePhytomerObservationErr(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, core.ErrPhytomerObservationNotWired) {
 		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		return
+	}
+	if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)

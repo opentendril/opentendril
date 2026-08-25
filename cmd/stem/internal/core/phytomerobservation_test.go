@@ -11,8 +11,17 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
+func projectObservation(t *testing.T, seed core.SeedObservationEvidence, sprouts []core.SproutObservationEvidence) core.PhytomerObservation {
+	t.Helper()
+	obs, err := core.ProjectPhytomerObservation(seed, sprouts)
+	if err != nil {
+		t.Fatalf("ProjectPhytomerObservation: %v", err)
+	}
+	return obs
+}
+
 func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		Pollen:     "claude",
 		PhytomerID: "tendril-1",
@@ -42,7 +51,7 @@ func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
 }
 
 func TestProjectPhytomerObservationDoesNotInventCommitFromBranch(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		PhytomerID: "tendril-1",
 		Status:     core.SeedStatusSatisfied,
@@ -58,7 +67,7 @@ func TestProjectPhytomerObservationDoesNotInventCommitFromBranch(t *testing.T) {
 
 func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 	diag := &core.ProviderDiagnostic{StatusCode: 401, Message: "User not found", Provider: "anthropic"}
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		Pollen:     "claude",
 		PhytomerID: "tendril-1",
@@ -69,6 +78,8 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 	}, []core.SproutObservationEvidence{
 		{
 			RunID:                    "run-a",
+			Pollen:                   "claude",
+			Substrate:                "myrepo",
 			Status:                   "matured",
 			Provider:                 "anthropic",
 			Model:                    "claude-sonnet",
@@ -80,6 +91,8 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 		},
 		{
 			RunID:                    "run-b",
+			Pollen:                   "claude",
+			Substrate:                "myrepo",
 			Status:                   "withered",
 			Provider:                 "anthropic",
 			Model:                    "claude-sonnet",
@@ -120,7 +133,7 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 }
 
 func TestProjectPhytomerObservationSatisfiedFruit(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		PhytomerID: "tendril-1",
 		Status:     core.SeedStatusSatisfied,
@@ -134,7 +147,7 @@ func TestProjectPhytomerObservationSatisfiedFruit(t *testing.T) {
 }
 
 func TestProjectPhytomerObservationOmitsPersistedUnsafeFields(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		PhytomerID: "tendril-1",
 		Status:     core.SeedStatusWithered,
@@ -176,7 +189,7 @@ func TestProjectPhytomerObservationOmitsPersistedUnsafeFields(t *testing.T) {
 func TestProjectPhytomerObservationOrdersSproutsByStartThenRunID(t *testing.T) {
 	later := time.Unix(20, 0).UTC()
 	earlier := time.Unix(10, 0).UTC()
-	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+	obs := projectObservation(t, core.SeedObservationEvidence{
 		Handle: "seed-1", PhytomerID: "tendril-1", Status: "running",
 	}, []core.SproutObservationEvidence{
 		{RunID: "run-z", StartedAt: later},
@@ -213,11 +226,15 @@ func TestObservePhytomerUsesSourceAndProjectsSafely(t *testing.T) {
 		SproutsByPhytomer: func(_ context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
 			return []core.SproutObservationEvidence{{
 				RunID:      "run-b",
+				Pollen:     "claude",
+				Substrate:  "myrepo",
 				Status:     "running",
 				Transcript: "PRIVATE_PROMPT_CONTENT",
 				StartedAt:  time.Unix(2, 0).UTC(),
 			}, {
 				RunID:     "run-a",
+				Pollen:    "claude",
+				Substrate: "myrepo",
 				Status:    "running",
 				StartedAt: time.Unix(1, 0).UTC(),
 			}}, nil
@@ -238,6 +255,99 @@ func TestObservePhytomerUsesSourceAndProjectsSafely(t *testing.T) {
 	for _, banned := range []string{"Authorization: Bearer secret-token", "PRIVATE_PROMPT_CONTENT"} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("unsafe material %q leaked: %s", banned, body)
+		}
+	}
+}
+
+func TestObservePhytomerRefusesSproutWithOtherPollen(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: "running",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{{
+				RunID:     "run-intruder",
+				Pollen:    "codex",
+				Substrate: "myrepo",
+				Status:    "running",
+				Provider:  "intruder-provider",
+				Model:     "intruder-model",
+			}}, nil
+		},
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		t.Fatalf("other pollen = %v, want ownership conflict", err)
+	}
+	assertObservationDoesNotContain(t, obs, "run-intruder", "intruder-provider", "intruder-model", "codex")
+}
+
+func TestObservePhytomerRefusesSproutWithOtherSubstrate(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: "running",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{{
+				RunID:     "run-otherrepo",
+				Pollen:    "claude",
+				Substrate: "otherrepo",
+				Status:    "running",
+				Provider:  "foreign-provider",
+				Model:     "foreign-model",
+			}}, nil
+		},
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		t.Fatalf("other substrate = %v, want ownership conflict", err)
+	}
+	assertObservationDoesNotContain(t, obs, "run-otherrepo", "foreign-provider", "foreign-model", "otherrepo")
+}
+
+func TestObservePhytomerKeepsMatchingMultiSproutSeed(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: "running",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{
+				{RunID: "run-b", Pollen: "claude", Substrate: "myrepo", Status: "running", Provider: "anthropic", Model: "claude-sonnet", StartedAt: time.Unix(2, 0).UTC()},
+				{RunID: "run-a", Pollen: "claude", Substrate: "myrepo", Status: "matured", Provider: "anthropic", Model: "claude-sonnet", StartedAt: time.Unix(1, 0).UTC()},
+			}, nil
+		},
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if err != nil {
+		t.Fatalf("matching sprouts: %v", err)
+	}
+	if len(obs.Sprouts) != 2 || obs.Sprouts[0].RunID != "run-a" || obs.Sprouts[1].RunID != "run-b" {
+		t.Fatalf("matching multi-sprout = %+v", obs.Sprouts)
+	}
+}
+
+func assertObservationDoesNotContain(t *testing.T, obs core.PhytomerObservation, banned ...string) {
+	t.Helper()
+	if len(obs.Sprouts) != 0 || obs.Handle != "" {
+		t.Fatalf("contradictory observation was released: %+v", obs)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, item := range banned {
+		if strings.Contains(body, item) {
+			t.Fatalf("contradictory material %q leaked: %s", item, body)
 		}
 	}
 }

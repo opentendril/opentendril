@@ -284,6 +284,113 @@ func TestPhytomerWatchExhaustedCloses(t *testing.T) {
 	}
 }
 
+func TestPhytomerWatchRaceDoesNotLeakContradictorySprout(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-race", Pollen: watchOwner, PhytomerID: "tendril-race",
+		Substrate: "myrepo", Status: "running",
+	})
+
+	src := testPhytomerObservationSource(store)
+	loadSprouts := src.SproutsByPhytomer
+	src.SproutsByPhytomer = func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
+		seedWatchRun(t, store, historydb.SproutRun{
+			RunID: "run-intruder", SessionID: phytomerID, StepID: "run-intruder",
+			Pollen: watchOther, Substrate: "myrepo", Status: "running",
+			Provider: "intruder-provider", Model: "intruder-model",
+		})
+		return loadSprouts(ctx, phytomerID)
+	}
+
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(watchOwnerGrants()), Bus: eventbus.New()}
+	handler := NewSessionsHandler(core.NewService(nil).WithPhytomerObservationSource(src), nil, store, eventbus.New()).
+		WithWatch(NewWatchAuthority(gate, store))
+	mux := http.NewServeMux()
+	handler.Register(mux, gate.Middleware, nil)
+
+	rec := watchRequest(t, mux, "/v1/phytomers/tendril-race/watch", watchOwner)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("race watch = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, banned := range []string{
+		"run-intruder", "intruder-provider", "intruder-model",
+		"event: observation", watchOther,
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("contradictory sprout leaked after authorized watch: %s", body)
+		}
+	}
+}
+
+func TestPhytomerWatchMidStreamContradictionDoesNotLeak(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-mid", Pollen: watchOwner, PhytomerID: "tendril-mid",
+		Substrate: "myrepo", Status: "running",
+	})
+
+	src := testPhytomerObservationSource(store)
+	loadSprouts := src.SproutsByPhytomer
+	calls := 0
+	src.SproutsByPhytomer = func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
+		calls++
+		if calls == 2 {
+			if err := store.RecordSproutRun(ctx, historydb.SproutRun{
+				RunID: "run-intruder", SessionID: phytomerID, StepID: "run-intruder",
+				Pollen: watchOther, Substrate: "myrepo", Status: "running",
+				Provider: "intruder-provider", Model: "intruder-model",
+				StartedAt: time.Now().UTC(),
+			}); err != nil {
+				return nil, err
+			}
+		}
+		return loadSprouts(ctx, phytomerID)
+	}
+
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(watchOwnerGrants()), Bus: eventbus.New()}
+	bus := eventbus.New()
+	handler := NewSessionsHandler(core.NewService(nil).WithPhytomerObservationSource(src), nil, store, bus).
+		WithWatch(NewWatchAuthority(gate, store))
+	handler.watchPoll = 15 * time.Millisecond
+	mux := http.NewServeMux()
+	handler.Register(mux, gate.Middleware, nil)
+
+	stream := openPhytomerWatch(t, mux, "tendril-mid", watchOwner)
+	if stream.status != http.StatusOK {
+		t.Fatalf("initial watch = %d", stream.status)
+	}
+	first := stream.nextObservation(t, time.Second)
+	if first.Handle != "seed-mid" || first.Status != "running" {
+		t.Fatalf("initial observation = %+v", first)
+	}
+	bus.Publish(eventbus.Event{Type: eventbus.EventSproutEmerged, SessionID: "tendril-mid", Source: "test"})
+
+	for {
+		select {
+		case ev, ok := <-stream.events:
+			if !ok {
+				return
+			}
+			for _, banned := range []string{"run-intruder", "intruder-provider", "intruder-model"} {
+				if strings.Contains(ev.data, banned) {
+					t.Fatalf("mid-stream contradictory sprout leaked: %+v", ev)
+				}
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("watch stream did not close after contradictory sprout evidence appeared")
+		}
+	}
+}
+
 func TestPhytomerWatchDoesNotExposeRawSeedError(t *testing.T) {
 	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
 	hostile := "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT"
