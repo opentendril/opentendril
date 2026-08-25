@@ -57,8 +57,10 @@ func newWatchFixtureWithGrants(t *testing.T, grants []core.DelegationGrant) (*ht
 	t.Cleanup(func() { store.Close() })
 
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
-	handler := NewSessionsHandler(core.NewService(nil), nil, store, nil).
+	bus := eventbus.New()
+	handler := NewSessionsHandler(core.NewService(nil), nil, store, bus).
 		WithWatch(NewWatchAuthority(gate, store))
+	handler.watchPoll = 15 * time.Millisecond
 
 	mux := http.NewServeMux()
 	// The command lane keeps the blanket delegated-request refusal it has
@@ -141,6 +143,14 @@ func TestOtherSubjectIsRefusedAnotherRun(t *testing.T) {
 	if body := runs.Body.String(); strings.Contains(body, "run-owner") {
 		t.Fatalf("a refused read still carried the run it refused: %s", body)
 	}
+
+	watch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOther)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("another subject watching = %d, want 403: %s", watch.Code, watch.Body.String())
+	}
+	if body := watch.Body.String(); strings.Contains(body, "run-owner") || strings.Contains(body, "event: observation") {
+		t.Fatalf("a refused watch still carried observation: %s", body)
+	}
 }
 
 // TestUnresolvableCredentialIsNotTheOperator closes the fall-through. A
@@ -153,6 +163,7 @@ func TestUnresolvableCredentialIsNotTheOperator(t *testing.T) {
 	for _, path := range []string{
 		"/v1/phytomers/" + watchSubject + "/events",
 		"/v1/phytomers/" + watchSubject + "/sprout-runs",
+		"/v1/phytomers/" + watchSubject + "/watch",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		request.Header.Set("Authorization", "Bearer tendril_refresh_00000000000000000000000000000000")
@@ -209,6 +220,10 @@ func TestOwnershipAloneDoesNotAdmit(t *testing.T) {
 	if runs.Code != http.StatusForbidden {
 		t.Fatalf("owner without a sprout.watch grant read runs = %d, want 403: %s", runs.Code, runs.Body.String())
 	}
+	watch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("owner without a sprout.watch grant watching = %d, want 403: %s", watch.Code, watch.Body.String())
+	}
 }
 
 // TestWatchIsBoundToTheSubstrateItWasGranted keeps observation inside the same
@@ -226,6 +241,10 @@ func TestWatchIsBoundToTheSubstrateItWasGranted(t *testing.T) {
 	events := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/events", watchOwner)
 	if events.Code != http.StatusForbidden {
 		t.Fatalf("watch grant on another substrate = %d, want 403: %s", events.Code, events.Body.String())
+	}
+	watch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("watch grant on another substrate watching = %d, want 403: %s", watch.Code, watch.Body.String())
 	}
 }
 
@@ -274,6 +293,14 @@ func TestPartialSubstrateGrantDoesNotCoverPhytomer(t *testing.T) {
 	}
 	if body := runs.Body.String(); strings.Contains(body, "run-otherrepo") || strings.Contains(body, "run-myrepo") {
 		t.Fatalf("a refused sprout-runs read still carried run records: %s", body)
+	}
+
+	watch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("watch with partial-substrate grant = %d, want 403: %s", watch.Code, watch.Body.String())
+	}
+	if body := watch.Body.String(); strings.Contains(body, "run-otherrepo") || strings.Contains(body, "run-myrepo") || strings.Contains(body, "event: observation") {
+		t.Fatalf("a refused watch still carried observation: %s", body)
 	}
 }
 
@@ -325,6 +352,11 @@ func TestSharedPhytomerReleasesRunsButNotEvents(t *testing.T) {
 	if len(recorded) != 1 || recorded[0].RunID != "run-owner" {
 		t.Fatalf("shared phytomer returned %d run(s), want only run-owner: %+v", len(recorded), recorded)
 	}
+
+	watch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("watch of a shared phytomer = %d, want 403: %s", watch.Code, watch.Body.String())
+	}
 }
 
 // TestEmptyPhytomerBelongsToNobody covers the phytomer nothing was dispatched
@@ -340,6 +372,10 @@ func TestEmptyPhytomerBelongsToNobody(t *testing.T) {
 	runs := watchRequest(t, mux, "/v1/phytomers/tendril-empty/sprout-runs", watchOwner)
 	if runs.Code != http.StatusForbidden {
 		t.Fatalf("runs of an empty phytomer = %d, want 403: %s", runs.Code, runs.Body.String())
+	}
+	watch := watchRequest(t, mux, "/v1/phytomers/tendril-empty/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("watch of an empty phytomer = %d, want 403: %s", watch.Code, watch.Body.String())
 	}
 }
 
@@ -510,6 +546,10 @@ func TestContradictorySeedSproutOwnershipFailsClosed(t *testing.T) {
 	if runs.Code != http.StatusForbidden {
 		t.Fatalf("contradictory ownership runs = %d, want 403: %s", runs.Code, runs.Body.String())
 	}
+	watch := watchRequest(t, mux, "/v1/phytomers/tendril-seed-mixed/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("contradictory ownership watch = %d, want 403: %s", watch.Code, watch.Body.String())
+	}
 }
 
 func TestSeedGrowGrantDoesNotImplyWatch(t *testing.T) {
@@ -525,6 +565,10 @@ func TestSeedGrowGrantDoesNotImplyWatch(t *testing.T) {
 	events := watchRequest(t, mux, "/v1/phytomers/tendril-seed-grow-only/events", watchOwner)
 	if events.Code != http.StatusForbidden {
 		t.Fatalf("seed.grow without sprout.watch = %d, want 403: %s", events.Code, events.Body.String())
+	}
+	watch := watchRequest(t, mux, "/v1/phytomers/tendril-seed-grow-only/watch", watchOwner)
+	if watch.Code != http.StatusForbidden {
+		t.Fatalf("seed.grow without sprout.watch watching = %d, want 403: %s", watch.Code, watch.Body.String())
 	}
 }
 
@@ -549,5 +593,9 @@ func TestUnwiredWatchAuthorityDenies(t *testing.T) {
 	operator := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/events", "")
 	if operator.Code != http.StatusOK {
 		t.Fatalf("operator read with no authority = %d, want 200: %s", operator.Code, operator.Body.String())
+	}
+	delegatedWatch := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/watch", watchOwner)
+	if delegatedWatch.Code != http.StatusForbidden {
+		t.Fatalf("delegated watch with no authority = %d, want 403: %s", delegatedWatch.Code, delegatedWatch.Body.String())
 	}
 }

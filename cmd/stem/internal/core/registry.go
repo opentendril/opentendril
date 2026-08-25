@@ -47,7 +47,8 @@ const (
 
 // CapSproutWatch is the read side of the sprout family: it authorises watching
 // a phytomer that a subject's own runs were dispatched into — the stored run
-// record, the persisted events, and the live stream.
+// record, the persisted events, the live stream, and the headless
+// current-state watch.
 //
 // It is deliberately absent from CapabilityNames() and the parity registry. A
 // capability there is a command every surface must project; this is a view, and
