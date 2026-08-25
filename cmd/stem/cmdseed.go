@@ -109,6 +109,46 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 	return core.NewService(manager).WithSeed(seedOperations(nil, nil)), nil
 }
 
+func seedPersistence(history *historydb.Store) core.SeedPersistence {
+	return core.SeedPersistence{
+		RecordOpening: func(ctx context.Context, opening core.SeedOpening) error {
+			if history == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return history.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     opening.Handle,
+				Pollen:     opening.Pollen,
+				PhytomerID: opening.PhytomerID,
+				Substrate:  opening.Substrate,
+				Goal:       opening.Goal,
+				Status:     opening.Status,
+				StartedAt:  opening.StartedAt,
+			})
+		},
+		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
+			if history == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return history.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     settled.Handle,
+				Pollen:     settled.Pollen,
+				PhytomerID: settled.PhytomerID,
+				Substrate:  settled.Substrate,
+				Goal:       settled.Goal,
+				Status:     settled.Status,
+				Iterations: settled.Iterations,
+				Branch:     settled.Branch,
+				Commit:     settled.Commit,
+				Diff:       settled.Diff,
+				Logs:       settled.Logs,
+				Error:      settled.Error,
+				StartedAt:  settled.StartedAt,
+				FinishedAt: settled.FinishedAt,
+			})
+		},
+	}
+}
+
 // seedOperations binds the Seed-growth execution port to the conductor's
 // bounded-task executor — the Sprout builder loop plus the sealed-Terrarium
 // verify run. This wiring lives in the adapter layer precisely so the Core never

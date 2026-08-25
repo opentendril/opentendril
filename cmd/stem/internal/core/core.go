@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
@@ -71,10 +72,11 @@ type Core interface {
 	// goal and iterating until a verify predicate passes, within iteration/time
 	// bounds. Runs through the injected SeedOperations execution port.
 	SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error)
-	// PrepareSeed is the Stem-internal Seed lifecycle open: it validates the
-	// request and establishes the canonical Phytomer for that growth. It is
-	// not a governed Pollinator command.
+	// PrepareSeed, GrowPreparedSeed, and OpenPreparedSeed are Stem-internal
+	// Seed lifecycle methods. They are not governed Pollinator commands.
 	PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error)
+	GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error)
+	OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error)
 	// Git family: commit a substrate's workspace under its configured commit
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.
@@ -193,11 +195,18 @@ type Service struct {
 	stoma      StomaOperations
 	seed       SeedOperations
 	git        GitOperations
+
+	seedPersist   SeedPersistence
+	seedMu        sync.Mutex
+	preparedSeeds map[string]*preparedSeed
 }
 
 // NewService builds a Core over the shared SessionManager.
 func NewService(sessions *session.Manager) *Service {
-	return &Service{sessions: sessions}
+	return &Service{
+		sessions:      sessions,
+		preparedSeeds: make(map[string]*preparedSeed),
+	}
 }
 
 // WithTendrilDir injects the root directory of the Stem's control plane.

@@ -2,6 +2,9 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -79,10 +82,6 @@ type SeedGrowInput struct {
 	// after the delegation authorizer has matched a grant, so no transport
 	// input can ever widen egress (deny-all remains the default).
 	Egress []string `json:"-"`
-	// PhytomerID reuses an already-opened Seed Phytomer. It has no JSON
-	// surface: a caller cannot name the execution context. The Stem sets this
-	// after PrepareSeed so async dispatch and the later grow share one identity.
-	PhytomerID string `json:"-"`
 }
 
 // SeedSpec is the fully resolved, transport-free Seed handed to the
@@ -101,11 +100,100 @@ type SeedSpec struct {
 	PhytomerID string
 }
 
-// SeedGrowth is the Stem-owned lifecycle envelope for one Seed: the canonical
-// Phytomer identity plus the resolved spec. It is not a governed capability.
+// ErrSeedHistoryUnavailable is returned when async Seed ownership cannot be
+// recorded because no persistence port is wired.
+var ErrSeedHistoryUnavailable = errors.New("seed run history is not available")
+
+// ErrSeedGrowthInvalid is returned when a caller presents a SeedGrowth that
+// the Stem did not issue, or one whose bound identity was substituted.
+var ErrSeedGrowthInvalid = errors.New("seed growth is not a prepared Stem lifecycle")
+
+// SeedGrowth is an opaque Stem-owned lifecycle envelope for one Seed growth.
+// Only PrepareSeed can issue a valid envelope. GrowPreparedSeed and
+// OpenPreparedSeed refuse construction, mutation, or substitution.
 type SeedGrowth struct {
+	token      string
+	phytomerID string
+	pollen     string
+	spec       SeedSpec
+}
+
+// PhytomerID is the Stem-created execution/observation identity bound to this
+// growth. Empty on a zero envelope that was not issued by PrepareSeed.
+func (g SeedGrowth) PhytomerID() string { return g.phytomerID }
+
+// Substrate is the Substrate bound at preparation. Empty on a zero envelope.
+func (g SeedGrowth) Substrate() string { return g.spec.Substrate }
+
+// Pollen is the authenticated Pollen bound at preparation. Empty when the
+// growth is not delegated.
+func (g SeedGrowth) Pollen() string { return g.pollen }
+
+// Goal is the prepared intent. Empty on a zero envelope.
+func (g SeedGrowth) Goal() string { return g.spec.Goal }
+
+// preparedSeed is the Stem-side record of one issued SeedGrowth.
+type preparedSeed struct {
+	phytomerID string
+	pollen     string
+	spec       SeedSpec
+	handle     string
+	startedAt  time.Time
+	opened     bool
+	consumed   bool
+}
+
+// SeedDispatch is the Stem-composed async accept contract: the durable handle
+// together with the canonical Phytomer identity. Adapters encode it; they do
+// not assemble the relation.
+type SeedDispatch struct {
+	Handle     string `json:"handle"`
+	PhytomerID string `json:"phytomerId"`
+	Status     string `json:"status"`
+}
+
+// SeedOpening is the transport-free opening ownership record the Stem persists
+// before an async dispatch is accepted.
+type SeedOpening struct {
+	Handle     string
 	PhytomerID string
-	Spec       SeedSpec
+	Pollen     string
+	Substrate  string
+	Goal       string
+	Status     string
+	StartedAt  time.Time
+}
+
+// SeedSettlement is the transport-free terminal Seed record.
+type SeedSettlement struct {
+	Handle     string
+	PhytomerID string
+	Pollen     string
+	Substrate  string
+	Goal       string
+	Status     string
+	Iterations int
+	Branch     string
+	Commit     string
+	Diff       string
+	Logs       string
+	Error      string
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+// SeedPersistence is the injected durable-ownership port. Core composes the
+// Seed/Phytomer/Pollen/Substrate relation; the port only records it. Core
+// never imports historydb.
+type SeedPersistence struct {
+	RecordOpening    func(ctx context.Context, opening SeedOpening) error
+	RecordSettlement func(ctx context.Context, settled SeedSettlement) error
+}
+
+// WithSeedPersistence wires the durable Seed-ownership port.
+func (s *Service) WithSeedPersistence(p SeedPersistence) *Service {
+	s.seedPersist = p
+	return s
 }
 
 // SeedGrowResult is the reviewable outcome of a grown Seed — the Fruit the
@@ -149,23 +237,118 @@ func (s *Service) WithSeed(operations SeedOperations) *Service {
 
 // PrepareSeed validates the request and establishes exactly one canonical
 // Phytomer for the Seed growth. Sync SeedGrow and async dispatch share this
-// path so they cannot mint separate identities.
+// path so they cannot mint separate identities. It is not a governed command.
 func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error) {
 	spec, err := resolveSeedSpec(in)
 	if err != nil {
 		return SeedGrowth{}, err
 	}
-	spec, err = s.bindSeedPhytomer(ctx, spec, in.PhytomerID)
+	spec, err = s.bindSeedPhytomer(ctx, spec)
 	if err != nil {
 		return SeedGrowth{}, err
 	}
-	return SeedGrowth{PhytomerID: spec.PhytomerID, Spec: spec}, nil
+	token := newPreparedSeedToken()
+	pollen := PollenFromContext(ctx)
+	growth := SeedGrowth{
+		token:      token,
+		phytomerID: spec.PhytomerID,
+		pollen:     pollen,
+		spec:       spec,
+	}
+	s.seedMu.Lock()
+	if s.preparedSeeds == nil {
+		s.preparedSeeds = make(map[string]*preparedSeed)
+	}
+	s.preparedSeeds[token] = &preparedSeed{
+		phytomerID: spec.PhytomerID,
+		pollen:     pollen,
+		spec:       spec,
+	}
+	s.seedMu.Unlock()
+	return growth, nil
 }
 
-// SeedGrow validates the request, establishes the canonical Phytomer, and
-// grows the Seed via the injected execution port. Bounds are clamped to
-// Stem-owned caps here, so a caller can only ever narrow — never widen — what
-// a grant already permits.
+// GrowPreparedSeed executes a SeedGrowth issued by PrepareSeed. Substituting
+// another Phytomer, Substrate, Pollen, or spec fails closed. It is not a
+// governed command.
+func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error) {
+	if s.seed.Run == nil {
+		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
+	}
+	spec, pollen, handle, started, opened, err := s.takePreparedSeed(ctx, growth)
+	if err != nil {
+		return SeedGrowResult{}, err
+	}
+	result, err := s.seed.Run(ctx, spec)
+	result.PhytomerID = spec.PhytomerID
+	if opened && s.seedPersist.RecordSettlement != nil {
+		settled := SeedSettlement{
+			Handle:     handle,
+			PhytomerID: spec.PhytomerID,
+			Pollen:     pollen,
+			Substrate:  spec.Substrate,
+			Goal:       spec.Goal,
+			StartedAt:  started,
+			FinishedAt: time.Now().UTC(),
+		}
+		if err != nil {
+			settled.Status = SeedStatusWithered
+			settled.Error = err.Error()
+		} else {
+			settled.Status = result.Status
+			settled.Iterations = result.Iterations
+			settled.Branch = result.Branch
+			settled.Commit = result.Commit
+			settled.Diff = result.Diff
+			settled.Logs = result.Logs
+		}
+		_ = s.seedPersist.RecordSettlement(ctx, settled)
+	}
+	return result, err
+}
+
+// OpenPreparedSeed records durable Seed ownership from a Stem-issued growth
+// before async dispatch is accepted. The handle may be supplied by the
+// adapter; Phytomer, Pollen, and Substrate come only from the envelope.
+func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error) {
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return SeedDispatch{}, fmt.Errorf("seed handle is required")
+	}
+	if s.seedPersist.RecordOpening == nil {
+		return SeedDispatch{}, ErrSeedHistoryUnavailable
+	}
+	rec, err := s.lookupPreparedSeed(growth)
+	if err != nil {
+		return SeedDispatch{}, err
+	}
+	opening := SeedOpening{
+		Handle:     handle,
+		PhytomerID: rec.phytomerID,
+		Pollen:     rec.pollen,
+		Substrate:  rec.spec.Substrate,
+		Goal:       rec.spec.Goal,
+		Status:     "running",
+		StartedAt:  time.Now().UTC(),
+	}
+	if err := s.seedPersist.RecordOpening(ctx, opening); err != nil {
+		return SeedDispatch{}, err
+	}
+	s.seedMu.Lock()
+	rec.handle = handle
+	rec.startedAt = opening.StartedAt
+	rec.opened = true
+	s.seedMu.Unlock()
+	return SeedDispatch{
+		Handle:     handle,
+		PhytomerID: rec.phytomerID,
+		Status:     "running",
+	}, nil
+}
+
+// SeedGrow validates the request, prepares a canonical Phytomer, and grows
+// that prepared envelope. Bounds are clamped to Stem-owned caps here, so a
+// caller can only ever narrow — never widen — what a grant already permits.
 func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error) {
 	if s.seed.Run == nil {
 		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
@@ -174,11 +357,7 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
-	result, err := s.seed.Run(ctx, growth.Spec)
-	if result.PhytomerID == "" {
-		result.PhytomerID = growth.PhytomerID
-	}
-	return result, err
+	return s.GrowPreparedSeed(ctx, growth)
 }
 
 func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
@@ -228,19 +407,9 @@ func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
 	}, nil
 }
 
-func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec, existingID string) (SeedSpec, error) {
+func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec) (SeedSpec, error) {
 	if s.sessions == nil {
 		return SeedSpec{}, fmt.Errorf("seed.grow requires a phytomer session manager")
-	}
-	existingID = strings.TrimSpace(existingID)
-	if existingID != "" {
-		sess, ok := s.sessions.Get(ctx, existingID)
-		if !ok {
-			return SeedSpec{}, fmt.Errorf("seed phytomer %s: %w", existingID, ErrNotFound)
-		}
-		spec.PhytomerID = sess.ID
-		s.sessions.Touch(ctx, sess.ID)
-		return spec, nil
 	}
 	sess, err := s.sessions.Initiate(ctx, spec.Origin, session.Preferences{Substrate: spec.Substrate})
 	if err != nil {
@@ -248,6 +417,96 @@ func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec, existingI
 	}
 	spec.PhytomerID = sess.ID
 	return spec, nil
+}
+
+func newPreparedSeedToken() string {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("seed-growth-%d", time.Now().UTC().UnixNano())
+	}
+	return "seed-growth-" + hex.EncodeToString(buf)
+}
+
+func (s *Service) lookupPreparedSeed(growth SeedGrowth) (*preparedSeed, error) {
+	if s == nil {
+		return nil, ErrSeedGrowthInvalid
+	}
+	s.seedMu.Lock()
+	defer s.seedMu.Unlock()
+	return s.lookupPreparedSeedLocked(growth)
+}
+
+func (s *Service) lookupPreparedSeedLocked(growth SeedGrowth) (*preparedSeed, error) {
+	if strings.TrimSpace(growth.token) == "" {
+		return nil, ErrSeedGrowthInvalid
+	}
+	rec, ok := s.preparedSeeds[growth.token]
+	if !ok || rec == nil {
+		return nil, ErrSeedGrowthInvalid
+	}
+	if rec.consumed {
+		return nil, fmt.Errorf("%w: already executed", ErrSeedGrowthInvalid)
+	}
+	if err := preparedSeedMatches(growth, rec); err != nil {
+		return nil, err
+	}
+	return rec, nil
+}
+
+func (s *Service) takePreparedSeed(ctx context.Context, growth SeedGrowth) (spec SeedSpec, pollen, handle string, started time.Time, opened bool, err error) {
+	if s == nil {
+		return SeedSpec{}, "", "", time.Time{}, false, ErrSeedGrowthInvalid
+	}
+	s.seedMu.Lock()
+	defer s.seedMu.Unlock()
+	rec, err := s.lookupPreparedSeedLocked(growth)
+	if err != nil {
+		return SeedSpec{}, "", "", time.Time{}, false, err
+	}
+	if PollenFromContext(ctx) != rec.pollen {
+		return SeedSpec{}, "", "", time.Time{}, false, fmt.Errorf("%w: pollen does not match the prepared growth", ErrSeedGrowthInvalid)
+	}
+	rec.consumed = true
+	return rec.spec, rec.pollen, rec.handle, rec.startedAt, rec.opened, nil
+}
+
+func preparedSeedMatches(growth SeedGrowth, rec *preparedSeed) error {
+	if rec == nil {
+		return ErrSeedGrowthInvalid
+	}
+	if growth.phytomerID != rec.phytomerID || rec.spec.PhytomerID != rec.phytomerID || growth.spec.PhytomerID != rec.phytomerID {
+		return fmt.Errorf("%w: phytomer substitution is refused", ErrSeedGrowthInvalid)
+	}
+	if growth.pollen != rec.pollen {
+		return fmt.Errorf("%w: pollen substitution is refused", ErrSeedGrowthInvalid)
+	}
+	if !seedSpecsEqual(growth.spec, rec.spec) {
+		return fmt.Errorf("%w: seed substitution is refused", ErrSeedGrowthInvalid)
+	}
+	return nil
+}
+
+func seedSpecsEqual(a, b SeedSpec) bool {
+	return a.Substrate == b.Substrate &&
+		a.Goal == b.Goal &&
+		a.MaxIterations == b.MaxIterations &&
+		a.Timeout == b.Timeout &&
+		a.Origin == b.Origin &&
+		a.PhytomerID == b.PhytomerID &&
+		stringSlicesEqual(a.Verify, b.Verify) &&
+		stringSlicesEqual(a.Egress, b.Egress)
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // seedCapabilities declares the seed family's registry entry, bound to this

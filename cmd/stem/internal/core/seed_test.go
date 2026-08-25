@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -218,24 +220,124 @@ func TestConcurrentSeedsReceiveDistinctPhytomers(t *testing.T) {
 	}
 }
 
-func TestPrepareSeedThenGrowReusesTheSamePhytomer(t *testing.T) {
+func TestPrepareSeedThenGrowPreparedUsesTheSameEnvelope(t *testing.T) {
 	svc, captured := newSeedService(t)
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if growth.PhytomerID == "" {
+	if growth.PhytomerID() == "" {
 		t.Fatal("prepare minted no phytomer")
 	}
 
-	in := validSeedInput()
-	in.PhytomerID = growth.PhytomerID
-	result, err := svc.SeedGrow(context.Background(), in)
+	result, err := svc.GrowPreparedSeed(context.Background(), growth)
 	if err != nil {
 		t.Fatalf("grow prepared: %v", err)
 	}
-	if result.PhytomerID != growth.PhytomerID || captured.PhytomerID != growth.PhytomerID {
-		t.Fatalf("prepared phytomer %q was not reused (result=%q spec=%q)", growth.PhytomerID, result.PhytomerID, captured.PhytomerID)
+	if result.PhytomerID != growth.PhytomerID() || captured.PhytomerID != growth.PhytomerID() {
+		t.Fatalf("prepared phytomer %q was not executed (result=%q spec=%q)", growth.PhytomerID(), result.PhytomerID, captured.PhytomerID)
+	}
+}
+
+func TestPreparedSeedCannotBeSubstitutedIntoADifferentGrowth(t *testing.T) {
+	svc, captured := newSeedService(t)
+	firstIn := validSeedInput()
+	firstIn.Goal = "first seed"
+	secondIn := validSeedInput()
+	secondIn.Goal = "second seed"
+
+	growthA, err := svc.PrepareSeed(context.Background(), firstIn)
+	if err != nil {
+		t.Fatalf("prepare A: %v", err)
+	}
+	growthB, err := svc.PrepareSeed(context.Background(), secondIn)
+	if err != nil {
+		t.Fatalf("prepare B: %v", err)
+	}
+	if growthA.PhytomerID() == growthB.PhytomerID() {
+		t.Fatal("two prepared Seeds shared a Phytomer")
+	}
+
+	growthA.phytomerID = growthB.PhytomerID()
+	growthA.spec.PhytomerID = growthB.PhytomerID()
+	if _, err := svc.GrowPreparedSeed(context.Background(), growthA); err == nil {
+		t.Fatal("substituted phytomer was executed")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("substitution error = %v, want ErrSeedGrowthInvalid", err)
+	}
+	if captured.PhytomerID == growthB.PhytomerID() && captured.Goal == "first seed" {
+		t.Fatal("Seed A executed under Seed B's Phytomer")
+	}
+}
+
+func TestDifferentSeedCannotReusePhytomerOnSameSubstrate(t *testing.T) {
+	svc, _ := newSeedService(t)
+	growthA, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare A: %v", err)
+	}
+	growthB, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare B: %v", err)
+	}
+	if growthA.Substrate() != growthB.Substrate() {
+		t.Fatal("test requires identical substrates")
+	}
+	if growthA.PhytomerID() == growthB.PhytomerID() {
+		t.Fatal("same-substrate Seeds shared a Phytomer")
+	}
+
+	growthB.phytomerID = growthA.PhytomerID()
+	growthB.spec.PhytomerID = growthA.PhytomerID()
+	if _, err := svc.GrowPreparedSeed(context.Background(), growthB); err == nil {
+		t.Fatal("same-substrate phytomer reuse was accepted")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("reuse error = %v, want ErrSeedGrowthInvalid", err)
+	}
+
+	result, err := svc.SeedGrow(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("fresh grow: %v", err)
+	}
+	if result.PhytomerID == growthA.PhytomerID() || result.PhytomerID == growthB.PhytomerID() {
+		t.Fatalf("SeedGrow reused a prepared Phytomer %q", result.PhytomerID)
+	}
+}
+
+func TestDifferentSubstrateCannotReusePreparedPhytomer(t *testing.T) {
+	svc, _ := newSeedService(t)
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	growth.spec.Substrate = "other-substrate"
+	if _, err := svc.GrowPreparedSeed(context.Background(), growth); err == nil {
+		t.Fatal("different-substrate reuse of a prepared Phytomer was accepted")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("reuse error = %v, want ErrSeedGrowthInvalid", err)
+	}
+
+	other := validSeedInput()
+	other.Substrate = "other-substrate"
+	result, err := svc.SeedGrow(context.Background(), other)
+	if err != nil {
+		t.Fatalf("other grow: %v", err)
+	}
+	if result.PhytomerID == growth.PhytomerID() {
+		t.Fatal("a different-Substrate Seed reused the prepared Phytomer")
+	}
+}
+
+func TestZeroSeedGrowthIsRefused(t *testing.T) {
+	svc, _ := newSeedService(t)
+	if _, err := svc.GrowPreparedSeed(context.Background(), SeedGrowth{}); err == nil {
+		t.Fatal("a zero SeedGrowth was executed")
+	}
+}
+
+func TestSeedGrowInputHasNoPhytomerResumeField(t *testing.T) {
+	if _, ok := reflect.TypeOf(SeedGrowInput{}).FieldByName("PhytomerID"); ok {
+		t.Fatal("SeedGrowInput still exposes a Phytomer resume field")
 	}
 }
 
@@ -280,11 +382,49 @@ func TestSeedPollenIsNotACallerField(t *testing.T) {
 
 func TestPrepareSeedIsNotAGovernedCapability(t *testing.T) {
 	for _, name := range CapabilityNames() {
-		if name == "seed.prepare" || name == "seed.watch" {
+		if name == "seed.prepare" || name == "seed.watch" || name == "seed.growPrepared" {
 			t.Fatalf("governed registry includes %q", name)
 		}
 	}
 	if IsDelegatedCapability("seed.watch") || IsDelegatedCapability("seed.prepare") {
 		t.Fatal("a Seed observation/prepare command was added to the delegated set")
+	}
+}
+
+func TestOpenPreparedSeedComposesOwnershipFromTheEnvelope(t *testing.T) {
+	svc, _ := newSeedService(t)
+	var opening SeedOpening
+	svc.WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(_ context.Context, got SeedOpening) error {
+			opening = got
+			return nil
+		},
+	})
+	ctx := WithPollen(context.Background(), "claude")
+	growth, err := svc.PrepareSeed(ctx, validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	dispatch, err := svc.OpenPreparedSeed(ctx, growth, "seed-handle-1")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if dispatch.Handle != "seed-handle-1" || dispatch.PhytomerID != growth.PhytomerID() || dispatch.Status != "running" {
+		t.Fatalf("dispatch = %+v", dispatch)
+	}
+	if opening.Handle != "seed-handle-1" || opening.PhytomerID != growth.PhytomerID() || opening.Pollen != "claude" || opening.Substrate != "core" {
+		t.Fatalf("opening composed from outside the envelope: %+v", opening)
+	}
+
+	foreign := validSeedInput()
+	foreign.Substrate = "other"
+	other, err := svc.PrepareSeed(ctx, foreign)
+	if err != nil {
+		t.Fatalf("prepare other: %v", err)
+	}
+	other.phytomerID = growth.PhytomerID()
+	other.spec.PhytomerID = growth.PhytomerID()
+	if _, err := svc.OpenPreparedSeed(ctx, other, "seed-stolen"); err == nil {
+		t.Fatal("open accepted a substituted phytomer")
 	}
 }

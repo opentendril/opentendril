@@ -27,6 +27,12 @@ func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.Ser
 	if err != nil {
 		t.Fatalf("session manager: %v", err)
 	}
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
 		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
 			return core.SeedGrowResult{
@@ -35,19 +41,53 @@ func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.Ser
 				Branch:     "tendril/seed-x", Diff: "the diff", Logs: "the logs",
 			}, nil
 		},
-	})
-
-	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	}).WithSeedPersistence(testSeedPersistence(store))
 
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
 	handler := NewSeedHandler(coreSvc).WithDelegation(gate).WithHistory(store)
 	mux := http.NewServeMux()
 	handler.Register(mux, nil)
 	return mux, store
+}
+
+func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
+	return core.SeedPersistence{
+		RecordOpening: func(ctx context.Context, opening core.SeedOpening) error {
+			if store == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return store.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     opening.Handle,
+				Pollen:     opening.Pollen,
+				PhytomerID: opening.PhytomerID,
+				Substrate:  opening.Substrate,
+				Goal:       opening.Goal,
+				Status:     opening.Status,
+				StartedAt:  opening.StartedAt,
+			})
+		},
+		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
+			if store == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return store.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     settled.Handle,
+				Pollen:     settled.Pollen,
+				PhytomerID: settled.PhytomerID,
+				Substrate:  settled.Substrate,
+				Goal:       settled.Goal,
+				Status:     settled.Status,
+				Iterations: settled.Iterations,
+				Branch:     settled.Branch,
+				Commit:     settled.Commit,
+				Diff:       settled.Diff,
+				Logs:       settled.Logs,
+				Error:      settled.Error,
+				StartedAt:  settled.StartedAt,
+				FinishedAt: settled.FinishedAt,
+			})
+		},
+	}
 }
 
 func seedGrantFor(pollen string) core.DelegationGrant {
@@ -186,19 +226,28 @@ func TestSeedCollectScopedToDispatchingSubject(t *testing.T) {
 }
 
 func TestSeedAsyncPersistFailureDoesNotAccept(t *testing.T) {
-	mux, _ := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
-	original := recordSeedRunFn
-	t.Cleanup(func() { recordSeedRunFn = original })
-	recordSeedRunFn = func(context.Context, *historydb.Store, historydb.SeedRun) error {
-		return fmt.Errorf("disk full")
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
 	}
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			t.Fatal("execution must not start when ownership cannot be persisted")
+			return core.SeedGrowResult{}, nil
+		},
+	}).WithSeedPersistence(core.SeedPersistence{
+		RecordOpening: func(context.Context, core.SeedOpening) error {
+			return fmt.Errorf("disk full")
+		},
+	})
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("local-pollinator")}), Bus: eventbus.New()}
+	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
 
 	rec := dispatchSeedAsync(t, mux, "local-pollinator")
 	if rec.Code == http.StatusAccepted {
 		t.Fatalf("persist failure returned 202: %s", rec.Body.String())
-	}
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -250,6 +299,63 @@ func TestSeedAsyncWithoutHistoryDoesNotAccept(t *testing.T) {
 	rec := dispatchSeedAsync(t, mux, "local-pollinator")
 	if rec.Code == http.StatusAccepted {
 		t.Fatalf("missing history still returned 202: %s", rec.Body.String())
+	}
+}
+
+func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	var openings []core.SeedOpening
+	var specs []core.SeedSpec
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			specs = append(specs, spec)
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+		},
+	}).WithSeedPersistence(core.SeedPersistence{
+		RecordOpening: func(_ context.Context, opening core.SeedOpening) error {
+			openings = append(openings, opening)
+			return nil
+		},
+		RecordSettlement: func(context.Context, core.SeedSettlement) error { return nil },
+	})
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("local-pollinator")}), Bus: eventbus.New()}
+	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["true"],"pollen":"attacker","phytomerId":"tendril-forged","handle":"seed-forged"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(body))
+	req.Header.Set(PollenHeader, "local-pollinator")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202: %s", rec.Code, rec.Body.String())
+	}
+	var accepted core.SeedDispatch
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if accepted.PhytomerID == "tendril-forged" || accepted.Handle == "seed-forged" {
+		t.Fatalf("REST manufactured lifecycle identity: %+v", accepted)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(specs) == 1 && len(openings) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if len(openings) != 1 {
+		t.Fatalf("want one Stem-composed opening, got %d", len(openings))
+	}
+	if openings[0].Pollen != "local-pollinator" || openings[0].PhytomerID != accepted.PhytomerID || openings[0].Substrate != "core" {
+		t.Fatalf("REST chose ownership: %+v", openings[0])
+	}
+	if len(specs) != 1 || specs[0].PhytomerID != accepted.PhytomerID {
+		t.Fatalf("async execution did not use the prepared Phytomer: specs=%+v accepted=%+v", specs, accepted)
 	}
 }
 

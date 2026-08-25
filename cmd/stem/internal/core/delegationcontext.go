@@ -17,8 +17,9 @@ import (
 // authenticated header, stamped after authorization, and unforgeable from
 // request content.
 //
-// The Core never reads it; it passes the context to the injected port, which
-// keeps the Core transport-free.
+// Capability input structs never carry it. The Core may bind it from context
+// onto a Stem-owned Seed lifecycle envelope at PrepareSeed; it still never
+// takes Pollen from caller JSON.
 
 type pollenKey struct{}
 

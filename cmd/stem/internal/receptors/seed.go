@@ -186,58 +186,19 @@ func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 		writeCoreErr(w, err)
 		return
 	}
-	req.PhytomerID = growth.PhytomerID
-
 	handle := fmt.Sprintf("seed-%d", time.Now().UTC().UnixNano())
-	started := time.Now().UTC()
-	opening := historydb.SeedRun{
-		Handle:     handle,
-		Pollen:     pollen,
-		PhytomerID: growth.PhytomerID,
-		Substrate:  strings.TrimSpace(req.Substrate),
-		Goal:       strings.TrimSpace(req.Goal),
-		Status:     "running",
-		StartedAt:  started,
-	}
-	if err := recordSeedRunFn(r.Context(), h.history, opening); err != nil {
-		http.Error(w, "failed to persist seed ownership: "+err.Error(), http.StatusServiceUnavailable)
+	dispatch, err := h.core.OpenPreparedSeed(r.Context(), growth, handle)
+	if err != nil {
+		writeCoreErr(w, err)
 		return
 	}
 
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
-		record := opening
-		result, err := h.core.SeedGrow(bgCtx, req)
-		if err != nil {
-			record.Status = "withered"
-			record.Error = err.Error()
-		} else {
-			record.Status = result.Status
-			record.Iterations = result.Iterations
-			record.PhytomerID = result.PhytomerID
-			record.Branch = result.Branch
-			record.Commit = result.Commit
-			record.Diff = result.Diff
-			record.Logs = result.Logs
-		}
-		record.FinishedAt = time.Now().UTC()
-		_ = recordSeedRunFn(bgCtx, h.history, record)
+		_, _ = h.core.GrowPreparedSeed(bgCtx, growth)
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"handle":     handle,
-		"phytomerId": growth.PhytomerID,
-		"status":     "running",
-	})
-}
-
-// recordSeedRunFn persists one Seed run. The opening write is the dispatch
-// ownership contract: a failure here must not be reported as 202 Accepted.
-var recordSeedRunFn = func(ctx context.Context, store *historydb.Store, run historydb.SeedRun) error {
-	if store == nil {
-		return fmt.Errorf("seed run history is not available")
-	}
-	return store.RecordSeedRun(ctx, run)
+	writeJSON(w, http.StatusAccepted, dispatch)
 }
 
 // collect returns the reviewable Fruit for a dispatched growth by handle. It is
