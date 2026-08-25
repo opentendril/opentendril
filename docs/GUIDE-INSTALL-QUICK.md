@@ -91,13 +91,16 @@ sudo -u tendril -H bash -lc 'cd /home/tendril && export DOCKER_HOST=unix:///run/
 sudo -u tendril -H bash -lc 'cd /home/tendril && /home/tendril/.local/bin/tendril hardiness'
 ```
 
-Git connection and Pollinator credentials still require Botanist intent —
-Stage 5 and Stage 6 of [GUIDE-INSTALL.md](./GUIDE-INSTALL.md). When
-configuration is complete, start the Stem:
+Git connection, the explicit `seed.grow` / `sprout.watch` grant, and Pollinator
+credentials still require Botanist intent — Stage 5 and Stage 6 of
+[GUIDE-INSTALL.md](./GUIDE-INSTALL.md). Configure those grants before starting
+the Stem. When configuration is complete, start it:
 
 ```bash
 # [root]
 systemctl enable --now tendril
 ```
 
-The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md).
+The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md):
+dispatch a Seed with the Pollinator credential, watch that Phytomer, and review
+the Git Fruit. `main` stays unchanged until a human merges.

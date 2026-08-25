@@ -499,31 +499,61 @@ tendril git setup \
 principal: the Stem cannot read your clone, so `mode: path` pointing at it will
 fail. Managed mode gives the Stem its own clone under its own home.
 
-This writes `/home/tendril/substrates.yaml` and
-`/home/tendril/.tendril/grants.yaml`. Review the grant — no grant means every
-delegated invocation is denied, which is the secure default:
+This writes `/home/tendril/substrates.yaml` and a **Git-only** grant at
+`/home/tendril/.tendril/grants.yaml`. `git setup --grant-pollen` authorises the
+delegated Git loop and nothing else — no `seed.grow`, no `sprout.watch`, no
+`sprout.grow`. No grant means every delegated invocation is denied, which is the
+secure default.
 
-```yaml
-# /home/tendril/.tendril/grants.yaml
-grants:
-  claude:
-    # git.prune is deliberately absent: it deletes branches, and every other
-    # operation is recoverable. Add it knowingly if you want one tidying up.
-    #
-    # sprout.watch is the read side: it lets this pollen watch the runs it
-    # dispatched — the stored record, the persisted events, and the live
-    # stream — and nothing anyone else dispatched. Grant it alongside
-    # sprout.grow, or on its own for an observer that may look but not start
-    # work. Without it a pollen can begin work it cannot then see.
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, sprout.watch]
-    substrates: [myrepo]
-    # egress: [github.com]              # optional: hosts the Stem may fetch for this pollen
-    # expires: 2027-01-01               # optional: RFC 3339 timestamp or YYYY-MM-DD
-    # confirmAbove: { impact: high }    # optional: an invocation crossing this bound returns pending,
-    #                                   # not denied. An operator lists/approves/denies via CLI
-    #                                   # (`tendril delegation pending`, `tendril delegation approve <id>`).
-    #                                   # An approved confirmation is single-use and expires after
-    #                                   # an hour if unresolved.
+Inspect it through the control-plane command; do not edit `.tendril/grants.yaml`
+by hand for ordinary first use:
+
+```bash
+# as tendril, in /home/tendril
+tendril delegation grants --pollen claude --substrate myrepo
+```
+
+```text
+pollen: claude
+  substrates: [myrepo]
+  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
+```
+
+`git.prune` is deliberately absent: it deletes branches, and every other Git
+operation is recoverable.
+
+Then grant the bounded Seed hand-off and observation explicitly, using the same
+Pollen and Substrate names:
+
+```bash
+# as tendril, in /home/tendril
+tendril delegation grant \
+  --pollen claude \
+  --substrate myrepo \
+  --operation seed.grow \
+  --operation sprout.watch
+```
+
+```text
+pollen: claude
+  substrates: [myrepo]
+  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, sprout.watch]
+```
+
+`seed.grow` is the bounded task hand-off. `sprout.watch` is the read side: it
+lets this Pollen observe the Phytomer the Stem created for that Seed — first
+through `GET /v1/phytomers/{phytomerId}/watch`, and also the stored run
+records, persisted events, and live stream — and nothing anyone else
+dispatched. Granting `seed.grow` does not imply `sprout.watch`. `sprout.grow`
+is not part of this first-use grant.
+
+Revoke the same way if you need to take an operation back:
+
+```bash
+tendril delegation revoke \
+  --pollen claude \
+  --substrate myrepo \
+  --operation seed.grow
 ```
 
 **Check:** `tendril git setup --verify --substrate myrepo`
@@ -594,9 +624,10 @@ tendril pollinator issue --pollen claude --note "laptop"
 ```
 
 The secret prints **once** and is never stored — only its SHA-256 digest is kept,
-so a leaked store is not a leaked credential. It begins `tendril_root_`, which makes it
+so a leaked store is not a leaked credential. It begins `tendril_refresh_`, which makes it
 recognisable in a log or a configuration file. That secret is the **durable
-refresh root** for this Pollinator.
+refresh root** for this Pollinator. Give it to that Pollinator; do not give the
+Pollinator the Botanist key.
 
 On a **loopback** bind (the default), the Pollinator may present the durable root
 as a bearer token on data routes for local convenience. On an **off-host** bind,
@@ -820,10 +851,11 @@ Representational State Transfer surface. It is admitted only on routes that
 consult the delegation authorizer per invocation, with the Substrate in hand;
 every other route — including the Model Context Protocol endpoint at `POST /v1`
 — refuses a direct credential-bearing caller by default rather than running the
-request as ordinary traffic:
+request as ordinary traffic. On a loopback bind the bearer may be the durable
+root (`tendril_refresh_…`); off-host binds require a minted access token.
 
 ```console
-$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer tendril_root_…" …
+$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer <pollinator-credential>" …
 HTTP/1.1 403 Forbidden
 delegation denied: this endpoint exposes no delegable operation-class
 ```
@@ -841,23 +873,25 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/git/prune` | `git.prune` |
 | `POST /v1/stoma/pass` | `stoma.pass` |
 | `POST /v1/seeds/grow` | `seed.grow` |
+| `POST /v1/seeds/grow/async` | `seed.grow` |
+| `GET /v1/seeds/runs/{handle}` | `seed.grow` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
-| `GET /v1/phytomers/{id}/sprout-runs` | `sprout.watch` |
-| `GET /v1/phytomers/{id}/events` | `sprout.watch` |
-| `GET /ws?sessionId={id}` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/watch` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/sprout-runs` | `sprout.watch` |
+| `GET /v1/phytomers/{phytomerId}/events` | `sprout.watch` |
+| `GET /ws?sessionId={phytomerId}` | `sprout.watch` |
 
-A `sprout.watch` grant releases only what the Pollen's own runs put there, and
-only for the substrates those runs targeted. `sprout-runs` narrows to the
-caller's own records. A phytomer's events and its live stream are session-wide
-and name no owner individually, so they are released whole or not at all: every
-run in the phytomer must be the caller's, and a phytomer nothing was dispatched
-into belongs to nobody. A delegated stream must name the phytomer it watches and
-receives only that phytomer's events; the Botanist key still opens the
-unfiltered feed.
+A `sprout.watch` grant releases only what this Pollen dispatched, and only for
+the Substrate that grant covers. `GET /v1/phytomers/{phytomerId}/watch` is the
+headless current-state stream for the Seed-owned Phytomer named in the path.
+`sprout-runs` narrows to the caller's own records. A phytomer's events and its
+live stream are session-wide and name no owner individually, so they are
+released whole or not at all. The Botanist key still opens the unfiltered feed
+and is not given to the Pollinator.
 
 ```bash
 curl -X POST http://localhost:8080/v1/git/status \
-  -H "Authorization: Bearer tendril_root_…" \
+  -H "Authorization: Bearer <pollinator-credential>" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo"}'
 ```
@@ -866,7 +900,7 @@ curl -X POST http://localhost:8080/v1/git/status \
 the reason:
 
 ```console
-$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer tendril_root_…" …
+$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer <pollinator-credential>" …
 HTTP/1.1 403 Forbidden
 delegation denied: no active grant covers Pollen "claude",
 operation-class "git.prune", substrate "myrepo"
@@ -887,27 +921,80 @@ Stem runs the verify command deterministically in a network-sealed Terrarium;
 that exit code — never the Sprout's own claim — is the verdict. The work lands on
 a branch for review as **Fruit**; nothing is ever merged.
 
-```bash
-# Synchronous — blocks until the Seed settles, then prints the Fruit.
-tendril seed grow --substrate myrepo --goal "make the failing tests pass" -- go test ./...
+The first real task uses the Pollinator credential and the same Substrate name
+granted above. It does **not** use the Botanist/operator `tendril seed grow`
+command, and it does not use the Botanist key.
 
-# Asynchronous — hand it to the running daemon and walk away with a handle.
-tendril seed grow --substrate myrepo --goal "make the failing tests pass" --async -- go test ./...
-#   → Handle: seed-1723488000000000000
-tendril seed collect seed-1723488000000000000
+Mint a short-lived access token, then dispatch with that Pollinator credential.
+The redirect writes the token to the invoking account, not into the Stem's
+control plane:
+
+```bash
+# from the ordinary account — mint a short-lived access token (≤15 minutes)
+sudo -u tendril -i tendril pollinator token --pollen claude > ~/.tendril-token
+chmod 600 ~/.tendril-token
+TOKEN=$(cat ~/.tendril-token)
 ```
 
-The daemon routes underneath, each gated by the `seed.grow` operation-class:
+```bash
+# Dispatch a bounded Seed. Substrate must be myrepo — the name granted above.
+curl -s -X POST localhost:8080/v1/seeds/grow/async \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
+```
 
-| Route | Behaviour |
-|---|---|
-| `POST /v1/seeds/grow` | grow synchronously; the response body is the Fruit |
-| `POST /v1/seeds/grow/async` | dispatch; the response body is a durable `handle` |
-| `GET /v1/seeds/runs/{handle}` | collect the Fruit — **only** by the Pollen that dispatched it |
+The Stem accepts the dispatch with HTTP 202 and returns three fields:
 
-A settled Seed reports `satisfied` (verify passed), `exhausted` (bounds spent), or
-`withered` (the Sprout failed). Collection is scoped to the dispatching subject:
-one Pollinator can never read another's handle.
+```json
+{"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
+```
+
+`handle` is the Fruit-collection identity. `phytomerId` is the
+lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
+from that response. Do not invent an ID, inspect a database, or correlate
+identities by hand.
+
+Immediately observe that exact Phytomer. `sprout.watch` authorises this stream;
+it does not collect Fruit and does not grant `seed.grow`.
+
+```bash
+curl -N \
+  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The stream is Server-Sent Events. After authenticating it emits the current safe
+observation immediately, then follows durable state until the Seed is
+`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
+terminal Seed returns that terminal current state and closes.
+
+The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
+When the Stem actually produced Fruit, the same stream includes `branch` and
+`commit`. Those fields stay absent until those facts exist. `main` is not
+modified.
+
+When the documented workflow needs the collection view, use the Seed handle
+from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
+that dispatched it:
+
+```bash
+curl -s localhost:8080/v1/seeds/runs/<handle> \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+A settled Seed reports `satisfied` (verify passed), `exhausted` (bounds spent),
+or `withered` (the Sprout failed). Review the resulting Git Fruit on the
+reported branch. `main` remains unchanged until a human merges. One Pollinator
+can never read another's handle.
+
+The same routes exist for a synchronous grow (`POST /v1/seeds/grow`); the async
+dispatch is the ordinary-terminal first-use path.
+
+An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
+MCP tool name is `seedGrow`; the grant stays `seed.grow`. Granting `seed.grow`
+does not grant `sprout.watch`, and granting `sprout.watch` does not grant
+`seed.grow`.
 
 ---
 

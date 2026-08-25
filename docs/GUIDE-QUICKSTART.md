@@ -151,7 +151,8 @@ sudo -u tendril -i tendril pollinator issue --pollen claude --note "laptop"
 ```
 
 The secret prints **once** and is never stored; only its digest is kept. It begins
-`tendril_root_` and is the **durable refresh root** for that Pollinator.
+`tendril_refresh_` and is the **durable refresh root** for that Pollinator. Give
+it to that Pollinator; do not give the Pollinator the Botanist key.
 
 > [!IMPORTANT]
 > **Credentials and grants are read at startup.** One issued while the Stem is
@@ -182,20 +183,36 @@ Use it without printing it:
 A credential proves *who* you are. A grant decides *what* you may do. No grant
 means every delegated invocation is denied — the secure default.
 
+Inspect the Stem control-plane grant. Do not edit `.tendril/grants.yaml` by hand
+for ordinary first use:
+
 ```bash
-sudo -u tendril -i cat .tendril/grants.yaml
+sudo -u tendril -i tendril delegation grants --pollen claude --substrate myrepo
 ```
 
-```yaml
-grants:
-  claude:
-    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
-    substrates: [opentendril]
+After Git setup the grant is Git-only. The Botanist then grants `seed.grow` and
+`sprout.watch` explicitly, using the same Pollen and Substrate names:
+
+```bash
+sudo -u tendril -i tendril delegation grant \
+  --pollen claude \
+  --substrate myrepo \
+  --operation seed.grow \
+  --operation sprout.watch
+```
+
+If the Stem is already running, restart it so the new grant is read. Then
+inspect again:
+
+```text
+pollen: claude
+  substrates: [myrepo]
+  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, sprout.watch]
 ```
 
 Read it as a sentence: *the Pollen `claude` may run these operation classes, on
-this Substrate, and nothing else.* Note `git.prune` is absent — it deletes
-branches, and every other operation here is recoverable.
+this Substrate, and nothing else.* Note `git.prune` and `sprout.grow` are
+absent — deletion and raw Sprout dispatch are not part of the first-use grant.
 
 Grants and Core identity stay dotted. The MCP tool name is the lower-camelCase
 projection of that identity:
@@ -212,13 +229,13 @@ TOKEN=$(cat ~/.tendril-token)
 curl -s -X POST localhost:8080/v1/git/status \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"substrate":"opentendril"}'
+  -d '{"substrate":"myrepo"}'
 ```
 
 ```json
 {"branch":"tendril/claude/work","head":"bb63c9f…","defaultBranch":"main",
  "clean":true,"onDefaultBranch":false,"commitAllowed":true,
- "workspace":"/home/tendril/.tendril/workspaces/opentendril/claude",
+ "workspace":"/home/tendril/.tendril/workspaces/myrepo/claude",
  "isolated":true,"pollen":"claude"}
 ```
 
@@ -234,7 +251,66 @@ Three things in that response are worth reading closely:
   Stem owns and can later reclaim. Branches made by hand in a shell are invisible
   to it.
 
-## 6. Learn what a refusal looks like
+## 6. Hand off a bounded Seed
+
+Use the same Pollinator credential and the same Substrate name. This is the
+delegated first task — not the Botanist/operator `tendril seed grow` command,
+and not the Botanist key.
+
+```bash
+TOKEN=$(cat ~/.tendril-token)
+curl -s -X POST localhost:8080/v1/seeds/grow/async \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
+```
+
+The Stem accepts the dispatch with HTTP 202 and returns three fields:
+
+```json
+{"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
+```
+
+`handle` is the Fruit-collection identity. `phytomerId` is the
+lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
+from that response. Do not invent an ID, inspect a database, or correlate
+identities by hand.
+
+Immediately observe that exact Phytomer. `sprout.watch` authorises this stream;
+it does not collect Fruit and does not grant `seed.grow`.
+
+```bash
+curl -N \
+  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+The stream is Server-Sent Events. After authenticating it emits the current safe
+observation immediately, then follows durable state until the Seed is
+`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
+terminal Seed returns that terminal current state and closes.
+
+The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
+When the Stem actually produced Fruit, the same stream includes `branch` and
+`commit`. Those fields stay absent until those facts exist. `main` is not
+modified.
+
+When the documented workflow needs the collection view, use the Seed handle
+from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
+that dispatched it:
+
+```bash
+curl -s localhost:8080/v1/seeds/runs/<handle> \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Review the resulting Git Fruit on the reported branch. `main` remains unchanged
+until a human merges.
+
+An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
+MCP tool name is `seedGrow`; the grant stays `seed.grow`.
+
+## 7. Learn what a refusal looks like
 
 A refusal is not a fault. Knowing the difference between these three saves an
 afternoon:
@@ -249,26 +325,26 @@ The `403` names all three things it checked, so you know which to change:
 
 ```
 delegation denied: no active grant covers Pollen "claude",
-operation-class "git.prune", substrate "opentendril"
+operation-class "git.prune", substrate "myrepo"
 ```
 
 If a Substrate is configured but its managed checkout has not been materialized,
 an in-grant call returns `409` — a configuration state you fix on the host, not a
 server fault.
 
-## 7. Two credential systems, not one
+## 8. Two credential systems, not one
 
 A frequent confusion, worth stating plainly:
 
 | | Held by | Used for |
 |---|---|---|
 | **`BOTANIST_KEY`** | the operator | the gate, and management routes such as delegation approvals |
-| **Pollinator credential** (`tendril_root_…`) | each caller | delegated data routes, constrained by that caller's grant |
+| **Pollinator credential** (`tendril_refresh_…`) | each caller | delegated data routes, constrained by that caller's grant |
 
 They are separate on purpose. It is why a Pollinator cannot approve its own
 pending confirmation.
 
-## 8. Connect over MCP
+## 9. Connect over MCP
 
 The supported MCP client on this installation is `tendril-mcp`, not
 `tendril mcp`. See [Model Context Protocol over stdio](#model-context-protocol-over-stdio).
@@ -347,7 +423,7 @@ Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
 A granted `git.status` call uses the primary MCP identifier:
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitStatus","arguments":{"substrate":"opentendril"}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitStatus","arguments":{"substrate":"myrepo"}}}
 ```
 
 The Stem authorizes and invokes canonical `git.status`. Do not rewrite the
