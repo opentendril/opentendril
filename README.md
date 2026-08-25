@@ -74,22 +74,22 @@ Then `tendril hardiness` and `tendril init`. First session:
 
 ### Governed
 
-Pin **v0.3.1**. Download `install.sh` and `checksums.txt`, verify the installer,
+Pin **v0.3.2**. Download `install.sh` and `checksums.txt`, verify the installer,
 read it, then run it with `--governed`. Do not pipe the installer into
 `sudo sh`. The full sequence is in
 [docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md):
 
 ```bash
 curl -fsSL -o install.sh \
-  https://github.com/opentendril/opentendril/releases/download/v0.3.1/install.sh
+  https://github.com/opentendril/opentendril/releases/download/v0.3.2/install.sh
 curl -fsSL -o checksums.txt \
-  https://github.com/opentendril/opentendril/releases/download/v0.3.1/checksums.txt
+  https://github.com/opentendril/opentendril/releases/download/v0.3.2/checksums.txt
 grep 'install.sh$' checksums.txt | sha256sum -c
 # read install.sh, then:
 sudo sh install.sh \
   --governed \
   --pollinator-user <ordinary-user> \
-  --version v0.3.1
+  --version v0.3.2
 ```
 
 ### Hardened / manual reference
