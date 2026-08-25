@@ -525,6 +525,94 @@ func TestPrepareSeedFailsClosedWhenTokenMintFails(t *testing.T) {
 	if len(svc.preparedSeeds) != 0 {
 		t.Fatalf("failed mint left prepared growth in the map: %d", len(svc.preparedSeeds))
 	}
+	sessions, err := svc.ListSessions(context.Background())
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("token mint failure left orphan phytomer: %+v", sessions)
+	}
+}
+
+func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	var ran atomic.Int32
+	svc := NewService(manager).WithSeed(SeedOperations{
+		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+			ran.Add(1)
+			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+		},
+	})
+	persistStarted := make(chan struct{})
+	persistRelease := make(chan struct{})
+	svc.WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error {
+			persistStarted <- struct{}{}
+			<-persistRelease
+			return nil
+		},
+	})
+
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	openErr := make(chan error, 1)
+	go func() {
+		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-handle")
+		openErr <- err
+	}()
+	select {
+	case <-persistStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OpenPreparedSeed never reached RecordOpening")
+	}
+
+	growWhileOpeningErr := make(chan error, 1)
+	go func() {
+		_, err := svc.GrowPreparedSeed(context.Background(), growth)
+		growWhileOpeningErr <- err
+	}()
+	select {
+	case err := <-growWhileOpeningErr:
+		if err == nil {
+			t.Fatal("GrowPreparedSeed executed while durable opening was incomplete")
+		}
+		if !errors.Is(err, ErrSeedGrowthInvalid) {
+			t.Fatalf("grow-while-opening error = %v, want ErrSeedGrowthInvalid", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("GrowPreparedSeed did not fail closed while opening was incomplete")
+	}
+	if ran.Load() != 0 {
+		t.Fatal("SeedOperations.Run was invoked before OpenPreparedSeed completed")
+	}
+
+	close(persistRelease)
+	if err := <-openErr; err != nil {
+		t.Fatalf("OpenPreparedSeed: %v", err)
+	}
+
+	result, err := svc.GrowPreparedSeed(context.Background(), growth)
+	if err != nil {
+		t.Fatalf("grow after open: %v", err)
+	}
+	if result.Status != SeedStatusSatisfied || ran.Load() != 1 {
+		t.Fatalf("after open: status=%q runs=%d, want satisfied/1", result.Status, ran.Load())
+	}
+
+	if _, err := svc.GrowPreparedSeed(context.Background(), growth); err == nil {
+		t.Fatal("replay of a claimed growth was accepted")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("replay error = %v, want ErrSeedGrowthInvalid", err)
+	}
+	if ran.Load() != 1 {
+		t.Fatalf("replay invoked Run: runs=%d", ran.Load())
+	}
 }
 
 func TestGrowPreparedSeedRemovesClaimedGrowth(t *testing.T) {

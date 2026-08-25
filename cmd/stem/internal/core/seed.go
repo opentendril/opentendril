@@ -243,11 +243,13 @@ func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth
 	if err != nil {
 		return SeedGrowth{}, err
 	}
-	spec, err = s.bindSeedPhytomer(ctx, spec)
+	// Mint before Phytomer creation so a crypto/rand failure cannot leave an
+	// orphan session. An unused token after a later Initiate failure is never stored.
+	token, err := s.mintPreparedSeedToken()
 	if err != nil {
 		return SeedGrowth{}, err
 	}
-	token, err := s.mintPreparedSeedToken()
+	spec, err = s.bindSeedPhytomer(ctx, spec)
 	if err != nil {
 		return SeedGrowth{}, err
 	}
@@ -485,6 +487,9 @@ func (s *Service) takePreparedSeed(ctx context.Context, growth SeedGrowth) (spec
 	rec, err := s.lookupPreparedSeedLocked(growth)
 	if err != nil {
 		return SeedSpec{}, "", "", time.Time{}, false, err
+	}
+	if rec.opening {
+		return SeedSpec{}, "", "", time.Time{}, false, fmt.Errorf("%w: durable opening is not complete", ErrSeedGrowthInvalid)
 	}
 	if PollenFromContext(ctx) != rec.pollen {
 		return SeedSpec{}, "", "", time.Time{}, false, fmt.Errorf("%w: pollen does not match the prepared growth", ErrSeedGrowthInvalid)
