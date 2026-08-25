@@ -199,6 +199,9 @@ type Service struct {
 	seedPersist   SeedPersistence
 	seedMu        sync.Mutex
 	preparedSeeds map[string]*preparedSeed
+	// newPreparedSeedToken, when set, replaces crypto/rand token minting.
+	// Tests inject a failing seam; production leaves it nil.
+	newPreparedSeedToken func() (string, error)
 }
 
 // NewService builds a Core over the shared SessionManager.

@@ -120,7 +120,7 @@ func waitForSeedRun(t *testing.T, store *historydb.Store, handle string) history
 		if found && run.Status != "running" {
 			return run
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // poll: wait until the async SeedRun leaves running
 	}
 	t.Fatalf("seed run %s did not settle in time", handle)
 	return historydb.SeedRun{}
@@ -308,10 +308,10 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 		t.Fatalf("session manager: %v", err)
 	}
 	var openings []core.SeedOpening
-	var specs []core.SeedSpec
+	executed := make(chan core.SeedSpec, 1)
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
 		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
-			specs = append(specs, spec)
+			executed <- spec
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
 	}).WithSeedPersistence(core.SeedPersistence{
@@ -341,21 +341,19 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 	if accepted.PhytomerID == "tendril-forged" || accepted.Handle == "seed-forged" {
 		t.Fatalf("REST manufactured lifecycle identity: %+v", accepted)
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(specs) == 1 && len(openings) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 	if len(openings) != 1 {
 		t.Fatalf("want one Stem-composed opening, got %d", len(openings))
 	}
 	if openings[0].Pollen != "local-pollinator" || openings[0].PhytomerID != accepted.PhytomerID || openings[0].Substrate != "core" {
 		t.Fatalf("REST chose ownership: %+v", openings[0])
 	}
-	if len(specs) != 1 || specs[0].PhytomerID != accepted.PhytomerID {
-		t.Fatalf("async execution did not use the prepared Phytomer: specs=%+v accepted=%+v", specs, accepted)
+	select {
+	case spec := <-executed:
+		if spec.PhytomerID != accepted.PhytomerID {
+			t.Fatalf("async execution did not use the prepared Phytomer: spec=%+v accepted=%+v", spec, accepted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("async execution did not run the prepared growth")
 	}
 }
 

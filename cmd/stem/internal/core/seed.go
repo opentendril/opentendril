@@ -140,7 +140,7 @@ type preparedSeed struct {
 	handle     string
 	startedAt  time.Time
 	opened     bool
-	consumed   bool
+	opening    bool
 }
 
 // SeedDispatch is the Stem-composed async accept contract: the durable handle
@@ -247,7 +247,10 @@ func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth
 	if err != nil {
 		return SeedGrowth{}, err
 	}
-	token := newPreparedSeedToken()
+	token, err := s.mintPreparedSeedToken()
+	if err != nil {
+		return SeedGrowth{}, err
+	}
 	pollen := PollenFromContext(ctx)
 	growth := SeedGrowth{
 		token:      token,
@@ -318,10 +321,19 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handl
 	if s.seedPersist.RecordOpening == nil {
 		return SeedDispatch{}, ErrSeedHistoryUnavailable
 	}
-	rec, err := s.lookupPreparedSeed(growth)
+
+	s.seedMu.Lock()
+	rec, err := s.lookupPreparedSeedLocked(growth)
 	if err != nil {
+		s.seedMu.Unlock()
 		return SeedDispatch{}, err
 	}
+	if rec.opened || rec.opening {
+		s.seedMu.Unlock()
+		return SeedDispatch{}, fmt.Errorf("%w: already opened", ErrSeedGrowthInvalid)
+	}
+	rec.opening = true
+	phytomerID := rec.phytomerID
 	opening := SeedOpening{
 		Handle:     handle,
 		PhytomerID: rec.phytomerID,
@@ -331,17 +343,24 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handl
 		Status:     "running",
 		StartedAt:  time.Now().UTC(),
 	}
+	s.seedMu.Unlock()
+
 	if err := s.seedPersist.RecordOpening(ctx, opening); err != nil {
+		s.seedMu.Lock()
+		rec.opening = false
+		s.seedMu.Unlock()
 		return SeedDispatch{}, err
 	}
+
 	s.seedMu.Lock()
 	rec.handle = handle
 	rec.startedAt = opening.StartedAt
 	rec.opened = true
+	rec.opening = false
 	s.seedMu.Unlock()
 	return SeedDispatch{
 		Handle:     handle,
-		PhytomerID: rec.phytomerID,
+		PhytomerID: phytomerID,
 		Status:     "running",
 	}, nil
 }
@@ -419,12 +438,19 @@ func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec) (SeedSpec
 	return spec, nil
 }
 
-func newPreparedSeedToken() string {
+func (s *Service) mintPreparedSeedToken() (string, error) {
+	if s != nil && s.newPreparedSeedToken != nil {
+		return s.newPreparedSeedToken()
+	}
+	return generatePreparedSeedToken()
+}
+
+func generatePreparedSeedToken() (string, error) {
 	buf := make([]byte, 12)
 	if _, err := rand.Read(buf); err != nil {
-		return fmt.Sprintf("seed-growth-%d", time.Now().UTC().UnixNano())
+		return "", fmt.Errorf("prepare seed: mint lifecycle token: %w", err)
 	}
-	return "seed-growth-" + hex.EncodeToString(buf)
+	return "seed-growth-" + hex.EncodeToString(buf), nil
 }
 
 func (s *Service) lookupPreparedSeed(growth SeedGrowth) (*preparedSeed, error) {
@@ -443,9 +469,6 @@ func (s *Service) lookupPreparedSeedLocked(growth SeedGrowth) (*preparedSeed, er
 	rec, ok := s.preparedSeeds[growth.token]
 	if !ok || rec == nil {
 		return nil, ErrSeedGrowthInvalid
-	}
-	if rec.consumed {
-		return nil, fmt.Errorf("%w: already executed", ErrSeedGrowthInvalid)
 	}
 	if err := preparedSeedMatches(growth, rec); err != nil {
 		return nil, err
@@ -466,8 +489,13 @@ func (s *Service) takePreparedSeed(ctx context.Context, growth SeedGrowth) (spec
 	if PollenFromContext(ctx) != rec.pollen {
 		return SeedSpec{}, "", "", time.Time{}, false, fmt.Errorf("%w: pollen does not match the prepared growth", ErrSeedGrowthInvalid)
 	}
-	rec.consumed = true
-	return rec.spec, rec.pollen, rec.handle, rec.startedAt, rec.opened, nil
+	spec = rec.spec
+	pollen = rec.pollen
+	handle = rec.handle
+	started = rec.startedAt
+	opened = rec.opened
+	delete(s.preparedSeeds, growth.token)
+	return spec, pollen, handle, started, opened, nil
 }
 
 func preparedSeedMatches(growth SeedGrowth, rec *preparedSeed) error {

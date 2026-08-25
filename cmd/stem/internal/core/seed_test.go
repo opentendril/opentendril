@@ -3,9 +3,11 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -426,5 +428,117 @@ func TestOpenPreparedSeedComposesOwnershipFromTheEnvelope(t *testing.T) {
 	other.spec.PhytomerID = growth.PhytomerID()
 	if _, err := svc.OpenPreparedSeed(ctx, other, "seed-stolen"); err == nil {
 		t.Fatal("open accepted a substituted phytomer")
+	}
+}
+
+func TestOpenPreparedSeedRefusesSecondHandle(t *testing.T) {
+	svc, _ := newSeedService(t)
+	var openings atomic.Int32
+	svc.WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error {
+			openings.Add(1)
+			return nil
+		},
+	})
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-a"); err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-b"); err == nil {
+		t.Fatal("second open of the same growth was accepted")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("second open error = %v, want ErrSeedGrowthInvalid", err)
+	}
+	if openings.Load() != 1 {
+		t.Fatalf("durable openings = %d, want 1", openings.Load())
+	}
+}
+
+func TestOpenPreparedSeedRefusesConcurrentSecondHandle(t *testing.T) {
+	svc, _ := newSeedService(t)
+	persistStarted := make(chan struct{})
+	persistRelease := make(chan struct{})
+	var openings atomic.Int32
+	svc.WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error {
+			openings.Add(1)
+			persistStarted <- struct{}{}
+			<-persistRelease
+			return nil
+		},
+	})
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-a")
+		firstErr <- err
+	}()
+	select {
+	case <-persistStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first open never reached durable persist")
+	}
+
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-b")
+		secondErr <- err
+	}()
+	select {
+	case err := <-secondErr:
+		if err == nil {
+			t.Fatal("concurrent second open succeeded")
+		}
+		if !errors.Is(err, ErrSeedGrowthInvalid) {
+			t.Fatalf("concurrent second open error = %v, want ErrSeedGrowthInvalid", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("concurrent second open did not fail closed")
+	}
+	close(persistRelease)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+	if openings.Load() != 1 {
+		t.Fatalf("durable openings = %d, want 1", openings.Load())
+	}
+}
+
+func TestPrepareSeedFailsClosedWhenTokenMintFails(t *testing.T) {
+	svc, captured := newSeedService(t)
+	svc.newPreparedSeedToken = func() (string, error) {
+		return "", fmt.Errorf("crypto/rand failed")
+	}
+	if _, err := svc.PrepareSeed(context.Background(), validSeedInput()); err == nil {
+		t.Fatal("prepare succeeded when token mint failed")
+	}
+	if captured.PhytomerID != "" {
+		t.Fatal("execution ran after a failed token mint")
+	}
+	if len(svc.preparedSeeds) != 0 {
+		t.Fatalf("failed mint left prepared growth in the map: %d", len(svc.preparedSeeds))
+	}
+}
+
+func TestGrowPreparedSeedRemovesClaimedGrowth(t *testing.T) {
+	svc, _ := newSeedService(t)
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.GrowPreparedSeed(context.Background(), growth); err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if _, err := svc.GrowPreparedSeed(context.Background(), growth); err == nil {
+		t.Fatal("replay of a claimed growth was accepted")
+	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
+		t.Fatalf("replay error = %v, want ErrSeedGrowthInvalid", err)
 	}
 }
