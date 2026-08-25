@@ -405,12 +405,15 @@ this stage as a way of reinitializing the Stem.
 > contents.
 
 An LLM is required before `tendril init`. Local [Ollama](https://ollama.com)
-is the default. A clean machine does not include it. Install Ollama from the
-[public Linux instructions](https://docs.ollama.com/linux) if it is not already
-present. Alternatively, have a supported cloud-provider credential ready.
+is the worked default. A clean machine does not include it.
+
+**If using local Ollama**, install it from the
+[public Linux instructions](https://docs.ollama.com/linux) before switching
+to the Stem account. **If using a cloud provider**, do not install Ollama
+and do not pull a model; have a supported credential ready for the wizard.
 
 ```bash
-# [root] public Ollama Linux install
+# [root] local Ollama only
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
@@ -428,15 +431,29 @@ install -d -m 700 /home/tendril/.tendril
 export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock
 ```
 
-Create the environment file **before** running the wizard. `tendril init` writes
-to `~/.tendril/.env` when no `./.env` exists, and the Stem reads `./.env` — so an
-empty file here is what makes the wizard write where the Stem will look:
+Both LLM paths create the environment file **before** running the wizard.
+`tendril init` writes to `~/.tendril/.env` when no `./.env` exists, and the
+Stem reads `./.env` — so an empty file here is what makes the wizard write
+where the Stem will look:
+
+```bash
+# as tendril, in /home/tendril — both LLM paths
+touch /home/tendril/.env
+chmod 600 /home/tendril/.env
+```
+
+**If using local Ollama**, pull the default model. Skip this command on the
+cloud-provider path.
+
+```bash
+# as tendril — local Ollama only
+ollama pull llama3.2
+```
+
+Then run the wizard:
 
 ```bash
 # as tendril, in /home/tendril
-touch /home/tendril/.env
-chmod 600 /home/tendril/.env
-ollama pull llama3.2
 tendril init
 ```
 
