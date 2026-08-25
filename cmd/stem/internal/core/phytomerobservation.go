@@ -1,13 +1,28 @@
 package core
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"sort"
+	"strings"
+	"time"
+)
+
+// ErrPhytomerObservationNotWired is returned when the current-state
+// observation source has not been injected.
+var ErrPhytomerObservationNotWired = errors.New("phytomer observation is not wired")
+
+// ErrPhytomerObservationNotFound is returned when no Seed growth is
+// associated with the named Phytomer.
+var ErrPhytomerObservationNotFound = errors.New("no seed growth is associated with this phytomer")
 
 // PhytomerObservation is the transport-free current-state projection of one
 // Seed-owned Phytomer. A sprout.watch observer may see these facts when they
 // actually exist: identities, Seed lifecycle, iteration progress, actual
 // Sprout lifecycle, and real Fruit identity. Absent facts stay absent; this
 // type does not invent a commit, a Sprout, provider activity, or a zeroed
-// success.
+// success. Raw Seed error text, transcript, output, and private reasoning are
+// not part of this contract.
 type PhytomerObservation struct {
 	Pollen     string              `json:"pollen,omitempty"`
 	Substrate  string              `json:"substrate,omitempty"`
@@ -17,13 +32,12 @@ type PhytomerObservation struct {
 	Iterations int                 `json:"iterations"`
 	Branch     string              `json:"branch,omitempty"`
 	Commit     string              `json:"commit,omitempty"`
-	Error      string              `json:"error,omitempty"`
 	Sprouts    []SproutObservation `json:"sprouts,omitempty"`
 }
 
 // SproutObservation is the safe lifecycle envelope of one actual Sprout
-// attributed to the Seed's Phytomer. Transcript, output, and private
-// reasoning are not part of this contract.
+// attributed to the Seed's Phytomer. Transcript, output, raw errors, and
+// private reasoning are not part of this contract.
 type SproutObservation struct {
 	RunID                    string              `json:"runId,omitempty"`
 	Status                   string              `json:"status,omitempty"`
@@ -36,9 +50,10 @@ type SproutObservation struct {
 	ToolInvocations          int                 `json:"toolInvocations"`
 }
 
-// SeedObservation is the durable Seed evidence the current-state projection
-// may consult. It is not a transport type.
-type SeedObservation struct {
+// SeedObservationEvidence is durable Seed state the current-state projection
+// may consult. It includes persisted fields that are not part of the public
+// observation (goal, diff, logs, raw error). It is not a transport type.
+type SeedObservationEvidence struct {
 	Handle     string
 	Pollen     string
 	PhytomerID string
@@ -47,14 +62,73 @@ type SeedObservation struct {
 	Iterations int
 	Branch     string
 	Commit     string
+	Goal       string
+	Diff       string
+	Logs       string
 	Error      string
+}
+
+// SproutObservationEvidence is durable Sprout state the current-state
+// projection may consult. It includes persisted fields that are not part of
+// the public observation (transcript, output, raw error). StartedAt is used
+// only to order the public Sprout list.
+type SproutObservationEvidence struct {
+	RunID                    string
+	Status                   string
+	Provider                 string
+	Model                    string
+	Outcome                  string
+	FailureCategory          string
+	ProviderDiagnostic       *ProviderDiagnostic
+	ProviderRequestAttempted bool
+	ToolInvocations          int
+	Transcript               string
+	Output                   string
+	Error                    string
+	StartedAt                time.Time
+}
+
+// PhytomerObservationSource is the injected durable-evidence port for
+// current-state observation. Core composes the safe PhytomerObservation; the
+// port only supplies persisted evidence. Core never imports historydb.
+type PhytomerObservationSource struct {
+	SeedByPhytomer    func(ctx context.Context, phytomerID string) (SeedObservationEvidence, bool, error)
+	SproutsByPhytomer func(ctx context.Context, phytomerID string) ([]SproutObservationEvidence, error)
+}
+
+// WithPhytomerObservationSource wires the durable current-state evidence port.
+func (s *Service) WithPhytomerObservationSource(src PhytomerObservationSource) *Service {
+	s.observation = src
+	return s
+}
+
+// ObservePhytomer returns the safe current-state observation of one Seed-owned
+// Phytomer. It is a view, not a governed command. Which persisted fields may
+// be released is decided here, not by a transport adapter.
+func (s *Service) ObservePhytomer(ctx context.Context, phytomerID string) (PhytomerObservation, error) {
+	if s == nil || s.observation.SeedByPhytomer == nil || s.observation.SproutsByPhytomer == nil {
+		return PhytomerObservation{}, ErrPhytomerObservationNotWired
+	}
+	seed, found, err := s.observation.SeedByPhytomer(ctx, phytomerID)
+	if err != nil {
+		return PhytomerObservation{}, err
+	}
+	if !found {
+		return PhytomerObservation{}, ErrPhytomerObservationNotFound
+	}
+	sprouts, err := s.observation.SproutsByPhytomer(ctx, phytomerID)
+	if err != nil {
+		return PhytomerObservation{}, err
+	}
+	return ProjectPhytomerObservation(seed, sprouts), nil
 }
 
 // ProjectPhytomerObservation composes the safe current-state view from Seed
 // evidence and the Sprouts actually recorded against that Phytomer. It copies
 // only the observation contract; it does not derive a commit from a branch,
-// synthesize a Sprout, or rewrite missing provider activity as zero/success.
-func ProjectPhytomerObservation(seed SeedObservation, sprouts []SproutObservation) PhytomerObservation {
+// synthesize a Sprout, rewrite missing provider activity as zero/success, or
+// release raw Seed error, transcript, output, diff, logs, or goal text.
+func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutObservationEvidence) PhytomerObservation {
 	obs := PhytomerObservation{
 		Pollen:     strings.TrimSpace(seed.Pollen),
 		Substrate:  strings.TrimSpace(seed.Substrate),
@@ -64,11 +138,36 @@ func ProjectPhytomerObservation(seed SeedObservation, sprouts []SproutObservatio
 		Iterations: seed.Iterations,
 		Branch:     strings.TrimSpace(seed.Branch),
 		Commit:     strings.TrimSpace(seed.Commit),
-		Error:      strings.TrimSpace(seed.Error),
 	}
-	if len(sprouts) > 0 {
-		obs.Sprouts = append([]SproutObservation(nil), sprouts...)
+	if len(sprouts) == 0 {
+		return obs
 	}
+	ordered := append([]SproutObservationEvidence(nil), sprouts...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if !ordered[i].StartedAt.Equal(ordered[j].StartedAt) {
+			return ordered[i].StartedAt.Before(ordered[j].StartedAt)
+		}
+		return ordered[i].RunID < ordered[j].RunID
+	})
+	out := make([]SproutObservation, 0, len(ordered))
+	for _, run := range ordered {
+		sprout := SproutObservation{
+			RunID:                    strings.TrimSpace(run.RunID),
+			Status:                   strings.TrimSpace(run.Status),
+			Provider:                 strings.TrimSpace(run.Provider),
+			Model:                    strings.TrimSpace(run.Model),
+			Outcome:                  strings.TrimSpace(run.Outcome),
+			FailureCategory:          strings.TrimSpace(run.FailureCategory),
+			ProviderRequestAttempted: run.ProviderRequestAttempted,
+			ToolInvocations:          run.ToolInvocations,
+		}
+		if run.ProviderDiagnostic != nil {
+			copied := *run.ProviderDiagnostic
+			sprout.ProviderDiagnostic = &copied
+		}
+		out = append(out, sprout)
+	}
+	obs.Sprouts = out
 	return obs
 }
 

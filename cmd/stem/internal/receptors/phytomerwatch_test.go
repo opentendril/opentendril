@@ -41,7 +41,8 @@ func newPhytomerWatchFixture(t *testing.T, grants []core.DelegationGrant) (*http
 
 	bus := eventbus.New()
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
-	handler := NewSessionsHandler(core.NewService(nil), nil, store, bus).
+	coreSvc := core.NewService(nil).WithPhytomerObservationSource(testPhytomerObservationSource(store))
+	handler := NewSessionsHandler(coreSvc, nil, store, bus).
 		WithWatch(NewWatchAuthority(gate, store))
 	handler.watchPoll = 15 * time.Millisecond
 
@@ -283,6 +284,45 @@ func TestPhytomerWatchExhaustedCloses(t *testing.T) {
 	}
 }
 
+func TestPhytomerWatchDoesNotExposeRawSeedError(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	hostile := "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT"
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-hostile", Pollen: watchOwner, PhytomerID: "tendril-hostile",
+		Substrate: "myrepo", Status: core.SeedStatusWithered,
+		Goal: "PRIVATE_PROMPT_CONTENT", Diff: "internal path /home/operator/private",
+		Logs: "Authorization: Bearer secret-token", Error: hostile,
+	})
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-hostile", SessionID: "tendril-hostile", StepID: "run-hostile",
+		Pollen: watchOwner, Substrate: "myrepo", Status: "withered",
+		Outcome: "failed", FailureCategory: string(core.FailureCategoryExecutionFailed),
+		Transcript: "private reasoning SECRET_TOKEN=sk-secret",
+		Output:     "chain-of-thought hidden",
+		Error:      "Authorization: Bearer secret-token",
+	})
+	rec := watchRequest(t, mux, "/v1/phytomers/tendril-hostile/watch", watchOwner)
+	obs := observationFromRecorder(t, rec)
+	if obs.Status != core.SeedStatusWithered || obs.Handle != "seed-hostile" {
+		t.Fatalf("hostile seed observation = %+v", obs)
+	}
+	body := rec.Body.String()
+	for _, banned := range []string{
+		"internal path /home/operator/private",
+		"Authorization: Bearer secret-token",
+		"PRIVATE_PROMPT_CONTENT",
+		"private reasoning",
+		"SECRET_TOKEN",
+		"sk-secret",
+		"chain-of-thought",
+		"Bearer ",
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unsafe material %q in watch body: %s", banned, body)
+		}
+	}
+}
+
 func TestPhytomerWatchWitheredExposesStructuredFailure(t *testing.T) {
 	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
 	recordWatchSeed(t, store, historydb.SeedRun{
@@ -484,7 +524,8 @@ func TestPhytomerWatchDispatchToFruitIntegration(t *testing.T) {
 				Commit:     "cafebabedeadbeef",
 			}, nil
 		},
-	}).WithSeedPersistence(testSeedPersistence(store))
+	}).WithSeedPersistence(testSeedPersistence(store)).
+		WithPhytomerObservationSource(testPhytomerObservationSource(store))
 
 	grants := []core.DelegationGrant{
 		{Pollen: watchOwner, OperationClasses: []string{core.CapSeedGrow, core.CapSproutWatch}, Substrates: []string{"core"}},

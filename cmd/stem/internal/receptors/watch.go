@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 
@@ -278,9 +277,10 @@ func (h *SessionsHandler) phytomerWatchPoll() time.Duration {
 // GET /v1/phytomers/{sessionId}/watch
 //
 // Authorization is the existing sprout.watch phytomer rule. The REST adapter
-// authenticates, routes, invokes the transport-free projection, and frames
+// authenticates, authorizes, routes, invokes Core.ObservePhytomer, and frames
 // the result as Server-Sent Events. Current durable state is authoritative;
-// EventBus wakeups and a bounded poll only prompt a re-read.
+// EventBus wakeups and a bounded poll only prompt a re-read. Safe-field
+// selection and Sprout ordering live in Core, not here.
 func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) {
 	if h.history == nil {
 		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
@@ -295,14 +295,14 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 	if pollen != "" && !h.watch.AuthorizePhytomer(w, r, pollen, sessionID) {
 		return
 	}
-
-	obs, found, err := h.projectPhytomerObservation(r.Context(), sessionID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if h.core == nil {
+		writePhytomerObservationErr(w, core.ErrPhytomerObservationNotWired)
 		return
 	}
-	if !found {
-		http.Error(w, "no seed growth is associated with this phytomer", http.StatusNotFound)
+
+	obs, err := h.core.ObservePhytomer(r.Context(), sessionID)
+	if err != nil {
+		writePhytomerObservationErr(w, err)
 		return
 	}
 
@@ -356,8 +356,8 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 
-		current, found, err := h.projectPhytomerObservation(ctx, sessionID)
-		if err != nil || !found {
+		current, err := h.core.ObservePhytomer(ctx, sessionID)
+		if err != nil {
 			return
 		}
 		if emit(current) {
@@ -366,68 +366,16 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func (h *SessionsHandler) projectPhytomerObservation(ctx context.Context, phytomerID string) (core.PhytomerObservation, bool, error) {
-	if h == nil || h.history == nil {
-		return core.PhytomerObservation{}, false, nil
+func writePhytomerObservationErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, core.ErrPhytomerObservationNotFound) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
 	}
-	seed, found, err := h.history.GetSeedRunByPhytomer(ctx, phytomerID)
-	if err != nil {
-		return core.PhytomerObservation{}, false, err
+	if errors.Is(err, core.ErrPhytomerObservationNotWired) {
+		http.Error(w, "persistent history is disabled (TENDRIL_DB_LOGGING=false)", http.StatusNotImplemented)
+		return
 	}
-	if !found {
-		return core.PhytomerObservation{}, false, nil
-	}
-	runs, err := h.history.LoadSproutRuns(ctx, phytomerID, 100)
-	if err != nil {
-		return core.PhytomerObservation{}, false, err
-	}
-	return core.ProjectPhytomerObservation(core.SeedObservation{
-		Handle:     seed.Handle,
-		Pollen:     seed.Pollen,
-		PhytomerID: seed.PhytomerID,
-		Substrate:  seed.Substrate,
-		Status:     seed.Status,
-		Iterations: seed.Iterations,
-		Branch:     seed.Branch,
-		Commit:     seed.Commit,
-		Error:      seed.Error,
-	}, projectSproutObservations(runs)), true, nil
-}
-
-func projectSproutObservations(runs []historydb.SproutRun) []core.SproutObservation {
-	if len(runs) == 0 {
-		return nil
-	}
-	ordered := append([]historydb.SproutRun(nil), runs...)
-	sort.Slice(ordered, func(i, j int) bool {
-		if !ordered[i].StartedAt.Equal(ordered[j].StartedAt) {
-			return ordered[i].StartedAt.Before(ordered[j].StartedAt)
-		}
-		return ordered[i].RunID < ordered[j].RunID
-	})
-	out := make([]core.SproutObservation, 0, len(ordered))
-	for _, run := range ordered {
-		obs := core.SproutObservation{
-			RunID:                    run.RunID,
-			Status:                   run.Status,
-			Provider:                 run.Provider,
-			Model:                    run.Model,
-			Outcome:                  run.Outcome,
-			FailureCategory:          run.FailureCategory,
-			ProviderRequestAttempted: run.ProviderRequestAttempted,
-			ToolInvocations:          run.ToolInvocations,
-		}
-		if run.ProviderDiagnostic != nil {
-			copied := core.ProviderDiagnostic{
-				StatusCode: run.ProviderDiagnostic.StatusCode,
-				Message:    run.ProviderDiagnostic.Message,
-				Provider:   run.ProviderDiagnostic.Provider,
-			}
-			obs.ProviderDiagnostic = &copied
-		}
-		out = append(out, obs)
-	}
-	return out
+	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 func (h *SessionsHandler) subscribePhytomerWake(sessionID string, wake chan struct{}) func() {

@@ -1,15 +1,18 @@
 package core_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservation{
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		Pollen:     "claude",
 		PhytomerID: "tendril-1",
@@ -39,7 +42,7 @@ func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
 }
 
 func TestProjectPhytomerObservationDoesNotInventCommitFromBranch(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservation{
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		PhytomerID: "tendril-1",
 		Status:     core.SeedStatusSatisfied,
@@ -55,7 +58,7 @@ func TestProjectPhytomerObservationDoesNotInventCommitFromBranch(t *testing.T) {
 
 func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 	diag := &core.ProviderDiagnostic{StatusCode: 401, Message: "User not found", Provider: "anthropic"}
-	obs := core.ProjectPhytomerObservation(core.SeedObservation{
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		Pollen:     "claude",
 		PhytomerID: "tendril-1",
@@ -63,7 +66,7 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 		Status:     core.SeedStatusWithered,
 		Iterations: 2,
 		Error:      "provider refused the principal",
-	}, []core.SproutObservation{
+	}, []core.SproutObservationEvidence{
 		{
 			RunID:                    "run-a",
 			Status:                   "matured",
@@ -73,6 +76,7 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 			FailureCategory:          string(core.FailureCategoryMatured),
 			ProviderRequestAttempted: true,
 			ToolInvocations:          3,
+			StartedAt:                time.Unix(1, 0).UTC(),
 		},
 		{
 			RunID:                    "run-b",
@@ -84,9 +88,10 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 			ProviderDiagnostic:       diag,
 			ProviderRequestAttempted: true,
 			ToolInvocations:          0,
+			StartedAt:                time.Unix(2, 0).UTC(),
 		},
 	})
-	if obs.Status != core.SeedStatusWithered || obs.Iterations != 2 || obs.Error == "" {
+	if obs.Status != core.SeedStatusWithered || obs.Iterations != 2 {
 		t.Fatalf("withered seed = %+v", obs)
 	}
 	if len(obs.Sprouts) != 2 {
@@ -107,7 +112,7 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	body := string(raw)
-	for _, banned := range []string{"transcript", "chain-of-thought", "Bearer ", "sk-"} {
+	for _, banned := range []string{"transcript", "chain-of-thought", "Bearer ", "sk-", "provider refused the principal"} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("unsafe material %q leaked: %s", banned, body)
 		}
@@ -115,7 +120,7 @@ func TestProjectPhytomerObservationKeepsRealFruitAndSprouts(t *testing.T) {
 }
 
 func TestProjectPhytomerObservationSatisfiedFruit(t *testing.T) {
-	obs := core.ProjectPhytomerObservation(core.SeedObservation{
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
 		Handle:     "seed-1",
 		PhytomerID: "tendril-1",
 		Status:     core.SeedStatusSatisfied,
@@ -125,6 +130,132 @@ func TestProjectPhytomerObservationSatisfiedFruit(t *testing.T) {
 	}, nil)
 	if obs.Branch != "tendril/seed-fruit" || obs.Commit != "abc123def456" {
 		t.Fatalf("fruit = branch %q commit %q", obs.Branch, obs.Commit)
+	}
+}
+
+func TestProjectPhytomerObservationOmitsPersistedUnsafeFields(t *testing.T) {
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+		Handle:     "seed-1",
+		PhytomerID: "tendril-1",
+		Status:     core.SeedStatusWithered,
+		Goal:       "PRIVATE_PROMPT_CONTENT",
+		Diff:       "internal path /home/operator/private",
+		Logs:       "Authorization: Bearer secret-token",
+		Error:      "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT",
+	}, []core.SproutObservationEvidence{{
+		RunID:      "run-a",
+		Status:     "withered",
+		Transcript: "private reasoning SECRET_TOKEN=sk-secret",
+		Output:     "chain-of-thought hidden",
+		Error:      "Authorization: Bearer secret-token",
+		StartedAt:  time.Unix(1, 0).UTC(),
+	}})
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, banned := range []string{
+		"internal path /home/operator/private",
+		"Authorization: Bearer secret-token",
+		"PRIVATE_PROMPT_CONTENT",
+		"private reasoning",
+		"SECRET_TOKEN",
+		"sk-secret",
+		"chain-of-thought",
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unsafe material %q leaked: %s", banned, body)
+		}
+	}
+	if strings.Contains(body, `"error"`) {
+		t.Fatalf("raw error field was released: %s", body)
+	}
+}
+
+func TestProjectPhytomerObservationOrdersSproutsByStartThenRunID(t *testing.T) {
+	later := time.Unix(20, 0).UTC()
+	earlier := time.Unix(10, 0).UTC()
+	obs := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+		Handle: "seed-1", PhytomerID: "tendril-1", Status: "running",
+	}, []core.SproutObservationEvidence{
+		{RunID: "run-z", StartedAt: later},
+		{RunID: "run-b", StartedAt: earlier},
+		{RunID: "run-a", StartedAt: earlier},
+	})
+	if len(obs.Sprouts) != 3 {
+		t.Fatalf("sprouts = %d, want 3", len(obs.Sprouts))
+	}
+	got := []string{obs.Sprouts[0].RunID, obs.Sprouts[1].RunID, obs.Sprouts[2].RunID}
+	want := []string{"run-a", "run-b", "run-z"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sprout order = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestObservePhytomerUsesSourceAndProjectsSafely(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(_ context.Context, phytomerID string) (core.SeedObservationEvidence, bool, error) {
+			if phytomerID != "tendril-1" {
+				return core.SeedObservationEvidence{}, false, nil
+			}
+			return core.SeedObservationEvidence{
+				Handle:     "seed-1",
+				Pollen:     "claude",
+				PhytomerID: "tendril-1",
+				Substrate:  "myrepo",
+				Status:     "running",
+				Error:      "Authorization: Bearer secret-token",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(_ context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{{
+				RunID:      "run-b",
+				Status:     "running",
+				Transcript: "PRIVATE_PROMPT_CONTENT",
+				StartedAt:  time.Unix(2, 0).UTC(),
+			}, {
+				RunID:     "run-a",
+				Status:    "running",
+				StartedAt: time.Unix(1, 0).UTC(),
+			}}, nil
+		},
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if err != nil {
+		t.Fatalf("ObservePhytomer: %v", err)
+	}
+	if obs.Handle != "seed-1" || len(obs.Sprouts) != 2 || obs.Sprouts[0].RunID != "run-a" {
+		t.Fatalf("observation = %+v", obs)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, banned := range []string{"Authorization: Bearer secret-token", "PRIVATE_PROMPT_CONTENT"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unsafe material %q leaked: %s", banned, body)
+		}
+	}
+}
+
+func TestObservePhytomerNotFoundAndNotWired(t *testing.T) {
+	if _, err := core.NewService(nil).ObservePhytomer(context.Background(), "tendril-1"); !errors.Is(err, core.ErrPhytomerObservationNotWired) {
+		t.Fatalf("unwired = %v, want not wired", err)
+	}
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{}, false, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return nil, nil
+		},
+	})
+	if _, err := svc.ObservePhytomer(context.Background(), "tendril-missing"); !errors.Is(err, core.ErrPhytomerObservationNotFound) {
+		t.Fatalf("missing = %v, want not found", err)
 	}
 }
 

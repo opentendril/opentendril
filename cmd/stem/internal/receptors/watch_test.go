@@ -58,7 +58,8 @@ func newWatchFixtureWithGrants(t *testing.T, grants []core.DelegationGrant) (*ht
 
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
 	bus := eventbus.New()
-	handler := NewSessionsHandler(core.NewService(nil), nil, store, bus).
+	coreSvc := core.NewService(nil).WithPhytomerObservationSource(testPhytomerObservationSource(store))
+	handler := NewSessionsHandler(coreSvc, nil, store, bus).
 		WithWatch(NewWatchAuthority(gate, store))
 	handler.watchPoll = 15 * time.Millisecond
 
@@ -75,6 +76,67 @@ func seedWatchRun(t *testing.T, store *historydb.Store, run historydb.SproutRun)
 	run.StartedAt = time.Now().UTC()
 	if err := store.RecordSproutRun(context.Background(), run); err != nil {
 		t.Fatalf("record sprout run %s: %v", run.RunID, err)
+	}
+}
+
+func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservationSource {
+	if store == nil {
+		return core.PhytomerObservationSource{}
+	}
+	return core.PhytomerObservationSource{
+		SeedByPhytomer: func(ctx context.Context, phytomerID string) (core.SeedObservationEvidence, bool, error) {
+			seed, found, err := store.GetSeedRunByPhytomer(ctx, phytomerID)
+			if err != nil || !found {
+				return core.SeedObservationEvidence{}, found, err
+			}
+			return core.SeedObservationEvidence{
+				Handle:     seed.Handle,
+				Pollen:     seed.Pollen,
+				PhytomerID: seed.PhytomerID,
+				Substrate:  seed.Substrate,
+				Status:     seed.Status,
+				Iterations: seed.Iterations,
+				Branch:     seed.Branch,
+				Commit:     seed.Commit,
+				Goal:       seed.Goal,
+				Diff:       seed.Diff,
+				Logs:       seed.Logs,
+				Error:      seed.Error,
+			}, true, nil
+		},
+		SproutsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
+			runs, err := store.LoadSproutRuns(ctx, phytomerID, 100)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]core.SproutObservationEvidence, 0, len(runs))
+			for _, run := range runs {
+				evidence := core.SproutObservationEvidence{
+					RunID:                    run.RunID,
+					Status:                   run.Status,
+					Provider:                 run.Provider,
+					Model:                    run.Model,
+					Outcome:                  run.Outcome,
+					FailureCategory:          run.FailureCategory,
+					ProviderRequestAttempted: run.ProviderRequestAttempted,
+					ToolInvocations:          run.ToolInvocations,
+					Transcript:               run.Transcript,
+					Output:                   run.Output,
+					Error:                    run.Error,
+					StartedAt:                run.StartedAt,
+				}
+				if run.ProviderDiagnostic != nil {
+					copied := core.ProviderDiagnostic{
+						StatusCode: run.ProviderDiagnostic.StatusCode,
+						Message:    run.ProviderDiagnostic.Message,
+						Provider:   run.ProviderDiagnostic.Provider,
+					}
+					evidence.ProviderDiagnostic = &copied
+				}
+				out = append(out, evidence)
+			}
+			return out, nil
+		},
 	}
 }
 

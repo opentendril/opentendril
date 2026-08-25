@@ -601,6 +601,11 @@ func (m *mockCore) OpenPreparedSeed(_ context.Context, growth core.SeedGrowth, h
 	}, nil
 }
 
+func (m *mockCore) ObservePhytomer(_ context.Context, phytomerID string) (core.PhytomerObservation, error) {
+	m.record("ObservePhytomer", phytomerID)
+	return core.PhytomerObservation{}, core.ErrPhytomerObservationNotFound
+}
+
 func (m *mockCore) SeedGrow(_ context.Context, in core.SeedGrowInput) (core.SeedGrowResult, error) {
 	m.record("SeedGrow", in)
 	return core.SeedGrowResult{
