@@ -173,7 +173,7 @@ for the ordinary account.
 
 ### First-party installer
 
-The published `install.sh` from the current OpenTendril release (**v0.3.1**) is
+The published `install.sh` from the current OpenTendril release (**v0.3.2**) is
 the automated realization of this procedure's host-bootstrap steps.
 
 - **Local / evaluation** installs the full `tendril` executable for this
@@ -187,7 +187,7 @@ the automated realization of this procedure's host-bootstrap steps.
   posture. It does not run `tendril init` and does not start the Stem. WSL and
   macOS are not governed.
 
-Pin the governed installer to v0.3.1, download `install.sh` and
+Pin the governed installer to v0.3.2, download `install.sh` and
 `checksums.txt`, verify `install.sh` against that checksum file, then invoke it
 with `--governed`. Do not pipe it into `sudo sh`. The copyable sequence is in
 [GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md).
@@ -336,7 +336,7 @@ a home that other accounts cannot traverse satisfies that; so does a root-owned
 binary in a system location. Neither is more secure than the other, and the
 choice is logistics — see Variations.
 
-The current OpenTendril release is **v0.3.1**. Each platform archive contains two
+The current OpenTendril release is **v0.3.2**. Each platform archive contains two
 independent executables, `tendril` and `tendril-mcp`, and nothing else. This
 worked path is Linux amd64. The same release also publishes
 `opentendril-linux-arm64.tar.gz`, `opentendril-darwin-amd64.tar.gz`, and
@@ -355,7 +355,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.1
+RELEASE=v0.3.2
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -769,7 +769,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.1
+RELEASE=v0.3.2
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1121,7 +1121,7 @@ release tag for `RELEASE`.
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.1
+RELEASE=v0.3.2
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1146,7 +1146,7 @@ executable onto that account's PATH.
 ```bash
 # as the ordinary (Pollinator-hosting) account — same RELEASE as above
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.1
+RELEASE=v0.3.2
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
