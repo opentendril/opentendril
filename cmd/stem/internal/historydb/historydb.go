@@ -77,7 +77,10 @@ func historyRetentionDaysFromEnv() int {
 // run can carry the structured observation contract (outcome, failure
 // category, safe provider diagnostic, request-begun, tool count) without
 // collapsing it to matured/withered + free-text.
-const currentSchemaVersion = 4
+//
+// Version 5 records a Seed's canonical Phytomer identity and truthful Fruit
+// commit on seedruns. Legacy rows keep an empty phytomerId; none is invented.
+const currentSchemaVersion = 5
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -165,13 +168,17 @@ type SproutRunUsage struct {
 // (status, branch, diff, logs). It records the dispatching Pollen so collection
 // can be scoped to the subject that owns the run.
 type SeedRun struct {
-	Handle     string    `json:"handle"`
-	Pollen     string    `json:"pollen,omitempty"`
+	Handle string `json:"handle"`
+	Pollen string `json:"pollen,omitempty"`
+	// PhytomerID is the Stem-created execution/observation identity for this
+	// Seed growth. Empty on historical rows that never had a truthful relation.
+	PhytomerID string    `json:"phytomerId,omitempty"`
 	Substrate  string    `json:"substrate,omitempty"`
 	Goal       string    `json:"goal,omitempty"`
 	Status     string    `json:"status"`
 	Iterations int       `json:"iterations"`
 	Branch     string    `json:"branch,omitempty"`
+	Commit     string    `json:"commit,omitempty"`
 	Diff       string    `json:"diff,omitempty"`
 	Logs       string    `json:"logs,omitempty"`
 	Error      string    `json:"error,omitempty"`
@@ -382,11 +389,13 @@ CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedA
 CREATE TABLE IF NOT EXISTS seedruns (
 	handle TEXT PRIMARY KEY,
 	pollen TEXT NOT NULL DEFAULT '',
+	phytomerId TEXT NOT NULL DEFAULT '',
 	substrate TEXT NOT NULL DEFAULT '',
 	goal TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	iterations INTEGER NOT NULL DEFAULT 0,
 	branch TEXT NOT NULL DEFAULT '',
+	fruitCommit TEXT NOT NULL DEFAULT '',
 	diff TEXT NOT NULL DEFAULT '',
 	logs TEXT NOT NULL DEFAULT '',
 	error TEXT NOT NULL DEFAULT '',
@@ -442,6 +451,15 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sproutrunsByPollen ON sproutruns(pollen, startedAt)`); err != nil {
 		return fmt.Errorf("index sprout runs by pollen: %w", err)
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "phytomerId", `ALTER TABLE seedruns ADD COLUMN phytomerId TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "fruitCommit", `ALTER TABLE seedruns ADD COLUMN fruitCommit TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsByPhytomer ON seedruns(phytomerId, startedAt)`); err != nil {
+		return fmt.Errorf("index seed runs by phytomer: %w", err)
 	}
 
 	const stamp = `INSERT INTO schemaMeta (id, version) VALUES (1, ?)
@@ -1098,25 +1116,29 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	}
 
 	const statement = `
-INSERT INTO seedruns (handle, pollen, substrate, goal, status, iterations, branch, diff, logs, error, startedAt, finishedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
 	iterations = excluded.iterations,
 	branch = excluded.branch,
+	fruitCommit = excluded.fruitCommit,
 	diff = excluded.diff,
 	logs = excluded.logs,
 	error = excluded.error,
-	finishedAt = excluded.finishedAt`
+	finishedAt = excluded.finishedAt,
+	phytomerId = CASE WHEN seedruns.phytomerId = '' THEN excluded.phytomerId ELSE seedruns.phytomerId END`
 
 	_, err = s.db.ExecContext(ctx, statement,
 		run.Handle,
 		run.Pollen,
+		run.PhytomerID,
 		run.Substrate,
 		goal,
 		run.Status,
 		run.Iterations,
 		run.Branch,
+		run.Commit,
 		diff,
 		logs,
 		runError,
@@ -1138,42 +1160,97 @@ func (s *Store) GetSeedRun(ctx context.Context, handle string) (SeedRun, bool, e
 	}
 
 	const query = `
-SELECT handle, pollen, substrate, goal, status, iterations, branch, diff, logs, error, startedAt, finishedAt
+SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt
 FROM seedruns
 WHERE handle = ?`
 
 	var run SeedRun
 	var startedAt, finishedAt string
 	err := s.db.QueryRowContext(ctx, query, handle).Scan(
-		&run.Handle, &run.Pollen, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-		&run.Branch, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt)
+		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
+		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt)
 	if err == sql.ErrNoRows {
 		return SeedRun{}, false, nil
 	}
 	if err != nil {
 		return SeedRun{}, false, fmt.Errorf("get seed run: %w", err)
 	}
+	if err := s.decodeSeedRun(&run, startedAt, finishedAt); err != nil {
+		return SeedRun{}, false, err
+	}
+	return run, true, nil
+}
+
+// GetSeedRunByPhytomer returns the Seed growth whose canonical Phytomer is
+// sessionID. Multiple rows for one Phytomer is contradictory evidence and
+// fails closed rather than picking one. Historical rows with an empty
+// phytomerId are never matched.
+func (s *Store) GetSeedRunByPhytomer(ctx context.Context, phytomerID string) (SeedRun, bool, error) {
+	phytomerID = strings.TrimSpace(phytomerID)
+	if phytomerID == "" {
+		return SeedRun{}, false, fmt.Errorf("phytomerId is required")
+	}
+
+	const query = `
+SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt
+FROM seedruns
+WHERE phytomerId = ?`
+
+	rows, err := s.db.QueryContext(ctx, query, phytomerID)
+	if err != nil {
+		return SeedRun{}, false, fmt.Errorf("get seed run by phytomer: %w", err)
+	}
+	defer rows.Close()
+
+	var found []SeedRun
+	for rows.Next() {
+		var run SeedRun
+		var startedAt, finishedAt string
+		if err := rows.Scan(
+			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
+			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt); err != nil {
+			return SeedRun{}, false, fmt.Errorf("scan seed run by phytomer: %w", err)
+		}
+		if err := s.decodeSeedRun(&run, startedAt, finishedAt); err != nil {
+			return SeedRun{}, false, err
+		}
+		found = append(found, run)
+	}
+	if err := rows.Err(); err != nil {
+		return SeedRun{}, false, fmt.Errorf("iterate seed run by phytomer: %w", err)
+	}
+	if len(found) == 0 {
+		return SeedRun{}, false, nil
+	}
+	if len(found) > 1 {
+		return SeedRun{}, false, fmt.Errorf("phytomer %s has %d seed runs; refusing to choose", phytomerID, len(found))
+	}
+	return found[0], true, nil
+}
+
+func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt string) error {
+	var err error
 	if run.Goal, err = s.dec(run.Goal, "historydb/seedruns/goal"); err != nil {
-		return SeedRun{}, false, fmt.Errorf("decrypt seed run goal: %w", err)
+		return fmt.Errorf("decrypt seed run goal: %w", err)
 	}
 	if run.Diff, err = s.dec(run.Diff, "historydb/seedruns/diff"); err != nil {
-		return SeedRun{}, false, fmt.Errorf("decrypt seed run diff: %w", err)
+		return fmt.Errorf("decrypt seed run diff: %w", err)
 	}
 	if run.Logs, err = s.dec(run.Logs, "historydb/seedruns/logs"); err != nil {
-		return SeedRun{}, false, fmt.Errorf("decrypt seed run logs: %w", err)
+		return fmt.Errorf("decrypt seed run logs: %w", err)
 	}
 	if run.Error, err = s.dec(run.Error, "historydb/seedruns/error"); err != nil {
-		return SeedRun{}, false, fmt.Errorf("decrypt seed run error: %w", err)
+		return fmt.Errorf("decrypt seed run error: %w", err)
 	}
 	if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
-		return SeedRun{}, false, fmt.Errorf("parse seed run startedAt: %w", err)
+		return fmt.Errorf("parse seed run startedAt: %w", err)
 	}
 	if finishedAt != "" {
 		if run.FinishedAt, err = time.Parse(time.RFC3339Nano, finishedAt); err != nil {
-			return SeedRun{}, false, fmt.Errorf("parse seed run finishedAt: %w", err)
+			return fmt.Errorf("parse seed run finishedAt: %w", err)
 		}
 	}
-	return run, true, nil
+	return nil
 }
 
 // PruneOlderThan deletes rows from messages, events, sproutruns, and

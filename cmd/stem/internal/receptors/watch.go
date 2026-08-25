@@ -74,10 +74,29 @@ func (a *WatchAuthority) AuthorizePhytomer(w http.ResponseWriter, r *http.Reques
 		return false
 	}
 
-	owners, err := store.SproutRunOwners(r.Context(), strings.TrimSpace(sessionID))
+	sessionID = strings.TrimSpace(sessionID)
+	seed, hasSeed, err := store.GetSeedRunByPhytomer(r.Context(), sessionID)
+	if err != nil {
+		http.Error(w, "failed to read seed ownership: "+err.Error(), http.StatusInternalServerError)
+		return false
+	}
+
+	owners, err := store.SproutRunOwners(r.Context(), sessionID)
 	if err != nil {
 		http.Error(w, "failed to read run ownership: "+err.Error(), http.StatusInternalServerError)
 		return false
+	}
+
+	if hasSeed {
+		if seed.Pollen != pollen {
+			http.Error(w, "delegation denied: this phytomer carries a run dispatched by another subject", http.StatusForbidden)
+			return false
+		}
+		if !seedSproutOwnershipAgrees(seed, owners) {
+			http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
+			return false
+		}
+		return a.authorizeSubstrates(w, pollen, []string{seed.Substrate})
 	}
 
 	substrates := make([]string, 0, len(owners))
@@ -97,7 +116,43 @@ func (a *WatchAuthority) AuthorizePhytomer(w http.ResponseWriter, r *http.Reques
 // than an all-or-nothing release — and a subject holding none of them is
 // refused outright rather than handed an empty list it might read as "no runs
 // happened".
-func (a *WatchAuthority) AuthorizeRuns(w http.ResponseWriter, r *http.Request, pollen string, runs []historydb.SproutRun) ([]historydb.SproutRun, bool) {
+func (a *WatchAuthority) AuthorizeRuns(w http.ResponseWriter, r *http.Request, pollen, sessionID string, runs []historydb.SproutRun) ([]historydb.SproutRun, bool) {
+	store := a.store()
+	sessionID = strings.TrimSpace(sessionID)
+	if store != nil && sessionID != "" {
+		seed, hasSeed, err := store.GetSeedRunByPhytomer(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, "failed to read seed ownership: "+err.Error(), http.StatusInternalServerError)
+			return nil, false
+		}
+		if hasSeed {
+			if seed.Pollen != pollen {
+				http.Error(w, "delegation denied: this phytomer carries a run dispatched by another subject", http.StatusForbidden)
+				return nil, false
+			}
+			owners, err := store.SproutRunOwners(r.Context(), sessionID)
+			if err != nil {
+				http.Error(w, "failed to read run ownership: "+err.Error(), http.StatusInternalServerError)
+				return nil, false
+			}
+			if !seedSproutOwnershipAgrees(seed, owners) {
+				http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
+				return nil, false
+			}
+			owned := make([]historydb.SproutRun, 0, len(runs))
+			for _, run := range runs {
+				if run.Pollen != pollen {
+					continue
+				}
+				owned = append(owned, run)
+			}
+			if !a.authorizeSubstrates(w, pollen, []string{seed.Substrate}) {
+				return nil, false
+			}
+			return owned, true
+		}
+	}
+
 	owned := make([]historydb.SproutRun, 0, len(runs))
 	substrates := make([]string, 0, len(runs))
 	seen := make(map[string]bool, len(runs))
@@ -115,6 +170,15 @@ func (a *WatchAuthority) AuthorizeRuns(w http.ResponseWriter, r *http.Request, p
 		return nil, false
 	}
 	return owned, true
+}
+
+func seedSproutOwnershipAgrees(seed historydb.SeedRun, owners []historydb.SproutRunOwner) bool {
+	for _, owner := range owners {
+		if owner.Pollen != seed.Pollen || owner.Substrate != seed.Substrate {
+			return false
+		}
+	}
+	return true
 }
 
 // StreamMiddleware gates the live event stream. The operator passes through

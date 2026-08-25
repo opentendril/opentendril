@@ -91,6 +91,10 @@ func writeCoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
+	if errors.Is(err, core.ErrSeedHistoryUnavailable) {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if errors.Is(err, conductor.ErrWorkspaceAbsent) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -312,7 +316,7 @@ func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 	// limit above is applied before the narrowing, so a busy phytomer answers
 	// with the observer's share of one page rather than a page of its own.
 	if pollen != "" {
-		runs, ok = h.watch.AuthorizeRuns(w, r, pollen, runs)
+		runs, ok = h.watch.AuthorizeRuns(w, r, pollen, sessionID, runs)
 		if !ok {
 			return
 		}

@@ -75,6 +75,13 @@ type SeedExecution struct {
 	Genotype string
 	// EventBus, when set, receives the Sprout lifecycle events of each pass.
 	EventBus *eventbus.Bus
+	// SessionID is the Seed's canonical Phytomer. Every builder Sprout for
+	// this growth is attributed to it. Required: a sessionless Seed cannot
+	// be observed.
+	SessionID string
+	// PrepareSprout runs after the iteration's orchestrator is configured and
+	// before Terrarium work, so the adapter can persist opening ownership.
+	PrepareSprout func(ctx context.Context, orch *DockerOrchestrator, iteration int) error
 }
 
 // SeedRunResult is the reviewable outcome of a grown Seed — the Fruit.
@@ -82,6 +89,7 @@ type SeedRunResult struct {
 	Status     string
 	Iterations int
 	Branch     string
+	Commit     string
 	Diff       string
 	Logs       string
 }
@@ -97,6 +105,11 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, execution.Timeout)
 		defer cancel()
+	}
+
+	sessionID := strings.TrimSpace(execution.SessionID)
+	if sessionID == "" {
+		return SeedRunResult{}, fmt.Errorf("seed.grow requires a phytomer sessionId")
 	}
 
 	sourcePath, err := resolveSeedWorkspace(execution.Substrate)
@@ -133,10 +146,18 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		orch.Substrate = execution.Substrate
 		orch.SubstrateBranch = seedBranch
 		orch.DisableMergeBack = true
+		orch.AwaitsRunEnding = true
 		orch.Provider = execution.Provider
 		orch.Model = execution.Model
 		orch.Genotype = execution.Genotype
 		orch.EventBus = execution.EventBus
+		orch.SessionID = sessionID
+
+		if execution.PrepareSprout != nil {
+			if prepErr := execution.PrepareSprout(ctx, orch, iterations); prepErr != nil {
+				return SeedRunResult{}, prepErr
+			}
+		}
 
 		report, runErr := seedBuildFn(ctx, orch, prompt)
 		fmt.Fprintf(&logs, "\n🌱 Iteration %d — sprout %s\n", iterations, strings.TrimSpace(report.Outcome))
@@ -160,22 +181,42 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		prompt = seedGoalPrompt(execution.Goal, execution.Verify, verifyOut)
 	}
 
-	branch := ""
-	diff := ""
-	if localBranchExists(sourcePath, seedBranch) {
-		branch = seedBranch
-		if raw, derr := runGitCommandRawOutput(ctx, sourcePath, "diff", "--no-color", base, seedBranch); derr == nil {
-			diff = raw
-		}
-	}
+	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
 
 	return SeedRunResult{
 		Status:     status,
 		Iterations: iterations,
 		Branch:     branch,
+		Commit:     commit,
 		Diff:       diff,
 		Logs:       strings.TrimSpace(logs.String()),
 	}, nil
+}
+
+// seedFruitIdentity reports the reviewable Seed branch, its diff against the
+// pre-run HEAD, and a Fruit commit SHA only when that SHA is independently
+// identifiable as Seed work — never the default branch, pre-run HEAD, or a
+// no-change branch.
+func seedFruitIdentity(ctx context.Context, sourcePath, seedBranch, base string) (branch, diff, commit string) {
+	if !localBranchExists(sourcePath, seedBranch) {
+		return "", "", ""
+	}
+	branch = seedBranch
+	if raw, derr := runGitCommandRawOutput(ctx, sourcePath, "diff", "--no-color", base, seedBranch); derr == nil {
+		diff = raw
+	}
+	tip, err := runGitCommand(ctx, sourcePath, "rev-parse", seedBranch)
+	if err != nil {
+		return branch, diff, ""
+	}
+	tip = strings.TrimSpace(tip)
+	if tip == "" || tip == strings.TrimSpace(base) {
+		return branch, diff, ""
+	}
+	if strings.TrimSpace(diff) == "" {
+		return branch, diff, ""
+	}
+	return branch, diff, tip
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway

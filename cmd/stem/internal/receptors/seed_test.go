@@ -2,6 +2,7 @@ package receptors
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
 // newSeedTestHandler builds a SeedHandler over a real Core with a stubbed
@@ -20,11 +22,15 @@ func newSeedTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.Serv
 
 	executed := &atomic.Int64{}
 	lastSpec := &core.SeedSpec{}
-	coreSvc := core.NewService(nil).WithSeed(core.SeedOperations{
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
 		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
 			executed.Add(1)
 			*lastSpec = spec
-			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1}, nil
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
 	})
 
@@ -186,5 +192,67 @@ func TestSeedCallerCannotSupplyEgress(t *testing.T) {
 	}
 	if len(lastSpec.Egress) != 0 {
 		t.Fatalf("delegated caller widened egress beyond its grant: %v", lastSpec.Egress)
+	}
+}
+
+func TestSyncSeedResultReturnsPhytomerID(t *testing.T) {
+	mux, _, _, lastSpec := newSeedTestHandler(t, nil)
+	request := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(seedGrowBody))
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	var result core.SeedGrowResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.PhytomerID == "" || !strings.HasPrefix(result.PhytomerID, session.IDPrefix) {
+		t.Fatalf("phytomerId = %q", result.PhytomerID)
+	}
+	if lastSpec.PhytomerID != result.PhytomerID {
+		t.Fatalf("adapter-invented phytomer? spec=%q result=%q", lastSpec.PhytomerID, result.PhytomerID)
+	}
+}
+
+func TestDelegatedSeedStampsPollenOnContext(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	var saw string
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			saw = core.PollenFromContext(ctx)
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+		},
+	})
+	grants := []core.DelegationGrant{{
+		Pollen:           "local-pollinator",
+		OperationClasses: []string{core.CapSeedGrow},
+		Substrates:       []string{"core"},
+	}}
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
+	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+
+	smuggled := `{"substrate":"core","goal":"g","verify":["true"],"pollen":"attacker","phytomerId":"tendril-forged"}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(smuggled))
+	request.Header.Set(PollenHeader, "local-pollinator")
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if saw != "local-pollinator" {
+		t.Fatalf("execution pollen = %q, want the authenticated subject", saw)
+	}
+	var result core.SeedGrowResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if result.PhytomerID == "tendril-forged" {
+		t.Fatal("caller-supplied phytomer identity was accepted")
 	}
 }

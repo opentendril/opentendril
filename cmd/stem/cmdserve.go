@@ -246,7 +246,8 @@ func runServeCmd(ctx context.Context, args []string) {
 		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
 		WithSprout(sproutOperations(history, bus)).
 		WithStoma(stomaOperations()).
-		WithSeed(seedOperations()).
+		WithSeed(seedOperations(history, bus)).
+		WithSeedPersistence(seedPersistence(history)).
 		WithGit(gitOperations())
 
 	meshServer := mesh.NewServer(resolveRepoRoot(""))

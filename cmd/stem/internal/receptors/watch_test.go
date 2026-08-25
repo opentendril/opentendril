@@ -456,6 +456,78 @@ func TestDispatchedRunIsObservableByItsDispatcher(t *testing.T) {
 // TestUnwiredWatchAuthorityDenies is the deny-closed posture: a handler built
 // without an observation authority still serves the operator and still refuses
 // every delegated observer, rather than treating "not configured" as "allowed".
+func TestSeedOwnedPhytomerIsWatchableBeforeSprout(t *testing.T) {
+	mux, store := newWatchFixtureWithGrants(t, []core.DelegationGrant{
+		{Pollen: watchOwner, OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
+		{Pollen: watchOther, OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
+	})
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-owned", Pollen: watchOwner, PhytomerID: "tendril-seed-owned",
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+
+	events := watchRequest(t, mux, "/v1/phytomers/tendril-seed-owned/events", watchOwner)
+	if events.Code != http.StatusOK {
+		t.Fatalf("owner watching seed phytomer before sprout = %d, want 200: %s", events.Code, events.Body.String())
+	}
+	runs := watchRequest(t, mux, "/v1/phytomers/tendril-seed-owned/sprout-runs", watchOwner)
+	if runs.Code != http.StatusOK {
+		t.Fatalf("owner listing seed phytomer runs before sprout = %d, want 200: %s", runs.Code, runs.Body.String())
+	}
+	if len(decodeRuns(t, runs.Body.Bytes())) != 0 {
+		t.Fatalf("expected no sprout rows yet: %s", runs.Body.String())
+	}
+
+	foreign := watchRequest(t, mux, "/v1/phytomers/tendril-seed-owned/events", watchOther)
+	if foreign.Code != http.StatusForbidden {
+		t.Fatalf("another pollen watching seed phytomer = %d, want 403: %s", foreign.Code, foreign.Body.String())
+	}
+}
+
+func TestContradictorySeedSproutOwnershipFailsClosed(t *testing.T) {
+	mux, store := newWatchFixtureWithGrants(t, []core.DelegationGrant{
+		{Pollen: watchOwner, OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
+		{Pollen: watchOther, OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"myrepo"}},
+	})
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-mixed", Pollen: watchOwner, PhytomerID: "tendril-seed-mixed",
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-intruder", SessionID: "tendril-seed-mixed", StepID: "run-intruder",
+		Pollen: watchOther, Substrate: "myrepo", Status: "running",
+	})
+
+	events := watchRequest(t, mux, "/v1/phytomers/tendril-seed-mixed/events", watchOwner)
+	if events.Code != http.StatusForbidden {
+		t.Fatalf("contradictory ownership events = %d, want 403: %s", events.Code, events.Body.String())
+	}
+	runs := watchRequest(t, mux, "/v1/phytomers/tendril-seed-mixed/sprout-runs", watchOwner)
+	if runs.Code != http.StatusForbidden {
+		t.Fatalf("contradictory ownership runs = %d, want 403: %s", runs.Code, runs.Body.String())
+	}
+}
+
+func TestSeedGrowGrantDoesNotImplyWatch(t *testing.T) {
+	mux, store := newWatchFixtureWithGrants(t, []core.DelegationGrant{
+		{Pollen: watchOwner, OperationClasses: []string{core.CapSeedGrow}, Substrates: []string{"myrepo"}},
+	})
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-grow-only", Pollen: watchOwner, PhytomerID: "tendril-seed-grow-only",
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+	events := watchRequest(t, mux, "/v1/phytomers/tendril-seed-grow-only/events", watchOwner)
+	if events.Code != http.StatusForbidden {
+		t.Fatalf("seed.grow without sprout.watch = %d, want 403: %s", events.Code, events.Body.String())
+	}
+}
+
 func TestUnwiredWatchAuthorityDenies(t *testing.T) {
 	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
 	if err != nil {

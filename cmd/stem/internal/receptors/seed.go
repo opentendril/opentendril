@@ -145,7 +145,7 @@ func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
 	// Egress is grant material: it has no JSON surface on the input type, so the
 	// decode above can never have populated it. It is set below — and only below
 	// — from an authorized delegation grant.
-	_, egress, ok := h.authorizeSeed(w, r, req.Substrate)
+	pollen, egress, ok := h.authorizeSeed(w, r, req.Substrate)
 	if !ok {
 		return
 	}
@@ -153,6 +153,7 @@ func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
 	result, err := h.core.SeedGrow(r.Context(), req)
 	if err != nil {
@@ -178,48 +179,26 @@ func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
+	growth, err := h.core.PrepareSeed(r.Context(), req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
 	handle := fmt.Sprintf("seed-%d", time.Now().UTC().UnixNano())
-	started := time.Now().UTC()
-	if h.history != nil {
-		_ = h.history.RecordSeedRun(r.Context(), historydb.SeedRun{
-			Handle:    handle,
-			Pollen:    pollen,
-			Substrate: strings.TrimSpace(req.Substrate),
-			Goal:      strings.TrimSpace(req.Goal),
-			Status:    "running",
-			StartedAt: started,
-		})
+	dispatch, err := h.core.OpenPreparedSeed(r.Context(), growth, handle)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
 	}
 
 	bgCtx := context.WithoutCancel(r.Context())
 	go func() {
-		record := historydb.SeedRun{
-			Handle:     handle,
-			Pollen:     pollen,
-			Substrate:  strings.TrimSpace(req.Substrate),
-			Goal:       strings.TrimSpace(req.Goal),
-			StartedAt:  started,
-			FinishedAt: time.Now().UTC(),
-		}
-		result, err := h.core.SeedGrow(bgCtx, req)
-		if err != nil {
-			record.Status = "withered"
-			record.Error = err.Error()
-		} else {
-			record.Status = result.Status
-			record.Iterations = result.Iterations
-			record.Branch = result.Branch
-			record.Diff = result.Diff
-			record.Logs = result.Logs
-		}
-		record.FinishedAt = time.Now().UTC()
-		if h.history != nil {
-			_ = h.history.RecordSeedRun(bgCtx, record)
-		}
+		_, _ = h.core.GrowPreparedSeed(bgCtx, growth)
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"handle": handle, "status": "running"})
+	writeJSON(w, http.StatusAccepted, dispatch)
 }
 
 // collect returns the reviewable Fruit for a dispatched growth by handle. It is

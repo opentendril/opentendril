@@ -10,9 +10,12 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
@@ -103,7 +106,47 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 	if err != nil {
 		return nil, err
 	}
-	return core.NewService(manager).WithSeed(seedOperations()), nil
+	return core.NewService(manager).WithSeed(seedOperations(nil, nil)), nil
+}
+
+func seedPersistence(history *historydb.Store) core.SeedPersistence {
+	return core.SeedPersistence{
+		RecordOpening: func(ctx context.Context, opening core.SeedOpening) error {
+			if history == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return history.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     opening.Handle,
+				Pollen:     opening.Pollen,
+				PhytomerID: opening.PhytomerID,
+				Substrate:  opening.Substrate,
+				Goal:       opening.Goal,
+				Status:     opening.Status,
+				StartedAt:  opening.StartedAt,
+			})
+		},
+		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
+			if history == nil {
+				return core.ErrSeedHistoryUnavailable
+			}
+			return history.RecordSeedRun(ctx, historydb.SeedRun{
+				Handle:     settled.Handle,
+				Pollen:     settled.Pollen,
+				PhytomerID: settled.PhytomerID,
+				Substrate:  settled.Substrate,
+				Goal:       settled.Goal,
+				Status:     settled.Status,
+				Iterations: settled.Iterations,
+				Branch:     settled.Branch,
+				Commit:     settled.Commit,
+				Diff:       settled.Diff,
+				Logs:       settled.Logs,
+				Error:      settled.Error,
+				StartedAt:  settled.StartedAt,
+				FinishedAt: settled.FinishedAt,
+			})
+		},
+	}
 }
 
 // seedOperations binds the Seed-growth execution port to the conductor's
@@ -112,9 +155,17 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 // imports the conductor (see internal/core/boundary_test.go); it translates the
 // Core's transport-free spec into the conductor's execution request and the
 // reviewable Fruit back.
-func seedOperations() core.SeedOperations {
+func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SeedOperations {
 	return core.SeedOperations{
 		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			bus := ambientBus
+			if bus == nil {
+				bus = eventbus.New()
+				if history != nil {
+					bus.AttachSink(history, 0, "historydb")
+				}
+				defer bus.Shutdown()
+			}
 			result, err := conductor.RunSeed(ctx, conductor.SeedExecution{
 				Substrate:     spec.Substrate,
 				Goal:          spec.Goal,
@@ -122,6 +173,11 @@ func seedOperations() core.SeedOperations {
 				MaxIterations: spec.MaxIterations,
 				Timeout:       spec.Timeout,
 				Egress:        spec.Egress,
+				EventBus:      bus,
+				SessionID:     spec.PhytomerID,
+				PrepareSprout: func(ctx context.Context, orch *conductor.DockerOrchestrator, iteration int) error {
+					return prepareSeedSprout(ctx, history, spec, orch, iteration)
+				},
 			})
 			if err != nil {
 				return core.SeedGrowResult{}, err
@@ -129,12 +185,46 @@ func seedOperations() core.SeedOperations {
 			return core.SeedGrowResult{
 				Status:     result.Status,
 				Iterations: result.Iterations,
+				PhytomerID: spec.PhytomerID,
 				Branch:     result.Branch,
+				Commit:     result.Commit,
 				Diff:       result.Diff,
 				Logs:       result.Logs,
 			}, nil
 		},
 	}
+}
+
+// prepareSeedSprout records opening ownership for one real Seed builder Sprout
+// before Terrarium work. Iteration identifiers are unique so later passes
+// cannot overwrite earlier ones. Verification-only Terrarium commands are not
+// recorded as Sprouts.
+func prepareSeedSprout(ctx context.Context, history *historydb.Store, spec core.SeedSpec, orch *conductor.DockerOrchestrator, iteration int) error {
+	if orch == nil {
+		return fmt.Errorf("seed sprout orchestrator is required")
+	}
+	phytomerID := strings.TrimSpace(spec.PhytomerID)
+	if phytomerID == "" {
+		return fmt.Errorf("seed.grow requires a phytomer sessionId")
+	}
+	stepID := fmt.Sprintf("seed-%s-%d-%d", phytomerID, iteration, time.Now().UTC().UnixNano())
+	orch.SessionID = phytomerID
+	orch.StepID = stepID
+	orch.AwaitsRunEnding = true
+	opened := openSproutRunRecord(ctx, core.SproutSpec{
+		StepID:     stepID,
+		SessionID:  phytomerID,
+		Origin:     spec.Origin,
+		Transcript: spec.Goal,
+		Substrate:  spec.Substrate,
+	}, spec.Substrate)
+	if err := persistDispatchSproutRun(ctx, history, opened); err != nil {
+		return err
+	}
+	if history != nil {
+		installSproutTerminalHistory(orch, history, context.WithoutCancel(ctx), opened)
+	}
+	return nil
 }
 
 // seedCommand is one subcommand actually registered on the `tendril seed`
@@ -334,8 +424,9 @@ func submitSeedAsync(ctx context.Context, input map[string]any) {
 	}
 
 	var accepted struct {
-		Handle string `json:"handle"`
-		Status string `json:"status"`
+		Handle     string `json:"handle"`
+		PhytomerID string `json:"phytomerId"`
+		Status     string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to decode daemon response: %v\n", err)
@@ -343,8 +434,11 @@ func submitSeedAsync(ctx context.Context, input map[string]any) {
 	}
 
 	fmt.Fprintln(os.Stdout, "🌱 Seed dispatched for growth.")
-	fmt.Fprintf(os.Stdout, "   Handle:  %s\n", accepted.Handle)
-	fmt.Fprintf(os.Stdout, "   Collect: tendril seed collect %s\n", accepted.Handle)
+	fmt.Fprintf(os.Stdout, "   Handle:   %s\n", accepted.Handle)
+	if strings.TrimSpace(accepted.PhytomerID) != "" {
+		fmt.Fprintf(os.Stdout, "   Phytomer: %s\n", accepted.PhytomerID)
+	}
+	fmt.Fprintf(os.Stdout, "   Collect:  tendril seed collect %s\n", accepted.Handle)
 }
 
 // runSeedCollect fetches the reviewable Fruit for a dispatched growth by handle.
@@ -375,7 +469,9 @@ func runSeedCollect(ctx context.Context, args []string) {
 	var run struct {
 		Status     string `json:"status"`
 		Iterations int    `json:"iterations"`
+		PhytomerID string `json:"phytomerId"`
 		Branch     string `json:"branch"`
+		Commit     string `json:"commit"`
 		Diff       string `json:"diff"`
 		Logs       string `json:"logs"`
 	}
@@ -393,6 +489,9 @@ func runSeedCollect(ctx context.Context, args []string) {
 	fmt.Fprintf(os.Stderr, "🌱 Seed %s after %d iteration(s)", run.Status, run.Iterations)
 	if strings.TrimSpace(run.Branch) != "" {
 		fmt.Fprintf(os.Stderr, " on branch %s", run.Branch)
+	}
+	if strings.TrimSpace(run.Commit) != "" {
+		fmt.Fprintf(os.Stderr, " at %s", run.Commit)
 	}
 	fmt.Fprintln(os.Stderr)
 

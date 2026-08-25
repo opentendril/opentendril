@@ -151,7 +151,7 @@ func (h *MCPHandler) callStomaPass(id interface{}, args map[string]interface{}, 
 // Seed's egress allow-list is grant material with no JSON surface, so the
 // adapter places the authorized grant's allow-list itself rather than trusting
 // the generic registry decode.
-func (h *MCPHandler) callSeedGrow(id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
+func (h *MCPHandler) callSeedGrow(ctx context.Context, id interface{}, args map[string]interface{}, decision core.DelegationDecision) []byte {
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return h.formatError(id, -32602, "Invalid params", err.Error())
@@ -171,7 +171,10 @@ func (h *MCPHandler) callSeedGrow(id interface{}, args map[string]interface{}, d
 		in.Origin = session.OriginMCP
 	}
 
-	result, runErr := h.core.SeedGrow(context.Background(), in)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, runErr := h.core.SeedGrow(ctx, in)
 	return h.formatCapabilityResult(id, result, runErr)
 }
 
@@ -436,7 +439,7 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 			// stoma.pass (json:"-"), so it takes the same typed
 			// dispatch: the adapter places the authorized grant's allow-list
 			// itself rather than trusting the generic registry decode.
-			return h.callSeedGrow(id, params.Arguments, decision)
+			return h.callSeedGrow(callCtx, id, params.Arguments, decision)
 		}
 		resBytes := h.callCoreCapabilityAs(callCtx, id, canonical, params.Arguments)
 		if canonical == core.CapGenotypeCreate && !strings.Contains(string(resBytes), `"isError":true`) {
