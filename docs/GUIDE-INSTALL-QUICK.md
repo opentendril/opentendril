@@ -83,9 +83,35 @@ sudo sh install.sh \
 ```
 
 The installer does not run `tendril init` and does not start the Stem. Complete
-configuration as the Stem, from `/home/tendril`:
+configuration as the Stem, from `/home/tendril`.
+
+An LLM is required before `tendril init`. Local
+[Ollama](https://ollama.com) is the documented default. A clean machine does
+not include it. Either:
+
+- install Ollama from the [public Linux instructions](https://docs.ollama.com/linux)
+  and pull the default local model; or
+- have a supported cloud-provider credential ready (Anthropic, OpenAI, xAI,
+  or Google).
+
+The wizard detects a running Ollama instance at `localhost:11434` — including
+one with no models pulled yet — and defaults to fully local inference. If none
+is reachable, it asks for a cloud provider and its key.
 
 ```bash
+# [root] public Ollama Linux install
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Create `/home/tendril/.env` before the wizard. `tendril init` writes to
+`~/.tendril/.env` when no `./.env` exists, and the Stem reads `./.env`. These
+commands are safe if the installer already created the file.
+
+```bash
+sudo -u tendril -H bash -lc 'touch /home/tendril/.env && chmod 600 /home/tendril/.env'
+
+sudo -u tendril -H bash -lc 'ollama pull llama3.2'
+
 sudo -u tendril -H bash -lc 'cd /home/tendril && export DOCKER_HOST=unix:///run/user/$(id -u tendril)/docker.sock && /home/tendril/.local/bin/tendril init'
 
 sudo -u tendril -H bash -lc 'cd /home/tendril && /home/tendril/.local/bin/tendril hardiness'

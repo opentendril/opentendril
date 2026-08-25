@@ -151,7 +151,7 @@ root-equivalent group makes every later stage cosmetic.
 Prerequisites for the normal path:
 - A Terrarium provider. This guide instantiates rootless Docker Engine in Stage 2.
 - Git, where the Stem clones and manages Substrates.
-- An LLM — local [Ollama](https://ollama.ai) by default, or a cloud provider key.
+- An LLM — local [Ollama](https://ollama.com) by default, or a cloud provider key.
 - Access to the target GitHub repository.
 - Authority necessary to create and install the GitHub App used by the secure-default path.
 - Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
@@ -403,6 +403,16 @@ this stage as a way of reinitializing the Stem.
 > **Serves P1 and P3.** The directory location within the home is *preference*;
 > what matters is that it belongs to the Stem and no caller can read its
 > contents.
+
+An LLM is required before `tendril init`. Local [Ollama](https://ollama.com)
+is the default. A clean machine does not include it. Install Ollama from the
+[public Linux instructions](https://docs.ollama.com/linux) if it is not already
+present. Alternatively, have a supported cloud-provider credential ready.
+
+```bash
+# [root] public Ollama Linux install
+curl -fsSL https://ollama.com/install.sh | sh
+```
 
 Everything from here runs **as `tendril`, from `/home/tendril`**.
 
