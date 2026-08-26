@@ -344,6 +344,21 @@ func writeAppVerifyFixture(t *testing.T, appID, repo string, pemBytes []byte) st
 	return dir
 }
 
+func writePATVerifyFixture(t *testing.T, repo, tokenEnv, token string) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv(tokenEnv, token)
+	opts := gitSetupOptions{
+		posture: "pat", substrate: "garden", repo: repo,
+		tokenEnv: tokenEnv, signKey: "KEY", identityName: "N", identityEmail: "e@x",
+		checkout: "managed",
+	}
+	if err := os.WriteFile(filepath.Join(dir, "substrates.yaml"), []byte(renderSubstratesYAML(opts)), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return dir
+}
+
 func captureVerifyOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	t.Helper()
 	oldOut, oldErr := os.Stdout, os.Stderr
@@ -375,36 +390,67 @@ func captureVerifyOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	return <-outDone, <-errDone
 }
 
+type setupVerifyFakeOpts struct {
+	appStatus     int
+	installStatus int
+	repoStatus    int
+	leakyBody     string
+	emptyRepo     bool
+	defaultBranch string
+	commitSHA     string
+	branches      map[string]string
+	installToken  string
+}
+
 func startSetupVerifyFake(t *testing.T, appStatus, installStatus, repoStatus int, leakyBody string, calls *[]gitHubCall) {
 	t.Helper()
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		appStatus:     appStatus,
+		installStatus: installStatus,
+		repoStatus:    repoStatus,
+		leakyBody:     leakyBody,
+		defaultBranch: "trunk",
+		commitSHA:     "0123456789abcdef0123456789abcdef01234567",
+		installToken:  "ghs_INSTALL_VERIFY_TOKEN",
+	}, calls)
+}
+
+func startSetupVerifyServer(t *testing.T, opts setupVerifyFakeOpts, calls *[]gitHubCall) {
+	t.Helper()
+	if opts.defaultBranch == "" {
+		opts.defaultBranch = "trunk"
+	}
+	if opts.commitSHA == "" {
+		opts.commitSHA = "0123456789abcdef0123456789abcdef01234567"
+	}
+	if opts.installToken == "" {
+		opts.installToken = "ghs_INSTALL_VERIFY_TOKEN"
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*calls = append(*calls, gitHubCall{Method: r.Method, Path: r.URL.Path, Authorization: r.Header.Get("Authorization")})
 		switch {
 		case r.URL.Path == "/app":
-			if appStatus != 0 && appStatus != http.StatusOK {
-				w.WriteHeader(appStatus)
-				_, _ = w.Write([]byte(leakyBody))
+			if opts.appStatus != 0 && opts.appStatus != http.StatusOK {
+				w.WriteHeader(opts.appStatus)
+				_, _ = w.Write([]byte(opts.leakyBody))
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+		case strings.Contains(r.URL.Path, "/access_tokens"):
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": opts.installToken})
 		case strings.HasSuffix(r.URL.Path, "/installation"):
-			if installStatus != 0 && installStatus != http.StatusOK {
-				w.WriteHeader(installStatus)
-				_, _ = w.Write([]byte(leakyBody))
+			if opts.installStatus != 0 && opts.installStatus != http.StatusOK {
+				w.WriteHeader(opts.installStatus)
+				_, _ = w.Write([]byte(opts.leakyBody))
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99001})
-		case strings.HasPrefix(r.URL.Path, "/repos/"):
-			status := repoStatus
-			if status == 0 {
-				status = http.StatusOK
-			}
-			w.WriteHeader(status)
-			if status == http.StatusOK {
-				_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
-			}
 		default:
-			w.WriteHeader(http.StatusNotFound)
+			serveSetupVerifyRepo(w, r, opts)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -412,21 +458,82 @@ func startSetupVerifyFake(t *testing.T, appStatus, installStatus, repoStatus int
 	t.Cleanup(restore)
 }
 
+func serveSetupVerifyRepo(w http.ResponseWriter, r *http.Request, opts setupVerifyFakeOpts) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "repos" {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	rest := strings.Join(parts[3:], "/")
+	switch {
+	case rest == "":
+		status := opts.repoStatus
+		if status == 0 {
+			status = http.StatusOK
+		}
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": opts.defaultBranch})
+		} else if opts.leakyBody != "" {
+			_, _ = w.Write([]byte(opts.leakyBody))
+		}
+	case rest == "commits":
+		if opts.emptyRepo {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"Git Repository is empty."}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"sha": opts.commitSHA}})
+	case strings.HasPrefix(rest, "commits/"):
+		if opts.emptyRepo {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"Git Repository is empty.","token":"ghs_LEAKME_INSTALL"}`))
+			return
+		}
+		branch := strings.TrimPrefix(rest, "commits/")
+		if sha, ok := opts.branches[branch]; ok {
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": sha})
+			return
+		}
+		if opts.branches == nil && branch == opts.defaultBranch {
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": opts.commitSHA})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"Not Found"}`))
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
 func assertNoMutatingCalls(t *testing.T, calls []gitHubCall) {
 	t.Helper()
 	for _, call := range calls {
+		if strings.EqualFold(call.Method, http.MethodPost) && strings.Contains(strings.ToLower(call.Path), "/access_tokens") {
+			continue
+		}
 		switch call.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
 		default:
-			t.Errorf("mutating GitHub HTTP method %s %s", call.Method, call.Path)
+			t.Errorf("repository-mutating GitHub HTTP method %s %s", call.Method, call.Path)
 		}
 		path := strings.ToLower(call.Path)
-		for _, banned := range []string{"access_tokens", "/git/", "/pulls", "/issues", "/merges"} {
+		for _, banned := range []string{"/git/", "/pulls", "/issues", "/merges"} {
 			if strings.Contains(path, banned) {
-				t.Errorf("mutating GitHub HTTP path %s %s", call.Method, call.Path)
+				t.Errorf("repository-mutating GitHub HTTP path %s %s", call.Method, call.Path)
 			}
 		}
 	}
+}
+
+func countSetupTokenIssuance(calls []gitHubCall) int {
+	n := 0
+	for _, call := range calls {
+		if strings.EqualFold(call.Method, http.MethodPost) && strings.Contains(strings.ToLower(call.Path), "/access_tokens") {
+			n++
+		}
+	}
+	return n
 }
 
 func secretsFromCalls(calls []gitHubCall) []string {
@@ -453,11 +560,17 @@ func TestRunGitSetupVerifyAppRemoteSuccess(t *testing.T) {
 		}
 	})
 	out := stdout + stderr
-	if !strings.Contains(stdout, "authenticated to the remote repository") {
-		t.Fatalf("stdout = %q, want remote authentication success", stdout)
+	if !strings.Contains(stdout, "the repository is ready as a managed Substrate") {
+		t.Fatalf("stdout = %q, want Git-base readiness success", stdout)
+	}
+	if !strings.Contains(stdout, `Git base ready: branch "trunk"`) {
+		t.Fatalf("stdout = %q, want the repository-reported default branch", stdout)
+	}
+	if countSetupTokenIssuance(calls) != 1 {
+		t.Fatalf("App verify should issue one installation token, calls=%+v", calls)
 	}
 	assertNoMutatingCalls(t, calls)
-	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_", "BEGIN RSA PRIVATE KEY")...)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_INSTALL_VERIFY_TOKEN", "ghs_", "BEGIN RSA PRIVATE KEY")...)
 }
 
 func TestRunGitSetupVerifyAppWrongAppID(t *testing.T) {
@@ -535,6 +648,95 @@ func TestRunGitSetupVerifyAppInaccessibleRepo(t *testing.T) {
 	assertNoSecretSubstrings(t, out, secretsFromCalls(calls)...)
 }
 
+func TestRunGitSetupVerifyAppEmptyRepository(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,
+		emptyRepo: true, leakyBody: `{"token":"ghs_LEAKME_INSTALL"}`,
+	}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("empty repository should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "no Git base") || !strings.Contains(out, "git setup --verify") {
+		t.Fatalf("output = %q, want actionable no-Git-base diagnosis", out)
+	}
+	if strings.Contains(out, "not installed") || strings.Contains(out, "inaccessible") {
+		t.Fatalf("empty repository must stay distinct from auth failures: %q", out)
+	}
+	if countSetupTokenIssuance(calls) != 1 {
+		t.Fatalf("App empty-repo verify should still issue an installation token, calls=%+v", calls)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_LEAKME_INSTALL", "ghs_INSTALL_VERIFY_TOKEN")...)
+}
+
+func TestRunGitSetupVerifyPATRemoteSuccess(t *testing.T) {
+	dir := writePATVerifyFixture(t, "acme/widget", "TENDRIL_TEST_PAT", "github_pat_LEAKME_PAT")
+	var calls []gitHubCall
+	startSetupVerifyFake(t, 0, 0, http.StatusOK, "", &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("expected verify success")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(stdout, "the repository is ready as a managed Substrate") {
+		t.Fatalf("stdout = %q, want Git-base readiness success", stdout)
+	}
+	if countSetupTokenIssuance(calls) != 0 {
+		t.Fatalf("PAT verify must not mint an App installation token, calls=%+v", calls)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "github_pat_LEAKME_PAT")...)
+}
+
+func TestRunGitSetupVerifyPATEmptyRepository(t *testing.T) {
+	dir := writePATVerifyFixture(t, "acme/widget", "TENDRIL_TEST_PAT", "github_pat_LEAKME_PAT")
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		repoStatus: http.StatusOK, emptyRepo: true, leakyBody: `{"token":"github_pat_LEAKME_PAT"}`,
+	}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("empty repository should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "no Git base") || !strings.Contains(out, "OpenTendril Substrate") {
+		t.Fatalf("output = %q, want actionable no-Git-base diagnosis", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "github_pat_LEAKME_PAT")...)
+}
+
+func TestRunGitSetupVerifyPATInaccessibleRepo(t *testing.T) {
+	dir := writePATVerifyFixture(t, "acme/widget", "TENDRIL_TEST_PAT", "github_pat_LEAKME_PAT")
+	var calls []gitHubCall
+	startSetupVerifyFake(t, 0, 0, http.StatusNotFound, `{"token":"github_pat_LEAKME_PAT"}`, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("inaccessible repository should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "does not exist or is inaccessible") {
+		t.Fatalf("output = %q, want inaccessible repository", out)
+	}
+	if strings.Contains(out, "no Git base") {
+		t.Fatalf("inaccessible must stay distinct from empty: %q", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "github_pat_LEAKME_PAT")...)
+}
+
 func TestGitSetupCLIContainsNoGitHubAuthImplementation(t *testing.T) {
 	src, err := os.ReadFile("cmdgitsetup.go")
 	if err != nil {
@@ -549,6 +751,9 @@ func TestGitSetupCLIContainsNoGitHubAuthImplementation(t *testing.T) {
 		"/access_tokens",
 		"githubAppAPI",
 		"RS256",
+		"githubReadinessGET",
+		"inspectRepositoryGitBase",
+		"default_branch",
 	} {
 		if strings.Contains(text, banned) {
 			t.Errorf("CLI adapter contains GitHub auth implementation %q", banned)

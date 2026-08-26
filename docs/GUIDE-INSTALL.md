@@ -159,7 +159,7 @@ Prerequisites for the normal path:
 - A Terrarium provider. This guide instantiates rootless Docker Engine in Stage 2.
 - Git, where the Stem clones and manages Substrates.
 - An LLM — local [Ollama](https://ollama.com) by default, or a cloud provider key.
-- Access to the target GitHub repository.
+- Access to the target GitHub repository. That repository must already contain at least one commit; an empty repository is not a ready OpenTendril Substrate.
 - Authority necessary to create and install the GitHub App used by the secure-default path.
 - Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
 
@@ -592,8 +592,12 @@ tendril delegation revoke \
 
 **Check:** `tendril git setup --verify --substrate myrepo`
 reports the connection ready only after authenticating to the configured
-repository. A wrong App ID, unusable private key, missing installation, or
-inaccessible repository fails the check.
+repository and confirming it has a usable Git base: the required branch
+resolves to a commit. The check does not clone, create a checkout, commit,
+branch, push, or open a pull request. A wrong App ID, unusable private key,
+missing installation, inaccessible repository, missing configured branch, or
+empty repository fails the check. If the repository has no commit, create an
+initial commit on it and rerun the same verify command.
 
 ### Commit signing
 

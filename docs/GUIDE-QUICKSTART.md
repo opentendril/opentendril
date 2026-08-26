@@ -245,6 +245,10 @@ MCP tool:      gitStatus
 
 ## 5. Make your first governed call
 
+The Substrate must already have a Git base — at least one commit on the
+required branch. `tendril git setup --verify --substrate myrepo` confirms
+authentication and that Git base without mutating the repository.
+
 ```bash
 TOKEN=$(cat ~/.tendril-token)
 curl -s -X POST localhost:8080/v1/git/status \
