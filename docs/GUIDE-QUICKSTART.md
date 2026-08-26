@@ -122,8 +122,29 @@ the point, not the exit code:
 HARDY — no weak conditions and nothing unestablished.
 ```
 
-Run it a second time **from your own account**. It answers the other side of the
-boundary: from there, none of the Stem's credential files may be readable.
+Hardiness is a control-plane operation. It is not a Pollinator-facing command.
+A correctly governed Pollinator-hosting account has no full `tendril` binary, so
+it cannot run `tendril hardiness`. If the Stem-side report tells you to run it
+again from an account that hosts Pollinators, that sentence does not apply to
+this posture.
+
+From the ordinary account, confirm the other side of the boundary with tools
+that account already has. Do not copy or chmod the Stem binary.
+
+```bash
+command -v tendril
+# no result
+
+test -r /home/tendril/.tendril/api-key; echo $?
+# non-zero — this account cannot read the Botanist key the Stem holds
+
+test -r /home/tendril/.tendril/pollinators.json; echo $?
+# non-zero — this account cannot read the Pollinator credential store
+```
+
+Those `test -r` checks do not print file contents. A zero from either means this
+account can read Stem control-plane material; that is a weak installation, not
+a prompt to install `tendril` here.
 
 > [!NOTE]
 > `hardiness` measures the binary **on disk**. If you have installed a new binary

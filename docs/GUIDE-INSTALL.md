@@ -11,10 +11,17 @@ of them. Where that is true, the step says so, and the [Variations](#variations)
 section shows what changes.
 
 Whether your installation actually holds those properties is not a matter of
-having followed the steps. It is measurable:
+having followed the steps. It is measurable. On a single-principal install the
+local account runs:
 
 ```bash
 tendril hardiness
+```
+
+On this guide's governed posture, run it as the Stem:
+
+```bash
+sudo -u tendril -i tendril hardiness
 ```
 
 **That command reports; it does not gate.** It tells you what is true about this
@@ -1074,6 +1081,23 @@ boundary is enforced by the operating system."*
 A governed Pollinator-hosting account following Stage 8 has `tendril-mcp` and
 not `tendril`. That is the intended outcome: `command -v tendril` prints
 nothing. The Stem-side report above remains the authoritative P5 reading.
+Hardiness is a control-plane operation; if its output tells you to run it again
+from a Pollinator-hosting account, that sentence does not apply to this
+posture — that account intentionally has no full Stem CLI.
+
+From the ordinary account, confirm the other side of the boundary without that
+binary:
+
+```bash
+command -v tendril
+# no result
+
+test -r /home/tendril/.tendril/api-key; echo $?
+test -r /home/tendril/.tendril/pollinators.json; echo $?
+# both non-zero — this account cannot read Stem control-plane material
+```
+
+Those `test -r` checks do not print file contents.
 
 If this account *does* resolve a `tendril` executable — a single-user install,
 or a leftover copy — run the caller's-view report from your home:
@@ -1396,7 +1420,11 @@ git status --short                        # must show no deleted tracked files
 **6. Rotate the credential.** Regenerate the private key at GitHub and install
 the new one per Stage 5.
 
-**Check:** `cd ~ && tendril hardiness` reports no readable credential files.
+**Check:** `command -v tendril` prints nothing. `test -r` on
+`/home/tendril/.tendril/api-key` and `/home/tendril/.tendril/pollinators.json`
+fails. A leftover `tendril` on this account's PATH is a single-principal
+remainder: from `$HOME`, `tendril hardiness` must report no readable credential
+files.
 
 ---
 
@@ -1418,9 +1446,17 @@ sudo -u tendril -i
 cd ~/.tendril/substrates/myrepo && git log --oneline -5 && git status
 ```
 
-**After anything that touches the installation**, run `tendril hardiness` as
-yourself. It is the fastest way to notice credential material that has drifted
-back into your home directory.
+**After anything that touches the installation**, run hardiness as the Stem:
+
+```bash
+sudo -u tendril -i tendril hardiness
+```
+
+A governed Pollinator-hosting account has no full `tendril` binary. From that
+account, `command -v tendril` should still print nothing, and `test -r` on
+`/home/tendril/.tendril/api-key` and `/home/tendril/.tendril/pollinators.json`
+should fail. A leftover `tendril` on this account's PATH is how credential
+material in `$HOME` still surfaces: from there, run `tendril hardiness`.
 
 ---
 
