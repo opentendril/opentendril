@@ -58,7 +58,7 @@ session is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md).
 
 ## Governed
 
-Pin **v0.3.2**. Download `install.sh` and `checksums.txt` from that release,
+Download `install.sh` and `checksums.txt` from the governed release below,
 verify the installer against the checksum file, then run it with
 administrative authority. Name the ordinary Pollinator-hosting account
 explicitly — not `root`, and not `tendril`.
@@ -66,20 +66,22 @@ explicitly — not `root`, and not `tendril`.
 Do **not** pipe the installer into `sudo sh`.
 
 ```bash
+RELEASE=v0.3.3
 curl -fsSL -o install.sh \
-  https://github.com/opentendril/opentendril/releases/download/v0.3.2/install.sh
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
-  https://github.com/opentendril/opentendril/releases/download/v0.3.2/checksums.txt
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
 grep 'install.sh$' checksums.txt | sha256sum -c
 ```
 
 Read the verified `install.sh` before privileged execution. Then:
 
 ```bash
+RELEASE=v0.3.3
 sudo sh install.sh \
   --governed \
   --pollinator-user <ordinary-user> \
-  --version v0.3.2
+  --version "${RELEASE}"
 ```
 
 The installer does not run `tendril init` and does not start the Stem. Complete
