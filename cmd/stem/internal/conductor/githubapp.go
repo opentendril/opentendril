@@ -311,11 +311,19 @@ func RedirectGitHubAPIBaseURL(baseURL string) func() {
 	orig := githubAPIBaseURL
 	githubAPIBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	githubEndpointMu.Unlock()
+	resetGitHubAppTokenCache()
 	return func() {
 		githubEndpointMu.Lock()
 		githubAPIBaseURL = orig
 		githubEndpointMu.Unlock()
+		resetGitHubAppTokenCache()
 	}
+}
+
+func resetGitHubAppTokenCache() {
+	appTokenMu.Lock()
+	appTokenCache = map[string]cachedAppToken{}
+	appTokenMu.Unlock()
 }
 
 func redirectGitHubGraphQLURL(url string) func() {
