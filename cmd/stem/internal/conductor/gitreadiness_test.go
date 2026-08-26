@@ -213,6 +213,21 @@ func countTokenIssuance(calls []recordedGitHubCall) int {
 	return n
 }
 
+func inspectsGitBase(calls []recordedGitHubCall) bool {
+	for _, call := range calls {
+		if strings.Contains(call.Path, "/commits") {
+			return true
+		}
+	}
+	return false
+}
+
+func managedWidgetSpec(branch string) SubstrateSpec {
+	spec := widgetSpec(branch)
+	spec.Checkout.Mode = "managed"
+	return spec
+}
+
 func readinessSecrets(calls []recordedGitHubCall, extra ...string) []string {
 	secrets := append(collectedAuthSecrets(calls), extra...)
 	secrets = append(secrets, readinessInstallToken, readinessPAT, "ghs_LEAKME_INSTALL")
@@ -489,6 +504,112 @@ func TestVerifyManagedSubstrateGitReadinessSecretsNeverAppear(t *testing.T) {
 		t.Fatal("expected empty-repo failure")
 	}
 	assertNoSecrets(t, err.Error(), append(readinessSecrets(fake.calls), "SECRETPEM-TEST-MARKER", "BEGIN RSA PRIVATE KEY")...)
+}
+
+func TestVerifySubstrateSetupManagedInvokesGitBase(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk"}
+	startReadinessFake(t, fake)
+
+	got, err := VerifySubstrateSetup(context.Background(), managedWidgetSpec(""), appReadinessCred(t))
+	if err != nil {
+		t.Fatalf("managed setup should succeed, got %v", err)
+	}
+	if !got.Managed {
+		t.Fatal("managed checkout must report Managed")
+	}
+	if got.GitBase.Branch != "trunk" || got.GitBase.Commit != readinessCommitSHA {
+		t.Fatalf("Git base = %+v, want trunk at the reported commit", got.GitBase)
+	}
+	if !inspectsGitBase(fake.calls) {
+		t.Fatalf("managed checkout must inspect Git base, calls=%+v", fake.calls)
+	}
+	if countTokenIssuance(fake.calls) != 1 {
+		t.Fatalf("managed App setup should mint an installation token, calls=%+v", fake.calls)
+	}
+}
+
+func TestVerifySubstrateSetupManagedEmptyStillFails(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", emptyRepo: true}
+	startReadinessFake(t, fake)
+
+	_, err := VerifySubstrateSetup(context.Background(), managedWidgetSpec(""), appReadinessCred(t))
+	if err == nil {
+		t.Fatal("managed empty repository should fail Git-base readiness")
+	}
+	assertNoGitBaseDiagnosis(t, err.Error())
+	if !inspectsGitBase(fake.calls) {
+		t.Fatalf("managed checkout must inspect Git base, calls=%+v", fake.calls)
+	}
+}
+
+func TestVerifySubstrateSetupPathDoesNotAcquireManagedReadiness(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", emptyRepo: true}
+	startReadinessFake(t, fake)
+
+	spec := widgetSpec("")
+	spec.Checkout.Mode = "path"
+	spec.Checkout.Path = "/tmp/ot-verify-path"
+	got, err := VerifySubstrateSetup(context.Background(), spec, appReadinessCred(t))
+	if err != nil {
+		t.Fatalf("path checkout must keep credential-only success, got %v", err)
+	}
+	if got.Managed {
+		t.Fatal("path checkout must not report Managed")
+	}
+	if got.GitBase != (SubstrateGitReadiness{}) {
+		t.Fatalf("path checkout must not return a Git base, got %+v", got.GitBase)
+	}
+	if inspectsGitBase(fake.calls) {
+		t.Fatalf("path checkout must not inspect Git base, calls=%+v", fake.calls)
+	}
+	if countTokenIssuance(fake.calls) != 0 {
+		t.Fatalf("path checkout must not mint an installation token, calls=%+v", fake.calls)
+	}
+}
+
+func TestVerifySubstrateSetupEphemeralDoesNotAcquireManagedReadiness(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", emptyRepo: true}
+	startReadinessFake(t, fake)
+
+	spec := widgetSpec("")
+	spec.Checkout.Mode = "ephemeral"
+	got, err := VerifySubstrateSetup(context.Background(), spec, patReadinessCred())
+	if err != nil {
+		t.Fatalf("ephemeral checkout must keep credential-only success, got %v", err)
+	}
+	if got.Managed {
+		t.Fatal("ephemeral checkout must not report Managed")
+	}
+	if inspectsGitBase(fake.calls) {
+		t.Fatalf("ephemeral PAT must not inspect Git base, calls=%+v", fake.calls)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("ephemeral PAT must not call GitHub, calls=%+v", fake.calls)
+	}
+}
+
+func TestVerifySubstrateSetupPathAppDiagnosticsUnchanged(t *testing.T) {
+	fake := &gitReadinessFake{
+		appStatus: http.StatusUnauthorized,
+		leakyBody: `{"message":"Bad credentials","token":"ghs_LEAKME_INSTALL"}`,
+	}
+	startReadinessFake(t, fake)
+
+	spec := widgetSpec("")
+	spec.Checkout.Mode = "path"
+	spec.Checkout.Path = "/tmp/ot-verify-path"
+	_, err := VerifySubstrateSetup(context.Background(), spec, appReadinessCred(t))
+	if err == nil {
+		t.Fatal("path App with rejected credentials should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "rejected the App credentials") {
+		t.Fatalf("error = %q, want rejected App credentials", msg)
+	}
+	if strings.Contains(msg, "no Git base") {
+		t.Fatalf("path credential failure must not become a Git-base failure: %q", msg)
+	}
+	assertNoSecrets(t, msg, readinessSecrets(fake.calls)...)
 }
 
 func assertNoGitBaseDiagnosis(t *testing.T, msg string) {

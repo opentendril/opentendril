@@ -12,9 +12,10 @@ inherits it.
 
 This guide is deliberately linear: follow it top to bottom.
 
-The GitHub repository you connect must already contain at least one commit.
-An empty repository is not a ready OpenTendril Substrate. Setup and
-`git setup --verify` do not create that inaugural commit.
+For a managed checkout (the default of `tendril git setup`), the GitHub
+repository must already contain at least one commit. An empty repository is
+not a ready managed OpenTendril Substrate. Setup and `git setup --verify` do
+not create that inaugural commit.
 
 ---
 
@@ -34,7 +35,7 @@ tendril git setup --posture pat --substrate myrepo --repo owner/repo \
   --identity-name "Tendril Bot" --identity-email bot@your-domain \
   --grant-pollen claude
 
-# Check repository readiness, including a usable Git base (no mutation):
+# Check a connection. Managed checkouts also require a usable Git base (no mutation):
 tendril git setup --verify --substrate myrepo
 ```
 

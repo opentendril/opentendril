@@ -284,15 +284,15 @@ func envOrDefault(v, def string) string {
 	return v
 }
 
-// verifyManagedSubstrateGitReadiness is the Conductor remote-readiness probe.
-// The CLI adapter reports the result; tests may replace this function.
-var verifyManagedSubstrateGitReadiness = conductor.VerifyManagedSubstrateGitReadiness
+// verifySubstrateSetup is the Conductor setup-verification probe. The CLI
+// adapter reports the result; tests may replace this function.
+var verifySubstrateSetup = conductor.VerifySubstrateSetup
 
 // runGitSetupVerify loads the written config, resolves the substrate's
-// credential, and asks the Conductor whether the remote is usable as a Git
-// base. The CLI does not implement GitHub authentication, branch resolution,
-// or readiness policy. The check does not clone, commit, push, or open a
-// pull request. Returns true when the connection is ready.
+// credential, and asks the Conductor to verify the connection. The CLI does
+// not implement GitHub authentication, branch resolution, checkout-mode
+// routing, or readiness policy. The check does not clone, commit, push, or
+// open a pull request. Returns true when the connection is ready.
 func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 	cfg, err := conductor.LoadSubstratesConfig(o.dir)
 	if err != nil {
@@ -331,18 +331,24 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 			fmt.Printf("  ✅ token present (from %s)\n", cred.TokenEnv)
 		}
 	}
+	var managed bool
 	if ready {
-		readiness, err := verifyManagedSubstrateGitReadiness(ctx, *spec, cred)
+		verification, err := verifySubstrateSetup(ctx, *spec, cred)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ remote verification failed: %v\n", err)
 			ready = false
 		} else {
-			sha := readiness.Commit
-			if len(sha) > 12 {
-				sha = sha[:12]
+			managed = verification.Managed
+			if managed {
+				sha := verification.GitBase.Commit
+				if len(sha) > 12 {
+					sha = sha[:12]
+				}
+				fmt.Println("  ✅ authenticated to the configured repository")
+				fmt.Printf("  ✅ Git base ready: branch %q at %s\n", verification.GitBase.Branch, sha)
+			} else if cred.Method == conductor.CredentialApp {
+				fmt.Println("  ✅ authenticated to the configured repository")
 			}
-			fmt.Println("  ✅ authenticated to the configured repository")
-			fmt.Printf("  ✅ Git base ready: branch %q at %s\n", readiness.Branch, sha)
 		}
 	}
 	if cred.Sign.Method != "" {
@@ -352,7 +358,13 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 		fmt.Printf("  identity:     %s <%s>\n", cred.Identity.Name, cred.Identity.Email)
 	}
 	if ready {
-		fmt.Println("✅ Connection configured; the repository is ready as a managed Substrate.")
+		if managed {
+			fmt.Println("✅ Connection configured; the repository is ready as a managed Substrate.")
+		} else if cred.Method == conductor.CredentialApp {
+			fmt.Println("✅ Connection configured; authenticated to the remote repository.")
+		} else {
+			fmt.Println("✅ Connection configured; authentication material present.")
+		}
 	} else {
 		fmt.Println("⚠️  Connection configured, but it is not ready (see above).")
 	}
@@ -436,5 +448,5 @@ func printGitSetupUsage() {
 	fmt.Println()
 	fmt.Println("  --dir <path>          Where to write config (default: current directory)")
 	fmt.Println("  --force               Overwrite existing config files, and skip the confirmation")
-	fmt.Println("  --verify              Check remote authentication and Git-base readiness (no mutation)")
+	fmt.Println("  --verify              Check the configured connection (managed checkouts include Git-base readiness; no mutation)")
 }

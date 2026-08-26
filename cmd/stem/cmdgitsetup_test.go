@@ -359,6 +359,22 @@ func writePATVerifyFixture(t *testing.T, repo, tokenEnv, token string) string {
 	return dir
 }
 
+func rewriteCheckout(t *testing.T, dir, checkoutYAML string) {
+	t.Helper()
+	path := filepath.Join(dir, "substrates.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	updated := strings.Replace(string(raw), "    checkout: { mode: managed }\n", "    checkout: "+checkoutYAML+"\n", 1)
+	if updated == string(raw) {
+		t.Fatalf("did not replace managed checkout in %s", raw)
+	}
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
 func captureVerifyOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	t.Helper()
 	oldOut, oldErr := os.Stdout, os.Stderr
@@ -534,6 +550,15 @@ func countSetupTokenIssuance(calls []gitHubCall) int {
 		}
 	}
 	return n
+}
+
+func inspectsGitBase(calls []gitHubCall) bool {
+	for _, call := range calls {
+		if strings.Contains(call.Path, "/commits") {
+			return true
+		}
+	}
+	return false
 }
 
 func secretsFromCalls(calls []gitHubCall) []string {
@@ -735,6 +760,67 @@ func TestRunGitSetupVerifyPATInaccessibleRepo(t *testing.T) {
 	}
 	assertNoMutatingCalls(t, calls)
 	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "github_pat_LEAKME_PAT")...)
+}
+
+func TestRunGitSetupVerifyPathAppKeepsCredentialOnly(t *testing.T) {
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	rewriteCheckout(t, dir, "{ mode: path, path: /tmp/ot-verify-path }")
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,
+		emptyRepo: true,
+	}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("path checkout should keep credential-only success")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(stdout, "authenticated to the remote repository") {
+		t.Fatalf("stdout = %q, want pre-slice App success", stdout)
+	}
+	if strings.Contains(out, "ready as a managed Substrate") {
+		t.Fatalf("path checkout must not be described as managed: %q", out)
+	}
+	if strings.Contains(out, "Git base ready") || strings.Contains(out, "no Git base") {
+		t.Fatalf("path checkout must not acquire managed Git-base readiness: %q", out)
+	}
+	if inspectsGitBase(calls) {
+		t.Fatalf("path checkout must not inspect Git base, calls=%+v", calls)
+	}
+	if countSetupTokenIssuance(calls) != 0 {
+		t.Fatalf("path checkout must not mint an installation token, calls=%+v", calls)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, secretsFromCalls(calls)...)
+}
+
+func TestRunGitSetupVerifyEphemeralPATKeepsCredentialOnly(t *testing.T) {
+	dir := writePATVerifyFixture(t, "acme/widget", "TENDRIL_TEST_PAT", "github_pat_LEAKME_PAT")
+	rewriteCheckout(t, dir, "{ mode: ephemeral }")
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{emptyRepo: true}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("ephemeral checkout should keep credential-only success")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(stdout, "authentication material present") {
+		t.Fatalf("stdout = %q, want pre-slice PAT success", stdout)
+	}
+	if strings.Contains(out, "ready as a managed Substrate") {
+		t.Fatalf("ephemeral checkout must not be described as managed: %q", out)
+	}
+	if strings.Contains(out, "Git base ready") || strings.Contains(out, "no Git base") {
+		t.Fatalf("ephemeral checkout must not acquire managed Git-base readiness: %q", out)
+	}
+	if inspectsGitBase(calls) || len(calls) != 0 {
+		t.Fatalf("ephemeral PAT must not call GitHub, calls=%+v", calls)
+	}
+	assertNoSecretSubstrings(t, out, "github_pat_LEAKME_PAT")
 }
 
 func TestGitSetupCLIContainsNoGitHubAuthImplementation(t *testing.T) {

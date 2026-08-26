@@ -20,8 +20,60 @@ type SubstrateGitReadiness struct {
 	Commit string
 }
 
-// VerifyManagedSubstrateGitReadiness proves a configured Substrate can be used
-// as a Git base for governed work. It is read-only with respect to the
+// SubstrateSetupVerification is the result of setup verification for a
+// configured Substrate. Managed is true only when checkout mode is managed and
+// the Git-base contract succeeded. Path and ephemeral checkouts never set
+// Managed; they keep credential-only verification.
+type SubstrateSetupVerification struct {
+	Managed bool
+	GitBase SubstrateGitReadiness
+}
+
+func managedCheckout(spec SubstrateSpec) bool {
+	return strings.EqualFold(strings.TrimSpace(spec.Checkout.Mode), "managed")
+}
+
+// VerifySubstrateSetup is the setup-verification policy. Managed checkouts
+// require Git-base readiness. Path and ephemeral checkouts keep credential-only
+// verification: App remote authentication, or PAT presence. This function does
+// not invent path/ephemeral Git-base semantics.
+func VerifySubstrateSetup(ctx context.Context, spec SubstrateSpec, cred ResolvedCredential) (SubstrateSetupVerification, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if managedCheckout(spec) {
+		gitBase, err := VerifyManagedSubstrateGitReadiness(ctx, spec, cred)
+		if err != nil {
+			return SubstrateSetupVerification{}, err
+		}
+		return SubstrateSetupVerification{Managed: true, GitBase: gitBase}, nil
+	}
+	if err := verifyNonManagedCredential(ctx, spec, cred); err != nil {
+		return SubstrateSetupVerification{}, err
+	}
+	return SubstrateSetupVerification{Managed: false}, nil
+}
+
+func verifyNonManagedCredential(ctx context.Context, spec SubstrateSpec, cred ResolvedCredential) error {
+	switch cred.Method {
+	case CredentialApp:
+		return VerifyGitHubAppRemoteAccess(ctx, cred.App, spec.URL)
+	case CredentialPAT:
+		if strings.TrimSpace(cred.TokenValue) == "" {
+			env := strings.TrimSpace(cred.TokenEnv)
+			if env == "" {
+				env = "the configured token environment variable"
+			}
+			return fmt.Errorf("Personal Access Token is not set in this environment (%s)", env)
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+// VerifyManagedSubstrateGitReadiness proves a configured managed Substrate can
+// be used as a Git base for governed work. It is read-only with respect to the
 // repository: it does not clone, create a checkout or worktree, create a
 // commit, create, delete, or rename a branch, push, open a pull request, or
 // otherwise mutate repository content.
