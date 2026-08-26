@@ -100,10 +100,20 @@ and troubleshooting. The first-party installer is the automated realization of
 that normal path. Compiling from source is an advanced/developer variation
 documented there.
 
-Whichever way you install, this tells you what you actually have:
+How you read the installation depends on the posture.
+
+**Local / evaluation.** The local account runs the Stem, so it can run the
+report:
 
 ```bash
 tendril hardiness
+```
+
+**Governed.** Hardiness is a control-plane operation. Run it as the Stem
+principal:
+
+```bash
+sudo -u tendril -i tendril hardiness
 ```
 
 It reports rather than gates. A weak finding may describe a configuration you
