@@ -703,12 +703,38 @@ func TestPublishManagedAPIFruitEndToEnd(t *testing.T) {
 		t.Fatalf("feature.txt missing after reconciliation: %v", err)
 	}
 
-	// Cleanup: reset workspace so Cleanup sees a clean tree.
-	if _, err := runGitCommand(ctx, rw.Path, "reset", "--hard", rw.BaseCommit); err != nil {
-		t.Fatalf("reset for cleanup: %v", err)
+	// After reconciliation the worktree must be clean: the published commit
+	// contains exactly the files that were committed, so git status should
+	// report nothing. This is the state that Cleanup must be able to handle
+	// directly — no manual reset is required or permitted.
+	statusOut, err := runGitCommandRawOutput(ctx, rw.Path, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		t.Fatalf("git status after reconcile: %v", err)
 	}
+	if statusOut != "" {
+		t.Errorf("workspace is not clean after ReconcilePublishedFruit (git status: %q)", statusOut)
+	}
+
+	// Cleanup the worktree in the real post-publication state (reconciled to the
+	// Fruit commit). The branch carries committed Fruit so Cleanup must retain it
+	// rather than reclaiming it.
 	if err := rw.Cleanup(ctx, ResolvedCredential{}); err != nil {
-		t.Fatalf("Cleanup after e2e test: %v", err)
+		t.Fatalf("Cleanup in post-publication state: %v", err)
+	}
+
+	// The disposable worktree directory must be gone.
+	if _, err := os.Lstat(rw.Path); !os.IsNotExist(err) {
+		t.Errorf("worktree path %q still exists after Cleanup", rw.Path)
+	}
+
+	// The contract: published remote Fruit OID == retained local Fruit branch OID.
+	// Cleanup must NOT delete or move the branch because it carries committed Fruit.
+	retainedOID, err := runGitCommand(ctx, rw.Repository, "rev-parse", rw.Branch)
+	if err != nil {
+		t.Fatalf("rev-parse retained Fruit branch after Cleanup: %v", err)
+	}
+	if strings.TrimSpace(retainedOID) != gotOID {
+		t.Errorf("retained local Fruit branch = %q, want published OID %q", strings.TrimSpace(retainedOID), gotOID)
 	}
 }
 
