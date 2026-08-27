@@ -32,6 +32,90 @@ type RunWorkspace struct {
 	RunID string
 }
 
+// ReconcilePublishedFruit synchronizes the local Tendril-owned run workspace to
+// match the exact remote commit published via the GitHub API.
+//
+// Before any destructive operation the following are verified:
+//   - The RunWorkspace carries a complete identity (Repository, Path, Branch,
+//     BaseCommit, RunID all non-empty).
+//   - The owned-reference registry records an entry for this Branch whose
+//     Purpose is PurposeSproutIsolation, BaseCommit matches, and RunID matches.
+//   - Path is the registered linked worktree for Branch in git-worktree(1)'s
+//     --porcelain listing.
+//
+// After fetching the remote Fruit branch by name (GitHub does not advertise
+// arbitrary OIDs), the fetched tip is resolved locally and compared to the
+// GitHub-returned OID. If they do not match exactly, the workspace is left
+// untouched and an error is returned — the caller can inspect the workspace
+// and no data is silently discarded.
+//
+// git reset --hard resets tracked files and the index to match the target
+// commit. It does not remove untracked files; those remain for inspection.
+func (rw *RunWorkspace) ReconcilePublishedFruit(ctx context.Context, oid string) error {
+	// 1. Validate complete RunWorkspace identity up-front; any empty field is a
+	//    programming error or a zero-value struct accidentally reaching this path.
+	repo := strings.TrimSpace(rw.Repository)
+	path := strings.TrimSpace(rw.Path)
+	branch := strings.TrimSpace(rw.Branch)
+	baseCommit := strings.TrimSpace(rw.BaseCommit)
+	runID := strings.TrimSpace(rw.RunID)
+	targetOID := strings.TrimSpace(oid)
+	if repo == "" || path == "" || branch == "" || baseCommit == "" || runID == "" {
+		return fmt.Errorf("reconcile: RunWorkspace identity is incomplete (repository, path, branch, base commit, and run ID are all required)")
+	}
+	if targetOID == "" {
+		return fmt.Errorf("reconcile: published OID is required")
+	}
+
+	// 2. Require the owned-reference registry to record a PurposeSproutIsolation
+	//    entry for this Branch whose BaseCommit and RunID both match the caller's
+	//    handle. This prevents a stale or misidentified RunWorkspace from
+	//    overwriting a different run's state.
+	owned, ownedOK := runWorkspaceOwnedRef(repo, branch, baseCommit)
+	if !ownedOK {
+		return fmt.Errorf("reconcile: branch %q is not a recorded Tendril-owned Sprout isolation branch for base commit %s", branch, baseCommit)
+	}
+	if owned.RunID != runID {
+		return fmt.Errorf("reconcile: branch %q is owned by run %q, not %q", branch, owned.RunID, runID)
+	}
+
+	// 3. Require Path to be the registered linked worktree for Branch. This
+	//    prevents reset --hard from targeting the wrong filesystem tree.
+	registered, err := runWorkspaceWorktreeMatches(ctx, repo, path, branch)
+	if err != nil {
+		return fmt.Errorf("reconcile: verify linked worktree: %w", err)
+	}
+	if !registered {
+		return fmt.Errorf("reconcile: path %q is not the registered linked worktree for branch %q", path, branch)
+	}
+
+	// 4. Fetch the run-specific Fruit branch from origin. Fetching by branch
+	//    name is required because GitHub does not advertise arbitrary OIDs.
+	if _, err := runGitCommand(ctx, repo, "fetch", "origin", branch); err != nil {
+		return fmt.Errorf("reconcile: fetch origin/%s: %w", branch, err)
+	}
+
+	// 5. Resolve the fetched tip locally and compare to the GitHub-returned OID
+	//    before any destructive operation. A mismatch means GitHub advertised a
+	//    different commit than the mutation returned — leave the workspace clean.
+	fetchedOID, err := runGitCommand(ctx, repo, "rev-parse", "--verify", "--end-of-options", "origin/"+branch+"^{commit}")
+	if err != nil {
+		return fmt.Errorf("reconcile: resolve fetched tip of origin/%s: %w", branch, err)
+	}
+	fetchedOID = strings.TrimSpace(fetchedOID)
+	if fetchedOID != targetOID {
+		return fmt.Errorf("reconcile: fetched tip of origin/%s is %s but GitHub returned %s — workspace left untouched", branch, fetchedOID, targetOID)
+	}
+
+	// 6. All checks passed: reset tracked files and index to match the published
+	//    commit. Untracked files are not removed by reset --hard and remain for
+	//    inspection if cleanup fails.
+	if _, err := runGitCommand(ctx, path, "reset", "--hard", targetOID); err != nil {
+		return fmt.Errorf("reconcile: reset workspace to %s: %w", targetOID, err)
+	}
+	return nil
+}
+
 // runWorkspaceGitLocks covers only Git metadata allocation and removal. The
 // key is the canonical managed-base path, so unrelated Substrates do not block
 // each other. No lock is held while a Sprout uses its workspace.

@@ -411,6 +411,37 @@ func githubAppInstallationToken(ctx context.Context, app AppCredential, repoURL 
 	return tokenResp.Token, nil
 }
 
+// githubCreateRef creates a Git ref via the GitHub REST API.
+func githubCreateRef(ctx context.Context, owner, repo, ref, sha, token string) error {
+	path := fmt.Sprintf("/repos/%s/%s/git/refs", owner, repo)
+	body := map[string]string{
+		"ref": "refs/heads/" + ref,
+		"sha": sha,
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("encode create-ref request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, currentGitHubAPIBaseURL()+path, strings.NewReader(string(encoded)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("Content-Type", "application/json")
+
+	if err := doGithubAppRequest(req, nil); err != nil {
+		var httpErr *githubAppHTTPError
+		if errors.As(err, &httpErr) && httpErr.Status == http.StatusUnprocessableEntity {
+			return fmt.Errorf("branch %s already exists or SHA is invalid", ref)
+		}
+		return err
+	}
+	return nil
+}
+
 // VerifyGitHubAppRemoteAccess proves the App credential can authenticate to
 // repoURL without minting an installation token and without mutating the
 // remote (no branch, commit, push, or pull request).
