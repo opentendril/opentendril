@@ -720,16 +720,16 @@ func TestVerifySubstrateSetupManagedAPIAppWithWritePassesAndSetsContentsWrite(t 
 	}
 }
 
-// TestVerifySubstrateSetupProfileAPIAppWithWritePassesAndSetsContentsWrite
-// verifies that a managed App Substrate whose credential profile supplies commit:api
-// (while the inline substrate spec has no commit mode) correctly resolves the
-// effective commit mode, exercises the contents-write probe, and reports
-// ContentsWrite=true.
-func TestVerifySubstrateSetupProfileAPIAppWithWritePassesAndSetsContentsWrite(t *testing.T) {
+// TestVerifySubstrateSetupEffectiveAPIAppWithWritePassesAndSetsContentsWrite
+// verifies that a managed App Substrate that receives an already-resolved credential
+// with effective commit mode api (such as from a credentials profile) exercises
+// the contents-write probe and reports ContentsWrite=true, even if the SubstrateSpec
+// has no inline commit mode.
+func TestVerifySubstrateSetupEffectiveAPIAppWithWritePassesAndSetsContentsWrite(t *testing.T) {
 	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "write"}
 	startReadinessFake(t, fake)
 
-	// Create a credential that represents resolving a profile with commit:api,
+	// Create a credential that represents resolving a configuration with effective commit:api
 	// while the substrate spec itself is just a standard managed spec (no inline commit).
 	cred := appReadinessCred(t)
 	cred.CommitMode = CommitModeAPI
