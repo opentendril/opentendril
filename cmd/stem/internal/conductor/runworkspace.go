@@ -32,6 +32,27 @@ type RunWorkspace struct {
 	RunID string
 }
 
+// ReconcilePublishedFruit synchronizes the local Tendril-owned run workspace to
+// match the exact remote commit published via the GitHub API. The API commit
+// already landed on the remote Fruit branch; this fetches that branch and
+// resets the local shadow worktree to the returned OID.
+func (rw *RunWorkspace) ReconcilePublishedFruit(ctx context.Context, oid string) error {
+	// Fetch the run-specific Fruit branch from origin. This makes the remote
+	// commit reachable locally before the reset; fetching by branch name is
+	// required because GitHub does not advertise arbitrary SHAs by OID.
+	if _, err := runGitCommand(ctx, rw.Repository, "fetch", "origin", rw.Branch); err != nil {
+		return fmt.Errorf("reconcile: fetch origin/%s: %w", rw.Branch, err)
+	}
+	// Hard-reset the linked worktree to exactly the commit GitHub returned.
+	// This drops any in-tree state the Terrarium wrote that was NOT included
+	// in the API commit (e.g. generated files, tool state) so the local view
+	// is a faithful mirror of what was published.
+	if _, err := runGitCommand(ctx, rw.Path, "reset", "--hard", oid); err != nil {
+		return fmt.Errorf("reconcile: reset workspace to %s: %w", oid, err)
+	}
+	return nil
+}
+
 // runWorkspaceGitLocks covers only Git metadata allocation and removal. The
 // key is the canonical managed-base path, so unrelated Substrates do not block
 // each other. No lock is held while a Sprout uses its workspace.

@@ -122,6 +122,7 @@ var (
 	collectStageableFilesFn        = collectStageableFiles
 	collectGitDiffFn               = collectGitDiff
 	commitTerrariumExecutionFn     = commitTerrariumExecution
+	publishManagedAPIFruitFn       = publishManagedAPIFruit
 	mergeTerrariumCommitFn         = mergeTerrariumCommit
 	pushTerrariumCommitFn          = pushTerrariumCommit
 	runContainerFitnessTestFn      = runContainerFitnessTest
@@ -1076,7 +1077,17 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			changes.measured && report.FilesUnmeasured == ""
 
 		if isReviewableFruit {
-			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, plan.credential)
+			var commitHash string
+			var commitErr error
+			apiCommit := managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI
+			var apiCommitOID string
+
+			if apiCommit {
+				apiCommitOID, commitErr = publishManagedAPIFruitFn(postMortemCtx, mountPath, executionStatus, taskPrompt, plan, managedWorkspace)
+				commitHash = apiCommitOID
+			} else {
+				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, plan.credential)
+			}
 			if commitErr != nil {
 				report.Outcome = ""
 				if runErr != nil {
@@ -1106,7 +1117,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				// Fruit onto the default branch — the isolation is structural,
 				// not dependent on the protected-branch detection.
 				var pushErr error
-				if managedRun {
+				if apiCommit {
+					pushErr = managedWorkspace.ReconcilePublishedFruit(postMortemCtx, apiCommitOID)
+				} else if managedRun {
 					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, managedWorkspace.Branch, plan.credential, false, stepID)
 				} else {
 					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID)
@@ -2257,6 +2270,63 @@ func shouldIgnoreStagePath(path string) bool {
 	}
 
 	return false
+}
+
+func publishManagedAPIFruit(ctx context.Context, mountPath string, executionStatus sproutExecutionStatus, taskPrompt string, plan *substrateExecutionPlan, managedWorkspace RunWorkspace) (string, error) {
+	originURL, err := runGitCommand(ctx, managedWorkspace.Repository, "remote", "get-url", "origin")
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: resolve origin remote: %w", err)
+	}
+	originURL = strings.TrimSpace(originURL)
+	owner, repo, err := parseOwnerRepo(originURL)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: %w", err)
+	}
+
+	token, err := githubAppInstallationToken(ctx, plan.credential.App, originURL)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: github app auth: %w", err)
+	}
+
+	err = githubCreateRef(ctx, owner, repo, managedWorkspace.Branch, managedWorkspace.BaseCommit, token)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: create remote branch %s: %w", managedWorkspace.Branch, err)
+	}
+
+	additions, deletions, err := apiCommitFileChangesFromWorkspace(ctx, mountPath, executionStatus.FilesModified)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: enumerate changes: %w", err)
+	}
+	if len(additions) == 0 && len(deletions) == 0 {
+		return "", fmt.Errorf("api fruit publication: nothing to commit")
+	}
+
+	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
+	headline, body := splitCommitMessage(commitMessage)
+
+	input := createCommitOnBranchInput{
+		Branch: apiCommitBranch{
+			RepositoryNameWithOwner: owner + "/" + repo,
+			BranchName:              managedWorkspace.Branch,
+		},
+		Message:         apiCommitMessage{Headline: headline, Body: body},
+		ExpectedHeadOid: managedWorkspace.BaseCommit,
+		FileChanges: apiCommitFileChanges{
+			Additions: additions,
+			Deletions: deletions,
+		},
+	}
+
+	var response createCommitOnBranchResponse
+	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
+		return "", fmt.Errorf("api fruit publication: %w", err)
+	}
+	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
+	if oid == "" {
+		return "", fmt.Errorf("api fruit publication: github returned no commit oid")
+	}
+
+	return oid, nil
 }
 
 func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
