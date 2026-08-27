@@ -346,6 +346,9 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 				}
 				fmt.Println("  ✅ authenticated to the configured repository")
 				fmt.Printf("  ✅ Git base ready: branch %q at %s\n", verification.GitBase.Branch, sha)
+				if verification.ContentsWrite {
+					fmt.Println("  ✅ App installation has repository contents write permission")
+				}
 			} else if cred.Method == conductor.CredentialApp {
 				fmt.Println("  ✅ authenticated to the configured repository")
 			}

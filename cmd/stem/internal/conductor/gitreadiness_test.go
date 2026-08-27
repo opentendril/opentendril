@@ -27,7 +27,13 @@ type gitReadinessFake struct {
 	emptyRepo     bool
 	commits       map[string]string
 	installToken  string
-	calls         []recordedGitHubCall
+	// installDetailStatus controls the HTTP status of GET /app/installations/{id}.
+	// Zero means 200 OK (the default, returns contentsPermission).
+	installDetailStatus int
+	// contentsPermission is the value returned in permissions.contents when
+	// installDetailStatus is 0 or 200. Empty string means the field is absent.
+	contentsPermission string
+	calls              []recordedGitHubCall
 }
 
 func (f *gitReadinessFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -69,6 +75,22 @@ func (f *gitReadinessFake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			id = 99001
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	case strings.HasPrefix(r.URL.Path, "/app/installations/"):
+		// Installation-detail endpoint: returns permissions for the installation.
+		if f.installDetailStatus != 0 && f.installDetailStatus != http.StatusOK {
+			w.WriteHeader(f.installDetailStatus)
+			if f.leakyBody != "" {
+				_, _ = w.Write([]byte(f.leakyBody))
+			}
+			return
+		}
+		perm := f.contentsPermission
+		if perm == "" {
+			perm = "write"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"permissions": map[string]any{"contents": perm},
+		})
 	default:
 		f.serveRepo(w, r)
 	}
@@ -624,4 +646,186 @@ func assertNoGitBaseDiagnosis(t *testing.T, msg string) {
 			t.Fatalf("error = %q, want %q", msg, want)
 		}
 	}
+}
+
+// managedAPIWidgetSpec returns a managed Substrate spec with commit:api set.
+func managedAPIWidgetSpec(branch string) SubstrateSpec {
+	spec := managedWidgetSpec(branch)
+	spec.Commit = CommitModeAPI
+	return spec
+}
+
+// ----------------------------------------------------------------------------
+// Slice 2: managed commit:api fail-early readiness tests
+// ----------------------------------------------------------------------------
+
+// TestVerifySubstrateSetupManagedAPIRequiresAppAuth verifies that a managed
+// Substrate with commit:api is refused at verify time when the credential is not
+// a GitHub App (e.g. a PAT), with an actionable error before any Seed runs.
+func TestVerifySubstrateSetupManagedAPIRequiresAppAuth(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk"}
+	startReadinessFake(t, fake)
+
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), patReadinessCred())
+	if err == nil {
+		t.Fatal("managed commit:api with PAT should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, CommitModeAPI) {
+		t.Fatalf("error = %q, want commit mode %q mentioned", msg, CommitModeAPI)
+	}
+	if !strings.Contains(msg, "app") {
+		t.Fatalf("error = %q, want auth method \"app\" mentioned", msg)
+	}
+	assertNoSecrets(t, msg, readinessSecrets(fake.calls)...)
+}
+
+// TestVerifySubstrateSetupManagedAPIAppWithWritePassesAndSetsContentsWrite
+// verifies that a managed App+commit:api Substrate that has contents:write passes
+// and reports ContentsWrite=true on the verification result.
+func TestVerifySubstrateSetupManagedAPIAppWithWritePassesAndSetsContentsWrite(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "write"}
+	startReadinessFake(t, fake)
+
+	got, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	if err != nil {
+		t.Fatalf("managed App+api with write permission should succeed, got %v", err)
+	}
+	if !got.Managed {
+		t.Fatal("managed checkout must report Managed")
+	}
+	if !got.ContentsWrite {
+		t.Fatal("App installation with contents:write must set ContentsWrite=true")
+	}
+	assertNoRepositoryMutation(t, fake.calls)
+
+	// Verify the installation-detail path was called (read-only GET).
+	// Exclude the token-issuance path (/access_tokens) which also has the
+	// /app/installations/ prefix but is a separate endpoint.
+	foundDetail := false
+	for _, call := range fake.calls {
+		if strings.HasPrefix(call.Path, "/app/installations/") && !strings.Contains(call.Path, "/access_tokens") {
+			foundDetail = true
+			if call.Method != "GET" {
+				t.Errorf("installation-detail call must be GET, got %s", call.Method)
+			}
+		}
+	}
+	if !foundDetail {
+		t.Fatalf("installation-detail endpoint was not called, calls=%+v", fake.calls)
+	}
+}
+
+// TestVerifySubstrateSetupManagedAPIAppReadPermissionFails verifies that a
+// managed App+commit:api Substrate that has only contents:read (not write) fails
+// with an actionable message naming the missing permission.
+func TestVerifySubstrateSetupManagedAPIAppReadPermissionFails(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "read"}
+	startReadinessFake(t, fake)
+
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	if err == nil {
+		t.Fatal("managed App+api with only read permission should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "write") {
+		t.Fatalf("error = %q, want missing write permission mentioned", msg)
+	}
+	if !strings.Contains(msg, "Contents") {
+		t.Fatalf("error = %q, want GitHub Contents permission mentioned", msg)
+	}
+	assertNoRepositoryMutation(t, fake.calls)
+	assertNoSecrets(t, msg, readinessSecrets(fake.calls)...)
+}
+
+// TestVerifySubstrateSetupManagedAPINoPermissionFails verifies that a managed
+// App+commit:api Substrate whose installation has no contents permission at all
+// fails with an actionable message.
+func TestVerifySubstrateSetupManagedAPINoPermissionFails(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "none"}
+	startReadinessFake(t, fake)
+
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	if err == nil {
+		t.Fatal("managed App+api with no contents permission should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "write") {
+		t.Fatalf("error = %q, want write permission diagnosis", msg)
+	}
+	assertNoRepositoryMutation(t, fake.calls)
+}
+
+// TestVerifySubstrateSetupManagedNonAPIDoesNotSetContentsWrite verifies that a
+// managed Substrate without commit:api never sets ContentsWrite, even when the
+// credential is a GitHub App.
+func TestVerifySubstrateSetupManagedNonAPIDoesNotSetContentsWrite(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "write"}
+	startReadinessFake(t, fake)
+
+	// managedWidgetSpec does not set commit:api.
+	got, err := VerifySubstrateSetup(context.Background(), managedWidgetSpec(""), appReadinessCred(t))
+	if err != nil {
+		t.Fatalf("managed non-API App should succeed, got %v", err)
+	}
+	if !got.Managed {
+		t.Fatal("managed checkout must report Managed")
+	}
+	if got.ContentsWrite {
+		t.Fatal("non-API managed Substrate must not set ContentsWrite")
+	}
+	// The installation-detail endpoint must not be called for non-API substrates.
+	// Exclude the token-issuance path (/access_tokens) which shares the prefix.
+	for _, call := range fake.calls {
+		if strings.HasPrefix(call.Path, "/app/installations/") && !strings.Contains(call.Path, "/access_tokens") {
+			t.Errorf("non-API managed Substrate called installation-detail: %s %s", call.Method, call.Path)
+		}
+	}
+}
+
+// TestVerifyAppInstallationContentsWriteIsReadOnly confirms that
+// VerifyAppInstallationContentsWrite issues only GET requests (plus the token
+// issuance POST that is already permitted). No ref, commit, branch, or pull
+// request may be created.
+func TestVerifyAppInstallationContentsWriteIsReadOnly(t *testing.T) {
+	fake := &gitReadinessFake{contentsPermission: "write"}
+	startReadinessFake(t, fake)
+
+	err := VerifyAppInstallationContentsWrite(context.Background(), appReadinessCred(t).App, "https://github.com/acme/widget")
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	// No token issuance: VerifyAppInstallationContentsWrite uses the App JWT only.
+	if countTokenIssuance(fake.calls) != 0 {
+		t.Fatalf("VerifyAppInstallationContentsWrite must not mint an installation token, calls=%+v", fake.calls)
+	}
+	for _, call := range fake.calls {
+		if strings.EqualFold(call.Method, "POST") && !strings.Contains(call.Path, "/access_tokens") {
+			t.Errorf("unexpected mutating POST: %s %s", call.Method, call.Path)
+		}
+		if strings.EqualFold(call.Method, "PUT") || strings.EqualFold(call.Method, "PATCH") || strings.EqualFold(call.Method, "DELETE") {
+			t.Errorf("mutating GitHub HTTP method %s %s", call.Method, call.Path)
+		}
+	}
+}
+
+// TestVerifyAppInstallationContentsWriteInstallDetailUnauthorized verifies that
+// an HTTP 401 from the installation-detail endpoint surfaces as a credential
+// rejection rather than a permission failure.
+func TestVerifyAppInstallationContentsWriteInstallDetailUnauthorized(t *testing.T) {
+	fake := &gitReadinessFake{
+		installDetailStatus: http.StatusUnauthorized,
+		leakyBody:           `{"message":"Bad credentials","token":"ghs_LEAKME_INSTALL"}`,
+	}
+	startReadinessFake(t, fake)
+
+	err := VerifyAppInstallationContentsWrite(context.Background(), appReadinessCred(t).App, "https://github.com/acme/widget")
+	if err == nil {
+		t.Fatal("401 on install detail should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "rejected the App credentials") {
+		t.Fatalf("error = %q, want rejected App credentials", msg)
+	}
+	assertNoSecrets(t, msg, append(readinessSecrets(fake.calls), "ghs_LEAKME_INSTALL")...)
 }
