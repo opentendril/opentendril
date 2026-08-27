@@ -11,7 +11,7 @@ to execution isolation.
 
 Governed command capabilities are declared in the Stem Core registry
 (`cmd/stem/internal/core/registry.go`). `core.CapabilityNames()` returns the
-canonical set — the single source of truth for every governed command the system
+canonical set - the single source of truth for every governed command the system
 offers.
 
 A Core **Capability** is a transport-free declaration:
@@ -25,7 +25,7 @@ type Capability struct {
 }
 ```
 
-The `Invoke` signature carries zero transport types — no `net/http`, no MCP
+The `Invoke` signature carries zero transport types - no `net/http`, no MCP
 message types, no CLI flag structs. That is the litmus test for the Core
 boundary, enforced by `TestCoreHasNoTransportOrExecutionImports` in
 `cmd/stem/internal/core/boundary_test.go`, which fails the build if Core imports
@@ -68,7 +68,7 @@ authorizes observation without authorizing execution.
 
 Current view:
 
-- **`sprout.watch`** — authorizes watching a Phytomer's run records, persisted
+- **`sprout.watch`** - authorizes watching a Phytomer's run records, persisted
   events, live stream, and the headless current-state watch at
   `GET /v1/phytomers/{phytomerId}/watch`. Defined as `CapSproutWatch` in the
   registry constants, with a doc comment stating it is deliberately absent from
@@ -133,18 +133,18 @@ Examples:
 | `git.branch.list` | `gitBranchList` |
 
 The governed command capability set is independently checked across four
-architectural surfaces — Core, REST, MCP, and CLI — using five independently
+architectural surfaces - Core, REST, MCP, and CLI - using five independently
 derived observations (MCP is checked two ways):
 
-1. **Core registry** — `core.CapabilityNames()`
-2. **REST adapter** — capabilities from each receptor handler's `Capabilities()`
+1. **Core registry** - `core.CapabilityNames()`
+2. **REST adapter** - capabilities from each receptor handler's `Capabilities()`
    method, reflecting what is actually mounted on the HTTP mux
-3. **MCP adapter (declared)** — `mcp.CoreCapabilityNames()`, the canonical set
+3. **MCP adapter (declared)** - `mcp.CoreCapabilityNames()`, the canonical set
    the adapter projects
-4. **MCP adapter (live)** — primary `tools/list` identifiers resolved through
+4. **MCP adapter (live)** - primary `tools/list` identifiers resolved through
    the adapter projection table back to `CapabilityNames()`. Compatibility
    aliases are not counted as extra governed capabilities.
-5. **CLI adapter** — subcommand names collected from each CLI registration
+5. **CLI adapter** - subcommand names collected from each CLI registration
    function
 
 `TestInterfaceParityCoverage` in `cmd/stem/parity_test.go` asserts REST and CLI
@@ -223,7 +223,7 @@ meets or exceeds it, the authorizer escalates:
   a `ConfirmationID`. The Botanist can approve or deny it. On a subsequent
   invocation with the same (Pollen, operation-class, Substrate) tuple, if an
   approved record exists it is consumed atomically and the invocation proceeds
-  against the live grant — not a stale snapshot.
+  against the live grant - not a stale snapshot.
 - If no pending store is attached, the invocation is denied with a
   confirmation-required reason.
 - An invocation whose impact is undeclared (empty) ranks above every configured
@@ -297,16 +297,16 @@ List defined Sequences or grow (execute) one.
 
 ### Sprout
 
-Grow a Sprout — emerge an ephemeral worker to execute a Transcript.
+Grow a Sprout - emerge an ephemeral worker to execute a Transcript.
 
 ### Stoma
 
-`stoma.pass` — pass a command through the Terrarium's Stoma (the single
+`stoma.pass` - pass a command through the Terrarium's Stoma (the single
 controlled aperture in the isolation wall).
 
 ### Seed
 
-Grow a Seed — activate a product-level goal. Each Seed growth has one canonical
+Grow a Seed - activate a product-level goal. Each Seed growth has one canonical
 Phytomer execution context. The Seed handle and Phytomer ID are distinct:
 dispatch and collection use the handle (`seed.grow`); observation of that
 growth uses the Phytomer ID under `sprout.watch`. Observation does not execute
@@ -317,7 +317,7 @@ separately grantable.
 
 The delegated Git family. Each operation-class is separately grantable. Git
 execution runs on the Stem (the sole secret-holding zone), never inside a
-sealed Sprout — a delegated push is the Stem's mediated egress with the
+sealed Sprout - a delegated push is the Stem's mediated egress with the
 Substrate's dedicated credential.
 
 | Capability | Behavior |
@@ -333,24 +333,25 @@ Substrate's dedicated credential.
 **`git.commit` modes.** The Substrate's connection configuration determines
 which mode is used:
 
-- **Local mode** (default) — commits using local Git under the Substrate's
+- **Local mode** (default) - commits using local Git under the Substrate's
   configured commit name and email. Deny-closed: execution is refused when no
   commit identity is configured, so a delegated commit is always attributable.
   A subsequent `git.push` is required to publish.
-- **API mode** (`commit: api`) — requires a GitHub App connection. Creates the
+- **API mode** (`commit: api`) - requires a GitHub App connection. Creates the
   commit server-side through the GitHub API; GitHub supplies the identity and
   signature. Because the API commit advances the remote branch directly, it
-  also publishes the change — a subsequent `git.push` is unnecessary.
-  **Readiness requirement:** `commit: api` is only valid with `auth.method: app`.
-  Any other credential is refused before a Seed grows. Additionally, the GitHub
-  App installation must hold repository **contents write** permission, which
-  `tendril git setup --verify` confirms read-only (no mutation) before the first
-  Seed run. A missing write permission fails verify with an actionable message
-  that names the required permission and the installation settings path.
+  also publishes the change - a subsequent `git.push` is unnecessary.
+  **Managed readiness requirement:** for `checkout.mode=managed`,
+  `tendril git setup --verify` additionally confirms that the GitHub App
+  installation holds repository **contents write** permission before the first
+  Seed run. The check is read-only and creates no branch, commit, push, or pull
+  request. A missing write permission fails verify with an actionable diagnosis.
+  This additional readiness probe does not apply to path or ephemeral checkouts;
+  their setup-verification contract remains credential-only.
 
 `git.push` and `git.pr` are separate operation-classes by design: a Pollen
 granted only `git.pr` must never be able to publish a branch as a side effect.
-There is no governed `git.merge` capability — merging is a Botanist decision.
+There is no governed `git.merge` capability - merging is a Botanist decision.
 
 > **Implementation note on `git.push`:** `RunGitPush` in the conductor does
 > not check whether the target branch is the repository's default branch.
@@ -369,12 +370,12 @@ Capability authorization and execution isolation are separate concerns:
 
 - **Capability authorization** is decided by the Core registry and the
   delegation authorizer before execution begins.
-- **Execution isolation** is provided by the Terrarium — the filesystem and
+- **Execution isolation** is provided by the Terrarium - the filesystem and
   network boundary around a Sprout.
 
 A **Sprout** is an ephemeral, strictly isolated worker that grows a Transcript.
 A **Terrarium** is the isolation boundary wrapping it. The Terrarium ensures a
-sealed Sprout cannot reach out on its own — external calls are Stem-mediated.
+sealed Sprout cannot reach out on its own - external calls are Stem-mediated.
 
 The Stem remains outside the Sprout/Terrarium distinction. It mediates governed
 operations, holds credentials, and performs Git and network operations that a
@@ -396,7 +397,7 @@ Terrarium provider specifics are documented in `docs/TERRARIUM.md`.
 | Concept | Role |
 |---|---|
 | **Stem** | Deterministic routing/lifecycle kernel and governed Core capability authority. Not reasoning. |
-| **Mycorrhizal Network** | The LLM — cognitive side, external to the plant. |
+| **Mycorrhizal Network** | The LLM - cognitive side, external to the plant. |
 | **Pollinator** | External requester that reaches in and asks for governed work. |
 | **Pollen** | The identity a Pollinator presents; the trust-root a grant names. |
 | **Sprout** | Ephemeral execution body. |
