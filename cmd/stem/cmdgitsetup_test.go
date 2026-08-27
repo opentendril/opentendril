@@ -871,35 +871,6 @@ func assertNoSecretSubstrings(t *testing.T, text string, secrets ...string) {
 	}
 }
 
-// writeAPIFruitVerifyFixture writes a substrates.yaml for the App posture with
-// commit:api added to the substrate. Used by Slice 2 CLI tests.
-func writeAPIFruitVerifyFixture(t *testing.T, appID, repo string, pemBytes []byte, contentsPermission string) (dir string) {
-	t.Helper()
-	dir = writeAppVerifyFixture(t, appID, repo, pemBytes)
-	// Patch the generated YAML to add commit: api to the substrate entry.
-	path := filepath.Join(dir, "substrates.yaml")
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read config: %v", err)
-	}
-	// The generated substrate block ends with "checkout: { mode: managed }\n".
-	// Insert commit: api after it.
-	updated := strings.Replace(
-		string(raw),
-		"    checkout: { mode: managed }\n",
-		"    checkout: { mode: managed }\n    commit: api\n",
-		1,
-	)
-	if updated == string(raw) {
-		t.Fatalf("did not inject commit: api into generated YAML:\n%s", raw)
-	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	_ = contentsPermission // used by the caller to configure the fake server
-	return dir
-}
-
 // ----------------------------------------------------------------------------
 // Slice 2: CLI-layer managed commit:api fail-early readiness tests
 // ----------------------------------------------------------------------------
@@ -908,7 +879,7 @@ func writeAPIFruitVerifyFixture(t *testing.T, appID, repo string, pemBytes []byt
 // App+commit:api Substrate with contents:write passes verify and reports the
 // write-permission confirmation in its output.
 func TestRunGitSetupVerifyManagedAPIAppWithWriteSucceeds(t *testing.T) {
-	dir := writeAPIFruitVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t), "write")
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
 	var calls []gitHubCall
 	startSetupVerifyServer(t, setupVerifyFakeOpts{
 		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,
@@ -936,7 +907,7 @@ func TestRunGitSetupVerifyManagedAPIAppWithWriteSucceeds(t *testing.T) {
 // App+commit:api Substrate whose installation has only read permission fails
 // verify with an actionable message naming the required permission.
 func TestRunGitSetupVerifyManagedAPIAppReadOnlyFails(t *testing.T) {
-	dir := writeAPIFruitVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t), "read")
+	dir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
 	var calls []gitHubCall
 	startSetupVerifyServer(t, setupVerifyFakeOpts{
 		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,

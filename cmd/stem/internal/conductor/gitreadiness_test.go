@@ -666,7 +666,9 @@ func TestVerifySubstrateSetupManagedAPIRequiresAppAuth(t *testing.T) {
 	fake := &gitReadinessFake{defaultBranch: "trunk"}
 	startReadinessFake(t, fake)
 
-	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), patReadinessCred())
+	cred := patReadinessCred()
+	cred.CommitMode = CommitModeAPI
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), cred)
 	if err == nil {
 		t.Fatal("managed commit:api with PAT should fail")
 	}
@@ -687,7 +689,9 @@ func TestVerifySubstrateSetupManagedAPIAppWithWritePassesAndSetsContentsWrite(t 
 	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "write"}
 	startReadinessFake(t, fake)
 
-	got, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	cred := appReadinessCred(t)
+	cred.CommitMode = CommitModeAPI
+	got, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), cred)
 	if err != nil {
 		t.Fatalf("managed App+api with write permission should succeed, got %v", err)
 	}
@@ -716,6 +720,33 @@ func TestVerifySubstrateSetupManagedAPIAppWithWritePassesAndSetsContentsWrite(t 
 	}
 }
 
+// TestVerifySubstrateSetupEffectiveAPIAppWithWritePassesAndSetsContentsWrite
+// verifies that a managed App Substrate that receives an already-resolved credential
+// with effective commit mode api (such as from a credentials profile) exercises
+// the contents-write probe and reports ContentsWrite=true, even if the SubstrateSpec
+// has no inline commit mode.
+func TestVerifySubstrateSetupEffectiveAPIAppWithWritePassesAndSetsContentsWrite(t *testing.T) {
+	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "write"}
+	startReadinessFake(t, fake)
+
+	// Create a credential that represents resolving a configuration with effective commit:api
+	// while the substrate spec itself is just a standard managed spec (no inline commit).
+	cred := appReadinessCred(t)
+	cred.CommitMode = CommitModeAPI
+
+	got, err := VerifySubstrateSetup(context.Background(), managedWidgetSpec(""), cred)
+	if err != nil {
+		t.Fatalf("managed App with profile-supplied api mode and write permission should succeed, got %v", err)
+	}
+	if !got.Managed {
+		t.Fatal("managed checkout must report Managed")
+	}
+	if !got.ContentsWrite {
+		t.Fatal("App installation with contents:write must set ContentsWrite=true when commit mode is api via profile")
+	}
+	assertNoRepositoryMutation(t, fake.calls)
+}
+
 // TestVerifySubstrateSetupManagedAPIAppReadPermissionFails verifies that a
 // managed App+commit:api Substrate that has only contents:read (not write) fails
 // with an actionable message naming the missing permission.
@@ -723,7 +754,9 @@ func TestVerifySubstrateSetupManagedAPIAppReadPermissionFails(t *testing.T) {
 	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "read"}
 	startReadinessFake(t, fake)
 
-	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	cred := appReadinessCred(t)
+	cred.CommitMode = CommitModeAPI
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), cred)
 	if err == nil {
 		t.Fatal("managed App+api with only read permission should fail")
 	}
@@ -745,7 +778,9 @@ func TestVerifySubstrateSetupManagedAPINoPermissionFails(t *testing.T) {
 	fake := &gitReadinessFake{defaultBranch: "trunk", contentsPermission: "none"}
 	startReadinessFake(t, fake)
 
-	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), appReadinessCred(t))
+	cred := appReadinessCred(t)
+	cred.CommitMode = CommitModeAPI
+	_, err := VerifySubstrateSetup(context.Background(), managedAPIWidgetSpec(""), cred)
 	if err == nil {
 		t.Fatal("managed App+api with no contents permission should fail")
 	}
