@@ -24,9 +24,14 @@ type SubstrateGitReadiness struct {
 // configured Substrate. Managed is true only when checkout mode is managed and
 // the Git-base contract succeeded. Path and ephemeral checkouts never set
 // Managed; they keep credential-only verification.
+//
+// ContentsWrite is true when the Substrate uses commit:api with GitHub App auth
+// and the App installation was confirmed to have repository contents write
+// permission. It is false for all non-API, non-App, and non-managed checkouts.
 type SubstrateSetupVerification struct {
-	Managed bool
-	GitBase SubstrateGitReadiness
+	Managed       bool
+	ContentsWrite bool
+	GitBase       SubstrateGitReadiness
 }
 
 func managedCheckout(spec SubstrateSpec) bool {
@@ -46,7 +51,11 @@ func VerifySubstrateSetup(ctx context.Context, spec SubstrateSpec, cred Resolved
 		if err != nil {
 			return SubstrateSetupVerification{}, err
 		}
-		return SubstrateSetupVerification{Managed: true, GitBase: gitBase}, nil
+		contentsWrite, err := verifyManagedAPICommitReadiness(ctx, spec, cred)
+		if err != nil {
+			return SubstrateSetupVerification{}, err
+		}
+		return SubstrateSetupVerification{Managed: true, ContentsWrite: contentsWrite, GitBase: gitBase}, nil
 	}
 	if err := verifyNonManagedCredential(ctx, spec, cred); err != nil {
 		return SubstrateSetupVerification{}, err
@@ -70,6 +79,33 @@ func verifyNonManagedCredential(ctx context.Context, spec SubstrateSpec, cred Re
 	default:
 		return nil
 	}
+}
+
+// verifyManagedAPICommitReadiness enforces that a managed Substrate configured
+// with commit:api uses GitHub App authentication, and then confirms that the App
+// installation has the repository contents write permission required to create
+// the Fruit review ref and commit. It is read-only: no branch, commit, push, or
+// pull request is created.
+//
+// For managed Substrates that do not use commit:api the function is a no-op and
+// returns (false, nil). The bool return is true only when the App was confirmed
+// to hold contents write permission.
+func verifyManagedAPICommitReadiness(ctx context.Context, spec SubstrateSpec, cred ResolvedCredential) (bool, error) {
+	if strings.ToLower(strings.TrimSpace(spec.Commit)) != CommitModeAPI {
+		// Not an API-commit substrate; no additional readiness check required.
+		return false, nil
+	}
+	if cred.Method != CredentialApp {
+		return false, fmt.Errorf(
+			"commit mode %q requires auth method \"app\" (GitHub signs the commit server-side); "+
+				"this Substrate uses auth method %q",
+			CommitModeAPI, cred.Method,
+		)
+	}
+	if err := VerifyAppInstallationContentsWrite(ctx, cred.App, spec.URL); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // VerifyManagedSubstrateGitReadiness proves a configured managed Substrate can

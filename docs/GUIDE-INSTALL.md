@@ -600,6 +600,13 @@ missing installation, inaccessible repository, missing configured branch, or
 empty repository fails the check. If the repository has no commit, create an
 initial commit on it and rerun the same verify command.
 
+For managed Substrates using `commit: api` (the App posture default), the check
+additionally confirms that the GitHub App installation has the repository
+**Contents: Read and write** permission required to create and publish the Fruit
+commit. A read-only or absent contents permission fails immediately with an
+actionable message naming the required permission and the installation settings
+path where the Botanist can grant it.
+
 ### Commit signing
 
 *Preference in general — **required** if the target repository demands signed

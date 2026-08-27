@@ -416,6 +416,12 @@ type setupVerifyFakeOpts struct {
 	commitSHA     string
 	branches      map[string]string
 	installToken  string
+	// contentsPermission is the value in permissions.contents for
+	// GET /app/installations/{id}. Empty means the field is absent (treated as
+	// no permission). Defaults to "write" when the existing app tests call
+	// startSetupVerifyFake (which passes zero opts); set explicitly in Slice 2
+	// tests.
+	contentsPermission string
 }
 
 func startSetupVerifyFake(t *testing.T, appStatus, installStatus, repoStatus int, leakyBody string, calls *[]gitHubCall) {
@@ -465,6 +471,15 @@ func startSetupVerifyServer(t *testing.T, opts setupVerifyFakeOpts, calls *[]git
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": 99001})
+		case strings.HasPrefix(r.URL.Path, "/app/installations/"):
+			// Installation-detail endpoint for VerifyAppInstallationContentsWrite.
+			perm := opts.contentsPermission
+			if perm == "" {
+				perm = "write" // safe default: existing non-api tests never reach here
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"permissions": map[string]any{"contents": perm},
+			})
 		default:
 			serveSetupVerifyRepo(w, r, opts)
 		}
@@ -854,4 +869,93 @@ func assertNoSecretSubstrings(t *testing.T, text string, secrets ...string) {
 			t.Errorf("secret material appeared in output %q", text)
 		}
 	}
+}
+
+// writeAPIFruitVerifyFixture writes a substrates.yaml for the App posture with
+// commit:api added to the substrate. Used by Slice 2 CLI tests.
+func writeAPIFruitVerifyFixture(t *testing.T, appID, repo string, pemBytes []byte, contentsPermission string) (dir string) {
+	t.Helper()
+	dir = writeAppVerifyFixture(t, appID, repo, pemBytes)
+	// Patch the generated YAML to add commit: api to the substrate entry.
+	path := filepath.Join(dir, "substrates.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	// The generated substrate block ends with "checkout: { mode: managed }\n".
+	// Insert commit: api after it.
+	updated := strings.Replace(
+		string(raw),
+		"    checkout: { mode: managed }\n",
+		"    checkout: { mode: managed }\n    commit: api\n",
+		1,
+	)
+	if updated == string(raw) {
+		t.Fatalf("did not inject commit: api into generated YAML:\n%s", raw)
+	}
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_ = contentsPermission // used by the caller to configure the fake server
+	return dir
+}
+
+// ----------------------------------------------------------------------------
+// Slice 2: CLI-layer managed commit:api fail-early readiness tests
+// ----------------------------------------------------------------------------
+
+// TestRunGitSetupVerifyManagedAPIAppWithWriteSucceeds verifies that a managed
+// App+commit:api Substrate with contents:write passes verify and reports the
+// write-permission confirmation in its output.
+func TestRunGitSetupVerifyManagedAPIAppWithWriteSucceeds(t *testing.T) {
+	dir := writeAPIFruitVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t), "write")
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,
+		defaultBranch: "trunk", commitSHA: "0123456789abcdef0123456789abcdef01234567",
+		installToken: "ghs_INSTALL_VERIFY_TOKEN", contentsPermission: "write",
+	}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("managed App+api with write permission should pass verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(stdout, "the repository is ready as a managed Substrate") {
+		t.Fatalf("stdout = %q, want managed Substrate readiness", stdout)
+	}
+	if !strings.Contains(stdout, "contents write") {
+		t.Fatalf("stdout = %q, want contents write permission confirmed", stdout)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_INSTALL_VERIFY_TOKEN", "ghs_")...)
+}
+
+// TestRunGitSetupVerifyManagedAPIAppReadOnlyFails verifies that a managed
+// App+commit:api Substrate whose installation has only read permission fails
+// verify with an actionable message naming the required permission.
+func TestRunGitSetupVerifyManagedAPIAppReadOnlyFails(t *testing.T) {
+	dir := writeAPIFruitVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t), "read")
+	var calls []gitHubCall
+	startSetupVerifyServer(t, setupVerifyFakeOpts{
+		appStatus: http.StatusOK, installStatus: http.StatusOK, repoStatus: http.StatusOK,
+		defaultBranch: "trunk", commitSHA: "0123456789abcdef0123456789abcdef01234567",
+		installToken: "ghs_INSTALL_VERIFY_TOKEN", contentsPermission: "read",
+	}, &calls)
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", dir: dir, verify: true}) {
+			t.Error("managed App+api with read-only permission should fail verify")
+		}
+	})
+	out := stdout + stderr
+	if !strings.Contains(out, "write") {
+		t.Fatalf("output = %q, want missing write permission mentioned", out)
+	}
+	if !strings.Contains(out, "Contents") {
+		t.Fatalf("output = %q, want GitHub Contents permission mentioned", out)
+	}
+	assertNoMutatingCalls(t, calls)
+	assertNoSecretSubstrings(t, out, append(secretsFromCalls(calls), "ghs_INSTALL_VERIFY_TOKEN")...)
 }

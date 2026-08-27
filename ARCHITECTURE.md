@@ -76,6 +76,10 @@ The host workspace is not unconditionally failed-closed when dirty. The current 
 
 Protected kernel paths enforce a floor of safety, refusing automated merges that modify the Stem's own kernel or governance files. The Botanist always retains the final Gate C merge decision.
 
+**Managed App+API Substrates.** When a managed Substrate is configured with `commit: api`, the Stem creates the commit server-side via the GitHub GraphQL/REST API using the GitHub App credential. This eliminates the need for a local signing key; GitHub supplies the commit identity and the `Verified` badge. The `commit: api` mode is only valid with GitHub App authentication (`auth.method: app`). Any other auth method is refused at setup-verify time and fails before a Seed grows.
+
+`tendril git setup --verify` for managed App/API Substrates additionally confirms that the GitHub App installation holds repository **contents write** permission, which is required to create the Fruit ref and commit. This check is strictly read-only (no branch, commit, push, or pull request is created). A missing or read-only contents permission fails immediately with an actionable message that names the required permission and the installation settings path. The write-permission check is only performed for managed Substrates with `commit: api`; path and ephemeral checkouts are unaffected.
+
 ## Observation/Persistence
 
 Runtime state is persisted by default when history logging is enabled. **Phytomers** (sessions) are recorded in `.tendril/history.db`. SQLite persistence is enabled by default (controlled via `TENDRIL_DB_LOGGING`). Heartwood provides application-level encryption for persisted payload values; encrypted writes are default when the cipher resolves and can be disabled with `TENDRIL_ENCRYPT_AT_REST`.

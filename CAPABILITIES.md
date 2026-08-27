@@ -341,6 +341,12 @@ which mode is used:
   commit server-side through the GitHub API; GitHub supplies the identity and
   signature. Because the API commit advances the remote branch directly, it
   also publishes the change — a subsequent `git.push` is unnecessary.
+  **Readiness requirement:** `commit: api` is only valid with `auth.method: app`.
+  Any other credential is refused before a Seed grows. Additionally, the GitHub
+  App installation must hold repository **contents write** permission, which
+  `tendril git setup --verify` confirms read-only (no mutation) before the first
+  Seed run. A missing write permission fails verify with an actionable message
+  that names the required permission and the installation settings path.
 
 `git.push` and `git.pr` are separate operation-classes by design: a Pollen
 granted only `git.pr` must never be able to publish a branch as a side effect.

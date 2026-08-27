@@ -489,6 +489,83 @@ func VerifyGitHubAppRemoteAccess(ctx context.Context, app AppCredential, repoURL
 	return nil
 }
 
+// VerifyAppInstallationContentsWrite confirms the App installation for repoURL
+// has the repository contents write permission required to create refs and
+// commit via the GitHub API. It is read-only: it calls GET /repos/{o}/{r}/installation
+// (to resolve the installation ID) and GET /app/installations/{id} (to read the
+// permission set). No ref, commit, branch, or pull request is created.
+//
+// A missing or non-write permission returns an actionable error that names the
+// required permission and links the installation settings path. Unexpected HTTP
+// errors are redacted before surfacing.
+func VerifyAppInstallationContentsWrite(ctx context.Context, app AppCredential, repoURL string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	pemBytes, err := appPrivateKeyPEM(app)
+	if err != nil {
+		return fmt.Errorf("GitHub App private key is unusable: %w", err)
+	}
+	key, err := loadRSAPrivateKey(pemBytes)
+	if err != nil {
+		return fmt.Errorf("GitHub App private key is malformed: %w", err)
+	}
+	jwt, err := mintAppJWT(app.AppID, key, time.Now())
+	if err != nil {
+		return fmt.Errorf("GitHub App credentials could not mint a JWT: %w", err)
+	}
+
+	owner, repo, err := parseOwnerRepo(repoURL)
+	if err != nil {
+		return err
+	}
+
+	// Resolve the installation ID for this repository.
+	var repoInstall struct {
+		ID int64 `json:"id"`
+	}
+	installPath := fmt.Sprintf("/repos/%s/%s/installation", owner, repo)
+	if err := githubAppAPIGet(ctx, installPath, jwt, &repoInstall); err != nil {
+		return classifyAppInstallationError(ctx, err, owner, repo)
+	}
+	if repoInstall.ID == 0 {
+		return fmt.Errorf("GitHub App is not installed on %s/%s", owner, repo)
+	}
+
+	// Read the installation's permission set. This is a JWT-authenticated read
+	// against the App's own installation record — no token is minted, no
+	// repository is mutated.
+	var installDetail struct {
+		Permissions struct {
+			Contents string `json:"contents"`
+		} `json:"permissions"`
+	}
+	detailPath := fmt.Sprintf("/app/installations/%d", repoInstall.ID)
+	if err := githubAppAPIGet(ctx, detailPath, jwt, &installDetail); err != nil {
+		var httpErr *githubAppHTTPError
+		if errors.As(err, &httpErr) {
+			switch httpErr.Status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				return fmt.Errorf("GitHub rejected the App credentials (HTTP %d). Check that appId matches the private key", httpErr.Status)
+			case http.StatusNotFound:
+				return fmt.Errorf("GitHub App installation %d not found; check that the App is installed on %s/%s", repoInstall.ID, owner, repo)
+			}
+		}
+		return fmt.Errorf("could not read GitHub App installation permissions: %s", redactCredentialMaterial(err.Error()))
+	}
+
+	contents := strings.ToLower(strings.TrimSpace(installDetail.Permissions.Contents))
+	if contents != "write" && contents != "admin" {
+		return fmt.Errorf(
+			"GitHub App installation does not have repository contents write permission on %s/%s (got %q). "+
+				"Grant the App Contents: Read and write in the installation settings and rerun tendril git setup --verify",
+			owner, repo, contents,
+		)
+	}
+	return nil
+}
+
 func classifyAppCredentialError(err error) error {
 	var httpErr *githubAppHTTPError
 	if errors.As(err, &httpErr) {
