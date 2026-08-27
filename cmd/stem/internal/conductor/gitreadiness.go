@@ -91,7 +91,7 @@ func verifyNonManagedCredential(ctx context.Context, spec SubstrateSpec, cred Re
 // returns (false, nil). The bool return is true only when the App was confirmed
 // to hold contents write permission.
 func verifyManagedAPICommitReadiness(ctx context.Context, spec SubstrateSpec, cred ResolvedCredential) (bool, error) {
-	if strings.ToLower(strings.TrimSpace(spec.Commit)) != CommitModeAPI {
+	if cred.CommitMode != CommitModeAPI {
 		// Not an API-commit substrate; no additional readiness check required.
 		return false, nil
 	}
