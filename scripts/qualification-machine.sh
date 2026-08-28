@@ -101,8 +101,9 @@ get_qemu_qmp_socket() {
     [ -r "/proc/$pid/cmdline" ] || return 1
     tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | awk '
         found {
-            if (match($0, /unix:([^,]+)/, m)) {
-                print m[1]
+            if (index($0, "unix:") == 1) {
+                split($0, parts, ",")
+                print substr(parts[1], 6)
             }
             exit
         }
