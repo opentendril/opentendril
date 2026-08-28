@@ -654,7 +654,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 			return report, err
 		}
-		managedRun = isWritableManagedRun(sourcePath, plan, d.Investigation)
+		managedRun = isWritableManagedRun(sourcePath, plan, d.Investigation) && !strings.HasPrefix(d.SubstrateBranch, "tendril/seed-")
 		if managedRun {
 			if err := allocateManagedWorkspace(); err != nil {
 				if cleanup != nil {
@@ -1086,7 +1086,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				apiCommitOID, commitErr = publishManagedAPIFruitFn(postMortemCtx, mountPath, executionStatus, taskPrompt, plan, managedWorkspace)
 				commitHash = apiCommitOID
 			} else {
-				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, plan.credential)
+				cred := plan.credential
+				if d.DisableMergeBack {
+					cred.CommitMode = ""
+				}
+				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred)
 			}
 			if commitErr != nil {
 				report.Outcome = ""

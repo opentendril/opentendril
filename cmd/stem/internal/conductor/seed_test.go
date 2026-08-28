@@ -2,6 +2,10 @@ package conductor
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +80,7 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 		t.Fatalf("RunSeed: %v", err)
 	}
 	if res.Status != SeedStatusSatisfied {
-		t.Fatalf("status = %q, want satisfied", res.Status)
+		t.Fatalf("status = %q, want satisfied. log:\n%s", res.Status, res.Logs)
 	}
 	if res.Iterations != 1 {
 		t.Fatalf("iterations = %d, want 1", res.Iterations)
@@ -371,4 +375,105 @@ func TestSeedFruitCommitIsTheBranchTipWhenWorkExists(t *testing.T) {
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func TestRunSeedManagedAPIFruit(t *testing.T) {
+	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	chdirToTempDir(t)
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+
+	keyPath := filepath.Join(t.TempDir(), "fake.pem")
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	os.WriteFile(keyPath, pemBytes, 0o644)
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"),
+		"substrates:\n  seed-api-test:\n    url: "+repo+"\n    branch: main\n    checkout:\n      mode: managed\n    commit: api\n    auth:\n      method: app\n      appId: \"1234\"\n      privateKeyPath: "+keyPath+"\n")
+
+	// Stub materializeManagedCheckoutFn so the actual clone uses the local repo URL
+	origMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = origMaterialize })
+	materializeManagedCheckoutFn = func(name, dest, url, branch string, _ ResolvedCredential, _ []string) error {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if _, err := runGitCommand(context.Background(), filepath.Dir(dest), "clone", "-q", repo, dest); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Materialize the checkout manually before RunSeed, since RunSeed expects the directory to exist
+	dest := filepath.Join(os.Getenv("TENDRIL_MANAGED_CHECKOUT_ROOT"), "seed-api-test")
+	if err := materializeManagedCheckoutFn("seed-api-test", dest, repo, "main", ResolvedCredential{}, nil); err != nil {
+		t.Fatalf("materialize test repo: %v", err)
+	}
+
+	// Start the fake API server
+	fake := startAPIFruitFake(t, 201, "abcd1234abcd1234abcd1234abcd1234abcd1234")
+
+	var prompts []string
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		prompts = append(prompts, prompt)
+
+		// In a real managed run, the orchestrator handles the shadow worktree for DisableMergeBack.
+		// For the fake, we'll manually ensure the seed branch exists and add a commit to the cache path.
+		if !localBranchExists(dest, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, dest, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+
+		// Simulate the Sprout doing work in a shadow worktree that persists the commit to dest
+		wt, err := createShadowWorktree(dest, orch.SubstrateBranch)
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		defer removeShadowWorktree(dest, wt)
+
+		filename := fmt.Sprintf("fruit-%d.txt", len(prompts))
+		if err := os.WriteFile(filepath.Join(wt, filename), []byte("content"), 0o644); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, wt, "add", "-A"); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, wt, "-c", "user.name=Tester", "-c", "user.email=t@example.com", "commit", "-m", "iteration commit"); err != nil {
+			return SproutRunReport{}, err
+		}
+
+		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		// Pass on the second iteration
+		if len(prompts) < 2 {
+			return "failed", false, nil
+		}
+		return "ok", true, nil
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: "seed-api-test", Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 3,
+		SessionID: "tendril-seed-api",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied, logs: %s", res.Status, res.Logs)
+	}
+	if res.Iterations != 2 {
+		t.Fatalf("iterations = %d, want 2", res.Iterations)
+	}
+	if res.Commit != "abcd1234abcd1234abcd1234abcd1234abcd1234" {
+		t.Fatalf("commit = %q, want published OID from GraphQL mock", res.Commit)
+	}
+
+	if fake.graphQLCalled != 1 {
+		t.Fatalf("API publication was called %d times, want exactly 1", fake.graphQLCalled)
+	}
 }
