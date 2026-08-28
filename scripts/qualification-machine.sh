@@ -68,39 +68,107 @@ require() { command -v "$1" >/dev/null 2>&1 || die "missing required command: $1
 validate() {
     [[ "$TEST_NAME" == opentendril-test-* ]] || die "TEST_NAME must start with opentendril-test-"
     case "$MODE" in strict|fast) ;; *) die "MODE must be strict or fast" ;; esac
+    if [ "$MODE" = "strict" ] && [ -n "$MODEL_SOURCE" ]; then
+        die "MODEL_SOURCE is not permitted in strict mode"
+    fi
     for value in "$SSH_PORT" "$MEMORY_MB" "$HOST_MEMORY_RESERVE_MB" "$PROCESSORS"; do
         [[ "$value" =~ ^[1-9][0-9]*$ ]] || die "numeric settings must be positive integers"
     done
     [ "$SSH_PORT" -le 65535 ] || die "SSH_PORT must be <= 65535"
 }
 
-pid_is_qemu() {
+is_qemu_executable() {
+    local pid="$1" exe
+    [ -n "$pid" ] || return 1
+    [ -d "/proc/$pid" ] || return 1
+    exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    [ -n "$exe" ] && [ "$(basename "$exe")" = "qemu-system-x86_64" ]
+}
+
+get_qemu_name() {
     local pid="$1"
-    kill -0 "$pid" 2>/dev/null || return 1
-    ps -p "$pid" -o comm= 2>/dev/null | grep -qx 'qemu-system-x86_64'
-}
-
-recorded_pid() {
-    [ -s "$PID_FILE" ] || return 1
-    tr -d '[:space:]' < "$PID_FILE"
-}
-
-named_pid() {
-    ps -eo pid=,args= | awk -v name="$TEST_NAME" '
-        /[q]emu-system-x86_64/ && index($0, "-name " name) {print $1; exit}
+    [ -n "$pid" ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | awk '
+        found { print $0; exit }
+        $0 == "-name" { found = 1 }
     '
 }
 
+get_qemu_qmp_socket() {
+    local pid="$1"
+    [ -n "$pid" ] || return 1
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    tr '\0' '\n' < "/proc/$pid/cmdline" 2>/dev/null | awk '
+        found {
+            if (match($0, /unix:([^,]+)/, m)) {
+                print m[1]
+            }
+            exit
+        }
+        $0 == "-qmp" { found = 1 }
+    '
+}
+
+pid_matches_qemu_name() {
+    local pid="$1" expected_name="$2"
+    is_qemu_executable "$pid" || return 1
+    [ "$(get_qemu_name "$pid")" = "$expected_name" ]
+}
+
+recorded_pid() {
+    local pid
+    [ -s "$PID_FILE" ] || return 1
+    pid="$(tr -d '[:space:]' < "$PID_FILE")"
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    if pid_matches_qemu_name "$pid" "$TEST_NAME"; then
+        printf '%s\n' "$pid"
+        return 0
+    fi
+    return 1
+}
+
+named_pid() {
+    local p pid
+    for p in /proc/[0-9]*; do
+        [ -d "$p" ] || continue
+        pid="${p##*/}"
+        if pid_matches_qemu_name "$pid" "$TEST_NAME"; then
+            printf '%s\n' "$pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+get_opentendril_test_qemu_pids() {
+    local p pid qemu_name
+    for p in /proc/[0-9]*; do
+        [ -d "$p" ] || continue
+        pid="${p##*/}"
+        is_qemu_executable "$pid" || continue
+        qemu_name="$(get_qemu_name "$pid" || true)"
+        if [[ "$qemu_name" == opentendril-test-* ]]; then
+            printf '%s\n' "$pid"
+        fi
+    done
+}
+
 running_test_machines() {
-    ps -eo pid=,rss=,etime=,args= | awk '/[q]emu-system-x86_64/ && /-name opentendril-test-/ {print}'
+    local pids
+    mapfile -t pids < <(get_opentendril_test_qemu_pids)
+    if [ "${#pids[@]}" -gt 0 ] && [ -n "${pids[0]}" ]; then
+        ps -p "${pids[*]}" -o pid=,rss=,etime=,args=
+    fi
 }
 
 live_run_pid() {
     local pid
     pid="$(recorded_pid 2>/dev/null || true)"
-    if [ -n "$pid" ] && pid_is_qemu "$pid"; then printf '%s\n' "$pid"; return; fi
-    pid="$(named_pid || true)"
-    if [ -n "$pid" ] && pid_is_qemu "$pid"; then printf '%s\n' "$pid"; fi
+    if [ -n "$pid" ]; then printf '%s\n' "$pid"; return 0; fi
+    pid="$(named_pid 2>/dev/null || true)"
+    if [ -n "$pid" ]; then printf '%s\n' "$pid"; return 0; fi
+    return 1
 }
 
 available_memory_mb() {
@@ -155,16 +223,39 @@ wait_exit() {
 }
 
 stop_pid() {
-    local pid="$1" socket="${2:-}"
-    pid_is_qemu "$pid" || return 0
+    local pid="$1" socket="${2:-}" expected_name="${3:-$TEST_NAME}"
+
+    validate_target() {
+        is_qemu_executable "$pid" || return 1
+        local current_name
+        current_name="$(get_qemu_name "$pid" || true)"
+        if [[ "$expected_name" == opentendril-test-* ]]; then
+            [ "$current_name" = "$expected_name" ]
+        else
+            return 1
+        fi
+    }
+
+    validate_target || return 0
+
     if [ -n "$socket" ] && [ -S "$socket" ]; then
         log "requesting ACPI shutdown through QMP pid=$pid"
         QMP_SOCKET="$socket" qmp_powerdown || true
         if wait_exit "$pid" 60; then log "QEMU exited cleanly pid=$pid"; return; fi
     fi
+
+    if ! validate_target; then
+        log "PID $pid is no longer expected QEMU process ($expected_name); skipping SIGTERM"
+        return 0
+    fi
     log "sending SIGTERM pid=$pid"
     kill -TERM "$pid" 2>/dev/null || true
     if wait_exit "$pid" 15; then return; fi
+
+    if ! validate_target; then
+        log "PID $pid is no longer expected QEMU process ($expected_name); skipping SIGKILL"
+        return 0
+    fi
     log "sending SIGKILL pid=$pid"
     kill -KILL "$pid" 2>/dev/null || true
     wait_exit "$pid" 5 || die "QEMU pid=$pid did not stop"
@@ -176,7 +267,7 @@ stop_run() {
     if [ -z "$pid" ]; then
         log "no running VM for $TEST_NAME"
     else
-        stop_pid "$pid" "$QMP_SOCKET"
+        stop_pid "$pid" "$QMP_SOCKET" "$TEST_NAME"
     fi
     rm -f "$PID_FILE" "$QMP_SOCKET"
 }
@@ -203,9 +294,11 @@ resolve_base_image() {
     local image_dir image sums expected actual
     if [ -n "$BASE_IMAGE" ]; then
         [ -r "$BASE_IMAGE" ] || die "BASE_IMAGE is not readable: $BASE_IMAGE"
-        qemu-img info "$BASE_IMAGE" >/dev/null
+        qemu-img info "$BASE_IMAGE" >/dev/null 2>&1 || die "BASE_IMAGE is not a valid image: $BASE_IMAGE"
         actual="$(sha256sum "$BASE_IMAGE" | awk '{print $1}')"
-        [ -z "$BASE_IMAGE_SHA256" ] || [ "$actual" = "$BASE_IMAGE_SHA256" ] || die "BASE_IMAGE checksum mismatch"
+        if [ -n "$BASE_IMAGE_SHA256" ] && [ "$actual" != "$BASE_IMAGE_SHA256" ]; then
+            die "BASE_IMAGE checksum mismatch: expected $BASE_IMAGE_SHA256, got $actual"
+        fi
         log "using explicit base image: $BASE_IMAGE sha256=$actual"
         RESOLVED_BASE_IMAGE="$BASE_IMAGE"
         return
@@ -219,21 +312,38 @@ resolve_base_image() {
 
     if [ ! -f "$image" ]; then
         log "Ubuntu image cache miss"
-        curl -fsSL --retry 5 --retry-all-errors -o "$sums.tmp" "$UBUNTU_SUMS_URL"
+        curl -fsSL --retry 5 --retry-all-errors -o "$sums.tmp" "$UBUNTU_SUMS_URL" || die "failed to download authoritative SHA256SUMS from $UBUNTU_SUMS_URL"
         expected="$(awk '$2 == "*noble-server-cloudimg-amd64.img" || $2 == "noble-server-cloudimg-amd64.img" {print $1; exit}' "$sums.tmp")"
-        [ -n "$expected" ] || die "Ubuntu checksum not found"
-        curl -fL --retry 5 --retry-all-errors -o "$image.tmp" "$UBUNTU_IMAGE_URL"
+        [ -n "$expected" ] || die "Ubuntu image checksum entry not found in SHA256SUMS from $UBUNTU_SUMS_URL"
+        curl -fL --retry 5 --retry-all-errors -o "$image.tmp" "$UBUNTU_IMAGE_URL" || die "failed to download Ubuntu image from $UBUNTU_IMAGE_URL"
         actual="$(sha256sum "$image.tmp" | awk '{print $1}')"
-        [ "$actual" = "$expected" ] || die "Ubuntu image checksum mismatch"
-        mv "$sums.tmp" "$sums"; mv "$image.tmp" "$image"; printf '%s\n' "$expected" > "$image.sha256"
+        [ "$actual" = "$expected" ] || die "downloaded Ubuntu image checksum mismatch: expected $expected, got $actual"
+        mv "$sums.tmp" "$sums"
+        mv "$image.tmp" "$image"
+        printf '%s\n' "$expected" > "$image.sha256"
     else
         log "Ubuntu image cache hit: $image"
         actual="$(sha256sum "$image" | awk '{print $1}')"
         if [ -r "$image.sha256" ]; then
             expected="$(tr -d '[:space:]' < "$image.sha256")"
-            [ "$actual" = "$expected" ] || die "cached Ubuntu image checksum mismatch"
+            [ -n "$expected" ] || die "cached $image.sha256 is empty; delete it or run REFRESH_BASE_IMAGE=1"
+            [ "$actual" = "$expected" ] || die "cached Ubuntu image checksum mismatch: image is $actual, expected $expected from $image.sha256. Run REFRESH_BASE_IMAGE=1 to re-download."
         else
-            printf '%s\n' "$actual" > "$image.sha256"
+            log "image.sha256 missing for cached image; verifying against SHA256SUMS"
+            expected=""
+            if [ -r "$sums" ]; then
+                expected="$(awk '$2 == "*noble-server-cloudimg-amd64.img" || $2 == "noble-server-cloudimg-amd64.img" {print $1; exit}' "$sums")"
+            fi
+            if [ -z "$expected" ]; then
+                log "retrieving authoritative SHA256SUMS from $UBUNTU_SUMS_URL"
+                curl -fsSL --retry 5 --retry-all-errors -o "$sums.tmp" "$UBUNTU_SUMS_URL" || die "failed to retrieve authoritative SHA256SUMS from $UBUNTU_SUMS_URL to verify cached image"
+                expected="$(awk '$2 == "*noble-server-cloudimg-amd64.img" || $2 == "noble-server-cloudimg-amd64.img" {print $1; exit}' "$sums.tmp")"
+                [ -n "$expected" ] || die "Ubuntu image checksum entry not found in retrieved SHA256SUMS"
+                mv "$sums.tmp" "$sums"
+            fi
+            [ "$actual" = "$expected" ] || die "cached Ubuntu image checksum verification failed: image is $actual, expected $expected from SHA256SUMS. Run REFRESH_BASE_IMAGE=1 to re-download."
+            printf '%s\n' "$expected" > "$image.sha256"
+            log "cached image verified successfully; wrote $image.sha256"
         fi
     fi
     log "base image sha256=$(cat "$image.sha256")"
@@ -379,11 +489,12 @@ PY_PASS
         -device virtio-rng-pci "${QEMU_MODEL_ARGS[@]}" -display none -serial none \
         -qmp "unix:$QMP_SOCKET,server=on,wait=off" -pidfile "$PID_FILE" -daemonize
 
-    pid="$(recorded_pid)"; pid_is_qemu "$pid" || die "QEMU exited during launch"
+    pid="$(recorded_pid || true)"
+    [ -n "$pid" ] || die "QEMU exited during launch"
     log "QEMU started pid=$pid"
     for _ in $(seq 1 120); do
         if ssh_base true >/dev/null 2>&1; then ssh_ready=1; break; fi
-        pid_is_qemu "$pid" || die "QEMU exited while waiting for SSH"
+        pid_matches_qemu_name "$pid" "$TEST_NAME" || die "QEMU exited while waiting for SSH"
         sleep 2
     done
     [ "$ssh_ready" -eq 1 ] || die "SSH did not become ready"
@@ -417,18 +528,24 @@ status_machine() {
 }
 
 cleanup_machines() {
-    local rows answer pid socket row
-    rows="$(running_test_machines || true)"
-    [ -n "$rows" ] || { printf 'No running OpenTendril test VMs found.\n'; return; }
-    printf 'Running OpenTendril test VMs:\n%s\n' "$rows"
+    local pids answer pid socket qemu_name
+    mapfile -t pids < <(get_opentendril_test_qemu_pids)
+    if [ "${#pids[@]}" -eq 0 ] || [ -z "${pids[0]}" ]; then
+        printf 'No running OpenTendril test VMs found.\n'
+        return 0
+    fi
+    printf 'Running OpenTendril test VMs:\n'
+    ps -p "${pids[*]}" -o pid=,rss=,etime=,args=
     [ -t 0 ] || die "cleanup requires an interactive terminal"
     read -r -p 'Gracefully stop all listed VMs? [y/N] ' answer
     [[ "${answer:-N}" =~ ^[Yy]$ ]] || die "cleanup aborted"
-    while IFS= read -r row; do
-        pid="$(awk '{print $1}' <<<"$row")"
-        socket="$(sed -n 's/.*-qmp unix:\([^, ]*\).*/\1/p' <<<"$row")"
-        stop_pid "$pid" "$socket"
-    done <<< "$rows"
+    for pid in "${pids[@]}"; do
+        [ -n "$pid" ] || continue
+        qemu_name="$(get_qemu_name "$pid" || true)"
+        [[ "$qemu_name" == opentendril-test-* ]] || continue
+        socket="$(get_qemu_qmp_socket "$pid" || true)"
+        stop_pid "$pid" "$socket" "$qemu_name"
+    done
 }
 
 case "$COMMAND" in
