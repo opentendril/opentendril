@@ -62,25 +62,26 @@ func allowHostWorkspace() bool {
 
 // DockerOrchestrator implements the Orchestrator interface using the local Docker daemon.
 type DockerOrchestrator struct {
-	ImageName        string
-	Substrate        string
-	SubstrateURL     string
-	SubstrateBranch  string
-	StepID           string
-	StatusPath       string
-	IsCoordinator    bool
-	Tier             llm.ModelTier
-	Provider         string
-	Model            string
-	BaseURL          string
-	Genotype         string
-	Temperature      float64
-	DisableMergeBack bool
-	Investigation    bool
-	EventBus         *eventbus.Bus
-	// SessionID attributes the run's lifecycle events to the session (Phytomer)
-	// it belongs to; empty for sessionless runs.
-	SessionID string
+	ImageName                 string
+	Substrate                 string
+	SubstrateURL              string
+	SubstrateBranch           string
+	StepID                    string
+	StatusPath                string
+	IsCoordinator             bool
+	Tier                      llm.ModelTier
+	Provider                  string
+	Model                     string
+	BaseURL                   string
+	Genotype                  string
+	Temperature               float64
+	DisableMergeBack          bool
+	Investigation             bool
+	EventBus                  *eventbus.Bus
+	SessionID                 string
+	SystemMessage             string
+	SeedIntegrationCheckpoint bool
+	SeedStartRevision         string
 	// AwaitsRunEnding declares that the caller will block until the run finishes,
 	// rather than carrying it on asynchronously. When true, a spent growth
 	// budget ends the run as timed-out instead of detaching.
@@ -1079,7 +1080,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if isReviewableFruit {
 			var commitHash string
 			var commitErr error
-			apiCommit := managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI
+			apiCommit := managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI && !d.SeedIntegrationCheckpoint
 			var apiCommitOID string
 
 			if apiCommit {
@@ -1090,7 +1091,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				if d.DisableMergeBack {
 					cred.CommitMode = ""
 				}
-				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred)
+				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred, d.SeedIntegrationCheckpoint)
 			}
 			if commitErr != nil {
 				report.Outcome = ""
@@ -1106,6 +1107,19 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			if managedRun {
 				report.FruitBranch = managedWorkspace.Branch
 				report.FruitCommit = strings.TrimSpace(commitHash)
+			}
+
+			if d.SeedIntegrationCheckpoint {
+				integrateErr := integrateSeedCheckpoint(postMortemCtx, managedWorkspace, d.SubstrateBranch, commitHash, d.SeedStartRevision)
+				if integrateErr != nil {
+					report.Outcome = ""
+					if runErr != nil {
+						return report, changes, errors.Join(runErr, integrateErr)
+					}
+					return report, changes, integrateErr
+				}
+				report.Output = sproutResult.Response
+				return report, changes, runErr
 			}
 
 			if d.DisableMergeBack || (managedRun && !plan.remoteClone) {
@@ -2277,69 +2291,22 @@ func shouldIgnoreStagePath(path string) bool {
 }
 
 func publishManagedAPIFruit(ctx context.Context, mountPath string, executionStatus sproutExecutionStatus, taskPrompt string, plan *substrateExecutionPlan, managedWorkspace RunWorkspace) (string, error) {
-	originURL, err := runGitCommand(ctx, managedWorkspace.Repository, "remote", "get-url", "origin")
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: resolve origin remote: %w", err)
-	}
-	originURL = strings.TrimSpace(originURL)
-	owner, repo, err := parseOwnerRepo(originURL)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
-	}
-
-	token, err := githubAppInstallationToken(ctx, plan.credential.App, originURL)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: github app auth: %w", err)
-	}
-
-	err = githubCreateRef(ctx, owner, repo, managedWorkspace.Branch, managedWorkspace.BaseCommit, token)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: create remote branch %s: %w", managedWorkspace.Branch, err)
-	}
-
 	additions, deletions, err := apiCommitFileChangesFromWorkspace(ctx, mountPath, executionStatus.FilesModified)
 	if err != nil {
 		return "", fmt.Errorf("api fruit publication: enumerate changes: %w", err)
 	}
-	if len(additions) == 0 && len(deletions) == 0 {
-		return "", fmt.Errorf("api fruit publication: nothing to commit")
-	}
 
 	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
-	headline, body := splitCommitMessage(commitMessage)
-
-	input := createCommitOnBranchInput{
-		Branch: apiCommitBranch{
-			RepositoryNameWithOwner: owner + "/" + repo,
-			BranchName:              managedWorkspace.Branch,
-		},
-		Message:         apiCommitMessage{Headline: headline, Body: body},
-		ExpectedHeadOid: managedWorkspace.BaseCommit,
-		FileChanges: apiCommitFileChanges{
-			Additions: additions,
-			Deletions: deletions,
-		},
-	}
-
-	var response createCommitOnBranchResponse
-	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
-	}
-	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
-	if oid == "" {
-		return "", fmt.Errorf("api fruit publication: github returned no commit oid")
-	}
-
-	return oid, nil
+	return publishAPIFruit(ctx, managedWorkspace.Repository, managedWorkspace.Branch, managedWorkspace.BaseCommit, plan.credential.App, additions, deletions, commitMessage)
 }
 
-func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
-	if credential.CommitMode == CommitModeAPI {
+func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
+	if credential.CommitMode == CommitModeAPI && !seedIntegrationCheckpoint {
 		return "", fmt.Errorf("sprout git commit refused: the substrate is configured for api commit mode (commit: api), which commits directly to the remote branch, but a Sprout requires a local commit to merge back from its shadow worktree. Remove commit: api from the substrate to use the Sprout local commit path")
 	}
 
 	if strings.TrimSpace(credential.Identity.Name) == "" && strings.TrimSpace(credential.Identity.Email) == "" {
-		if _, err := runGitCommand(ctx, mountPath, "var", "GIT_COMMITTER_IDENT"); err != nil {
+		if _, err := runGitCommand(ctx, mountPath, "var", "GIT_COMMITTER_IDENT"); err != nil && !seedIntegrationCheckpoint {
 			return "", fmt.Errorf("sprout git commit refused: the substrate has no configured commit identity (set identity name and email in substrates.yaml) and git cannot resolve an ambient identity — an unattributable Sprout commit is never created")
 		}
 	}
@@ -2384,6 +2351,9 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
 	// Signing and identity config (`-c ...`) must precede the `commit` subcommand.
 	configArgs := append(signingGitConfigArgs(credential.Sign), identityGitConfigArgs(credential.Identity)...)
+	if seedIntegrationCheckpoint && len(identityGitConfigArgs(credential.Identity)) == 0 {
+		configArgs = []string{"-c", "user.name=OpenTendril Integration Checkpoint", "-c", "user.email=seed@opentendril.local"}
+	}
 	commitArgs := append(append([]string{}, configArgs...), "commit", "-m", commitMessage)
 	if len(uniqueStagePaths) == 0 {
 		commitArgs = append(append([]string{}, configArgs...), "commit", "--allow-empty", "-m", commitMessage)
@@ -2822,4 +2792,46 @@ func ensureNotGitVisible(targetPath string) {
 		}
 		dir = parent
 	}
+}
+
+func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace, seedBranch, checkpointCommit, expectedOldTip string) error {
+	// a. atomically create/advance tendril/seed-* using expected previous tip
+	oldTip := expectedOldTip
+	if oldTip == "" || oldTip == managedWorkspace.BaseCommit {
+		oldTip = "0000000000000000000000000000000000000000" // pseudo-zero for creation
+	}
+	if _, err := runGitCommand(ctx, managedWorkspace.Repository, "update-ref", "refs/heads/"+seedBranch, checkpointCommit, oldTip); err != nil {
+		return fmt.Errorf("seed integration checkpoint failed to advance %s: %w", seedBranch, err)
+	}
+
+	// b. verify the Seed ref resolves to the exact checkpoint commit
+	resolved, err := runGitCommand(ctx, managedWorkspace.Repository, "rev-parse", "refs/heads/"+seedBranch)
+	if err != nil || strings.TrimSpace(resolved) != checkpointCommit {
+		return fmt.Errorf("seed integration checkpoint verification failed for %s", seedBranch)
+	}
+
+	// c. verify the RunWorkspace remains owned and clean
+	// d. remove the linked worktree
+	// e. delete only that exact owned temporary sprout/task-* ref
+	// f. forget its ownership record
+	if _, ownedOK := runWorkspaceOwnedRef(managedWorkspace.Repository, managedWorkspace.Branch, managedWorkspace.BaseCommit); ownedOK {
+		status, statusErr := runGitCommandRawOutput(ctx, managedWorkspace.Path, "status", "--porcelain", "-uall", "-z")
+		if statusErr == nil && status == "" {
+			// Remove worktree
+			if _, removeErr := runGitCommand(ctx, managedWorkspace.Repository, "worktree", "remove", managedWorkspace.Path); removeErr == nil {
+				// Delete branch
+				if _, delErr := runGitCommand(ctx, managedWorkspace.Repository, "branch", "-D", managedWorkspace.Branch); delErr == nil {
+					// Forget ownership
+					_ = ForgetOwnedRef(managedWorkspace.Repository, managedWorkspace.Branch)
+				} else {
+					fmt.Fprintf(os.Stderr, "⚠️ Failed to delete temporary integration branch %s: %v\n", managedWorkspace.Branch, delErr)
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to remove integration worktree %s: %v\n", managedWorkspace.Path, removeErr)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "⚠️ Integration worktree %s is not clean after commit. status=[%s] err=[%v]\n", managedWorkspace.Path, status, statusErr)
+		}
+	}
+	return nil
 }

@@ -1795,7 +1795,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 			if sequencePlan != nil {
 				sequenceCredential = sequencePlan.credential
 			}
-			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential)
+			commitHash, commitErr := commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, sequenceCredential, false)
 			if commitErr != nil {
 				if runErr != nil {
 					return result, changes, errors.Join(runErr, commitErr)

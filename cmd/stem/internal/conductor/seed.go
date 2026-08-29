@@ -193,11 +193,15 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			if plan, err := resolveSubstrateExecutionPlan(orchProto, config); err == nil {
 				fmt.Printf("DEBUG: Loaded plan %s with CommitMode=%s\n", plan.name, plan.credential.CommitMode)
 				if plan.credential.CommitMode == CommitModeAPI {
+					// In API mode, local checkpoints are not Fruit identity.
+					commit = "" // Clear the local SHA from the final result.
+
 					fmt.Printf("DEBUG: Entering publishSeedManagedAPIFruit\n")
 					publishedOID, pubErr := publishSeedManagedAPIFruit(ctx, sourcePath, branch, base, execution.Goal, string(status), plan, execution.SessionID)
 					if pubErr != nil {
 						fmt.Printf("DEBUG: publish error: %v\n", pubErr)
 						fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
+						// local work is preserved on branch, but we return empty Commit since we failed to publish.
 					} else {
 						commit = publishedOID
 					}
@@ -217,29 +221,12 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 }
 
 func publishSeedManagedAPIFruit(ctx context.Context, sourcePath, branch, baseCommit, taskPrompt, status string, plan *substrateExecutionPlan, sessionID string) (string, error) {
-	originURL, err := runGitCommand(ctx, sourcePath, "remote", "get-url", "origin")
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: resolve origin remote: %w", err)
-	}
-	originURL = strings.TrimSpace(originURL)
-	owner, repo, err := parseOwnerRepo(originURL)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
-	}
-
-	token, err := githubAppInstallationToken(ctx, plan.credential.App, originURL)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: github app auth: %w", err)
-	}
-
-	err = githubCreateRef(ctx, owner, repo, branch, baseCommit, token)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: create remote branch %s: %w", branch, err)
-	}
-
 	diffStatus, err := runGitCommandRawOutput(ctx, sourcePath, "diff", "--name-status", "-z", baseCommit, branch)
 	if err != nil {
 		return "", fmt.Errorf("api fruit publication: list modified files: %w", err)
+	}
+	if diffStatus == "" {
+		return "", fmt.Errorf("api fruit publication: nothing to commit")
 	}
 
 	worktree, err := createShadowWorktree(sourcePath, branch)
@@ -295,36 +282,9 @@ func publishSeedManagedAPIFruit(ctx context.Context, sourcePath, branch, baseCom
 			})
 		}
 	}
-	if len(additions) == 0 && len(deletions) == 0 {
-		return "", fmt.Errorf("api fruit publication: nothing to commit")
-	}
 
 	commitMessage := buildSproutCommitMessage("seed-"+sessionID, taskPrompt, status, "")
-	headline, body := splitCommitMessage(commitMessage)
-
-	input := createCommitOnBranchInput{
-		Branch: apiCommitBranch{
-			RepositoryNameWithOwner: owner + "/" + repo,
-			BranchName:              branch,
-		},
-		Message:         apiCommitMessage{Headline: headline, Body: body},
-		ExpectedHeadOid: baseCommit,
-		FileChanges: apiCommitFileChanges{
-			Additions: additions,
-			Deletions: deletions,
-		},
-	}
-
-	var response createCommitOnBranchResponse
-	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
-	}
-	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
-	if oid == "" {
-		return "", fmt.Errorf("api fruit publication: github returned no commit oid")
-	}
-
-	return oid, nil
+	return publishAPIFruit(ctx, sourcePath, branch, baseCommit, plan.credential.App, additions, deletions, commitMessage)
 }
 
 // seedFruitIdentity reports the reviewable Seed branch, its diff against the

@@ -795,7 +795,7 @@ func TestPublishManagedAPIFruitRoutesThroughFn(t *testing.T) {
 		apiPublishCalled = true
 		return "api-oid-deadbeef", nil
 	}
-	commitTerrariumExecutionFn = func(_ context.Context, _, _, _ string, _ sproutExecutionStatus, _ string, _ ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(_ context.Context, _, _, _ string, _ sproutExecutionStatus, _ string, _ ResolvedCredential, _ bool) (string, error) {
 		commitCalled = true
 		return "local-oid", nil
 	}

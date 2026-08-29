@@ -317,7 +317,7 @@ func stubStatusFileWrite(t *testing.T, root string) string {
 	original := commitTerrariumExecutionFn
 	t.Cleanup(func() { commitTerrariumExecutionFn = original })
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, path string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, path string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		if err := writeSproutStatus(statusPath, executionStatus); err != nil {
 			return "", err
 		}
@@ -414,7 +414,7 @@ func stubSequenceCommit(t *testing.T) *sproutExecutionStatus {
 	original := commitTerrariumExecutionFn
 	t.Cleanup(func() { commitTerrariumExecutionFn = original })
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		*captured = executionStatus
 		return "deadbeefcafe", nil
 	}

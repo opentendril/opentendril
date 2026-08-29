@@ -102,7 +102,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 		return []string{"a.go"}, nil
 	}
 	collectGitDiffFn = func(ctx context.Context, mountPath string) (string, error) { return "", nil }
-	commitTerrariumExecutionFn = func(ctx context.Context, shadowPath, sourcePath, statusPath string, execution sproutExecutionStatus, prompt string, cred ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, shadowPath, sourcePath, statusPath string, execution sproutExecutionStatus, prompt string, cred ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		return "hash", nil
 	}
 	mergeTerrariumCommitFn = func(ctx context.Context, hostPath, commitHash string) error { return nil }

@@ -1005,3 +1005,56 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	}
 	return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
 }
+
+// publishAPIFruit performs the GraphQL API commit using the provided file changes.
+func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, appCredential AppCredential, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion, commitMessage string) (string, error) {
+	if len(additions) == 0 && len(deletions) == 0 {
+		return "", fmt.Errorf("api fruit publication: nothing to commit")
+	}
+
+	originURL, err := runGitCommand(ctx, repoPath, "remote", "get-url", "origin")
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: resolve origin remote: %w", err)
+	}
+	originURL = strings.TrimSpace(originURL)
+	owner, repo, err := parseOwnerRepo(originURL)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: %w", err)
+	}
+
+	token, err := githubAppInstallationToken(ctx, appCredential, originURL)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: github app auth: %w", err)
+	}
+
+	err = githubCreateRef(ctx, owner, repo, branch, baseCommit, token)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: create remote branch %s: %w", branch, err)
+	}
+
+	headline, body := splitCommitMessage(commitMessage)
+
+	input := createCommitOnBranchInput{
+		Branch: apiCommitBranch{
+			RepositoryNameWithOwner: owner + "/" + repo,
+			BranchName:              branch,
+		},
+		Message:         apiCommitMessage{Headline: headline, Body: body},
+		ExpectedHeadOid: baseCommit,
+		FileChanges: apiCommitFileChanges{
+			Additions: additions,
+			Deletions: deletions,
+		},
+	}
+
+	var response createCommitOnBranchResponse
+	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
+		return "", fmt.Errorf("api fruit publication: %w", err)
+	}
+	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
+	if oid == "" {
+		return "", fmt.Errorf("api fruit publication: github returned no commit oid")
+	}
+
+	return oid, nil
+}

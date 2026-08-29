@@ -30,7 +30,7 @@ func TestFruitPublicationProviderFailureDoesNotPushRemote(t *testing.T) {
 		mergeTerrariumCommitFn = origMerge
 	})
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commitCalled = true
 		return "deadbeef", nil
 	}
@@ -105,7 +105,7 @@ func TestFruitPublicationNoChangesDoesNotPushRemote(t *testing.T) {
 		mergeTerrariumCommitFn = origMerge
 	})
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commitCalled = true
 		return "deadbeef", nil
 	}
@@ -174,7 +174,7 @@ func TestFruitPublicationNoEngagementDoesNotPushRemote(t *testing.T) {
 		mergeTerrariumCommitFn = origMerge
 	})
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commitCalled = true
 		return "deadbeef", nil
 	}
@@ -242,7 +242,7 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 		mergeTerrariumCommitFn = origMerge
 	})
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		capturedStatusPath = statusPath
 		commitCount++
 		return "deadbeef1234", nil
@@ -316,7 +316,7 @@ func TestFruitPublicationHistoryAndEventPublishedForNonReviewableOutcomes(t *tes
 	var commitCalled bool
 	origCommit := commitTerrariumExecutionFn
 	t.Cleanup(func() { commitTerrariumExecutionFn = origCommit })
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commitCalled = true
 		return "deadbeef", nil
 	}
@@ -376,7 +376,7 @@ func TestFruitPublicationStatusDoesNotDirtyGitWorktree(t *testing.T) {
 
 	origCommit := commitTerrariumExecutionFn
 	t.Cleanup(func() { commitTerrariumExecutionFn = origCommit })
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		t.Fatalf("commitTerrariumExecutionFn should not be called")
 		return "", nil
 	}

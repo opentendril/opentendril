@@ -253,7 +253,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 	collectGitDiffFn = func(ctx context.Context, mountPath string) (string, error) { return "", nil }
 
 	captured := &sproutExecutionStatus{}
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		*captured = executionStatus
 		return "deadbeefcafe", nil
 	}
