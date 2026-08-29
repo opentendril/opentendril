@@ -32,6 +32,14 @@ type RunWorkspace struct {
 	RunID string
 }
 
+// Purpose is the classification of an owned reference.
+type Purpose string
+
+const (
+	PurposeSproutIsolation Purpose = "sprout-isolation"
+	PurposeSeedIntegration Purpose = "seed-integration"
+)
+
 // ReconcilePublishedFruit synchronizes the local Tendril-owned run workspace to
 // match the exact remote commit published via the GitHub API.
 //
@@ -412,7 +420,7 @@ func newRunWorkspaceID() (string, error) {
 }
 
 func runWorkspaceBranchExists(ctx context.Context, repository, branch string) bool {
-	_, err := runGitCommand(ctx, repository, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	_, err := runGitCommand(ctx, repository, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch)
 	return err == nil
 }
 
