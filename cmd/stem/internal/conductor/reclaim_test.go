@@ -212,3 +212,159 @@ func TestOwnedRefRegistryRoundTrip(t *testing.T) {
 		t.Fatalf("registry still holds %+v", refs)
 	}
 }
+
+// integratedIsolationFixture creates an owned Sprout isolation branch whose
+// checkpoint commit is also the exact tip of a Seed branch.
+func integratedIsolationFixture(t *testing.T) (string, RunWorkspace, string, string, string) {
+	t.Helper()
+	ctx := context.Background()
+	repo := newBranchRepo(t, "trunk", "trunk")
+
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+
+	branch := "sprout/task-step-seed-reclaim"
+	if _, err := runGitCommand(ctx, repo, "checkout", "-b", branch); err != nil {
+		t.Fatalf("create isolation branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "checkpoint.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+		t.Fatalf("write checkpoint: %v", err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "seed checkpoint"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	checkpoint, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve checkpoint: %v", err)
+	}
+	checkpoint = strings.TrimSpace(checkpoint)
+
+	if _, err := runGitCommand(ctx, repo, "checkout", "trunk"); err != nil {
+		t.Fatalf("checkout trunk: %v", err)
+	}
+
+	seedBranch := "tendril/seed-reclaim"
+	if _, err := runGitCommand(ctx, repo, "branch", seedBranch, checkpoint); err != nil {
+		t.Fatalf("create Seed branch: %v", err)
+	}
+
+	runID := "run-seed-reclaim"
+	if err := RegisterOwnedRef(OwnedRef{
+		Repository: repo,
+		Branch:     branch,
+		Purpose:    PurposeSproutIsolation,
+		Base:       base,
+		RunID:      runID,
+	}); err != nil {
+		t.Fatalf("register isolation ownership: %v", err)
+	}
+
+	workspace := RunWorkspace{
+		Repository: repo,
+		Branch:     branch,
+		BaseCommit: base,
+		RunID:      runID,
+	}
+	return repo, workspace, seedBranch, checkpoint, base
+}
+
+func TestReclaimIntegratedIsolationBranchRemovesExactTransferredBranch(t *testing.T) {
+	repo, workspace, seedBranch, checkpoint, _ := integratedIsolationFixture(t)
+
+	outcome := ReclaimIntegratedIsolationBranch(context.Background(), workspace, seedBranch, checkpoint)
+	if !outcome.Reclaimed {
+		t.Fatalf("outcome = %+v, want successful reclamation", outcome)
+	}
+	if branchExists(t, repo, workspace.Branch) {
+		t.Fatal("temporary isolation branch survived successful reclamation")
+	}
+	seedTip, err := runGitCommand(context.Background(), repo, "rev-parse", "refs/heads/"+seedBranch)
+	if err != nil {
+		t.Fatalf("resolve Seed branch: %v", err)
+	}
+	if strings.TrimSpace(seedTip) != checkpoint {
+		t.Fatalf("Seed tip = %q, want checkpoint %q", strings.TrimSpace(seedTip), checkpoint)
+	}
+	if refs := OwnedRefsFor(repo); len(refs) != 0 {
+		t.Fatalf("ownership registry still contains %+v after successful reclamation", refs)
+	}
+}
+
+func TestReclaimIntegratedIsolationBranchKeepsBranchWhenSeedTipDiffers(t *testing.T) {
+	repo, workspace, seedBranch, checkpoint, base := integratedIsolationFixture(t)
+
+	if _, err := runGitCommand(context.Background(), repo, "branch", "-f", seedBranch, base); err != nil {
+		t.Fatalf("move Seed branch: %v", err)
+	}
+
+	outcome := ReclaimIntegratedIsolationBranch(context.Background(), workspace, seedBranch, checkpoint)
+	if outcome.Reclaimed {
+		t.Fatalf("outcome = %+v, want reclamation refused", outcome)
+	}
+	if !strings.Contains(outcome.Reason, "Seed branch does not point to the checkpoint commit") {
+		t.Fatalf("reason = %q, want Seed-tip mismatch", outcome.Reason)
+	}
+	if !branchExists(t, repo, workspace.Branch) {
+		t.Fatal("temporary isolation branch was destroyed despite Seed-tip mismatch")
+	}
+	if refs := OwnedRefsFor(repo); len(refs) != 1 || refs[0].Branch != workspace.Branch {
+		t.Fatalf("ownership registry = %+v, want temporary branch ownership preserved", refs)
+	}
+}
+
+func TestReclaimIntegratedIsolationBranchConditionalDeleteRejectsMovedRef(t *testing.T) {
+	repo, workspace, seedBranch, checkpoint, base := integratedIsolationFixture(t)
+
+	originalRun := runGitCommitCommandFn
+	moved := false
+	runGitCommitCommandFn = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if !moved &&
+			len(args) == 4 &&
+			args[0] == "update-ref" &&
+			args[1] == "-d" &&
+			args[2] == "refs/heads/"+workspace.Branch &&
+			args[3] == checkpoint {
+			moved = true
+			if _, err := originalRun(
+				ctx,
+				dir,
+				"update-ref",
+				"refs/heads/"+workspace.Branch,
+				base,
+				checkpoint,
+			); err != nil {
+				return "", err
+			}
+		}
+		return originalRun(ctx, dir, args...)
+	}
+	defer func() { runGitCommitCommandFn = originalRun }()
+
+	outcome := ReclaimIntegratedIsolationBranch(context.Background(), workspace, seedBranch, checkpoint)
+	if !moved {
+		t.Fatal("test did not move the temporary ref before conditional deletion")
+	}
+	if outcome.Reclaimed {
+		t.Fatalf("outcome = %+v, want moved ref preserved", outcome)
+	}
+	if !strings.Contains(outcome.Reason, "reclamation failed") {
+		t.Fatalf("reason = %q, want conditional deletion failure", outcome.Reason)
+	}
+
+	tip, err := runGitCommand(context.Background(), repo, "rev-parse", "refs/heads/"+workspace.Branch)
+	if err != nil {
+		t.Fatalf("temporary branch was deleted after ref movement: %v", err)
+	}
+	if strings.TrimSpace(tip) != base {
+		t.Fatalf("temporary branch tip = %q, want moved tip %q", strings.TrimSpace(tip), base)
+	}
+	if refs := OwnedRefsFor(repo); len(refs) != 1 || refs[0].Branch != workspace.Branch {
+		t.Fatalf("ownership registry = %+v, want moved branch ownership preserved", refs)
+	}
+}

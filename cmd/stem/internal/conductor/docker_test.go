@@ -1182,13 +1182,21 @@ func TestIntegrateSeedCheckpoint(t *testing.T) {
 	runGitCommand(ctx, wsPath, "worktree", "add", linkedPath, branch)
 
 	// Own it
-	RegisterOwnedRef(OwnedRef{Repository: wsPath, Branch: branch, Purpose: PurposeSproutIsolation, Base: base})
+	runID := "run-seed123"
+	RegisterOwnedRef(OwnedRef{
+		Repository: wsPath,
+		Branch:     branch,
+		Purpose:    PurposeSproutIsolation,
+		Base:       base,
+		RunID:      runID,
+	})
 
 	ws := RunWorkspace{
 		Path:       linkedPath,
 		Repository: wsPath,
 		Branch:     branch,
 		BaseCommit: base,
+		RunID:      runID,
 	}
 
 	seedBranch := "tendril/seed-123"

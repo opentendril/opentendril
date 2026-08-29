@@ -113,6 +113,9 @@ func ReclaimIntegratedIsolationBranch(ctx context.Context, workspace RunWorkspac
 		return outcome
 	}
 
+	unlockGit := lockRunWorkspaceGit(repository)
+	defer unlockGit()
+
 	owned, ok := runWorkspaceOwnedRef(repository, branch, baseCommit)
 	if !ok {
 		outcome.Reason = "branch is not an owned Sprout isolation branch with the recorded base commit"
@@ -163,13 +166,49 @@ func ReclaimIntegratedIsolationBranch(ctx context.Context, workspace RunWorkspac
 		return outcome
 	}
 
-	if _, err := runGitCommitCommandFn(ctx, repository, "branch", "-D", branch); err != nil {
+	// Re-prove exact ownership immediately before the destructive operation.
+	currentOwned, ok := runWorkspaceOwnedRef(repository, branch, baseCommit)
+	if !ok || currentOwned.RunID != owned.RunID {
+		outcome.Reason = "branch ownership changed before reclamation"
+		return outcome
+	}
+
+	if _, err := runGitCommitCommandFn(
+		ctx,
+		repository,
+		"update-ref",
+		"-d",
+		"refs/heads/"+branch,
+		checkpointCommit,
+	); err != nil {
 		outcome.Reason = fmt.Sprintf("reclamation failed: %v", err)
+		return outcome
+	}
+	if err := ForgetOwnedRef(repository, branch); err != nil {
+		const zeroOID = "0000000000000000000000000000000000000000"
+		if _, restoreErr := runGitCommitCommandFn(
+			ctx,
+			repository,
+			"update-ref",
+			"refs/heads/"+branch,
+			checkpointCommit,
+			zeroOID,
+		); restoreErr != nil {
+			outcome.Reason = fmt.Sprintf(
+				"ownership cleanup failed after branch deletion: %v; restoring temporary branch also failed: %v",
+				err,
+				restoreErr,
+			)
+			return outcome
+		}
+		outcome.Reason = fmt.Sprintf(
+			"ownership cleanup failed after branch deletion: %v; temporary branch restored",
+			err,
+		)
 		return outcome
 	}
 	outcome.Reclaimed = true
 	outcome.Reason = "commits integrated into checkpoint ref"
-	_ = forgetRunWorkspaceOwnedRef(repository, branch, owned.RunID)
 	return outcome
 }
 
