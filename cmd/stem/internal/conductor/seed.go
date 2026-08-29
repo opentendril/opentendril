@@ -155,6 +155,15 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		orch.Genotype = execution.Genotype
 		orch.EventBus = execution.EventBus
 		orch.SessionID = sessionID
+		orch.SeedIntegrationCheckpoint = true
+
+		currentStartRevision := base
+		if tip, err := runGitCommand(ctx, sourcePath, "rev-parse", seedBranch); err == nil {
+			if tip = strings.TrimSpace(tip); tip != "" {
+				currentStartRevision = tip
+			}
+		}
+		orch.SeedStartRevision = currentStartRevision
 
 		if execution.PrepareSprout != nil {
 			if prepErr := execution.PrepareSprout(ctx, orch, iterations); prepErr != nil {
@@ -191,15 +200,12 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		orchProto.Substrate = execution.Substrate
 		if config, err := LoadSubstratesConfig(""); err == nil {
 			if plan, err := resolveSubstrateExecutionPlan(orchProto, config); err == nil {
-				fmt.Printf("DEBUG: Loaded plan %s with CommitMode=%s\n", plan.name, plan.credential.CommitMode)
 				if plan.credential.CommitMode == CommitModeAPI {
 					// In API mode, local checkpoints are not Fruit identity.
 					commit = "" // Clear the local SHA from the final result.
 
-					fmt.Printf("DEBUG: Entering publishSeedManagedAPIFruit\n")
 					publishedOID, pubErr := publishSeedManagedAPIFruit(ctx, sourcePath, branch, base, execution.Goal, string(status), plan, execution.SessionID)
 					if pubErr != nil {
-						fmt.Printf("DEBUG: publish error: %v\n", pubErr)
 						fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
 						// local work is preserved on branch, but we return empty Commit since we failed to publish.
 					} else {

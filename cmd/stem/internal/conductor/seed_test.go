@@ -11,6 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 // newSeedRepo builds a real git repository on branch main with one commit, the
@@ -417,36 +421,38 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	fake := startAPIFruitFake(t, 201, "abcd1234abcd1234abcd1234abcd1234abcd1234")
 
 	var prompts []string
-	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
-		prompts = append(prompts, prompt)
 
-		// In a real managed run, the orchestrator handles the shadow worktree for DisableMergeBack.
-		// For the fake, we'll manually ensure the seed branch exists and add a commit to the cache path.
-		if !localBranchExists(dest, orch.SubstrateBranch) {
-			if _, err := runGitCommand(ctx, dest, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
-				return SproutRunReport{}, err
-			}
-		}
+	origStart := startTerrariumSessionFn
+	t.Cleanup(func() { startTerrariumSessionFn = origStart })
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		return stubCountingSession(t), nil
+	}
 
-		// Simulate the Sprout doing work in a shadow worktree that persists the commit to dest
-		wt, err := createShadowWorktree(dest, orch.SubstrateBranch)
-		if err != nil {
-			return SproutRunReport{}, err
-		}
-		defer removeShadowWorktree(dest, wt)
+	origSprout := newSproutFn
+	t.Cleanup(func() { newSproutFn = origSprout })
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+		return &testSproutRunner{
+			run: func(ctx context.Context, taskPrompt string) (sproutResult, error) {
+				prompts = append(prompts, taskPrompt)
+				filename := fmt.Sprintf("fruit-%d.txt", len(prompts))
+				if err := os.WriteFile(filepath.Join(workspace, filename), []byte("content"), 0o644); err != nil {
+					return sproutResult{}, err
+				}
+				return sproutResult{Response: "I did the thing", WroteWorkspace: true}, nil
+			},
+		}, nil
+	}
 
-		filename := fmt.Sprintf("fruit-%d.txt", len(prompts))
-		if err := os.WriteFile(filepath.Join(wt, filename), []byte("content"), 0o644); err != nil {
-			return SproutRunReport{}, err
-		}
-		if _, err := runGitCommand(ctx, wt, "add", "-A"); err != nil {
-			return SproutRunReport{}, err
-		}
-		if _, err := runGitCommand(ctx, wt, "-c", "user.name=Tester", "-c", "user.email=t@example.com", "commit", "-m", "iteration commit"); err != nil {
-			return SproutRunReport{}, err
-		}
+	origPreflight := runSproutPreflightChecksFn
+	t.Cleanup(func() { runSproutPreflightChecksFn = origPreflight })
+	runSproutPreflightChecksFn = func(ctx context.Context) error {
+		return nil
+	}
 
-		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+	origEnsure := ensureSproutImageFn
+	t.Cleanup(func() { ensureSproutImageFn = origEnsure })
+	ensureSproutImageFn = func(ctx context.Context, imageName string) error {
+		return nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
 		// Pass on the second iteration
@@ -476,4 +482,12 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	if fake.graphQLCalled != 1 {
 		t.Fatalf("API publication was called %d times, want exactly 1", fake.graphQLCalled)
 	}
+}
+
+type testSproutRunner struct {
+	run func(ctx context.Context, taskPrompt string) (sproutResult, error)
+}
+
+func (r *testSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
+	return r.run(ctx, taskPrompt)
 }

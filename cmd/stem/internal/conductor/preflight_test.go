@@ -66,6 +66,7 @@ func TestRunSproutPreflightChecksLocalProviderRequiresOllama(t *testing.T) {
 		t.Skip("docker tests disabled")
 	}
 
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_INFERENCE_URL", "http://127.0.0.1:1/v1")
 
@@ -86,6 +87,7 @@ func TestRunSproutPreflightChecksRequiresDocker(t *testing.T) {
 		t.Skip("docker tests disabled")
 	}
 
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "anthropic")
 	if err := runSproutPreflightChecks(context.Background()); err != nil {
 		if strings.Contains(err.Error(), "Docker daemon is not responding") {

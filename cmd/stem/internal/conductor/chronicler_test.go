@@ -23,6 +23,7 @@ type testChatRequest struct {
 }
 
 func TestTranscribeLearningsWritesGenomeFile(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_MODEL_NAME", "test-model")
 
@@ -177,6 +178,7 @@ func TestReduceGenomeFileUsesInjectedClientSeam(t *testing.T) {
 }
 
 func TestTranscribeLearningsAppendsToExistingGenome(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_MODEL_NAME", "test-model")
 
@@ -241,6 +243,7 @@ func TestTranscribeLearningsAppendsToExistingGenome(t *testing.T) {
 }
 
 func TestTranscribeLearningsSkipsEmptyDiff(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_MODEL_NAME", "test-model")
 

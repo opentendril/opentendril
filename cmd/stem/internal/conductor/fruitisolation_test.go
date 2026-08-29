@@ -175,6 +175,7 @@ func remoteSourceCommit(t *testing.T, remote, branch string) string {
 // managed remote run pushes Fruit to sprout/task-<stepID>, not to the configured
 // source branch (main).
 func TestRemoteManagedPublicationTargetsRunBranchNotSourceBranch(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -250,6 +251,7 @@ func TestRemoteManagedPublicationTargetsRunBranchNotSourceBranch(t *testing.T) {
 // that even when the configured starting branch is a non-protected feature branch,
 // managed publication still targets sprout/task-<stepID> — not the feature branch.
 func TestRemoteManagedPublicationNonProtectedSourceBranchTargetsRunBranch(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -300,6 +302,7 @@ func TestRemoteManagedPublicationNonProtectedSourceBranchTargetsRunBranch(t *tes
 // proves that allowDefaultBranchCommit=true cannot authorize a managed autonomous
 // run to collapse its Fruit onto the configured source branch or main.
 func TestRemoteManagedPublicationAllowDefaultBranchCommitDoesNotBypassIsolation(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -351,6 +354,7 @@ func TestRemoteManagedPublicationAllowDefaultBranchCommitDoesNotBypassIsolation(
 // managed remote runs starting from the same revision produce separate, independent
 // Fruit branches without interfering with each other or advancing the source branch.
 func TestConcurrentRemoteManagedRunsProduceDistinctFruit(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -851,6 +855,7 @@ func TestConcurrentManagedRunsWithSameSourceEditsProduceCompetingFruit(t *testin
 //   - remote main/configured source remains at the initial commit
 //   - the withered terminal event for the failing run carries its local Fruit identity
 func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -1120,6 +1125,7 @@ substrates:
 // remote runs still use the configured source branch as the push target, not a
 // sprout/task-* branch. The existing legacy push behaviour must be unchanged.
 func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")

@@ -171,6 +171,7 @@ func TestGenomeEvolutionPass(t *testing.T) {
 		t.Fatalf("seed fitness: %v", err)
 	}
 
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
 	t.Setenv("LOCAL_INFERENCE_URL", "http://example.invalid")
 	t.Setenv("LOCAL_STANDARD_MODEL", "test-standard-model")

@@ -151,6 +151,7 @@ func (runner *managedWritingRunner) releaseRun() {
 func prepareManagedRunRepository(t *testing.T) string {
 	t.Helper()
 
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -705,6 +706,7 @@ func TestManagedRunFailureCleansItsGeneratedState(t *testing.T) {
 }
 
 func TestRunSproutRemoteManagedCheckoutUsesRunWorkspace(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -759,6 +761,7 @@ func TestRunSproutRemoteManagedCheckoutUsesRunWorkspace(t *testing.T) {
 }
 
 func TestRunSproutRemoteEphemeralCheckoutKeepsExistingLifecycle(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
@@ -811,6 +814,7 @@ func TestRunSproutRemoteEphemeralCheckoutKeepsExistingLifecycle(t *testing.T) {
 }
 
 func TestCheckoutPathStillUsesShadowWorktree(t *testing.T) {
+	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
 	t.Setenv("GOOGLE_API_KEY", "google-key")
 	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")

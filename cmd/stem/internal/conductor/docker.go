@@ -513,6 +513,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, err
 	}
 
+	if d.SeedIntegrationCheckpoint {
+		plan.credential.CommitMode = ""
+		plan.credential.Sign = ResolvedSigning{}
+		plan.credential.Identity = ResolvedIdentity{}
+		plan.credential.ExposeToken = false
+		plan.credential.TokenValue = ""
+	}
+
 	if err := runSproutPreflightChecksFn(ctx); err != nil {
 		return report, err
 	}
@@ -591,9 +599,21 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		extraEnv = append(extraEnv, gitHubTokenEnv+"="+plan.credential.TokenValue, gitHubPATLegacyEnv+"="+plan.credential.TokenValue)
 	}
 	allocateManagedWorkspace := func() error {
-		startCommit, err := resolveManagedRunStartCommit(ctx, sourcePath)
-		if err != nil {
-			return err
+		var startCommit string
+		var err error
+		if d.SeedIntegrationCheckpoint {
+			startCommit = strings.TrimSpace(d.SeedStartRevision)
+			if startCommit == "" {
+				return fmt.Errorf("SeedIntegrationCheckpoint requires a non-empty SeedStartRevision")
+			}
+			if _, vErr := runGitCommand(ctx, sourcePath, "rev-parse", "--verify", startCommit+"^{commit}"); vErr != nil {
+				return fmt.Errorf("invalid SeedStartRevision %q: %w", startCommit, vErr)
+			}
+		} else {
+			startCommit, err = resolveManagedRunStartCommit(ctx, sourcePath)
+			if err != nil {
+				return err
+			}
 		}
 		managedWorkspace, err = createRunWorkspaceFn(ctx, sourcePath, stepID, startCommit)
 		if err != nil {
@@ -655,7 +675,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 			return report, err
 		}
-		managedRun = isWritableManagedRun(sourcePath, plan, d.Investigation) && !strings.HasPrefix(d.SubstrateBranch, "tendril/seed-")
+		managedRun = isWritableManagedRun(sourcePath, plan, d.Investigation)
 		if managedRun {
 			if err := allocateManagedWorkspace(); err != nil {
 				if cleanup != nil {
@@ -1088,9 +1108,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				commitHash = apiCommitOID
 			} else {
 				cred := plan.credential
-				if d.DisableMergeBack {
-					cred.CommitMode = ""
-				}
 				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred, d.SeedIntegrationCheckpoint)
 			}
 			if commitErr != nil {
@@ -1109,7 +1126,20 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				report.FruitCommit = strings.TrimSpace(commitHash)
 			}
 
-			if d.SeedIntegrationCheckpoint {
+			if d.SeedIntegrationCheckpoint && isReviewableFruit {
+				if generatedState != nil {
+					if err := generatedState.cleanup(); err != nil {
+						return report, changes, fmt.Errorf("seed integration generated state cleanup: %w", err)
+					}
+					generatedState = nil
+				}
+				for _, state := range managedCacheStates {
+					if err := state.cleanup(); err != nil {
+						return report, changes, fmt.Errorf("seed integration cache state cleanup: %w", err)
+					}
+				}
+				managedCacheStates = nil
+
 				integrateErr := integrateSeedCheckpoint(postMortemCtx, managedWorkspace, d.SubstrateBranch, commitHash, d.SeedStartRevision)
 				if integrateErr != nil {
 					report.Outcome = ""
@@ -1118,6 +1148,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 					return report, changes, integrateErr
 				}
+				managedWorkspaceAllocated = false
 				report.Output = sproutResult.Response
 				return report, changes, runErr
 			}
@@ -2797,7 +2828,7 @@ func ensureNotGitVisible(targetPath string) {
 func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace, seedBranch, checkpointCommit, expectedOldTip string) error {
 	// a. atomically create/advance tendril/seed-* using expected previous tip
 	oldTip := expectedOldTip
-	if oldTip == "" || oldTip == managedWorkspace.BaseCommit {
+	if !localBranchExists(managedWorkspace.Repository, seedBranch) {
 		oldTip = "0000000000000000000000000000000000000000" // pseudo-zero for creation
 	}
 	if _, err := runGitCommand(ctx, managedWorkspace.Repository, "update-ref", "refs/heads/"+seedBranch, checkpointCommit, oldTip); err != nil {
@@ -2811,27 +2842,37 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 	}
 
 	// c. verify the RunWorkspace remains owned and clean
-	// d. remove the linked worktree
-	// e. delete only that exact owned temporary sprout/task-* ref
-	// f. forget its ownership record
-	if _, ownedOK := runWorkspaceOwnedRef(managedWorkspace.Repository, managedWorkspace.Branch, managedWorkspace.BaseCommit); ownedOK {
-		status, statusErr := runGitCommandRawOutput(ctx, managedWorkspace.Path, "status", "--porcelain", "-uall", "-z")
-		if statusErr == nil && status == "" {
-			// Remove worktree
-			if _, removeErr := runGitCommand(ctx, managedWorkspace.Repository, "worktree", "remove", managedWorkspace.Path); removeErr == nil {
-				// Delete branch
-				if _, delErr := runGitCommand(ctx, managedWorkspace.Repository, "branch", "-D", managedWorkspace.Branch); delErr == nil {
-					// Forget ownership
-					_ = ForgetOwnedRef(managedWorkspace.Repository, managedWorkspace.Branch)
-				} else {
-					fmt.Fprintf(os.Stderr, "⚠️ Failed to delete temporary integration branch %s: %v\n", managedWorkspace.Branch, delErr)
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to remove integration worktree %s: %v\n", managedWorkspace.Path, removeErr)
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "⚠️ Integration worktree %s is not clean after commit. status=[%s] err=[%v]\n", managedWorkspace.Path, status, statusErr)
-		}
+	owned, ownedOK := runWorkspaceOwnedRef(managedWorkspace.Repository, managedWorkspace.Branch, managedWorkspace.BaseCommit)
+	if !ownedOK || owned.RunID != managedWorkspace.RunID {
+		return fmt.Errorf("seed integration failed: run workspace ownership mismatch for %s", managedWorkspace.Branch)
 	}
+
+	registered, err := runWorkspaceWorktreeMatches(ctx, managedWorkspace.Repository, managedWorkspace.Path, managedWorkspace.Branch)
+	if err != nil {
+		return fmt.Errorf("seed integration failed: verify linked worktree for %s: %w", managedWorkspace.Branch, err)
+	}
+	if !registered {
+		return fmt.Errorf("seed integration failed: %s is not the registered linked worktree for %s", managedWorkspace.Path, managedWorkspace.Branch)
+	}
+
+	status, statusErr := runGitCommandRawOutput(ctx, managedWorkspace.Path, "status", "--porcelain", "-uall", "-z")
+	if statusErr != nil {
+		return fmt.Errorf("seed integration failed: inspect worktree %s: %w", managedWorkspace.Path, statusErr)
+	}
+	if status != "" {
+		return fmt.Errorf("seed integration failed: worktree %s is not clean after commit. status=[%s]", managedWorkspace.Path, status)
+	}
+
+	// d. remove the linked worktree
+	if _, removeErr := runGitCommand(ctx, managedWorkspace.Repository, "worktree", "remove", managedWorkspace.Path); removeErr != nil {
+		return fmt.Errorf("seed integration failed: remove worktree %s: %w", managedWorkspace.Path, removeErr)
+	}
+
+	// e. safely reclaim the now-transferred temporary run branch
+	outcome := ReclaimIntegratedIsolationBranch(ctx, managedWorkspace.Repository, owned)
+	if !outcome.Reclaimed {
+		return fmt.Errorf("seed integration failed: reclaim temporary branch %s: %s", managedWorkspace.Branch, outcome.Reason)
+	}
+
 	return nil
 }
