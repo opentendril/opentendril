@@ -87,18 +87,21 @@ func ReclaimOwnedRefIfNoWork(ctx context.Context, repository string, ref OwnedRe
 
 // ReclaimIntegratedIsolationBranch removes an owned branch after its work has
 // been successfully integrated elsewhere (e.g. into a Seed checkpoint).
-func ReclaimIntegratedIsolationBranch(ctx context.Context, repository string, ref OwnedRef) ReclaimOutcome {
+// It performs strict safety checks before deletion.
+func ReclaimIntegratedIsolationBranch(ctx context.Context, repository string, ref OwnedRef, seedBranch, checkpointCommit string) ReclaimOutcome {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	outcome := ReclaimOutcome{Branch: ref.Branch}
 
+	// Ensure not currently checked out.
 	if current, err := runGitCommitCommandFn(ctx, repository, "branch", "--show-current"); err == nil {
 		if strings.TrimSpace(current) == ref.Branch {
 			outcome.Reason = "checked out here"
 			return outcome
 		}
 	}
+	// Ensure no linked worktree.
 	if out, err := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+ref.Branch); err == nil {
 		if strings.TrimSpace(out) != "" {
 			outcome.Reason = "checked out in another workspace"
@@ -106,6 +109,44 @@ func ReclaimIntegratedIsolationBranch(ctx context.Context, repository string, re
 		}
 	}
 
+	// Verify OwnedRef matches expected identity.
+	if strings.TrimSpace(ref.Repository) != strings.TrimSpace(repository) {
+		outcome.Reason = "ownership repository mismatch"
+		return outcome
+	}
+	if strings.TrimSpace(ref.RunID) == "" {
+		outcome.Reason = "ownership run ID missing"
+		return outcome
+	}
+	if strings.TrimSpace(ref.Base) != strings.TrimSpace(checkpointCommit) && ref.Base != "" {
+		// Base may be empty for older refs; treat mismatch as unsafe.
+		outcome.Reason = "ownership base mismatch"
+		return outcome
+	}
+
+	// Verify temporary branch tip matches checkpoint commit.
+	branchTip, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "refs/heads/"+ref.Branch)
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("cannot resolve temporary branch tip: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(branchTip) != strings.TrimSpace(checkpointCommit) {
+		outcome.Reason = "temporary branch does not point to expected checkpoint commit"
+		return outcome
+	}
+
+	// Verify destination seed branch resolves to same checkpoint commit.
+	seedTip, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "refs/heads/"+seedBranch)
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("cannot resolve seed branch tip: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(seedTip) != strings.TrimSpace(checkpointCommit) {
+		outcome.Reason = "seed branch does not point to expected checkpoint commit"
+		return outcome
+	}
+
+	// All checks passed; delete the temporary branch.
 	if _, err := runGitCommitCommandFn(ctx, repository, "branch", "-D", ref.Branch); err != nil {
 		outcome.Reason = fmt.Sprintf("reclamation failed: %v", err)
 		return outcome
