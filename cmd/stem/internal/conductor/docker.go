@@ -2869,7 +2869,7 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 	}
 
 	// e. safely reclaim the now-transferred temporary run branch
-	outcome := ReclaimIntegratedIsolationBranch(ctx, managedWorkspace.Repository, owned)
+	outcome := ReclaimIntegratedIsolationBranch(ctx, managedWorkspace, seedBranch, checkpointCommit)
 	if !outcome.Reclaimed {
 		return fmt.Errorf("seed integration failed: reclaim temporary branch %s: %s", managedWorkspace.Branch, outcome.Reason)
 	}
