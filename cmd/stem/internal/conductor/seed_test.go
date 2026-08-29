@@ -491,3 +491,134 @@ type testSproutRunner struct {
 func (r *testSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	return r.run(ctx, taskPrompt)
 }
+
+func committedSeedBuild(t *testing.T, repo string, capturedBranch *string) func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+	t.Helper()
+	return func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+		*capturedBranch = orch.SubstrateBranch
+		if !localBranchExists(repo, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, repo, "checkout", "-b", orch.SubstrateBranch, "main"); err != nil {
+				return SproutRunReport{}, err
+			}
+			if err := os.WriteFile(filepath.Join(repo, "fruit.txt"), []byte("reviewable work\n"), 0o644); err != nil {
+				return SproutRunReport{}, err
+			}
+			for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "seed work"}, {"checkout", "main"}} {
+				if _, err := runGitCommand(ctx, repo, args...); err != nil {
+					return SproutRunReport{}, err
+				}
+			}
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "done"}, nil
+	}
+}
+
+func writeSeedTestAppKey(t *testing.T) string {
+	t.Helper()
+	keyPath := filepath.Join(t.TempDir(), "app.pem")
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate test App key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+	if err := os.WriteFile(keyPath, pemBytes, 0o600); err != nil {
+		t.Fatalf("write test App key: %v", err)
+	}
+	return keyPath
+}
+
+func TestRunSeedManagedAPIPublicationFailureReportsNoFruit(t *testing.T) {
+	restoreSeeds(t)
+	t.Setenv("HOME", t.TempDir())
+	chdirToTempDir(t)
+
+	repo := newSeedRepo(t)
+	if _, err := runGitCommand(context.Background(), repo, "remote", "add", "origin", "https://github.com/owner/repo.git"); err != nil {
+		t.Fatalf("add origin: %v", err)
+	}
+	base, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("resolve main: %v", err)
+	}
+	base = strings.TrimSpace(base)
+
+	keyPath := writeSeedTestAppKey(t)
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"),
+		fmt.Sprintf("substrates:\n  seed-api-failure:\n    path: %s\n    commit: api\n    auth:\n      method: app\n      appId: \"1234\"\n      privateKeyPath: %s\n", repo, keyPath))
+
+	fake := startAPIFruitFake(t, 201, "")
+	fake.graphQLError = "publication denied"
+
+	var seedBranch string
+	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	res, runErr := RunSeed(context.Background(), SeedExecution{
+		Substrate:     "seed-api-failure",
+		Goal:          "make reviewable work",
+		Verify:        []string{"true"},
+		MaxIterations: 1,
+		SessionID:     "seed-api-failure-session",
+	})
+	if runErr == nil {
+		t.Fatal("RunSeed succeeded despite final API publication failure")
+	}
+	if !strings.Contains(runErr.Error(), "publish Seed Fruit via API") {
+		t.Fatalf("RunSeed error = %q, want publication failure", runErr)
+	}
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = branch %q commit %q, want none after failed API publication", res.Branch, res.Commit)
+	}
+	if seedBranch == "" || !branchExists(t, repo, seedBranch) {
+		t.Fatalf("local Seed branch %q was not preserved", seedBranch)
+	}
+	if fake.graphQLCalled != 1 {
+		t.Fatalf("GraphQL calls = %d, want exactly 1 final publication attempt", fake.graphQLCalled)
+	}
+
+	mainTip, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("resolve main after failure: %v", err)
+	}
+	if strings.TrimSpace(mainTip) != base {
+		t.Fatalf("main moved from %q to %q", base, strings.TrimSpace(mainTip))
+	}
+}
+
+func TestRunSeedPublicationPlanFailureReportsNoFruit(t *testing.T) {
+	restoreSeeds(t)
+	chdirToTempDir(t)
+
+	repo := newSeedRepo(t)
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"),
+		fmt.Sprintf("substrates:\n  seed-plan-failure:\n    path: %s\n    auth:\n      method: definitely-not-a-real-method\n", repo))
+
+	var seedBranch string
+	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
+	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+		return "ok", true, nil
+	}
+
+	res, runErr := RunSeed(context.Background(), SeedExecution{
+		Substrate:     "seed-plan-failure",
+		Goal:          "make reviewable work",
+		Verify:        []string{"true"},
+		MaxIterations: 1,
+		SessionID:     "seed-plan-failure-session",
+	})
+	if runErr == nil {
+		t.Fatal("RunSeed succeeded despite publication plan resolution failure")
+	}
+	if !strings.Contains(runErr.Error(), "resolve Seed Fruit publication plan") ||
+		!strings.Contains(runErr.Error(), "unknown auth method") {
+		t.Fatalf("RunSeed error = %q, want explicit publication plan failure", runErr)
+	}
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = branch %q commit %q, want none after plan failure", res.Branch, res.Commit)
+	}
+	if seedBranch == "" || !branchExists(t, repo, seedBranch) {
+		t.Fatalf("local Seed branch %q was not preserved", seedBranch)
+	}
+}

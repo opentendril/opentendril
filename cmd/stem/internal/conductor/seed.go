@@ -195,35 +195,60 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
 
-	if commit != "" && commit != base {
-		orchProto := NewDockerOrchestrator()
-		orchProto.Substrate = execution.Substrate
-		if config, err := LoadSubstratesConfig(""); err == nil {
-			if plan, err := resolveSubstrateExecutionPlan(orchProto, config); err == nil {
-				if plan.credential.CommitMode == CommitModeAPI {
-					// In API mode, local checkpoints are not Fruit identity.
-					commit = "" // Clear the local SHA from the final result.
-
-					publishedOID, pubErr := publishSeedManagedAPIFruit(ctx, sourcePath, branch, base, execution.Goal, string(status), plan, execution.SessionID)
-					if pubErr != nil {
-						fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
-						// local work is preserved on branch, but we return empty Commit since we failed to publish.
-					} else {
-						commit = publishedOID
-					}
-				}
-			}
+	result := func(fruitBranch, fruitCommit string) SeedRunResult {
+		return SeedRunResult{
+			Status:     status,
+			Iterations: iterations,
+			Branch:     fruitBranch,
+			Commit:     fruitCommit,
+			Diff:       diff,
+			Logs:       strings.TrimSpace(logs.String()),
 		}
 	}
 
-	return SeedRunResult{
-		Status:     status,
-		Iterations: iterations,
-		Branch:     branch,
-		Commit:     commit,
-		Diff:       diff,
-		Logs:       strings.TrimSpace(logs.String()),
-	}, nil
+	if commit != "" && commit != base {
+		orchProto := NewDockerOrchestrator()
+		orchProto.Substrate = execution.Substrate
+
+		config, configErr := LoadSubstratesConfig("")
+		if configErr != nil {
+			return result("", ""), fmt.Errorf("resolve Seed Fruit publication configuration: %w", configErr)
+		}
+
+		plan, planErr := resolveSubstrateExecutionPlan(orchProto, config)
+		if planErr != nil {
+			return result("", ""), fmt.Errorf("resolve Seed Fruit publication plan: %w", planErr)
+		}
+
+		if plan.credential.CommitMode == CommitModeAPI {
+			// The local Seed branch and checkpoint are retained integration state,
+			// not Botanist-reviewable Fruit until GitHub publishes them.
+			localSeedBranch := branch
+			branch = ""
+			commit = ""
+
+			publishedOID, pubErr := publishSeedManagedAPIFruit(
+				ctx,
+				sourcePath,
+				localSeedBranch,
+				base,
+				execution.Goal,
+				string(status),
+				plan,
+				execution.SessionID,
+			)
+			if pubErr != nil {
+				fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
+				return result("", ""), fmt.Errorf("publish Seed Fruit via API: %w", pubErr)
+			}
+
+			branch = localSeedBranch
+			commit = publishedOID
+		}
+	}
+
+	return result(branch, commit), nil
+
 }
 
 func publishSeedManagedAPIFruit(ctx context.Context, sourcePath, branch, baseCommit, taskPrompt, status string, plan *substrateExecutionPlan, sessionID string) (string, error) {
