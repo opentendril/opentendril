@@ -121,7 +121,7 @@ func stubCountingCommit(t *testing.T) (*atomic.Int64, *atomic.Int64) {
 		mergeTerrariumCommitFn = originalMerge
 	})
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commits.Add(1)
 		return "deadbeefcafe", nil
 	}
@@ -643,7 +643,7 @@ func stubCountingSequenceCommit(t *testing.T) *atomic.Int64 {
 	original := commitTerrariumExecutionFn
 	t.Cleanup(func() { commitTerrariumExecutionFn = original })
 
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		commits.Add(1)
 		return "deadbeefcafe", nil
 	}

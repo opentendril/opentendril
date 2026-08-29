@@ -130,7 +130,7 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 	t.Run("configured identity attributes author and committer", func(t *testing.T) {
 		repo := newRepo(t)
 		credential := ResolvedCredential{Identity: ResolvedIdentity{Name: "OpenTendril Bot", Email: "bot@example.com"}}
-		if _, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", credential); err != nil {
+		if _, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", credential, false); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 		want := "OpenTendril Bot|bot@example.com|OpenTendril Bot|bot@example.com"
@@ -141,7 +141,7 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 
 	t.Run("unset identity keeps ambient git identity", func(t *testing.T) {
 		repo := newRepo(t)
-		if _, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{}); err != nil {
+		if _, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{}, false); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 		want := "Ambient Tester|ambient@example.com|Ambient Tester|ambient@example.com"
@@ -175,7 +175,7 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 			}
 		}
 
-		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{})
+		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{}, false)
 		if err == nil {
 			t.Fatalf("expected commit to be refused due to missing identity")
 		}
@@ -190,7 +190,7 @@ func TestCommitTerrariumExecutionAppliesIdentity(t *testing.T) {
 		_, err := commitTerrariumExecution(context.Background(), repo, repo, "", status, "task", ResolvedCredential{
 			CommitMode: CommitModeAPI,
 			Identity:   ResolvedIdentity{Name: "Name", Email: "email@example.com"},
-		})
+		}, false)
 		if err == nil {
 			t.Fatalf("expected commit to be refused due to api mode")
 		}

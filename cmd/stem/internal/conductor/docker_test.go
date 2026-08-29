@@ -668,7 +668,7 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 			collectStageableFilesFn = func(ctx context.Context, mountPath string, excludedPaths ...string) ([]string, error) {
 				return nil, nil
 			}
-			commitTerrariumExecutionFn = func(ctx context.Context, shadowPath, sourcePath, statusPath string, execution sproutExecutionStatus, prompt string, cred ResolvedCredential) (string, error) {
+			commitTerrariumExecutionFn = func(ctx context.Context, shadowPath, sourcePath, statusPath string, execution sproutExecutionStatus, prompt string, cred ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 				return "hash", nil
 			}
 			mergeTerrariumCommitFn = func(ctx context.Context, hostPath, commitHash string) error { return nil }
@@ -1149,3 +1149,84 @@ func (s *stubTerrarium) SnapshotLogs(ctx context.Context) (terrarium.TerrariumLo
 	return terrarium.TerrariumLogs{}, nil
 }
 func (s *stubTerrarium) Stop(ctx context.Context) error { return nil }
+
+func TestIntegrateSeedCheckpoint(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a managed workspace
+	wsPath := filepath.Join(t.TempDir(), "ws")
+	err := os.MkdirAll(wsPath, 0755)
+	if err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	runGitCommand(ctx, wsPath, "init")
+	runGitCommand(ctx, wsPath, "checkout", "-b", "main")
+	runGitCommand(ctx, wsPath, "config", "user.name", "Tester")
+	runGitCommand(ctx, wsPath, "config", "user.email", "test@test.com")
+	runGitCommand(ctx, wsPath, "commit", "--allow-empty", "-m", "base commit")
+	base, _ := runGitCommand(ctx, wsPath, "rev-parse", "HEAD")
+	base = strings.TrimSpace(base)
+
+	// Create a sprout branch
+	branch := "sprout/task-seed123"
+	runGitCommand(ctx, wsPath, "checkout", "-b", branch)
+	runGitCommand(ctx, wsPath, "commit", "--allow-empty", "-m", "sprout work")
+	sproutCommit, _ := runGitCommand(ctx, wsPath, "rev-parse", "HEAD")
+	sproutCommit = strings.TrimSpace(sproutCommit)
+
+	runGitCommand(ctx, wsPath, "checkout", "main")
+
+	// Create a linked worktree to simulate the running Sprout
+	linkedPath := filepath.Join(t.TempDir(), "linked")
+	runGitCommand(ctx, wsPath, "worktree", "add", linkedPath, branch)
+
+	// Own it
+	runID := "run-seed123"
+	RegisterOwnedRef(OwnedRef{
+		Repository: wsPath,
+		Branch:     branch,
+		Purpose:    PurposeSproutIsolation,
+		Base:       base,
+		RunID:      runID,
+	})
+
+	ws := RunWorkspace{
+		Path:       linkedPath,
+		Repository: wsPath,
+		Branch:     branch,
+		BaseCommit: base,
+		RunID:      runID,
+	}
+
+	seedBranch := "tendril/seed-123"
+
+	err = integrateSeedCheckpoint(ctx, ws, seedBranch, sproutCommit, base)
+	if err != nil {
+		t.Fatalf("integrateSeedCheckpoint failed: %v", err)
+	}
+
+	// Verify tendril/seed-* branch is advanced to sproutCommit
+	tip, err := runGitCommand(ctx, wsPath, "rev-parse", "refs/heads/"+seedBranch)
+	if err != nil {
+		t.Fatalf("seed branch not created: %v", err)
+	}
+	if strings.TrimSpace(tip) != sproutCommit {
+		t.Fatalf("seed branch tip = %q, want %q", strings.TrimSpace(tip), sproutCommit)
+	}
+
+	// Verify worktree is removed
+	if _, err := os.Stat(linkedPath); !os.IsNotExist(err) {
+		t.Errorf("linked worktree still exists")
+	}
+
+	// Verify branch is deleted
+	if _, err := runGitCommand(ctx, wsPath, "rev-parse", "refs/heads/"+branch); err == nil {
+		t.Errorf("sprout branch still exists")
+	}
+
+	// Verify ownership is forgotten
+	if _, owned := runWorkspaceOwnedRef(wsPath, branch, base); owned {
+		t.Errorf("sprout branch ownership was not forgotten")
+	}
+}

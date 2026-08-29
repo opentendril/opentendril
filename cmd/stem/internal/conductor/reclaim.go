@@ -85,6 +85,133 @@ func ReclaimOwnedRefIfNoWork(ctx context.Context, repository string, ref OwnedRe
 	return outcome
 }
 
+// ReclaimIntegratedIsolationBranch removes an owned branch after its exact
+// checkpoint commit has been successfully integrated into a Seed branch.
+func ReclaimIntegratedIsolationBranch(ctx context.Context, workspace RunWorkspace, seedBranch, checkpointCommit string) ReclaimOutcome {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	repository := strings.TrimSpace(workspace.Repository)
+	branch := strings.TrimSpace(workspace.Branch)
+	baseCommit := strings.TrimSpace(workspace.BaseCommit)
+	runID := strings.TrimSpace(workspace.RunID)
+	seedBranch = strings.TrimSpace(seedBranch)
+	checkpointCommit = strings.TrimSpace(checkpointCommit)
+	outcome := ReclaimOutcome{Branch: branch}
+
+	if repository == "" || branch == "" || baseCommit == "" || runID == "" || seedBranch == "" || checkpointCommit == "" {
+		outcome.Reason = "reclamation requires repository, branch, base commit, run ID, Seed branch, and checkpoint commit"
+		return outcome
+	}
+	if !strings.HasPrefix(seedBranch, "tendril/seed-") || strings.TrimPrefix(seedBranch, "tendril/seed-") == "" {
+		outcome.Reason = fmt.Sprintf("destination branch %q is not a tendril/seed-* branch", seedBranch)
+		return outcome
+	}
+	if _, err := runGitCommitCommandFn(ctx, repository, "check-ref-format", "--branch", seedBranch); err != nil {
+		outcome.Reason = fmt.Sprintf("destination Seed branch is invalid: %v", err)
+		return outcome
+	}
+
+	unlockGit := lockRunWorkspaceGit(repository)
+	defer unlockGit()
+
+	owned, ok := runWorkspaceOwnedRef(repository, branch, baseCommit)
+	if !ok {
+		outcome.Reason = "branch is not an owned Sprout isolation branch with the recorded base commit"
+		return outcome
+	}
+	if owned.RunID != runID {
+		outcome.Reason = "branch ownership belongs to a different run"
+		return outcome
+	}
+
+	branchTip, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("temporary branch tip could not be resolved: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(branchTip) != checkpointCommit {
+		outcome.Reason = "temporary branch does not point to the checkpoint commit"
+		return outcome
+	}
+
+	seedTip, err := runGitCommitCommandFn(ctx, repository, "rev-parse", "--verify", "--end-of-options", "refs/heads/"+seedBranch+"^{commit}")
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("Seed branch tip could not be resolved: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(seedTip) != checkpointCommit {
+		outcome.Reason = "Seed branch does not point to the checkpoint commit"
+		return outcome
+	}
+
+	current, err := runGitCommitCommandFn(ctx, repository, "branch", "--show-current")
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("current branch could not be inspected: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(current) == branch {
+		outcome.Reason = "checked out here"
+		return outcome
+	}
+
+	worktreePath, err := runGitCommitCommandFn(ctx, repository, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+branch)
+	if err != nil {
+		outcome.Reason = fmt.Sprintf("linked worktree could not be inspected: %v", err)
+		return outcome
+	}
+	if strings.TrimSpace(worktreePath) != "" {
+		outcome.Reason = "checked out in another workspace"
+		return outcome
+	}
+
+	// Re-prove exact ownership immediately before the destructive operation.
+	currentOwned, ok := runWorkspaceOwnedRef(repository, branch, baseCommit)
+	if !ok || currentOwned.RunID != owned.RunID {
+		outcome.Reason = "branch ownership changed before reclamation"
+		return outcome
+	}
+
+	if _, err := runGitCommitCommandFn(
+		ctx,
+		repository,
+		"update-ref",
+		"-d",
+		"refs/heads/"+branch,
+		checkpointCommit,
+	); err != nil {
+		outcome.Reason = fmt.Sprintf("reclamation failed: %v", err)
+		return outcome
+	}
+	if err := ForgetOwnedRef(repository, branch); err != nil {
+		const zeroOID = "0000000000000000000000000000000000000000"
+		if _, restoreErr := runGitCommitCommandFn(
+			ctx,
+			repository,
+			"update-ref",
+			"refs/heads/"+branch,
+			checkpointCommit,
+			zeroOID,
+		); restoreErr != nil {
+			outcome.Reason = fmt.Sprintf(
+				"ownership cleanup failed after branch deletion: %v; restoring temporary branch also failed: %v",
+				err,
+				restoreErr,
+			)
+			return outcome
+		}
+		outcome.Reason = fmt.Sprintf(
+			"ownership cleanup failed after branch deletion: %v; temporary branch restored",
+			err,
+		)
+		return outcome
+	}
+	outcome.Reclaimed = true
+	outcome.Reason = "commits integrated into checkpoint ref"
+	return outcome
+}
+
 // ReclaimOwnedRef decides and acts on a single owned reference. It never
 // reclaims the branch currently checked out, and never one held by another
 // workspace — those belong to work in progress.

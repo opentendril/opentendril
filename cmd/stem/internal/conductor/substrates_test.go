@@ -485,7 +485,7 @@ substrates:
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
 	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return nil, nil }
 	collectGitDiffFn = func(context.Context, string) (string, error) { return "", nil }
-	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
 		return "", nil
 	}
 	mergeTerrariumCommitFn = func(context.Context, string, string) error { return nil }
@@ -620,7 +620,7 @@ substrates:
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
 	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return nil, nil }
 	collectGitDiffFn = func(context.Context, string) (string, error) { return "", nil }
-	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
 		return "", nil
 	}
 	mergeTerrariumCommitFn = func(context.Context, string, string) error { return nil }
@@ -754,7 +754,7 @@ substrates:
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
 	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return nil, nil }
 	collectGitDiffFn = func(context.Context, string) (string, error) { return "", nil }
-	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
 		return "", nil
 	}
 	mergeTerrariumCommitFn = func(context.Context, string, string) error { return nil }
@@ -992,7 +992,7 @@ substrates:
 		t.Fatalf("collectGitDiff should not run for read-only substrates")
 		return "", nil
 	}
-	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential) (string, error) {
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
 		t.Fatalf("commitTerrariumExecution should not run for read-only substrates")
 		return "", nil
 	}

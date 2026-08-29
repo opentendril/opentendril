@@ -2,7 +2,10 @@ package conductor
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -152,6 +155,15 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		orch.Genotype = execution.Genotype
 		orch.EventBus = execution.EventBus
 		orch.SessionID = sessionID
+		orch.SeedIntegrationCheckpoint = true
+
+		currentStartRevision := base
+		if tip, err := runGitCommand(ctx, sourcePath, "rev-parse", seedBranch); err == nil {
+			if tip = strings.TrimSpace(tip); tip != "" {
+				currentStartRevision = tip
+			}
+		}
+		orch.SeedStartRevision = currentStartRevision
 
 		if execution.PrepareSprout != nil {
 			if prepErr := execution.PrepareSprout(ctx, orch, iterations); prepErr != nil {
@@ -183,14 +195,127 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
 
-	return SeedRunResult{
-		Status:     status,
-		Iterations: iterations,
-		Branch:     branch,
-		Commit:     commit,
-		Diff:       diff,
-		Logs:       strings.TrimSpace(logs.String()),
-	}, nil
+	result := func(fruitBranch, fruitCommit string) SeedRunResult {
+		return SeedRunResult{
+			Status:     status,
+			Iterations: iterations,
+			Branch:     fruitBranch,
+			Commit:     fruitCommit,
+			Diff:       diff,
+			Logs:       strings.TrimSpace(logs.String()),
+		}
+	}
+
+	if commit != "" && commit != base {
+		orchProto := NewDockerOrchestrator()
+		orchProto.Substrate = execution.Substrate
+
+		config, configErr := LoadSubstratesConfig("")
+		if configErr != nil {
+			return result("", ""), fmt.Errorf("resolve Seed Fruit publication configuration: %w", configErr)
+		}
+
+		plan, planErr := resolveSubstrateExecutionPlan(orchProto, config)
+		if planErr != nil {
+			return result("", ""), fmt.Errorf("resolve Seed Fruit publication plan: %w", planErr)
+		}
+
+		if plan.credential.CommitMode == CommitModeAPI {
+			// The local Seed branch and checkpoint are retained integration state,
+			// not Botanist-reviewable Fruit until GitHub publishes them.
+			localSeedBranch := branch
+			branch = ""
+			commit = ""
+
+			publishedOID, pubErr := publishSeedManagedAPIFruit(
+				ctx,
+				sourcePath,
+				localSeedBranch,
+				base,
+				execution.Goal,
+				string(status),
+				plan,
+				execution.SessionID,
+			)
+			if pubErr != nil {
+				fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
+				return result("", ""), fmt.Errorf("publish Seed Fruit via API: %w", pubErr)
+			}
+
+			branch = localSeedBranch
+			commit = publishedOID
+		}
+	}
+
+	return result(branch, commit), nil
+
+}
+
+func publishSeedManagedAPIFruit(ctx context.Context, sourcePath, branch, baseCommit, taskPrompt, status string, plan *substrateExecutionPlan, sessionID string) (string, error) {
+	diffStatus, err := runGitCommandRawOutput(ctx, sourcePath, "diff", "--name-status", "-z", baseCommit, branch)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: list modified files: %w", err)
+	}
+	if diffStatus == "" {
+		return "", fmt.Errorf("api fruit publication: nothing to commit")
+	}
+
+	worktree, err := createShadowWorktree(sourcePath, branch)
+	if err != nil {
+		return "", fmt.Errorf("api fruit publication: create worktree for changes: %w", err)
+	}
+	defer removeShadowWorktree(sourcePath, worktree)
+
+	var additions []apiCommitFileAddition
+	var deletions []apiCommitFileDeletion
+
+	entries := strings.Split(diffStatus, "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) == 0 {
+			continue
+		}
+		code := entry[0]
+		i++
+		if i >= len(entries) {
+			break
+		}
+		path := filepath.ToSlash(entries[i])
+
+		if code == 'R' || code == 'C' {
+			oldPath := path
+			i++
+			if i >= len(entries) {
+				break
+			}
+			path = filepath.ToSlash(entries[i])
+			if oldPath != "" {
+				deletions = append(deletions, apiCommitFileDeletion{Path: oldPath})
+			}
+			contents, readErr := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(path)))
+			if readErr != nil {
+				return "", fmt.Errorf("api fruit publication: read %s: %w", path, readErr)
+			}
+			additions = append(additions, apiCommitFileAddition{
+				Path:     path,
+				Contents: base64.StdEncoding.EncodeToString(contents),
+			})
+		} else if code == 'D' {
+			deletions = append(deletions, apiCommitFileDeletion{Path: path})
+		} else {
+			contents, readErr := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(path)))
+			if readErr != nil {
+				return "", fmt.Errorf("api fruit publication: read %s: %w", path, readErr)
+			}
+			additions = append(additions, apiCommitFileAddition{
+				Path:     path,
+				Contents: base64.StdEncoding.EncodeToString(contents),
+			})
+		}
+	}
+
+	commitMessage := buildSproutCommitMessage("seed-"+sessionID, taskPrompt, status, "")
+	return publishAPIFruit(ctx, sourcePath, branch, baseCommit, plan.credential.App, additions, deletions, commitMessage)
 }
 
 // seedFruitIdentity reports the reviewable Seed branch, its diff against the
