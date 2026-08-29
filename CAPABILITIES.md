@@ -313,6 +313,18 @@ growth uses the Phytomer ID under `sprout.watch`. Observation does not execute
 the Seed and does not accept Fruit. `seed.grow` and `sprout.watch` remain
 separately grantable.
 
+Under the managed GitHub App/API posture, Seed writing iterations are chained
+through local `tendril/seed-*` checkpoints: each successful iteration advances
+the checkpoint, and the next iteration starts from its tip. These checkpoints
+are internal convergence state, not remotely published Fruit; they do not
+receive GitHub credentials and use a Tendril-owned local Git identity. The
+converged result is published exactly once through the Stem-held managed App/API
+path. Only the GitHub-created review branch and returned GitHub commit OID are
+reported as Fruit identity. Publication configuration, execution-plan
+resolution, or final API publication failure preserves the local Seed state,
+returns the error, and reports no Fruit branch or commit. The default branch is
+unchanged by this Seed growth.
+
 ### Git
 
 The delegated Git family. Each operation-class is separately grantable. Git

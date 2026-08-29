@@ -126,6 +126,7 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 ```
 
 * **A managed Sprout makes a change** → it uses the Tendril-owned managed base as Git backing state, executes writable work in an independent `~/.tendril/run-workspaces/` worktree, and produces managed Fruit on a `sprout/task-<stepID>` branch.
+* **A managed Seed grows a goal** → each writing iteration runs in a Tendril-owned RunWorkspace, and successful iteration state is accumulated in a local `tendril/seed-*` checkpoint. The checkpoint is internal convergence state, not remote Fruit. Under the secure-default GitHub App/API posture, only the converged result is published once; the GitHub-created branch and commit OID are the Fruit identity. If publication fails, local Seed work is preserved and no Fruit branch or commit is reported.
 * **A Pollinator invokes delegated Git capabilities** → it works in a per-Pollen delegated workspace under `~/.tendril/workspaces/`. Operations like `git.commit`, `git.push`, and `git.pr` belong to this delegated Git ladder; they are NOT managed Sprout RunWorkspaces.
 * **You make a change** → you work in your own clone and push to the remote. The Stem picks it up on its next run: the managed base is fetched and hard-reset to the target branch.
 
@@ -363,7 +364,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.5
+RELEASE=v0.3.6
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -815,7 +816,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.5
+RELEASE=v0.3.6
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1184,7 +1185,7 @@ release tag for `RELEASE`.
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.5
+RELEASE=v0.3.6
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1209,7 +1210,7 @@ executable onto that account's PATH.
 ```bash
 # as the ordinary (Pollinator-hosting) account — same RELEASE as above
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.5
+RELEASE=v0.3.6
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
