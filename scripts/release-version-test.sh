@@ -6,8 +6,11 @@
 # cases invoke the script against those fixtures. Caller-repository identity
 # is derived from the live VERSION file: current, intended-tag, and check
 # must agree with it whether the checkout is aligned to the published
-# baseline or prepared one permitted increment ahead. Read-only operations
-# must not create tags, push, or otherwise mutate VERSION or Git state.
+# baseline or prepared one permitted increment ahead. check also requires
+# the approved governed documentation pins to match VERSION. Read-only
+# operations must not create tags, push, or otherwise mutate VERSION, those
+# pins, or Git state. bump may rewrite VERSION and the approved pin files
+# only.
 #
 # Usage: scripts/release-version-test.sh
 set -euo pipefail
@@ -61,6 +64,34 @@ init_repo() {
   git -C "${dir}" config tag.gpgsign false
 }
 
+LATEST_INSTALL_PATH='https://github.com/opentendril/opentendril/releases/latest/download/install.sh'
+
+# Minimal governed documentation fixtures. Counts match the live contract:
+# README.md 1, docs/GUIDE-INSTALL-QUICK.md 2, docs/GUIDE-INSTALL.md 4.
+write_pin_docs() {
+  local repo="$1" version="$2"
+  mkdir -p "${repo}/docs"
+  cat >"${repo}/README.md" <<EOF
+# fixture readme
+curl -fsSL \\
+  ${LATEST_INSTALL_PATH} \\
+  | sh
+RELEASE=v${version}
+EOF
+  cat >"${repo}/docs/GUIDE-INSTALL-QUICK.md" <<EOF
+# fixture quick guide
+RELEASE=v${version}
+RELEASE=v${version}
+EOF
+  cat >"${repo}/docs/GUIDE-INSTALL.md" <<EOF
+# fixture full guide
+RELEASE=v${version}
+RELEASE=v${version}
+RELEASE=v${version}
+RELEASE=v${version}
+EOF
+}
+
 # Build a bare remote whose published tags are the remaining arguments, then a
 # working clone with --no-tags so local tag state starts empty.
 #
@@ -76,10 +107,11 @@ build_fixture() {
   rm -rf "${work}"
   init_repo "${seed}"
   printf '%s\n' "${committed}" >"${seed}/VERSION"
-  printf 'keep-me\n' >"${seed}/unrelated.txt"
+  write_pin_docs "${seed}" "${committed}"
+  printf 'keep-me\nRELEASE=v%s\n' "${committed}" >"${seed}/unrelated.txt"
   mkdir -p "${seed}/nested"
   printf 'nested\n' >"${seed}/nested/file.txt"
-  git -C "${seed}" add VERSION unrelated.txt nested/file.txt
+  git -C "${seed}" add VERSION README.md docs/GUIDE-INSTALL-QUICK.md docs/GUIDE-INSTALL.md unrelated.txt nested/file.txt
   git -C "${seed}" commit -q -m "seed ${committed}"
 
   for tag in "$@"; do
@@ -93,6 +125,7 @@ build_fixture() {
   git -C "${repo}" config commit.gpgsign false
   git -C "${repo}" config tag.gpgsign false
   printf '%s\n' "${working}" >"${repo}/VERSION"
+  write_pin_docs "${repo}" "${working}"
   printf 'untracked\n' >"${repo}/untracked.dat"
 
   printf '%s\n' "${repo}"
@@ -158,6 +191,60 @@ file_checksums() {
   ) | sort
 }
 
+release_identity_paths() {
+  printf '%s\n' README.md VERSION docs/GUIDE-INSTALL-QUICK.md docs/GUIDE-INSTALL.md | LC_ALL=C sort
+}
+
+count_pin_lines() {
+  local file="$1" version="$2"
+  local line count=0
+  while IFS= read -r line || [ -n "${line}" ]; do
+    if [ "${line}" = "RELEASE=v${version}" ]; then
+      count=$((count + 1))
+    fi
+  done <"${file}"
+  printf '%s\n' "${count}"
+}
+
+changed_file_paths() {
+  local before="$1" after="$2"
+  comm -3 <(printf '%s\n' "${before}") <(printf '%s\n' "${after}") | awk '{print $NF}' | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+expect_pins() {
+  local name="$1" repo="$2" version="$3"
+  local readme quick full
+  readme="$(count_pin_lines "${repo}/README.md" "${version}")"
+  quick="$(count_pin_lines "${repo}/docs/GUIDE-INSTALL-QUICK.md" "${version}")"
+  full="$(count_pin_lines "${repo}/docs/GUIDE-INSTALL.md" "${version}")"
+  if [ "${readme}" = "1" ] && [ "${quick}" = "2" ] && [ "${full}" = "4" ]; then
+    pass "${name}"
+  else
+    fail "${name}" "README=${readme} quick=${quick} full=${full} want 1/2/4 of RELEASE=v${version}"
+  fi
+}
+
+expect_release_files_only() {
+  local name="$1" before="$2" after="$3"
+  local got want
+  got="$(changed_file_paths "${before}" "${after}")"
+  want="$(release_identity_paths)"
+  if [ "${got}" = "${want}" ]; then
+    pass "${name}"
+  else
+    fail "${name}" "paths=$(printf '%s' "${got}" | tr '\n' ' ')"
+  fi
+}
+
+expect_tree_unchanged() {
+  local name="$1" repo="$2" before="$3"
+  if [ "$(file_checksums "${repo}")" = "${before}" ]; then
+    pass "${name}"
+  else
+    fail "${name}" "$(comm -3 <(printf '%s\n' "${before}") <(printf '%s\n' "$(file_checksums "${repo}")") | tr '\n' ' ')"
+  fi
+}
+
 # Snapshot of the caller repository's VERSION bytes and Git identity. A
 # VERSION that already differs from HEAD is a legitimate prepared state,
 # not a failure; the suite only requires that read-only operations leave
@@ -221,6 +308,7 @@ expect_stdout "next major from 0.2.0" "${calc_repo}" "1.0.0" next major
 expect_stdout "check accepts VERSION equal to published baseline" "${calc_repo}" "0.2.0" check
 
 before_version="$(cat "${calc_repo}/VERSION")"
+before_calc_tree="$(file_checksums "${calc_repo}")"
 run_tool "${calc_repo}" next minor >/dev/null
 after_version="$(cat "${calc_repo}/VERSION")"
 if [ "${before_version}" = "0.2.0" ] && [ "${after_version}" = "0.2.0" ]; then
@@ -228,6 +316,7 @@ if [ "${before_version}" = "0.2.0" ] && [ "${after_version}" = "0.2.0" ]; then
 else
   fail "next minor modified VERSION" "before=${before_version@Q} after=${after_version@Q}"
 fi
+expect_tree_unchanged "next minor does not modify governed documentation pins" "${calc_repo}" "${before_calc_tree}"
 
 # Wider calculation coverage against an isolated VERSION, still using a remote
 # so check/bump remain exercisable in later cases.
@@ -330,23 +419,24 @@ else
 fi
 
 after_tree="$(file_checksums "${stale_repo}")"
-tree_diff="$(comm -3 <(printf '%s\n' "${before_tree}") <(printf '%s\n' "${after_tree}") || true)"
-changed_paths="$(printf '%s\n' "${tree_diff}" | awk '{print $NF}' | sed '/^$/d' | sort -u | tr '\n' ' ')"
-if [ "${changed_paths}" = "VERSION " ] || [ "${changed_paths}" = "VERSION" ]; then
-  pass "bump with conflicting local tags changes only VERSION"
-else
-  fail "bump changed unexpected paths" "paths=${changed_paths@Q}"
-fi
+expect_release_files_only "bump with conflicting local tags changes only VERSION and governed documentation pins" \
+  "${before_tree}" "${after_tree}"
 
 if [ "$(cat "${stale_repo}/VERSION")" != "0.3.0" ]; then
   fail "VERSION after bump is not 0.3.0" "got=$(cat "${stale_repo}/VERSION" | tr '\n' ' ')"
 else
   pass "VERSION after bump is 0.3.0"
 fi
-if [ "$(cat "${stale_repo}/unrelated.txt")" != "keep-me" ]; then
-  fail "bump modified unrelated.txt"
+expect_pins "bump with conflicting local tags updates all governed documentation pins" "${stale_repo}" "0.3.0"
+if grep -Fq "${LATEST_INSTALL_PATH}" "${stale_repo}/README.md"; then
+  pass "bump with conflicting local tags leaves releases/latest/download/install.sh untouched"
 else
+  fail "bump with conflicting local tags rewrote the local/evaluation latest install path"
+fi
+if [ "$(cat "${stale_repo}/unrelated.txt")" = $'keep-me\nRELEASE=v0.2.0' ]; then
   pass "unrelated.txt is unchanged after bump"
+else
+  fail "bump modified unrelated.txt" "got=$(cat "${stale_repo}/unrelated.txt" | tr '\n' ' ')"
 fi
 
 # --- Already-ahead / unreleased VERSION fails closed. -----------------------
@@ -355,6 +445,7 @@ ahead="$(mktemp -d "${tmp_root}/ahead.XXXXXX")"
 ahead_repo="$(build_fixture "${ahead}" "0.2.0" "0.3.0" "0.2.0")"
 printf '%s\n' "0.3.0" >"${ahead_repo}/VERSION"
 ahead_before="$(cat "${ahead_repo}/VERSION")"
+ahead_tree_before="$(file_checksums "${ahead_repo}")"
 expect_stdout "check allows a single prepared minor increment" "${ahead_repo}" "0.3.0" check
 expect_failure "bump patch fails when VERSION is already ahead" "${ahead_repo}" bump patch
 expect_failure "bump minor fails when VERSION is already ahead" "${ahead_repo}" bump minor
@@ -364,6 +455,7 @@ if [ "$(cat "${ahead_repo}/VERSION")" = "${ahead_before}" ]; then
 else
   fail "failed bump mutated VERSION" "got=$(cat "${ahead_repo}/VERSION" | tr '\n' ' ')"
 fi
+expect_tree_unchanged "failed bump leaves governed documentation pins unchanged" "${ahead_repo}" "${ahead_tree_before}"
 
 unpublished="$(mktemp -d "${tmp_root}/unpublished.XXXXXX")"
 unpublished_repo="$(build_fixture "${unpublished}" "0.2.0" "0.2.0")"
@@ -441,28 +533,135 @@ behind_repo="$(build_fixture "${behind}" "0.2.0" "0.1.0" "0.2.0")"
 expect_failure "check fails when VERSION is behind published" "${behind_repo}" check
 expect_failure "bump fails when VERSION is behind published" "${behind_repo}" bump minor
 
-# --- Only VERSION changes on a successful bump. -----------------------------
+# --- Successful bump updates VERSION and governed documentation pins. ------
 
 only="$(mktemp -d "${tmp_root}/only.XXXXXX")"
 only_repo="$(build_fixture "${only}" "1.2.3" "1.2.3" "1.2.3")"
 printf 'payload\n' >"${only_repo}/extra.bin"
 before_only="$(file_checksums "${only_repo}")"
+unrelated_before="$(cat "${only_repo}/unrelated.txt")"
+nested_before="$(cat "${only_repo}/nested/file.txt")"
+untracked_before="$(cat "${only_repo}/untracked.dat")"
 expect_stdout "bump patch from 1.2.3" "${only_repo}" "1.2.4" bump patch
 after_only="$(file_checksums "${only_repo}")"
-only_diff="$(comm -3 <(printf '%s\n' "${before_only}") <(printf '%s\n' "${after_only}") || true)"
-only_paths="$(printf '%s\n' "${only_diff}" | awk '{print $NF}' | sed '/^$/d' | sort -u | tr '\n' ' ')"
-if [ "${only_paths}" = "VERSION " ] || [ "${only_paths}" = "VERSION" ]; then
-  pass "successful bump changes only VERSION"
+expect_release_files_only "successful patch bump changes only VERSION and governed documentation pins" \
+  "${before_only}" "${after_only}"
+expect_pins "patch bump updates all governed documentation pin occurrences" "${only_repo}" "1.2.4"
+if [ "$(count_pin_lines "${only_repo}/README.md" "1.2.3")" = "0" ] &&
+  [ "$(count_pin_lines "${only_repo}/docs/GUIDE-INSTALL-QUICK.md" "1.2.3")" = "0" ] &&
+  [ "$(count_pin_lines "${only_repo}/docs/GUIDE-INSTALL.md" "1.2.3")" = "0" ]; then
+  pass "patch bump leaves no stale current-version documentation pins"
 else
-  fail "successful bump changed unexpected paths" "paths=${only_paths@Q}"
+  fail "patch bump left stale RELEASE=v1.2.3 documentation pins"
 fi
-tracked_change="$(git -C "${only_repo}" diff --name-only)"
+if grep -Fq "${LATEST_INSTALL_PATH}" "${only_repo}/README.md"; then
+  pass "patch bump does not rewrite releases/latest/download/install.sh"
+else
+  fail "patch bump rewrote the local/evaluation latest install path"
+fi
+if [ "$(cat "${only_repo}/unrelated.txt")" = "${unrelated_before}" ] &&
+  [ "$(cat "${only_repo}/nested/file.txt")" = "${nested_before}" ] &&
+  [ "$(cat "${only_repo}/untracked.dat")" = "${untracked_before}" ] &&
+  [ "$(cat "${only_repo}/extra.bin")" = "payload" ]; then
+  pass "unrelated files remain byte-identical after a successful bump"
+else
+  fail "successful bump mutated an unrelated file"
+fi
+tracked_change="$(git -C "${only_repo}" diff --name-only | LC_ALL=C sort)"
 staged_change="$(git -C "${only_repo}" diff --cached --name-only)"
-if [ "${tracked_change}" = "VERSION" ] && [ -z "${staged_change}" ]; then
-  pass "git diff after bump names only unstaged VERSION"
+want_tracked="$(release_identity_paths)"
+if [ "${tracked_change}" = "${want_tracked}" ] && [ -z "${staged_change}" ]; then
+  pass "git diff after bump names only unstaged VERSION and governed documentation pins"
 else
-  fail "git diff after bump is not only unstaged VERSION" "diff=${tracked_change@Q} staged=${staged_change@Q}"
+  fail "git diff after bump is not only unstaged release identity files" \
+    "diff=${tracked_change@Q} staged=${staged_change@Q}"
 fi
+expect_stdout "check succeeds when all pins match VERSION" "${only_repo}" "1.2.4" check
+
+minor_work="$(mktemp -d "${tmp_root}/minor-calc.XXXXXX")"
+minor_repo="$(build_fixture "${minor_work}" "1.2.3" "1.2.3" "1.2.3")"
+expect_stdout "bump minor from 1.2.3" "${minor_repo}" "1.3.0" bump minor
+expect_pins "minor bump updates all governed documentation pins" "${minor_repo}" "1.3.0"
+
+major_work="$(mktemp -d "${tmp_root}/major-calc.XXXXXX")"
+major_repo="$(build_fixture "${major_work}" "1.2.3" "1.2.3" "1.2.3")"
+expect_stdout "bump major from 1.2.3" "${major_repo}" "2.0.0" bump major
+expect_pins "major bump updates all governed documentation pins" "${major_repo}" "2.0.0"
+
+# --- Stale or malformed governed documentation pins fail closed. -----------
+
+stale_readme="$(mktemp -d "${tmp_root}/stale-readme.XXXXXX")"
+stale_readme_repo="$(build_fixture "${stale_readme}" "0.2.0" "0.2.0" "0.2.0")"
+write_pin_docs "${stale_readme_repo}" "0.2.0"
+sed -i 's/^RELEASE=v0.2.0$/RELEASE=v0.1.9/' "${stale_readme_repo}/README.md"
+stale_readme_tree="$(file_checksums "${stale_readme_repo}")"
+expect_failure "check fails for a stale README pin" "${stale_readme_repo}" check
+expect_tree_unchanged "stale README check does not mutate the worktree" "${stale_readme_repo}" "${stale_readme_tree}"
+
+stale_quick="$(mktemp -d "${tmp_root}/stale-quick.XXXXXX")"
+stale_quick_repo="$(build_fixture "${stale_quick}" "0.2.0" "0.2.0" "0.2.0")"
+# Rewrite only the first quick-guide pin so the file still has a current pin
+# plus a stale one.
+awk 'BEGIN{done=0} /^RELEASE=v0.2.0$/ && done==0 {print "RELEASE=v0.1.9"; done=1; next} {print}' \
+  "${stale_quick_repo}/docs/GUIDE-INSTALL-QUICK.md" >"${stale_quick_repo}/docs/GUIDE-INSTALL-QUICK.md.tmp"
+mv -f "${stale_quick_repo}/docs/GUIDE-INSTALL-QUICK.md.tmp" "${stale_quick_repo}/docs/GUIDE-INSTALL-QUICK.md"
+stale_quick_tree="$(file_checksums "${stale_quick_repo}")"
+expect_failure "check fails for a stale quick-guide pin" "${stale_quick_repo}" check
+expect_tree_unchanged "stale quick-guide check does not mutate the worktree" "${stale_quick_repo}" "${stale_quick_tree}"
+
+stale_full="$(mktemp -d "${tmp_root}/stale-full.XXXXXX")"
+stale_full_repo="$(build_fixture "${stale_full}" "0.2.0" "0.2.0" "0.2.0")"
+awk 'BEGIN{done=0} /^RELEASE=v0.2.0$/ && done==0 {print "RELEASE=v0.1.9"; done=1; next} {print}' \
+  "${stale_full_repo}/docs/GUIDE-INSTALL.md" >"${stale_full_repo}/docs/GUIDE-INSTALL.md.tmp"
+mv -f "${stale_full_repo}/docs/GUIDE-INSTALL.md.tmp" "${stale_full_repo}/docs/GUIDE-INSTALL.md"
+stale_full_tree="$(file_checksums "${stale_full_repo}")"
+expect_failure "check fails for a stale full-guide pin" "${stale_full_repo}" check
+expect_tree_unchanged "stale full-guide check does not mutate the worktree" "${stale_full_repo}" "${stale_full_tree}"
+
+missing_pin="$(mktemp -d "${tmp_root}/missing-pin.XXXXXX")"
+missing_pin_repo="$(build_fixture "${missing_pin}" "0.2.0" "0.2.0" "0.2.0")"
+rm -f "${missing_pin_repo}/README.md"
+missing_pin_tree="$(file_checksums "${missing_pin_repo}")"
+run_tool_capture "${missing_pin_repo}" bump patch
+if [ "${status}" -eq 0 ]; then
+  fail "bump fails when a required pin file is missing" "unexpected success; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+elif grep -q "governed documentation pin file is missing: README.md" "${stderr_file}"; then
+  pass "bump fails when a required pin file is missing"
+else
+  fail "bump fails when a required pin file is missing" \
+    "stderr lacked the missing-file diagnostic: $(tr '\n' ' ' <"${stderr_file}")"
+fi
+expect_tree_unchanged "bump does not modify files when a required pin is missing" "${missing_pin_repo}" "${missing_pin_tree}"
+
+wrong_count="$(mktemp -d "${tmp_root}/wrong-count.XXXXXX")"
+wrong_count_repo="$(build_fixture "${wrong_count}" "0.2.0" "0.2.0" "0.2.0")"
+printf 'RELEASE=v0.2.0\n' >>"${wrong_count_repo}/README.md"
+wrong_count_tree="$(file_checksums "${wrong_count_repo}")"
+run_tool_capture "${wrong_count_repo}" bump patch
+if [ "${status}" -eq 0 ]; then
+  fail "bump fails when a pin occurrence count is wrong" "unexpected success; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+elif grep -q "governed documentation pin count mismatch in README.md" "${stderr_file}"; then
+  pass "bump fails when a pin occurrence count is wrong"
+else
+  fail "bump fails when a pin occurrence count is wrong" \
+    "stderr lacked the count-mismatch diagnostic: $(tr '\n' ' ' <"${stderr_file}")"
+fi
+expect_tree_unchanged "bump does not modify files when a pin occurrence count is wrong" "${wrong_count_repo}" "${wrong_count_tree}"
+
+conflict_pin="$(mktemp -d "${tmp_root}/conflict-pin.XXXXXX")"
+conflict_pin_repo="$(build_fixture "${conflict_pin}" "0.2.0" "0.2.0" "0.2.0")"
+printf 'RELEASE=v9.9.9\n' >>"${conflict_pin_repo}/docs/GUIDE-INSTALL.md"
+conflict_pin_tree="$(file_checksums "${conflict_pin_repo}")"
+run_tool_capture "${conflict_pin_repo}" bump patch
+if [ "${status}" -eq 0 ]; then
+  fail "bump fails when a conflicting release pin exists" "unexpected success; stdout=$(tr '\n' ' ' <"${stdout_file}")"
+elif grep -q "governed documentation pin conflict in docs/GUIDE-INSTALL.md: found RELEASE=v9.9.9" "${stderr_file}"; then
+  pass "bump fails when a conflicting release pin exists"
+else
+  fail "bump fails when a conflicting release pin exists" \
+    "stderr lacked the conflict diagnostic: $(tr '\n' ' ' <"${stderr_file}")"
+fi
+expect_tree_unchanged "bump does not modify files when a conflicting release pin exists" "${conflict_pin_repo}" "${conflict_pin_tree}"
 
 # --- Argument / kind errors. ------------------------------------------------
 
@@ -596,6 +795,7 @@ expect_stdout "current reports the caller repository VERSION" "${repo_root}" "${
 expect_stdout "intended-tag from 0.2.0" "${calc_repo}" "v0.2.0" intended-tag
 expect_stdout "intended-tag is v plus the caller repository VERSION" "${repo_root}" "v${caller_version}" intended-tag
 expect_stdout "check accepts the caller repository VERSION" "${repo_root}" "${caller_version}" check
+expect_pins "caller repository governed documentation pins match VERSION" "${repo_root}" "${caller_version}"
 
 malformed_pub="$(mktemp -d "${tmp_root}/malformed-pub.XXXXXX")"
 malformed_pub_repo="$(build_fixture "${malformed_pub}" "0.2.0" "0.2.0" "0.2.0")"

@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 # Canonical release-version contract.
 #
-# VERSION is the only repository source of release identity. This script is the
+# VERSION is the sole repository source of release identity. This script is the
 # deterministic way to read it, calculate the next patch/minor/major, apply a
 # requested bump, or check that the file is a stable semantic version aligned
 # with published remote tag history.
 #
+# Governed documentation pins in README.md, docs/GUIDE-INSTALL-QUICK.md, and
+# docs/GUIDE-INSTALL.md are synchronized projections of VERSION. They are not
+# independent identity. bump updates VERSION and those projections. check
+# requires each approved file to contain exactly its expected number of
+# RELEASE=vMAJOR.MINOR.PATCH pins matching VERSION, and no conflicting
+# RELEASE=v<other-version> pin. The local/evaluation
+# releases/latest/download/install.sh path is not a governed pin and is not
+# rewritten.
+#
 # Remote tags are queried in place (git ls-remote). Local tags are never
 # consulted, so a stale or conflicting local tag cannot become authority.
 #
-# Preparation writes VERSION and does nothing else: no tag, no push, no
-# pull request, no publication, and no update of Git refs.
+# bump writes VERSION and the approved governed documentation pins and does
+# nothing else: no tag, no commit, no push, no pull request, no publication,
+# and no update of Git refs.
 #
 # Usage:
 #   scripts/release-version.sh current
@@ -269,6 +279,85 @@ write_version() {
   mv -f "${tmp}" "${path}"
 }
 
+# Approved governed documentation pin projections of VERSION.
+# Path is relative to the repository root. Count is the number of whole-line
+# pins of the form RELEASE=vMAJOR.MINOR.PATCH.
+governed_pin_specs() {
+  cat <<'EOF'
+README.md 1
+docs/GUIDE-INSTALL-QUICK.md 2
+docs/GUIDE-INSTALL.md 4
+EOF
+}
+
+# Fail closed if any approved pin file is missing, the current-version pin
+# count is wrong, or a RELEASE=v<other-stable-version> pin is present.
+assert_governed_pins() {
+  local root="$1" version="$2"
+  local rel expected path line rest current_count conflict
+
+  is_stable_semver "${version}" || die "cannot validate documentation pins for invalid version: ${version}"
+
+  while read -r rel expected; do
+    [ -n "${rel}" ] || continue
+    path="${root}/${rel}"
+    [ -f "${path}" ] || die "governed documentation pin file is missing: ${rel}"
+
+    current_count=0
+    conflict=""
+    while IFS= read -r line || [ -n "${line}" ]; do
+      case "${line}" in
+        RELEASE=v*)
+          rest="${line#RELEASE=v}"
+          if is_stable_semver "${rest}"; then
+            if [ "${rest}" = "${version}" ]; then
+              current_count=$((current_count + 1))
+            else
+              conflict="${line}"
+            fi
+          fi
+          ;;
+      esac
+    done <"${path}"
+
+    if [ -n "${conflict}" ]; then
+      die "governed documentation pin conflict in ${rel}: found ${conflict} (canonical version is ${version})"
+    fi
+    if [ "${current_count}" -ne "${expected}" ]; then
+      die "governed documentation pin count mismatch in ${rel}: expected ${expected} occurrence(s) of RELEASE=v${version}, found ${current_count}"
+    fi
+  done <<EOF
+$(governed_pin_specs)
+EOF
+}
+
+# Rewrite approved whole-line RELEASE=v<current> pins to RELEASE=v<next>.
+# Does not scan the rest of the repository.
+sync_governed_pins() {
+  local root="$1" current="$2" next="$3"
+  local rel expected path tmp line
+
+  is_stable_semver "${current}" || die "refusing to rewrite documentation pins from invalid version: ${current}"
+  is_stable_semver "${next}" || die "refusing to rewrite documentation pins to invalid version: ${next}"
+
+  while read -r rel expected; do
+    [ -n "${rel}" ] || continue
+    : "${expected}"
+    path="${root}/${rel}"
+    tmp="$(mktemp "${path}.tmp.XXXXXX")"
+    while IFS= read -r line || [ -n "${line}" ]; do
+      if [ "${line}" = "RELEASE=v${current}" ]; then
+        printf 'RELEASE=v%s\n' "${next}"
+      else
+        printf '%s\n' "${line}"
+      fi
+    done <"${path}" >"${tmp}"
+    mv -f "${tmp}" "${path}"
+  done <<EOF
+$(governed_pin_specs)
+EOF
+}
+
 cmd_current() {
   read_version "$(version_path)"
 }
@@ -281,7 +370,7 @@ cmd_next() {
 }
 
 cmd_bump() {
-  local kind path current published next remote
+  local kind path current published next remote root
   kind="$(parse_kind "${1:-}")"
   path="$(version_path)"
   current="$(read_version "${path}")"
@@ -296,7 +385,11 @@ cmd_bump() {
   fi
 
   next="$(increment_version "${current}" "${kind}")"
+  root="$(repo_root)"
+  # Verify projections against the current version before writing anything.
+  assert_governed_pins "${root}" "${current}"
   write_version "${path}" "${next}"
+  sync_governed_pins "${root}" "${current}" "${next}"
   printf '%s\n' "${next}"
 }
 
@@ -319,6 +412,7 @@ cmd_check() {
     fi
   fi
 
+  assert_governed_pins "$(repo_root)" "${current}"
   printf '%s\n' "${current}"
 }
 
