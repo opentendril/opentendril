@@ -364,7 +364,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.6
+RELEASE=v0.3.7
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -816,7 +816,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.6
+RELEASE=v0.3.7
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1185,7 +1185,7 @@ release tag for `RELEASE`.
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.6
+RELEASE=v0.3.7
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1210,7 +1210,7 @@ executable onto that account's PATH.
 ```bash
 # as the ordinary (Pollinator-hosting) account — same RELEASE as above
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.6
+RELEASE=v0.3.7
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
