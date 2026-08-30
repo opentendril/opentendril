@@ -80,6 +80,14 @@ Protected kernel paths enforce a floor of safety, refusing automated merges that
 
 `tendril git setup --verify` for managed App/API Substrates additionally confirms that the GitHub App installation holds repository **contents write** permission, which is required to create the Fruit ref and commit. This check is strictly read-only (no branch, commit, push, or pull request is created). A missing or read-only contents permission fails immediately with an actionable message that names the required permission and the installation settings path. The write-permission check is only performed for managed Substrates with `commit: api`; path and ephemeral checkouts are unaffected.
 
+An empty managed App/API Substrate has a Botanist-only setup path:
+`tendril git bootstrap --substrate <name>`. The Stem authenticates and checks
+the empty repository, resolves the configured or repository default branch (or
+the Botanist's explicit branch input), shows the one empty-tree root commit,
+and requires confirmation. Publication uses an expected-absent target-ref
+lease and never overwrites an existing ref. The resulting root commit is setup
+state, not Fruit; `git setup --verify` remains the read-only readiness check.
+
 For `seed.grow` on a managed App/API Substrate, each writing iteration runs in a Tendril-owned RunWorkspace. A successful iteration is transferred into a local `tendril/seed-*` checkpoint, and the next iteration starts from that checkpoint. These checkpoints are internal convergence state: they are not remotely published, do not receive GitHub credentials, use a Tendril-owned local Git identity, and are not returned as Botanist-reviewable Fruit. After convergence, the accumulated Seed result is published exactly once through the Stem-held managed App/API path. Only the GitHub-created review branch and returned GitHub commit OID are reported as Fruit. If publication configuration, execution-plan resolution, or final API publication fails, the local Seed state is preserved, the error is returned, and no Fruit branch or commit is reported. The default branch remains unchanged.
 
 ## Observation/Persistence

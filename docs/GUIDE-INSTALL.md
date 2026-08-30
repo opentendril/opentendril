@@ -160,7 +160,9 @@ Prerequisites for the normal path:
 - A Terrarium provider. This guide instantiates rootless Docker Engine in Stage 2.
 - Git, where the Stem clones and manages Substrates.
 - An LLM — local [Ollama](https://ollama.com) by default, or a cloud provider key.
-- Access to the target GitHub repository. That repository must already contain at least one commit; an empty repository is not a ready OpenTendril Substrate.
+- Access to the target GitHub repository. An empty repository is supported for
+  the managed GitHub App/API path through `tendril git bootstrap`; other
+  postures still require an existing Git base.
 - Authority necessary to create and install the GitHub App used by the secure-default path.
 - Access to GitHub's web UI from a browser, which may be on a different trusted administrative machine from the headless Stem host.
 
@@ -598,8 +600,20 @@ repository and confirming it has a usable Git base: the required branch
 resolves to a commit. The check does not clone, create a checkout, commit,
 branch, push, or open a pull request. A wrong App ID, unusable private key,
 missing installation, inaccessible repository, missing configured branch, or
-empty repository fails the check. If the repository has no commit, create an
-initial commit on it and rerun the same verify command.
+empty repository fails the check. For an empty managed GitHub App/API
+repository, run the supported Botanist-only bootstrap command, review its
+confirmation summary, and then rerun verification:
+
+```bash
+tendril git bootstrap --substrate myrepo
+tendril git setup --verify --substrate myrepo
+```
+
+Bootstrap creates exactly one empty-tree root commit on the resolved target
+branch. It does not create a README, licence, `.gitignore`, project files, or
+Fruit, and it never overwrites an existing ref. PAT, local/path, ephemeral, or
+otherwise unsupported postures must be initialized through their own Git
+workflow instead.
 
 For managed Substrates using `commit: api` (the App posture default), the check
 additionally confirms that the GitHub App installation has the repository

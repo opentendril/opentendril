@@ -40,6 +40,9 @@ func runGitCmd(ctx context.Context, args []string) {
 	case "setup":
 		runGitSetup(ctx, args[1:])
 		return
+	case "bootstrap":
+		runGitBootstrap(ctx, args[1:])
+		return
 	}
 
 	sub := strings.ToLower(strings.TrimSpace(args[0]))
@@ -556,11 +559,15 @@ func gitUsageSuffix(capName string) string {
 }
 
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|status|branches|branch|commit|push|pr|prune> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|bootstrap|status|branches|branch|commit|push|pr|prune> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
 	fmt.Println("  Model Context Protocol block for the Pollinator. Run `tendril git setup --help` for the full flag list.")
+	fmt.Println()
+	fmt.Println("bootstrap --substrate <name> [--branch <branch>] [--confirm]")
+	fmt.Println("  Botanist-only: create exactly one empty-tree root commit in an empty managed")
+	fmt.Println("  GitHub App/API Substrate. It is setup state, never Fruit, and never overwrites a ref.")
 	fmt.Println()
 	fmt.Println("status --substrate <path|name>")
 	fmt.Println("  Reports the workspace's branch, the resolved default branch, uncommitted")

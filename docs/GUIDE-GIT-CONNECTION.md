@@ -12,10 +12,11 @@ inherits it.
 
 This guide is deliberately linear: follow it top to bottom.
 
-For a managed checkout (the default of `tendril git setup`), the GitHub
-repository must already contain at least one commit. An empty repository is
-not a ready managed OpenTendril Substrate. Setup and `git setup --verify` do
-not create that inaugural commit.
+For a managed checkout (the default of `tendril git setup`), an empty GitHub
+repository is not ready until it has a Git base. `git setup` and
+`git setup --verify` remain configuration and read-only verification actions;
+for the supported managed GitHub App/API posture, a Botanist can create that
+base with `tendril git bootstrap`.
 
 ---
 
@@ -37,7 +38,15 @@ tendril git setup --posture pat --substrate myrepo --repo owner/repo \
 
 # Check a connection. Managed checkouts also require a usable Git base (no mutation):
 tendril git setup --verify --substrate myrepo
+
+# If verify reports an empty managed App/API repository, create one empty root commit:
+tendril git bootstrap --substrate myrepo
 ```
+
+Bootstrap displays the repository, target branch, fixed OpenTendril attribution,
+and the empty-tree setup mutation before asking for explicit Botanist
+confirmation. It never creates project files, overwrites an existing ref, or
+creates Fruit. Use `--confirm` for an explicit non-interactive confirmation.
 
 Prefer to write the files by hand? The rest of this guide is the manual
 reference, and the repository ships `substrates.yaml.example` /
