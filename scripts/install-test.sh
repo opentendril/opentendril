@@ -1234,6 +1234,54 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd apt-get "\$*"
+apt_call_number=0
+if [ -f "${ROOT}/state/apt-call-count" ]; then
+  apt_call_number=\$(${real_cat} "${ROOT}/state/apt-call-count")
+fi
+apt_call_number=\$((apt_call_number + 1))
+printf '%s\n' "\$apt_call_number" >"${ROOT}/state/apt-call-count"
+apt_lock=0
+apt_lock_message=canonical
+if [ -f "${ROOT}/state/apt-lock-alternate" ] && [ "\$apt_call_number" -eq 1 ]; then
+  apt_lock=1
+  apt_lock_message=alternate
+fi
+if [ -f "${ROOT}/state/apt-lock-docker-drift" ] && [ "\$apt_call_number" -eq 1 ]; then
+  ${real_mkdir} -p "${ROOT}/state/pkg"
+  ${real_touch} "${ROOT}/state/pkg/docker.io"
+  apt_lock=1
+fi
+if [ -f "${ROOT}/state/apt-lock-always" ]; then
+  apt_lock=1
+elif [ -f "${ROOT}/state/apt-lock-calls" ]; then
+  lock_calls=\$(${real_cat} "${ROOT}/state/apt-lock-calls")
+  case " \$lock_calls " in
+    *" \$apt_call_number "*) apt_lock=1 ;;
+  esac
+fi
+if [ "\$apt_lock" -eq 1 ]; then
+  if [ "\$apt_lock_message" = alternate ]; then
+    printf 'E: Unable to lock the administration directory (/var/lib/dpkg/), is another process using it?\n' >&2
+  else
+    case "\$1" in
+      update)
+        printf 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 1234 (apt-get)\n' >&2
+        ;;
+      install)
+        printf 'E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1234 (apt-get)\n' >&2
+        ;;
+    esac
+  fi
+  exit 100
+fi
+if [ -f "${ROOT}/state/apt-fail" ]; then
+  printf 'E: Failed to fetch package indexes from the configured mirrors\n' >&2
+  exit 1
+fi
+if [ -f "${ROOT}/state/apt-lock-open-fail" ]; then
+  printf 'E: Could not get lock /var/lib/apt/lists/lock: Permission denied\n' >&2
+  exit 100
+fi
 if [ "\$1" = update ]; then
   exit 0
 fi
@@ -1252,6 +1300,13 @@ if [ "\$1" = remove ]; then
   printf 'apt-get remove is forbidden in governed tests\\n' >&2
   exit 1
 fi
+exit 0
+EOF
+
+  write_exec "${SHIM_DIR}/sleep" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd sleep "\$*"
 exit 0
 EOF
 
@@ -1671,6 +1726,16 @@ assert_governed_failure() {
   return 0
 }
 
+assert_no_apt_recovery_abuse() {
+  local name=$1
+  if grep -Eq 'rm .*(/var/lib/apt|/var/lib/dpkg).*lock|(^|[[:space:]])(kill|pkill|fuser)([[:space:]]|$)' "${installer}" \
+    || grep -Eq '^CMD rm .*(/var/lib/apt|/var/lib/dpkg).*lock|^CMD (kill|pkill|fuser) ' "${events_file}"; then
+    fail "${name}: recovery deleted a lock file or terminated a process" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
+}
+
 preseed_tendril_user() {
   if ! grep -q '^tendril:' "${HOSTFS}/etc/passwd"; then
     printf 'tendril:x:2001:2001:OpenTendril Stem:/home/tendril:/bin/bash\n' >>"${HOSTFS}/etc/passwd"
@@ -2085,6 +2150,125 @@ assert_governed_success_core() {
   fi
   return 0
 }
+
+# --- APT lock handling ------------------------------------------------------
+
+new_governed_case
+printf '1 3 5 7\n' >"${ROOT}/state/apt-lock-calls"
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "transient APT locks retry every governed operation"; then
+  apt_events="$(grep '^CMD apt-get ' "${events_file}")"
+  expected_apt_events='CMD apt-get update -o DPkg::Lock::Timeout=0
+CMD apt-get update -o DPkg::Lock::Timeout=0
+CMD apt-get install -y ca-certificates curl git uidmap slirp4netns dbus-user-session kmod iptables -o DPkg::Lock::Timeout=0
+CMD apt-get install -y ca-certificates curl git uidmap slirp4netns dbus-user-session kmod iptables -o DPkg::Lock::Timeout=0
+CMD apt-get update -o DPkg::Lock::Timeout=0
+CMD apt-get update -o DPkg::Lock::Timeout=0
+CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras -o DPkg::Lock::Timeout=0
+CMD apt-get install -y docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras -o DPkg::Lock::Timeout=0'
+  apt_calls="$(grep -c '^CMD apt-get ' "${events_file}" || true)"
+  waiting_messages="$(grep -c 'another package-manager operation is active' "${stderr_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
+  if [ "${apt_events}" = "${expected_apt_events}" ] \
+    && [ "${apt_calls}" -eq 8 ] \
+    && [ "${waiting_messages}" -eq 4 ] \
+    && [ "${sleep_calls}" -eq 4 ]; then
+    pass "transient APT locks retry every governed operation"
+  else
+    fail "transient APT locks retry every governed operation" "apt_calls=${apt_calls} waiting_messages=${waiting_messages} sleep_calls=${sleep_calls} events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if assert_no_apt_recovery_abuse "transient APT locks retry every governed operation"; then
+    pass "transient APT locks do not delete locks or terminate processes"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/apt-lock-always"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "persistent APT lock contention is bounded"; then
+  apt_calls="$(grep -c '^CMD apt-get ' "${events_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
+  if [ "${apt_calls}" -eq 31 ] && [ "${sleep_calls}" -eq 30 ]; then
+    pass "persistent APT lock contention is bounded"
+  else
+    fail "persistent APT lock contention is bounded" "apt_calls=${apt_calls} sleep_calls=${sleep_calls} events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if grep -q 'package manager remained busy' "${stderr_file}" \
+    && grep -q 'after waiting 60 seconds' "${stderr_file}" \
+    && grep -q 'rerun the governed installer' "${stderr_file}" \
+    && ! grep -Eq 'delete|remove.*lock' "${stderr_file}"; then
+    pass "persistent APT lock contention has an actionable diagnosis"
+  else
+    fail "persistent APT lock contention has an actionable diagnosis" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+  if assert_no_apt_recovery_abuse "persistent APT lock contention is bounded"; then
+    pass "persistent APT locks do not trigger unsafe recovery"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/apt-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "ordinary APT failure is not retried"; then
+  apt_calls="$(grep -c '^CMD apt-get ' "${events_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
+  if [ "${apt_calls}" -eq 1 ] && [ "${sleep_calls}" -eq 0 ] \
+    && grep -q 'Failed to fetch package indexes' "${stderr_file}" \
+    && ! grep -q 'another package-manager operation is active' "${stderr_file}"; then
+    pass "ordinary APT failure is not retried"
+  else
+    fail "ordinary APT failure is not retried" "apt_calls=${apt_calls} sleep_calls=${sleep_calls} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+  if assert_no_apt_recovery_abuse "ordinary APT failure is not retried"; then
+    pass "ordinary APT failure does not trigger unsafe recovery"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/apt-lock-open-fail"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "non-contention lock failure is not retried"; then
+  apt_calls="$(grep -c '^CMD apt-get ' "${events_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
+  if [ "${apt_calls}" -eq 1 ] && [ "${sleep_calls}" -eq 0 ] \
+    && grep -q 'Permission denied' "${stderr_file}" \
+    && ! grep -q 'another package-manager operation is active' "${stderr_file}"; then
+    pass "non-contention lock failure is not retried"
+  else
+    fail "non-contention lock failure is not retried" "apt_calls=${apt_calls} sleep_calls=${sleep_calls} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+  if assert_no_apt_recovery_abuse "non-contention lock failure is not retried"; then
+    pass "non-contention lock failure does not trigger unsafe recovery"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/apt-lock-alternate"
+run_governed_installer --pollinator-user alice
+if assert_governed_success_core "alternate APT lock wording is retried"; then
+  apt_calls="$(grep -c '^CMD apt-get ' "${events_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
+  if [ "${apt_calls}" -eq 5 ] && [ "${sleep_calls}" -eq 1 ]; then
+    pass "alternate APT lock wording is retried"
+  else
+    fail "alternate APT lock wording is retried" "apt_calls=${apt_calls} sleep_calls=${sleep_calls} events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+fi
+
+new_governed_case
+touch "${ROOT}/state/apt-lock-docker-drift"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "Docker posture is rechecked after an APT wait"; then
+  if grep -q 'package docker.io is installed' "${stderr_file}" \
+    && ! grep -q '^CMD systemctl mask ' "${events_file}"; then
+    pass "Docker posture is rechecked after an APT wait"
+  else
+    fail "Docker posture is rechecked after an APT wait" "stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if assert_no_apt_recovery_abuse "Docker posture is rechecked after an APT wait"; then
+    pass "APT wait does not weaken Docker safety checks"
+  fi
+fi
 
 new_governed_case
 run_governed_installer --pollinator-user alice --version v0.3.0

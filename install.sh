@@ -37,6 +37,9 @@ pollinator_user=""
 workdir=""
 docker_units_guarded=0
 governed_finished=0
+APT_LOCK_RETRY_DELAY_SECONDS=2
+APT_LOCK_MAX_RETRIES=30
+APT_LOCK_MAX_WAIT_SECONDS=$((APT_LOCK_RETRY_DELAY_SECONDS * APT_LOCK_MAX_RETRIES))
 
 die() {
   printf 'install.sh: %s\n' "$*" >&2
@@ -640,13 +643,55 @@ ensure_tendril_principal() {
   loginctl enable-linger "$STEM_USER" </dev/null || die "failed to enable linger for ${STEM_USER}"
 }
 
+apt_lock_contention() {
+  grep -Eq \
+    'Could not get lock .*lock.*(held by process|another process using it|Resource temporarily unavailable)|Unable to acquire .*lock.*(held by process|another process using it|Resource temporarily unavailable)|Unable to lock the administration directory.*(held by process|another process using it|Resource temporarily unavailable)' \
+    "$1"
+}
+
+apt_run() {
+  _apt_failure=$1
+  _apt_action=$2
+  shift 2
+  require_cmd cat
+  require_cmd grep
+  _apt_error_path="${workdir}/apt-error"
+  _apt_retry=0
+  while :; do
+    : >"${_apt_error_path}" || die "cannot create temporary APT error output"
+    if LC_ALL=C DEBIAN_FRONTEND=noninteractive apt-get "$@" -o DPkg::Lock::Timeout=0 </dev/null 2>"${_apt_error_path}"; then
+      cat "${_apt_error_path}" >&2
+      return 0
+    fi
+    cat "${_apt_error_path}" >&2
+    if ! apt_lock_contention "${_apt_error_path}"; then
+      die "${_apt_failure}"
+    fi
+    if [ "${_apt_retry}" -ge "${APT_LOCK_MAX_RETRIES}" ]; then
+      die "${_apt_failure}; package manager remained busy with another operation after waiting ${APT_LOCK_MAX_WAIT_SECONDS} seconds. Wait for it to finish, then rerun the governed installer"
+    fi
+    _apt_retry=$((_apt_retry + 1))
+    require_cmd sleep
+    printf 'install.sh: another package-manager operation is active; waiting before retrying apt-get %s (%s/%s)\n' \
+      "${_apt_action}" "${_apt_retry}" "${APT_LOCK_MAX_RETRIES}" >&2
+    sleep "${APT_LOCK_RETRY_DELAY_SECONDS}" || die "failed while waiting for the package manager lock"
+  done
+}
+
+refuse_unsafe_docker() {
+  classify_docker
+  if [ "$docker_class" = unsafe ]; then
+    die "$docker_reason"
+  fi
+}
+
 apt_install() {
-  DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" </dev/null || die "apt-get install failed: $*"
+  apt_run "apt-get install failed: $*" "install" install -y "$@"
 }
 
 install_prereq_packages() {
   require_cmd apt-get
-  DEBIAN_FRONTEND=noninteractive apt-get update </dev/null || die "apt-get update failed"
+  apt_run "apt-get update failed" "update" update
   apt_install ca-certificates curl git uidmap slirp4netns dbus-user-session kmod iptables
   require_cmd curl
   require_cmd modprobe
@@ -728,6 +773,7 @@ ensure_rootless_netfilter() {
 install_docker_engine() {
   require_cmd apt-get
   require_cmd systemctl
+  refuse_unsafe_docker
   mask_rootful_docker
   install -m 0755 -d /etc/apt/keyrings </dev/null || die "failed to create /etc/apt/keyrings"
   download_docker_gpg "${workdir}/docker.asc"
@@ -743,7 +789,8 @@ Architectures: ${_arch}
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
   install -m 0644 "${workdir}/docker.sources" /etc/apt/sources.list.d/docker.sources </dev/null || die "failed to install the Docker apt source"
-  DEBIAN_FRONTEND=noninteractive apt-get update </dev/null || die "apt-get update failed after adding the Docker repository"
+  apt_run "apt-get update failed after adding the Docker repository" "update" update
+  refuse_unsafe_docker
   apt_install docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras
   systemctl disable --now docker.service docker.socket </dev/null || true
   if unit_is_active docker.service || unit_is_active docker.socket; then
@@ -1030,13 +1077,11 @@ install_governed() {
   require_cmd dpkg
   require_cmd dpkg-query
   resolve_pollinator
-  classify_docker
-  if [ "$docker_class" = unsafe ]; then
-    die "$docker_reason"
-  fi
+  refuse_unsafe_docker
   archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
   prepare_workdir governed_cleanup
   install_prereq_packages
+  refuse_unsafe_docker
   ensure_rootless_netfilter
   obtain_verified_archive
   mask_rootful_docker
