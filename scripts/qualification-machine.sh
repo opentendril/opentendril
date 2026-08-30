@@ -391,6 +391,12 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - $public_key
+  - name: pollinator
+    gecos: Pollinator
+    homedir: /home/pollinator
+    no_create_home: false
+    shell: /bin/bash
+    lock_passwd: true
 chpasswd:
   expire: false
   list: |
@@ -504,6 +510,11 @@ PY_PASS
     ssh_base 'sudo -n true'
     ssh_base 'sudo -n -u root true'
     ssh_base "sh -c 'sudo -n true'"
+    ssh_base 'id pollinator'
+    ssh_base 'test "$(getent passwd pollinator | cut -d: -f6)" = /home/pollinator && test -d /home/pollinator && test "$(getent passwd pollinator | cut -d: -f7)" = /bin/bash'
+    if ssh_base 'sudo -n -u pollinator sudo -n true'; then
+        die "pollinator unexpectedly has non-interactive sudo authorization"
+    fi
 
     if [ "$MODE" = fast ] && [ -n "$model_source" ]; then
         guest_sudo "mkdir -p '$MODEL_MOUNT' && mount -t 9p -o trans=virtio,version=9p2000.L,ro opentendril-model-cache '$MODEL_MOUNT'"
