@@ -335,7 +335,15 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 	if ready {
 		verification, err := verifySubstrateSetup(ctx, *spec, cred)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ remote verification failed: %v\n", err)
+			diagnostic := err.Error()
+			if strings.Contains(diagnostic, "has no Git base") {
+				diagnostic = strings.Replace(diagnostic,
+					"Create an initial commit before using it as an OpenTendril Substrate, then rerun tendril git setup --verify",
+					fmt.Sprintf("use the supported `tendril git bootstrap --substrate %s` command to create the OpenTendril Substrate base, then rerun tendril git setup --verify", o.substrate),
+					1,
+				)
+			}
+			fmt.Fprintf(os.Stderr, "❌ remote verification failed: %s\n", diagnostic)
 			ready = false
 		} else {
 			managed = verification.Managed
