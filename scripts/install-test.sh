@@ -1246,10 +1246,15 @@ if [ -f "${ROOT}/state/apt-lock-alternate" ] && [ "\$apt_call_number" -eq 1 ]; t
   apt_lock=1
   apt_lock_message=alternate
 fi
-if [ -f "${ROOT}/state/apt-lock-docker-drift" ] && [ "\$apt_call_number" -eq 1 ]; then
-  ${real_mkdir} -p "${ROOT}/state/pkg"
-  ${real_touch} "${ROOT}/state/pkg/docker.io"
-  apt_lock=1
+if [ -f "${ROOT}/state/apt-lock-docker-drift" ] && [ "\$1" = install ]; then
+  case " \$* " in
+    *" docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras "*)
+      if [ ! -f "${ROOT}/state/apt-lock-docker-drift-injected" ]; then
+        ${real_touch} "${ROOT}/state/apt-lock-docker-drift-waiting"
+        apt_lock=1
+      fi
+      ;;
+  esac
 fi
 if [ -f "${ROOT}/state/apt-lock-always" ]; then
   apt_lock=1
@@ -1307,6 +1312,12 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd sleep "\$*"
+if [ -f "${ROOT}/state/apt-lock-docker-drift-waiting" ] \
+  && [ ! -f "${ROOT}/state/apt-lock-docker-drift-injected" ]; then
+  ${real_mkdir} -p "${ROOT}/state/pkg"
+  ${real_touch} "${ROOT}/state/pkg/docker.io"
+  ${real_touch} "${ROOT}/state/apt-lock-docker-drift-injected"
+fi
 exit 0
 EOF
 
@@ -2259,11 +2270,15 @@ new_governed_case
 touch "${ROOT}/state/apt-lock-docker-drift"
 run_governed_installer --pollinator-user alice
 if assert_governed_failure "Docker posture is rechecked after an APT wait"; then
+  docker_install_calls="$(grep -c '^CMD apt-get install .*docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras' "${events_file}" || true)"
+  sleep_calls="$(grep -c '^CMD sleep 2$' "${events_file}" || true)"
   if grep -q 'package docker.io is installed' "${stderr_file}" \
-    && ! grep -q '^CMD systemctl mask ' "${events_file}"; then
+    && grep -q 'another package-manager operation is active' "${stderr_file}" \
+    && [ "${docker_install_calls}" -eq 1 ] \
+    && [ "${sleep_calls}" -eq 1 ]; then
     pass "Docker posture is rechecked after an APT wait"
   else
-    fail "Docker posture is rechecked after an APT wait" "stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+    fail "Docker posture is rechecked after an APT wait" "docker_install_calls=${docker_install_calls} sleep_calls=${sleep_calls} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
   fi
   if assert_no_apt_recovery_abuse "Docker posture is rechecked after an APT wait"; then
     pass "APT wait does not weaken Docker safety checks"

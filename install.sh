@@ -652,7 +652,8 @@ apt_lock_contention() {
 apt_run() {
   _apt_failure=$1
   _apt_action=$2
-  shift 2
+  _apt_revalidate_docker=$3
+  shift 3
   require_cmd cat
   require_cmd grep
   _apt_error_path="${workdir}/apt-error"
@@ -675,6 +676,9 @@ apt_run() {
     printf 'install.sh: another package-manager operation is active; waiting before retrying apt-get %s (%s/%s)\n' \
       "${_apt_action}" "${_apt_retry}" "${APT_LOCK_MAX_RETRIES}" >&2
     sleep "${APT_LOCK_RETRY_DELAY_SECONDS}" || die "failed while waiting for the package manager lock"
+    if [ "${_apt_revalidate_docker}" -eq 1 ]; then
+      refuse_unsafe_docker
+    fi
   done
 }
 
@@ -686,12 +690,12 @@ refuse_unsafe_docker() {
 }
 
 apt_install() {
-  apt_run "apt-get install failed: $*" "install" install -y "$@"
+  apt_run "apt-get install failed: $*" "install" 0 install -y "$@"
 }
 
 install_prereq_packages() {
   require_cmd apt-get
-  apt_run "apt-get update failed" "update" update
+  apt_run "apt-get update failed" "update" 0 update
   apt_install ca-certificates curl git uidmap slirp4netns dbus-user-session kmod iptables
   require_cmd curl
   require_cmd modprobe
@@ -789,9 +793,10 @@ Architectures: ${_arch}
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
   install -m 0644 "${workdir}/docker.sources" /etc/apt/sources.list.d/docker.sources </dev/null || die "failed to install the Docker apt source"
-  apt_run "apt-get update failed after adding the Docker repository" "update" update
+  apt_run "apt-get update failed after adding the Docker repository" "update" 0 update
   refuse_unsafe_docker
-  apt_install docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras
+  apt_run "apt-get install failed: docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras" \
+    "install" 1 install -y docker-ce docker-ce-cli containerd.io docker-ce-rootless-extras
   systemctl disable --now docker.service docker.socket </dev/null || true
   if unit_is_active docker.service || unit_is_active docker.socket; then
     systemctl disable --now docker.service docker.socket </dev/null || true
