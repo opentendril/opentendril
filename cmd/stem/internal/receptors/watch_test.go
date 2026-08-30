@@ -102,6 +102,20 @@ func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservat
 				Diff:       seed.Diff,
 				Logs:       seed.Logs,
 				Error:      seed.Error,
+				PublicationDiagnostic: func() *core.SeedPublicationDiagnostic {
+					if seed.PublicationDiagnostic == nil {
+						return nil
+					}
+					return &core.SeedPublicationDiagnostic{
+						FailureCategory: seed.PublicationDiagnostic.FailureCategory,
+						ExecutionStatus: seed.PublicationDiagnostic.ExecutionStatus,
+						Phase:           seed.PublicationDiagnostic.Phase,
+						Outcome:         seed.PublicationDiagnostic.Outcome,
+						RetrySafe:       seed.PublicationDiagnostic.RetrySafe,
+						Message:         seed.PublicationDiagnostic.Message,
+						RequestID:       seed.PublicationDiagnostic.RequestID,
+					}
+				}(),
 			}, true, nil
 		},
 		SproutsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {

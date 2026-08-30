@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -85,6 +86,51 @@ func TestSeedRunPhytomerIsImmutableOnSettle(t *testing.T) {
 	}
 	if run.PhytomerID != "tendril-original" {
 		t.Fatalf("phytomer mutated on settle: %q", run.PhytomerID)
+	}
+}
+
+func TestSeedRunFruitPublicationDiagnosticRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started := time.Now().UTC()
+	diagnostic := &SeedPublicationDiagnostic{
+		FailureCategory: "fruit-publication",
+		ExecutionStatus: "satisfied",
+		Phase:           "reconciliation",
+		Outcome:         "reconciliation-unavailable",
+		RetrySafe:       false,
+		Message:         "read-only GitHub reconciliation could not establish the target state",
+		RequestID:       "req-safe-123",
+	}
+	if err := store.RecordSeedRun(ctx, SeedRun{
+		Handle: "seed-publication-failure", Pollen: "claude", PhytomerID: "tendril-publication-failure",
+		Substrate: "core", Status: "fruit-publication-failed", Iterations: 2,
+		Diff: "completed diff", Logs: "completed logs", Error: diagnostic.Message,
+		PublicationDiagnostic: diagnostic, StartedAt: started, FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record publication failure: %v", err)
+	}
+
+	run, found, err := store.GetSeedRun(ctx, "seed-publication-failure")
+	if err != nil || !found {
+		t.Fatalf("get publication failure: found=%v err=%v", found, err)
+	}
+	if run.Status != "fruit-publication-failed" || run.Branch != "" || run.Commit != "" || run.Iterations != 2 {
+		t.Fatalf("publication failure record = %+v", run)
+	}
+	if run.Diff != "completed diff" || run.Logs != "completed logs" {
+		t.Fatalf("completed execution evidence = %+v", run)
+	}
+	if run.PublicationDiagnostic == nil || run.PublicationDiagnostic.RequestID != diagnostic.RequestID || run.PublicationDiagnostic.Message != diagnostic.Message {
+		t.Fatalf("publication diagnostic = %+v", run.PublicationDiagnostic)
+	}
+
+	var rawObservation string
+	if err := store.db.QueryRow(`SELECT observation FROM seedruns WHERE handle = ?`, "seed-publication-failure").Scan(&rawObservation); err != nil {
+		t.Fatalf("read stored observation: %v", err)
+	}
+	if rawObservation == "" || strings.Contains(rawObservation, "Authorization") || strings.Contains(rawObservation, "PRIVATE_PROMPT_CONTENT") {
+		t.Fatalf("unsafe publication observation = %q", rawObservation)
 	}
 }
 

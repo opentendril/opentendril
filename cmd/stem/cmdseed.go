@@ -130,20 +130,21 @@ func seedPersistence(history *historydb.Store) core.SeedPersistence {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return history.RecordSeedRun(ctx, historydb.SeedRun{
-				Handle:     settled.Handle,
-				Pollen:     settled.Pollen,
-				PhytomerID: settled.PhytomerID,
-				Substrate:  settled.Substrate,
-				Goal:       settled.Goal,
-				Status:     settled.Status,
-				Iterations: settled.Iterations,
-				Branch:     settled.Branch,
-				Commit:     settled.Commit,
-				Diff:       settled.Diff,
-				Logs:       settled.Logs,
-				Error:      settled.Error,
-				StartedAt:  settled.StartedAt,
-				FinishedAt: settled.FinishedAt,
+				Handle:                settled.Handle,
+				Pollen:                settled.Pollen,
+				PhytomerID:            settled.PhytomerID,
+				Substrate:             settled.Substrate,
+				Goal:                  settled.Goal,
+				Status:                settled.Status,
+				Iterations:            settled.Iterations,
+				Branch:                settled.Branch,
+				Commit:                settled.Commit,
+				Diff:                  settled.Diff,
+				Logs:                  settled.Logs,
+				Error:                 settled.Error,
+				PublicationDiagnostic: historySeedPublicationDiagnostic(settled.PublicationDiagnostic),
+				StartedAt:             settled.StartedAt,
+				FinishedAt:            settled.FinishedAt,
 			})
 		},
 	}
@@ -179,19 +180,41 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 					return prepareSeedSprout(ctx, history, spec, orch, iteration)
 				},
 			})
-			if err != nil {
-				return core.SeedGrowResult{}, err
+			translated := core.SeedGrowResult{
+				Status:                result.Status,
+				Iterations:            result.Iterations,
+				PhytomerID:            spec.PhytomerID,
+				Branch:                result.Branch,
+				Commit:                result.Commit,
+				Diff:                  result.Diff,
+				Logs:                  result.Logs,
+				PublicationDiagnostic: copySeedPublicationDiagnostic(result.PublicationDiagnostic),
 			}
-			return core.SeedGrowResult{
-				Status:     result.Status,
-				Iterations: result.Iterations,
-				PhytomerID: spec.PhytomerID,
-				Branch:     result.Branch,
-				Commit:     result.Commit,
-				Diff:       result.Diff,
-				Logs:       result.Logs,
-			}, nil
+			return translated, err
 		},
+	}
+}
+
+func copySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic) *core.SeedPublicationDiagnostic {
+	if diagnostic == nil {
+		return nil
+	}
+	copied := *diagnostic
+	return &copied
+}
+
+func historySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic) *historydb.SeedPublicationDiagnostic {
+	if diagnostic == nil {
+		return nil
+	}
+	return &historydb.SeedPublicationDiagnostic{
+		FailureCategory: diagnostic.FailureCategory,
+		ExecutionStatus: diagnostic.ExecutionStatus,
+		Phase:           diagnostic.Phase,
+		Outcome:         diagnostic.Outcome,
+		RetrySafe:       diagnostic.RetrySafe,
+		Message:         diagnostic.Message,
+		RequestID:       diagnostic.RequestID,
 	}
 }
 

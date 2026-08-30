@@ -42,6 +42,12 @@ const (
 	// SeedStatusWithered means the underlying sprout failed and was Abscised;
 	// host state is untouched (the Terrarium contained it).
 	SeedStatusWithered = "withered"
+	// SeedStatusFruitPublicationFailed means Seed execution reached Fruit
+	// publication, but no authoritative remote Fruit could be established.
+	SeedStatusFruitPublicationFailed = "fruit-publication-failed"
+	// SeedFailureCategoryFruitPublication is the safe diagnostic category for a
+	// failed managed Fruit publication.
+	SeedFailureCategoryFruitPublication = "fruit-publication"
 )
 
 // seedDefaultMaxIterations bounds the build/verify loop when the caller does
@@ -166,20 +172,34 @@ type SeedOpening struct {
 
 // SeedSettlement is the transport-free terminal Seed record.
 type SeedSettlement struct {
-	Handle     string
-	PhytomerID string
-	Pollen     string
-	Substrate  string
-	Goal       string
-	Status     string
-	Iterations int
-	Branch     string
-	Commit     string
-	Diff       string
-	Logs       string
-	Error      string
-	StartedAt  time.Time
-	FinishedAt time.Time
+	Handle                string
+	PhytomerID            string
+	Pollen                string
+	Substrate             string
+	Goal                  string
+	Status                string
+	Iterations            int
+	Branch                string
+	Commit                string
+	Diff                  string
+	Logs                  string
+	Error                 string
+	PublicationDiagnostic *SeedPublicationDiagnostic
+	StartedAt             time.Time
+	FinishedAt            time.Time
+}
+
+// SeedPublicationDiagnostic is the Core-owned, credential-free explanation of
+// a managed Fruit publication failure. It preserves the execution verdict so a
+// publication problem cannot be mistaken for a failed Sprout.
+type SeedPublicationDiagnostic struct {
+	FailureCategory string `json:"failureCategory"`
+	ExecutionStatus string `json:"executionStatus"`
+	Phase           string `json:"phase"`
+	Outcome         string `json:"outcome"`
+	RetrySafe       bool   `json:"retrySafe"`
+	Message         string `json:"message"`
+	RequestID       string `json:"requestId,omitempty"`
 }
 
 // SeedPersistence is the injected durable-ownership port. Core composes the
@@ -199,7 +219,7 @@ func (s *Service) WithSeedPersistence(p SeedPersistence) *Service {
 // SeedGrowResult is the reviewable outcome of a grown Seed — the Fruit the
 // Pollinator inspects. It is presented for review; nothing is merged.
 type SeedGrowResult struct {
-	// Status is satisfied, exhausted, or withered.
+	// Status is satisfied, exhausted, withered, or fruit-publication-failed.
 	Status string `json:"status"`
 	// Iterations is how many build/verify passes ran.
 	Iterations int `json:"iterations"`
@@ -215,6 +235,9 @@ type SeedGrowResult struct {
 	Diff string `json:"diff,omitempty"`
 	// Logs is the captured transcript/verify output (Xylem).
 	Logs string `json:"logs,omitempty"`
+	// PublicationDiagnostic is present only when managed Fruit publication
+	// failed after Seed execution completed.
+	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
 }
 
 // SeedOperations is the injection port for growing a Seed. Run may be nil, in
@@ -286,6 +309,12 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 	}
 	result, err := s.seed.Run(ctx, spec)
 	result.PhytomerID = spec.PhytomerID
+	publicationFailed := err != nil && result.PublicationDiagnostic != nil && result.PublicationDiagnostic.FailureCategory == SeedFailureCategoryFruitPublication
+	if publicationFailed {
+		result.Status = SeedStatusFruitPublicationFailed
+		result.Branch = ""
+		result.Commit = ""
+	}
 	if opened && s.seedPersist.RecordSettlement != nil {
 		settled := SeedSettlement{
 			Handle:     handle,
@@ -296,16 +325,23 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 			StartedAt:  started,
 			FinishedAt: time.Now().UTC(),
 		}
-		if err != nil {
+		settled.Iterations = result.Iterations
+		settled.Diff = result.Diff
+		settled.Logs = result.Logs
+		if publicationFailed {
+			settled.Status = SeedStatusFruitPublicationFailed
+			settled.Branch = ""
+			settled.Commit = ""
+			copied := *result.PublicationDiagnostic
+			settled.PublicationDiagnostic = &copied
+			settled.Error = copied.Message
+		} else if err != nil {
 			settled.Status = SeedStatusWithered
 			settled.Error = err.Error()
 		} else {
 			settled.Status = result.Status
-			settled.Iterations = result.Iterations
 			settled.Branch = result.Branch
 			settled.Commit = result.Commit
-			settled.Diff = result.Diff
-			settled.Logs = result.Logs
 		}
 		_ = s.seedPersist.RecordSettlement(ctx, settled)
 	}

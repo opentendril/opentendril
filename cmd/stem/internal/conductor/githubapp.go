@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
@@ -173,6 +174,62 @@ type githubGraphQLError struct {
 	Message string `json:"message"`
 }
 
+// githubRequestMetadata records only transport facts that are safe to use in
+// a publication decision. In particular, it never retains a request or
+// response body.
+type githubRequestMetadata struct {
+	RequestWritten   bool
+	ResponseReceived bool
+	RequestID        string
+	StatusCode       int
+}
+
+// githubMutationError is a credential-free description of a mutation failure.
+// RequestWritten is set by httptrace rather than inferred from an error string;
+// once a request was written the caller must treat the remote outcome as
+// potentially committed and reconcile before any replay.
+type githubMutationError struct {
+	Operation string
+	Kind      string
+	githubRequestMetadata
+}
+
+const (
+	githubMutationBeforeWrite       = "before-write"
+	githubMutationTransport         = "transport"
+	githubMutationHTTP              = "http-response"
+	githubMutationGraphQLError      = "graphql-error"
+	githubMutationMalformedResponse = "malformed-response"
+	githubMutationPartialResponse   = "partial-response"
+	githubMutationRefConflict       = "target-ref-conflict"
+)
+
+func (e *githubMutationError) Error() string {
+	if e == nil {
+		return "github mutation failed"
+	}
+	operation := strings.TrimSpace(e.Operation)
+	if operation == "" {
+		operation = "github mutation"
+	}
+	switch e.Kind {
+	case githubMutationBeforeWrite:
+		return operation + " was not written to GitHub"
+	case githubMutationRefConflict:
+		return operation + " reported a target-ref conflict; the target ref already exists or its base is invalid"
+	case githubMutationHTTP:
+		return fmt.Sprintf("%s returned HTTP %d", operation, e.StatusCode)
+	case githubMutationGraphQLError:
+		return operation + " returned a GraphQL error"
+	case githubMutationMalformedResponse:
+		return operation + " returned a malformed response"
+	case githubMutationPartialResponse:
+		return operation + " returned no authoritative result"
+	default:
+		return operation + " failed after the request may have reached GitHub"
+	}
+}
+
 // githubGraphQLPost issues a GraphQL request against api.github.com/graphql,
 // authenticated with an installation access token (not the App JWT — GraphQL
 // operations like createCommitOnBranch act as the installation, the same
@@ -180,28 +237,45 @@ type githubGraphQLError struct {
 // decoded "data" object; a non-empty top-level "errors" array is always
 // reported as an error, even on an HTTP 200 (GraphQL's error-reporting
 // convention differs from the REST helpers above).
-func githubGraphQLPost(ctx context.Context, installationToken, query string, variables any, decodeInto any) error {
+func githubGraphQLPost(ctx context.Context, installationToken, query string, variables any, decodeInto any) (githubRequestMetadata, error) {
 	body, err := json.Marshal(githubGraphQLRequest{Query: query, Variables: variables})
 	if err != nil {
-		return fmt.Errorf("encode github graphql request: %w", err)
+		return githubRequestMetadata{}, fmt.Errorf("encode github graphql request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, currentGitHubGraphQLURL(), strings.NewReader(string(body)))
 	if err != nil {
-		return err
+		return githubRequestMetadata{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+installationToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/vnd.github+json")
 
+	var metadata githubRequestMetadata
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			metadata.RequestWritten = true
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := githubAppHTTPClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("github graphql request failed: %w", err)
+		kind := githubMutationTransport
+		if !metadata.RequestWritten {
+			kind = githubMutationBeforeWrite
+		}
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: kind, githubRequestMetadata: metadata}
 	}
+	metadata.ResponseReceived = true
+	metadata.StatusCode = resp.StatusCode
+	metadata.RequestID = safeGitHubRequestID(resp.Header.Get("X-GitHub-Request-Id"))
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationTransport, githubRequestMetadata: metadata}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("github graphql returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationHTTP, githubRequestMetadata: metadata}
 	}
 
 	var envelope struct {
@@ -209,21 +283,68 @@ func githubGraphQLPost(ctx context.Context, installationToken, query string, var
 		Errors []githubGraphQLError `json:"errors"`
 	}
 	if err := json.Unmarshal(respBody, &envelope); err != nil {
-		return fmt.Errorf("decode github graphql response: %w", err)
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationMalformedResponse, githubRequestMetadata: metadata}
 	}
 	if len(envelope.Errors) > 0 {
-		messages := make([]string, 0, len(envelope.Errors))
-		for _, e := range envelope.Errors {
-			messages = append(messages, e.Message)
-		}
-		return fmt.Errorf("github graphql request failed: %s", strings.Join(messages, "; "))
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationGraphQLError, githubRequestMetadata: metadata}
+	}
+	if decodeInto != nil && len(envelope.Data) == 0 {
+		return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationPartialResponse, githubRequestMetadata: metadata}
 	}
 	if decodeInto != nil && len(envelope.Data) > 0 {
 		if err := json.Unmarshal(envelope.Data, decodeInto); err != nil {
-			return fmt.Errorf("decode github graphql data: %w", err)
+			return metadata, &githubMutationError{Operation: "github GraphQL mutation", Kind: githubMutationMalformedResponse, githubRequestMetadata: metadata}
 		}
 	}
-	return nil
+	return metadata, nil
+}
+
+func safeGitHubRequestID(value string) string {
+	if len(value) > 128 {
+		return ""
+	}
+	for _, char := range value {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' && char != ':' {
+			return ""
+		}
+	}
+	return value
+}
+
+// githubReadREST performs a read-only authenticated REST request and reports
+// a missing resource separately. It deliberately discards upstream response
+// bodies on errors; callers use the result only for deterministic state
+// reconciliation, never as a diagnostic payload.
+func githubReadREST(ctx context.Context, path, token string, out any) (bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentGitHubAPIBaseURL()+path, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := githubAppHTTPClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("github read request failed")
+	}
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return false, fmt.Errorf("github read response could not be read")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Errorf("github read request returned HTTP %d", resp.StatusCode)
+	}
+	if out != nil {
+		if err := json.Unmarshal(body, out); err != nil {
+			return false, fmt.Errorf("github read response was malformed")
+		}
+	}
+	return true, nil
 }
 
 // githubRESTRequest issues an authenticated REST request against
@@ -432,12 +553,32 @@ func githubCreateRef(ctx context.Context, owner, repo, ref, sha, token string) e
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Content-Type", "application/json")
 
-	if err := doGithubAppRequest(req, nil); err != nil {
-		var httpErr *githubAppHTTPError
-		if errors.As(err, &httpErr) && httpErr.Status == http.StatusUnprocessableEntity {
-			return fmt.Errorf("branch %s already exists or SHA is invalid", ref)
+	var metadata githubRequestMetadata
+	trace := &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			metadata.RequestWritten = true
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	resp, err := githubAppHTTPClient.Do(req)
+	if err != nil {
+		kind := githubMutationTransport
+		if !metadata.RequestWritten {
+			kind = githubMutationBeforeWrite
 		}
-		return err
+		return &githubMutationError{Operation: "github target-ref creation", Kind: kind, githubRequestMetadata: metadata}
+	}
+	metadata.ResponseReceived = true
+	metadata.StatusCode = resp.StatusCode
+	metadata.RequestID = safeGitHubRequestID(resp.Header.Get("X-GitHub-Request-Id"))
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		kind := githubMutationHTTP
+		if resp.StatusCode == http.StatusUnprocessableEntity {
+			kind = githubMutationRefConflict
+		}
+		return &githubMutationError{Operation: "github target-ref creation", Kind: kind, githubRequestMetadata: metadata}
 	}
 	return nil
 }

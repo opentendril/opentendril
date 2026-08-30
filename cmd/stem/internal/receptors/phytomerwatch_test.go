@@ -586,6 +586,31 @@ func TestPhytomerWatchOperatorSeesOwnedSeed(t *testing.T) {
 	}
 }
 
+func TestPhytomerWatchEmitsFruitPublicationFailureAndCloses(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-publication-failure", Pollen: watchOwner, PhytomerID: "tendril-publication-failure",
+		Substrate: "myrepo", Status: core.SeedStatusFruitPublicationFailed, Iterations: 2,
+		PublicationDiagnostic: &historydb.SeedPublicationDiagnostic{
+			FailureCategory: "fruit-publication", ExecutionStatus: core.SeedStatusSatisfied,
+			Phase: "commit-mutation", Outcome: "reconciliation-unavailable", RetrySafe: false,
+			Message: "read-only GitHub reconciliation could not establish the target state", RequestID: "req-safe-123",
+		},
+	})
+
+	rec := watchRequest(t, mux, "/v1/phytomers/tendril-publication-failure/watch", watchOwner)
+	obs := observationFromRecorder(t, rec)
+	if obs.Status != core.SeedStatusFruitPublicationFailed || obs.Branch != "" || obs.Commit != "" {
+		t.Fatalf("publication failure watch = %+v", obs)
+	}
+	if obs.PublicationDiagnostic == nil || obs.PublicationDiagnostic.Outcome != "reconciliation-unavailable" {
+		t.Fatalf("publication diagnostic = %+v", obs.PublicationDiagnostic)
+	}
+	if strings.Contains(rec.Body.String(), "Authorization") || strings.Contains(rec.Body.String(), "PRIVATE_PROMPT_CONTENT") {
+		t.Fatalf("unsafe publication material leaked: %s", rec.Body.String())
+	}
+}
+
 func TestPhytomerWatchDoesNotAddSeedWatchCapability(t *testing.T) {
 	for _, name := range core.CapabilityNames() {
 		if name == "seed.watch" {

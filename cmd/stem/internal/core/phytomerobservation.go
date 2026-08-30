@@ -29,15 +29,16 @@ var ErrPhytomerObservationOwnershipConflict = errors.New("phytomer observation o
 // success. Raw Seed error text, transcript, output, and private reasoning are
 // not part of this contract.
 type PhytomerObservation struct {
-	Pollen     string              `json:"pollen,omitempty"`
-	Substrate  string              `json:"substrate,omitempty"`
-	Handle     string              `json:"handle,omitempty"`
-	PhytomerID string              `json:"phytomerId,omitempty"`
-	Status     string              `json:"status,omitempty"`
-	Iterations int                 `json:"iterations"`
-	Branch     string              `json:"branch,omitempty"`
-	Commit     string              `json:"commit,omitempty"`
-	Sprouts    []SproutObservation `json:"sprouts,omitempty"`
+	Pollen                string                     `json:"pollen,omitempty"`
+	Substrate             string                     `json:"substrate,omitempty"`
+	Handle                string                     `json:"handle,omitempty"`
+	PhytomerID            string                     `json:"phytomerId,omitempty"`
+	Status                string                     `json:"status,omitempty"`
+	Iterations            int                        `json:"iterations"`
+	Branch                string                     `json:"branch,omitempty"`
+	Commit                string                     `json:"commit,omitempty"`
+	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
+	Sprouts               []SproutObservation        `json:"sprouts,omitempty"`
 }
 
 // SproutObservation is the safe lifecycle envelope of one actual Sprout
@@ -59,18 +60,19 @@ type SproutObservation struct {
 // may consult. It includes persisted fields that are not part of the public
 // observation (goal, diff, logs, raw error). It is not a transport type.
 type SeedObservationEvidence struct {
-	Handle     string
-	Pollen     string
-	PhytomerID string
-	Substrate  string
-	Status     string
-	Iterations int
-	Branch     string
-	Commit     string
-	Goal       string
-	Diff       string
-	Logs       string
-	Error      string
+	Handle                string
+	Pollen                string
+	PhytomerID            string
+	Substrate             string
+	Status                string
+	Iterations            int
+	Branch                string
+	Commit                string
+	Goal                  string
+	Diff                  string
+	Logs                  string
+	Error                 string
+	PublicationDiagnostic *SeedPublicationDiagnostic
 }
 
 // SproutObservationEvidence is durable Sprout state the current-state
@@ -154,6 +156,10 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 		Branch:     strings.TrimSpace(seed.Branch),
 		Commit:     strings.TrimSpace(seed.Commit),
 	}
+	if seed.PublicationDiagnostic != nil {
+		copied := *seed.PublicationDiagnostic
+		obs.PublicationDiagnostic = &copied
+	}
 	if len(sprouts) == 0 {
 		return obs, nil
 	}
@@ -201,7 +207,7 @@ func phytomerObservationOwnershipAgrees(seed SeedObservationEvidence, sprouts []
 // state. Unknown or empty status is not terminal.
 func SeedStatusIsTerminal(status string) bool {
 	switch strings.TrimSpace(status) {
-	case SeedStatusSatisfied, SeedStatusExhausted, SeedStatusWithered:
+	case SeedStatusSatisfied, SeedStatusExhausted, SeedStatusWithered, SeedStatusFruitPublicationFailed:
 		return true
 	default:
 		return false

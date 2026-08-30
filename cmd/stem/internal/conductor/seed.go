@@ -3,12 +3,14 @@ package conductor
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
@@ -89,12 +91,31 @@ type SeedExecution struct {
 
 // SeedRunResult is the reviewable outcome of a grown Seed — the Fruit.
 type SeedRunResult struct {
-	Status     string
-	Iterations int
-	Branch     string
-	Commit     string
-	Diff       string
-	Logs       string
+	Status                string
+	Iterations            int
+	Branch                string
+	Commit                string
+	Diff                  string
+	Logs                  string
+	PublicationDiagnostic *core.SeedPublicationDiagnostic
+}
+
+// SeedPublicationFailure is returned alongside the completed Seed result when
+// execution reached managed Fruit publication but no authoritative Fruit was
+// established. The diagnostic is safe to persist and contains no upstream
+// response or credential material.
+type SeedPublicationFailure struct {
+	Diagnostic core.SeedPublicationDiagnostic
+}
+
+func (e *SeedPublicationFailure) Error() string {
+	if e == nil {
+		return "publish Seed Fruit via API: publication failure"
+	}
+	if e.Diagnostic.RequestID != "" {
+		return fmt.Sprintf("publish Seed Fruit via API: publication failure during %s (%s; GitHub request %s): %s", e.Diagnostic.Phase, e.Diagnostic.Outcome, e.Diagnostic.RequestID, e.Diagnostic.Message)
+	}
+	return fmt.Sprintf("publish Seed Fruit via API: publication failure during %s (%s): %s", e.Diagnostic.Phase, e.Diagnostic.Outcome, e.Diagnostic.Message)
 }
 
 // RunSeed grows a Seed to Fruit: it drives the build/verify loop and returns the
@@ -212,12 +233,16 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 		config, configErr := LoadSubstratesConfig("")
 		if configErr != nil {
-			return result("", ""), fmt.Errorf("resolve Seed Fruit publication configuration: %w", configErr)
+			return seedPublicationFailure(result("", ""), "preparation", "publication-plan-unavailable", false, "", "resolve Seed Fruit publication configuration: configured publication settings could not be resolved")
 		}
 
 		plan, planErr := resolveSubstrateExecutionPlan(orchProto, config)
 		if planErr != nil {
-			return result("", ""), fmt.Errorf("resolve Seed Fruit publication plan: %w", planErr)
+			message := "resolve Seed Fruit publication plan: configured publication plan could not be resolved"
+			if strings.Contains(planErr.Error(), "unknown auth method") {
+				message += " (unknown auth method)"
+			}
+			return seedPublicationFailure(result("", ""), "preparation", "publication-plan-unavailable", false, "", message)
 		}
 
 		if plan.credential.CommitMode == CommitModeAPI {
@@ -239,7 +264,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			)
 			if pubErr != nil {
 				fmt.Fprintf(&logs, "\n⚠️ Failed to publish Seed Fruit via API: %v\n", pubErr)
-				return result("", ""), fmt.Errorf("publish Seed Fruit via API: %w", pubErr)
+				return seedPublicationFailureFromError(result("", ""), pubErr)
 			}
 
 			branch = localSeedBranch
@@ -249,6 +274,28 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 	return result(branch, commit), nil
 
+}
+
+func seedPublicationFailure(result SeedRunResult, phase, outcome string, retrySafe bool, requestID, message string) (SeedRunResult, error) {
+	diagnostic := core.SeedPublicationDiagnostic{
+		FailureCategory: core.SeedFailureCategoryFruitPublication,
+		ExecutionStatus: result.Status,
+		Phase:           phase,
+		Outcome:         outcome,
+		RetrySafe:       retrySafe,
+		Message:         message,
+		RequestID:       safeGitHubRequestID(requestID),
+	}
+	result.PublicationDiagnostic = &diagnostic
+	return result, &SeedPublicationFailure{Diagnostic: diagnostic}
+}
+
+func seedPublicationFailureFromError(result SeedRunResult, err error) (SeedRunResult, error) {
+	var publicationErr *apiFruitPublicationFailure
+	if errors.As(err, &publicationErr) {
+		return seedPublicationFailure(result, publicationErr.Phase, publicationErr.Outcome, publicationErr.RetrySafe, publicationErr.RequestID, publicationErr.Message)
+	}
+	return seedPublicationFailure(result, "publication", "publication-failed", false, "", "Seed Fruit publication could not be completed")
 }
 
 func publishSeedManagedAPIFruit(ctx context.Context, sourcePath, branch, baseCommit, taskPrompt, status string, plan *substrateExecutionPlan, sessionID string) (string, error) {
