@@ -71,22 +71,38 @@ func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return store.RecordSeedRun(ctx, historydb.SeedRun{
-				Handle:     settled.Handle,
-				Pollen:     settled.Pollen,
-				PhytomerID: settled.PhytomerID,
-				Substrate:  settled.Substrate,
-				Goal:       settled.Goal,
-				Status:     settled.Status,
-				Iterations: settled.Iterations,
-				Branch:     settled.Branch,
-				Commit:     settled.Commit,
-				Diff:       settled.Diff,
-				Logs:       settled.Logs,
-				Error:      settled.Error,
-				StartedAt:  settled.StartedAt,
-				FinishedAt: settled.FinishedAt,
+				Handle:                settled.Handle,
+				Pollen:                settled.Pollen,
+				PhytomerID:            settled.PhytomerID,
+				Substrate:             settled.Substrate,
+				Goal:                  settled.Goal,
+				Status:                settled.Status,
+				Iterations:            settled.Iterations,
+				Branch:                settled.Branch,
+				Commit:                settled.Commit,
+				Diff:                  settled.Diff,
+				Logs:                  settled.Logs,
+				Error:                 settled.Error,
+				PublicationDiagnostic: testHistorySeedPublicationDiagnostic(settled.PublicationDiagnostic),
+				StartedAt:             settled.StartedAt,
+				FinishedAt:            settled.FinishedAt,
 			})
 		},
+	}
+}
+
+func testHistorySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic) *historydb.SeedPublicationDiagnostic {
+	if diagnostic == nil {
+		return nil
+	}
+	return &historydb.SeedPublicationDiagnostic{
+		FailureCategory: diagnostic.FailureCategory,
+		ExecutionStatus: diagnostic.ExecutionStatus,
+		Phase:           diagnostic.Phase,
+		Outcome:         diagnostic.Outcome,
+		RetrySafe:       diagnostic.RetrySafe,
+		Message:         diagnostic.Message,
+		RequestID:       diagnostic.RequestID,
 	}
 }
 
@@ -185,6 +201,83 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 	}
 	if fruit.PhytomerID != accepted.PhytomerID {
 		t.Fatalf("collect phytomer %q != dispatch phytomer %q", fruit.PhytomerID, accepted.PhytomerID)
+	}
+}
+
+func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	diagnostic := &core.SeedPublicationDiagnostic{
+		FailureCategory: core.SeedFailureCategoryFruitPublication,
+		ExecutionStatus: core.SeedStatusSatisfied,
+		Phase:           "commit-mutation",
+		Outcome:         "reconciliation-unavailable",
+		Message:         "read-only GitHub reconciliation could not establish the target state",
+		RequestID:       "req-safe-123",
+	}
+	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(_ context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+			return core.SeedGrowResult{
+				Status:                core.SeedStatusSatisfied,
+				Iterations:            2,
+				PhytomerID:            spec.PhytomerID,
+				Branch:                "tendril/untrusted",
+				Commit:                "untrusted-oid",
+				Diff:                  "completed diff",
+				Logs:                  "completed logs",
+				PublicationDiagnostic: diagnostic,
+			}, fmt.Errorf("upstream-secret-content")
+		},
+	}).WithSeedPersistence(testSeedPersistence(store))
+	gates := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("publication-pollinator")}), Bus: eventbus.New()}
+	handler := NewSeedHandler(coreSvc).WithDelegation(gates).WithHistory(store)
+	mux := http.NewServeMux()
+	handler.Register(mux, nil)
+
+	rec := dispatchSeedAsync(t, mux, "publication-pollinator")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("dispatch status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var accepted struct {
+		Handle string `json:"handle"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode dispatch: %v", err)
+	}
+	settled := waitForSeedRun(t, store, accepted.Handle)
+	if settled.Status != core.SeedStatusFruitPublicationFailed || settled.Branch != "" || settled.Commit != "" {
+		t.Fatalf("settled Fruit = %+v", settled)
+	}
+	if settled.Iterations != 2 || settled.Diff != "completed diff" || settled.Logs != "completed logs" {
+		t.Fatalf("settled execution evidence = %+v", settled)
+	}
+	if settled.PublicationDiagnostic == nil || settled.PublicationDiagnostic.RequestID != diagnostic.RequestID {
+		t.Fatalf("settled diagnostic = %+v", settled.PublicationDiagnostic)
+	}
+
+	collect := httptest.NewRequest(http.MethodGet, "/v1/seeds/runs/"+accepted.Handle, nil)
+	collect.Header.Set(PollenHeader, "publication-pollinator")
+	collected := httptest.NewRecorder()
+	mux.ServeHTTP(collected, collect)
+	if collected.Code != http.StatusOK {
+		t.Fatalf("collect status = %d: %s", collected.Code, collected.Body.String())
+	}
+	var got historydb.SeedRun
+	if err := json.Unmarshal(collected.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode collection: %v", err)
+	}
+	if got.Status != core.SeedStatusFruitPublicationFailed || got.PublicationDiagnostic == nil || got.PublicationDiagnostic.Outcome != diagnostic.Outcome {
+		t.Fatalf("collected publication failure = %+v", got)
+	}
+	if strings.Contains(collected.Body.String(), "upstream-secret-content") {
+		t.Fatalf("raw execution error leaked from collection: %s", collected.Body.String())
 	}
 }
 

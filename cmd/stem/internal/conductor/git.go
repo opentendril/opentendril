@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -465,7 +466,7 @@ func runAPICommit(ctx context.Context, execution GitCommitExecution) (GitCommitR
 	}
 
 	var response createCommitOnBranchResponse
-	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
+	if _, err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
 		return GitCommitResult{}, fmt.Errorf("api-mode commit: %w", err)
 	}
 	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
@@ -1006,55 +1007,497 @@ func RunGitBranch(ctx context.Context, execution GitBranchExecution) (GitBranchR
 	return GitBranchResult{Status: "created", Branch: branch, PreviousBranch: previous}, nil
 }
 
-// publishAPIFruit performs the GraphQL API commit using the provided file changes.
-func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, appCredential AppCredential, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion, commitMessage string) (string, error) {
+const (
+	apiFruitOutcomePreMutationFailure    = "pre-mutation-failure"
+	apiFruitOutcomeTargetRefConflict     = "target-ref-conflict"
+	apiFruitOutcomeTargetRefAbsent       = "target-ref-absent"
+	apiFruitOutcomeUnexpectedState       = "unexpected-target-state"
+	apiFruitOutcomeReconciliationFailure = "reconciliation-unavailable"
+	apiFruitOutcomeRetryExhausted        = "retry-exhausted"
+)
+
+// apiFruitPublicationFailure is the safe failure descriptor shared by the
+// managed Sprout and Seed publication paths. Its fields contain only bounded
+// state-machine values and an optional GitHub request ID; upstream bodies and
+// request contents never cross this boundary.
+type apiFruitPublicationFailure struct {
+	Phase     string
+	Outcome   string
+	RetrySafe bool
+	RequestID string
+	Message   string
+}
+
+func (e *apiFruitPublicationFailure) Error() string {
+	if e == nil {
+		return "api Fruit publication failed"
+	}
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = "managed API Fruit publication could not establish an authoritative outcome"
+	}
+	if e.RequestID != "" {
+		return fmt.Sprintf("api Fruit publication failed during %s (%s; GitHub request %s): %s", e.Phase, e.Outcome, e.RequestID, message)
+	}
+	return fmt.Sprintf("api Fruit publication failed during %s (%s): %s", e.Phase, e.Outcome, message)
+}
+
+type apiFruitPublicationIntent struct {
+	Owner         string
+	Repo          string
+	Branch        string
+	BaseCommit    string
+	Headline      string
+	Body          string
+	CommitMessage string
+	Additions     []apiCommitFileAddition
+	Deletions     []apiCommitFileDeletion
+}
+
+type apiFruitReconciliation struct {
+	Outcome string
+	OID     string
+}
+
+const (
+	apiFruitReconciledExact      = "exact-fruit"
+	apiFruitReconciledBase       = "base"
+	apiFruitReconciledAbsent     = "absent"
+	apiFruitReconciledUnexpected = "unexpected"
+)
+
+type githubRefResponse struct {
+	Object struct {
+		SHA  string `json:"sha"`
+		Type string `json:"type"`
+	} `json:"object"`
+}
+
+type githubCommitResponse struct {
+	SHA    string `json:"sha"`
+	Commit struct {
+		Message string `json:"message"`
+		Tree    struct {
+			SHA string `json:"sha"`
+		} `json:"tree"`
+	} `json:"commit"`
+	Parents []struct {
+		SHA string `json:"sha"`
+	} `json:"parents"`
+}
+
+type githubTreeResponse struct {
+	Tree []struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+		Type string `json:"type"`
+		SHA  string `json:"sha"`
+	} `json:"tree"`
+	Truncated bool `json:"truncated"`
+}
+
+type githubBlobResponse struct {
+	Content  string `json:"content"`
+	Encoding string `json:"encoding"`
+}
+
+func newAPIFruitPublicationFailure(phase, outcome string, retrySafe bool, requestID, message string) error {
+	return &apiFruitPublicationFailure{
+		Phase:     phase,
+		Outcome:   outcome,
+		RetrySafe: retrySafe,
+		RequestID: safeGitHubRequestID(requestID),
+		Message:   message,
+	}
+}
+
+func apiFruitFailureMessage(outcome string) string {
+	switch outcome {
+	case apiFruitOutcomePreMutationFailure:
+		return "the GitHub mutation was not written; no Fruit commit was accepted"
+	case apiFruitOutcomeTargetRefConflict:
+		return "the target review ref already exists or is not safely owned; it was not modified"
+	case apiFruitOutcomeTargetRefAbsent:
+		return "the target review ref is absent after publication was attempted"
+	case apiFruitOutcomeUnexpectedState:
+		return "the target review ref advanced to an unexpected state; it was not modified"
+	case apiFruitOutcomeReconciliationFailure:
+		return "read-only GitHub reconciliation could not establish the target state"
+	case apiFruitOutcomeRetryExhausted:
+		return "the evidence-gated final mutation did not establish an authoritative Fruit"
+	default:
+		return "managed API Fruit publication could not establish an authoritative outcome"
+	}
+}
+
+func validateAPIFruitIntent(owner, repo, branch, baseCommit, commitMessage string, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion) (apiFruitPublicationIntent, error) {
 	if len(additions) == 0 && len(deletions) == 0 {
-		return "", fmt.Errorf("api fruit publication: nothing to commit")
+		return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "nothing to commit")
+	}
+	if strings.TrimSpace(branch) == "" || strings.TrimSpace(baseCommit) == "" {
+		return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "the target branch and expected base are required")
+	}
+	headline, body := splitCommitMessage(commitMessage)
+	if headline == "" {
+		return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "the commit message headline is required")
+	}
+	intent := apiFruitPublicationIntent{
+		Owner:         owner,
+		Repo:          repo,
+		Branch:        strings.TrimSpace(branch),
+		BaseCommit:    strings.TrimSpace(baseCommit),
+		Headline:      headline,
+		Body:          body,
+		CommitMessage: headline,
+		Additions:     make([]apiCommitFileAddition, 0, len(additions)),
+		Deletions:     make([]apiCommitFileDeletion, 0, len(deletions)),
+	}
+	if body != "" {
+		intent.CommitMessage += "\n\n" + body
+	}
+	seen := make(map[string]string, len(additions)+len(deletions))
+	for _, addition := range additions {
+		path := filepath.ToSlash(strings.TrimSpace(addition.Path))
+		if invalidAPIFruitPath(path) {
+			return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit path is invalid")
+		}
+		if _, err := base64.StdEncoding.DecodeString(addition.Contents); err != nil {
+			return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit file addition is not valid base64")
+		}
+		if prior, exists := seen[path]; exists {
+			if prior == "addition" {
+				return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit path was supplied more than once")
+			}
+			return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit path was supplied as both an addition and a deletion")
+		}
+		seen[path] = "addition"
+		intent.Additions = append(intent.Additions, apiCommitFileAddition{Path: path, Contents: addition.Contents})
+	}
+	for _, deletion := range deletions {
+		path := filepath.ToSlash(strings.TrimSpace(deletion.Path))
+		if invalidAPIFruitPath(path) {
+			return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit deletion path is invalid")
+		}
+		if _, exists := seen[path]; exists {
+			return apiFruitPublicationIntent{}, newAPIFruitPublicationFailure("intent", "invalid-intent", false, "", "a Fruit path was supplied more than once")
+		}
+		seen[path] = "deletion"
+		intent.Deletions = append(intent.Deletions, apiCommitFileDeletion{Path: path})
+	}
+	return intent, nil
+}
+
+func invalidAPIFruitPath(path string) bool {
+	return path == "" || path == "." || path == ".." || strings.HasPrefix(path, "/") || strings.HasPrefix(path, "../") || strings.Contains(path, "\x00")
+}
+
+func githubFruitRefPath(owner, repo, branch string) string {
+	return fmt.Sprintf("/repos/%s/%s/git/ref/heads/%s", owner, repo, branch)
+}
+
+func githubFruitCommitPath(owner, repo, oid string) string {
+	return fmt.Sprintf("/repos/%s/%s/git/commits/%s", owner, repo, oid)
+}
+
+func githubFruitTreePath(owner, repo, oid string) string {
+	return fmt.Sprintf("/repos/%s/%s/git/trees/%s?recursive=1", owner, repo, oid)
+}
+
+func githubFruitBlobPath(owner, repo, oid string) string {
+	return fmt.Sprintf("/repos/%s/%s/git/blobs/%s", owner, repo, oid)
+}
+
+func reconcileAPIFruit(ctx context.Context, intent apiFruitPublicationIntent, token string) (apiFruitReconciliation, error) {
+	var ref githubRefResponse
+	found, err := githubReadREST(ctx, githubFruitRefPath(intent.Owner, intent.Repo, intent.Branch), token, &ref)
+	if err != nil {
+		return apiFruitReconciliation{}, err
+	}
+	if !found {
+		return apiFruitReconciliation{Outcome: apiFruitReconciledAbsent}, nil
+	}
+	oid := strings.TrimSpace(ref.Object.SHA)
+	if oid == "" {
+		return apiFruitReconciliation{}, fmt.Errorf("target ref returned no commit OID")
+	}
+	if ref.Object.Type != "commit" {
+		return apiFruitReconciliation{Outcome: apiFruitReconciledUnexpected, OID: oid}, nil
+	}
+	if oid == intent.BaseCommit {
+		return apiFruitReconciliation{Outcome: apiFruitReconciledBase, OID: oid}, nil
+	}
+	exact, err := remoteAPIFruitMatches(ctx, intent, token, oid)
+	if err != nil {
+		return apiFruitReconciliation{}, err
+	}
+	if exact {
+		return apiFruitReconciliation{Outcome: apiFruitReconciledExact, OID: oid}, nil
+	}
+	return apiFruitReconciliation{Outcome: apiFruitReconciledUnexpected, OID: oid}, nil
+}
+
+func remoteAPIFruitMatches(ctx context.Context, intent apiFruitPublicationIntent, token, oid string) (bool, error) {
+	var fruit githubCommitResponse
+	found, err := githubReadREST(ctx, githubFruitCommitPath(intent.Owner, intent.Repo, oid), token, &fruit)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("GitHub target commit is unavailable")
+	}
+	if strings.TrimSpace(fruit.SHA) != oid || len(fruit.Parents) != 1 || strings.TrimSpace(fruit.Parents[0].SHA) != intent.BaseCommit {
+		return false, nil
+	}
+	if fruit.Commit.Message != intent.CommitMessage || strings.TrimSpace(fruit.Commit.Tree.SHA) == "" {
+		return false, nil
 	}
 
+	var baseCommit githubCommitResponse
+	found, err = githubReadREST(ctx, githubFruitCommitPath(intent.Owner, intent.Repo, intent.BaseCommit), token, &baseCommit)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("GitHub base commit is unavailable")
+	}
+	if strings.TrimSpace(baseCommit.SHA) != intent.BaseCommit || strings.TrimSpace(baseCommit.Commit.Tree.SHA) == "" {
+		return false, fmt.Errorf("GitHub base commit tree is unavailable")
+	}
+	baseTree, err := githubFruitTree(ctx, intent.Owner, intent.Repo, baseCommit.Commit.Tree.SHA, token)
+	if err != nil {
+		return false, err
+	}
+	headTree, err := githubFruitTree(ctx, intent.Owner, intent.Repo, fruit.Commit.Tree.SHA, token)
+	if err != nil {
+		return false, err
+	}
+	baseFiles := githubFruitLeafTree(baseTree)
+	headFiles := githubFruitLeafTree(headTree)
+	additions := make(map[string]apiCommitFileAddition, len(intent.Additions))
+	for _, addition := range intent.Additions {
+		additions[addition.Path] = addition
+	}
+	deletions := make(map[string]struct{}, len(intent.Deletions))
+	for _, deletion := range intent.Deletions {
+		deletions[deletion.Path] = struct{}{}
+	}
+
+	paths := make(map[string]struct{}, len(baseFiles)+len(headFiles))
+	for path := range baseFiles {
+		paths[path] = struct{}{}
+	}
+	for path := range headFiles {
+		paths[path] = struct{}{}
+	}
+	for path := range paths {
+		baseEntry, baseOK := baseFiles[path]
+		headEntry, headOK := headFiles[path]
+		if addition, expectedAddition := additions[path]; expectedAddition {
+			if !headOK || headEntry.Type != "blob" || (baseOK && sameGitHubTreeEntry(baseEntry, headEntry)) {
+				return false, nil
+			}
+			matches, err := githubFruitBlobMatches(ctx, intent.Owner, intent.Repo, headEntry.SHA, addition.Contents, token)
+			if err != nil {
+				return false, err
+			}
+			if !matches {
+				return false, nil
+			}
+			if baseOK && baseEntry.Mode != headEntry.Mode {
+				return false, nil
+			}
+			continue
+		}
+		if _, expectedDeletion := deletions[path]; expectedDeletion {
+			if !baseOK || baseEntry.Type != "blob" || headOK {
+				return false, nil
+			}
+			continue
+		}
+		if !sameGitHubTreeEntry(baseEntry, headEntry) || baseOK != headOK {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+type githubFruitTreeEntry struct {
+	Mode string
+	Type string
+	SHA  string
+}
+
+func githubFruitTree(ctx context.Context, owner, repo, oid, token string) (githubTreeResponse, error) {
+	var tree githubTreeResponse
+	found, err := githubReadREST(ctx, githubFruitTreePath(owner, repo, oid), token, &tree)
+	if err != nil {
+		return githubTreeResponse{}, err
+	}
+	if !found || tree.Truncated {
+		return githubTreeResponse{}, fmt.Errorf("GitHub tree state is unavailable or truncated")
+	}
+	return tree, nil
+}
+
+func githubFruitLeafTree(tree githubTreeResponse) map[string]githubFruitTreeEntry {
+	files := make(map[string]githubFruitTreeEntry)
+	for _, entry := range tree.Tree {
+		if entry.Type == "tree" {
+			continue
+		}
+		files[entry.Path] = githubFruitTreeEntry{Mode: entry.Mode, Type: entry.Type, SHA: entry.SHA}
+	}
+	return files
+}
+
+func sameGitHubTreeEntry(a, b githubFruitTreeEntry) bool {
+	return a.Mode == b.Mode && a.Type == b.Type && a.SHA == b.SHA
+}
+
+func githubFruitBlobMatches(ctx context.Context, owner, repo, oid, expectedContents, token string) (bool, error) {
+	var blob githubBlobResponse
+	found, err := githubReadREST(ctx, githubFruitBlobPath(owner, repo, oid), token, &blob)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("GitHub Fruit blob is unavailable")
+	}
+	if blob.Encoding != "base64" {
+		return false, nil
+	}
+	actual, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(blob.Content), ""))
+	if err != nil {
+		return false, nil
+	}
+	expected, err := base64.StdEncoding.DecodeString(expectedContents)
+	return err == nil && string(actual) == string(expected), nil
+}
+
+func apiFruitMutationInput(intent apiFruitPublicationIntent) createCommitOnBranchInput {
+	return createCommitOnBranchInput{
+		Branch: apiCommitBranch{
+			RepositoryNameWithOwner: intent.Owner + "/" + intent.Repo,
+			BranchName:              intent.Branch,
+		},
+		Message:         apiCommitMessage{Headline: intent.Headline, Body: intent.Body},
+		ExpectedHeadOid: intent.BaseCommit,
+		FileChanges: apiCommitFileChanges{
+			Additions: intent.Additions,
+			Deletions: intent.Deletions,
+		},
+	}
+}
+
+func createAPIFruitCommit(ctx context.Context, token string, intent apiFruitPublicationIntent) (string, githubRequestMetadata, error) {
+	var response createCommitOnBranchResponse
+	metadata, err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": apiFruitMutationInput(intent)}, &response)
+	if err != nil {
+		return "", metadata, err
+	}
+	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
+	if oid == "" {
+		return "", metadata, &githubMutationError{Operation: "github createCommitOnBranch mutation", Kind: githubMutationPartialResponse, githubRequestMetadata: metadata}
+	}
+	return oid, metadata, nil
+}
+
+func mutationMetadata(err error, fallback githubRequestMetadata) githubRequestMetadata {
+	var mutationErr *githubMutationError
+	if errors.As(err, &mutationErr) {
+		return mutationErr.githubRequestMetadata
+	}
+	return fallback
+}
+
+// publishAPIFruit performs the GraphQL API commit using the provided file
+// changes. Every no-OID result is reconciled before a replay is considered, and
+// the replay retains the exact same expected head and file intent.
+func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, appCredential AppCredential, additions []apiCommitFileAddition, deletions []apiCommitFileDeletion, commitMessage string) (string, error) {
+	intent, err := validateAPIFruitIntent("", "", branch, baseCommit, commitMessage, additions, deletions)
+	if err != nil {
+		return "", err
+	}
 	originURL, err := runGitCommand(ctx, repoPath, "remote", "get-url", "origin")
 	if err != nil {
-		return "", fmt.Errorf("api fruit publication: resolve origin remote: %w", err)
+		return "", newAPIFruitPublicationFailure("preparation", "remote-unavailable", false, "", "the publication repository remote could not be resolved")
 	}
 	originURL = strings.TrimSpace(originURL)
 	owner, repo, err := parseOwnerRepo(originURL)
 	if err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
+		return "", newAPIFruitPublicationFailure("preparation", "remote-unavailable", false, "", "the publication repository identity could not be resolved")
 	}
+	intent.Owner, intent.Repo = owner, repo
 
 	token, err := githubAppInstallationToken(ctx, appCredential, originURL)
 	if err != nil {
-		return "", fmt.Errorf("api fruit publication: github app auth: %w", err)
+		return "", newAPIFruitPublicationFailure("authentication", "authentication-failed", false, "", "GitHub App authentication could not be established")
 	}
 
-	err = githubCreateRef(ctx, owner, repo, branch, baseCommit, token)
-	if err != nil {
-		return "", fmt.Errorf("api fruit publication: create remote branch %s: %w", branch, err)
+	if err := githubCreateRef(ctx, owner, repo, intent.Branch, intent.BaseCommit, token); err != nil {
+		var mutationErr *githubMutationError
+		if !errors.As(err, &mutationErr) || !mutationErr.RequestWritten {
+			return "", newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomePreMutationFailure, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomePreMutationFailure))
+		}
+		reconciliation, reconcileErr := reconcileAPIFruit(ctx, intent, token)
+		if reconcileErr != nil {
+			return "", newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
+		}
+		if reconciliation.Outcome == apiFruitReconciledExact {
+			return reconciliation.OID, nil
+		}
+		return "", newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeTargetRefConflict, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomeTargetRefConflict))
 	}
 
-	headline, body := splitCommitMessage(commitMessage)
-
-	input := createCommitOnBranchInput{
-		Branch: apiCommitBranch{
-			RepositoryNameWithOwner: owner + "/" + repo,
-			BranchName:              branch,
-		},
-		Message:         apiCommitMessage{Headline: headline, Body: body},
-		ExpectedHeadOid: baseCommit,
-		FileChanges: apiCommitFileChanges{
-			Additions: additions,
-			Deletions: deletions,
-		},
+	commitOID, metadata, commitErr := createAPIFruitCommit(ctx, token, intent)
+	if commitErr == nil {
+		return commitOID, nil
+	}
+	metadata = mutationMetadata(commitErr, metadata)
+	if !metadata.RequestWritten {
+		return "", newAPIFruitPublicationFailure("commit-mutation", apiFruitOutcomePreMutationFailure, false, metadata.RequestID, apiFruitFailureMessage(apiFruitOutcomePreMutationFailure))
 	}
 
-	var response createCommitOnBranchResponse
-	if err := githubGraphQLPost(ctx, token, createCommitOnBranchMutation, map[string]any{"input": input}, &response); err != nil {
-		return "", fmt.Errorf("api fruit publication: %w", err)
+	reconciliation, reconcileErr := reconcileAPIFruit(ctx, intent, token)
+	if reconcileErr != nil {
+		return "", newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, metadata.RequestID, apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
 	}
-	oid := strings.TrimSpace(response.CreateCommitOnBranch.Commit.Oid)
-	if oid == "" {
-		return "", fmt.Errorf("api fruit publication: github returned no commit oid")
+	if reconciliation.Outcome == apiFruitReconciledExact {
+		return reconciliation.OID, nil
+	}
+	if reconciliation.Outcome != apiFruitReconciledBase {
+		outcome := apiFruitOutcomeUnexpectedState
+		if reconciliation.Outcome == apiFruitReconciledAbsent {
+			outcome = apiFruitOutcomeTargetRefAbsent
+		}
+		return "", newAPIFruitPublicationFailure("reconciliation", outcome, false, metadata.RequestID, apiFruitFailureMessage(outcome))
 	}
 
-	return oid, nil
+	// Exactly one final identical mutation is allowed after the read proved the
+	// ref is still the expected base. No branch state permits another attempt.
+	commitOID, secondMetadata, secondErr := createAPIFruitCommit(ctx, token, intent)
+	if secondErr == nil {
+		return commitOID, nil
+	}
+	secondMetadata = mutationMetadata(secondErr, secondMetadata)
+	secondID := secondMetadata.RequestID
+	if secondID == "" {
+		secondID = metadata.RequestID
+	}
+	finalReconciliation, finalErr := reconcileAPIFruit(ctx, intent, token)
+	if finalErr != nil {
+		return "", newAPIFruitPublicationFailure("reconciliation", apiFruitOutcomeReconciliationFailure, false, secondID, apiFruitFailureMessage(apiFruitOutcomeReconciliationFailure))
+	}
+	if finalReconciliation.Outcome == apiFruitReconciledExact {
+		return finalReconciliation.OID, nil
+	}
+	return "", newAPIFruitPublicationFailure("commit-mutation", apiFruitOutcomeRetryExhausted, false, secondID, apiFruitFailureMessage(apiFruitOutcomeRetryExhausted))
+}
+
+func mutationRequestID(err error) string {
+	var mutationErr *githubMutationError
+	if errors.As(err, &mutationErr) {
+		return mutationErr.RequestID
+	}
+	return ""
 }

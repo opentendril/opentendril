@@ -370,7 +370,7 @@ func TestObservePhytomerNotFoundAndNotWired(t *testing.T) {
 }
 
 func TestSeedStatusIsTerminal(t *testing.T) {
-	for _, status := range []string{core.SeedStatusSatisfied, core.SeedStatusExhausted, core.SeedStatusWithered} {
+	for _, status := range []string{core.SeedStatusSatisfied, core.SeedStatusExhausted, core.SeedStatusWithered, core.SeedStatusFruitPublicationFailed} {
 		if !core.SeedStatusIsTerminal(status) {
 			t.Fatalf("%q should be terminal", status)
 		}
@@ -379,5 +379,39 @@ func TestSeedStatusIsTerminal(t *testing.T) {
 		if core.SeedStatusIsTerminal(status) {
 			t.Fatalf("%q should not be terminal", status)
 		}
+	}
+}
+
+func TestProjectPhytomerObservationPublishesSafeFruitFailureDiagnostic(t *testing.T) {
+	obs := projectObservation(t, core.SeedObservationEvidence{
+		Handle:     "seed-publication-failure",
+		PhytomerID: "tendril-publication-failure",
+		Status:     core.SeedStatusFruitPublicationFailed,
+		Iterations: 2,
+		Branch:     "",
+		Commit:     "",
+		Error:      "raw upstream-secret-content",
+		PublicationDiagnostic: &core.SeedPublicationDiagnostic{
+			FailureCategory: core.SeedFailureCategoryFruitPublication,
+			ExecutionStatus: core.SeedStatusSatisfied,
+			Phase:           "commit-mutation",
+			Outcome:         "reconciliation-unavailable",
+			RetrySafe:       false,
+			Message:         "read-only GitHub reconciliation could not establish the target state",
+			RequestID:       "req-safe-123",
+		},
+	}, nil)
+	if obs.Status != core.SeedStatusFruitPublicationFailed || obs.Branch != "" || obs.Commit != "" {
+		t.Fatalf("publication failure observation = %+v", obs)
+	}
+	if obs.PublicationDiagnostic == nil || obs.PublicationDiagnostic.FailureCategory != core.SeedFailureCategoryFruitPublication {
+		t.Fatalf("publication diagnostic = %+v", obs.PublicationDiagnostic)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "raw upstream-secret-content") {
+		t.Fatalf("raw Seed error leaked into observation: %s", raw)
 	}
 }

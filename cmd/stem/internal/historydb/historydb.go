@@ -80,7 +80,10 @@ func historyRetentionDaysFromEnv() int {
 //
 // Version 5 records a Seed's canonical Phytomer identity and truthful Fruit
 // commit on seedruns. Legacy rows keep an empty phytomerId; none is invented.
-const currentSchemaVersion = 5
+//
+// Version 6 records the structured, safe Seed Fruit-publication diagnostic in
+// seedruns.observation. Legacy rows keep an empty observation envelope.
+const currentSchemaVersion = 6
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -172,18 +175,35 @@ type SeedRun struct {
 	Pollen string `json:"pollen,omitempty"`
 	// PhytomerID is the Stem-created execution/observation identity for this
 	// Seed growth. Empty on historical rows that never had a truthful relation.
-	PhytomerID string    `json:"phytomerId,omitempty"`
-	Substrate  string    `json:"substrate,omitempty"`
-	Goal       string    `json:"goal,omitempty"`
-	Status     string    `json:"status"`
-	Iterations int       `json:"iterations"`
-	Branch     string    `json:"branch,omitempty"`
-	Commit     string    `json:"commit,omitempty"`
-	Diff       string    `json:"diff,omitempty"`
-	Logs       string    `json:"logs,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	StartedAt  time.Time `json:"startedAt"`
-	FinishedAt time.Time `json:"finishedAt,omitempty"`
+	PhytomerID            string                     `json:"phytomerId,omitempty"`
+	Substrate             string                     `json:"substrate,omitempty"`
+	Goal                  string                     `json:"goal,omitempty"`
+	Status                string                     `json:"status"`
+	Iterations            int                        `json:"iterations"`
+	Branch                string                     `json:"branch,omitempty"`
+	Commit                string                     `json:"commit,omitempty"`
+	Diff                  string                     `json:"diff,omitempty"`
+	Logs                  string                     `json:"logs,omitempty"`
+	Error                 string                     `json:"error,omitempty"`
+	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
+	StartedAt             time.Time                  `json:"startedAt"`
+	FinishedAt            time.Time                  `json:"finishedAt,omitempty"`
+}
+
+// SeedPublicationDiagnostic is the credential- and content-safe durable
+// explanation of a managed Fruit publication failure.
+type SeedPublicationDiagnostic struct {
+	FailureCategory string `json:"failureCategory"`
+	ExecutionStatus string `json:"executionStatus"`
+	Phase           string `json:"phase"`
+	Outcome         string `json:"outcome"`
+	RetrySafe       bool   `json:"retrySafe"`
+	Message         string `json:"message"`
+	RequestID       string `json:"requestId,omitempty"`
+}
+
+type seedRunObservation struct {
+	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
 }
 
 // EventRecord is one persisted EventBus telemetry row.
@@ -400,7 +420,8 @@ CREATE TABLE IF NOT EXISTS seedruns (
 	logs TEXT NOT NULL DEFAULT '',
 	error TEXT NOT NULL DEFAULT '',
 	startedAt TEXT NOT NULL,
-	finishedAt TEXT NOT NULL DEFAULT ''
+	finishedAt TEXT NOT NULL DEFAULT '',
+	observation TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);
 
@@ -456,6 +477,9 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureColumn(ctx, "seedruns", "fruitCommit", `ALTER TABLE seedruns ADD COLUMN fruitCommit TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "observation", `ALTER TABLE seedruns ADD COLUMN observation TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsByPhytomer ON seedruns(phytomerId, startedAt)`); err != nil {
@@ -866,6 +890,29 @@ func decodeSproutRunObservation(raw string) (sproutRunObservation, error) {
 	return observation, nil
 }
 
+func encodeSeedRunObservation(run SeedRun) (string, error) {
+	if run.PublicationDiagnostic == nil {
+		return "", nil
+	}
+	encoded, err := json.Marshal(seedRunObservation{PublicationDiagnostic: run.PublicationDiagnostic})
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func decodeSeedRunObservation(raw string) (seedRunObservation, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return seedRunObservation{}, nil
+	}
+	var observation seedRunObservation
+	if err := json.Unmarshal([]byte(raw), &observation); err != nil {
+		return seedRunObservation{}, err
+	}
+	return observation, nil
+}
+
 // RecordSproutRun upserts one Sprout execution record; call it once when the
 // sprout emerges (status "running") and again when it matures or withers.
 //
@@ -1084,7 +1131,7 @@ ORDER BY pollen, substrate`
 
 // RecordSeedRun upserts one seed.grow execution keyed by its handle; call it
 // once when the run is dispatched (status "running") and again when it settles
-// (satisfied / exhausted / withered).
+// (satisfied / exhausted / withered / fruit-publication-failed).
 func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	if strings.TrimSpace(run.Handle) == "" {
 		return fmt.Errorf("seed run requires a handle")
@@ -1114,10 +1161,14 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	if err != nil {
 		return fmt.Errorf("encrypt seed run error: %w", err)
 	}
+	observation, err := encodeSeedRunObservation(run)
+	if err != nil {
+		return fmt.Errorf("encode seed run observation: %w", err)
+	}
 
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
 	iterations = excluded.iterations,
@@ -1127,6 +1178,7 @@ ON CONFLICT(handle) DO UPDATE SET
 	logs = excluded.logs,
 	error = excluded.error,
 	finishedAt = excluded.finishedAt,
+	observation = COALESCE(NULLIF(excluded.observation, ''), seedruns.observation),
 	phytomerId = CASE WHEN seedruns.phytomerId = '' THEN excluded.phytomerId ELSE seedruns.phytomerId END`
 
 	_, err = s.db.ExecContext(ctx, statement,
@@ -1144,6 +1196,7 @@ ON CONFLICT(handle) DO UPDATE SET
 		runError,
 		run.StartedAt.UTC().Format(time.RFC3339Nano),
 		finishedAt,
+		observation,
 	)
 	if err != nil {
 		return fmt.Errorf("record seed run: %w", err)
@@ -1160,22 +1213,22 @@ func (s *Store) GetSeedRun(ctx context.Context, handle string) (SeedRun, bool, e
 	}
 
 	const query = `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt
+SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
 FROM seedruns
 WHERE handle = ?`
 
 	var run SeedRun
-	var startedAt, finishedAt string
+	var startedAt, finishedAt, observation string
 	err := s.db.QueryRowContext(ctx, query, handle).Scan(
 		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt)
+		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation)
 	if err == sql.ErrNoRows {
 		return SeedRun{}, false, nil
 	}
 	if err != nil {
 		return SeedRun{}, false, fmt.Errorf("get seed run: %w", err)
 	}
-	if err := s.decodeSeedRun(&run, startedAt, finishedAt); err != nil {
+	if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
 		return SeedRun{}, false, err
 	}
 	return run, true, nil
@@ -1192,7 +1245,7 @@ func (s *Store) GetSeedRunByPhytomer(ctx context.Context, phytomerID string) (Se
 	}
 
 	const query = `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt
+SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
 FROM seedruns
 WHERE phytomerId = ?`
 
@@ -1205,13 +1258,13 @@ WHERE phytomerId = ?`
 	var found []SeedRun
 	for rows.Next() {
 		var run SeedRun
-		var startedAt, finishedAt string
+		var startedAt, finishedAt, observation string
 		if err := rows.Scan(
 			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt); err != nil {
+			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation); err != nil {
 			return SeedRun{}, false, fmt.Errorf("scan seed run by phytomer: %w", err)
 		}
-		if err := s.decodeSeedRun(&run, startedAt, finishedAt); err != nil {
+		if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
 			return SeedRun{}, false, err
 		}
 		found = append(found, run)
@@ -1228,7 +1281,7 @@ WHERE phytomerId = ?`
 	return found[0], true, nil
 }
 
-func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt string) error {
+func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt, observationRaw string) error {
 	var err error
 	if run.Goal, err = s.dec(run.Goal, "historydb/seedruns/goal"); err != nil {
 		return fmt.Errorf("decrypt seed run goal: %w", err)
@@ -1242,6 +1295,11 @@ func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt string) error 
 	if run.Error, err = s.dec(run.Error, "historydb/seedruns/error"); err != nil {
 		return fmt.Errorf("decrypt seed run error: %w", err)
 	}
+	observation, err := decodeSeedRunObservation(observationRaw)
+	if err != nil {
+		return fmt.Errorf("decode seed run observation: %w", err)
+	}
+	run.PublicationDiagnostic = observation.PublicationDiagnostic
 	if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
 		return fmt.Errorf("parse seed run startedAt: %w", err)
 	}

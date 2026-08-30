@@ -19,9 +19,12 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	hostile := "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT"
 	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
 		Handle: "seed-hostile", Pollen: "claude", PhytomerID: "tendril-hostile",
-		Substrate: "myrepo", Status: "withered", Goal: "PRIVATE_PROMPT_CONTENT",
+		Substrate: "myrepo", Status: "fruit-publication-failed", Goal: "PRIVATE_PROMPT_CONTENT",
 		Diff: "internal path /home/operator/private", Logs: "Authorization: Bearer secret-token",
-		Error: hostile, StartedAt: time.Now().UTC(),
+		Error: hostile, PublicationDiagnostic: &historydb.SeedPublicationDiagnostic{
+			FailureCategory: "fruit-publication", ExecutionStatus: "satisfied", Phase: "reconciliation",
+			Outcome: "reconciliation-unavailable", Message: "safe publication diagnostic", RequestID: "req-safe-123",
+		}, StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record seed: %v", err)
 	}
@@ -41,6 +44,9 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	}
 	if seed.Error != hostile || seed.Goal == "" || seed.Diff == "" || seed.Logs == "" {
 		t.Fatalf("source dropped seed evidence Core must refuse: %+v", seed)
+	}
+	if seed.PublicationDiagnostic == nil || seed.PublicationDiagnostic.FailureCategory != "fruit-publication" {
+		t.Fatalf("source dropped publication diagnostic: %+v", seed.PublicationDiagnostic)
 	}
 	sprouts, err := src.SproutsByPhytomer(context.Background(), "tendril-hostile")
 	if err != nil || len(sprouts) != 1 {

@@ -24,18 +24,19 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 				return core.SeedObservationEvidence{}, found, err
 			}
 			return core.SeedObservationEvidence{
-				Handle:     seed.Handle,
-				Pollen:     seed.Pollen,
-				PhytomerID: seed.PhytomerID,
-				Substrate:  seed.Substrate,
-				Status:     seed.Status,
-				Iterations: seed.Iterations,
-				Branch:     seed.Branch,
-				Commit:     seed.Commit,
-				Goal:       seed.Goal,
-				Diff:       seed.Diff,
-				Logs:       seed.Logs,
-				Error:      seed.Error,
+				Handle:                seed.Handle,
+				Pollen:                seed.Pollen,
+				PhytomerID:            seed.PhytomerID,
+				Substrate:             seed.Substrate,
+				Status:                seed.Status,
+				Iterations:            seed.Iterations,
+				Branch:                seed.Branch,
+				Commit:                seed.Commit,
+				Goal:                  seed.Goal,
+				Diff:                  seed.Diff,
+				Logs:                  seed.Logs,
+				Error:                 seed.Error,
+				PublicationDiagnostic: coreSeedPublicationDiagnostic(seed.PublicationDiagnostic),
 			}, true, nil
 		},
 		SproutsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
@@ -73,5 +74,20 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 			}
 			return out, nil
 		},
+	}
+}
+
+func coreSeedPublicationDiagnostic(diagnostic *historydb.SeedPublicationDiagnostic) *core.SeedPublicationDiagnostic {
+	if diagnostic == nil {
+		return nil
+	}
+	return &core.SeedPublicationDiagnostic{
+		FailureCategory: diagnostic.FailureCategory,
+		ExecutionStatus: diagnostic.ExecutionStatus,
+		Phase:           diagnostic.Phase,
+		Outcome:         diagnostic.Outcome,
+		RetrySafe:       diagnostic.RetrySafe,
+		Message:         diagnostic.Message,
+		RequestID:       diagnostic.RequestID,
 	}
 }

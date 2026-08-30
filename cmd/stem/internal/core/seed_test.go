@@ -630,3 +630,73 @@ func TestGrowPreparedSeedRemovesClaimedGrowth(t *testing.T) {
 		t.Fatalf("replay error = %v, want ErrSeedGrowthInvalid", err)
 	}
 }
+
+func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	diagnostic := &SeedPublicationDiagnostic{
+		FailureCategory: SeedFailureCategoryFruitPublication,
+		ExecutionStatus: SeedStatusSatisfied,
+		Phase:           "commit-mutation",
+		Outcome:         "reconciliation-unavailable",
+		RetrySafe:       false,
+		Message:         "read-only GitHub reconciliation could not establish the target state",
+		RequestID:       "req-safe-123",
+	}
+	var settled SeedSettlement
+	svc := NewService(manager).WithSeed(SeedOperations{
+		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+			return SeedGrowResult{
+				Status:                SeedStatusSatisfied,
+				Iterations:            3,
+				PhytomerID:            spec.PhytomerID,
+				Branch:                "tendril/seed-fruit",
+				Commit:                "fruit-oid",
+				Diff:                  "the completed diff",
+				Logs:                  "the completed logs",
+				PublicationDiagnostic: diagnostic,
+			}, errors.New("upstream-secret-content")
+		},
+	}).WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error { return nil },
+		RecordSettlement: func(_ context.Context, got SeedSettlement) error {
+			settled = got
+			return nil
+		},
+	})
+
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-publication-failure"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	result, err := svc.GrowPreparedSeed(context.Background(), growth)
+	if err == nil {
+		t.Fatal("publication failure was reported as success")
+	}
+	if result.Status != SeedStatusFruitPublicationFailed || result.Branch != "" || result.Commit != "" {
+		t.Fatalf("returned publication failure result = %+v", result)
+	}
+	if result.Iterations != 3 || result.Diff != "the completed diff" || result.Logs != "the completed logs" {
+		t.Fatalf("returned execution evidence = %+v", result)
+	}
+	if result.PublicationDiagnostic == nil || result.PublicationDiagnostic.Outcome != diagnostic.Outcome {
+		t.Fatalf("returned diagnostic = %+v", result.PublicationDiagnostic)
+	}
+	if settled.Status != SeedStatusFruitPublicationFailed || settled.Branch != "" || settled.Commit != "" {
+		t.Fatalf("settled publication failure = %+v", settled)
+	}
+	if settled.Iterations != 3 || settled.Diff != "the completed diff" || settled.Logs != "the completed logs" {
+		t.Fatalf("settled execution evidence = %+v", settled)
+	}
+	if settled.PublicationDiagnostic == nil || settled.PublicationDiagnostic.RequestID != diagnostic.RequestID {
+		t.Fatalf("settled diagnostic = %+v", settled.PublicationDiagnostic)
+	}
+	if settled.Error != diagnostic.Message || strings.Contains(settled.Error, "upstream-secret-content") {
+		t.Fatalf("settled error = %q, want safe publication message", settled.Error)
+	}
+}
