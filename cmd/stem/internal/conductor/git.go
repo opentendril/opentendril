@@ -1446,7 +1446,11 @@ func publishAPIFruit(ctx context.Context, repoPath, branch, baseCommit string, a
 		if reconciliation.Outcome == apiFruitReconciledExact {
 			return reconciliation.OID, nil
 		}
-		return "", newAPIFruitPublicationFailure("target-ref-creation", apiFruitOutcomeTargetRefConflict, false, mutationRequestID(err), apiFruitFailureMessage(apiFruitOutcomeTargetRefConflict))
+		outcome := apiFruitOutcomeTargetRefConflict
+		if reconciliation.Outcome == apiFruitReconciledAbsent {
+			outcome = apiFruitOutcomeTargetRefAbsent
+		}
+		return "", newAPIFruitPublicationFailure("target-ref-creation", outcome, false, mutationRequestID(err), apiFruitFailureMessage(outcome))
 	}
 
 	commitOID, metadata, commitErr := createAPIFruitCommit(ctx, token, intent)

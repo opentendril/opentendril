@@ -300,12 +300,11 @@ func githubGraphQLPost(ctx context.Context, installationToken, query string, var
 }
 
 func safeGitHubRequestID(value string) string {
-	value = strings.TrimSpace(value)
 	if len(value) > 128 {
 		return ""
 	}
 	for _, char := range value {
-		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '-' && char != '_' && char != '.' && char != ':' {
 			return ""
 		}
 	}
