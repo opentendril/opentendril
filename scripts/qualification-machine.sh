@@ -388,7 +388,7 @@ users:
     groups: [sudo]
     shell: /bin/bash
     lock_passwd: false
-    sudo: ALL=(ALL) PASSWD:ALL
+    sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - $public_key
 chpasswd:
@@ -501,7 +501,9 @@ PY_PASS
     [ "$ssh_ready" -eq 1 ] || die "SSH did not become ready"
     ssh_base 'cloud-init status --wait'
     ssh_base 'grep -E "^(ID|VERSION_ID)=" /etc/os-release; uname -m; id botanist'
-    guest_sudo 'true'
+    ssh_base 'sudo -n true'
+    ssh_base 'sudo -n -u root true'
+    ssh_base "sh -c 'sudo -n true'"
 
     if [ "$MODE" = fast ] && [ -n "$model_source" ]; then
         guest_sudo "mkdir -p '$MODEL_MOUNT' && mount -t 9p -o trans=virtio,version=9p2000.L,ro opentendril-model-cache '$MODEL_MOUNT'"
