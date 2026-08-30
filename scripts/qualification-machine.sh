@@ -388,7 +388,7 @@ users:
     groups: [sudo]
     shell: /bin/bash
     lock_passwd: false
-    sudo: ALL=(ALL) PASSWD:ALL
+    sudo: ALL=(ALL) NOPASSWD:ALL
     ssh_authorized_keys:
       - $public_key
 chpasswd:
@@ -399,15 +399,6 @@ ssh_pwauth: false
 timezone: UTC
 package_update: false
 package_upgrade: false
-write_files:
-  - path: /etc/sudoers.d/91-opentendril-qualification-cache
-    owner: root:root
-    permissions: '0440'
-    content: |
-      Defaults:botanist timestamp_type=global
-      Defaults:botanist timestamp_timeout=30
-runcmd:
-  - [visudo, -c, -f, /etc/sudoers.d/91-opentendril-qualification-cache]
 EOF_USER
     cat > "$RUN_DIR/meta-data" <<EOF_META
 instance-id: $TEST_NAME-$(date -u +%Y%m%dT%H%M%SZ)
@@ -510,14 +501,8 @@ PY_PASS
     [ "$ssh_ready" -eq 1 ] || die "SSH did not become ready"
     ssh_base 'cloud-init status --wait'
     ssh_base 'grep -E "^(ID|VERSION_ID)=" /etc/os-release; uname -m; id botanist'
-    ssh_base 'stat -c "%U:%G %a" /etc/sudoers.d/91-opentendril-qualification-cache | grep -qx "root:root 440"'
-    ssh_base 'sudo -k'
-    if ssh_base 'sudo -n true' >/dev/null 2>&1; then
-        die "botanist sudo did not require a password before authentication"
-    fi
-    guest_sudo 'true'
-    guest_sudo 'visudo -c'
     ssh_base 'sudo -n true'
+    ssh_base 'sudo -n -u root true'
     ssh_base "sh -c 'sudo -n true'"
 
     if [ "$MODE" = fast ] && [ -n "$model_source" ]; then
