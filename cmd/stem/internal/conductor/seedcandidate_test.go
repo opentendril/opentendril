@@ -302,6 +302,101 @@ func TestSeedCandidateAllowsOrdinaryRepositoryRelativeFile(t *testing.T) {
 	}
 }
 
+func TestSeedCandidateRejectsWhitespaceCollapsedExecutionLocationPath(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "seed@example.com"}, {"config", "user.name", "Seed Tester"}, {"checkout", "-b", "main"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	existing := " ~/tendril/.tendril/run-workspaces/x/HELLO.md"
+	writeExactGitPath(t, repo, existing, "legacy\n")
+	if err := os.WriteFile(filepath.Join(repo, "keep.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatalf("write keep: %v", err)
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "base with leading-space path"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	start, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	start = strings.TrimSpace(start)
+
+	isolation := "sprout/task-whitespace-path"
+	if _, err := runGitCommand(ctx, repo, "checkout", "-b", isolation); err != nil {
+		t.Fatalf("isolation: %v", err)
+	}
+	leaked := "~/tendril/.tendril/run-workspaces/x/HELLO.md"
+	writeExactGitPath(t, repo, leaked, "Hello from OpenTendril.\n")
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "add unpadded execution-location path"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	commit, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	commit = strings.TrimSpace(commit)
+	if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+		t.Fatalf("checkout main: %v", err)
+	}
+	linked := filepath.Join(t.TempDir(), "linked")
+	if _, err := runGitCommand(ctx, repo, "worktree", "add", linked, isolation); err != nil {
+		t.Fatalf("worktree add: %v", err)
+	}
+	RegisterOwnedRef(OwnedRef{Repository: repo, Branch: isolation, Purpose: PurposeSproutIsolation, Base: start, RunID: "run-whitespace-path"})
+	ws := RunWorkspace{Path: linked, Repository: repo, Branch: isolation, BaseCommit: start, RunID: "run-whitespace-path"}
+	seedBranch := "tendril/seed-whitespace-path"
+
+	if err := integrateSeedCheckpoint(ctx, ws, seedBranch, commit, start); err == nil {
+		t.Fatal("integrateSeedCheckpoint accepted a newly created execution-location path that differs from an existing path only by leading whitespace")
+	} else if !strings.Contains(err.Error(), "execution-location leakage") {
+		t.Fatalf("error = %q, want path-integrity failure", err)
+	}
+	if localBranchExists(repo, seedBranch) {
+		t.Fatal("rejected candidate advanced the Seed checkpoint")
+	}
+}
+
+func TestGitTreePathSetKeepsWhitespaceDistinctPathnames(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	for _, args := range [][]string{{"init"}, {"config", "user.email", "seed@example.com"}, {"config", "user.name", "Seed Tester"}, {"checkout", "-b", "main"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	for _, name := range []string{"keep.txt", " keep.txt", "keep.txt "} {
+		writeExactGitPath(t, repo, name, "x\n")
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", "whitespace-distinct names"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	rev, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("rev-parse: %v", err)
+	}
+	paths, err := gitTreePathSet(ctx, repo, strings.TrimSpace(rev))
+	if err != nil {
+		t.Fatalf("gitTreePathSet: %v", err)
+	}
+	for _, name := range []string{"keep.txt", " keep.txt", "keep.txt "} {
+		if _, ok := paths[name]; !ok {
+			t.Errorf("missing exact pathname %q in %#v", name, paths)
+		}
+	}
+	if len(paths) != 3 {
+		t.Fatalf("whitespace-distinct Git pathnames collapsed: %#v", paths)
+	}
+}
+
 func TestSeedCandidatePreservesIntentionalExistingPath(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
@@ -741,6 +836,17 @@ func seedCheckpointWithNewPath(t *testing.T, relPath, contents string) (repo str
 	return repo, workspace, seedBranch, start, commit
 }
 
+func writeExactGitPath(t *testing.T, repo, relPath, contents string) {
+	t.Helper()
+	full := filepath.Join(repo, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir %q: %v", relPath, err)
+	}
+	if err := os.WriteFile(full, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write %q: %v", relPath, err)
+	}
+}
+
 func commitPathOnBranch(t *testing.T, repo, branch, relPath, contents string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -774,7 +880,12 @@ func TestSeedCandidateExecutionLeakReasonCoversBoundaryShapes(t *testing.T) {
 	}{
 		{"HELLO.md", false},
 		{"docs/HELLO.md", false},
+		{" keep.txt", false},
+		{"keep.txt ", false},
+		{" ~/not-a-workspace.md", false},
+		{"~/not-a-workspace.md", true},
 		{"~/tendril/.tendril/run-workspaces/abc123/HELLO.md", true},
+		{" ~/tendril/.tendril/run-workspaces/x/HELLO.md", true},
 		{".tendril/run-workspaces/abc123/HELLO.md", true},
 		{"/app/HELLO.md", true},
 		{"/workspace/HELLO.md", true},

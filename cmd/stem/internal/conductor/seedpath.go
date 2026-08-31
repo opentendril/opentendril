@@ -57,17 +57,20 @@ func gitTreePathSet(ctx context.Context, repo, revision string) (map[string]stru
 	}
 	paths := make(map[string]struct{})
 	for _, entry := range strings.Split(raw, "\x00") {
-		entry = filepath.ToSlash(strings.TrimSpace(entry))
+		// Git pathnames are identity, including legal leading/trailing
+		// whitespace. Empty means the trailing NUL remainder, not a trimmed
+		// path. Trimming would collapse distinct tree entries onto one key
+		// and let a newly introduced forbidden path look pre-existing.
 		if entry == "" {
 			continue
 		}
-		paths[entry] = struct{}{}
+		paths[filepath.ToSlash(entry)] = struct{}{}
 	}
 	return paths, nil
 }
 
 func seedCandidateExecutionLeakReason(repoRelPath, hostRunWorkspace string) string {
-	normalized := filepath.ToSlash(strings.TrimSpace(repoRelPath))
+	normalized := filepath.ToSlash(repoRelPath)
 	for strings.Contains(normalized, "//") {
 		normalized = strings.ReplaceAll(normalized, "//", "/")
 	}

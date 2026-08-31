@@ -982,8 +982,8 @@ Stem runs the verify command deterministically in a network-sealed Terrarium
 against the accumulated Seed candidate; that exit code — never the Sprout's own
 claim — is the verdict. Structured verification outcomes distinguish a failed
 predicate from a timeout or an inability to execute the verifier. Internal
-execution paths cannot become Fruit. The work lands on a branch for review as
-**Fruit**; nothing is ever merged.
+execution paths cannot become Fruit. The work lands on
+a branch for review as **Fruit**; nothing is ever merged.
 
 The first real task uses the Pollinator credential and the same Substrate name
 granted above. It does **not** use the Botanist/operator `tendril seed grow`
