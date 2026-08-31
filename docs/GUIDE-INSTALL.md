@@ -978,9 +978,12 @@ Stem and forwards only after the Stem accepts the root.
 
 `seed.grow` grows a **Seed** — a bounded intent: a goal, a verify command that
 must exit 0, and iteration/time bounds. A Sprout builds toward the goal and the
-Stem runs the verify command deterministically in a network-sealed Terrarium;
-that exit code — never the Sprout's own claim — is the verdict. The work lands on
-a branch for review as **Fruit**; nothing is ever merged.
+Stem runs the verify command deterministically in a network-sealed Terrarium
+against the accumulated Seed candidate; that exit code — never the Sprout's own
+claim — is the verdict. Structured verification outcomes distinguish a failed
+predicate from a timeout or an inability to execute the verifier. Internal
+execution paths cannot become Fruit. The work lands on a branch for review as
+**Fruit**; nothing is ever merged.
 
 The first real task uses the Pollinator credential and the same Substrate name
 granted above. It does **not** use the Botanist/operator `tendril seed grow`

@@ -700,3 +700,51 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 		t.Fatalf("settled error = %q, want safe publication message", settled.Error)
 	}
 }
+
+func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	code := 2
+	var settled SeedSettlement
+	svc := NewService(manager).WithSeed(SeedOperations{
+		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+			return SeedGrowResult{
+				Status:     SeedStatusExhausted,
+				Iterations: 1,
+				PhytomerID: spec.PhytomerID,
+				VerificationDiagnostics: []SeedVerificationDiagnostic{{
+					Iteration: 1,
+					Outcome:   SeedVerificationOutcomeInfrastructureFailed,
+					ExitCode:  &code,
+					TimedOut:  false,
+					Message:   "verify infrastructure could not execute",
+				}},
+			}, nil
+		},
+	}).WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error { return nil },
+		RecordSettlement: func(_ context.Context, got SeedSettlement) error {
+			settled = got
+			return nil
+		},
+	})
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-verify-diag"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	result, err := svc.GrowPreparedSeed(context.Background(), growth)
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if len(result.VerificationDiagnostics) != 1 || result.VerificationDiagnostics[0].Outcome != SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("result diagnostics = %+v", result.VerificationDiagnostics)
+	}
+	if len(settled.VerificationDiagnostics) != 1 || settled.VerificationDiagnostics[0].ExitCode == nil || *settled.VerificationDiagnostics[0].ExitCode != 2 {
+		t.Fatalf("settled diagnostics = %+v", settled.VerificationDiagnostics)
+	}
+}

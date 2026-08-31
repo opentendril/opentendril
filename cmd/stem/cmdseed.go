@@ -130,21 +130,22 @@ func seedPersistence(history *historydb.Store) core.SeedPersistence {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return history.RecordSeedRun(ctx, historydb.SeedRun{
-				Handle:                settled.Handle,
-				Pollen:                settled.Pollen,
-				PhytomerID:            settled.PhytomerID,
-				Substrate:             settled.Substrate,
-				Goal:                  settled.Goal,
-				Status:                settled.Status,
-				Iterations:            settled.Iterations,
-				Branch:                settled.Branch,
-				Commit:                settled.Commit,
-				Diff:                  settled.Diff,
-				Logs:                  settled.Logs,
-				Error:                 settled.Error,
-				PublicationDiagnostic: historySeedPublicationDiagnostic(settled.PublicationDiagnostic),
-				StartedAt:             settled.StartedAt,
-				FinishedAt:            settled.FinishedAt,
+				Handle:                  settled.Handle,
+				Pollen:                  settled.Pollen,
+				PhytomerID:              settled.PhytomerID,
+				Substrate:               settled.Substrate,
+				Goal:                    settled.Goal,
+				Status:                  settled.Status,
+				Iterations:              settled.Iterations,
+				Branch:                  settled.Branch,
+				Commit:                  settled.Commit,
+				Diff:                    settled.Diff,
+				Logs:                    settled.Logs,
+				Error:                   settled.Error,
+				PublicationDiagnostic:   historySeedPublicationDiagnostic(settled.PublicationDiagnostic),
+				VerificationDiagnostics: historySeedVerificationDiagnostics(settled.VerificationDiagnostics),
+				StartedAt:               settled.StartedAt,
+				FinishedAt:              settled.FinishedAt,
 			})
 		},
 	}
@@ -181,14 +182,15 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 				},
 			})
 			translated := core.SeedGrowResult{
-				Status:                result.Status,
-				Iterations:            result.Iterations,
-				PhytomerID:            spec.PhytomerID,
-				Branch:                result.Branch,
-				Commit:                result.Commit,
-				Diff:                  result.Diff,
-				Logs:                  result.Logs,
-				PublicationDiagnostic: copySeedPublicationDiagnostic(result.PublicationDiagnostic),
+				Status:                  result.Status,
+				Iterations:              result.Iterations,
+				PhytomerID:              spec.PhytomerID,
+				Branch:                  result.Branch,
+				Commit:                  result.Commit,
+				Diff:                    result.Diff,
+				Logs:                    result.Logs,
+				PublicationDiagnostic:   copySeedPublicationDiagnostic(result.PublicationDiagnostic),
+				VerificationDiagnostics: core.CopySeedVerificationDiagnostics(result.VerificationDiagnostics),
 			}
 			return translated, err
 		},
@@ -216,6 +218,26 @@ func historySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic
 		Message:         diagnostic.Message,
 		RequestID:       diagnostic.RequestID,
 	}
+}
+
+func historySeedVerificationDiagnostics(src []core.SeedVerificationDiagnostic) []historydb.SeedVerificationDiagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]historydb.SeedVerificationDiagnostic, len(src))
+	for i, diagnostic := range src {
+		out[i] = historydb.SeedVerificationDiagnostic{
+			Iteration: diagnostic.Iteration,
+			Outcome:   diagnostic.Outcome,
+			TimedOut:  diagnostic.TimedOut,
+			Message:   diagnostic.Message,
+		}
+		if diagnostic.ExitCode != nil {
+			code := *diagnostic.ExitCode
+			out[i].ExitCode = &code
+		}
+	}
+	return out
 }
 
 // prepareSeedSprout records opening ownership for one real Seed builder Sprout

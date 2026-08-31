@@ -982,6 +982,11 @@ func mapToolsToNative(tools []ToolDefinition) []llm.ToolDefinition {
 	return mapped
 }
 
+// sproutLogicalWorkspaceRoot is the namespace presented to the Mycorrhiza.
+// Tool path arguments are repository-relative; the host RunWorkspace path is
+// orchestration state and is never this value.
+const sproutLogicalWorkspaceRoot = "repository root"
+
 func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string) string {
 	var builder strings.Builder
 	builder.WriteString(strings.TrimSpace(`
@@ -993,7 +998,9 @@ Rules:
 - Prefer concise, high-signal actions and responses.
 `))
 	builder.WriteString("\n\nWorkspace root:\n")
-	builder.WriteString(strings.TrimSpace(workspace))
+	builder.WriteString(sproutLogicalWorkspaceRoot)
+	builder.WriteString("\nTool paths are repository-relative (relative to this workspace root).")
+	_ = workspace
 
 	if strings.TrimSpace(genotypeContext) != "" {
 		builder.WriteString("\n\nLoaded genotype context:\n")

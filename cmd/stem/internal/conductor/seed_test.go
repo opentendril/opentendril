@@ -72,8 +72,8 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 	repo := newSeedRepo(t)
 	var prompts []string
 	seedBuildFn = fakeBuild(&prompts)
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -105,8 +105,8 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 	repo := newSeedRepo(t)
 	var prompts []string
 	seedBuildFn = fakeBuild(&prompts)
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "boom: a test failed", false, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "boom: a test failed", Passed: false}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -139,9 +139,9 @@ func TestRunSeedWitheredOnBuildError(t *testing.T) {
 	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
 		return SproutRunReport{}, fmt.Errorf("sprout crashed")
 	}
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		t.Fatal("verify must not run after a withered build")
-		return "", false, nil
+		return seedVerifyReport{}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -167,8 +167,8 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 	repo := newSeedRepo(t)
 	var prompts []string
 	seedBuildFn = fakeBuild(&prompts)
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "", false, fmt.Errorf("terrarium unavailable")
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Err: fmt.Errorf("terrarium unavailable")}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -222,8 +222,8 @@ func TestRunSeedIterationsShareOnePhytomer(t *testing.T) {
 		}
 		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "ok"}, nil
 	}
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "still failing", false, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "still failing"}
 	}
 
 	const phytomer = "tendril-seed-shared"
@@ -248,8 +248,8 @@ func TestTwoSeedsUseDistinctPhytomers(t *testing.T) {
 	restoreSeeds(t)
 	repo := newSeedRepo(t)
 	seedBuildFn = fakeBuild(new([]string))
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	first, err := RunSeed(context.Background(), SeedExecution{
@@ -279,8 +279,8 @@ func TestPrepareSproutRunsBeforeTerrariumWork(t *testing.T) {
 		order = append(order, "build:"+orch.StepID)
 		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
 	}
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	_, err := RunSeed(context.Background(), SeedExecution{
@@ -304,8 +304,8 @@ func TestSeedFruitCommitIsNotInventedFromUnchangedBranch(t *testing.T) {
 	restoreSeeds(t)
 	repo := newSeedRepo(t)
 	seedBuildFn = fakeBuild(new([]string))
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -347,8 +347,8 @@ func TestSeedFruitCommitIsTheBranchTipWhenWorkExists(t *testing.T) {
 		}
 		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
 	}
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -454,12 +454,12 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error {
 		return nil
 	}
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		// Pass on the second iteration
 		if len(prompts) < 2 {
-			return "failed", false, nil
+			return seedVerifyReport{Output: "failed"}
 		}
-		return "ok", true, nil
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -551,8 +551,8 @@ func TestRunSeedManagedAPIPublicationFailureReportsNoFruit(t *testing.T) {
 
 	var seedBranch string
 	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, runErr := RunSeed(context.Background(), SeedExecution{
@@ -597,8 +597,8 @@ func TestRunSeedPublicationPlanFailureReportsNoFruit(t *testing.T) {
 
 	var seedBranch string
 	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
-	seedVerifyFn = func(context.Context, string, string, []string, []string) (string, bool, error) {
-		return "ok", true, nil
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "ok", Passed: true}
 	}
 
 	res, runErr := RunSeed(context.Background(), SeedExecution{

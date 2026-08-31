@@ -48,6 +48,9 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	if seed.PublicationDiagnostic == nil || seed.PublicationDiagnostic.FailureCategory != "fruit-publication" {
 		t.Fatalf("source dropped publication diagnostic: %+v", seed.PublicationDiagnostic)
 	}
+	if len(seed.VerificationDiagnostics) != 0 {
+		t.Fatalf("invented verification diagnostics: %+v", seed.VerificationDiagnostics)
+	}
 	sprouts, err := src.SproutsByPhytomer(context.Background(), "tendril-hostile")
 	if err != nil || len(sprouts) != 1 {
 		t.Fatalf("sprout evidence = %d err=%v", len(sprouts), err)
@@ -57,6 +60,38 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	}
 	if sprouts[0].Pollen != "claude" || sprouts[0].Substrate != "myrepo" {
 		t.Fatalf("source dropped sprout ownership evidence: %+v", sprouts[0])
+	}
+}
+
+func TestPhytomerObservationSourceCopiesVerificationDiagnostics(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	code := 1
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-verify", Pollen: "claude", PhytomerID: "tendril-verify",
+		Substrate: "myrepo", Status: "exhausted", Iterations: 1,
+		VerificationDiagnostics: []historydb.SeedVerificationDiagnostic{{
+			Iteration: 1, Outcome: "predicate-failed", ExitCode: &code, Message: "verify command exited 1",
+		}},
+		StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+
+	src := phytomerObservationSource(store)
+	seed, found, err := src.SeedByPhytomer(context.Background(), "tendril-verify")
+	if err != nil || !found {
+		t.Fatalf("seed evidence found=%v err=%v", found, err)
+	}
+	if len(seed.VerificationDiagnostics) != 1 || seed.VerificationDiagnostics[0].Outcome != "predicate-failed" {
+		t.Fatalf("verification diagnostics = %+v", seed.VerificationDiagnostics)
+	}
+	if seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 1 {
+		t.Fatalf("exit code = %+v", seed.VerificationDiagnostics[0])
 	}
 }
 

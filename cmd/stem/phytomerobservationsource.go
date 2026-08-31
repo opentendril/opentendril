@@ -24,19 +24,20 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 				return core.SeedObservationEvidence{}, found, err
 			}
 			return core.SeedObservationEvidence{
-				Handle:                seed.Handle,
-				Pollen:                seed.Pollen,
-				PhytomerID:            seed.PhytomerID,
-				Substrate:             seed.Substrate,
-				Status:                seed.Status,
-				Iterations:            seed.Iterations,
-				Branch:                seed.Branch,
-				Commit:                seed.Commit,
-				Goal:                  seed.Goal,
-				Diff:                  seed.Diff,
-				Logs:                  seed.Logs,
-				Error:                 seed.Error,
-				PublicationDiagnostic: coreSeedPublicationDiagnostic(seed.PublicationDiagnostic),
+				Handle:                  seed.Handle,
+				Pollen:                  seed.Pollen,
+				PhytomerID:              seed.PhytomerID,
+				Substrate:               seed.Substrate,
+				Status:                  seed.Status,
+				Iterations:              seed.Iterations,
+				Branch:                  seed.Branch,
+				Commit:                  seed.Commit,
+				Goal:                    seed.Goal,
+				Diff:                    seed.Diff,
+				Logs:                    seed.Logs,
+				Error:                   seed.Error,
+				PublicationDiagnostic:   coreSeedPublicationDiagnostic(seed.PublicationDiagnostic),
+				VerificationDiagnostics: coreSeedVerificationDiagnostics(seed.VerificationDiagnostics),
 			}, true, nil
 		},
 		SproutsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {
@@ -90,4 +91,24 @@ func coreSeedPublicationDiagnostic(diagnostic *historydb.SeedPublicationDiagnost
 		Message:         diagnostic.Message,
 		RequestID:       diagnostic.RequestID,
 	}
+}
+
+func coreSeedVerificationDiagnostics(src []historydb.SeedVerificationDiagnostic) []core.SeedVerificationDiagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]core.SeedVerificationDiagnostic, len(src))
+	for i, diagnostic := range src {
+		out[i] = core.SeedVerificationDiagnostic{
+			Iteration: diagnostic.Iteration,
+			Outcome:   diagnostic.Outcome,
+			TimedOut:  diagnostic.TimedOut,
+			Message:   diagnostic.Message,
+		}
+		if diagnostic.ExitCode != nil {
+			code := *diagnostic.ExitCode
+			out[i].ExitCode = &code
+		}
+	}
+	return out
 }

@@ -49,6 +49,14 @@ const seedVerifyTimeout = 5 * time.Minute
 // drives, injectable so the loop's logic (statuses, iteration, feedback) can be
 // tested without a real Terrarium or LLM. Production wires the real Sprout
 // builder and the deterministic verify.
+type seedVerifyReport struct {
+	Output   string
+	Passed   bool
+	ExitCode *int
+	TimedOut bool
+	Err      error
+}
+
 var (
 	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
 		return orch.RunSprout(ctx, prompt)
@@ -91,13 +99,14 @@ type SeedExecution struct {
 
 // SeedRunResult is the reviewable outcome of a grown Seed — the Fruit.
 type SeedRunResult struct {
-	Status                string
-	Iterations            int
-	Branch                string
-	Commit                string
-	Diff                  string
-	Logs                  string
-	PublicationDiagnostic *core.SeedPublicationDiagnostic
+	Status                  string
+	Iterations              int
+	Branch                  string
+	Commit                  string
+	Diff                    string
+	Logs                    string
+	PublicationDiagnostic   *core.SeedPublicationDiagnostic
+	VerificationDiagnostics []core.SeedVerificationDiagnostic
 }
 
 // SeedPublicationFailure is returned alongside the completed Seed result when
@@ -158,6 +167,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	status := SeedStatusExhausted
 	iterations := 0
 	prompt := seedGoalPrompt(execution.Goal, execution.Verify, "")
+	var verificationDiagnostics []core.SeedVerificationDiagnostic
 
 	for i := 0; i < maxIterations; i++ {
 		if ctx.Err() != nil {
@@ -192,38 +202,41 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			}
 		}
 
-		report, runErr := seedBuildFn(ctx, orch, prompt)
-		fmt.Fprintf(&logs, "\n🌱 Iteration %d — sprout %s\n", iterations, strings.TrimSpace(report.Outcome))
+		buildReport, runErr := seedBuildFn(ctx, orch, prompt)
+		fmt.Fprintf(&logs, "\n🌱 Iteration %d — sprout %s\n", iterations, strings.TrimSpace(buildReport.Outcome))
 		if runErr != nil {
 			status = SeedStatusWithered
 			fmt.Fprintf(&logs, "sprout withered: %v\n", runErr)
 			break
 		}
 
-		verifyOut, passed, verifyErr := seedVerifyFn(ctx, sourcePath, seedBranch, execution.Verify, execution.Egress)
-		if verifyErr != nil {
+		verifyReport := seedVerifyFn(ctx, sourcePath, seedBranch, execution.Verify, execution.Egress)
+		diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
+		verificationDiagnostics = append(verificationDiagnostics, diagnostic)
+		if verifyReport.Err != nil {
 			status = SeedStatusWithered
-			fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyErr)
+			fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
 			break
 		}
-		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", verifyVerdict(passed), verifyOut)
-		if passed {
+		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", verifyVerdict(verifyReport.Passed), verifyReport.Output)
+		if verifyReport.Passed {
 			status = SeedStatusSatisfied
 			break
 		}
-		prompt = seedGoalPrompt(execution.Goal, execution.Verify, verifyOut)
+		prompt = seedGoalPrompt(execution.Goal, execution.Verify, verifyReport.Output)
 	}
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
 
 	result := func(fruitBranch, fruitCommit string) SeedRunResult {
 		return SeedRunResult{
-			Status:     status,
-			Iterations: iterations,
-			Branch:     fruitBranch,
-			Commit:     fruitCommit,
-			Diff:       diff,
-			Logs:       strings.TrimSpace(logs.String()),
+			Status:                  status,
+			Iterations:              iterations,
+			Branch:                  fruitBranch,
+			Commit:                  fruitCommit,
+			Diff:                    diff,
+			Logs:                    strings.TrimSpace(logs.String()),
+			VerificationDiagnostics: core.CopySeedVerificationDiagnostics(verificationDiagnostics),
 		}
 	}
 
@@ -395,10 +408,10 @@ func seedFruitIdentity(ctx context.Context, sourcePath, seedBranch, base string)
 // worktree of the seed branch and reports whether it passed. A non-nil error is
 // an infrastructure failure (the verdict could not be produced), distinct from
 // a clean non-zero exit (a normal failed verification the loop iterates on).
-func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, egress []string) (string, bool, error) {
+func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, egress []string) seedVerifyReport {
 	worktree, err := createShadowWorktree(sourcePath, seedBranch)
 	if err != nil {
-		return "", false, fmt.Errorf("create verify worktree: %w", err)
+		return seedVerifyReport{Err: fmt.Errorf("create verify worktree: %w", err)}
 	}
 	defer removeShadowWorktree(sourcePath, worktree)
 
@@ -409,10 +422,53 @@ func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, e
 		Timeout:   seedVerifyTimeout,
 	})
 	if err != nil {
-		return "", false, err
+		return seedVerifyReport{Err: err}
 	}
 	output := strings.TrimSpace(strings.TrimSpace(result.Stdout) + "\n" + strings.TrimSpace(result.Stderr))
-	return output, result.ExitCode == 0 && !result.TimedOut, nil
+	code := result.ExitCode
+	return seedVerifyReport{
+		Output:   output,
+		Passed:   result.ExitCode == 0 && !result.TimedOut,
+		ExitCode: &code,
+		TimedOut: result.TimedOut,
+	}
+}
+
+func seedVerificationDiagnostic(iteration int, report seedVerifyReport) core.SeedVerificationDiagnostic {
+	diagnostic := core.SeedVerificationDiagnostic{
+		Iteration: iteration,
+		TimedOut:  report.TimedOut,
+		ExitCode:  report.ExitCode,
+	}
+	switch {
+	case report.Err != nil:
+		diagnostic.Outcome = core.SeedVerificationOutcomeInfrastructureFailed
+		diagnostic.Message = boundSeedVerifyDiagnostic("verify infrastructure could not execute")
+	case report.TimedOut:
+		diagnostic.Outcome = core.SeedVerificationOutcomeInfrastructureFailed
+		diagnostic.Message = boundSeedVerifyDiagnostic("verify command timed out")
+	case report.Passed:
+		diagnostic.Outcome = core.SeedVerificationOutcomePassed
+	default:
+		diagnostic.Outcome = core.SeedVerificationOutcomePredicateFailed
+		if report.ExitCode != nil {
+			diagnostic.Message = boundSeedVerifyDiagnostic(fmt.Sprintf("verify command exited %d", *report.ExitCode))
+		} else {
+			diagnostic.Message = boundSeedVerifyDiagnostic("verify command did not pass")
+		}
+	}
+	return diagnostic
+}
+
+func boundSeedVerifyDiagnostic(message string) string {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return ""
+	}
+	if len(message) > seedVerifyDiagnosticBound {
+		return message[:seedVerifyDiagnosticBound]
+	}
+	return message
 }
 
 // resolveSeedWorkspace resolves a substrate name or path to a local workspace

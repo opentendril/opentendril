@@ -71,24 +71,45 @@ func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return store.RecordSeedRun(ctx, historydb.SeedRun{
-				Handle:                settled.Handle,
-				Pollen:                settled.Pollen,
-				PhytomerID:            settled.PhytomerID,
-				Substrate:             settled.Substrate,
-				Goal:                  settled.Goal,
-				Status:                settled.Status,
-				Iterations:            settled.Iterations,
-				Branch:                settled.Branch,
-				Commit:                settled.Commit,
-				Diff:                  settled.Diff,
-				Logs:                  settled.Logs,
-				Error:                 settled.Error,
-				PublicationDiagnostic: testHistorySeedPublicationDiagnostic(settled.PublicationDiagnostic),
-				StartedAt:             settled.StartedAt,
-				FinishedAt:            settled.FinishedAt,
+				Handle:                  settled.Handle,
+				Pollen:                  settled.Pollen,
+				PhytomerID:              settled.PhytomerID,
+				Substrate:               settled.Substrate,
+				Goal:                    settled.Goal,
+				Status:                  settled.Status,
+				Iterations:              settled.Iterations,
+				Branch:                  settled.Branch,
+				Commit:                  settled.Commit,
+				Diff:                    settled.Diff,
+				Logs:                    settled.Logs,
+				Error:                   settled.Error,
+				PublicationDiagnostic:   testHistorySeedPublicationDiagnostic(settled.PublicationDiagnostic),
+				VerificationDiagnostics: testHistorySeedVerificationDiagnostics(settled.VerificationDiagnostics),
+				StartedAt:               settled.StartedAt,
+				FinishedAt:              settled.FinishedAt,
 			})
 		},
 	}
+}
+
+func testHistorySeedVerificationDiagnostics(src []core.SeedVerificationDiagnostic) []historydb.SeedVerificationDiagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]historydb.SeedVerificationDiagnostic, len(src))
+	for i, diagnostic := range src {
+		out[i] = historydb.SeedVerificationDiagnostic{
+			Iteration: diagnostic.Iteration,
+			Outcome:   diagnostic.Outcome,
+			TimedOut:  diagnostic.TimedOut,
+			Message:   diagnostic.Message,
+		}
+		if diagnostic.ExitCode != nil {
+			code := *diagnostic.ExitCode
+			out[i].ExitCode = &code
+		}
+	}
+	return out
 }
 
 func testHistorySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagnostic) *historydb.SeedPublicationDiagnostic {

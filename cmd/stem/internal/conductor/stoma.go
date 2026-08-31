@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	pathpkg "path"
 	"strings"
 	"time"
@@ -241,7 +240,7 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 		return StomaResult{}, fmt.Errorf("build stoma image: %w", err)
 	}
 
-	provider, err := terrarium.NewProvider(ctx, resolveTerrariumProviderName(ctx, nil))
+	provider, err := terrariumNewProviderFn(ctx, resolveTerrariumProviderName(ctx, nil))
 	if err != nil {
 		return StomaResult{}, fmt.Errorf("resolve terrarium provider for stoma: %w", err)
 	}
@@ -254,13 +253,10 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 		MemoryLimitMB: 2048,
 		PidsLimit:     512,
 		Timeout:       timeout + time.Minute,
-		// Run as the host uid:gid so files the command writes into the
-		// read-write workspace bind mount are owned by the Stem's user, not
-		// root. A stoma exists to replace host-side formatters/test runs,
-		// so its edits land back in the operator's checkout; a root-owned tree
-		// would need sudo to clean up. The container user then also matches the
-		// bind mount owner.
-		RunAsUser: fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		// Same bind-mount identity as normal Sprout execution: rootless Docker
+		// uses 0:0 so the mount is readable; otherwise the Stem host UID:GID
+		// so workspace writes remain owned by the operator.
+		RunAsUser: terrariumBindMountRunAsUser(),
 		Mounts: []terrarium.MountSpec{
 			{Source: execution.Workspace, Target: "/app"},
 		},

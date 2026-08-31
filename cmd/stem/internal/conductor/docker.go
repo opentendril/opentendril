@@ -1611,16 +1611,11 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 		return nil, err
 	}
 
-	runAsUser := fmt.Sprintf("%d:%d", osGetuidFn(), osGetgidFn())
-	if dockerIsRootlessFn() {
-		runAsUser = "0:0"
-	}
-
 	instance, err := provider.Create(ctx, terrarium.TerrariumSpec{
 		Image:          imageName,
 		WorkingDir:     "/app",
 		NetworkMode:    terrarium.NetworkModeNone,
-		RunAsUser:      runAsUser,
+		RunAsUser:      terrariumBindMountRunAsUser(),
 		CPUQuota:       "1.0",
 		MemoryLimitMB:  2048,
 		ReadOnlyRootFS: false,
@@ -1641,6 +1636,17 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 	}
 
 	return &terrariumToolSession{terrarium: instance}, nil
+}
+
+// terrariumBindMountRunAsUser is the single bind-mounted Terrarium identity
+// rule. Rootless Docker maps container 0:0 to the Stem host user, which is
+// the owner of the bind-mounted workspace. Any other identity appears as an
+// unmapped subordinate user and cannot use that mount as the host user does.
+func terrariumBindMountRunAsUser() string {
+	if dockerIsRootlessFn() {
+		return "0:0"
+	}
+	return fmt.Sprintf("%d:%d", osGetuidFn(), osGetgidFn())
 }
 
 // CheckGVisorReadinessFn is a test seam over terrarium.CheckGVisorReadiness.
@@ -2826,6 +2832,10 @@ func ensureNotGitVisible(targetPath string) {
 }
 
 func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace, seedBranch, checkpointCommit, expectedOldTip string) error {
+	if err := validateSeedCandidatePaths(ctx, managedWorkspace.Repository, expectedOldTip, checkpointCommit, managedWorkspace.Path); err != nil {
+		return err
+	}
+
 	// a. atomically create/advance tendril/seed-* using expected previous tip
 	oldTip := expectedOldTip
 	if !localBranchExists(managedWorkspace.Repository, seedBranch) {
