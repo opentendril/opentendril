@@ -116,6 +116,25 @@ func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservat
 						RequestID:       seed.PublicationDiagnostic.RequestID,
 					}
 				}(),
+				VerificationDiagnostics: func() []core.SeedVerificationDiagnostic {
+					if len(seed.VerificationDiagnostics) == 0 {
+						return nil
+					}
+					out := make([]core.SeedVerificationDiagnostic, len(seed.VerificationDiagnostics))
+					for i, diagnostic := range seed.VerificationDiagnostics {
+						out[i] = core.SeedVerificationDiagnostic{
+							Iteration: diagnostic.Iteration,
+							Outcome:   diagnostic.Outcome,
+							TimedOut:  diagnostic.TimedOut,
+							Message:   diagnostic.Message,
+						}
+						if diagnostic.ExitCode != nil {
+							code := *diagnostic.ExitCode
+							out[i].ExitCode = &code
+						}
+					}
+					return out
+				}(),
 			}, true, nil
 		},
 		SproutsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.SproutObservationEvidence, error) {

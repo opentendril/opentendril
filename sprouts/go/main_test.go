@@ -147,6 +147,20 @@ func TestWriteFileTool(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects pseudo-home execution paths", func(t *testing.T) {
+		res := writeFileTool(ws, mkArgs("path", "~/tendril/.tendril/run-workspaces/abc/HELLO.md", "content", "nope"))
+		if res.Status != "error" || !strings.Contains(res.Error, "repository-relative") {
+			t.Fatalf("pseudo-home path was accepted: %+v", res)
+		}
+	})
+
+	t.Run("rejects run-workspace execution paths", func(t *testing.T) {
+		res := writeFileTool(ws, mkArgs("path", ".tendril/run-workspaces/abc/HELLO.md", "content", "nope"))
+		if res.Status != "error" || !strings.Contains(res.Error, "repository-relative") {
+			t.Fatalf("run-workspace path was accepted: %+v", res)
+		}
+	})
+
 	t.Run("creates parent directories", func(t *testing.T) {
 		res := writeFileTool(ws, mkArgs("path", "a/b/c/new.txt", "content", "deep"))
 		if res.Status != "success" {

@@ -415,3 +415,37 @@ func TestProjectPhytomerObservationPublishesSafeFruitFailureDiagnostic(t *testin
 		t.Fatalf("raw Seed error leaked into observation: %s", raw)
 	}
 }
+
+func TestProjectPhytomerObservationIncludesVerificationDiagnostics(t *testing.T) {
+	code := 1
+	obs := projectObservation(t, core.SeedObservationEvidence{
+		Handle:     "seed-1",
+		PhytomerID: "tendril-1",
+		Status:     core.SeedStatusExhausted,
+		Iterations: 1,
+		VerificationDiagnostics: []core.SeedVerificationDiagnostic{{
+			Iteration: 1,
+			Outcome:   core.SeedVerificationOutcomePredicateFailed,
+			ExitCode:  &code,
+			TimedOut:  false,
+			Message:   "verify command exited 1",
+		}},
+	}, nil)
+	if len(obs.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v", obs.VerificationDiagnostics)
+	}
+	if obs.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("outcome = %q", obs.VerificationDiagnostics[0].Outcome)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"verificationDiagnostics"`) || !strings.Contains(body, `"predicate-failed"`) {
+		t.Fatalf("observation omitted verification diagnostics: %s", body)
+	}
+	if strings.Contains(body, "/home/") || strings.Contains(body, "Bearer ") {
+		t.Fatalf("unsafe material leaked: %s", body)
+	}
+}

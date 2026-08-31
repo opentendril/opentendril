@@ -523,6 +523,9 @@ func resolveWorkspacePath(workspaceRoot string, rawPath string) (string, string,
 	if strings.TrimSpace(rawPath) == "" {
 		rawPath = "."
 	}
+	if err := rejectExecutionLocationPath(rawPath); err != nil {
+		return "", "", err
+	}
 
 	absRoot, err := filepath.Abs(workspaceRoot)
 	if err != nil {
@@ -545,6 +548,22 @@ func resolveWorkspacePath(workspaceRoot string, rawPath string) (string, string,
 	}
 
 	return absPath, filepath.ToSlash(relPath), nil
+}
+
+func rejectExecutionLocationPath(rawPath string) error {
+	normalized := filepath.ToSlash(strings.TrimSpace(rawPath))
+	for strings.Contains(normalized, "//") {
+		normalized = strings.ReplaceAll(normalized, "//", "/")
+	}
+	if normalized == "~" || strings.HasPrefix(normalized, "~/") {
+		return fmt.Errorf("path %q is not a repository-relative workspace path", rawPath)
+	}
+	if strings.Contains(normalized, "/.tendril/run-workspaces/") ||
+		strings.HasPrefix(normalized, ".tendril/run-workspaces/") ||
+		normalized == ".tendril/run-workspaces" {
+		return fmt.Errorf("path %q is not a repository-relative workspace path", rawPath)
+	}
+	return nil
 }
 
 func walkDirectory(rootAbs string, rootRel string, depth int, maxDepth int, maxEntries int, entries *[]listFilesEntry) bool {

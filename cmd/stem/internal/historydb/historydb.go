@@ -83,7 +83,11 @@ func historyRetentionDaysFromEnv() int {
 //
 // Version 6 records the structured, safe Seed Fruit-publication diagnostic in
 // seedruns.observation. Legacy rows keep an empty observation envelope.
-const currentSchemaVersion = 6
+//
+// Version 7 records bounded Seed verification diagnostics in the same
+// seedruns.observation envelope. Legacy rows keep an empty verification list;
+// no historical verification facts are invented.
+const currentSchemaVersion = 7
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -175,19 +179,20 @@ type SeedRun struct {
 	Pollen string `json:"pollen,omitempty"`
 	// PhytomerID is the Stem-created execution/observation identity for this
 	// Seed growth. Empty on historical rows that never had a truthful relation.
-	PhytomerID            string                     `json:"phytomerId,omitempty"`
-	Substrate             string                     `json:"substrate,omitempty"`
-	Goal                  string                     `json:"goal,omitempty"`
-	Status                string                     `json:"status"`
-	Iterations            int                        `json:"iterations"`
-	Branch                string                     `json:"branch,omitempty"`
-	Commit                string                     `json:"commit,omitempty"`
-	Diff                  string                     `json:"diff,omitempty"`
-	Logs                  string                     `json:"logs,omitempty"`
-	Error                 string                     `json:"error,omitempty"`
-	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
-	StartedAt             time.Time                  `json:"startedAt"`
-	FinishedAt            time.Time                  `json:"finishedAt,omitempty"`
+	PhytomerID              string                       `json:"phytomerId,omitempty"`
+	Substrate               string                       `json:"substrate,omitempty"`
+	Goal                    string                       `json:"goal,omitempty"`
+	Status                  string                       `json:"status"`
+	Iterations              int                          `json:"iterations"`
+	Branch                  string                       `json:"branch,omitempty"`
+	Commit                  string                       `json:"commit,omitempty"`
+	Diff                    string                       `json:"diff,omitempty"`
+	Logs                    string                       `json:"logs,omitempty"`
+	Error                   string                       `json:"error,omitempty"`
+	PublicationDiagnostic   *SeedPublicationDiagnostic   `json:"publicationDiagnostic,omitempty"`
+	VerificationDiagnostics []SeedVerificationDiagnostic `json:"verificationDiagnostics,omitempty"`
+	StartedAt               time.Time                    `json:"startedAt"`
+	FinishedAt              time.Time                    `json:"finishedAt,omitempty"`
 }
 
 // SeedPublicationDiagnostic is the credential- and content-safe durable
@@ -202,8 +207,19 @@ type SeedPublicationDiagnostic struct {
 	RequestID       string `json:"requestId,omitempty"`
 }
 
+// SeedVerificationDiagnostic is the credential- and content-safe durable
+// record of one completed Seed verification iteration.
+type SeedVerificationDiagnostic struct {
+	Iteration int    `json:"iteration"`
+	Outcome   string `json:"outcome"`
+	ExitCode  *int   `json:"exitCode,omitempty"`
+	TimedOut  bool   `json:"timedOut"`
+	Message   string `json:"message,omitempty"`
+}
+
 type seedRunObservation struct {
-	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
+	PublicationDiagnostic   *SeedPublicationDiagnostic   `json:"publicationDiagnostic,omitempty"`
+	VerificationDiagnostics []SeedVerificationDiagnostic `json:"verificationDiagnostics,omitempty"`
 }
 
 // EventRecord is one persisted EventBus telemetry row.
@@ -891,14 +907,32 @@ func decodeSproutRunObservation(raw string) (sproutRunObservation, error) {
 }
 
 func encodeSeedRunObservation(run SeedRun) (string, error) {
-	if run.PublicationDiagnostic == nil {
+	if run.PublicationDiagnostic == nil && len(run.VerificationDiagnostics) == 0 {
 		return "", nil
 	}
-	encoded, err := json.Marshal(seedRunObservation{PublicationDiagnostic: run.PublicationDiagnostic})
+	encoded, err := json.Marshal(seedRunObservation{
+		PublicationDiagnostic:   run.PublicationDiagnostic,
+		VerificationDiagnostics: copySeedVerificationDiagnostics(run.VerificationDiagnostics),
+	})
 	if err != nil {
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+func copySeedVerificationDiagnostics(src []SeedVerificationDiagnostic) []SeedVerificationDiagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]SeedVerificationDiagnostic, len(src))
+	copy(out, src)
+	for i := range src {
+		if src[i].ExitCode != nil {
+			code := *src[i].ExitCode
+			out[i].ExitCode = &code
+		}
+	}
+	return out
 }
 
 func decodeSeedRunObservation(raw string) (seedRunObservation, error) {
@@ -1300,6 +1334,7 @@ func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt, observationRa
 		return fmt.Errorf("decode seed run observation: %w", err)
 	}
 	run.PublicationDiagnostic = observation.PublicationDiagnostic
+	run.VerificationDiagnostics = copySeedVerificationDiagnostics(observation.VerificationDiagnostics)
 	if run.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt); err != nil {
 		return fmt.Errorf("parse seed run startedAt: %w", err)
 	}

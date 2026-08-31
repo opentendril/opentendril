@@ -48,6 +48,13 @@ const (
 	// SeedFailureCategoryFruitPublication is the safe diagnostic category for a
 	// failed managed Fruit publication.
 	SeedFailureCategoryFruitPublication = "fruit-publication"
+
+	// Seed verification outcomes. These distinguish a completed predicate from
+	// a timeout or an inability to execute the verifier. They are not Seed
+	// terminal statuses.
+	SeedVerificationOutcomePassed               = "passed"
+	SeedVerificationOutcomePredicateFailed      = "predicate-failed"
+	SeedVerificationOutcomeInfrastructureFailed = "infrastructure-failed"
 )
 
 // seedDefaultMaxIterations bounds the build/verify loop when the caller does
@@ -172,21 +179,22 @@ type SeedOpening struct {
 
 // SeedSettlement is the transport-free terminal Seed record.
 type SeedSettlement struct {
-	Handle                string
-	PhytomerID            string
-	Pollen                string
-	Substrate             string
-	Goal                  string
-	Status                string
-	Iterations            int
-	Branch                string
-	Commit                string
-	Diff                  string
-	Logs                  string
-	Error                 string
-	PublicationDiagnostic *SeedPublicationDiagnostic
-	StartedAt             time.Time
-	FinishedAt            time.Time
+	Handle                  string
+	PhytomerID              string
+	Pollen                  string
+	Substrate               string
+	Goal                    string
+	Status                  string
+	Iterations              int
+	Branch                  string
+	Commit                  string
+	Diff                    string
+	Logs                    string
+	Error                   string
+	PublicationDiagnostic   *SeedPublicationDiagnostic
+	VerificationDiagnostics []SeedVerificationDiagnostic
+	StartedAt               time.Time
+	FinishedAt              time.Time
 }
 
 // SeedPublicationDiagnostic is the Core-owned, credential-free explanation of
@@ -200,6 +208,17 @@ type SeedPublicationDiagnostic struct {
 	RetrySafe       bool   `json:"retrySafe"`
 	Message         string `json:"message"`
 	RequestID       string `json:"requestId,omitempty"`
+}
+
+// SeedVerificationDiagnostic is the Core-owned, credential-free explanation of
+// one completed Seed verification iteration. It records only bounded Stem
+// facts: whether the predicate passed, failed, timed out, or could not run.
+type SeedVerificationDiagnostic struct {
+	Iteration int    `json:"iteration"`
+	Outcome   string `json:"outcome"`
+	ExitCode  *int   `json:"exitCode,omitempty"`
+	TimedOut  bool   `json:"timedOut"`
+	Message   string `json:"message,omitempty"`
 }
 
 // SeedPersistence is the injected durable-ownership port. Core composes the
@@ -238,6 +257,9 @@ type SeedGrowResult struct {
 	// PublicationDiagnostic is present only when managed Fruit publication
 	// failed after Seed execution completed.
 	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
+	// VerificationDiagnostics is one bounded diagnostic per completed
+	// verification iteration. Absent when no verification ran.
+	VerificationDiagnostics []SeedVerificationDiagnostic `json:"verificationDiagnostics,omitempty"`
 }
 
 // SeedOperations is the injection port for growing a Seed. Run may be nil, in
@@ -328,6 +350,7 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 		settled.Iterations = result.Iterations
 		settled.Diff = result.Diff
 		settled.Logs = result.Logs
+		settled.VerificationDiagnostics = CopySeedVerificationDiagnostics(result.VerificationDiagnostics)
 		if publicationFailed {
 			settled.Status = SeedStatusFruitPublicationFailed
 			settled.Branch = ""
@@ -564,6 +587,24 @@ func seedSpecsEqual(a, b SeedSpec) bool {
 		a.PhytomerID == b.PhytomerID &&
 		stringSlicesEqual(a.Verify, b.Verify) &&
 		stringSlicesEqual(a.Egress, b.Egress)
+}
+
+// CopySeedVerificationDiagnostics copies a verification diagnostic slice,
+// including exit-code pointers, so persistence and observation cannot share
+// mutable backing with the execution result.
+func CopySeedVerificationDiagnostics(src []SeedVerificationDiagnostic) []SeedVerificationDiagnostic {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]SeedVerificationDiagnostic, len(src))
+	copy(out, src)
+	for i := range src {
+		if src[i].ExitCode != nil {
+			code := *src[i].ExitCode
+			out[i].ExitCode = &code
+		}
+	}
+	return out
 }
 
 func stringSlicesEqual(a, b []string) bool {

@@ -3,6 +3,7 @@ package historydb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,6 +125,9 @@ func TestSeedRunFruitPublicationDiagnosticRoundTrip(t *testing.T) {
 	if run.PublicationDiagnostic == nil || run.PublicationDiagnostic.RequestID != diagnostic.RequestID || run.PublicationDiagnostic.Message != diagnostic.Message {
 		t.Fatalf("publication diagnostic = %+v", run.PublicationDiagnostic)
 	}
+	if len(run.VerificationDiagnostics) != 0 {
+		t.Fatalf("invented verification diagnostics on a publication-only record: %+v", run.VerificationDiagnostics)
+	}
 
 	var rawObservation string
 	if err := store.db.QueryRow(`SELECT observation FROM seedruns WHERE handle = ?`, "seed-publication-failure").Scan(&rawObservation); err != nil {
@@ -131,6 +135,52 @@ func TestSeedRunFruitPublicationDiagnosticRoundTrip(t *testing.T) {
 	}
 	if rawObservation == "" || strings.Contains(rawObservation, "Authorization") || strings.Contains(rawObservation, "PRIVATE_PROMPT_CONTENT") {
 		t.Fatalf("unsafe publication observation = %q", rawObservation)
+	}
+}
+
+func TestSeedRunVerificationDiagnosticsRoundTrip(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started := time.Now().UTC()
+	code := 1
+	diagnostics := []SeedVerificationDiagnostic{{
+		Iteration: 1,
+		Outcome:   "predicate-failed",
+		ExitCode:  &code,
+		TimedOut:  false,
+		Message:   "verify command exited 1",
+	}, {
+		Iteration: 2,
+		Outcome:   "infrastructure-failed",
+		TimedOut:  true,
+		Message:   "verify command timed out",
+	}}
+	if err := store.RecordSeedRun(ctx, SeedRun{
+		Handle: "seed-verify-diag", Pollen: "claude", PhytomerID: "tendril-verify-diag",
+		Substrate: "core", Status: "exhausted", Iterations: 2,
+		VerificationDiagnostics: diagnostics, StartedAt: started, FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	run, found, err := store.GetSeedRun(ctx, "seed-verify-diag")
+	if err != nil || !found {
+		t.Fatalf("get: found=%v err=%v", found, err)
+	}
+	if len(run.VerificationDiagnostics) != 2 {
+		t.Fatalf("diagnostics = %+v", run.VerificationDiagnostics)
+	}
+	if run.VerificationDiagnostics[0].ExitCode == nil || *run.VerificationDiagnostics[0].ExitCode != 1 {
+		t.Fatalf("exit code = %+v", run.VerificationDiagnostics[0])
+	}
+	if !run.VerificationDiagnostics[1].TimedOut || run.VerificationDiagnostics[1].Outcome != "infrastructure-failed" {
+		t.Fatalf("timeout diagnostic = %+v", run.VerificationDiagnostics[1])
+	}
+	raw, err := json.Marshal(run)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "/home/") || strings.Contains(string(raw), "Bearer ") {
+		t.Fatalf("unsafe material in seed run JSON: %s", raw)
 	}
 }
 
@@ -204,6 +254,9 @@ VALUES ('legacy-seed', 'claude', 'core', 'old goal', 'satisfied', '2026-01-01T00
 	}
 	if run.Pollen != "claude" || run.Substrate != "core" || run.Status != "satisfied" {
 		t.Fatalf("migration lost the legacy row: %+v", run)
+	}
+	if len(run.VerificationDiagnostics) != 0 {
+		t.Fatalf("legacy seed was assigned invented verification facts: %+v", run.VerificationDiagnostics)
 	}
 
 	if _, found, err := store.GetSeedRunByPhytomer(context.Background(), "tendril-anything"); err != nil || found {

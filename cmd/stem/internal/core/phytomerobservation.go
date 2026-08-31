@@ -29,16 +29,17 @@ var ErrPhytomerObservationOwnershipConflict = errors.New("phytomer observation o
 // success. Raw Seed error text, transcript, output, and private reasoning are
 // not part of this contract.
 type PhytomerObservation struct {
-	Pollen                string                     `json:"pollen,omitempty"`
-	Substrate             string                     `json:"substrate,omitempty"`
-	Handle                string                     `json:"handle,omitempty"`
-	PhytomerID            string                     `json:"phytomerId,omitempty"`
-	Status                string                     `json:"status,omitempty"`
-	Iterations            int                        `json:"iterations"`
-	Branch                string                     `json:"branch,omitempty"`
-	Commit                string                     `json:"commit,omitempty"`
-	PublicationDiagnostic *SeedPublicationDiagnostic `json:"publicationDiagnostic,omitempty"`
-	Sprouts               []SproutObservation        `json:"sprouts,omitempty"`
+	Pollen                  string                       `json:"pollen,omitempty"`
+	Substrate               string                       `json:"substrate,omitempty"`
+	Handle                  string                       `json:"handle,omitempty"`
+	PhytomerID              string                       `json:"phytomerId,omitempty"`
+	Status                  string                       `json:"status,omitempty"`
+	Iterations              int                          `json:"iterations"`
+	Branch                  string                       `json:"branch,omitempty"`
+	Commit                  string                       `json:"commit,omitempty"`
+	PublicationDiagnostic   *SeedPublicationDiagnostic   `json:"publicationDiagnostic,omitempty"`
+	VerificationDiagnostics []SeedVerificationDiagnostic `json:"verificationDiagnostics,omitempty"`
+	Sprouts                 []SproutObservation          `json:"sprouts,omitempty"`
 }
 
 // SproutObservation is the safe lifecycle envelope of one actual Sprout
@@ -60,19 +61,20 @@ type SproutObservation struct {
 // may consult. It includes persisted fields that are not part of the public
 // observation (goal, diff, logs, raw error). It is not a transport type.
 type SeedObservationEvidence struct {
-	Handle                string
-	Pollen                string
-	PhytomerID            string
-	Substrate             string
-	Status                string
-	Iterations            int
-	Branch                string
-	Commit                string
-	Goal                  string
-	Diff                  string
-	Logs                  string
-	Error                 string
-	PublicationDiagnostic *SeedPublicationDiagnostic
+	Handle                  string
+	Pollen                  string
+	PhytomerID              string
+	Substrate               string
+	Status                  string
+	Iterations              int
+	Branch                  string
+	Commit                  string
+	Goal                    string
+	Diff                    string
+	Logs                    string
+	Error                   string
+	PublicationDiagnostic   *SeedPublicationDiagnostic
+	VerificationDiagnostics []SeedVerificationDiagnostic
 }
 
 // SproutObservationEvidence is durable Sprout state the current-state
@@ -160,6 +162,7 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 		copied := *seed.PublicationDiagnostic
 		obs.PublicationDiagnostic = &copied
 	}
+	obs.VerificationDiagnostics = CopySeedVerificationDiagnostics(seed.VerificationDiagnostics)
 	if len(sprouts) == 0 {
 		return obs, nil
 	}
