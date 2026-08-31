@@ -13,6 +13,8 @@ var requestErrorSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9._\-]+`),
 	regexp.MustCompile(`(sk-|ghp_|github_pat_|xox[baprs]-)[A-Za-z0-9._\-]+`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+`),
+	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|secret|password)(\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)`),
+	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)`),
 }
 
 // RequestError is a typed provider HTTP rejection. StatusCode is the fact
@@ -28,8 +30,11 @@ type RequestError struct {
 	Source     string
 	// Body is the sanitized provider explanation. It never carries the
 	// request's API key or a bearer token.
-	Body    string
-	wrapped error
+	Body               string
+	EndpointResolution LocalEndpointResolution
+	AttemptedEndpoint  string
+	Failure            ReachabilityFailureClass
+	wrapped            error
 }
 
 func (e *RequestError) Error() string {
@@ -38,6 +43,9 @@ func (e *RequestError) Error() string {
 	}
 	base := fmt.Sprintf("llm returned %d: %s (provider=%s model=%s tier=%s ceiling=%d source=%q)",
 		e.StatusCode, e.Body, e.Provider, e.Model, e.Tier, e.Ceiling, e.Source)
+	if e.EndpointResolution.EffectiveEndpoint != "" || e.AttemptedEndpoint != "" {
+		base += " (" + safeEndpointDescription(e.EndpointResolution, e.AttemptedEndpoint) + ")"
+	}
 	if e.wrapped != nil {
 		return e.wrapped.Error() + ": " + base
 	}
@@ -59,6 +67,16 @@ func (e *RequestError) SafeMessage() string {
 	return e.Body
 }
 
+func (e *RequestError) FailureClass() ReachabilityFailureClass {
+	if e == nil {
+		return ""
+	}
+	if e.Failure != "" {
+		return e.Failure
+	}
+	return ReachabilityFailureProviderHTTP
+}
+
 // NewRequestError builds a typed provider rejection whose Body has already
 // been stripped of bearer tokens and API-key material.
 func NewRequestError(status int, body string, spec ProviderSpec) *RequestError {
@@ -66,15 +84,22 @@ func NewRequestError(status int, body string, spec ProviderSpec) *RequestError {
 }
 
 func newRequestError(status int, body string, spec ProviderSpec, wrapped error) *RequestError {
+	return newRequestErrorAt(status, body, spec, wrapped, "")
+}
+
+func newRequestErrorAt(status int, body string, spec ProviderSpec, wrapped error, attempted string) *RequestError {
 	return &RequestError{
-		StatusCode: status,
-		Provider:   spec.Provider,
-		Model:      spec.Model,
-		Tier:       spec.Tier,
-		Ceiling:    spec.OutputLimit,
-		Source:     spec.CeilingSource,
-		Body:       safeProviderMessage(body),
-		wrapped:    wrapped,
+		StatusCode:         status,
+		Provider:           spec.Provider,
+		Model:              spec.Model,
+		Tier:               spec.Tier,
+		Ceiling:            spec.OutputLimit,
+		Source:             spec.CeilingSource,
+		Body:               safeProviderMessage(body),
+		EndpointResolution: endpointResolutionForAttempt(spec, attempted),
+		AttemptedEndpoint:  attempted,
+		Failure:            ReachabilityFailureProviderHTTP,
+		wrapped:            wrapped,
 	}
 }
 
@@ -86,6 +111,7 @@ func safeProviderMessage(body string) string {
 	if msg := extractJSONErrorMessage(body); msg != "" {
 		body = msg
 	}
+	body = redactEndpointURLs(body)
 	body = redactProviderSecrets(body)
 	if len(body) > maxSafeProviderMessage {
 		return body[:maxSafeProviderMessage] + "…"

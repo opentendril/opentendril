@@ -87,7 +87,7 @@ func installRemoteManagedRunSeams(
 		mergeTerrariumCommitFn = originalMerge
 	})
 
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "# repo map\n", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
@@ -1176,7 +1176,7 @@ func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
 		commitTerrariumExecutionFn = originalCommit
 		mergeTerrariumCommitFn = originalMerge
 	})
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }

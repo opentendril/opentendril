@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -84,7 +86,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 		mergeTerrariumCommitFn = origMerge
 	})
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
@@ -126,6 +128,52 @@ func newSproutWorkspace(t *testing.T) string {
 		t.Fatalf("git commit: %v", err)
 	}
 	return workdir
+}
+
+func TestRunSproutLocalModelUnavailableStopsBeforeTerrarium(t *testing.T) {
+	clearLLMEnv(t)
+	t.Setenv("DEFAULT_LLM_PROVIDER", "local")
+	t.Setenv("LOCAL_MODEL_NAME", "missing-model")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"present-model"}]}`))
+	}))
+	defer server.Close()
+	t.Setenv("LOCAL_INFERENCE_URL", server.URL+"/v1")
+
+	stubSproutRun(t, nil)
+	preflightCalled := false
+	runSproutPreflightChecksFn = func(ctx context.Context, mind *llm.Client) error {
+		preflightCalled = true
+		return checkLocalInferenceReachable(ctx, mind)
+	}
+	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		t.Fatal("Terrarium started before the selected local model was proven available")
+		return nil, nil
+	}
+
+	orch := NewDockerOrchestrator()
+	orch.Substrate = newSproutWorkspace(t)
+	orch.StepID = "step-missing-local-model"
+	orch.DisableMergeBack = true
+	_, err := orch.RunSprout(context.Background(), "do the thing")
+	if err == nil {
+		t.Fatal("RunSprout() error = nil, want model-unavailable preflight failure")
+	}
+	if !preflightCalled {
+		t.Fatal("local provider preflight was not called")
+	}
+	var reachabilityErr *llm.ProviderReachabilityError
+	if !errors.As(err, &reachabilityErr) {
+		t.Fatalf("RunSprout() error = %v, want typed reachability error", err)
+	}
+	if reachabilityErr.FailureClass() != llm.ReachabilityFailureModelUnavailable {
+		t.Fatalf("failure class = %q, want model-unavailable", reachabilityErr.FailureClass())
+	}
 }
 
 // A run that pinned no model must still be able to say which model carried it,
@@ -190,7 +238,7 @@ func TestRunSproutRefusesAnUnresolvableProviderBeforeBuildingAnything(t *testing
 	built := false
 	stubSproutRun(t, func(llmCaller) { built = true })
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		t.Fatal("a terrarium was started for a run with no resolvable model")
 		return nil, nil

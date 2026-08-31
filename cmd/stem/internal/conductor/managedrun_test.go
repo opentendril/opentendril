@@ -213,7 +213,7 @@ func installManagedRunSeams(t *testing.T, capture *managedRunCapture, runners ma
 		mergeTerrariumCommitFn = originalMerge
 	})
 
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "# managed repo map\n", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
@@ -853,7 +853,7 @@ func TestCheckoutPathStillUsesShadowWorktree(t *testing.T) {
 		newSproutFn = originalNew
 		collectStageableFilesFn = originalCollect
 	})
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(context.Context, string) error { return nil }

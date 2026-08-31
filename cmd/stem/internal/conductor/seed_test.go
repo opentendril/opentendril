@@ -15,6 +15,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 // newSeedRepo builds a real git repository on branch main with one commit, the
@@ -445,7 +446,7 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 
 	origPreflight := runSproutPreflightChecksFn
 	t.Cleanup(func() { runSproutPreflightChecksFn = origPreflight })
-	runSproutPreflightChecksFn = func(ctx context.Context) error {
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error {
 		return nil
 	}
 
