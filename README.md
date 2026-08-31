@@ -80,7 +80,7 @@ installer into `sudo sh`. The full sequence is in
 [docs/GUIDE-INSTALL-QUICK.md](docs/GUIDE-INSTALL-QUICK.md):
 
 ```bash
-RELEASE=v0.3.9
+RELEASE=v0.3.10
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
