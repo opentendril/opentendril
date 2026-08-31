@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 )
@@ -17,7 +18,7 @@ var requestErrorSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)`),
 }
 
-// RequestError is a typed provider HTTP rejection. StatusCode is the fact
+// RequestError is a typed HTTP failure. StatusCode is the fact
 // Stem core classifies from; Body is a credential-free excerpt of the
 // provider's own explanation. The Error() string keeps the historical
 // "llm returned N: …" shape so existing readers stay valid.
@@ -98,9 +99,16 @@ func newRequestErrorAt(status int, body string, spec ProviderSpec, wrapped error
 		Body:               safeProviderMessage(body),
 		EndpointResolution: endpointResolutionForAttempt(spec, attempted),
 		AttemptedEndpoint:  attempted,
-		Failure:            ReachabilityFailureProviderHTTP,
+		Failure:            requestFailureClass(status),
 		wrapped:            wrapped,
 	}
+}
+
+func requestFailureClass(status int) ReachabilityFailureClass {
+	if status == http.StatusProxyAuthRequired {
+		return ReachabilityFailureProxy
+	}
+	return ReachabilityFailureProviderHTTP
 }
 
 func safeProviderMessage(body string) string {

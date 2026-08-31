@@ -72,6 +72,27 @@ func TestCheckLocalInferenceReachableHealthyEndpoint(t *testing.T) {
 	}
 }
 
+func TestCheckLocalInferenceReachableAcceptsOllamaDefaultTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"llama3.2:latest"}]}`))
+	}))
+	defer server.Close()
+
+	client := llm.NewClient(llm.ProviderSpec{
+		Provider: "local",
+		BaseURL:  server.URL + "/v1",
+		Model:    "llama3.2",
+		Mode:     llm.ModeOpenAIish,
+	})
+	if err := checkLocalInferenceReachable(context.Background(), client); err != nil {
+		t.Fatalf("checkLocalInferenceReachable() error = %v, want Ollama's default-tag alias accepted", err)
+	}
+}
+
 func TestCheckLocalInferenceReachableMissingModelFailsBeforeUse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/models" {

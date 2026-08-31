@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -41,29 +40,45 @@ func TestLocalEndpointResolutionPreservesExplicitLoopbackAndRemoteEndpoints(t *t
 	}
 }
 
-func TestLocalEndpointResolutionPreservesExplicitProviderConfigEndpoint(t *testing.T) {
+func TestLocalEndpointResolutionUsesHostProviderConfigExactly(t *testing.T) {
 	clearProviderKeys(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "")
 	t.Setenv("LOCAL_INFERENCE_URL", "")
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".tendril"), 0o755); err != nil {
-		t.Fatalf("mkdir config directory: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".tendril", "config.yaml"), []byte("llm:\n  default-provider: local\n  providers:\n    local:\n      base-url: http://localhost:11434/v1\n      model: present-model\n"), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	chdirWithTendrilConfig(t, "llm:\n  default-provider: local\n  providers:\n    local:\n      base-url: http://localhost:11434/v1\n      model: llama3.2\n      endpoint: /chat/completions\n      temperature: 0.1\n")
 
-	previous, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(root); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(previous) })
-
-	spec := ResolveProviderSpec()
+	spec := ResolveLocalProviderSpecForContext(HostLocalEndpointContext())
 	assertExplicitLocalEndpoint(t, spec, "http://localhost:11434/v1", EndpointSourceProviderConfig)
+	if spec.Model != "llama3.2" {
+		t.Fatalf("model = %q, want repository local model", spec.Model)
+	}
+	if spec.EndpointResolution.CallerContext.Caller != EndpointCallerHost {
+		t.Fatalf("caller = %q, want host", spec.EndpointResolution.CallerContext.Caller)
+	}
+}
+
+func TestModelIDsMatchPreservesExactAndLocalDefaultTagIdentities(t *testing.T) {
+	tests := []struct {
+		name       string
+		provider   string
+		selected   string
+		advertised string
+		want       bool
+	}{
+		{name: "exact local identity", provider: "local", selected: "llama3.2", advertised: "llama3.2", want: true},
+		{name: "selected local default tag", provider: "local", selected: "llama3.2", advertised: "llama3.2:latest", want: true},
+		{name: "advertised local default tag", provider: "local", selected: "llama3.2:latest", advertised: "llama3.2", want: true},
+		{name: "different local tag", provider: "local", selected: "llama3.2:7b", advertised: "llama3.2:latest", want: false},
+		{name: "malformed double default tag", provider: "local", selected: "llama3.2:latest:latest", advertised: "llama3.2:latest", want: false},
+		{name: "non-local default tag", provider: "openrouter", selected: "llama3.2", advertised: "llama3.2:latest", want: false},
+		{name: "missing local model", provider: "local", selected: "qwen2.5", advertised: "llama3.2:latest", want: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := ModelIDsMatch(testCase.provider, testCase.selected, testCase.advertised); got != testCase.want {
+				t.Fatalf("ModelIDsMatch(%q, %q, %q) = %t, want %t", testCase.provider, testCase.selected, testCase.advertised, got, testCase.want)
+			}
+		})
+	}
 }
 
 func TestLocalEndpointResolutionPreservesExplicitOrchestrationOverride(t *testing.T) {
@@ -297,6 +312,36 @@ func TestProviderHTTPErrorPrecedesLaterTransportFailure(t *testing.T) {
 				t.Fatalf("later transport failure masked provider error: %v", err)
 			}
 		})
+	}
+}
+
+func TestProviderHTTP407IsClassifiedAsProxyFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Proxy-Authenticate", `Basic realm="proxy"`)
+		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "local",
+		BaseURL:  server.URL + "/v1",
+		Model:    "present-model",
+		Mode:     ModeOpenAIish,
+	})
+	_, err := client.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("ListModels() error = nil, want HTTP 407 failure")
+	}
+
+	var requestErr *RequestError
+	if !errors.As(err, &requestErr) {
+		t.Fatalf("error = %v, want RequestError", err)
+	}
+	if requestErr.StatusCode != http.StatusProxyAuthRequired {
+		t.Fatalf("status = %d, want %d", requestErr.StatusCode, http.StatusProxyAuthRequired)
+	}
+	if got := requestErr.FailureClass(); got != ReachabilityFailureProxy {
+		t.Fatalf("failure class = %q, want proxy-mediated", got)
 	}
 }
 

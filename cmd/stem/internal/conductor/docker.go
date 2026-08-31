@@ -1881,7 +1881,7 @@ func checkLocalInferenceReachable(ctx context.Context, mind *llm.Client) error {
 		return nil
 	}
 	for _, model := range models {
-		if strings.TrimSpace(model) == selected {
+		if llm.ModelIDsMatch(mind.Provider(), selected, model) {
 			return nil
 		}
 	}

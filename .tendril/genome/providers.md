@@ -13,7 +13,7 @@ llm:
   default-provider: local
   providers:
     local:
-      base-url: http://host.docker.internal:11434/v1
+      base-url: http://localhost:11434/v1
       model: llama3.2
       endpoint: /chat/completions
       temperature: 0.1

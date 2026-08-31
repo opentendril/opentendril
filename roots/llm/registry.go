@@ -37,6 +37,39 @@ type ModelDefinition struct {
 	CostTier    ModelTier
 }
 
+// ModelIDsMatch reports whether a selected model identity is represented by
+// an advertised provider identity. Exact identities remain authoritative. The
+// local provider also supports Ollama's canonical default-tag equivalence:
+// `model` and `model:latest` name the same served model. No other provider or
+// tag is normalized here.
+func ModelIDsMatch(provider, selected, advertised string) bool {
+	selected = strings.TrimSpace(selected)
+	advertised = strings.TrimSpace(advertised)
+	if selected == "" || advertised == "" {
+		return false
+	}
+	if selected == advertised {
+		return true
+	}
+	if !strings.EqualFold(strings.TrimSpace(provider), "local") {
+		return false
+	}
+
+	const defaultTag = ":latest"
+	selectedHasDefaultTag := strings.HasSuffix(selected, defaultTag)
+	advertisedHasDefaultTag := strings.HasSuffix(advertised, defaultTag)
+	if selectedHasDefaultTag == advertisedHasDefaultTag {
+		return false
+	}
+	switch {
+	case selectedHasDefaultTag:
+		return strings.TrimSuffix(selected, defaultTag) == advertised
+	case advertisedHasDefaultTag:
+		return strings.TrimSuffix(advertised, defaultTag) == selected
+	}
+	return false
+}
+
 // FallbackModels preserves capability metadata for providers that do not expose a models API.
 // It is a curated snapshot of current-generation, tool-capable models per provider — the set
 // the router selects from whenever live discovery is unavailable. Entries must be model names
