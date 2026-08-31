@@ -10,14 +10,11 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	opentendril "github.com/opentendril/opentendril"
@@ -163,12 +160,7 @@ func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	}
 
 	if d != nil && strings.TrimSpace(d.BaseURL) != "" {
-		spec.BaseURL = strings.TrimSpace(d.BaseURL)
-		if spec.Provider == "local" {
-			spec.BaseURLs = llm.LocalInferenceBaseURLs(spec.BaseURL)
-		} else {
-			spec.BaseURLs = []string{spec.BaseURL}
-		}
+		llm.ApplyExplicitBaseURLOverride(&spec, d.BaseURL)
 	}
 
 	client := llm.NewClient(spec)
@@ -521,7 +513,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		plan.credential.TokenValue = ""
 	}
 
-	if err := runSproutPreflightChecksFn(ctx); err != nil {
+	if err := runSproutPreflightChecksFn(ctx, mind); err != nil {
 		return report, err
 	}
 
@@ -1857,7 +1849,7 @@ func getEnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
-func runSproutPreflightChecks(ctx context.Context) error {
+func runSproutPreflightChecks(ctx context.Context, mind *llm.Client) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1868,75 +1860,33 @@ func runSproutPreflightChecks(ctx context.Context) error {
 		return fmt.Errorf("❌ Docker daemon is not responding. OpenTendril requires Docker to run secure Sprouts.")
 	}
 
-	env := buildTerrariumEnvironment()
-	if !strings.EqualFold(strings.TrimSpace(env["DEFAULT_LLM_PROVIDER"]), "local") {
+	if mind == nil || !strings.EqualFold(strings.TrimSpace(mind.Provider()), "local") {
 		return nil
 	}
 
-	inferenceURL := strings.TrimSpace(env["LOCAL_INFERENCE_URL"])
-	if inferenceURL == "" {
-		inferenceURL = "http://localhost:11434/v1"
-	}
-
-	return checkLocalInferenceReachable(ctx, inferenceURL)
+	return checkLocalInferenceReachable(ctx, mind)
 }
 
-func checkLocalInferenceReachable(ctx context.Context, inferenceURL string) error {
-	checkURL := hostInferenceHealthURL(inferenceURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
-	if err != nil {
-		return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+func checkLocalInferenceReachable(ctx context.Context, mind *llm.Client) error {
+	if mind == nil {
+		return fmt.Errorf("local provider preflight requires a resolved client")
 	}
 
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Do(req)
+	models, err := mind.ListModels(ctx)
 	if err != nil {
-		if isConnectionRefused(err) {
-			return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
-		}
-		return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
+		return fmt.Errorf("local provider preflight failed: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+	selected := strings.TrimSpace(mind.Model())
+	if selected == "" {
 		return nil
 	}
-
-	return fmt.Errorf("❌ Ollama is not responding at %s. Please ensure Ollama is running.", inferenceURL)
-}
-
-func hostInferenceHealthURL(inferenceURL string) string {
-	trimmed := strings.TrimSpace(inferenceURL)
-	trimmed = strings.ReplaceAll(trimmed, "host.docker.internal", "localhost")
-
-	if strings.HasSuffix(trimmed, "/v1") {
-		return strings.TrimSuffix(trimmed, "/v1") + "/api/tags"
-	}
-	if strings.HasSuffix(trimmed, "/v1/") {
-		return strings.TrimSuffix(trimmed, "/v1/") + "/api/tags"
-	}
-
-	if strings.Contains(trimmed, "/api/") {
-		return trimmed
-	}
-
-	return strings.TrimRight(trimmed, "/") + "/api/tags"
-}
-
-func isConnectionRefused(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		return true
-	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		if sysErr, ok := opErr.Err.(syscall.Errno); ok && sysErr == syscall.ECONNREFUSED {
-			return true
+	for _, model := range models {
+		if llm.ModelIDsMatch(mind.Provider(), selected, model) {
+			return nil
 		}
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "connection refused")
+
+	return llm.NewModelUnavailableError(mind)
 }
 
 func mustGetwd() string {

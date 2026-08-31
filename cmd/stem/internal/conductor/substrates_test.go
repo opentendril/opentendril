@@ -12,6 +12,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func TestLoadSubstratesConfigSearchOrder(t *testing.T) {
@@ -464,7 +465,7 @@ substrates:
 		commitTerrariumExecutionFn = originalCommit
 		mergeTerrariumCommitFn = originalMerge
 	})
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(context.Context, string) error { return nil }
@@ -599,7 +600,7 @@ substrates:
 		commitTerrariumExecutionFn = originalCommit
 		mergeTerrariumCommitFn = originalMerge
 	})
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(context.Context, string) error { return nil }
@@ -723,7 +724,7 @@ substrates:
 		commitTerrariumExecutionFn = originalCommit
 		mergeTerrariumCommitFn = originalMerge
 	})
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(context.Context, string) error { return nil }
@@ -941,7 +942,7 @@ substrates:
 		pushTerrariumCommitFn = originalPush
 	})
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 
 	var capturedExtraEnv []string
 	var capturedRepoMap string
@@ -1258,7 +1259,7 @@ func TestRunSproutMissingWorkspaceWinsOverPreflight(t *testing.T) {
 	originalPreflight := runSproutPreflightChecksFn
 	t.Cleanup(func() { runSproutPreflightChecksFn = originalPreflight })
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error {
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error {
 		return fmt.Errorf("❌ Docker daemon is not responding")
 	}
 

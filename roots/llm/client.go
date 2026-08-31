@@ -48,10 +48,14 @@ type ProviderSpec struct {
 	Provider string
 	BaseURL  string
 	BaseURLs []string
-	APIKey   string
-	Model    string
-	Endpoint string
-	Mode     Mode
+	// EndpointResolution is the canonical local-provider endpoint state. It is
+	// retained on the resolved spec so request execution, model discovery and
+	// preflight can consume the same endpoint contract.
+	EndpointResolution LocalEndpointResolution
+	APIKey             string
+	Model              string
+	Endpoint           string
+	Mode               Mode
 	// Temperature is the sampling temperature to send on every request. Nil means
 	// the field is omitted from the wire and the provider's own default applies.
 	// Set explicitly via temperature in .tendril/config.yaml or SetTemperature.
@@ -276,11 +280,38 @@ func (c *Client) ResolutionError() error {
 }
 
 func NewClient(spec ProviderSpec) *Client {
+	if strings.EqualFold(strings.TrimSpace(spec.Provider), "local") {
+		if strings.TrimSpace(spec.BaseURL) != "" &&
+			strings.TrimSpace(spec.EndpointResolution.EffectiveEndpoint) != "" &&
+			strings.TrimSpace(spec.BaseURL) != strings.TrimSpace(spec.EndpointResolution.EffectiveEndpoint) {
+			ApplyExplicitBaseURLOverride(&spec, spec.BaseURL)
+		}
+		if spec.EndpointResolution.EffectiveEndpoint == "" {
+			spec.EndpointResolution = resolutionForExplicitSpec(spec)
+		}
+		if spec.BaseURL == "" {
+			spec.BaseURL = spec.EndpointResolution.EffectiveEndpoint
+		}
+		if len(spec.BaseURLs) == 0 {
+			spec.BaseURLs = spec.EndpointResolution.candidateURLs()
+		}
+	}
 	return &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Minute},
 		spec:       spec,
 		adapter:    adapterForMode(spec.Mode),
 	}
+}
+
+// EndpointResolution returns a copy of the endpoint state used by this
+// client's requests and model discovery.
+func (c *Client) EndpointResolution() LocalEndpointResolution {
+	if c == nil {
+		return LocalEndpointResolution{}
+	}
+	resolution := c.spec.EndpointResolution
+	resolution.Candidates = append([]string(nil), resolution.Candidates...)
+	return resolution
 }
 
 func NewClientFromEnv() *Client {
@@ -300,16 +331,22 @@ func NewClientForModel(provider string, model string) *Client {
 // choice of provider: the model is selected from what that provider serves, and
 // the resolution fails rather than answering with somebody else's model.
 func ResolveModelProviderSpec(provider string, model string) ProviderSpec {
+	return ResolveModelProviderSpecForContext(provider, model, HostLocalEndpointContext())
+}
+
+// ResolveModelProviderSpecForContext resolves a provider using the supplied
+// caller context for any local endpoint it may need.
+func ResolveModelProviderSpecForContext(provider string, model string, context LocalEndpointContext) ProviderSpec {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	model = strings.TrimSpace(model)
 	if provider == "" {
-		return ResolveTierProviderSpec(TierPremium)
+		return ResolveTierProviderSpecForContext(TierPremium, context)
 	}
 	if model != "" {
-		return providerSpecForModel(provider, TierPremium, model, "")
+		return providerSpecForModelInContext(provider, TierPremium, model, "", context)
 	}
-	return carryResolutionFailure(resolveForProviderChoice(
-		providerChoice{name: provider, explicit: true}, TierPremium, false,
+	return carryResolutionFailure(resolveForProviderChoiceInContext(
+		providerChoice{name: provider, explicit: true}, TierPremium, false, context,
 	))
 }
 
@@ -318,7 +355,19 @@ func NewCoordinatorClientFromEnv() *Client {
 }
 
 func ResolveLocalProviderSpec() ProviderSpec {
-	return resolveTierProviderSpecForProvider("local", TierPremium, "")
+	return ResolveLocalProviderSpecForContext(HostLocalEndpointContext())
+}
+
+// ResolveLocalProviderSpecForCaller resolves a local provider for the named
+// caller and establishes the default container alias only when it resolves.
+func ResolveLocalProviderSpecForCaller(caller EndpointCaller) ProviderSpec {
+	return ResolveLocalProviderSpecForContext(localEndpointContextForCaller(caller))
+}
+
+// ResolveLocalProviderSpecForContext resolves a local provider using the
+// caller-side endpoint facts supplied by the caller.
+func ResolveLocalProviderSpecForContext(context LocalEndpointContext) ProviderSpec {
+	return resolveTierProviderSpecForProviderInContext("local", TierPremium, "", context)
 }
 
 func (c *Client) CallPromptWithResult(ctx context.Context, systemPrompt string, userPrompt string) (Result, error) {
@@ -378,23 +427,20 @@ func (c *Client) ListModels(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("no LLM base URL configured for provider %q", c.spec.Provider)
 	}
 
-	candidates := c.spec.BaseURLs
-	if len(candidates) == 0 {
-		candidates = []string{c.spec.BaseURL}
-	}
+	candidates := c.endpointCandidates()
 
-	var lastErr error
+	var primaryErr error
 	for _, baseURL := range candidates {
 		models, err := c.listModelsAtBaseURL(ctx, baseURL)
 		if err == nil {
 			return models, nil
 		}
-		lastErr = err
+		primaryErr = preferAttemptError(primaryErr, err)
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("list models failed for provider %q", c.spec.Provider)
+	if primaryErr == nil {
+		primaryErr = fmt.Errorf("list models failed for provider %q", c.spec.Provider)
 	}
-	return nil, lastErr
+	return nil, primaryErr
 }
 
 func (c *Client) CallStreamWithResult(ctx context.Context, messages []Message, tokenChan chan<- string) (Result, error) {
@@ -444,12 +490,9 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 		return Result{}, fmt.Errorf("no API key configured for provider %q", c.spec.Provider)
 	}
 
-	candidates := c.spec.BaseURLs
-	if len(candidates) == 0 {
-		candidates = []string{c.spec.BaseURL}
-	}
+	candidates := c.endpointCandidates()
 
-	var lastErr error
+	var primaryErr error
 	for _, baseURL := range candidates {
 		result, err := c.doCall(ctx, baseURL, messages, tools, tokenChan != nil, tokenChan)
 		if err == nil {
@@ -462,14 +505,14 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 		if errors.Is(err, ErrRejectedWithTools) {
 			return Result{}, err
 		}
-		lastErr = err
+		primaryErr = preferAttemptError(primaryErr, err)
 	}
 
-	if lastErr == nil {
-		lastErr = fmt.Errorf("llm request failed for provider %q", c.spec.Provider)
+	if primaryErr == nil {
+		primaryErr = fmt.Errorf("llm request failed for provider %q", c.spec.Provider)
 	}
 
-	return Result{}, lastErr
+	return Result{}, primaryErr
 }
 
 func ResolveProviderSpec() ProviderSpec {
@@ -477,7 +520,13 @@ func ResolveProviderSpec() ProviderSpec {
 }
 
 func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
-	return resolveTierProviderSpecWithCaps(tier, false)
+	return ResolveTierProviderSpecForContext(tier, HostLocalEndpointContext())
+}
+
+// ResolveTierProviderSpecForContext resolves a tier using caller-side local
+// endpoint facts supplied by the caller.
+func ResolveTierProviderSpecForContext(tier ModelTier, context LocalEndpointContext) ProviderSpec {
+	return resolveTierProviderSpecWithCapsInContext(tier, false, context)
 }
 
 // ResolveAgentTierProviderSpec resolves the tier default for an autonomous
@@ -487,7 +536,13 @@ func ResolveTierProviderSpec(tier ModelTier) ProviderSpec {
 // (e.g. a 3B local llama that returns an empty completion). Explicit env/config
 // model choices are still honoured, since those are a deliberate override.
 func ResolveAgentTierProviderSpec(tier ModelTier) ProviderSpec {
-	return resolveTierProviderSpecWithCaps(tier, true)
+	return ResolveAgentTierProviderSpecForContext(tier, HostLocalEndpointContext())
+}
+
+// ResolveAgentTierProviderSpecForContext resolves an autonomous tier using
+// caller-side local endpoint facts supplied by the caller.
+func ResolveAgentTierProviderSpecForContext(tier ModelTier, context LocalEndpointContext) ProviderSpec {
+	return resolveTierProviderSpecWithCapsInContext(tier, true, context)
 }
 
 // providerChoice is the provider a resolution will run against, and whether an
@@ -528,17 +583,25 @@ func carryResolutionFailure(spec ProviderSpec, err error) ProviderSpec {
 }
 
 func resolveTierProviderSpecWithCaps(tier ModelTier, requireTools bool) ProviderSpec {
-	return carryResolutionFailure(resolveForProviderChoice(configuredProviderChoice(), tier, requireTools))
+	return resolveTierProviderSpecWithCapsInContext(tier, requireTools, HostLocalEndpointContext())
+}
+
+func resolveTierProviderSpecWithCapsInContext(tier ModelTier, requireTools bool, context LocalEndpointContext) ProviderSpec {
+	return carryResolutionFailure(resolveForProviderChoiceInContext(configuredProviderChoice(), tier, requireTools, context))
 }
 
 func resolveForProviderChoice(choice providerChoice, tier ModelTier, requireTools bool) (ProviderSpec, error) {
+	return resolveForProviderChoiceInContext(choice, tier, requireTools, HostLocalEndpointContext())
+}
+
+func resolveForProviderChoiceInContext(choice providerChoice, tier ModelTier, requireTools bool, context LocalEndpointContext) (ProviderSpec, error) {
 	tier = canonicalModelTier(tier)
 
 	if model, ok := explicitModelForTier(choice.name, tier); ok {
-		return providerSpecForModel(choice.name, tier, model, ""), nil
+		return providerSpecForModelInContext(choice.name, tier, model, "", context), nil
 	}
 	if model := configuredModelForProvider(choice.name); model != "" {
-		return providerSpecForModel(choice.name, tier, model, ""), nil
+		return providerSpecForModelInContext(choice.name, tier, model, "", context), nil
 	}
 
 	caps := Capabilities{MaxCostTier: tier, RequiresToolUse: requireTools}
@@ -589,10 +652,10 @@ func resolveForProviderChoice(choice providerChoice, tier ModelTier, requireTool
 		}
 	}
 	if err != nil {
-		return providerSpecForModel(choice.name, tier, "", ""), resolutionFailure(choice, tier, err)
+		return providerSpecForModelInContext(choice.name, tier, "", "", context), resolutionFailure(choice, tier, err)
 	}
 
-	return providerSpecForModel(model.Provider, tier, model.Name, ""), nil
+	return providerSpecForModelInContext(model.Provider, tier, model.Name, "", context), nil
 }
 
 // resolutionFailure explains a selection that produced no model, naming the
@@ -619,8 +682,7 @@ func ResolveCoordinatorProviderSpec() ProviderSpec {
 		}
 		if strings.EqualFold(spec.Provider, "local") {
 			if baseURL := strings.TrimSpace(os.Getenv("COORDINATOR_LOCAL_INFERENCE_URL")); baseURL != "" {
-				spec.BaseURL = baseURL
-				spec.BaseURLs = LocalInferenceBaseURLs(baseURL)
+				ApplyExplicitBaseURLOverride(&spec, baseURL)
 			}
 		}
 		if val := strings.TrimSpace(os.Getenv("MYCORRHIZA_COORDINATOR_MAX_OUTPUT_TOKENS")); val != "" {
@@ -673,14 +735,22 @@ func detectProviderFallback() string {
 }
 
 func resolveTierProviderSpecForProvider(provider string, tier ModelTier, localInferenceOverride string) ProviderSpec {
+	return resolveTierProviderSpecForProviderInContext(provider, tier, localInferenceOverride, HostLocalEndpointContext())
+}
+
+func resolveTierProviderSpecForProviderInContext(provider string, tier ModelTier, localInferenceOverride string, context LocalEndpointContext) ProviderSpec {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	tier = canonicalModelTier(tier)
 	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
 	model, _ := explicitModelForTier(provider, tier)
-	return providerSpecForModel(provider, tier, model, localInferenceOverride)
+	return providerSpecForModelInContext(provider, tier, model, localInferenceOverride, context)
 }
 
 func providerSpecForModel(provider string, tier ModelTier, model string, localInferenceOverride string) ProviderSpec {
+	return providerSpecForModelInContext(provider, tier, model, localInferenceOverride, HostLocalEndpointContext())
+}
+
+func providerSpecForModelInContext(provider string, tier ModelTier, model string, localInferenceOverride string, context LocalEndpointContext) ProviderSpec {
 	provider = strings.ToLower(strings.TrimSpace(provider))
 	tier = canonicalModelTier(tier)
 	localInferenceOverride = strings.TrimSpace(localInferenceOverride)
@@ -692,18 +762,14 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 	isRouter := resolveIsRouter(providerConfig)
 	acceptsToolDefs := resolveAcceptsToolDefinitions(providerConfig)
 	outputLimit, ceilingSource := resolveOutputLimit(provider, tier, providerConfig, model)
-
-	switch provider {
-	case "local":
-		baseURL := localInferenceOverride
-		if baseURL == "" {
-			baseURL = envOrConfig("LOCAL_INFERENCE_URL", providerConfig.BaseURL, "http://host.docker.internal:11434/v1")
-		}
+	localProviderSpec := func() ProviderSpec {
+		endpointResolution := resolveLocalEndpoint(context, localInferenceOverride, os.Getenv("LOCAL_INFERENCE_URL"), providerConfig.BaseURL)
 		endpoint := configOrDefault(providerConfig.Endpoint, "/chat/completions")
-		return ProviderSpec{
+		spec := ProviderSpec{
 			Provider:               "local",
-			BaseURL:                baseURL,
-			BaseURLs:               LocalInferenceBaseURLs(baseURL),
+			BaseURL:                endpointResolution.EffectiveEndpoint,
+			BaseURLs:               endpointResolution.candidateURLs(),
+			EndpointResolution:     endpointResolution,
 			Model:                  model,
 			Endpoint:               endpoint,
 			Mode:                   ModeOpenAIish,
@@ -714,6 +780,15 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			CeilingSource:          ceilingSource,
 			Tier:                   tier,
 		}
+		if endpointResolution.EffectiveEndpoint == "" {
+			spec.ResolutionErr = newProviderReachabilityError(spec, "", ReachabilityFailureConnection, errors.New(endpointResolution.SynthesisReason))
+		}
+		return spec
+	}
+
+	switch provider {
+	case "local":
+		return localProviderSpec()
 	case "anthropic":
 		return ProviderSpec{
 			Provider:               "anthropic",
@@ -805,24 +880,7 @@ func providerSpecForModel(provider string, tier ModelTier, model string, localIn
 			Tier:                   tier,
 		}
 	default:
-		baseURL := localInferenceOverride
-		if baseURL == "" {
-			baseURL = envOrConfig("LOCAL_INFERENCE_URL", providerConfig.BaseURL, "http://host.docker.internal:11434/v1")
-		}
-		return ProviderSpec{
-			Provider:               "local",
-			BaseURL:                baseURL,
-			BaseURLs:               LocalInferenceBaseURLs(baseURL),
-			Model:                  model,
-			Endpoint:               configOrDefault(providerConfig.Endpoint, "/chat/completions"),
-			Mode:                   ModeOpenAIish,
-			Temperature:            temperature,
-			IsRouter:               isRouter,
-			AcceptsToolDefinitions: acceptsToolDefs,
-			OutputLimit:            outputLimit,
-			CeilingSource:          ceilingSource,
-			Tier:                   tier,
-		}
+		return localProviderSpec()
 	}
 }
 
@@ -1076,43 +1134,13 @@ func explicitModelForTier(provider string, tier ModelTier) (string, bool) {
 }
 
 func LocalInferenceBaseURLs(baseURL string) []string {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	// This helper remains for source compatibility. Endpoint resolution owns
+	// caller-aware selection; this compatibility path never invents aliases.
+	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
-		baseURL = "http://host.docker.internal:11434/v1"
+		return nil
 	}
-
-	candidates := []string{baseURL}
-	switch {
-	case strings.Contains(baseURL, "host.docker.internal"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"),
-			strings.ReplaceAll(baseURL, "host.docker.internal", "127.0.0.1"),
-		)
-	case strings.Contains(baseURL, "localhost"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "localhost", "127.0.0.1"),
-			strings.ReplaceAll(baseURL, "localhost", "host.docker.internal"),
-		)
-	case strings.Contains(baseURL, "127.0.0.1"):
-		candidates = append(candidates,
-			strings.ReplaceAll(baseURL, "127.0.0.1", "localhost"),
-			strings.ReplaceAll(baseURL, "127.0.0.1", "host.docker.internal"),
-		)
-	default:
-		candidates = append(candidates, strings.ReplaceAll(baseURL, "host.docker.internal", "localhost"))
-	}
-
-	seen := make(map[string]struct{}, len(candidates))
-	out := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		if _, ok := seen[candidate]; ok {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		out = append(out, candidate)
-	}
-
-	return out
+	return []string{baseURL}
 }
 
 func (c *Client) callAtBaseURL(ctx context.Context, baseURL string, messages []Message) (string, error) {
@@ -1137,7 +1165,7 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("list models request failed: %w", err)
+		return nil, newProviderReachabilityError(c.spec, baseURL, classifyTransportFailure(err), err)
 	}
 	defer resp.Body.Close()
 
@@ -1146,7 +1174,7 @@ func (c *Client) listModelsAtBaseURL(ctx context.Context, baseURL string) ([]str
 		return nil, fmt.Errorf("read models response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("models returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, newRequestErrorAt(resp.StatusCode, string(body), c.spec, nil, baseURL)
 	}
 
 	var decoded struct {
@@ -1192,7 +1220,7 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return Result{}, fmt.Errorf("llm request failed: %w", err)
+		return Result{}, newProviderReachabilityError(c.spec, baseURL, classifyTransportFailure(err), err)
 	}
 	defer resp.Body.Close()
 
@@ -1213,10 +1241,10 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		// Wrapped rather than replaced so the provider's own message, which is
 		// usually the whole answer, still reaches the operator.
 		if len(tools) > 0 && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnprocessableEntity) {
-			return Result{}, newRequestError(resp.StatusCode, string(body), c.spec, ErrRejectedWithTools)
+			return Result{}, newRequestErrorAt(resp.StatusCode, string(body), c.spec, ErrRejectedWithTools, baseURL)
 		}
 
-		return Result{}, newRequestError(resp.StatusCode, string(body), c.spec, nil)
+		return Result{}, newRequestErrorAt(resp.StatusCode, string(body), c.spec, nil, baseURL)
 	}
 
 	if stream {

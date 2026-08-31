@@ -222,7 +222,7 @@ func stubRunSproutCollaborators(t *testing.T, root string, runner sproutRunner, 
 		mergeTerrariumCommitFn = originalMerge
 	})
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	probeProviderAuthFn = func(context.Context, *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, workspace string) (string, error) { return "# Repo Map", nil }
 	generateMemoryMapFn = func(ctx context.Context, workspace string) (string, error) { return "", nil }
@@ -465,7 +465,7 @@ func TestRunSproutResumptionHonorsOutcomeVocabulary(t *testing.T) {
 
 		originalPreflight := runSproutPreflightChecksFn
 		t.Cleanup(func() { runSproutPreflightChecksFn = originalPreflight })
-		runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+		runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 
 		report, err := (&DockerOrchestrator{
 			Substrate:  root,

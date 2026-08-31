@@ -79,15 +79,7 @@ func runLLMTestCmd(ctx context.Context, args []string) {
 }
 
 func applyLLMBaseURLOverride(spec *llm.ProviderSpec, baseURL string) {
-	if spec == nil {
-		return
-	}
-	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		return
-	}
-	spec.BaseURL = strings.TrimRight(baseURL, "/")
-	spec.BaseURLs = []string{spec.BaseURL}
+	llm.ApplyExplicitBaseURLOverride(spec, baseURL)
 }
 
 func printLLMUsage() {

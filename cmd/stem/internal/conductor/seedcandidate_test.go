@@ -15,6 +15,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 const round16HelloVerify = "printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md"
@@ -749,7 +750,7 @@ func TestPassingVerificationMatchesManagedAPIFruitPaths(t *testing.T) {
 	}
 	origPreflight := runSproutPreflightChecksFn
 	t.Cleanup(func() { runSproutPreflightChecksFn = origPreflight })
-	runSproutPreflightChecksFn = func(context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(_ context.Context, _ *llm.Client) error { return nil }
 	origEnsure := ensureSproutImageFn
 	t.Cleanup(func() { ensureSproutImageFn = origEnsure })
 	ensureSproutImageFn = func(context.Context, string) error { return nil }

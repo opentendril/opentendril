@@ -11,6 +11,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
@@ -66,7 +67,7 @@ func TestRunSproutRestoresHostStashAfterCanceledContext(t *testing.T) {
 		restoreHostStashFn = originalRestore
 	})
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, workspace string) (string, error) {
 		return "# Repo Map", nil
 	}
@@ -170,7 +171,7 @@ func TestRunSproutAutoBranchesBeforeStash(t *testing.T) {
 		stashHostWorkspaceFn = originalStash
 	})
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 
 	stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) {
 		branch, err := runGitCommand(ctx, repoRoot, "branch", "--show-current")

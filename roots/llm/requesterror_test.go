@@ -30,6 +30,13 @@ func TestSafeProviderMessageRedactsBearerAndTruncates(t *testing.T) {
 	if !strings.HasSuffix(got, "…") {
 		t.Fatalf("safeProviderMessage() = %q, want a truncation marker", got)
 	}
+
+	got = safeProviderMessage(`provider rejected api_key=top-secret password="also-secret"`)
+	for _, secret := range []string{"top-secret", "also-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("safeProviderMessage leaked %q: %q", secret, got)
+		}
+	}
 }
 
 func TestRequestErrorPreservesHistoricalShapeAndUnwrap(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func TestCloneForeignSubstrate(t *testing.T) {
@@ -600,7 +601,7 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 		generateRepoMapFn = origGenerateRepoMapFn
 	}()
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 
 	workdir := t.TempDir()
@@ -759,7 +760,7 @@ func TestRunSproutCarriesProtocolOntoTheReport(t *testing.T) {
 			})
 
 			ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
-			runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+			runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 			generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 				return &stubToolSession{}, nil
@@ -814,7 +815,7 @@ func TestDockerOrchestratorPublishesHostActivationEvent(t *testing.T) {
 		ensureSproutImageFn = origEnsureImage
 	}()
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	createShadowWorktreeFn = func(s, b string) (string, error) { return orch.Substrate, nil }
 	generateRepoMapFn = func(c context.Context, d string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(c context.Context, i string) error { return nil }
@@ -857,7 +858,7 @@ func TestDockerOrchestratorNoEventForDockerProvider(t *testing.T) {
 		ensureSproutImageFn = origEnsureImage
 	}()
 
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	createShadowWorktreeFn = func(s, b string) (string, error) { return orch.Substrate, nil }
 	generateRepoMapFn = func(c context.Context, d string) (string, error) { return "", nil }
 	ensureSproutImageFn = func(c context.Context, i string) error { return nil }
@@ -906,7 +907,7 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 	})
 
 	ensureSproutImageFn = func(ctx context.Context, imageName string) error { return nil }
-	runSproutPreflightChecksFn = func(ctx context.Context) error { return nil }
+	runSproutPreflightChecksFn = func(ctx context.Context, _ *llm.Client) error { return nil }
 	generateRepoMapFn = func(ctx context.Context, dir string) (string, error) { return "", nil }
 
 	tests := []struct {
