@@ -199,6 +199,93 @@ func TestRound16HelloPredicatePassesAgainstSeedCandidate(t *testing.T) {
 	}
 }
 
+// TestSeedVerificationUsesRunWorkspaceRootForDockerMount checks the host-side
+// boundary that a real Docker Stoma consumes. The injected Stoma seam only
+// observes the prepared worktree; TestRound16HelloPredicateThroughRealTerrarium
+// below is the governed container regression.
+func TestSeedVerificationUsesRunWorkspaceRootForDockerMount(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+	seedBranch := "tendril/seed-visible"
+	if _, err := runGitCommand(ctx, repo, "checkout", "-b", seedBranch); err != nil {
+		t.Fatalf("checkout seed branch: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "HELLO.md"), []byte("Hello from OpenTendril.\n"), 0o644); err != nil {
+		t.Fatalf("write HELLO.md: %v", err)
+	}
+	for _, args := range [][]string{{"add", "HELLO.md"}, {"commit", "-m", "hello"}, {"checkout", "main"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed tip: %v", err)
+	}
+	seedTip = strings.TrimSpace(seedTip)
+
+	originalStoma := runStomaCommandFn
+	t.Cleanup(func() { runStomaCommandFn = originalStoma })
+	var mountedWorkspace, mountedTip string
+	runStomaCommandFn = func(ctx context.Context, execution StomaExecution, _ []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
+		mountedWorkspace = execution.Workspace
+		tip, tipErr := runGitCommand(ctx, execution.Workspace, "rev-parse", "HEAD")
+		if tipErr != nil {
+			return StomaResult{}, tipErr
+		}
+		mountedTip = strings.TrimSpace(tip)
+		return StomaResult{ExitCode: 0}, nil
+	}
+
+	report := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	if report.Err != nil {
+		t.Fatalf("runSeedVerify: %v", report.Err)
+	}
+	if mountedWorkspace == "" {
+		t.Fatal("Stoma did not receive a workspace")
+	}
+	if !pathIsUnder(mountedWorkspace, runWorkspaceRoot()) {
+		t.Fatalf("Stoma workspace = %q, want a path below the Stem run-workspace root %q", mountedWorkspace, runWorkspaceRoot())
+	}
+	if strings.HasPrefix(mountedWorkspace, filepath.Join(os.TempDir(), "opentendril-terrarium-")) {
+		t.Fatalf("Stoma workspace still uses the private temporary namespace: %q", mountedWorkspace)
+	}
+	if mountedTip != seedTip {
+		t.Fatalf("Stoma observed candidate %q, want Seed tip %q", mountedTip, seedTip)
+	}
+	if _, err := os.Stat(mountedWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("verification worktree still exists after runSeedVerify: stat error = %v", err)
+	}
+}
+
+func TestSeedVerificationCleansUpAfterStomaFailure(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+	seedBranch := "tendril/seed-cleanup-error"
+	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
+		t.Fatalf("create branch: %v", err)
+	}
+
+	originalStoma := runStomaCommandFn
+	t.Cleanup(func() { runStomaCommandFn = originalStoma })
+	var mountedWorkspace string
+	runStomaCommandFn = func(_ context.Context, execution StomaExecution, _ []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
+		mountedWorkspace = execution.Workspace
+		return StomaResult{}, fmt.Errorf("stoma failed")
+	}
+
+	report := runSeedVerify(ctx, repo, seedBranch, []string{"false"}, nil)
+	if report.Err == nil || report.Passed {
+		t.Fatalf("runSeedVerify report = %+v, want an infrastructure error", report)
+	}
+	if mountedWorkspace == "" {
+		t.Fatal("Stoma did not receive a workspace")
+	}
+	if _, err := os.Stat(mountedWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("verification worktree still exists after Stoma failure: stat error = %v", err)
+	}
+}
+
 func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	stubLocalStoma(t)
 	repo := newSeedRepo(t)
@@ -215,8 +302,8 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	if missing.Passed {
 		t.Fatal("missing HELLO.md was reported as passing")
 	}
-	if missing.ExitCode == nil || *missing.ExitCode == 0 {
-		t.Fatalf("missing HELLO.md exit = %v, want non-zero", missing.ExitCode)
+	if missing.ExitCode == nil || *missing.ExitCode != 2 {
+		t.Fatalf("missing HELLO.md exit = %v, want 2 (cmp could not open the file)", missing.ExitCode)
 	}
 
 	if _, err := runGitCommand(ctx, repo, "checkout", seedBranch); err != nil {
@@ -240,6 +327,147 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	if wrong.ExitCode == nil || *wrong.ExitCode != 1 {
 		t.Fatalf("wrong contents exit = %v, want 1 (cmp content mismatch)", wrong.ExitCode)
 	}
+
+	if err := os.WriteFile(filepath.Join(repo, "HELLO.md"), []byte("Hello from OpenTendril."), 0o644); err != nil {
+		t.Fatalf("write no-newline HELLO.md: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "HELLO.md"); err != nil {
+		t.Fatalf("stage no-newline HELLO.md: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-m", "no trailing newline"); err != nil {
+		t.Fatalf("commit no-newline HELLO.md: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+		t.Fatalf("checkout main: %v", err)
+	}
+	noNewline := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	if noNewline.Err != nil {
+		t.Fatalf("no trailing newline HELLO.md: %v", noNewline.Err)
+	}
+	if noNewline.Passed {
+		t.Fatal("HELLO.md without a trailing newline was reported as passing")
+	}
+	if noNewline.ExitCode == nil || *noNewline.ExitCode != 1 {
+		t.Fatalf("no trailing newline exit = %v, want 1 (cmp content mismatch)", noNewline.ExitCode)
+	}
+}
+
+func TestRound16HelloPredicateThroughRealTerrarium(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("Docker CLI is unavailable: %v", err)
+	}
+	if os.Getenv("DOCKER_HOST") == "" {
+		// TestMain isolates HOME, which hides the user's Docker context. Keep
+		// rootless Docker available when its standard per-user socket exists.
+		if runtimeDir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR")); runtimeDir != "" {
+			socket := filepath.Join(runtimeDir, "docker.sock")
+			if _, err := os.Stat(socket); err == nil {
+				t.Setenv("DOCKER_HOST", "unix://"+socket)
+			}
+		}
+	}
+	if output, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
+		t.Skipf("Docker daemon is unavailable: %v (%s)", err, strings.TrimSpace(string(output)))
+	}
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+
+	tests := []struct {
+		name    string
+		content string
+		write   bool
+		want    int
+	}{
+		{name: "exact content", content: "Hello from OpenTendril.\n", write: true, want: 0},
+		{name: "no trailing newline", content: "Hello from OpenTendril.", write: true, want: 1},
+		{name: "wrong contents", content: "wrong\n", write: true, want: 1},
+		{name: "missing file", want: 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newSeedRepo(t)
+			ctx := context.Background()
+			seedBranch := "tendril/seed-real-" + strings.ReplaceAll(tc.name, " ", "-")
+			if _, err := runGitCommand(ctx, repo, "checkout", "-b", seedBranch); err != nil {
+				t.Fatalf("checkout seed branch: %v", err)
+			}
+			if tc.write {
+				if err := os.WriteFile(filepath.Join(repo, "HELLO.md"), []byte(tc.content), 0o644); err != nil {
+					t.Fatalf("write HELLO.md: %v", err)
+				}
+				for _, args := range [][]string{{"add", "HELLO.md"}, {"commit", "-m", tc.name}} {
+					if _, err := runGitCommand(ctx, repo, args...); err != nil {
+						t.Fatalf("git %v: %v", args, err)
+					}
+				}
+			}
+			if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+				t.Fatalf("checkout main: %v", err)
+			}
+
+			report := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+			if report.Err != nil {
+				t.Fatalf("runSeedVerify: %v", report.Err)
+			}
+			if report.ExitCode == nil || *report.ExitCode != tc.want {
+				t.Fatalf("verifier exit = %v, want %d (output=%q)", report.ExitCode, tc.want, report.Output)
+			}
+			if report.Passed != (tc.want == 0) {
+				t.Fatalf("verifier passed = %v, want %v", report.Passed, tc.want == 0)
+			}
+		})
+	}
+
+	t.Run("verifier writes stay outside the candidate", func(t *testing.T) {
+		repo := newSeedRepo(t)
+		ctx := context.Background()
+		seedBranch := "tendril/seed-real-mutation"
+		if _, err := runGitCommand(ctx, repo, "checkout", "-b", seedBranch); err != nil {
+			t.Fatalf("checkout seed branch: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "HELLO.md"), []byte("Hello from OpenTendril.\n"), 0o644); err != nil {
+			t.Fatalf("write HELLO.md: %v", err)
+		}
+		if _, err := runGitCommand(ctx, repo, "add", "HELLO.md"); err != nil {
+			t.Fatalf("stage HELLO.md: %v", err)
+		}
+		if _, err := runGitCommand(ctx, repo, "commit", "-m", "hello"); err != nil {
+			t.Fatalf("commit HELLO.md: %v", err)
+		}
+		if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+			t.Fatalf("checkout main: %v", err)
+		}
+		seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+		if err != nil {
+			t.Fatalf("seed tip: %v", err)
+		}
+		mainTip, err := runGitCommand(ctx, repo, "rev-parse", "main")
+		if err != nil {
+			t.Fatalf("main tip: %v", err)
+		}
+
+		command := []string{"sh", "-c", "printf 'verifier write\\n' > MUTATED.txt; printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md"}
+		report := runSeedVerify(ctx, repo, seedBranch, command, nil)
+		if report.Err != nil {
+			t.Fatalf("runSeedVerify: %v", report.Err)
+		}
+		if !report.Passed || report.ExitCode == nil || *report.ExitCode != 0 {
+			t.Fatalf("mutation verifier result = %+v, want pass", report)
+		}
+		if _, err := os.Stat(filepath.Join(repo, "MUTATED.txt")); !os.IsNotExist(err) {
+			t.Fatalf("verifier write escaped into candidate checkout: stat error = %v", err)
+		}
+		afterSeedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+		if err != nil {
+			t.Fatalf("read Seed tip after verification: %v", err)
+		}
+		afterMainTip, err := runGitCommand(ctx, repo, "rev-parse", "main")
+		if err != nil {
+			t.Fatalf("read main tip after verification: %v", err)
+		}
+		if strings.TrimSpace(afterSeedTip) != strings.TrimSpace(seedTip) || strings.TrimSpace(afterMainTip) != strings.TrimSpace(mainTip) {
+			t.Fatalf("verification changed Git refs: Seed %s -> %s, main %s -> %s", seedTip, strings.TrimSpace(afterSeedTip), mainTip, strings.TrimSpace(afterMainTip))
+		}
+	})
 }
 
 func TestSeedCandidateRejectsNewlyCreatedExecutionLocationPath(t *testing.T) {
