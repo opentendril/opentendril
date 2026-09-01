@@ -405,15 +405,16 @@ func seedFruitIdentity(ctx context.Context, sourcePath, seedBranch, base string)
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway
-// worktree of the seed branch and reports whether it passed. A non-nil error is
-// an infrastructure failure (the verdict could not be produced), distinct from
-// a clean non-zero exit (a normal failed verification the loop iterates on).
+// worktree of the seed branch and reports whether it passed. The worktree is
+// rooted in the Stem-owned run-workspace boundary so the Docker daemon sees the
+// same host path the Stem materialized. A non-nil error is an infrastructure
+// failure (the verdict could not be produced), distinct from a clean non-zero
+// exit (a normal failed verification the loop iterates on).
 func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, egress []string) seedVerifyReport {
-	worktree, err := createShadowWorktree(sourcePath, seedBranch)
+	worktree, err := createSeedVerificationWorktree(sourcePath, seedBranch)
 	if err != nil {
 		return seedVerifyReport{Err: fmt.Errorf("create verify worktree: %w", err)}
 	}
-	defer removeShadowWorktree(sourcePath, worktree)
 
 	result, err := RunStoma(ctx, StomaExecution{
 		Workspace: worktree,
@@ -421,8 +422,12 @@ func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, e
 		Egress:    egress,
 		Timeout:   seedVerifyTimeout,
 	})
+	cleanupErr := removeSeedVerificationWorktree(sourcePath, worktree)
 	if err != nil {
-		return seedVerifyReport{Err: err}
+		return seedVerifyReport{Err: errors.Join(err, cleanupErr)}
+	}
+	if cleanupErr != nil {
+		return seedVerifyReport{Err: cleanupErr}
 	}
 	output := strings.TrimSpace(strings.TrimSpace(result.Stdout) + "\n" + strings.TrimSpace(result.Stderr))
 	code := result.ExitCode
