@@ -1,14 +1,19 @@
 package conductor
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const seedVerificationWorktreePrefix = "seed-verification-"
+
+const seedVerificationCleanupTimeout = 30 * time.Second
 
 func seedVerificationWorkspaceRoot() (string, error) {
 	root := strings.TrimSpace(runWorkspaceRoot())
@@ -27,10 +32,13 @@ func seedVerificationWorkspaceRoot() (string, error) {
 }
 
 // createSeedVerificationWorktree materializes one detached view of the exact
-// Seed branch under the Stem-owned run-workspace root. Unlike the general
+// Seed candidate commit under the Stem-owned run-workspace root. Unlike the general
 // shadow-worktree path, this location is intentionally outside the service's
 // private /tmp namespace so a Docker daemon can resolve the bind mount.
-func createSeedVerificationWorktree(sourcePath, seedBranch string) (string, error) {
+func createSeedVerificationWorktree(ctx context.Context, sourcePath, candidateCommit string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
 		return "", fmt.Errorf("seed verification source repository is required")
@@ -40,11 +48,10 @@ func createSeedVerificationWorktree(sourcePath, seedBranch string) (string, erro
 		return "", fmt.Errorf("resolve seed verification source repository: %w", err)
 	}
 	sourcePath = absSourcePath
-	seedBranch = strings.TrimSpace(seedBranch)
-	if seedBranch == "" {
-		return "", fmt.Errorf("seed verification branch is required")
+	candidateCommit = strings.TrimSpace(candidateCommit)
+	if candidateCommit == "" {
+		return "", fmt.Errorf("seed verification candidate commit is required")
 	}
-
 	absRoot, err := seedVerificationWorkspaceRoot()
 	if err != nil {
 		return "", err
@@ -70,18 +77,30 @@ func createSeedVerificationWorktree(sourcePath, seedBranch string) (string, erro
 	unlockGit := lockRunWorkspaceGit(sourcePath)
 	defer unlockGit()
 
-	cmd := exec.Command("git", "worktree", "add", "--detach", worktree, seedBranch)
+	cmd := exec.CommandContext(ctx, "git", "worktree", "add", "--detach", worktree, candidateCommit)
 	cmd.Dir = sourcePath
 	if output, err := cmd.CombinedOutput(); err != nil {
-		_ = os.RemoveAll(worktree)
-		return "", fmt.Errorf("git worktree add for Seed verification failed: %w, output: %s", err, strings.TrimSpace(string(output)))
+		cleanupErr := removeSeedVerificationWorktreeLocked(ctx, sourcePath, worktree)
+		return "", errors.Join(fmt.Errorf("git worktree add for Seed verification failed: %w, output: %s", err, strings.TrimSpace(string(output))), cleanupErr)
+	}
+	head, headErr := runGitCommand(ctx, worktree, "rev-parse", "--verify", "HEAD^{commit}")
+	if headErr != nil {
+		cleanupErr := removeSeedVerificationWorktreeLocked(ctx, sourcePath, worktree)
+		return "", errors.Join(fmt.Errorf("resolve Seed verification worktree HEAD: %w", headErr), cleanupErr)
+	}
+	if strings.TrimSpace(head) != candidateCommit {
+		cleanupErr := removeSeedVerificationWorktreeLocked(ctx, sourcePath, worktree)
+		return "", errors.Join(fmt.Errorf("Seed verification worktree HEAD %s does not equal candidate %s", strings.TrimSpace(head), candidateCommit), cleanupErr)
 	}
 	return worktree, nil
 }
 
 // removeSeedVerificationWorktree removes the disposable verification view and
 // reports cleanup failures instead of silently leaving a Docker-visible tree.
-func removeSeedVerificationWorktree(sourcePath, worktree string) error {
+func removeSeedVerificationWorktree(ctx context.Context, sourcePath, worktree string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sourcePath = strings.TrimSpace(sourcePath)
 	worktree = filepath.Clean(strings.TrimSpace(worktree))
 	if sourcePath == "" || worktree == "." || worktree == string(filepath.Separator) {
@@ -102,8 +121,13 @@ func removeSeedVerificationWorktree(sourcePath, worktree string) error {
 
 	unlockGit := lockRunWorkspaceGit(sourcePath)
 	defer unlockGit()
+	return removeSeedVerificationWorktreeLocked(ctx, sourcePath, worktree)
+}
 
-	cmd := exec.Command("git", "worktree", "remove", "--force", worktree)
+func removeSeedVerificationWorktreeLocked(ctx context.Context, sourcePath, worktree string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), seedVerificationCleanupTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(cleanupCtx, "git", "worktree", "remove", "--force", worktree)
 	cmd.Dir = sourcePath
 	gitOutput, gitErr := cmd.CombinedOutput()
 	removeErr := os.RemoveAll(worktree)

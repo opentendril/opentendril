@@ -72,7 +72,7 @@ type SeedExecution struct {
 	// Goal is the intent handed to the Sprout builder.
 	Goal string
 	// Verify is the argv command whose exit-0 defines success, run
-	// deterministically in a sealed Terrarium against the seed branch.
+	// deterministically in a sealed Terrarium against the Seed candidate.
 	Verify []string
 	// MaxIterations bounds how many build/verify passes the loop may take.
 	MaxIterations int
@@ -168,6 +168,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	iterations := 0
 	prompt := seedGoalPrompt(execution.Goal, execution.Verify, "")
 	var verificationDiagnostics []core.SeedVerificationDiagnostic
+	candidateRevision := base
 
 	for i := 0; i < maxIterations; i++ {
 		if ctx.Err() != nil {
@@ -188,12 +189,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		orch.SessionID = sessionID
 		orch.SeedIntegrationCheckpoint = true
 
-		currentStartRevision := base
-		if tip, err := runGitCommand(ctx, sourcePath, "rev-parse", seedBranch); err == nil {
-			if tip = strings.TrimSpace(tip); tip != "" {
-				currentStartRevision = tip
-			}
-		}
+		currentStartRevision := candidateRevision
 		orch.SeedStartRevision = currentStartRevision
 
 		if execution.PrepareSprout != nil {
@@ -210,7 +206,18 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			break
 		}
 
-		verifyReport := seedVerifyFn(ctx, sourcePath, seedBranch, execution.Verify, execution.Egress)
+		var candidateErr error
+		candidateRevision, candidateErr = seedCandidateRevision(ctx, sourcePath, currentStartRevision, buildReport.FruitCommit)
+		if candidateErr != nil {
+			verifyReport := seedVerifyReport{Err: fmt.Errorf("resolve Seed verification candidate: %w", candidateErr)}
+			diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
+			verificationDiagnostics = append(verificationDiagnostics, diagnostic)
+			status = SeedStatusWithered
+			fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
+			break
+		}
+
+		verifyReport := seedVerifyFn(ctx, sourcePath, candidateRevision, execution.Verify, execution.Egress)
 		diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
 		verificationDiagnostics = append(verificationDiagnostics, diagnostic)
 		if verifyReport.Err != nil {
@@ -404,14 +411,37 @@ func seedFruitIdentity(ctx context.Context, sourcePath, seedBranch, base string)
 	return branch, diff, tip
 }
 
+// seedCandidateRevision resolves the immutable candidate commit for one Seed
+// iteration. A checkpoint commit reported by the integration path is preferred;
+// if no checkpoint was created, the iteration's starting candidate remains
+// authoritative.
+func seedCandidateRevision(ctx context.Context, sourcePath, startRevision, checkpointCommit string) (string, error) {
+	candidate := strings.TrimSpace(checkpointCommit)
+	if candidate == "" {
+		candidate = strings.TrimSpace(startRevision)
+	}
+	if candidate == "" {
+		return "", fmt.Errorf("Seed candidate commit is empty")
+	}
+	resolved, err := runGitCommand(ctx, sourcePath, "rev-parse", "--verify", "--end-of-options", candidate+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve Seed candidate commit %q: %w", candidate, err)
+	}
+	resolved = strings.TrimSpace(resolved)
+	if resolved == "" {
+		return "", fmt.Errorf("resolve Seed candidate commit %q returned no commit", candidate)
+	}
+	return resolved, nil
+}
+
 // runSeedVerify runs the verify command deterministically against a throwaway
-// worktree of the seed branch and reports whether it passed. The worktree is
-// rooted in the Stem-owned run-workspace boundary so the Docker daemon sees the
-// same host path the Stem materialized. A non-nil error is an infrastructure
-// failure (the verdict could not be produced), distinct from a clean non-zero
-// exit (a normal failed verification the loop iterates on).
-func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, egress []string) seedVerifyReport {
-	worktree, err := createSeedVerificationWorktree(sourcePath, seedBranch)
+// worktree of the exact candidate commit and reports whether it passed. The
+// worktree is rooted in the Stem-owned run-workspace boundary so the Docker
+// daemon sees the same host path the Stem materialized. A non-nil error is an
+// infrastructure failure (the verdict could not be produced), distinct from a
+// clean non-zero exit (a normal failed verification the loop iterates on).
+func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, verify, egress []string) seedVerifyReport {
+	worktree, err := createSeedVerificationWorktree(ctx, sourcePath, candidateCommit)
 	if err != nil {
 		return seedVerifyReport{Err: fmt.Errorf("create verify worktree: %w", err)}
 	}
@@ -422,7 +452,7 @@ func runSeedVerify(ctx context.Context, sourcePath, seedBranch string, verify, e
 		Egress:    egress,
 		Timeout:   seedVerifyTimeout,
 	})
-	cleanupErr := removeSeedVerificationWorktree(sourcePath, worktree)
+	cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
 	if err != nil {
 		return seedVerifyReport{Err: errors.Join(err, cleanupErr)}
 	}

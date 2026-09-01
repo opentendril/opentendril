@@ -186,8 +186,12 @@ func TestRound16HelloPredicatePassesAgainstSeedCandidate(t *testing.T) {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
+	seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed tip: %v", err)
+	}
 
-	report := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	report := runSeedVerify(ctx, repo, strings.TrimSpace(seedTip), round16HelloVerifyArgv(), nil)
 	if report.Err != nil {
 		t.Fatalf("runSeedVerify: %v", report.Err)
 	}
@@ -196,6 +200,173 @@ func TestRound16HelloPredicatePassesAgainstSeedCandidate(t *testing.T) {
 	}
 	if report.ExitCode == nil || *report.ExitCode != 0 || report.TimedOut {
 		t.Fatalf("diagnostic facts = exit=%v timedOut=%v, want 0/false", report.ExitCode, report.TimedOut)
+	}
+}
+
+func TestRunSeedNoChangeVerifiesBaseCandidate(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	var verifiedCandidate string
+
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeNoChanges}, nil
+	}
+	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
+		verifiedCandidate = candidate
+		return runSeedVerify(ctx, sourcePath, candidate, verify, egress)
+	}
+
+	res, err := RunSeed(ctx, SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 1,
+		SessionID: "seed-no-change-base",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusExhausted {
+		t.Fatalf("status = %q, want exhausted after a normal predicate failure", res.Status)
+	}
+	if res.Branch != "" {
+		t.Fatalf("no-change Seed created a review branch %q", res.Branch)
+	}
+	if verifiedCandidate != base {
+		t.Fatalf("verified candidate = %q, want base %q", verifiedCandidate, base)
+	}
+	if len(res.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v, want one diagnostic", res.VerificationDiagnostics)
+	}
+	diagnostic := res.VerificationDiagnostics[0]
+	if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed {
+		t.Fatalf("verification outcome = %q, want predicate-failed", diagnostic.Outcome)
+	}
+	if diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 {
+		t.Fatalf("verification exit = %v, want 2 for a missing HELLO.md", diagnostic.ExitCode)
+	}
+}
+
+func TestRunSeedInvalidCheckpointIsInfrastructureFailure(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var verified bool
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: "not-a-commit"}, nil
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		verified = true
+		return seedVerifyReport{}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 1,
+		SessionID: "seed-invalid-checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	if verified {
+		t.Fatal("verification ran for an invalid checkpoint")
+	}
+	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("verification diagnostics = %+v, want one infrastructure-failed diagnostic", res.VerificationDiagnostics)
+	}
+}
+
+func TestRunSeedNoChangeVerifiesAccumulatedCandidate(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var firstCheckpoint string
+	var verifiedCandidates []string
+
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+		if firstCheckpoint != "" {
+			return SproutRunReport{Outcome: SproutOutcomeNoChanges}, nil
+		}
+		if _, err := runGitCommand(ctx, repo, "branch", orch.SubstrateBranch, orch.SeedStartRevision); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "checkout", "--detach", orch.SeedStartRevision); err != nil {
+			return SproutRunReport{}, err
+		}
+		if err := os.WriteFile(filepath.Join(repo, "accumulated.txt"), []byte("first iteration\n"), 0o644); err != nil {
+			return SproutRunReport{}, err
+		}
+		for _, args := range [][]string{{"add", "accumulated.txt"}, {"commit", "-m", "accumulated work"}} {
+			if _, err := runGitCommand(ctx, repo, args...); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		checkpoint, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		firstCheckpoint = strings.TrimSpace(checkpoint)
+		if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+			return SproutRunReport{}, err
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: firstCheckpoint}, nil
+	}
+	seedVerifyFn = func(_ context.Context, _ string, candidate string, _ []string, _ []string) seedVerifyReport {
+		verifiedCandidates = append(verifiedCandidates, candidate)
+		code := 1
+		return seedVerifyReport{ExitCode: &code}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "accumulate work", Verify: []string{"false"}, MaxIterations: 2,
+		SessionID: "seed-no-change-accumulated",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusExhausted {
+		t.Fatalf("status = %q, want exhausted", res.Status)
+	}
+	if len(verifiedCandidates) != 2 {
+		t.Fatalf("verified candidates = %v, want one per iteration", verifiedCandidates)
+	}
+	if verifiedCandidates[0] != firstCheckpoint || verifiedCandidates[1] != firstCheckpoint {
+		t.Fatalf("verified candidates = %v, want accumulated candidate %q for both iterations", verifiedCandidates, firstCheckpoint)
+	}
+}
+
+func TestRunSeedNoChangeCanSatisfyStartingCandidate(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "HELLO.md"), []byte("Hello from OpenTendril.\n"), 0o644); err != nil {
+		t.Fatalf("write HELLO.md: %v", err)
+	}
+	for _, args := range [][]string{{"add", "HELLO.md"}, {"commit", "-m", "satisfying base candidate"}} {
+		if _, err := runGitCommand(context.Background(), repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeNoChanges}, nil
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 1,
+		SessionID: "seed-no-change-satisfied",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied", res.Status)
+	}
+	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomePassed {
+		t.Fatalf("verification diagnostics = %+v, want one passed diagnostic", res.VerificationDiagnostics)
 	}
 }
 
@@ -237,7 +408,7 @@ func TestSeedVerificationUsesRunWorkspaceRootForDockerMount(t *testing.T) {
 		return StomaResult{ExitCode: 0}, nil
 	}
 
-	report := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	report := runSeedVerify(ctx, repo, seedTip, round16HelloVerifyArgv(), nil)
 	if report.Err != nil {
 		t.Fatalf("runSeedVerify: %v", report.Err)
 	}
@@ -265,6 +436,11 @@ func TestSeedVerificationCleansUpAfterStomaFailure(t *testing.T) {
 	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
 		t.Fatalf("create branch: %v", err)
 	}
+	seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed tip: %v", err)
+	}
+	seedTip = strings.TrimSpace(seedTip)
 
 	originalStoma := runStomaCommandFn
 	t.Cleanup(func() { runStomaCommandFn = originalStoma })
@@ -274,7 +450,7 @@ func TestSeedVerificationCleansUpAfterStomaFailure(t *testing.T) {
 		return StomaResult{}, fmt.Errorf("stoma failed")
 	}
 
-	report := runSeedVerify(ctx, repo, seedBranch, []string{"false"}, nil)
+	report := runSeedVerify(ctx, repo, seedTip, []string{"false"}, nil)
 	if report.Err == nil || report.Passed {
 		t.Fatalf("runSeedVerify report = %+v, want an infrastructure error", report)
 	}
@@ -294,8 +470,13 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
 		t.Fatalf("create branch: %v", err)
 	}
+	seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed tip: %v", err)
+	}
+	seedTip = strings.TrimSpace(seedTip)
 
-	missing := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	missing := runSeedVerify(ctx, repo, seedTip, round16HelloVerifyArgv(), nil)
 	if missing.Err != nil {
 		t.Fatalf("missing HELLO.md: %v", missing.Err)
 	}
@@ -317,7 +498,11 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 			t.Fatalf("git %v: %v", args, err)
 		}
 	}
-	wrong := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	seedTip, err = runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("wrong seed tip: %v", err)
+	}
+	wrong := runSeedVerify(ctx, repo, strings.TrimSpace(seedTip), round16HelloVerifyArgv(), nil)
 	if wrong.Err != nil {
 		t.Fatalf("wrong HELLO.md: %v", wrong.Err)
 	}
@@ -340,7 +525,11 @@ func TestRound16HelloPredicateFailsWhenMissingOrWrong(t *testing.T) {
 	if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
 		t.Fatalf("checkout main: %v", err)
 	}
-	noNewline := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+	seedTip, err = runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("no-newline seed tip: %v", err)
+	}
+	noNewline := runSeedVerify(ctx, repo, strings.TrimSpace(seedTip), round16HelloVerifyArgv(), nil)
 	if noNewline.Err != nil {
 		t.Fatalf("no trailing newline HELLO.md: %v", noNewline.Err)
 	}
@@ -403,8 +592,12 @@ func TestRound16HelloPredicateThroughRealTerrarium(t *testing.T) {
 			if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
 				t.Fatalf("checkout main: %v", err)
 			}
+			seedTip, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+			if err != nil {
+				t.Fatalf("seed tip: %v", err)
+			}
 
-			report := runSeedVerify(ctx, repo, seedBranch, round16HelloVerifyArgv(), nil)
+			report := runSeedVerify(ctx, repo, strings.TrimSpace(seedTip), round16HelloVerifyArgv(), nil)
 			if report.Err != nil {
 				t.Fatalf("runSeedVerify: %v", report.Err)
 			}
@@ -446,7 +639,7 @@ func TestRound16HelloPredicateThroughRealTerrarium(t *testing.T) {
 		}
 
 		command := []string{"sh", "-c", "printf 'verifier write\\n' > MUTATED.txt; printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md"}
-		report := runSeedVerify(ctx, repo, seedBranch, command, nil)
+		report := runSeedVerify(ctx, repo, strings.TrimSpace(seedTip), command, nil)
 		if report.Err != nil {
 			t.Fatalf("runSeedVerify: %v", report.Err)
 		}
@@ -781,12 +974,19 @@ func TestFailedVerificationPreservesSeedCheckpointForNextIteration(t *testing.T)
 		if err := os.WriteFile(filepath.Join(repo, name), []byte(name+"\n"), 0o644); err != nil {
 			return SproutRunReport{}, err
 		}
-		for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", name}, {"checkout", "main"}} {
+		for _, args := range [][]string{{"add", "-A"}, {"commit", "-m", name}} {
 			if _, err := runGitCommand(ctx, repo, args...); err != nil {
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+		checkpoint, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+			return SproutRunReport{}, err
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: strings.TrimSpace(checkpoint)}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		code := 1
@@ -857,7 +1057,7 @@ func TestVerifierWritesStayInDisposableWorktree(t *testing.T) {
 	}
 	checkpoint = strings.TrimSpace(checkpoint)
 
-	report := runSeedVerify(ctx, repo, seedBranch, []string{"false"}, nil)
+	report := runSeedVerify(ctx, repo, checkpoint, []string{"false"}, nil)
 	if report.Err != nil {
 		t.Fatalf("verify: %v", report.Err)
 	}
@@ -904,6 +1104,16 @@ func TestConcurrentSeedsDoNotVerifyEachOthersCandidate(t *testing.T) {
 	}
 	writeHelloBranch("tendril/seed-a", "Hello from OpenTendril.\n")
 	writeHelloBranch("tendril/seed-b", "other seed\n")
+	seedA, err := runGitCommand(ctx, repo, "rev-parse", "tendril/seed-a")
+	if err != nil {
+		t.Fatalf("seed A tip: %v", err)
+	}
+	seedB, err := runGitCommand(ctx, repo, "rev-parse", "tendril/seed-b")
+	if err != nil {
+		t.Fatalf("seed B tip: %v", err)
+	}
+	seedA = strings.TrimSpace(seedA)
+	seedB = strings.TrimSpace(seedB)
 
 	var wg sync.WaitGroup
 	errA := make(chan seedVerifyReport, 1)
@@ -911,11 +1121,11 @@ func TestConcurrentSeedsDoNotVerifyEachOthersCandidate(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		errA <- runSeedVerify(ctx, repo, "tendril/seed-a", round16HelloVerifyArgv(), nil)
+		errA <- runSeedVerify(ctx, repo, seedA, round16HelloVerifyArgv(), nil)
 	}()
 	go func() {
 		defer wg.Done()
-		errB <- runSeedVerify(ctx, repo, "tendril/seed-b", round16HelloVerifyArgv(), nil)
+		errB <- runSeedVerify(ctx, repo, seedB, round16HelloVerifyArgv(), nil)
 	}()
 	wg.Wait()
 	a := <-errA
