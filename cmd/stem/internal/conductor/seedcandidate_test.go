@@ -323,8 +323,8 @@ func TestRound19SeedRetryCarriesCandidateEvidenceAndRejectsProviderProse(t *test
 	if res.Iterations != 2 || len(prompts) != 2 {
 		t.Fatalf("iterations/prompts = %d/%d, want 2/2", res.Iterations, len(prompts))
 	}
-	if res.Branch == "" || res.Commit == "" {
-		t.Fatalf("failed candidate identity = branch %q commit %q, want the first iteration's candidate preserved", res.Branch, res.Commit)
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("failed Fruit identity = branch %q commit %q, want none for a withered Seed", res.Branch, res.Commit)
 	}
 	if strings.Contains(prompts[0], seedCandidateDiffHeading) {
 		t.Fatalf("initial prompt included candidate evidence:\n%s", prompts[0])

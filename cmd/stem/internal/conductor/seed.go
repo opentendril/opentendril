@@ -269,6 +269,10 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		}
 	}
 
+	if status != SeedStatusSatisfied {
+		return result("", ""), nil
+	}
+
 	if commit != "" && commit != base {
 		orchProto := NewDockerOrchestrator()
 		orchProto.Substrate = execution.Substrate
