@@ -23,12 +23,15 @@ import (
 // per-posture required-flag enforcement.
 func TestParseGitSetupArgsDefaultsAndValidation(t *testing.T) {
 	// App posture is the default; managed checkout is the default.
-	opts, err := parseGitSetupArgs([]string{"--substrate", "r", "--repo", "o/r", "--app-id", "1", "--key", "/k.pem"})
+	opts, err := parseGitSetupArgs([]string{"--substrate", "r", "--repo", "o/r", "--app-id", "1", "--key", "/k.pem", "--yes"})
 	if err != nil {
 		t.Fatalf("valid app args rejected: %v", err)
 	}
 	if opts.posture != "app" || opts.checkout != "managed" {
 		t.Fatalf("defaults = posture %q checkout %q, want app/managed", opts.posture, opts.checkout)
+	}
+	if !opts.yes {
+		t.Fatal("--yes was not parsed")
 	}
 
 	for name, args := range map[string][]string{
@@ -45,6 +48,19 @@ func TestParseGitSetupArgsDefaultsAndValidation(t *testing.T) {
 		if _, err := parseGitSetupArgs(args); err == nil {
 			t.Errorf("%s: expected an error, got none", name)
 		}
+	}
+}
+
+func TestGitSetupUsageDistinguishesYesAndForce(t *testing.T) {
+	stdout, _ := captureVerifyOutput(t, func() {
+		printGitSetupUsage()
+	})
+
+	if !strings.Contains(stdout, "--yes                 Accept the destination without prompting; does not overwrite existing entries") {
+		t.Fatalf("usage = %q, want the non-overwriting --yes description", stdout)
+	}
+	if !strings.Contains(stdout, "--force               Overwrite existing entries and skip confirmation") {
+		t.Fatalf("usage = %q, want the overwriting --force description", stdout)
 	}
 }
 
@@ -287,20 +303,128 @@ func TestMergeConnectionForceGate(t *testing.T) {
 	if err := upsertSubstrates(path, base); err != nil {
 		t.Fatalf("fresh write: %v", err)
 	}
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read original config: %v", err)
+	}
 
 	changed := base
 	changed.repo = "o/other"
+	changed.yes = true
+	changed.dir = dir
+	setGitSetupStdin(t, "")
+	if !confirmGitSetupTarget(changed) {
+		t.Fatal("--yes did not bypass non-TTY confirmation")
+	}
 	if err := upsertSubstrates(path, changed); err == nil {
-		t.Fatal("re-running for an existing connection without --force overwrote it")
+		t.Fatal("--yes overwrote an existing connection")
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != string(original) {
+		t.Fatalf("--yes changed the existing connection after the merge was refused: err=%v contents=%q", err, raw)
 	}
 
+	changed.yes = false
 	changed.force = true
+	setGitSetupStdin(t, "")
+	if !confirmGitSetupTarget(changed) {
+		t.Fatal("--force did not bypass non-TTY confirmation")
+	}
 	if err := upsertSubstrates(path, changed); err != nil {
 		t.Fatalf("forced update: %v", err)
 	}
 	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "github.com/o/other") {
 		t.Error("forced update did not replace the connection's url")
 	}
+}
+
+func TestGitSetupNonTTYRefusesWithoutConfirmationFlag(t *testing.T) {
+	dir := t.TempDir()
+	opts := gitSetupOptions{
+		posture: "app", substrate: "fresh", repo: "o/r", appID: "1", keyPath: "/k.pem", dir: dir,
+	}
+	setGitSetupStdin(t, "")
+
+	_, stderr := captureVerifyOutput(t, func() {
+		if confirmGitSetupTarget(opts) {
+			t.Error("non-TTY setup without --yes or --force was accepted")
+		}
+	})
+	if !strings.Contains(stderr, "--yes") || strings.Contains(stderr, "--force") {
+		t.Fatalf("non-TTY guidance = %q, want --yes and not --force", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "substrates.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("non-TTY refusal left a config file behind: %v", err)
+	}
+}
+
+func TestGitSetupNonTTYYesWritesFreshConfig(t *testing.T) {
+	dir := t.TempDir()
+	opts := gitSetupOptions{
+		posture: "app", substrate: "fresh", repo: "o/r", appID: "1", keyPath: "/k.pem", dir: dir, yes: true,
+	}
+	setGitSetupStdin(t, "")
+
+	if !confirmGitSetupTarget(opts) {
+		t.Fatal("--yes did not accept a fresh non-TTY setup")
+	}
+	if err := upsertSubstrates(filepath.Join(dir, "substrates.yaml"), opts); err != nil {
+		t.Fatalf("fresh --yes setup: %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(dir, "substrates.yaml")); err != nil || !strings.Contains(string(raw), "github.com/o/r") {
+		t.Fatalf("fresh --yes setup did not write the config: err=%v contents=%q", err, raw)
+	}
+}
+
+func TestGitSetupInteractiveConfirmationRemainsIntact(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "yes", input: "y\n", want: true},
+		{name: "full yes", input: "yes\n", want: true},
+		{name: "no", input: "n\n", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			opts := gitSetupOptions{posture: "app", substrate: "interactive", repo: "o/r", appID: "1", keyPath: "/k.pem"}
+			setGitSetupStdin(t, test.input)
+			oldIsTerminal := gitSetupIsTerminal
+			gitSetupIsTerminal = func(*os.File) bool { return true }
+			t.Cleanup(func() { gitSetupIsTerminal = oldIsTerminal })
+
+			stdout, _ := captureVerifyOutput(t, func() {
+				if got := confirmGitSetupTarget(opts); got != test.want {
+					t.Errorf("confirmGitSetupTarget() = %v, want %v", got, test.want)
+				}
+			})
+			if !strings.Contains(stdout, "Proceed? (y/n): ") {
+				t.Fatalf("interactive prompt = %q, want the existing prompt", stdout)
+			}
+		})
+	}
+}
+
+func setGitSetupStdin(t *testing.T, input string) {
+	t.Helper()
+	oldStdin := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	if _, err := w.WriteString(input); err != nil {
+		r.Close()
+		w.Close()
+		t.Fatalf("write stdin: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		r.Close()
+		t.Fatalf("close stdin pipe: %v", err)
+	}
+	os.Stdin = r
+	t.Cleanup(func() {
+		r.Close()
+		os.Stdin = oldStdin
+	})
 }
 
 func contains(s []string, v string) bool {
