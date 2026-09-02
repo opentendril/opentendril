@@ -277,9 +277,9 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 // a non-nil nativeClient and the method clears it before returning.
 func (a *Sprout) announceDowngrade(reason string, endpointMessage string) {
 	if endpointMessage != "" {
-		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol: %s\n", reason, endpointMessage)
+		fmt.Fprintf(os.Stderr, "warning: native tool protocol degraded (%s), falling back to prose protocol: %s\n", reason, endpointMessage)
 	} else {
-		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol\n", reason)
+		fmt.Fprintf(os.Stderr, "warning: native tool protocol degraded (%s), falling back to prose protocol\n", reason)
 	}
 
 	if a.eventBus != nil {

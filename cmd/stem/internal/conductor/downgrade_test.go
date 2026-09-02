@@ -150,9 +150,19 @@ func TestNativeProviderShapedToolIntentDoesNotMature(t *testing.T) {
 		t.Fatalf("newSprout: %v", err)
 	}
 
-	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	var result sproutResult
+	var runErr error
+	stderr := captureStderr(t, func() {
+		result, runErr = sprout.Run(context.Background(), "create HELLO.md")
+	})
 	if !errors.Is(runErr, errUnusableReply) {
 		t.Fatalf("Sprout.Run error = %v, want bounded unusable-reply error", runErr)
+	}
+	if !strings.Contains(stderr, "native tool protocol degraded (native response attempted prose tool call)") {
+		t.Errorf("stderr = %q, want the native-response downgrade reason", stderr)
+	}
+	if strings.Contains(stderr, "endpoint rejected tool definitions") {
+		t.Errorf("stderr = %q, must not claim the endpoint rejected tool definitions", stderr)
 	}
 	if strings.TrimSpace(result.Response) != "" {
 		t.Fatalf("Response = %q, want empty rather than a matured answer", result.Response)
@@ -364,6 +374,12 @@ func TestRefusedToolDefinitionsDowngradeAndSaySo(t *testing.T) {
 	// downgrade is announced with what was proven, not a hypothesis.
 	if !strings.Contains(stderr, "accepted without tool definitions") {
 		t.Errorf("stderr = %q, want the proven-reason in the warning", stderr)
+	}
+	if !strings.Contains(stderr, "native tool protocol degraded") {
+		t.Errorf("stderr = %q, want the generic protocol-transition diagnostic", stderr)
+	}
+	if strings.Contains(stderr, "endpoint rejected tool definitions") {
+		t.Errorf("stderr = %q, must not claim a generic endpoint rejection", stderr)
 	}
 	if !strings.Contains(stderr, "falling back to prose protocol") {
 		t.Errorf("stderr = %q, want the downgrade warning", stderr)
