@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -359,6 +360,77 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 	}
 	if res.Status != SeedStatusWithered {
 		t.Fatalf("status = %q, want withered", res.Status)
+	}
+}
+
+func TestRunSeedExhaustedCandidateIsNotFruit(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var seedBranch string
+	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
+	exitCode := 1
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "candidate differs", ExitCode: &exitCode}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 1,
+		SessionID: "seed-exhausted-candidate",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusExhausted {
+		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
+	}
+	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
+	if len(res.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v, want one diagnostic", res.VerificationDiagnostics)
+	}
+	diagnostic := res.VerificationDiagnostics[0]
+	if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed || diagnostic.ExitCode == nil || *diagnostic.ExitCode != exitCode {
+		t.Fatalf("verification diagnostic = %+v, want predicate failure with exit %d", diagnostic, exitCode)
+	}
+}
+
+func TestRunSeedWitheredCandidateIsNotFruit(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var seedBranch string
+	seedBuildFn = committedSeedBuild(t, repo, &seedBranch)
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Err: errors.New("terrarium unavailable")}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 1,
+		SessionID: "seed-withered-candidate",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	assertSeedCandidateIsNotFruit(t, res, repo, seedBranch)
+	if len(res.VerificationDiagnostics) != 1 {
+		t.Fatalf("verification diagnostics = %+v, want one diagnostic", res.VerificationDiagnostics)
+	}
+	if diagnostic := res.VerificationDiagnostics[0]; diagnostic.Outcome != core.SeedVerificationOutcomeInfrastructureFailed || diagnostic.Message == "" {
+		t.Fatalf("verification diagnostic = %+v, want retained infrastructure diagnostics", diagnostic)
+	}
+}
+
+func assertSeedCandidateIsNotFruit(t *testing.T, res SeedRunResult, repo, seedBranch string) {
+	t.Helper()
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = branch %q commit %q, want none", res.Branch, res.Commit)
+	}
+	if !strings.Contains(res.Diff, "fruit.txt") {
+		t.Fatalf("candidate diff = %q, want the retained candidate change", res.Diff)
+	}
+	if seedBranch == "" || !branchExists(t, repo, seedBranch) {
+		t.Fatalf("internal candidate branch %q was not retained", seedBranch)
 	}
 }
 
@@ -814,6 +886,70 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 
 	if fake.graphQLCalled != 1 {
 		t.Fatalf("API publication was called %d times, want exactly 1", fake.graphQLCalled)
+	}
+}
+
+func TestRunSeedExhaustedManagedAPIFruitIsNotPublished(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", t.TempDir())
+	chdirToTempDir(t)
+	restoreSeeds(t)
+
+	repo := newSeedRepo(t)
+	keyPath := writeSeedTestAppKey(t)
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"),
+		"substrates:\n  seed-api-exhausted:\n    url: "+repo+"\n    branch: main\n    checkout:\n      mode: managed\n    commit: api\n    auth:\n      method: app\n      appId: \"1234\"\n      privateKeyPath: "+keyPath+"\n")
+
+	origMaterialize := materializeManagedCheckoutFn
+	t.Cleanup(func() { materializeManagedCheckoutFn = origMaterialize })
+	materializeManagedCheckoutFn = func(name, dest, url, branch string, _ ResolvedCredential, _ []string) error {
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			return err
+		}
+		if _, err := runGitCommand(context.Background(), filepath.Dir(dest), "clone", "-q", repo, dest); err != nil {
+			return err
+		}
+		for _, args := range [][]string{
+			{"config", "user.email", "seed@example.com"},
+			{"config", "user.name", "Seed Tester"},
+		} {
+			if _, err := runGitCommand(context.Background(), dest, args...); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	dest := filepath.Join(os.Getenv("TENDRIL_MANAGED_CHECKOUT_ROOT"), "seed-api-exhausted")
+	if err := materializeManagedCheckoutFn("seed-api-exhausted", dest, repo, "main", ResolvedCredential{}, nil); err != nil {
+		t.Fatalf("materialize test repo: %v", err)
+	}
+
+	fake := startAPIFruitFake(t, http.StatusCreated, "unused")
+	var seedBranch string
+	seedBuildFn = committedSeedBuild(t, dest, &seedBranch)
+	exitCode := 1
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{Output: "candidate differs", ExitCode: &exitCode}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: "seed-api-exhausted", Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 1,
+		SessionID: "seed-api-exhausted",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusExhausted {
+		t.Fatalf("status = %q, want exhausted; logs: %s", res.Status, res.Logs)
+	}
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = branch %q commit %q, want none", res.Branch, res.Commit)
+	}
+	if !strings.Contains(res.Diff, "fruit.txt") {
+		t.Fatalf("candidate diff = %q, want the retained candidate change", res.Diff)
+	}
+	if fake.installCalled != 0 || fake.tokenCalled != 0 || fake.createRefCalled != 0 || fake.graphQLCalled != 0 {
+		t.Fatalf("managed API publication was attempted: install=%d token=%d ref=%d graphql=%d", fake.installCalled, fake.tokenCalled, fake.createRefCalled, fake.graphQLCalled)
 	}
 }
 
