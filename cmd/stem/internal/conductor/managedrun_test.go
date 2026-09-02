@@ -406,7 +406,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		t.Fatalf("Sprout boundary classifications = first:%v second:%v, want no boundary violations", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load(), len(sprouts) > 1 && sprouts[1].boundaryFailure.Load())
 	}
 	if sprouts[1].boundaryFailure.Load() {
-		t.Fatal("turn-limit Sprout was classified as a boundary violation")
+		t.Fatal("post-write unusable-reply Sprout was classified as a boundary violation")
 	}
 	if !strings.Contains(sprouts[0].transcript.String(), "wrote candidate") {
 		t.Fatalf("first Sprout transcript omitted its normal completion:\n%s", sprouts[0].transcript.String())
@@ -415,7 +415,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		t.Fatalf("second Terrarium calls = %+v, want the repaired writeFile with a final newline", sessions[1].calls)
 	}
 	if reports[1].Outcome != SproutOutcomeFailed || reports[1].Output != "" {
-		t.Fatalf("second Sprout outcome/output = %q/%q, want failed with no matured answer after turn exhaustion", reports[1].Outcome, reports[1].Output)
+		t.Fatalf("second Sprout outcome/output = %q/%q, want failed with no matured answer after the post-write protocol failure", reports[1].Outcome, reports[1].Output)
 	}
 	if reports[1].FruitBranch != "" || reports[1].FruitCommit != "" || reports[1].seedCandidateCommit == "" {
 		t.Fatalf("second Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[1].FruitBranch, reports[1].FruitCommit, reports[1].seedCandidateCommit)
