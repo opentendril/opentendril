@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -18,6 +19,42 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 	"github.com/opentendril/opentendril/roots/llm"
 )
+
+func TestSeedGoalPromptPreservesVerifierArgvAndStemOwnership(t *testing.T) {
+	verify := []string{
+		"sh",
+		"-c",
+		"printf 'Hello from OpenTendril.\\n' | cmp -s - HELLO.md",
+		"line one\nline two",
+		`--literal "quotes" && rm -rf`,
+	}
+	priorFailure := "Verification failed: command exited 2."
+
+	prompt := seedGoalPrompt("create HELLO.md", verify, priorFailure)
+	encoded, err := json.Marshal(verify)
+	if err != nil {
+		t.Fatalf("json.Marshal verifier argv: %v", err)
+	}
+	wantContext := "Deterministic verification configured by the Stem:\n" + string(encoded)
+	if !strings.Contains(prompt, wantContext) {
+		t.Fatalf("prompt omitted structured verifier context %q:\n%s", wantContext, prompt)
+	}
+	if strings.Contains(prompt, strings.Join(verify, " ")) {
+		t.Fatalf("prompt flattened verifier argv into a shell command:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "The Stem will run this after your changes.") {
+		t.Fatalf("prompt did not assign deterministic verification to the Stem:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Run it to check your work before finishing.") {
+		t.Fatalf("prompt still instructs the Sprout to run the verifier:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Do not execute it merely to satisfy the Seed protocol.") {
+		t.Fatalf("prompt did not forbid Sprout-side verifier execution:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, priorFailure) {
+		t.Fatalf("retry feedback disappeared from the prompt:\n%s", prompt)
+	}
+}
 
 // newSeedRepo builds a real git repository on branch main with one commit, the
 // local checkout RunSeed grows a Seed against.

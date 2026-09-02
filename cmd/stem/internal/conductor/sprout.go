@@ -273,13 +273,13 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 // clearing would leave the prompt teaching one protocol while the parser
 // expects the other, and the run would mature on its first prose tool call.
 //
-// Callers reach here at most once per run, because the only two paths into it
-// both require a non-nil nativeClient.
+// Callers reach here at most once per run, because every path into it requires
+// a non-nil nativeClient and the method clears it before returning.
 func (a *Sprout) announceDowngrade(reason string, endpointMessage string) {
 	if endpointMessage != "" {
-		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol: %s\n", reason, endpointMessage)
+		fmt.Fprintf(os.Stderr, "warning: native tool protocol degraded (%s), falling back to prose protocol: %s\n", reason, endpointMessage)
 	} else {
-		fmt.Fprintf(os.Stderr, "warning: endpoint rejected tool definitions (%s), falling back to prose protocol\n", reason)
+		fmt.Fprintf(os.Stderr, "warning: native tool protocol degraded (%s), falling back to prose protocol\n", reason)
 	}
 
 	if a.eventBus != nil {
@@ -459,6 +459,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		var isToolCall bool
 		var finalResponse string
 		var actionResult *ActionResult
+		var parseErr error
 
 		if a.nativeClient != nil {
 			if len(nativeToolCalls) > 0 {
@@ -480,37 +481,47 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 					})
 				}
 			} else {
-				// No tool calls means it's a final text natively.
-				isToolCall = false
-				finalResponse = response
+				// Native providers may put a prose-protocol call in their text
+				// channel instead of returning structured ToolCalls. Run that
+				// text through the canonical parser so a recoverable call is not
+				// mistaken for a final answer.
+				calls, isToolCall, finalResponse, actionResult, parseErr = parseModelResponse(response)
+				if isToolCall || errors.Is(parseErr, errUnusableReply) {
+					// The parser's result is authoritative for whether this was a
+					// prose tool attempt. Demote once, then let the existing prose
+					// loop and bounded correction path handle it.
+					a.announceDowngrade("native response attempted prose tool call", "")
+				}
 			}
 		} else {
-			var parseErr error
 			calls, isToolCall, finalResponse, actionResult, parseErr = parseModelResponse(response)
-			if errors.Is(parseErr, errUnusableReply) {
-				// The mind tried to call a tool in a shape we cannot execute.
-				// Restating the rules is a fair chance to correct it, and this
-				// turn is charged to the budget because the mind did answer —
-				// unlike a refused request, which produced nothing.
-				//
-				// A second consecutive failure ends the growth naming the
-				// cause. One restatement is a fair chance; a mind that ignores
-				// it twice will not comply on the third, and the alternative is
-				// spending the whole budget discovering that.
-				unusableReplies++
-				if unusableReplies >= maxUnusableReplies {
-					return a.finishedResult(runUsage, usageStarted), fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
-				}
-				observation := buildUnusableReplyObservation(a.tools)
-				a.msgMu.Lock()
-				a.messages = append(a.messages, llm.Message{Role: "user", Content: observation})
-				a.msgMu.Unlock()
-				a.appendTranscript("user", observation)
-				continue
+		}
+
+		if errors.Is(parseErr, errUnusableReply) {
+			// The mind tried to call a tool in a shape we cannot execute.
+			// Restating the rules is a fair chance to correct it, and this
+			// turn is charged to the budget because the mind did answer —
+			// unlike a refused request, which produced nothing.
+			//
+			// A second consecutive failure ends the growth naming the
+			// cause. One restatement is a fair chance; a mind that ignores
+			// it twice will not comply on the third, and the alternative is
+			// spending the whole budget discovering that.
+			unusableReplies++
+			if unusableReplies >= maxUnusableReplies {
+				return a.finishedResult(runUsage, usageStarted), fmt.Errorf("%w after %d consecutive attempts; last reply: %s", errUnusableReply, unusableReplies, strings.TrimSpace(response))
 			}
-			if parseErr != nil {
-				return a.finishedResult(runUsage, usageStarted), parseErr
-			}
+			observation := buildUnusableReplyObservation(a.tools)
+			a.msgMu.Lock()
+			a.messages = append(a.messages, llm.Message{Role: "user", Content: observation})
+			a.msgMu.Unlock()
+			a.appendTranscript("user", observation)
+			continue
+		}
+		if parseErr != nil {
+			return a.finishedResult(runUsage, usageStarted), parseErr
+		}
+		if a.nativeClient == nil {
 			// Counted consecutively: a mind that recovers has not failed twice,
 			// and carrying the tally across a good turn would end a growth on
 			// two unrelated slips many turns apart.
@@ -1171,6 +1182,13 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 // the \"tool\" you listed" — is not mistaken for a call.
 var toolCallKeyRegex = regexp.MustCompile(`"tool"\s*:`)
 
+// namedParametersToolCallKeyRegex recognizes a provider-shaped object that
+// names a tool with "name" and supplies "parameters" but is not our canonical
+// prose protocol. It is intentionally recognition only: no provider-specific
+// fields are translated into an executable ToolCall.
+var namedParametersToolCallKeyRegex = regexp.MustCompile(`"name"\s*:`)
+var parametersKeyRegex = regexp.MustCompile(`"parameters"\s*:`)
+
 // toolCallWrapperMarkers are the openings of wrappers a mind reaches for when
 // it has native tool-calling trained into it and is being asked to speak the
 // prose protocol instead. They are listed because each was chosen by a model
@@ -1187,6 +1205,10 @@ var toolCallWrapperMarkers = []string{"<function_calls", "<invoke", "<tool_call"
 // says.
 func looksLikeToolCallAttempt(content string) bool {
 	if toolCallKeyRegex.MatchString(content) {
+		return true
+	}
+	candidate := stripCodeFences(strings.TrimSpace(content))
+	if strings.HasPrefix(candidate, "{") && namedParametersToolCallKeyRegex.MatchString(candidate) && parametersKeyRegex.MatchString(candidate) {
 		return true
 	}
 	for _, marker := range toolCallWrapperMarkers {
