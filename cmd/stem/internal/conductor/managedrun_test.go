@@ -260,6 +260,30 @@ func (runner *managedWritingRunner) setWorkspace(workspace string) {
 	runner.workspace = workspace
 }
 
+func (runner *managedWritingRunner) setSeedIntegrationCheckpoint(bool) {}
+
+func TestRunSproutSeedCheckpointRequiresExplicitSproutConfiguration(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	stepID := "seed-missing-sprout-configuration"
+	runner := &mockSproutRunner{response: "must not run"}
+	installManagedRunSeams(t, newManagedRunCapture(), map[string]sproutRunner{stepID: runner})
+
+	_, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           "tendril/seed-missing-sprout-configuration",
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         strings.TrimSpace(base),
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if runErr == nil || !strings.Contains(runErr.Error(), "requires an explicit Sprout execution configuration") {
+		t.Fatalf("RunSprout error = %v, want explicit configuration failure", runErr)
+	}
+}
+
 func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	prepareManagedRunRepository(t)
 	stubLocalStoma(t)
@@ -273,7 +297,6 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	var clients []*refusingLLM
 	var sprouts []*Sprout
 	iteration := 0
-	turnLimitCall := `{"tool":"execCommand","arguments":{"command":"continue"}}`
 
 	originalPreflight := runSproutPreflightChecksFn
 	originalEnsure := ensureSproutImageFn
@@ -315,7 +338,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 			}
 		}
 		client := &refusingLLM{
-			fakeLLM:        fakeLLM{responses: responses, response: turnLimitCall},
+			fakeLLM:        fakeLLM{responses: responses, response: unreadableWrapperReply},
 			refusalMessage: "tools unsupported for this model",
 		}
 		clients = append(clients, client)
@@ -357,8 +380,8 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	if len(prompts) != 2 || len(verifiedCandidates) != 2 || len(reports) != 2 {
 		t.Fatalf("prompts/candidates/reports = %d/%d/%d, want 2/2/2", len(prompts), len(verifiedCandidates), len(reports))
 	}
-	if len(runErrors) != 2 || runErrors[0] != nil || !errors.Is(runErrors[1], errSproutTurnLimit) {
-		t.Fatalf("Sprout errors = %v, want a clean first run and typed turn-limit second run", runErrors)
+	if len(runErrors) != 2 || runErrors[0] != nil || !errors.Is(runErrors[1], errUnusableReply) {
+		t.Fatalf("Sprout errors = %v, want a clean first run and typed unusable-reply second run", runErrors)
 	}
 	if reports[0].Outcome != SproutOutcomeComplete || reports[0].Output != "wrote candidate" {
 		t.Fatalf("first Sprout outcome/output = %q/%q, want a normally matured candidate", reports[0].Outcome, reports[0].Output)
@@ -383,7 +406,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		t.Fatalf("Sprout boundary classifications = first:%v second:%v, want no boundary violations", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load(), len(sprouts) > 1 && sprouts[1].boundaryFailure.Load())
 	}
 	if sprouts[1].boundaryFailure.Load() {
-		t.Fatal("turn-limit Sprout was classified as a boundary violation")
+		t.Fatal("post-write unusable-reply Sprout was classified as a boundary violation")
 	}
 	if !strings.Contains(sprouts[0].transcript.String(), "wrote candidate") {
 		t.Fatalf("first Sprout transcript omitted its normal completion:\n%s", sprouts[0].transcript.String())
@@ -392,7 +415,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		t.Fatalf("second Terrarium calls = %+v, want the repaired writeFile with a final newline", sessions[1].calls)
 	}
 	if reports[1].Outcome != SproutOutcomeFailed || reports[1].Output != "" {
-		t.Fatalf("second Sprout outcome/output = %q/%q, want failed with no matured answer after turn exhaustion", reports[1].Outcome, reports[1].Output)
+		t.Fatalf("second Sprout outcome/output = %q/%q, want failed with no matured answer after the post-write protocol failure", reports[1].Outcome, reports[1].Output)
 	}
 	if reports[1].FruitBranch != "" || reports[1].FruitCommit != "" || reports[1].seedCandidateCommit == "" {
 		t.Fatalf("second Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[1].FruitBranch, reports[1].FruitCommit, reports[1].seedCandidateCommit)
@@ -405,8 +428,8 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 			t.Fatalf("next Sprout prompt omitted %q:\n%s", want, prompts[1])
 		}
 	}
-	if !strings.Contains(result.Logs, "sprout withered") || !strings.Contains(result.Logs, "Sprout reached max iterations (20)") {
-		t.Fatalf("turn-limit Sprout failure was not preserved in Seed logs:\n%s", result.Logs)
+	if !strings.Contains(result.Logs, "sprout withered") || !strings.Contains(result.Logs, "model reply attempted a tool call") {
+		t.Fatalf("post-write protocol failure was not preserved in Seed logs:\n%s", result.Logs)
 	}
 	matured := filterEvents(*events, eventbus.EventSproutMatured)
 	withered := filterEvents(*events, eventbus.EventSproutWithered)
@@ -424,6 +447,9 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	}
 	if len(clients) != 2 {
 		t.Fatalf("provider clients = %d, want one per Sprout iteration", len(clients))
+	}
+	if len(clients[1].calls) != 2 {
+		t.Fatalf("second iteration provider turns = %d, want the write and malformed reply only", len(clients[1].calls))
 	}
 	for i, client := range clients {
 		if len(client.toolsPerNativeCall) != 2 || len(client.toolsPerNativeCall[0]) == 0 || len(client.toolsPerNativeCall[1]) != 0 {

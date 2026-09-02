@@ -105,6 +105,9 @@ type Sprout struct {
 	// Atomic because a dormancy capture may look at a Sprout while its loop
 	// goroutine is still running.
 	wroteWorkspace atomic.Bool
+	// seedIntegrationCheckpoint is set explicitly by the orchestrator for Seed
+	// runs. It protects a mutated candidate from protocol-repair writes.
+	seedIntegrationCheckpoint bool
 	// boundaryFailure records an explicit denied-policy/capability violation
 	// during the run. A safely refused unknown or unavailable tool is not such a
 	// violation: no Terrarium call was made, so it does not poison candidate
@@ -265,6 +268,14 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 		sessionID:       sessionID,
 		protocol:        "native",
 	}, nil
+}
+
+type sproutExecutionConfigurator interface {
+	setSeedIntegrationCheckpoint(bool)
+}
+
+func (a *Sprout) setSeedIntegrationCheckpoint(enabled bool) {
+	a.seedIntegrationCheckpoint = enabled
 }
 
 // announceDowngrade records that this run is no longer carried natively, and
@@ -512,6 +523,9 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		}
 
 		if errors.Is(parseErr, errUnusableReply) {
+			if a.seedIntegrationCheckpoint && a.wroteWorkspace.Load() {
+				return a.finishedResult(runUsage, usageStarted), fmt.Errorf("%w after Seed workspace mutation; last reply: %s", errUnusableReply, strings.TrimSpace(response))
+			}
 			// The mind tried to call a tool in a shape we cannot execute.
 			// Restating the rules is a fair chance to correct it, and this
 			// turn is charged to the budget because the mind did answer —
