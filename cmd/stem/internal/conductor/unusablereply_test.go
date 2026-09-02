@@ -235,6 +235,31 @@ func TestTwoConsecutiveUnusableRepliesEndTheRun(t *testing.T) {
 	}
 }
 
+func TestSproutTurnLimitPreservesBudgetAndIdentity(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{response: `{"tool":"execCommand","arguments":{"command":"keep trying"}}`}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "execCommand"}}}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	result, runErr := sprout.Run(context.Background(), "test")
+	if !errors.Is(runErr, errSproutTurnLimit) {
+		t.Fatalf("Run error = %v, want it to satisfy errors.Is(err, errSproutTurnLimit)", runErr)
+	}
+	if got := runErr.Error(); got != "Sprout reached max iterations (20)" {
+		t.Fatalf("Run error = %q, want the legacy operator-facing text", got)
+	}
+	if len(client.calls) != sproutMaxIterations {
+		t.Fatalf("provider turns = %d, want the existing budget %d", len(client.calls), sproutMaxIterations)
+	}
+	if strings.TrimSpace(result.Response) != "" {
+		t.Fatalf("Response = %q, want empty on turn-limit failure", result.Response)
+	}
+}
+
 func TestUnusableFailureAfterUnknownToolRefusalRemainsSalvageable(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{responses: []string{

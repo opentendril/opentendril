@@ -432,6 +432,32 @@ func TestRunSeedSalvagesCheckpointedRecoverableSproutFailure(t *testing.T) {
 	}
 }
 
+func TestRecoverableSeedSproutFailureAllowlistIsExact(t *testing.T) {
+	turnLimit := sproutTurnLimitError{limit: sproutMaxIterations}
+	wrappedTurnLimit := fmt.Errorf("sprout failed: %w", turnLimit)
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "unusable reply", err: errUnusableReply, want: true},
+		{name: "turn limit", err: turnLimit, want: true},
+		{name: "wrapped turn limit", err: wrappedTurnLimit, want: true},
+		{name: "plain legacy text", err: errors.New("Sprout reached max iterations (20)"), want: false},
+		{name: "joined turn limit", err: errors.Join(turnLimit, errors.New("checkpoint failed")), want: false},
+		{name: "provider failure", err: errors.New("provider unavailable"), want: false},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := isRecoverableSeedSproutFailure(testCase.err); got != testCase.want {
+				t.Fatalf("isRecoverableSeedSproutFailure(%v) = %v, want %v", testCase.err, got, testCase.want)
+			}
+		})
+	}
+}
+
 func TestRunSeedDoesNotSalvageRecoverableFailureWithoutCheckpoint(t *testing.T) {
 	restoreSeeds(t)
 	repo := newSeedRepo(t)
@@ -462,13 +488,13 @@ func TestRunSeedDoesNotSalvageRecoverableFailureWithoutCheckpoint(t *testing.T) 
 	}
 }
 
-func TestRunSeedDoesNotSalvageJoinedRecoverableFailure(t *testing.T) {
+func TestRunSeedDoesNotSalvageJoinedTurnLimitFailure(t *testing.T) {
 	restoreSeeds(t)
 	repo := newSeedRepo(t)
 	checkpointErr := errors.New("checkpoint materialization failed")
 	var verifyCalled bool
 	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
-		return SproutRunReport{Outcome: SproutOutcomeFailed, seedCandidateCommit: "untrusted-checkpoint"}, errors.Join(errUnusableReply, checkpointErr)
+		return SproutRunReport{Outcome: SproutOutcomeFailed, seedCandidateCommit: "untrusted-checkpoint"}, errors.Join(sproutTurnLimitError{limit: sproutMaxIterations}, checkpointErr)
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		verifyCalled = true
@@ -477,7 +503,7 @@ func TestRunSeedDoesNotSalvageJoinedRecoverableFailure(t *testing.T) {
 
 	res, err := RunSeed(context.Background(), SeedExecution{
 		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 2,
-		SessionID: "seed-salvage-joined-failure",
+		SessionID: "seed-salvage-joined-turn-limit-failure",
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)

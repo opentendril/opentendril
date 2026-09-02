@@ -190,7 +190,7 @@ func TestRunSproutSeedCheckpointRejectsCheckpointFailure(t *testing.T) {
 	base = strings.TrimSpace(base)
 	seedBranch := "tendril/seed-checkpoint-failure"
 	stepID := "seed-checkpoint-failure"
-	runner := &managedWritingRunner{file: "HELLO.md", contents: "partial", runErr: errUnusableReply}
+	runner := &managedWritingRunner{file: "HELLO.md", contents: "partial", runErr: sproutTurnLimitError{limit: sproutMaxIterations}}
 	capture := newManagedRunCapture()
 	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
 	commitErr := errors.New("checkpoint commit unavailable")
@@ -205,7 +205,7 @@ func TestRunSproutSeedCheckpointRejectsCheckpointFailure(t *testing.T) {
 		SeedIntegrationCheckpoint: true,
 		SeedStartRevision:         base,
 	}).RunSprout(context.Background(), "create HELLO.md")
-	if !errors.Is(runErr, errUnusableReply) || !errors.Is(runErr, commitErr) {
+	if !errors.Is(runErr, errSproutTurnLimit) || !errors.Is(runErr, commitErr) {
 		t.Fatalf("RunSprout error = %v, want both the recoverable failure and checkpoint error", runErr)
 	}
 	if report.FruitCommit != "" || report.FruitBranch != "" || report.seedCandidateCommit != "" {
@@ -268,10 +268,12 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	var prompts []string
 	var verifiedCandidates []string
 	var reports []SproutRunReport
+	var runErrors []error
 	var sessions []*round19WriteSession
 	var clients []*refusingLLM
 	var sprouts []*Sprout
 	iteration := 0
+	turnLimitCall := `{"tool":"execCommand","arguments":{"command":"continue"}}`
 
 	originalPreflight := runSproutPreflightChecksFn
 	originalEnsure := ensureSproutImageFn
@@ -305,18 +307,17 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		if iteration == 1 {
 			responses = []string{
 				`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril."}}`,
-				`{"tool":"cmp","arguments":{"path":"HELLO.md"}}`,
-				`{"tool":"readFile","arguments":{"path":"HELLO.md"}}`,
-				unreadableWrapperReply,
-				unreadableWrapperReply,
+				`{"final":"wrote candidate"}`,
 			}
 		} else {
 			responses = []string{
 				`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril.\n"}}`,
-				`{"final":"repaired candidate"}`,
 			}
 		}
-		client := &refusingLLM{fakeLLM: fakeLLM{responses: responses}, refusalMessage: "tools unsupported for this model"}
+		client := &refusingLLM{
+			fakeLLM:        fakeLLM{responses: responses, response: turnLimitCall},
+			refusalMessage: "tools unsupported for this model",
+		}
 		clients = append(clients, client)
 		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID)
 		if err == nil {
@@ -328,6 +329,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 		prompts = append(prompts, prompt)
 		report, err := orch.RunSprout(ctx, prompt)
 		reports = append(reports, report)
+		runErrors = append(runErrors, err)
 		return report, err
 	}
 	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
@@ -336,6 +338,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	}
 	bus := eventbus.New()
 	defer bus.Shutdown()
+	events := recordSproutLifecycle(bus)
 
 	result, err := RunSeed(context.Background(), SeedExecution{
 		Substrate:     repository,
@@ -354,8 +357,11 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	if len(prompts) != 2 || len(verifiedCandidates) != 2 || len(reports) != 2 {
 		t.Fatalf("prompts/candidates/reports = %d/%d/%d, want 2/2/2", len(prompts), len(verifiedCandidates), len(reports))
 	}
-	if reports[0].Outcome != SproutOutcomeFailed || reports[0].Output != "" {
-		t.Fatalf("first Sprout outcome = %q, want failed so the withered Sprout remains observable", reports[0].Outcome)
+	if len(runErrors) != 2 || runErrors[0] != nil || !errors.Is(runErrors[1], errSproutTurnLimit) {
+		t.Fatalf("Sprout errors = %v, want a clean first run and typed turn-limit second run", runErrors)
+	}
+	if reports[0].Outcome != SproutOutcomeComplete || reports[0].Output != "wrote candidate" {
+		t.Fatalf("first Sprout outcome/output = %q/%q, want a normally matured candidate", reports[0].Outcome, reports[0].Output)
 	}
 	if reports[0].FruitBranch != "" || reports[0].FruitCommit != "" || reports[0].seedCandidateCommit == "" {
 		t.Fatalf("first Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[0].FruitBranch, reports[0].FruitCommit, reports[0].seedCandidateCommit)
@@ -367,23 +373,26 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	if firstContents != "Hello from OpenTendril." {
 		t.Fatalf("first candidate HELLO.md = %q, want the immutable no-newline partial write", firstContents)
 	}
-	if len(sessions) != 2 || len(sessions[0].calls) != 2 || sessions[0].calls[0].Tool != "writeFile" || sessions[0].calls[1].Tool != "readFile" {
-		t.Fatalf("first Terrarium calls = %+v, want writeFile then readFile; cmp must be refused before session execution", sessions)
+	if len(sessions) != 2 || len(sessions[0].calls) != 1 || sessions[0].calls[0].Tool != "writeFile" {
+		t.Fatalf("first Terrarium calls = %+v, want the governed write only", sessions)
 	}
-	if reports[0].ToolInvocations != 3 {
-		t.Fatalf("first Sprout tool invocations = %d, want writeFile, refused cmp, and readFile", reports[0].ToolInvocations)
+	if reports[0].ToolInvocations != 1 {
+		t.Fatalf("first Sprout tool invocations = %d, want one governed write", reports[0].ToolInvocations)
 	}
 	if len(sprouts) != 2 || sprouts[0].boundaryFailure.Load() {
-		t.Fatalf("first Sprout boundary classification = %v, want no fail-closed boundary violation for unavailable cmp", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load())
+		t.Fatalf("Sprout boundary classifications = first:%v second:%v, want no boundary violations", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load(), len(sprouts) > 1 && sprouts[1].boundaryFailure.Load())
 	}
-	if !strings.Contains(sprouts[0].transcript.String(), "unsupported tool") || !strings.Contains(sprouts[0].transcript.String(), "cmp") {
-		t.Fatalf("first Sprout transcript omitted the safe cmp refusal:\n%s", sprouts[0].transcript.String())
+	if sprouts[1].boundaryFailure.Load() {
+		t.Fatal("turn-limit Sprout was classified as a boundary violation")
+	}
+	if !strings.Contains(sprouts[0].transcript.String(), "wrote candidate") {
+		t.Fatalf("first Sprout transcript omitted its normal completion:\n%s", sprouts[0].transcript.String())
 	}
 	if len(sessions[1].calls) != 1 || sessions[1].calls[0].Tool != "writeFile" || sessions[1].calls[0].Arguments["content"] != "Hello from OpenTendril.\n" {
 		t.Fatalf("second Terrarium calls = %+v, want the repaired writeFile with a final newline", sessions[1].calls)
 	}
-	if reports[1].Outcome != SproutOutcomeComplete {
-		t.Fatalf("second Sprout outcome = %q, want complete after repair", reports[1].Outcome)
+	if reports[1].Outcome != SproutOutcomeFailed || reports[1].Output != "" {
+		t.Fatalf("second Sprout outcome/output = %q/%q, want failed with no matured answer after turn exhaustion", reports[1].Outcome, reports[1].Output)
 	}
 	if reports[1].FruitBranch != "" || reports[1].FruitCommit != "" || reports[1].seedCandidateCommit == "" {
 		t.Fatalf("second Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[1].FruitBranch, reports[1].FruitCommit, reports[1].seedCandidateCommit)
@@ -396,8 +405,19 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 			t.Fatalf("next Sprout prompt omitted %q:\n%s", want, prompts[1])
 		}
 	}
-	if !strings.Contains(result.Logs, "model reply attempted a tool call") {
-		t.Fatalf("original Sprout failure was not preserved in Seed logs:\n%s", result.Logs)
+	if !strings.Contains(result.Logs, "sprout withered") || !strings.Contains(result.Logs, "Sprout reached max iterations (20)") {
+		t.Fatalf("turn-limit Sprout failure was not preserved in Seed logs:\n%s", result.Logs)
+	}
+	matured := filterEvents(*events, eventbus.EventSproutMatured)
+	withered := filterEvents(*events, eventbus.EventSproutWithered)
+	if len(matured) != 1 || len(withered) != 1 {
+		t.Fatalf("terminal lifecycle events = matured:%d withered:%d, want one of each", len(matured), len(withered))
+	}
+	if matured[0].Data["outcome"] != SproutOutcomeComplete {
+		t.Fatalf("first terminal event outcome = %v, want %q", matured[0].Data["outcome"], SproutOutcomeComplete)
+	}
+	if withered[0].Data["outcome"] != SproutOutcomeFailed {
+		t.Fatalf("second terminal event outcome = %v, want %q", withered[0].Data["outcome"], SproutOutcomeFailed)
 	}
 	if got := len(downgradeEvents(bus)); got != 2 {
 		t.Fatalf("provider/prose downgrade events = %d, want one per Sprout iteration", got)
@@ -415,9 +435,6 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 				return counts
 			}())
 		}
-	}
-	if len(clients[0].calls) != 5 {
-		t.Fatalf("first provider prose calls = %d, want 5: writeFile, cmp, readFile, then two bounded unusable replies", len(clients[0].calls))
 	}
 	if len(result.VerificationDiagnostics) != 2 || result.VerificationDiagnostics[0].ExitCode == nil || *result.VerificationDiagnostics[0].ExitCode != 1 || result.VerificationDiagnostics[1].ExitCode == nil || *result.VerificationDiagnostics[1].ExitCode != 0 {
 		t.Fatalf("verification diagnostics = %+v, want deterministic exit 1 then pass", result.VerificationDiagnostics)
