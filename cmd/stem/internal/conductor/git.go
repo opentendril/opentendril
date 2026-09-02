@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
@@ -62,6 +64,61 @@ func runGitCommandRawOutput(ctx context.Context, dir string, args ...string) (st
 	}
 
 	return string(output), nil
+}
+
+// runGitCommandBoundedRawOutput runs git while retaining at most maxOutput
+// bytes from stdout and stderr. The truncation flag lets callers preserve a
+// deterministic marker without materializing an unbounded diff in memory.
+func runGitCommandBoundedRawOutput(ctx context.Context, dir string, maxOutput int, args ...string) (string, bool, error) {
+	if maxOutput < 1 {
+		return "", false, fmt.Errorf("git output bound must be positive")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cmdArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	var output boundedGitOutput
+	output.limit = maxOutput
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		return "", output.truncated, fmt.Errorf("git %s failed: %w (output: %s)", strings.Join(args, " "), err, strings.TrimSpace(output.String()))
+	}
+
+	return output.String(), output.truncated, nil
+}
+
+type boundedGitOutput struct {
+	bytes.Buffer
+	mu        sync.Mutex
+	limit     int
+	truncated bool
+}
+
+func (output *boundedGitOutput) Write(data []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+
+	remaining := output.limit - output.Len()
+	if remaining <= 0 {
+		output.truncated = true
+		return len(data), nil
+	}
+	if len(data) > remaining {
+		_, _ = output.Buffer.Write(data[:remaining])
+		output.truncated = true
+		return len(data), nil
+	}
+	_, _ = output.Buffer.Write(data)
+	return len(data), nil
+}
+
+func (output *boundedGitOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.Buffer.String()
 }
 
 // isGitRepo checks if the given path is inside a git repository.

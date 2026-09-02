@@ -1182,12 +1182,12 @@ func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult
 // the \"tool\" you listed" — is not mistaken for a call.
 var toolCallKeyRegex = regexp.MustCompile(`"tool"\s*:`)
 
-// namedParametersToolCallKeyRegex recognizes a provider-shaped object that
-// names a tool with "name" and supplies "parameters" but is not our canonical
-// prose protocol. It is intentionally recognition only: no provider-specific
-// fields are translated into an executable ToolCall.
-var namedParametersToolCallKeyRegex = regexp.MustCompile(`"name"\s*:`)
-var parametersKeyRegex = regexp.MustCompile(`"parameters"\s*:`)
+// providerToolCallShapeRegex recognizes the provider-shaped object that some
+// minds emit instead of the prose protocol. It deliberately matches only an
+// object-like prefix with a string name and object-valued parameters. The
+// optional closing quote accepts the observed near-JSON "parameters={...}"
+// form; neither shape is decoded or translated into a ToolCall.
+var providerToolCallShapeRegex = regexp.MustCompile(`(?s)\{\s*"name"\s*:\s*"[^"\\]*(\\.[^"\\]*)*"\s*,\s*"parameters"?\s*(?::|=)\s*\{`)
 
 // toolCallWrapperMarkers are the openings of wrappers a mind reaches for when
 // it has native tool-calling trained into it and is being asked to speak the
@@ -1208,7 +1208,7 @@ func looksLikeToolCallAttempt(content string) bool {
 		return true
 	}
 	candidate := stripCodeFences(strings.TrimSpace(content))
-	if strings.HasPrefix(candidate, "{") && namedParametersToolCallKeyRegex.MatchString(candidate) && parametersKeyRegex.MatchString(candidate) {
+	if providerToolCallShapeRegex.MatchString(candidate) {
 		return true
 	}
 	for _, marker := range toolCallWrapperMarkers {

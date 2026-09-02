@@ -64,10 +64,12 @@ func TestWrappedToolCallIsNeverTheFinalAnswer(t *testing.T) {
 // only on it recognising an attempt.
 func TestUnreadableAttemptIsRefusedNotFinalised(t *testing.T) {
 	replies := map[string]string{
-		"anthropic invoke form":  unreadableWrapperReply,
-		"unparseable payload":    "<tool_call>\n{\"tool\": \"writeFile\", \"arguments\": {\"path\": \n</tool_call>",
-		"truncated bare object":  `{"tool": "writeFile", "arguments": {"path": "README.md", "content": "half`,
-		"provider-shaped object": `{"name":"createFile","parameters":{"filePath":"HELLO.md","content":"Hello"}}`,
+		"anthropic invoke form":              unreadableWrapperReply,
+		"unparseable payload":                "<tool_call>\n{\"tool\": \"writeFile\", \"arguments\": {\"path\": \n</tool_call>",
+		"truncated bare object":              `{"tool": "writeFile", "arguments": {"path": "README.md", "content": "half`,
+		"provider-shaped object":             `{"name":"createFile","parameters":{"filePath":"HELLO.md","content":"Hello"}}`,
+		"provider-shaped near object":        `{"name":"writeFile","parameters={"path":"HELLO","content":"Hello"}}`,
+		"provider-shaped object after prose": "explanation text\n{\"name\":\"runCommand\",\"parameters\":{\"command\":\"...\"}}",
 	}
 
 	for name, reply := range replies {
@@ -86,15 +88,56 @@ func TestUnreadableAttemptIsRefusedNotFinalised(t *testing.T) {
 	}
 }
 
+func TestProviderToolIntentUsesBoundedCorrectionWithoutTranslation(t *testing.T) {
+	replies := map[string]string{
+		"near-malformed writeFile":    `{"name":"writeFile","parameters={"path":"HELLO.md","content":"Hello"}}`,
+		"embedded unknown runCommand": "explanation text\n{\"name\":\"runCommand\",\"parameters\":{\"command\":\"...\"}}",
+	}
+
+	for name, reply := range replies {
+		t.Run(name, func(t *testing.T) {
+			workspace := t.TempDir()
+			client := &fakeLLM{responses: []string{reply, `{"final":"corrected"}`}}
+			session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+
+			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+			if err != nil {
+				t.Fatalf("newSprout: %v", err)
+			}
+			result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+			if runErr != nil {
+				t.Fatalf("Sprout.Run: %v", runErr)
+			}
+			if result.Response != "corrected" {
+				t.Fatalf("Response = %q, want bounded correction to continue", result.Response)
+			}
+			if len(session.calls) != 0 {
+				t.Fatalf("provider-shaped intent was translated or executed: %+v", session.calls)
+			}
+			if len(client.calls) != 2 {
+				t.Fatalf("model turns = %d, want initial reply plus one correction turn", len(client.calls))
+			}
+			correction := client.calls[1][len(client.calls[1])-1].Content
+			if !strings.Contains(correction, `{"tool":"name","arguments":{...}}`) {
+				t.Fatalf("correction = %q, want canonical prose protocol shape", correction)
+			}
+			if !strings.Contains(correction, "writeFile") {
+				t.Fatalf("correction = %q, want actual available tool catalog", correction)
+			}
+		})
+	}
+}
+
 // The counterweight, and the reason the discriminator is not simply "did the
 // decode fail". The protocol rules say a growth may end with "plain final
 // text", so refusing every reply the decoder cannot read would end growths that
 // had genuinely finished. Only an attempted call is refused.
 func TestPlainProseIsStillAFinalAnswer(t *testing.T) {
 	replies := map[string]string{
-		"plain sentence":       "Done. I appended a blank line to the end of README.md.",
-		"mentions the word":    `Done. I used the "tool" you listed to append the line.`,
-		"describes a function": "I considered calling a function to do this, but the file already ended with a newline.",
+		"plain sentence":               "Done. I appended a blank line to the end of README.md.",
+		"mentions the word":            `Done. I used the "tool" you listed to append the line.`,
+		"mentions name and parameters": `The name and parameters are documented in the task; the file was already correct.`,
+		"describes a function":         "I considered calling a function to do this, but the file already ended with a newline.",
 	}
 
 	for name, reply := range replies {

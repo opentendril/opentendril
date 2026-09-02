@@ -47,6 +47,24 @@ func stubLocalStoma(t *testing.T) {
 	}
 }
 
+type round19WriteSession struct {
+	fakeSession
+	workspace string
+}
+
+func (s *round19WriteSession) Call(_ context.Context, call ToolCall) (ToolResponse, error) {
+	if call.Tool == "writeFile" {
+		path, _ := call.Arguments["path"].(string)
+		content, _ := call.Arguments["content"].(string)
+		if err := os.WriteFile(filepath.Join(s.workspace, path), []byte(content), 0o644); err != nil {
+			return ToolResponse{}, err
+		}
+	}
+	return ToolResponse{Status: "success", Output: map[string]any{"tool": call.Tool}}, nil
+}
+
+func (s *round19WriteSession) Logs() string { return "round 19 fake terrarium" }
+
 func TestTerrariumBindMountRunAsUserRootlessAndRootful(t *testing.T) {
 	origUID := osGetuidFn
 	origGID := osGetgidFn
@@ -216,6 +234,112 @@ func TestRound16HelloPredicatePassesAgainstSeedCandidate(t *testing.T) {
 	}
 }
 
+func TestRound19SeedRetryCarriesCandidateEvidenceAndRejectsProviderProse(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+	var prompts []string
+	var iteration int
+	nearMalformedWrite := `{"name":"writeFile","parameters={"path":"HELLO.md","content":"Hello from OpenTendril."}}`
+	unknownProviderRun := "explanation text\n{\"name\":\"runCommand\",\"parameters\":{\"command\":\"printf ...\"}}"
+
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		prompts = append(prompts, prompt)
+		iteration++
+		if !localBranchExists(repo, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, repo, "branch", orch.SubstrateBranch, orch.SeedStartRevision); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		if _, err := runGitCommand(ctx, repo, "checkout", orch.SubstrateBranch); err != nil {
+			return SproutRunReport{}, err
+		}
+		defer func() { _, _ = runGitCommand(ctx, repo, "checkout", "main") }()
+
+		var client *nativeFakeLLM
+		if iteration == 1 {
+			client = &nativeFakeLLM{
+				fakeLLM: fakeLLM{responses: []string{
+					`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril."}}`,
+					`{"final":"wrote candidate"}`,
+				}},
+				nativeResponses: []llm.Result{{Text: nearMalformedWrite}},
+			}
+		} else {
+			client = &nativeFakeLLM{
+				fakeLLM:         fakeLLM{response: unknownProviderRun},
+				nativeResponses: []llm.Result{{Text: unknownProviderRun}},
+			}
+		}
+		session := &round19WriteSession{
+			fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}},
+			workspace:   repo,
+		}
+		sprout, err := newSprout(ctx, repo, repo, "workspace-Sprout", client, session, nil, "round-19", "round-19")
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		result, runErr := sprout.Run(ctx, prompt)
+		if runErr != nil {
+			return SproutRunReport{}, runErr
+		}
+		if !result.WroteWorkspace {
+			return SproutRunReport{Outcome: SproutOutcomeNoChanges}, nil
+		}
+		if _, err := runGitCommand(ctx, repo, "add", "HELLO.md"); err != nil {
+			return SproutRunReport{}, err
+		}
+		if _, err := runGitCommand(ctx, repo, "commit", "-m", "round 19 candidate"); err != nil {
+			return SproutRunReport{}, err
+		}
+		checkpoint, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+		if err != nil {
+			return SproutRunReport{}, err
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: strings.TrimSpace(checkpoint)}, nil
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "create HELLO.md",
+		Verify:        round16HelloVerifyArgv(),
+		MaxIterations: 2,
+		SessionID:     "round-19-seed-convergence",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered after the bounded provider correction failure", res.Status)
+	}
+	if res.Iterations != 2 || len(prompts) != 2 {
+		t.Fatalf("iterations/prompts = %d/%d, want 2/2", res.Iterations, len(prompts))
+	}
+	if res.Branch == "" || res.Commit == "" {
+		t.Fatalf("failed candidate identity = branch %q commit %q, want the first iteration's candidate preserved", res.Branch, res.Commit)
+	}
+	if strings.Contains(prompts[0], seedCandidateDiffHeading) {
+		t.Fatalf("initial prompt included candidate evidence:\n%s", prompts[0])
+	}
+	for _, want := range []string{
+		"Verification failed: command exited 1.",
+		seedCandidateDiffHeading,
+		"HELLO.md",
+		"\\ No newline at end of file",
+		"This is deterministic Stem-provided candidate evidence.",
+	} {
+		if !strings.Contains(prompts[1], want) {
+			t.Fatalf("retry prompt omitted %q:\n%s", want, prompts[1])
+		}
+	}
+	if !strings.Contains(res.Logs, "sprout withered") || !strings.Contains(res.Logs, "model reply attempted a tool call") {
+		t.Fatalf("malformed/provider prose did not remain a bounded Sprout failure:\n%s", res.Logs)
+	}
+	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].ExitCode == nil || *res.VerificationDiagnostics[0].ExitCode != 1 {
+		t.Fatalf("verification diagnostics = %+v, want the first silent predicate failure", res.VerificationDiagnostics)
+	}
+}
+
 func TestRunSeedNoChangeVerifiesBaseCandidate(t *testing.T) {
 	restoreSeeds(t)
 	stubLocalStoma(t)
@@ -299,8 +423,10 @@ func TestRunSeedNoChangeVerifiesAccumulatedCandidate(t *testing.T) {
 	repo := newSeedRepo(t)
 	var firstCheckpoint string
 	var verifiedCandidates []string
+	var prompts []string
 
-	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		prompts = append(prompts, prompt)
 		if firstCheckpoint != "" {
 			return SproutRunReport{Outcome: SproutOutcomeNoChanges}, nil
 		}
@@ -349,6 +475,21 @@ func TestRunSeedNoChangeVerifiesAccumulatedCandidate(t *testing.T) {
 	}
 	if verifiedCandidates[0] != firstCheckpoint || verifiedCandidates[1] != firstCheckpoint {
 		t.Fatalf("verified candidates = %v, want accumulated candidate %q for both iterations", verifiedCandidates, firstCheckpoint)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("prompts = %d, want one per iteration", len(prompts))
+	}
+	if strings.Contains(prompts[0], seedCandidateDiffHeading) {
+		t.Fatalf("initial prompt included candidate evidence: %q", prompts[0])
+	}
+	for _, want := range []string{
+		seedCandidateDiffHeading,
+		"accumulated.txt",
+		"This is deterministic Stem-provided candidate evidence.",
+	} {
+		if !strings.Contains(prompts[1], want) {
+			t.Fatalf("retry prompt omitted candidate evidence %q:\n%s", want, prompts[1])
+		}
 	}
 }
 
