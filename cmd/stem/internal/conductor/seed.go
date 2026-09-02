@@ -476,7 +476,7 @@ func isRecoverableSeedSproutFailure(runErr error) bool {
 	if wrapped, ok := runErr.(interface{ Unwrap() error }); ok {
 		return isRecoverableSeedSproutFailure(wrapped.Unwrap())
 	}
-	return errors.Is(runErr, errUnusableReply)
+	return errors.Is(runErr, errUnusableReply) || errors.Is(runErr, errSproutTurnLimit)
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway

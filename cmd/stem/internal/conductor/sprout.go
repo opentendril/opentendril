@@ -625,7 +625,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 		// iteration lets the model decide whether the task is complete.
 	}
 
-	return a.finishedResult(runUsage, usageStarted), fmt.Errorf("Sprout reached max iterations (%d)", sproutMaxIterations)
+	return a.finishedResult(runUsage, usageStarted), sproutTurnLimitError{limit: sproutMaxIterations}
 }
 
 func (a *Sprout) finishedResult(usage llm.Usage, started bool) sproutResult {
@@ -1153,6 +1153,24 @@ type modelResponse struct {
 // ending, so only a reply showing an attempted call is refused — see
 // looksLikeToolCallAttempt for what counts and what that deliberately misses.
 var errUnusableReply = errors.New("model reply attempted a tool call that could not be read")
+
+// errSproutTurnLimit identifies a Sprout that spent its bounded cognitive
+// turn budget. The concrete error preserves the existing operator-facing
+// message while this sentinel lets Seed distinguish bounded cognition failure
+// from provider, Terrarium, policy, and other infrastructure failures.
+var errSproutTurnLimit = errors.New("sprout reached its bounded turn limit")
+
+type sproutTurnLimitError struct {
+	limit int
+}
+
+func (e sproutTurnLimitError) Error() string {
+	return fmt.Sprintf("Sprout reached max iterations (%d)", e.limit)
+}
+
+func (e sproutTurnLimitError) Unwrap() error {
+	return errSproutTurnLimit
+}
 
 func parseModelResponse(content string) ([]ToolCall, bool, string, *ActionResult, error) {
 	trimmed := telemetry.StripPrivateReasoning(strings.TrimSpace(content))
