@@ -370,8 +370,8 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	if len(sessions) != 2 || len(sessions[0].calls) != 2 || sessions[0].calls[0].Tool != "writeFile" || sessions[0].calls[1].Tool != "readFile" {
 		t.Fatalf("first Terrarium calls = %+v, want writeFile then readFile; cmp must be refused before session execution", sessions)
 	}
-	if reports[0].ToolInvocations != 2 {
-		t.Fatalf("first Sprout tool invocations = %d, want writeFile and readFile only; refused cmp did not execute", reports[0].ToolInvocations)
+	if reports[0].ToolInvocations != 3 {
+		t.Fatalf("first Sprout tool invocations = %d, want writeFile, refused cmp, and readFile", reports[0].ToolInvocations)
 	}
 	if len(sprouts) != 2 || sprouts[0].boundaryFailure.Load() {
 		t.Fatalf("first Sprout boundary classification = %v, want no fail-closed boundary violation for unavailable cmp", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load())

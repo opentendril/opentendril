@@ -128,7 +128,8 @@ type SproutRunReport struct {
 	// ProviderDiagnostic is the credential-free provider explanation, when a
 	// typed provider response exists.
 	ProviderDiagnostic *core.ProviderDiagnostic
-	// ToolInvocations is how many terrarium tool calls the Sprout made.
+	// ToolInvocations is how many tool requests the Sprout handled, including
+	// requests refused before Terrarium execution.
 	ToolInvocations int
 	// FruitBranch is the run-specific Fruit branch on which this managed run
 	// created a reviewable commit. It is set immediately after the local commit

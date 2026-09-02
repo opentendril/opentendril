@@ -113,7 +113,8 @@ type Sprout struct {
 	// requestBegun is set the first time a Mycorrhizal request is about to
 	// be issued, so the structured "cognition has begun" signal fires once.
 	requestBegun atomic.Bool
-	// toolInvocations counts terrarium tool calls that actually ran.
+	// toolInvocations counts tool requests handled by the Sprout, including
+	// requests safely refused before Terrarium execution.
 	toolInvocations atomic.Int64
 }
 
@@ -590,14 +591,11 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				// misled about.
 			} else {
 				var err error
-				var invoked bool
-				resp, obs, invoked, err = a.executeTool(ctx, call)
+				resp, obs, err = a.executeTool(ctx, call)
 				if err != nil {
 					return a.finishedResult(runUsage, usageStarted), err
 				}
-				if invoked {
-					a.publishToolInvoked(call, resp, obs)
-				}
+				a.publishToolInvoked(call, resp, obs)
 			}
 			if combinedObservation.Len() > 0 {
 				combinedObservation.WriteString("\n\n")
@@ -705,9 +703,9 @@ func (a *Sprout) LastExchange() (request, response string) {
 	return request, response
 }
 
-func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, string, bool, error) {
+func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, string, error) {
 	if strings.TrimSpace(call.Tool) == "" {
-		return ToolResponse{}, "", false, fmt.Errorf("empty tool call received from model")
+		return ToolResponse{}, "", fmt.Errorf("empty tool call received from model")
 	}
 	if _, ok := a.toolIndex[call.Tool]; !ok {
 		if a.isDeniedCapability(call.Tool) {
@@ -717,7 +715,7 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 			Status: "error",
 			Error:  fmt.Sprintf("unsupported tool %q. available tools: %s", call.Tool, strings.Join(a.availableToolNames(), ", ")),
 		}
-		return response, renderToolObservation(call.Tool, response), false, nil
+		return response, renderToolObservation(call.Tool, response), nil
 	}
 
 	if call.Tool == "injectPlasmid" {
@@ -730,7 +728,7 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 							Status: "error",
 							Error:  fmt.Sprintf("access denied: plasmid %q is restricted by the active system genotype", name),
 						}
-						return response, renderToolObservation(call.Tool, response), false, nil
+						return response, renderToolObservation(call.Tool, response), nil
 					}
 				}
 			}
@@ -748,7 +746,7 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 	// editing.
 	if call.Tool == "gitCommit" {
 		response := managedGitCommitResponse()
-		return response, renderToolObservation(call.Tool, response), true, nil
+		return response, renderToolObservation(call.Tool, response), nil
 	}
 
 	// Recorded before the call, not after it: a tool call the terrarium never
@@ -761,10 +759,10 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 
 	response, err := a.session.Call(ctx, call)
 	if err != nil {
-		return ToolResponse{}, "", false, err
+		return ToolResponse{}, "", err
 	}
 
-	return response, renderToolObservation(call.Tool, response), true, nil
+	return response, renderToolObservation(call.Tool, response), nil
 }
 
 func (a *Sprout) isDeniedCapability(name string) bool {
@@ -800,10 +798,11 @@ func managedGitCommitResponse() ToolResponse {
 // cannot bloat the event stream or the history row.
 const maxToolObservationEventBytes = 2000
 
-// publishToolInvoked emits one tool-invoked event per action the Sprout takes,
-// so a run's actual actions are observable live and in history rather than
-// leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
-// no bus is wired (workspace and test callers), matching the other publishers.
+// publishToolInvoked emits one tool-invoked event per tool request handled by
+// the Sprout, including requests refused before Terrarium execution, so the
+// run's observations are live and in history rather than leaving only the
+// sprout-emerged/sprout-matured bookends. It is a no-op when no bus is wired
+// (workspace and test callers), matching the other publishers.
 func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
 	a.toolInvocations.Add(1)
 	if a.eventBus == nil {
