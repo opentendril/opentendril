@@ -220,9 +220,13 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		verifyReport := seedVerifyFn(ctx, sourcePath, candidateRevision, execution.Verify, execution.Egress)
 		diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
 		verificationDiagnostics = append(verificationDiagnostics, diagnostic)
-		if verifyReport.Err != nil {
+		if verifyReport.Err != nil || verifyReport.TimedOut {
 			status = SeedStatusWithered
-			fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
+			if verifyReport.Err != nil {
+				fmt.Fprintf(&logs, "🔬 verify could not run: %v\n", verifyReport.Err)
+			} else {
+				fmt.Fprintln(&logs, "🔬 verify could not run: command timed out")
+			}
 			break
 		}
 		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", verifyVerdict(verifyReport.Passed), verifyReport.Output)
@@ -230,7 +234,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			status = SeedStatusSatisfied
 			break
 		}
-		prompt = seedGoalPrompt(execution.Goal, execution.Verify, verifyReport.Output)
+		prompt = seedGoalPrompt(execution.Goal, execution.Verify, seedVerificationFeedback(verifyReport))
 	}
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
@@ -486,13 +490,54 @@ func seedVerificationDiagnostic(iteration int, report seedVerifyReport) core.See
 		diagnostic.Outcome = core.SeedVerificationOutcomePassed
 	default:
 		diagnostic.Outcome = core.SeedVerificationOutcomePredicateFailed
-		if report.ExitCode != nil {
-			diagnostic.Message = boundSeedVerifyDiagnostic(fmt.Sprintf("verify command exited %d", *report.ExitCode))
-		} else {
-			diagnostic.Message = boundSeedVerifyDiagnostic("verify command did not pass")
-		}
+		diagnostic.Message = boundSeedVerifyDiagnostic("verify " + seedVerificationFailureFact(report))
 	}
 	return diagnostic
+}
+
+// seedVerificationFailureFact renders only deterministic facts about a failed
+// verification. It deliberately does not guess why a command returned a
+// non-zero exit code.
+func seedVerificationFailureFact(report seedVerifyReport) string {
+	if report.TimedOut {
+		return "command timed out"
+	}
+	if report.ExitCode != nil {
+		return fmt.Sprintf("command exited %d", *report.ExitCode)
+	}
+	return "command did not pass"
+}
+
+const seedVerifyFeedbackBound = 4000
+
+// seedVerificationFeedback is the single bounded feedback path from a
+// deterministic verifier to the next Sprout prompt. Infrastructure failures
+// are intentionally excluded: they wither the Seed rather than becoming a
+// retry instruction.
+func seedVerificationFeedback(report seedVerifyReport) string {
+	if report.Passed || report.Err != nil {
+		return ""
+	}
+
+	output := strings.TrimSpace(report.Output)
+	if report.TimedOut || output == "" {
+		diagnostic := "Verification failed: " + seedVerificationFailureFact(report) + "."
+		if output == "" {
+			output = diagnostic
+		} else {
+			output = diagnostic + "\n" + output
+		}
+	}
+	return boundSeedVerifyFeedback(output)
+}
+
+func boundSeedVerifyFeedback(message string) string {
+	message = strings.TrimSpace(message)
+	if len(message) <= seedVerifyFeedbackBound {
+		return message
+	}
+	const truncatedSuffix = "\n…(truncated)"
+	return message[:seedVerifyFeedbackBound-len(truncatedSuffix)] + truncatedSuffix
 }
 
 func boundSeedVerifyDiagnostic(message string) string {
@@ -530,9 +575,7 @@ func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
 	fmt.Fprintf(&b, "%s\n\nThe task is complete only when `%s` exits 0. Run it to check your work before finishing.",
 		strings.TrimSpace(goal), strings.Join(verify, " "))
 	if fail := strings.TrimSpace(priorFailure); fail != "" {
-		if len(fail) > 4000 {
-			fail = fail[:4000] + "\n…(truncated)"
-		}
+		fail = boundSeedVerifyFeedback(fail)
 		fmt.Fprintf(&b, "\n\nA previous attempt did not pass. The verification command failed with:\n%s\n\nFind and fix the cause, then make it pass.", fail)
 	}
 	return b.String()

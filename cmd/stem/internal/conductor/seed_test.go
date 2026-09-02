@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 	"github.com/opentendril/opentendril/roots/llm"
@@ -96,6 +97,9 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 	if len(prompts) != 1 {
 		t.Fatalf("build ran %d time(s), want 1", len(prompts))
 	}
+	if strings.Contains(prompts[0], "previous attempt") || strings.Contains(prompts[0], "Verification failed") {
+		t.Fatalf("successful verification added retry failure feedback: %q", prompts[0])
+	}
 }
 
 // TestRunSeedExhaustedThreadsFeedback: a Seed whose verify never passes spends
@@ -107,7 +111,7 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 	var prompts []string
 	seedBuildFn = fakeBuild(&prompts)
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
-		return seedVerifyReport{Output: "boom: a test failed", Passed: false}
+		return seedVerifyReport{Output: "stdout: expected file differs\nstderr: cmp reported a mismatch", Passed: false}
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -126,11 +130,66 @@ func TestRunSeedExhaustedThreadsFeedback(t *testing.T) {
 	if len(prompts) != 3 {
 		t.Fatalf("build ran %d time(s), want 3", len(prompts))
 	}
-	if strings.Contains(prompts[0], "boom") {
+	if strings.Contains(prompts[0], "stdout: expected file differs") || strings.Contains(prompts[0], "stderr: cmp reported a mismatch") {
 		t.Error("first prompt must carry no prior failure")
 	}
-	if !strings.Contains(prompts[1], "boom: a test failed") {
-		t.Error("a retry prompt must feed back the deterministic verify failure")
+	for _, want := range []string{"stdout: expected file differs", "stderr: cmp reported a mismatch"} {
+		if !strings.Contains(prompts[1], want) {
+			t.Errorf("a retry prompt must preserve verifier %s output", want)
+		}
+	}
+}
+
+func TestRunSeedSilentVerificationThreadsExitFeedback(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var prompts []string
+	seedBuildFn = fakeBuild(&prompts)
+	exitCode := 2
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{ExitCode: &exitCode}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 2,
+		SessionID: "tendril-seed-silent-failure",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusExhausted {
+		t.Fatalf("status = %q, want exhausted", res.Status)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("build ran %d time(s), want 2", len(prompts))
+	}
+	if !strings.Contains(prompts[1], "Verification failed: command exited 2.") {
+		t.Fatalf("silent verification failure was not fed back with its exit code: %q", prompts[1])
+	}
+	if len(res.VerificationDiagnostics) != 2 {
+		t.Fatalf("verification diagnostics = %+v, want one per failed iteration", res.VerificationDiagnostics)
+	}
+	for _, diagnostic := range res.VerificationDiagnostics {
+		if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 2 || diagnostic.TimedOut {
+			t.Fatalf("silent verification diagnostic = %+v, want predicate failure with exit 2", diagnostic)
+		}
+	}
+}
+
+func TestSeedVerificationFeedbackTimeoutIsExplicitAndBounded(t *testing.T) {
+	feedback := seedVerificationFeedback(seedVerifyReport{
+		Output:   strings.Repeat("timeout output ", seedVerifyFeedbackBound),
+		TimedOut: true,
+	})
+	if !strings.Contains(feedback, "Verification failed: command timed out.") {
+		t.Fatalf("timeout feedback omitted its deterministic diagnostic: %q", feedback)
+	}
+	if len(feedback) > seedVerifyFeedbackBound {
+		t.Fatalf("timeout feedback length = %d, want <= %d", len(feedback), seedVerifyFeedbackBound)
+	}
+
+	if got := seedVerificationFeedback(seedVerifyReport{Err: fmt.Errorf("private infrastructure detail")}); got != "" {
+		t.Fatalf("infrastructure failure produced retry feedback: %q", got)
 	}
 }
 

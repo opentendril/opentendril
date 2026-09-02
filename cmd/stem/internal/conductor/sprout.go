@@ -999,7 +999,10 @@ Rules:
 `))
 	builder.WriteString("\n\nWorkspace root:\n")
 	builder.WriteString(sproutLogicalWorkspaceRoot)
-	builder.WriteString("\nTool paths are repository-relative (relative to this workspace root).")
+	builder.WriteString("\nTool path arguments are repository-relative, relative to the repository root.")
+	builder.WriteString(" Do not prefix tool paths with `repository/`.")
+	builder.WriteString(" For example, use `HELLO.md`, not `repository/HELLO.md`.")
+	builder.WriteString(" Host RunWorkspace and other execution-location paths are never exposed or valid tool paths.")
 	_ = workspace
 
 	if strings.TrimSpace(genotypeContext) != "" {
