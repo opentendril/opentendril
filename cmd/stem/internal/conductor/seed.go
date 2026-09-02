@@ -62,7 +62,8 @@ var (
 	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
 		return orch.RunSprout(ctx, prompt)
 	}
-	seedVerifyFn = runSeedVerify
+	seedVerifyFn        = runSeedVerify
+	seedCandidateDiffFn = seedCandidateDiff
 )
 
 // SeedExecution is a fully resolved seed-growth request handed to RunSeed.
@@ -170,6 +171,8 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	prompt := seedGoalPrompt(execution.Goal, execution.Verify, "")
 	var verificationDiagnostics []core.SeedVerificationDiagnostic
 	candidateRevision := base
+	candidateEvidenceRevision := ""
+	candidateEvidence := ""
 
 	for i := 0; i < maxIterations; i++ {
 		if ctx.Err() != nil {
@@ -235,7 +238,13 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			status = SeedStatusSatisfied
 			break
 		}
-		prompt = seedGoalPrompt(execution.Goal, execution.Verify, seedVerificationFeedback(verifyReport))
+		if iterations < maxIterations {
+			if candidateRevision != candidateEvidenceRevision {
+				candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
+				candidateEvidenceRevision = candidateRevision
+			}
+			prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, execution.Verify, seedVerificationFeedback(verifyReport), candidateEvidence)
+		}
 	}
 
 	branch, diff, commit := seedFruitIdentity(ctx, sourcePath, seedBranch, base)
@@ -511,6 +520,15 @@ func seedVerificationFailureFact(report seedVerifyReport) string {
 
 const seedVerifyFeedbackBound = 4000
 
+// seedCandidateDiffBound limits candidate evidence separately from verifier
+// feedback. A failed predicate may have both, and neither source may consume
+// the whole retry prompt on its own.
+const seedCandidateDiffBound = 4000
+
+const seedCandidateDiffHeading = "Current candidate diff against the Seed base:"
+
+const seedEvidenceTruncatedSuffix = "\n…(truncated)"
+
 // seedVerificationFeedback is the single bounded feedback path from a
 // deterministic verifier to the next Sprout prompt. Infrastructure failures
 // are intentionally excluded: they wither the Seed rather than becoming a
@@ -533,12 +551,41 @@ func seedVerificationFeedback(report seedVerifyReport) string {
 }
 
 func boundSeedVerifyFeedback(message string) string {
-	message = strings.TrimSpace(message)
-	if len(message) <= seedVerifyFeedbackBound {
+	return boundSeedEvidence(strings.TrimSpace(message), seedVerifyFeedbackBound)
+}
+
+// seedCandidateDiff returns the cumulative candidate diff that the next
+// Sprout needs to inspect after a failed predicate. Both revisions are
+// immutable identities established by the Seed lifecycle, so this describes
+// base -> current candidate rather than only the latest iteration delta.
+// Auxiliary evidence is best-effort: a Git failure must not replace the
+// authoritative verifier verdict or wither the Seed.
+func seedCandidateDiff(ctx context.Context, sourcePath, baseRevision, candidateRevision string) string {
+	baseRevision = strings.TrimSpace(baseRevision)
+	candidateRevision = strings.TrimSpace(candidateRevision)
+	if baseRevision == "" || candidateRevision == "" || baseRevision == candidateRevision {
+		return ""
+	}
+	diffLimit := seedCandidateDiffBound - len(seedEvidenceTruncatedSuffix)
+	diff, truncated, err := runGitCommandBoundedRawOutput(ctx, sourcePath, diffLimit, "diff", "--no-color", baseRevision, candidateRevision)
+	if err != nil {
+		return ""
+	}
+	if truncated {
+		diff += seedEvidenceTruncatedSuffix
+	}
+	return boundSeedCandidateDiff(diff)
+}
+
+func boundSeedCandidateDiff(message string) string {
+	return boundSeedEvidence(strings.TrimRight(message, "\r\n"), seedCandidateDiffBound)
+}
+
+func boundSeedEvidence(message string, bound int) string {
+	if len(message) <= bound {
 		return message
 	}
-	const truncatedSuffix = "\n…(truncated)"
-	return message[:seedVerifyFeedbackBound-len(truncatedSuffix)] + truncatedSuffix
+	return message[:bound-len(seedEvidenceTruncatedSuffix)] + seedEvidenceTruncatedSuffix
 }
 
 func boundSeedVerifyDiagnostic(message string) string {
@@ -572,6 +619,10 @@ func resolveSeedWorkspace(substrate string) (string, error) {
 // predicate it must satisfy, and — on a retry — the previous deterministic
 // verify failure so the Sprout fixes the real cause rather than guessing.
 func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
+	return seedGoalPromptWithCandidateEvidence(goal, verify, priorFailure, "")
+}
+
+func seedGoalPromptWithCandidateEvidence(goal string, verify []string, priorFailure, candidateDiff string) string {
 	var b strings.Builder
 	verifyJSON, _ := json.Marshal(verify)
 	fmt.Fprintf(&b, "%s\n\nDeterministic verification configured by the Stem:\n%s\n\nThe Stem will run this after your changes. Do not execute it merely to satisfy the Seed protocol.",
@@ -579,6 +630,9 @@ func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
 	if fail := strings.TrimSpace(priorFailure); fail != "" {
 		fail = boundSeedVerifyFeedback(fail)
 		fmt.Fprintf(&b, "\n\nA previous attempt did not pass. The verification command failed with:\n%s\n\nFind and fix the cause, then make it pass.", fail)
+	}
+	if diff := boundSeedCandidateDiff(candidateDiff); diff != "" {
+		fmt.Fprintf(&b, "\n\n%s\n%s\n\nThis is deterministic Stem-provided candidate evidence. The next Sprout starts from this candidate.", seedCandidateDiffHeading, diff)
 	}
 	return b.String()
 }

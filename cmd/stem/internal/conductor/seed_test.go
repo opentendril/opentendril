@@ -88,8 +88,8 @@ func newSeedRepo(t *testing.T) string {
 // overrides never leak into another.
 func restoreSeeds(t *testing.T) {
 	t.Helper()
-	build, verify := seedBuildFn, seedVerifyFn
-	t.Cleanup(func() { seedBuildFn, seedVerifyFn = build, verify })
+	build, verify, candidateDiff := seedBuildFn, seedVerifyFn, seedCandidateDiffFn
+	t.Cleanup(func() { seedBuildFn, seedVerifyFn, seedCandidateDiffFn = build, verify, candidateDiff })
 }
 
 // fakeBuild simulates the Sprout builder: it creates the seed branch once (so
@@ -136,6 +136,9 @@ func TestRunSeedSatisfiedOnFirstVerify(t *testing.T) {
 	}
 	if strings.Contains(prompts[0], "previous attempt") || strings.Contains(prompts[0], "Verification failed") {
 		t.Fatalf("successful verification added retry failure feedback: %q", prompts[0])
+	}
+	if strings.Contains(prompts[0], seedCandidateDiffHeading) {
+		t.Fatalf("initial prompt included candidate evidence: %q", prompts[0])
 	}
 }
 
@@ -227,6 +230,84 @@ func TestSeedVerificationFeedbackTimeoutIsExplicitAndBounded(t *testing.T) {
 
 	if got := seedVerificationFeedback(seedVerifyReport{Err: fmt.Errorf("private infrastructure detail")}); got != "" {
 		t.Fatalf("infrastructure failure produced retry feedback: %q", got)
+	}
+}
+
+func TestSeedCandidateDiffPreservesNoNewlineMarkerAndIsBounded(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	branch := "tendril/seed-candidate-evidence"
+	if _, err := runGitCommand(ctx, repo, "branch", branch, base); err != nil {
+		t.Fatalf("create candidate branch: %v", err)
+	}
+	candidate := commitPathOnBranch(t, repo, branch, "HELLO.md", "Hello")
+	if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+		t.Fatalf("restore main: %v", err)
+	}
+
+	diff := seedCandidateDiff(ctx, repo, base, candidate)
+	if !strings.Contains(diff, "\\ No newline at end of file") {
+		t.Fatalf("candidate diff omitted Git's no-final-newline marker:\n%s", diff)
+	}
+	if !strings.Contains(diff, "HELLO.md") {
+		t.Fatalf("candidate diff omitted the changed path:\n%s", diff)
+	}
+	if got := boundSeedCandidateDiff("diff --git a/file b/file\n+trailing spaces   \n"); !strings.Contains(got, "+trailing spaces   ") {
+		t.Fatalf("candidate evidence stripped meaningful trailing spaces: %q", got)
+	}
+
+	candidate = commitPathOnBranch(t, repo, branch, "large.txt", strings.Repeat("candidate evidence ", seedCandidateDiffBound))
+	if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+		t.Fatalf("restore main after large candidate: %v", err)
+	}
+	bounded := seedCandidateDiff(ctx, repo, base, candidate)
+	if len(bounded) > seedCandidateDiffBound {
+		t.Fatalf("candidate evidence length = %d, want <= %d", len(bounded), seedCandidateDiffBound)
+	}
+	if !strings.HasSuffix(bounded, seedEvidenceTruncatedSuffix) {
+		t.Fatalf("large candidate evidence omitted truncation marker: %q", bounded[len(bounded)-min(len(bounded), 32):])
+	}
+}
+
+func TestRunSeedCandidateEvidenceFailurePreservesLifecycle(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var diffCalls int
+	seedBuildFn = fakeBuild(new([]string))
+	seedCandidateDiffFn = func(context.Context, string, string, string) string {
+		diffCalls++
+		return ""
+	}
+	exitCode := 1
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		return seedVerifyReport{ExitCode: &exitCode}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"false"}, MaxIterations: 2,
+		SessionID: "seed-candidate-evidence-failure",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if diffCalls != 1 {
+		t.Fatalf("candidate diff calls = %d, want one retry-evidence attempt", diffCalls)
+	}
+	if res.Status != SeedStatusExhausted || res.Iterations != 2 {
+		t.Fatalf("status/iterations = %q/%d, want exhausted/2", res.Status, res.Iterations)
+	}
+	if len(res.VerificationDiagnostics) != 2 {
+		t.Fatalf("verification diagnostics = %+v, want the authoritative predicate failure", res.VerificationDiagnostics)
+	}
+	for _, diagnostic := range res.VerificationDiagnostics {
+		if diagnostic.Outcome != core.SeedVerificationOutcomePredicateFailed || diagnostic.ExitCode == nil || *diagnostic.ExitCode != 1 {
+			t.Fatalf("verification diagnostic = %+v, want predicate failure with exit 1", diagnostic)
+		}
 	}
 }
 
