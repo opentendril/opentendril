@@ -53,12 +53,20 @@ type round19WriteSession struct {
 }
 
 func (s *round19WriteSession) Call(_ context.Context, call ToolCall) (ToolResponse, error) {
+	s.fakeSession.calls = append(s.fakeSession.calls, call)
 	if call.Tool == "writeFile" {
 		path, _ := call.Arguments["path"].(string)
 		content, _ := call.Arguments["content"].(string)
 		if err := os.WriteFile(filepath.Join(s.workspace, path), []byte(content), 0o644); err != nil {
 			return ToolResponse{}, err
 		}
+	} else if call.Tool == "readFile" {
+		path, _ := call.Arguments["path"].(string)
+		content, err := os.ReadFile(filepath.Join(s.workspace, path))
+		if err != nil {
+			return ToolResponse{}, err
+		}
+		return ToolResponse{Status: "success", Output: map[string]any{"path": path, "content": string(content)}}, nil
 	}
 	return ToolResponse{Status: "success", Output: map[string]any{"tool": call.Tool}}, nil
 }
@@ -296,7 +304,7 @@ func TestRound19SeedRetryCarriesCandidateEvidenceAndRejectsProviderProse(t *test
 		if err != nil {
 			return SproutRunReport{}, err
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: strings.TrimSpace(checkpoint)}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: strings.TrimSpace(checkpoint)}, nil
 	}
 
 	res, err := RunSeed(context.Background(), SeedExecution{
@@ -393,7 +401,7 @@ func TestRunSeedInvalidCheckpointIsInfrastructureFailure(t *testing.T) {
 	repo := newSeedRepo(t)
 	var verified bool
 	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
-		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: "not-a-commit"}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: "not-a-commit"}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		verified = true
@@ -452,7 +460,7 @@ func TestRunSeedNoChangeVerifiesAccumulatedCandidate(t *testing.T) {
 		if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
 			return SproutRunReport{}, err
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: firstCheckpoint}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: firstCheckpoint}, nil
 	}
 	seedVerifyFn = func(_ context.Context, _ string, candidate string, _ []string, _ []string) seedVerifyReport {
 		verifiedCandidates = append(verifiedCandidates, candidate)
@@ -1143,7 +1151,7 @@ func TestFailedVerificationPreservesSeedCheckpointForNextIteration(t *testing.T)
 		if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
 			return SproutRunReport{}, err
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete, FruitCommit: strings.TrimSpace(checkpoint)}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: strings.TrimSpace(checkpoint)}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		code := 1

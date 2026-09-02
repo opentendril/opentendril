@@ -64,11 +64,16 @@ func (capture *managedRunCapture) cacheVisible(stepID string) bool {
 }
 
 type managedWritingRunner struct {
-	workspace string
-	file      string
-	started   chan struct{}
-	release   chan struct{}
-	releaseOn sync.Once
+	workspace        string
+	file             string
+	contents         string
+	generatedFile    string
+	generatedContent string
+	runErr           error
+	boundaryFailure  bool
+	started          chan struct{}
+	release          chan struct{}
+	releaseOn        sync.Once
 }
 
 func newManagedWritingRunner(file string) *managedWritingRunner {
@@ -81,9 +86,21 @@ func newManagedWritingRunner(file string) *managedWritingRunner {
 
 func (runner *managedWritingRunner) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
 	if runner.file != "" {
-		if err := os.WriteFile(filepath.Join(runner.workspace, runner.file), []byte(runner.file+"\n"), 0o644); err != nil {
+		contents := runner.contents
+		if contents == "" {
+			contents = runner.file + "\n"
+		}
+		if err := os.WriteFile(filepath.Join(runner.workspace, runner.file), []byte(contents), 0o644); err != nil {
 			return sproutResult{}, err
 		}
+	}
+	if runner.generatedFile != "" {
+		if err := os.WriteFile(filepath.Join(runner.workspace, runner.generatedFile), []byte(runner.generatedContent), 0o644); err != nil {
+			return sproutResult{}, err
+		}
+	}
+	if runner.runErr != nil {
+		return sproutResult{Response: "", WroteWorkspace: runner.file != "", BoundaryFailure: runner.boundaryFailure}, runner.runErr
 	}
 	close(runner.started)
 	select {
@@ -94,8 +111,396 @@ func (runner *managedWritingRunner) Run(ctx context.Context, taskPrompt string) 
 	}
 }
 
+func TestRunSproutSeedCheckpointRejectsCapabilityBoundaryFailure(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-boundary-failure"
+	stepID := "seed-boundary-failure"
+	runner := &managedWritingRunner{
+		file:            "HELLO.md",
+		contents:        "partial",
+		runErr:          errUnusableReply,
+		boundaryFailure: true,
+	}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("RunSprout error = %v, want the original recoverable failure", runErr)
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" || report.seedCandidateCommit != "" {
+		t.Fatalf("boundary failure exposed candidate identity: FruitBranch=%q FruitCommit=%q seedCandidateCommit=%q", report.FruitBranch, report.FruitCommit, report.seedCandidateCommit)
+	}
+	if localBranchExists(repository, seedBranch) {
+		t.Fatalf("Seed branch %q exists after a capability-boundary failure", seedBranch)
+	}
+}
+
+func TestRunSproutSeedCheckpointRejectsMeasuredEmptyChanges(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-empty-changes"
+	stepID := "seed-empty-changes"
+	runner := &managedWritingRunner{file: "HELLO.md", contents: "partial", runErr: errUnusableReply}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) {
+		return []string{}, nil
+	}
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("RunSprout error = %v, want the original recoverable failure", runErr)
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" || report.seedCandidateCommit != "" {
+		t.Fatalf("measured-empty run exposed candidate identity: FruitBranch=%q FruitCommit=%q seedCandidateCommit=%q", report.FruitBranch, report.FruitCommit, report.seedCandidateCommit)
+	}
+	if localBranchExists(repository, seedBranch) {
+		t.Fatalf("Seed branch %q exists after measured-empty changes", seedBranch)
+	}
+}
+
+func TestRunSproutSeedCheckpointRejectsCheckpointFailure(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-checkpoint-failure"
+	stepID := "seed-checkpoint-failure"
+	runner := &managedWritingRunner{file: "HELLO.md", contents: "partial", runErr: errUnusableReply}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+	commitErr := errors.New("checkpoint commit unavailable")
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
+		return "", commitErr
+	}
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) || !errors.Is(runErr, commitErr) {
+		t.Fatalf("RunSprout error = %v, want both the recoverable failure and checkpoint error", runErr)
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" || report.seedCandidateCommit != "" {
+		t.Fatalf("checkpoint failure exposed candidate identity: FruitBranch=%q FruitCommit=%q seedCandidateCommit=%q", report.FruitBranch, report.FruitCommit, report.seedCandidateCommit)
+	}
+	if localBranchExists(repository, seedBranch) {
+		t.Fatalf("Seed branch %q exists after checkpoint failure", seedBranch)
+	}
+}
+
+func TestRunSproutSeedCheckpointPreservesFailureWhenGeneratedStateCleanupFails(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-generated-cleanup-failure"
+	stepID := "seed-generated-cleanup-failure"
+	runner := &managedWritingRunner{
+		file:             "HELLO.md",
+		contents:         "partial",
+		generatedFile:    filepath.Join(tendrilStateDirectory, "genome", repositoryMapFile),
+		generatedContent: "tampered by Sprout\n",
+		runErr:           fmt.Errorf("%w after 2 attempts; last reply: model-secret", errUnusableReply),
+	}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("RunSprout error = %v, want the original recoverable failure preserved", runErr)
+	}
+	if !strings.Contains(runErr.Error(), "seed integration generated state cleanup") {
+		t.Fatalf("RunSprout error = %v, want generated-state cleanup evidence", runErr)
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" || report.seedCandidateCommit != "" {
+		t.Fatalf("generated-state cleanup failure exposed candidate identity: FruitBranch=%q FruitCommit=%q seedCandidateCommit=%q", report.FruitBranch, report.FruitCommit, report.seedCandidateCommit)
+	}
+	if localBranchExists(repository, seedBranch) {
+		t.Fatalf("Seed branch %q exists after generated-state cleanup failure", seedBranch)
+	}
+}
+
 func (runner *managedWritingRunner) setWorkspace(workspace string) {
 	runner.workspace = workspace
+}
+
+func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
+	prepareManagedRunRepository(t)
+	stubLocalStoma(t)
+	restoreSeeds(t)
+	repository := filepath.Join(os.Getenv("TENDRIL_MANAGED_CHECKOUT_ROOT"), "managed")
+	var prompts []string
+	var verifiedCandidates []string
+	var reports []SproutRunReport
+	var sessions []*round19WriteSession
+	var clients []*refusingLLM
+	var sprouts []*Sprout
+	iteration := 0
+
+	originalPreflight := runSproutPreflightChecksFn
+	originalEnsure := ensureSproutImageFn
+	originalStart := startTerrariumSessionFn
+	originalNew := newSproutFn
+	originalRepoMap := generateRepoMapFn
+	originalMemoryMap := generateMemoryMapFn
+	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
+		ensureSproutImageFn = originalEnsure
+		startTerrariumSessionFn = originalStart
+		newSproutFn = originalNew
+		generateRepoMapFn = originalRepoMap
+		generateMemoryMapFn = originalMemoryMap
+	})
+	runSproutPreflightChecksFn = func(context.Context, *llm.Client) error { return nil }
+	ensureSproutImageFn = func(context.Context, string) error { return nil }
+	startTerrariumSessionFn = func(_ context.Context, _ string, _ string, mountPath string, _ bool, _ []string, _ []string, _ time.Duration, _ ...terrarium.ActivationObserver) (toolSession, error) {
+		session := &round19WriteSession{
+			fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}, {Name: "readFile"}}},
+			workspace:   mountPath,
+		}
+		sessions = append(sessions, session)
+		return session, nil
+	}
+	generateRepoMapFn = func(context.Context, string) (string, error) { return "# repo map\n", nil }
+	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		iteration++
+		var responses []string
+		if iteration == 1 {
+			responses = []string{
+				`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril."}}`,
+				`{"tool":"cmp","arguments":{"path":"HELLO.md"}}`,
+				`{"tool":"readFile","arguments":{"path":"HELLO.md"}}`,
+				unreadableWrapperReply,
+				unreadableWrapperReply,
+			}
+		} else {
+			responses = []string{
+				`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril.\n"}}`,
+				`{"final":"repaired candidate"}`,
+			}
+		}
+		client := &refusingLLM{fakeLLM: fakeLLM{responses: responses}, refusalMessage: "tools unsupported for this model"}
+		clients = append(clients, client)
+		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID)
+		if err == nil {
+			sprouts = append(sprouts, sprout)
+		}
+		return sprout, err
+	}
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		prompts = append(prompts, prompt)
+		report, err := orch.RunSprout(ctx, prompt)
+		reports = append(reports, report)
+		return report, err
+	}
+	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
+		verifiedCandidates = append(verifiedCandidates, candidate)
+		return runSeedVerify(ctx, sourcePath, candidate, verify, egress)
+	}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repository,
+		Goal:          "create HELLO.md",
+		Verify:        round16HelloVerifyArgv(),
+		MaxIterations: 2,
+		SessionID:     "seed-round-19-qualification",
+		EventBus:      bus,
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if result.Status != SeedStatusSatisfied || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want satisfied after two iterations", result)
+	}
+	if len(prompts) != 2 || len(verifiedCandidates) != 2 || len(reports) != 2 {
+		t.Fatalf("prompts/candidates/reports = %d/%d/%d, want 2/2/2", len(prompts), len(verifiedCandidates), len(reports))
+	}
+	if reports[0].Outcome != SproutOutcomeFailed || reports[0].Output != "" {
+		t.Fatalf("first Sprout outcome = %q, want failed so the withered Sprout remains observable", reports[0].Outcome)
+	}
+	if reports[0].FruitBranch != "" || reports[0].FruitCommit != "" || reports[0].seedCandidateCommit == "" {
+		t.Fatalf("first Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[0].FruitBranch, reports[0].FruitCommit, reports[0].seedCandidateCommit)
+	}
+	firstContents, err := runGitCommandRawOutput(context.Background(), repository, "show", reports[0].seedCandidateCommit+":HELLO.md")
+	if err != nil {
+		t.Fatalf("read first internal Seed candidate: %v", err)
+	}
+	if firstContents != "Hello from OpenTendril." {
+		t.Fatalf("first candidate HELLO.md = %q, want the immutable no-newline partial write", firstContents)
+	}
+	if len(sessions) != 2 || len(sessions[0].calls) != 2 || sessions[0].calls[0].Tool != "writeFile" || sessions[0].calls[1].Tool != "readFile" {
+		t.Fatalf("first Terrarium calls = %+v, want writeFile then readFile; cmp must be refused before session execution", sessions)
+	}
+	if reports[0].ToolInvocations != 2 {
+		t.Fatalf("first Sprout tool invocations = %d, want writeFile and readFile only; refused cmp did not execute", reports[0].ToolInvocations)
+	}
+	if len(sprouts) != 2 || sprouts[0].boundaryFailure.Load() {
+		t.Fatalf("first Sprout boundary classification = %v, want no fail-closed boundary violation for unavailable cmp", len(sprouts) > 0 && sprouts[0].boundaryFailure.Load())
+	}
+	if !strings.Contains(sprouts[0].transcript.String(), "unsupported tool") || !strings.Contains(sprouts[0].transcript.String(), "cmp") {
+		t.Fatalf("first Sprout transcript omitted the safe cmp refusal:\n%s", sprouts[0].transcript.String())
+	}
+	if len(sessions[1].calls) != 1 || sessions[1].calls[0].Tool != "writeFile" || sessions[1].calls[0].Arguments["content"] != "Hello from OpenTendril.\n" {
+		t.Fatalf("second Terrarium calls = %+v, want the repaired writeFile with a final newline", sessions[1].calls)
+	}
+	if reports[1].Outcome != SproutOutcomeComplete {
+		t.Fatalf("second Sprout outcome = %q, want complete after repair", reports[1].Outcome)
+	}
+	if reports[1].FruitBranch != "" || reports[1].FruitCommit != "" || reports[1].seedCandidateCommit == "" {
+		t.Fatalf("second Sprout identity = Fruit %q/%q candidate %q, want an internal Seed candidate only", reports[1].FruitBranch, reports[1].FruitCommit, reports[1].seedCandidateCommit)
+	}
+	if reports[0].seedCandidateCommit == reports[1].seedCandidateCommit {
+		t.Fatalf("candidate identity did not advance after repair: %v", verifiedCandidates)
+	}
+	for _, want := range []string{"Current candidate diff against the Seed base:", "\\ No newline at end of file", "This is deterministic Stem-provided candidate evidence."} {
+		if !strings.Contains(prompts[1], want) {
+			t.Fatalf("next Sprout prompt omitted %q:\n%s", want, prompts[1])
+		}
+	}
+	if !strings.Contains(result.Logs, "model reply attempted a tool call") {
+		t.Fatalf("original Sprout failure was not preserved in Seed logs:\n%s", result.Logs)
+	}
+	if got := len(downgradeEvents(bus)); got != 2 {
+		t.Fatalf("provider/prose downgrade events = %d, want one per Sprout iteration", got)
+	}
+	if len(clients) != 2 {
+		t.Fatalf("provider clients = %d, want one per Sprout iteration", len(clients))
+	}
+	for i, client := range clients {
+		if len(client.toolsPerNativeCall) != 2 || len(client.toolsPerNativeCall[0]) == 0 || len(client.toolsPerNativeCall[1]) != 0 {
+			t.Fatalf("iteration %d native calls = %d with tool counts %v, want refused-with-tools then successful probe-without-tools", i+1, len(client.toolsPerNativeCall), func() []int {
+				counts := make([]int, len(client.toolsPerNativeCall))
+				for j, tools := range client.toolsPerNativeCall {
+					counts[j] = len(tools)
+				}
+				return counts
+			}())
+		}
+	}
+	if len(clients[0].calls) != 5 {
+		t.Fatalf("first provider prose calls = %d, want 5: writeFile, cmp, readFile, then two bounded unusable replies", len(clients[0].calls))
+	}
+	if len(result.VerificationDiagnostics) != 2 || result.VerificationDiagnostics[0].ExitCode == nil || *result.VerificationDiagnostics[0].ExitCode != 1 || result.VerificationDiagnostics[1].ExitCode == nil || *result.VerificationDiagnostics[1].ExitCode != 0 {
+		t.Fatalf("verification diagnostics = %+v, want deterministic exit 1 then pass", result.VerificationDiagnostics)
+	}
+	content, err := runGitCommandRawOutput(context.Background(), repository, "show", result.Commit+":HELLO.md")
+	if err != nil {
+		t.Fatalf("read final HELLO.md: %v", err)
+	}
+	if content != "Hello from OpenTendril.\n" {
+		t.Fatalf("final HELLO.md = %q, want a final newline", content)
+	}
+}
+
+func TestRunSproutSeedCheckpointSalvagesRecoverableFailure(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	base, err := runGitCommand(context.Background(), repository, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("resolve base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-recoverable-checkpoint"
+	stepID := "seed-recoverable-sprout"
+	runner := &managedWritingRunner{
+		file:     "HELLO.md",
+		contents: "Hello from OpenTendril.",
+		runErr:   fmt.Errorf("%w after 2 attempts; last reply: model-secret", errUnusableReply),
+	}
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+
+	// The helper normally supplies a runner by step ID. Seed's checkpoint path
+	// has an explicit starting revision and Seed branch, so exercise that path
+	// through the real managed RunWorkspace and commit/integration seams.
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repository,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("RunSprout error = %v, want the original recoverable failure", runErr)
+	}
+	if !strings.Contains(runErr.Error(), "model-secret") {
+		t.Fatalf("RunSprout error = %v, want the original terminal reply retained", runErr)
+	}
+	if report.Outcome != SproutOutcomeFailed {
+		t.Fatalf("outcome = %q, want failed so the Sprout failure remains observable", report.Outcome)
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" {
+		t.Fatalf("failed Sprout exposed Fruit identity = branch %q commit %q, want internal candidate only", report.FruitBranch, report.FruitCommit)
+	}
+	if report.seedCandidateCommit == "" {
+		t.Fatal("internal Seed candidate commit is empty")
+	}
+	resolvedSeed, err := runGitCommand(context.Background(), repository, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("resolve Seed candidate: %v", err)
+	}
+	if strings.TrimSpace(resolvedSeed) != report.seedCandidateCommit {
+		t.Fatalf("Seed candidate = %q, want report commit %q", strings.TrimSpace(resolvedSeed), report.seedCandidateCommit)
+	}
+	content, err := runGitCommandRawOutput(context.Background(), repository, "show", report.seedCandidateCommit+":HELLO.md")
+	if err != nil {
+		t.Fatalf("read salvaged HELLO.md: %v", err)
+	}
+	if content != "Hello from OpenTendril." {
+		t.Fatalf("salvaged HELLO.md = %q, want the Sprout's governed write without a newline", content)
+	}
+	message, err := runGitCommand(context.Background(), repository, "show", "-s", "--format=%B", report.seedCandidateCommit)
+	if err != nil {
+		t.Fatalf("read salvaged checkpoint message: %v", err)
+	}
+	if strings.Contains(message, "model-secret") {
+		t.Fatalf("checkpoint commit message leaked the terminal model reply: %q", message)
+	}
+	mainTip, err := runGitCommand(context.Background(), repository, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("resolve main: %v", err)
+	}
+	if strings.TrimSpace(mainTip) != base {
+		t.Fatalf("main moved from %q to %q", base, strings.TrimSpace(mainTip))
+	}
 }
 
 type managedLockProbeRunner struct {

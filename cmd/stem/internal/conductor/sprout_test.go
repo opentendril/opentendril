@@ -453,6 +453,12 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	if !strings.Contains(result.Transcript, "restricted by the active system genotype") {
 		t.Errorf("expected transcript to contain error about restricted injectPlasmid target, got: %s", result.Transcript)
 	}
+	if !result.BoundaryFailure {
+		t.Fatal("BoundaryFailure = false, want an explicit denied-policy violation to remain fail-closed")
+	}
+	if result.ToolInvocations != 0 {
+		t.Fatalf("ToolInvocations = %d, want 0 because both requests were refused before Terrarium execution", result.ToolInvocations)
+	}
 }
 
 func TestParseActionResult(t *testing.T) {

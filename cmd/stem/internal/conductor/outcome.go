@@ -145,6 +145,11 @@ type SproutRunReport struct {
 	// It is non-empty exactly when FruitBranch is non-empty, and carries the
 	// same publication-failure retention guarantee.
 	FruitCommit string
+
+	// seedCandidateCommit is an internal Seed-growth checkpoint. It is kept
+	// separate from FruitCommit because a checkpoint from a failed Sprout is
+	// verified work for the next Seed iteration, not Botanist-reviewable Fruit.
+	seedCandidateCommit string
 }
 
 // PostRunUsage is the fail-honest aggregate of every provider request made
@@ -202,6 +207,13 @@ func (e changeEvidence) attributedFiles() []string {
 		return e.measuredFiles
 	}
 	return []string{}
+}
+
+// hasMeasuredStageableChanges is the evidence required before a run can be
+// committed as work. An immutable Seed checkpoint cannot be materialized from
+// an unmeasured mount, even when the Sprout says it wrote something.
+func (e changeEvidence) hasMeasuredStageableChanges() bool {
+	return e.modelWrote && e.measured && len(e.measuredFiles) > 0
 }
 
 // changedAnything answers the question the outcome vocabulary asks.

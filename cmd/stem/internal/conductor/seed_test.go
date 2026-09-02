@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -358,6 +359,134 @@ func TestRunSeedWitheredOnVerifyInfraError(t *testing.T) {
 	}
 	if res.Status != SeedStatusWithered {
 		t.Fatalf("status = %q, want withered", res.Status)
+	}
+}
+
+func TestRunSeedSalvagesCheckpointedRecoverableSproutFailure(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+	var prompts []string
+	var starts []string
+	var candidate string
+	var buildCount int
+
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		prompts = append(prompts, prompt)
+		starts = append(starts, orch.SeedStartRevision)
+		buildCount++
+		if !localBranchExists(repo, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, repo, "branch", orch.SubstrateBranch, orch.SeedStartRevision); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		if buildCount == 1 {
+			candidate = commitPathOnBranch(t, repo, orch.SubstrateBranch, "HELLO.md", "Hello from OpenTendril.")
+			if _, err := runGitCommand(ctx, repo, "checkout", "main"); err != nil {
+				return SproutRunReport{}, err
+			}
+			return SproutRunReport{
+				Outcome:             SproutOutcomeFailed,
+				seedCandidateCommit: candidate,
+			}, errUnusableReply
+		}
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: candidate}, nil
+	}
+
+	var verifiedCandidates []string
+	seedVerifyFn = func(_ context.Context, _ string, candidateRevision string, _ []string, _ []string) seedVerifyReport {
+		verifiedCandidates = append(verifiedCandidates, candidateRevision)
+		if len(verifiedCandidates) == 1 {
+			code := 1
+			return seedVerifyReport{Output: "cmp: \u005c No newline at end of file", ExitCode: &code}
+		}
+		return seedVerifyReport{Output: "ok", Passed: true}
+	}
+
+	res, err := RunSeed(ctx, SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 2,
+		SessionID: "seed-salvage-recoverable",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied; logs:\n%s", res.Status, res.Logs)
+	}
+	if res.Iterations != 2 || buildCount != 2 || len(prompts) != 2 {
+		t.Fatalf("iterations/builds/prompts = %d/%d/%d, want 2/2/2", res.Iterations, buildCount, len(prompts))
+	}
+	if len(verifiedCandidates) != 2 || verifiedCandidates[0] != candidate || verifiedCandidates[1] != candidate {
+		t.Fatalf("verified candidates = %v, want the immutable salvaged candidate %q twice", verifiedCandidates, candidate)
+	}
+	if len(starts) != 2 || starts[1] != candidate {
+		t.Fatalf("iteration starts = %v, want second Sprout to start from salvaged candidate %q", starts, candidate)
+	}
+	if !strings.Contains(res.Logs, "sprout withered") || !strings.Contains(res.Logs, "model reply attempted a tool call") {
+		t.Fatalf("original recoverable Sprout failure was not retained in Seed logs:\n%s", res.Logs)
+	}
+	for _, want := range []string{"A previous attempt did not pass", "Current candidate diff against the Seed base:", "\\ No newline at end of file"} {
+		if !strings.Contains(prompts[1], want) {
+			t.Fatalf("retry prompt omitted %q:\n%s", want, prompts[1])
+		}
+	}
+}
+
+func TestRunSeedDoesNotSalvageRecoverableFailureWithoutCheckpoint(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var verifyCalled bool
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeFailed}, errUnusableReply
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		verifyCalled = true
+		return seedVerifyReport{Passed: true}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 2,
+		SessionID: "seed-salvage-no-checkpoint",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	if res.Iterations != 1 {
+		t.Fatalf("iterations = %d, want 1 after fail-closed salvage refusal", res.Iterations)
+	}
+	if verifyCalled {
+		t.Fatal("verification ran without an immutable checkpoint")
+	}
+}
+
+func TestRunSeedDoesNotSalvageJoinedRecoverableFailure(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	checkpointErr := errors.New("checkpoint materialization failed")
+	var verifyCalled bool
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeFailed, seedCandidateCommit: "untrusted-checkpoint"}, errors.Join(errUnusableReply, checkpointErr)
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		verifyCalled = true
+		return seedVerifyReport{Passed: true}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "create HELLO.md", Verify: round16HelloVerifyArgv(), MaxIterations: 2,
+		SessionID: "seed-salvage-joined-failure",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if res.Status != SeedStatusWithered || res.Iterations != 1 {
+		t.Fatalf("status/iterations = %q/%d, want withered/1", res.Status, res.Iterations)
+	}
+	if verifyCalled {
+		t.Fatal("verification ran after a recoverable failure was joined with checkpoint failure")
 	}
 }
 
