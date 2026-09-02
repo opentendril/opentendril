@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -572,8 +573,9 @@ func resolveSeedWorkspace(substrate string) (string, error) {
 // verify failure so the Sprout fixes the real cause rather than guessing.
 func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\nThe task is complete only when `%s` exits 0. Run it to check your work before finishing.",
-		strings.TrimSpace(goal), strings.Join(verify, " "))
+	verifyJSON, _ := json.Marshal(verify)
+	fmt.Fprintf(&b, "%s\n\nDeterministic verification configured by the Stem:\n%s\n\nThe Stem will run this after your changes. Do not execute it merely to satisfy the Seed protocol.",
+		strings.TrimSpace(goal), verifyJSON)
 	if fail := strings.TrimSpace(priorFailure); fail != "" {
 		fail = boundSeedVerifyFeedback(fail)
 		fmt.Fprintf(&b, "\n\nA previous attempt did not pass. The verification command failed with:\n%s\n\nFind and fix the cause, then make it pass.", fail)

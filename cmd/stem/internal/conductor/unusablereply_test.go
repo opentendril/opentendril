@@ -64,9 +64,10 @@ func TestWrappedToolCallIsNeverTheFinalAnswer(t *testing.T) {
 // only on it recognising an attempt.
 func TestUnreadableAttemptIsRefusedNotFinalised(t *testing.T) {
 	replies := map[string]string{
-		"anthropic invoke form": unreadableWrapperReply,
-		"unparseable payload":   "<tool_call>\n{\"tool\": \"writeFile\", \"arguments\": {\"path\": \n</tool_call>",
-		"truncated bare object": `{"tool": "writeFile", "arguments": {"path": "README.md", "content": "half`,
+		"anthropic invoke form":  unreadableWrapperReply,
+		"unparseable payload":    "<tool_call>\n{\"tool\": \"writeFile\", \"arguments\": {\"path\": \n</tool_call>",
+		"truncated bare object":  `{"tool": "writeFile", "arguments": {"path": "README.md", "content": "half`,
+		"provider-shaped object": `{"name":"createFile","parameters":{"filePath":"HELLO.md","content":"Hello"}}`,
 	}
 
 	for name, reply := range replies {

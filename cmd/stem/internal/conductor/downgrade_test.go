@@ -3,6 +3,7 @@ package conductor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,196 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/roots/llm"
 )
+
+func TestNativeToolResultThenCanonicalProseToolCallRecovers(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{
+		fakeLLM: fakeLLM{response: `{"final":"done after recovery"}`},
+		nativeResponses: []llm.Result{
+			{
+				Text: "<thought>read before writing</thought>",
+				ToolCalls: []llm.ToolCall{{
+					ID:   "native-read",
+					Type: "function",
+					Function: llm.ToolCallFunction{
+						Name:      "readFile",
+						Arguments: `{"path":"README.md"}`,
+					},
+				}},
+			},
+			{
+				Text: `{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril.\n"}}`,
+			},
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}, {Name: "writeFile"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	var result sproutResult
+	var runErr error
+	_ = captureStderr(t, func() {
+		result, runErr = sprout.Run(context.Background(), "create HELLO.md")
+	})
+	if runErr != nil {
+		t.Fatalf("Sprout.Run: %v", runErr)
+	}
+	if result.Response != "done after recovery" {
+		t.Fatalf("Response = %q, want the final prose response", result.Response)
+	}
+	if result.Protocol != "prose" {
+		t.Fatalf("Protocol = %q, want prose after native-to-prose recovery", result.Protocol)
+	}
+	if !result.WroteWorkspace {
+		t.Fatal("WroteWorkspace = false, want the recovered write attributed to the Sprout")
+	}
+	if result.ToolInvocations != 2 {
+		t.Fatalf("ToolInvocations = %d, want native read plus recovered write", result.ToolInvocations)
+	}
+	if len(session.calls) != 2 || session.calls[0].Tool != "readFile" || session.calls[1].Tool != "writeFile" {
+		t.Fatalf("tool calls = %+v, want readFile then writeFile", session.calls)
+	}
+	if got := len(downgradeEvents(bus)); got != 1 {
+		t.Fatalf("EventSproutDowngraded count = %d, want 1", got)
+	}
+	var invoked []eventbus.Event
+	for _, event := range bus.History(50) {
+		if event.Type == eventbus.EventToolInvoked {
+			invoked = append(invoked, event)
+		}
+	}
+	if len(invoked) != 2 {
+		t.Fatalf("EventToolInvoked count = %d, want native and recovered calls", len(invoked))
+	}
+	if got := invoked[1].Data["tool"]; got != "writeFile" {
+		t.Fatalf("recovered tool event named %v, want writeFile", got)
+	}
+}
+
+func TestNativeProviderShapedToolIntentUsesBoundedCorrection(t *testing.T) {
+	workspace := t.TempDir()
+	providerShape := `{"name":"createFile","parameters":{"filePath":"HELLO.md","content":"Hello from OpenTendril."}}`
+	client := &nativeFakeLLM{
+		fakeLLM: fakeLLM{responses: []string{
+			`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"Hello from OpenTendril."}}`,
+			`{"final":"done after correction"}`,
+		}},
+		nativeResponses: []llm.Result{{Text: providerShape}},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	var result sproutResult
+	var runErr error
+	_ = captureStderr(t, func() {
+		result, runErr = sprout.Run(context.Background(), "create HELLO.md")
+	})
+	if runErr != nil {
+		t.Fatalf("Sprout.Run: %v", runErr)
+	}
+	if result.Response != "done after correction" {
+		t.Fatalf("Response = %q, want corrected final response", result.Response)
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("tool calls = %+v, want exactly the canonical writeFile call", session.calls)
+	}
+	if result.ToolInvocations != 1 || !result.WroteWorkspace {
+		t.Fatalf("result attribution = invocations %d, wrote %v; want one workspace write", result.ToolInvocations, result.WroteWorkspace)
+	}
+	if len(client.calls) == 0 {
+		t.Fatal("no prose correction turn was sent")
+	}
+	correction := client.calls[0][len(client.calls[0])-1].Content
+	if !strings.Contains(correction, `{"tool":"name","arguments":{...}}`) {
+		t.Fatalf("correction = %q, want the canonical prose tool shape", correction)
+	}
+	if !strings.Contains(correction, "writeFile") {
+		t.Fatalf("correction = %q, want the available tool catalog", correction)
+	}
+	if got := len(downgradeEvents(bus)); got != 1 {
+		t.Fatalf("EventSproutDowngraded count = %d, want at most once", got)
+	}
+}
+
+func TestNativeProviderShapedToolIntentDoesNotMature(t *testing.T) {
+	workspace := t.TempDir()
+	providerShape := `{"name":"createFile","parameters":{"filePath":"HELLO.md","content":"Hello from OpenTendril."}}`
+	client := &nativeFakeLLM{
+		fakeLLM:         fakeLLM{response: providerShape},
+		nativeResponses: []llm.Result{{Text: providerShape}},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("Sprout.Run error = %v, want bounded unusable-reply error", runErr)
+	}
+	if strings.TrimSpace(result.Response) != "" {
+		t.Fatalf("Response = %q, want empty rather than a matured answer", result.Response)
+	}
+	if result.ToolInvocations != 0 || result.WroteWorkspace || len(session.calls) != 0 {
+		t.Fatalf("unusable provider shape caused execution/attribution: result=%+v calls=%+v", result, session.calls)
+	}
+	if got := len(downgradeEvents(bus)); got != 1 {
+		t.Fatalf("EventSproutDowngraded count = %d, want one bounded downgrade", got)
+	}
+}
+
+func TestNativeOrdinaryTextAndJSONRemainFinalAnswers(t *testing.T) {
+	cases := map[string]string{
+		"plain prose":   "The requested work is complete.",
+		"ordinary JSON": `{"status":"complete","message":"no tool invocation"}`,
+	}
+
+	for name, response := range cases {
+		t.Run(name, func(t *testing.T) {
+			workspace := t.TempDir()
+			client := &nativeFakeLLM{nativeResponse: llm.Result{Text: response}}
+			session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+			bus := eventbus.New()
+			defer bus.Shutdown()
+
+			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+			if err != nil {
+				t.Fatalf("newSprout: %v", err)
+			}
+			result, runErr := sprout.Run(context.Background(), "report")
+			if runErr != nil {
+				t.Fatalf("Sprout.Run: %v", runErr)
+			}
+			if result.Response != response {
+				t.Fatalf("Response = %q, want %q", result.Response, response)
+			}
+			if result.Protocol != "native" {
+				t.Fatalf("Protocol = %q, want native", result.Protocol)
+			}
+			if result.ToolInvocations != 0 || result.WroteWorkspace || len(session.calls) != 0 {
+				t.Fatalf("ordinary final answer caused tool execution/attribution: result=%+v calls=%+v", result, session.calls)
+			}
+			if got := len(downgradeEvents(bus)); got != 0 {
+				t.Fatalf("EventSproutDowngraded count = %d, want 0", got)
+			}
+		})
+	}
+}
 
 // captureStderr redirects os.Stderr for the duration of fn and returns what was
 // written. The warning is one of the three signals decision 2 asks for, so it
