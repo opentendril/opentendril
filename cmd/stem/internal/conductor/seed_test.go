@@ -961,6 +961,8 @@ func (r *testSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutRe
 	return r.run(ctx, taskPrompt)
 }
 
+func (r *testSproutRunner) setSeedIntegrationCheckpoint(bool) {}
+
 func committedSeedBuild(t *testing.T, repo string, capturedBranch *string) func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
 	t.Helper()
 	return func(ctx context.Context, orch *DockerOrchestrator, _ string) (SproutRunReport, error) {

@@ -941,6 +941,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if err != nil {
 		return report, err
 	}
+	configurable, ok := sprout.(sproutExecutionConfigurator)
+	if d.SeedIntegrationCheckpoint && !ok {
+		return report, errors.New("SeedIntegrationCheckpoint requires an explicit Sprout execution configuration")
+	}
+	if ok {
+		configurable.setSeedIntegrationCheckpoint(d.SeedIntegrationCheckpoint)
+	}
 
 	// The dormancy watcher runs on the WORK's context and is stopped by the
 	// teardown sequence rather than by this function returning. A detached call

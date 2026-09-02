@@ -1665,6 +1665,13 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 	if err != nil {
 		return result, err
 	}
+	configurable, ok := sprout.(sproutExecutionConfigurator)
+	if orch.SeedIntegrationCheckpoint && !ok {
+		return result, errors.New("SeedIntegrationCheckpoint requires an explicit Sprout execution configuration")
+	}
+	if ok {
+		configurable.setSeedIntegrationCheckpoint(orch.SeedIntegrationCheckpoint)
+	}
 
 	// The dormancy watcher runs on the WORK's context and is stopped by the
 	// teardown sequence, not by this function returning: a detached call

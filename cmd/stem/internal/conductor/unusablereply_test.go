@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -127,6 +128,147 @@ func TestProviderToolIntentUsesBoundedCorrectionWithoutTranslation(t *testing.T)
 				t.Fatalf("correction = %q, want actual available tool catalog", correction)
 			}
 		})
+	}
+}
+
+func TestSeedIntegrationStopsAfterWorkspaceWriteOnUnusableReply(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{responses: []string{
+		`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"first candidate\n"}}`,
+		unreadableWrapperReply,
+	}}
+	session := &round19WriteSession{
+		fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}},
+		workspace:   workspace,
+	}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+	sprout.setSeedIntegrationCheckpoint(true)
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("Run error = %v, want errUnusableReply", runErr)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("provider turns = %d, want the write and malformed reply only", len(client.calls))
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("tool calls = %+v, want exactly the first write", session.calls)
+	}
+	assertFileContents(t, filepath.Join(workspace, "HELLO.md"), "first candidate\n")
+	sprout.msgMu.RLock()
+	defer sprout.msgMu.RUnlock()
+	for _, message := range sprout.messages {
+		if strings.Contains(message.Content, "Your last reply looked like a tool call") {
+			t.Fatal("unusable-reply correction observation was appended after workspace mutation")
+		}
+	}
+	if !result.WroteWorkspace {
+		t.Fatal("WroteWorkspace = false, want true after the governed write")
+	}
+	if result.ToolInvocations != 1 {
+		t.Fatalf("ToolInvocations = %d, want one", result.ToolInvocations)
+	}
+}
+
+func TestSeedIntegrationCorrectsUnusableReplyBeforeWorkspaceWrite(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{responses: []string{
+		unreadableWrapperReply,
+		`{"final":"corrected"}`,
+	}}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+	sprout.setSeedIntegrationCheckpoint(true)
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if runErr != nil {
+		t.Fatalf("Run: %v, want the existing pre-write correction opportunity", runErr)
+	}
+	if result.Response != "corrected" {
+		t.Fatalf("Response = %q, want corrected response", result.Response)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("provider turns = %d, want the initial reply and one correction", len(client.calls))
+	}
+	if len(session.calls) != 0 {
+		t.Fatalf("tool calls = %+v, want no write before correction", session.calls)
+	}
+}
+
+func TestSeedIntegrationStopsAfterNativeWorkspaceWriteOnUnusableReply(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{
+		nativeResponses: []llm.Result{
+			{ToolCalls: []llm.ToolCall{{ID: "write", Type: "function", Function: llm.ToolCallFunction{
+				Name: "writeFile", Arguments: `{"path":"HELLO.md","content":"native candidate\n"}`,
+			}}}},
+			{Text: unreadableWrapperReply},
+		},
+	}
+	session := &round19WriteSession{
+		fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}},
+		workspace:   workspace,
+	}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+	sprout.setSeedIntegrationCheckpoint(true)
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("Run error = %v, want errUnusableReply", runErr)
+	}
+	if len(client.nativeCalls) != 2 {
+		t.Fatalf("native provider turns = %d, want the write and malformed reply only", len(client.nativeCalls))
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("tool calls = %+v, want exactly the native write", session.calls)
+	}
+	assertFileContents(t, filepath.Join(workspace, "HELLO.md"), "native candidate\n")
+	if !result.WroteWorkspace {
+		t.Fatal("WroteWorkspace = false, want true after the native governed write")
+	}
+}
+
+func TestOrdinarySproutCorrectsUnusableReplyAfterWorkspaceWrite(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{responses: []string{
+		`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"ordinary candidate\n"}}`,
+		unreadableWrapperReply,
+		`{"final":"corrected"}`,
+	}}
+	session := &round19WriteSession{
+		fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}},
+		workspace:   workspace,
+	}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if runErr != nil {
+		t.Fatalf("Run: %v, want ordinary correction behaviour", runErr)
+	}
+	if result.Response != "corrected" {
+		t.Fatalf("Response = %q, want corrected response", result.Response)
+	}
+	if len(client.calls) != 3 {
+		t.Fatalf("provider turns = %d, want write, malformed reply, and correction", len(client.calls))
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("tool calls = %+v, want exactly one write", session.calls)
 	}
 }
 
