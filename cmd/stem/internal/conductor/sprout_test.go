@@ -430,7 +430,9 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 			{Name: "injectPlasmid"},
 		},
 	}
-	sprout, err := newSprout(context.Background(), workspace, workspace, "secure", client, session, nil, "", "")
+	bus := eventbus.New()
+	defer bus.Shutdown()
+	sprout, err := newSprout(context.Background(), workspace, workspace, "secure", client, session, bus, "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -452,6 +454,31 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	}
 	if !strings.Contains(result.Transcript, "restricted by the active system genotype") {
 		t.Errorf("expected transcript to contain error about restricted injectPlasmid target, got: %s", result.Transcript)
+	}
+	if !result.BoundaryFailure {
+		t.Fatal("BoundaryFailure = false, want an explicit denied-policy violation to remain fail-closed")
+	}
+	if result.ToolInvocations != 2 {
+		t.Fatalf("ToolInvocations = %d, want 2 because both refused requests remain observable", result.ToolInvocations)
+	}
+	if len(session.calls) != 0 {
+		t.Fatalf("Terrarium calls = %+v, want 0 because both requests were refused before execution", session.calls)
+	}
+	observed := make(map[string]bool)
+	for _, event := range bus.History(50) {
+		if event.Type != eventbus.EventToolInvoked {
+			continue
+		}
+		if event.Data["status"] != "error" {
+			t.Errorf("refused tool event status = %v, want error", event.Data["status"])
+		}
+		if !strings.Contains(event.Data["observation"].(string), "access denied") && !strings.Contains(event.Data["observation"].(string), "unsupported tool") {
+			t.Errorf("refused tool event observation = %v, want the refusal error", event.Data["observation"])
+		}
+		observed[event.Data["tool"].(string)] = true
+	}
+	if len(observed) != 2 || !observed["evilTool"] || !observed["injectPlasmid"] {
+		t.Fatalf("refused tool events = %v, want evilTool and injectPlasmid", observed)
 	}
 }
 

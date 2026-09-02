@@ -1056,11 +1056,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		modifiedFiles := changes.attributedFiles()
 		report.FilesModified = modifiedFiles
 
-		gitDiff, diffErr := collectGitDiffFn(postMortemCtx, mountPath)
-		if diffErr != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
-		}
-
 		executionStatus := sproutExecutionStatus{
 			StepID:          stepID,
 			Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
@@ -1083,16 +1078,29 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 		}
 
-		isReviewableFruit := executionStatus.Status == SproutOutcomeComplete &&
-			len(modifiedFiles) > 0 &&
+		isReviewableFruit := !d.SeedIntegrationCheckpoint &&
+			executionStatus.Status == SproutOutcomeComplete &&
+			changes.hasMeasuredStageableChanges() &&
 			runErr == nil &&
-			!plan.readOnly && !d.Investigation &&
-			changes.measured && report.FilesUnmeasured == ""
-
+			!plan.readOnly && !d.Investigation
+		isSeedCandidateCheckpoint := d.SeedIntegrationCheckpoint &&
+			managedRun &&
+			(runErr == nil || isRecoverableSeedSproutFailure(runErr)) &&
+			!sproutResult.BoundaryFailure &&
+			changes.hasMeasuredStageableChanges()
+		shouldCommit := isReviewableFruit || isSeedCandidateCheckpoint
+		var gitDiff string
 		if isReviewableFruit {
+			gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
+			if diffErr != nil {
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+			}
+		}
+
+		if shouldCommit {
 			var commitHash string
 			var commitErr error
-			apiCommit := managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI && !d.SeedIntegrationCheckpoint
+			apiCommit := isReviewableFruit && managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI
 			var apiCommitOID string
 
 			if apiCommit {
@@ -1110,24 +1118,26 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return report, changes, commitErr
 			}
 
-			// Record Fruit identity immediately after the commit is created,
-			// before any push or merge. This means failure to publish does
-			// not erase the identity of work that is already committed.
-			if managedRun {
+			// Record normal Sprout Fruit identity immediately after the commit is
+			// created, before any push or merge. Seed checkpoints use their
+			// internal identity below because they are not yet Fruit.
+			if isReviewableFruit && managedRun {
 				report.FruitBranch = managedWorkspace.Branch
 				report.FruitCommit = strings.TrimSpace(commitHash)
 			}
 
-			if d.SeedIntegrationCheckpoint && isReviewableFruit {
+			if isSeedCandidateCheckpoint {
 				if generatedState != nil {
 					if err := generatedState.cleanup(); err != nil {
-						return report, changes, fmt.Errorf("seed integration generated state cleanup: %w", err)
+						cleanupErr := fmt.Errorf("seed integration generated state cleanup: %w", err)
+						return report, changes, errors.Join(runErr, cleanupErr)
 					}
 					generatedState = nil
 				}
 				for _, state := range managedCacheStates {
 					if err := state.cleanup(); err != nil {
-						return report, changes, fmt.Errorf("seed integration cache state cleanup: %w", err)
+						cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
+						return report, changes, errors.Join(runErr, cleanupErr)
 					}
 				}
 				managedCacheStates = nil
@@ -1141,6 +1151,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					return report, changes, integrateErr
 				}
 				managedWorkspaceAllocated = false
+				report.seedCandidateCommit = strings.TrimSpace(commitHash)
 				report.Output = sproutResult.Response
 				return report, changes, runErr
 			}
@@ -2335,7 +2346,14 @@ func commitTerrariumExecution(ctx context.Context, mountPath, sourcePath, status
 		}
 	}
 
-	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, executionStatus.Error)
+	failureError := executionStatus.Error
+	if seedIntegrationCheckpoint {
+		// The full Sprout failure remains in its observation and lifecycle
+		// history. It must not enter the internal checkpoint commit message,
+		// because the error includes untrusted model reply text.
+		failureError = ""
+	}
+	commitMessage := buildSproutCommitMessage(executionStatus.StepID, taskPrompt, executionStatus.Status, failureError)
 	// Signing and identity config (`-c ...`) must precede the `commit` subcommand.
 	configArgs := append(signingGitConfigArgs(credential.Sign), identityGitConfigArgs(credential.Identity)...)
 	if seedIntegrationCheckpoint && len(identityGitConfigArgs(credential.Identity)) == 0 {

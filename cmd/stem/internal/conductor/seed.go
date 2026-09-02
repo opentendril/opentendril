@@ -30,9 +30,9 @@ import (
 //
 // Each iteration re-bases on the seed branch (RunSprout's shadow worktree is
 // created from SubstrateBranch), so a second attempt builds on the first and
-// the deterministic verify failure is fed back into the next prompt. The loop
-// ends satisfied (verify passed), exhausted (bounds spent), or withered (the
-// Sprout itself failed and was Abscised).
+// the deterministic verify failure is fed back into the next prompt. A pure,
+// recoverable protocol failure may still leave an immutable checkpoint for the
+// verifier and next iteration; other Sprout failures wither the Seed.
 
 // Seed growth terminal statuses. The string values match core.SeedStatus* so
 // the adapter passes the verdict straight through without translation.
@@ -204,14 +204,22 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 		buildReport, runErr := seedBuildFn(ctx, orch, prompt)
 		fmt.Fprintf(&logs, "\n🌱 Iteration %d — sprout %s\n", iterations, strings.TrimSpace(buildReport.Outcome))
-		if runErr != nil {
+		candidateCommit := strings.TrimSpace(buildReport.seedCandidateCommit)
+		salvageableFailure := runErr != nil && isRecoverableSeedSproutFailure(runErr) && candidateCommit != ""
+		if runErr != nil && !salvageableFailure {
 			status = SeedStatusWithered
-			fmt.Fprintf(&logs, "sprout withered: %v\n", runErr)
+			fmt.Fprintf(&logs, "sprout withered: %s\n", boundSeedEvidence(strings.TrimSpace(runErr.Error()), seedVerifyFeedbackBound))
 			break
+		}
+		if runErr != nil {
+			// The Sprout's terminal failure remains part of its observation and
+			// history. Seed growth may continue only because the Stem received a
+			// separately materialized immutable checkpoint to verify.
+			fmt.Fprintf(&logs, "sprout withered after checkpointing a recoverable candidate: %s\n", boundSeedEvidence(strings.TrimSpace(runErr.Error()), seedVerifyFeedbackBound))
 		}
 
 		var candidateErr error
-		candidateRevision, candidateErr = seedCandidateRevision(ctx, sourcePath, currentStartRevision, buildReport.FruitCommit)
+		candidateRevision, candidateErr = seedCandidateRevision(ctx, sourcePath, currentStartRevision, candidateCommit)
 		if candidateErr != nil {
 			verifyReport := seedVerifyReport{Err: fmt.Errorf("resolve Seed verification candidate: %w", candidateErr)}
 			diagnostic := seedVerificationDiagnostic(iterations, verifyReport)
@@ -446,6 +454,29 @@ func seedCandidateRevision(ctx context.Context, sourcePath, startRevision, check
 		return "", fmt.Errorf("resolve Seed candidate commit %q returned no commit", candidate)
 	}
 	return resolved, nil
+}
+
+// isRecoverableSeedSproutFailure names the narrow cognitive/protocol failure
+// that may be salvaged after a Seed Sprout has already produced work. All
+// provider, Terrarium, capability-boundary, and other infrastructure failures
+// remain fail-closed because they do not establish trustworthy candidate
+// provenance.
+func isRecoverableSeedSproutFailure(runErr error) bool {
+	if runErr == nil {
+		return false
+	}
+
+	// A joined error can contain the recoverable protocol sentinel alongside a
+	// checkpoint, provider, or other infrastructure failure. That is not a pure
+	// convergence failure and must not enter the salvage path.
+	if joined, ok := runErr.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		return len(causes) == 1 && isRecoverableSeedSproutFailure(causes[0])
+	}
+	if wrapped, ok := runErr.(interface{ Unwrap() error }); ok {
+		return isRecoverableSeedSproutFailure(wrapped.Unwrap())
+	}
+	return errors.Is(runErr, errUnusableReply)
 }
 
 // runSeedVerify runs the verify command deterministically against a throwaway

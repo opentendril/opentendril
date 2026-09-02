@@ -128,7 +128,8 @@ type SproutRunReport struct {
 	// ProviderDiagnostic is the credential-free provider explanation, when a
 	// typed provider response exists.
 	ProviderDiagnostic *core.ProviderDiagnostic
-	// ToolInvocations is how many terrarium tool calls the Sprout made.
+	// ToolInvocations is how many tool requests the Sprout handled, including
+	// requests refused before Terrarium execution.
 	ToolInvocations int
 	// FruitBranch is the run-specific Fruit branch on which this managed run
 	// created a reviewable commit. It is set immediately after the local commit
@@ -145,6 +146,11 @@ type SproutRunReport struct {
 	// It is non-empty exactly when FruitBranch is non-empty, and carries the
 	// same publication-failure retention guarantee.
 	FruitCommit string
+
+	// seedCandidateCommit is an internal Seed-growth checkpoint. It is kept
+	// separate from FruitCommit because a checkpoint from a failed Sprout is
+	// verified work for the next Seed iteration, not Botanist-reviewable Fruit.
+	seedCandidateCommit string
 }
 
 // PostRunUsage is the fail-honest aggregate of every provider request made
@@ -202,6 +208,13 @@ func (e changeEvidence) attributedFiles() []string {
 		return e.measuredFiles
 	}
 	return []string{}
+}
+
+// hasMeasuredStageableChanges is the evidence required before a run can be
+// committed as work. An immutable Seed checkpoint cannot be materialized from
+// an unmeasured mount, even when the Sprout says it wrote something.
+func (e changeEvidence) hasMeasuredStageableChanges() bool {
+	return e.modelWrote && e.measured && len(e.measuredFiles) > 0
 }
 
 // changedAnything answers the question the outcome vocabulary asks.

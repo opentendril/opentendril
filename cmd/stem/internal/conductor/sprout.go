@@ -105,10 +105,16 @@ type Sprout struct {
 	// Atomic because a dormancy capture may look at a Sprout while its loop
 	// goroutine is still running.
 	wroteWorkspace atomic.Bool
+	// boundaryFailure records an explicit denied-policy/capability violation
+	// during the run. A safely refused unknown or unavailable tool is not such a
+	// violation: no Terrarium call was made, so it does not poison candidate
+	// salvage. A Seed may salvage only when this fact is false.
+	boundaryFailure atomic.Bool
 	// requestBegun is set the first time a Mycorrhizal request is about to
 	// be issued, so the structured "cognition has begun" signal fires once.
 	requestBegun atomic.Bool
-	// toolInvocations counts terrarium tool calls that actually ran.
+	// toolInvocations counts tool requests handled by the Sprout, including
+	// requests safely refused before Terrarium execution.
 	toolInvocations atomic.Int64
 }
 
@@ -164,7 +170,12 @@ type sproutResult struct {
 	// It is carried on failed runs too: a run cut off halfway still wrote
 	// whatever it wrote, and the post-mortem commits that work.
 	WroteWorkspace bool
-	Usage          llm.Usage
+	// BoundaryFailure reports an explicit denied-policy/capability violation. It
+	// is carried on failed runs so Seed salvage can remain fail-closed when a
+	// protocol failure follows such a violation. An unavailable tool that the
+	// Stem safely refuses before Terrarium execution does not set this fact.
+	BoundaryFailure bool
+	Usage           llm.Usage
 	// RequestsMade is true when Sprout.Run issued at least one provider
 	// request. It is the usageStarted fact, independent of whether Usage
 	// fields were supplied.
@@ -471,6 +482,9 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 				// evidence trail describe a call that was never made.
 				argErrors = make([]string, len(nativeToolCalls))
 				for i, ntc := range nativeToolCalls {
+					if a.isDeniedCapability(ntc.Function.Name) {
+						a.boundaryFailure.Store(true)
+					}
 					var args map[string]any
 					if err := json.Unmarshal([]byte(ntc.Function.Arguments), &args); err != nil {
 						argErrors[i] = fmt.Sprintf("failed to parse arguments JSON: %v", err)
@@ -617,6 +631,7 @@ func (a *Sprout) Run(ctx context.Context, taskPrompt string) (sproutResult, erro
 func (a *Sprout) finishedResult(usage llm.Usage, started bool) sproutResult {
 	return sproutResult{
 		WroteWorkspace:  a.wroteWorkspace.Load(),
+		BoundaryFailure: a.boundaryFailure.Load(),
 		Usage:           usage,
 		RequestsMade:    started,
 		ToolInvocations: int(a.toolInvocations.Load()),
@@ -693,6 +708,9 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 		return ToolResponse{}, "", fmt.Errorf("empty tool call received from model")
 	}
 	if _, ok := a.toolIndex[call.Tool]; !ok {
+		if a.isDeniedCapability(call.Tool) {
+			a.boundaryFailure.Store(true)
+		}
 		response := ToolResponse{
 			Status: "error",
 			Error:  fmt.Sprintf("unsupported tool %q. available tools: %s", call.Tool, strings.Join(a.availableToolNames(), ", ")),
@@ -705,6 +723,7 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 			if name, ok := nameRaw.(string); ok {
 				for _, denied := range a.denyPlasmids {
 					if strings.EqualFold(name, denied) {
+						a.boundaryFailure.Store(true)
 						response := ToolResponse{
 							Status: "error",
 							Error:  fmt.Sprintf("access denied: plasmid %q is restricted by the active system genotype", name),
@@ -746,6 +765,15 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 	return response, renderToolObservation(call.Tool, response), nil
 }
 
+func (a *Sprout) isDeniedCapability(name string) bool {
+	for _, denied := range a.denyPlasmids {
+		if strings.EqualFold(name, denied) {
+			return true
+		}
+	}
+	return false
+}
+
 // managedGitCommitResponse answers a gitCommit tool call with the run's git
 // policy: OpenTendril commits and merges the changes after the run, so the
 // Sprout neither needs to nor can commit inside the terrarium. It is a success,
@@ -770,10 +798,11 @@ func managedGitCommitResponse() ToolResponse {
 // cannot bloat the event stream or the history row.
 const maxToolObservationEventBytes = 2000
 
-// publishToolInvoked emits one tool-invoked event per action the Sprout takes,
-// so a run's actual actions are observable live and in history rather than
-// leaving only the sprout-emerged/sprout-matured bookends. It is a no-op when
-// no bus is wired (workspace and test callers), matching the other publishers.
+// publishToolInvoked emits one tool-invoked event per tool request handled by
+// the Sprout, including requests refused before Terrarium execution, so the
+// run's observations are live and in history rather than leaving only the
+// sprout-emerged/sprout-matured bookends. It is a no-op when no bus is wired
+// (workspace and test callers), matching the other publishers.
 func (a *Sprout) publishToolInvoked(call ToolCall, response ToolResponse, observation string) {
 	a.toolInvocations.Add(1)
 	if a.eventBus == nil {

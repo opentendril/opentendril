@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/opentendril/opentendril/roots/llm"
 )
 
 // observedNativeWrapperReply is the reply that exposed this, recorded verbatim
@@ -230,6 +232,73 @@ func TestTwoConsecutiveUnusableRepliesEndTheRun(t *testing.T) {
 	// had. This is the field the old fallthrough filled with the raw reply.
 	if strings.TrimSpace(res.Response) != "" {
 		t.Errorf("Response = %q, want empty on a failed growth", res.Response)
+	}
+}
+
+func TestUnusableFailureAfterUnknownToolRefusalRemainsSalvageable(t *testing.T) {
+	workspace := t.TempDir()
+	client := &fakeLLM{responses: []string{
+		`{"tool":"writeFile","arguments":{"path":"HELLO.md","content":"partial"}}`,
+		`{"tool":"cmp","arguments":{"path":"HELLO.md"}}`,
+		unreadableWrapperReply,
+		unreadableWrapperReply,
+	}}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("Run error = %v, want bounded unusable-reply failure", runErr)
+	}
+	if !result.WroteWorkspace {
+		t.Fatal("WroteWorkspace = false, want the governed write retained as evidence")
+	}
+	if result.BoundaryFailure {
+		t.Fatal("BoundaryFailure = true, want a safely refused unknown tool to leave provenance salvageable")
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("session calls = %+v, want only the governed write; refused cmp must not execute", session.calls)
+	}
+}
+
+func TestMalformedNativeUnknownToolRefusalDoesNotPoisonSalvage(t *testing.T) {
+	workspace := t.TempDir()
+	client := &nativeFakeLLM{
+		fakeLLM: fakeLLM{responses: []string{unreadableWrapperReply, unreadableWrapperReply}},
+		nativeResponses: []llm.Result{
+			{ToolCalls: []llm.ToolCall{{ID: "write", Type: "function", Function: llm.ToolCallFunction{
+				Name: "writeFile", Arguments: `{"path":"HELLO.md","content":"partial"}`,
+			}}}},
+			{ToolCalls: []llm.ToolCall{{ID: "unsupported", Type: "function", Function: llm.ToolCallFunction{
+				Name: "unsupportedTool", Arguments: `{malformed}`,
+			}}}},
+			{Text: unreadableWrapperReply},
+			{Text: unreadableWrapperReply},
+		},
+	}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
+
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	if err != nil {
+		t.Fatalf("newSprout: %v", err)
+	}
+
+	result, runErr := sprout.Run(context.Background(), "create HELLO.md")
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("Run error = %v, want bounded unusable-reply failure", runErr)
+	}
+	if !result.WroteWorkspace {
+		t.Fatal("WroteWorkspace = false, want the governed write retained as evidence")
+	}
+	if result.BoundaryFailure {
+		t.Fatal("BoundaryFailure = true, want malformed unknown tool refusal to leave provenance salvageable")
+	}
+	if len(session.calls) != 1 || session.calls[0].Tool != "writeFile" {
+		t.Fatalf("session calls = %+v, want only the governed write; malformed cmp must not execute", session.calls)
 	}
 }
 
