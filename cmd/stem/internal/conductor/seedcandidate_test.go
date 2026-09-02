@@ -142,13 +142,13 @@ func TestSproutSystemPromptOmitsManagedRunWorkspaceHostPath(t *testing.T) {
 	for _, want := range []string{
 		"relative to the repository root",
 		"do not prefix tool paths with `repository/`",
-		"logical absolute workspace root",
+		"host runworkspace and other execution-location paths are never exposed or valid tool paths",
 	} {
 		if !strings.Contains(lowerPrompt, want) {
 			t.Fatalf("system prompt omitted path guidance %q:\n%s", want, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "use `HELLO.md`, not `repository/HELLO.md` or `/workspace/repository/HELLO.md`") {
+	if !strings.Contains(prompt, "use `HELLO.md`, not `repository/HELLO.md`") {
 		t.Fatalf("system prompt omitted the concrete root-file example:\n%s", prompt)
 	}
 }
