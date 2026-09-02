@@ -138,6 +138,19 @@ func TestSproutSystemPromptOmitsManagedRunWorkspaceHostPath(t *testing.T) {
 	if !strings.Contains(strings.ToLower(prompt), "repository-relative") {
 		t.Fatalf("system prompt did not state that tool paths are repository-relative:\n%s", prompt)
 	}
+	lowerPrompt := strings.ToLower(prompt)
+	for _, want := range []string{
+		"relative to the repository root",
+		"do not prefix tool paths with `repository/`",
+		"logical absolute workspace root",
+	} {
+		if !strings.Contains(lowerPrompt, want) {
+			t.Fatalf("system prompt omitted path guidance %q:\n%s", want, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "use `HELLO.md`, not `repository/HELLO.md` or `/workspace/repository/HELLO.md`") {
+		t.Fatalf("system prompt omitted the concrete root-file example:\n%s", prompt)
+	}
 }
 
 func TestSproutLoadsGenomeFromHostPathWithoutExposingIt(t *testing.T) {
@@ -923,6 +936,9 @@ func TestSeedVerificationDiagnosticsDistinguishOutcomes(t *testing.T) {
 	}
 	if timedOut.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeInfrastructureFailed || !timedOut.VerificationDiagnostics[0].TimedOut {
 		t.Fatalf("timeout diagnostic = %+v", timedOut.VerificationDiagnostics[0])
+	}
+	if timedOut.Status != SeedStatusWithered || timedOut.Iterations != 1 {
+		t.Fatalf("timeout status/iterations = %q/%d, want withered/1", timedOut.Status, timedOut.Iterations)
 	}
 
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {

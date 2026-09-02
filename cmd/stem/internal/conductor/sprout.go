@@ -983,9 +983,9 @@ func mapToolsToNative(tools []ToolDefinition) []llm.ToolDefinition {
 }
 
 // sproutLogicalWorkspaceRoot is the namespace presented to the Mycorrhiza.
-// Tool path arguments are repository-relative; the host RunWorkspace path is
-// orchestration state and is never this value.
-const sproutLogicalWorkspaceRoot = "repository root"
+// It is a logical path, not the host RunWorkspace path, which is orchestration
+// state and is never exposed to the Sprout.
+const sproutLogicalWorkspaceRoot = "/workspace/repository"
 
 func buildSproutSystemPrompt(workspace string, genotypeContext string, genomeContext string) string {
 	var builder strings.Builder
@@ -996,10 +996,15 @@ You reason about tasks, choose tools, and stop when the task is complete.
 Rules:
 - You should think about the problem before taking action. Enclose your reasoning inside <thought> and </thought> tags. Explain alternatives you considered and why you rejected them.
 - Prefer concise, high-signal actions and responses.
-`))
+	`))
 	builder.WriteString("\n\nWorkspace root:\n")
+	builder.WriteString("repository root (logical path ")
 	builder.WriteString(sproutLogicalWorkspaceRoot)
-	builder.WriteString("\nTool paths are repository-relative (relative to this workspace root).")
+	builder.WriteString(")")
+	builder.WriteString("\nTool path arguments are repository-relative, relative to the repository root.")
+	builder.WriteString(" Do not prefix tool paths with `repository/` or with the logical absolute workspace root.")
+	fmt.Fprintf(&builder, " For example, use `HELLO.md`, not `repository/HELLO.md` or `%s/HELLO.md`.", sproutLogicalWorkspaceRoot)
+	builder.WriteString(" Host execution-location paths, including RunWorkspace paths, must never be exposed.")
 	_ = workspace
 
 	if strings.TrimSpace(genotypeContext) != "" {
