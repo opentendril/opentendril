@@ -36,6 +36,7 @@ type gitSetupOptions struct {
 	grantPollen   string
 	checkout      string // managed (default) | path | ephemeral
 	dir           string // where config is written (default: cwd)
+	yes           bool
 	force         bool
 	verify        bool
 	help          bool
@@ -130,6 +131,8 @@ func parseGitSetupArgs(args []string) (gitSetupOptions, error) {
 			opts.checkout, err = need(&i)
 		case "--dir":
 			opts.dir, err = need(&i)
+		case "--yes":
+			opts.yes = true
 		case "--force":
 			opts.force = true
 		case "--verify":
@@ -416,12 +419,12 @@ func confirmGitSetupTarget(opts gitSetupOptions) bool {
 		}
 	}
 
-	if opts.force {
+	if opts.yes || opts.force {
 		return true
 	}
-	if !isTerminal(os.Stdin) {
+	if !gitSetupIsTerminal(os.Stdin) {
 		fmt.Fprintln(os.Stderr, "\n❌ Not a terminal, so the destination cannot be confirmed.")
-		fmt.Fprintln(os.Stderr, "   Re-run with --force to write without confirmation.")
+		fmt.Fprintln(os.Stderr, "   Re-run with --yes to write without confirmation.")
 		return false
 	}
 
@@ -442,6 +445,8 @@ func isTerminal(file *os.File) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
+var gitSetupIsTerminal = isTerminal
+
 func printGitSetupUsage() {
 	fmt.Println("Usage: tendril git setup --substrate <name> --repo <owner/repo> [flags]")
 	fmt.Println()
@@ -458,6 +463,7 @@ func printGitSetupUsage() {
 	fmt.Println("  posture pat:  --token-env <ENV>  --sign-key <gpg id>  --identity-name <n>  --identity-email <e>")
 	fmt.Println()
 	fmt.Println("  --dir <path>          Where to write config (default: current directory)")
-	fmt.Println("  --force               Overwrite existing config files, and skip the confirmation")
+	fmt.Println("  --yes                 Accept the destination without prompting; does not overwrite existing entries")
+	fmt.Println("  --force               Overwrite existing entries and skip confirmation")
 	fmt.Println("  --verify              Check the configured connection (managed checkouts include Git-base readiness; no mutation)")
 }
