@@ -150,6 +150,8 @@ As a human contributor, your workflow is simple and respects the same quality ga
 6. **Submit a PR:** Push your branch and open a Pull Request into `main`. If your PR description itself needs to avoid a banned taxonomy term, check it first — `bash scripts/check-taxonomy.sh --text <file>` — since a commit-time hook cannot see a PR description.
 7. **Review:** A maintainer will review your code. Once approved and the required checks pass, it will be merged.
 
+Maintainers publishing a release should follow the [release operator procedure](../docs/development-process/releasing.md).
+
 ### What the default branch enforces
 
 These are ruleset rules, not conventions — they fail your push or block your merge rather than earning a review comment:
