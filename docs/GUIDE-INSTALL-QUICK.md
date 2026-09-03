@@ -66,7 +66,7 @@ explicitly — not `root`, and not `tendril`.
 Do **not** pipe the installer into `sudo sh`.
 
 ```bash
-RELEASE=v0.3.12
+RELEASE=v0.3.13
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
@@ -77,7 +77,7 @@ grep 'install.sh$' checksums.txt | sha256sum -c
 Read the verified `install.sh` before privileged execution. Then:
 
 ```bash
-RELEASE=v0.3.12
+RELEASE=v0.3.13
 sudo sh install.sh \
   --governed \
   --pollinator-user <ordinary-user> \
