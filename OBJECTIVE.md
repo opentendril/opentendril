@@ -2,85 +2,110 @@
 
 > One thing the organism must be able to do next. Every brief cites it. Work that
 > does not serve it is filed, not started. It changes when the condition below is
-> met — deliberately, not by drift.
+> met deliberately, not by drift.
 
 **The purpose it must serve** is the one stated in the first line of `README.md`:
 to let a Botanist stop approving every step an LLM takes, because it works freely
 inside a boundary and everything it did arrives in Git for review. That sentence
 does not change when the objective does. An objective that does not advance it is
-the wrong objective, however worthwhile the work — which is the check this file
+the wrong objective, however worthwhile the work, which is the check this file
 exists to make possible.
 
 ## Current
 
-**A Botanist unfamiliar with OpenTendril can go from a clean machine to one
-accepted Git-reviewable Fruit using the documented secure-default path, without
-OpenTendril-internal knowledge or undocumented repair.**
+**A developer unfamiliar with OpenTendril can use it directly as a lightweight
+interactive coding runtime, or delegate to it from an existing Pollinator, give
+it real coding work, observe and continue the same Stem-mediated interaction,
+and receive Git-reviewable Fruit without granting the model ambient host
+authority.**
 
-The governed execution boundary can now support unattended, observable and
-concurrent work once OpenTendril is running. The next constraint is reaching
-that state without relying on the knowledge of the people who built it.
+The governed installation and first-Fruit path are now qualified. The next
+constraint is the developer interaction once OpenTendril is available.
 
-Installation, configuration and first use are part of the autonomy boundary. If
-the Botanist must understand OpenTendril internals, discover hidden prerequisites,
-repair configuration by hand, know which daemon must be restarted, query internal
-APIs, or manually correlate opaque identifiers to understand what is happening,
-then the organism still depends on expert supervision before useful delegation
-can begin.
+The visible experience should be deliberately small: connect a model, identify a
+Substrate, state a coding task, observe useful progress, provide further intent
+when required, and review the resulting Fruit. A developer should not need to
+understand Seeds, Sprout lifecycle internals, private APIs, persistence layout or
+OpenTendril implementation structure merely to perform normal coding work.
 
-The target is therefore a short, secure and observable first-use path. Deterministic
-work should be automated where practical; questions should be asked only when
-Botanist intent is genuinely required. The secure path is the normal path, not an
-advanced configuration the Botanist must discover after setup.
+OpenTendril should support this experience in two forms. It can be used directly
+as the lightweight coding interface, without requiring another development
+harness, or an existing development tool, IDE or automation system can act as the
+Pollinator and delegate work to OpenTendril. Changing Pollinators must not create
+another execution architecture or move governed business logic out of the Stem
+Core.
+
+Local evaluation may run the Stem under the developer's existing OS principal.
+That posture does not claim the full governed deployment boundary or principal
+separation. It should nevertheless use the same Stem-owned interaction,
+execution and Git-result contracts so that moving to the separate-principal
+governed posture does not require learning or implementing another developer
+interaction model.
+
+Basic model/tool execution and safe observation substantially exist. The
+principal missing interaction is continued intent within an active Phytomer. A
+Pollinator must not gain a direct channel into a Sprout or Terrarium to provide
+that experience. Additional intent must remain Stem-mediated, authorized,
+attributable to the Pollen, persisted against the Phytomer and delivered to the
+Mycorrhizae through an explicit lifecycle contract.
+
+The interaction state therefore belongs behind the Stem boundary, not in a
+terminal interface or transport adapter. This keeps the same contract usable by
+a local terminal, an external development tool and, later, a remote Pollinator
+without making remote deployment part of this objective.
 
 ## Done when
 
-A recorded exercise beginning from a clean machine and following only the
-documented user-facing path demonstrates all of the following:
+Recorded exercises against real Substrates demonstrate all of the following:
 
-- **Prerequisites are discoverable.** Everything required before installation is
-  stated or detected. A missing prerequisite produces an actionable diagnosis
-  rather than requiring repository or source-code investigation.
-- **The secure-default installation produces a usable governed Stem.** The
-  Botanist does not need to weaken filesystem, credential, Terrarium or network
-  boundaries merely to reach a first useful run.
-- **Required configuration is understandable from the user-facing path.**
-  Provider, Substrate, Pollinator and other required first-run choices can be
-  completed without knowing OpenTendril's implementation structure or editing
-  undocumented internal state.
-- **A real task can be delegated through a documented supported interface.**
-  The Botanist does not need private API knowledge, database access, source-code
-  knowledge or ad-hoc shell repair to start useful work.
-- **The first run is immediately observable from an ordinary terminal.** One
-  documented command is sufficient to follow relevant activity from dispatch
-  through terminal state and Fruit. It exposes useful identity, Substrate,
-  lifecycle, progress, tool/activity, structured failure and Fruit information
-  without exposing raw model reasoning.
-- **The resulting Fruit is easy to locate and review.** A successful run produces
-  independently identifiable Git branch and commit state, leaves `main`
-  unchanged, and gives the Botanist enough information to review and either
-  accept or reject the work.
-- **No undocumented recovery knowledge is required.** Success does not depend on
-  knowing to restart a daemon, alter hidden files, inspect service internals,
-  issue raw HTTP requests, query persistence directly or manually reconstruct
-  execution state from unrelated logs.
-- **The headless path stands on its own.** Greenhouse or another graphical
-  interface may improve the experience, but the governed Stem can be installed,
-  operated, observed and diagnosed without requiring that optional interface.
-- **The measurement records friction rather than hiding it.** Prerequisites,
-  ambiguity, failures, manual interventions, working time and waiting time are
-  recorded. Any intervention that depends on existing OpenTendril expertise is
-  counted as a failure of the first-use path, not silently supplied by the
-  tester.
+- **The direct experience is small.** From a documented local/evaluation setup, a
+  developer can connect a model, select a Substrate, state a real coding task,
+  observe it and receive Fruit through a lightweight terminal experience without
+  operating another development harness.
+- **An existing development tool can use Tendril as its execution target.** At least one
+  external development tool can act as a Pollinator through a supported Tendril
+  transport, delegate the same class of real coding work and receive the result
+  without vendor-specific execution logic in the Stem.
+- **Changing Pollinators does not create another implementation.** A second
+  suitable Pollinator can exercise the same Stem-owned capability through
+  configuration or transport integration rather than a new execution path.
+- **The interaction continues inside one governed context.** Additional
+  developer intent can be supplied after work has begun without abandoning and
+  manually reconstructing the execution context. The continued interaction is
+  associated with the same intended Phytomer and remains attributable to the
+  exercising Pollen.
+- **Steering remains Stem-mediated.** A Pollinator cannot communicate directly
+  with a Sprout or Terrarium. Continued intent is authorized and persisted by
+  the Stem and reaches the Mycorrhizae only through the implemented interaction
+  lifecycle.
+- **Useful progress is observable.** The developer can see identity, Substrate,
+  lifecycle, meaningful activity, failures, iteration state and Fruit without
+  exposure of raw model reasoning or credentials.
+- **The model has no ambient host authority.** Normal coding work occurs through
+  declared capabilities and isolated execution rather than giving the model an
+  unrestricted host shell, host filesystem, privileged credentials or ambient
+  network authority.
+- **The result remains Fruit.** Successful work produces independently
+  identifiable Git branch and commit state, leaves the protected/default branch
+  unchanged, and gives the developer enough information to review and accept or
+  reject the result.
+- **The lightweight interface does not become an authority layer.** Durable
+  interaction and execution state is owned behind the Stem boundary. CLI, MCP,
+  REST or terminal presentation remains transport/presentation rather than a
+  second implementation of governed capability semantics.
+- **The measurement records product friction.** Setup steps, Tendril-specific
+  concepts exposed to the developer, manual interventions, interaction
+  round-trips, token/context overhead and failures are recorded rather than
+  hidden. The first exercise establishes a baseline; no arbitrary elapsed-time
+  or token threshold is required.
 
-The first exercise establishes the baseline; it does not need to meet an
-arbitrary elapsed-time target. Subsequent work should remove measured friction
-until the capability above is demonstrated without expert intervention.
+The objective does not require secure remote deployment, GitHub-native workers,
+multi-instance workload routing, a particular terminal UI framework or support
+for every external development tool. Those are follow-on capabilities.
 
-A path that succeeds only because the tester already knows OpenTendril does not
-satisfy this objective. Likewise, replacing understandable terminal operation
-with a mandatory graphical setup surface does not by itself satisfy it:
-simplicity and observability are the capability, not any particular interface.
+The test is whether one lightweight Stem-owned interaction model works directly
+for a developer and through another Pollinator while preserving OpenTendril's
+authority, isolation, observation and Git-review boundaries.
 
 ---
 
@@ -94,8 +119,8 @@ Give it a condition that someone other than the author can check. "It is safe" i
 judged; "nothing outside the declared boundary was touched, across runs that each
 changed something" is observed.
 
-**The test for whether work belongs** is not whether it is worth doing — most
-filed work is — but whether the objective is unreachable without it. Everything
+**The test for whether work belongs** is not whether it is worth doing (most
+filed work is) but whether the objective is unreachable without it. Everything
 else goes to Issues. That includes defects found while working: a real defect
 discovered on the way is evidence for a *future* objective, and starting it now
 is how a month disappears.
