@@ -104,7 +104,7 @@ func fakeBuild(prompts *[]string) func(context.Context, *DockerOrchestrator, str
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "deadbeef"}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "deadbeef", RequestsMade: true}, nil
 	}
 }
 

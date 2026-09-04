@@ -16,6 +16,7 @@ type continuationHarness struct {
 	pending   []string
 	inFlight  []string
 	delivered [][]string
+	confirmed int
 }
 
 func (h *continuationHarness) accept(intent string) {
@@ -37,6 +38,7 @@ func (h *continuationHarness) boundary() SeedContinuationBoundary {
 		ConfirmDelivery: func(context.Context) error {
 			h.mu.Lock()
 			defer h.mu.Unlock()
+			h.confirmed++
 			h.delivered = append(h.delivered, append([]string(nil), h.inFlight...))
 			h.inFlight = nil
 			return nil
@@ -100,7 +102,7 @@ func TestSeedContinuationAcceptedDuringSprout1ReachesOnlySprout2(t *testing.T) {
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "deadbeef"}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, Output: "deadbeef", RequestsMade: true}, nil
 	}
 	pass := 0
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
@@ -165,7 +167,7 @@ func TestSeedContinuationSequenceOrderAndNoReplay(t *testing.T) {
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		return seedVerifyReport{Output: "failed", Passed: false, ExitCode: intPtr(1)}
@@ -308,7 +310,7 @@ func TestSeedContinuationPassingVerifyRunsAnotherIterationOnlyWhenOneRemains(t *
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		return seedVerifyReport{Output: "ok", Passed: true}
@@ -362,7 +364,7 @@ func TestSeedContinuationFinalIterationPendingCannotSatisfy(t *testing.T) {
 				return SproutRunReport{}, err
 			}
 		}
-		return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+		return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
 	}
 	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 		return seedVerifyReport{Output: "ok", Passed: true}
@@ -421,7 +423,7 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 					return SproutRunReport{}, err
 				}
 			}
-			return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+			return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
 		}
 		seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 			return seedVerifyReport{Output: "ok", Passed: true}
@@ -518,7 +520,7 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 					return SproutRunReport{}, err
 				}
 			}
-			return SproutRunReport{Outcome: SproutOutcomeComplete}, nil
+			return SproutRunReport{Outcome: SproutOutcomeComplete, RequestsMade: true}, nil
 		}
 		seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
 			code := 2
@@ -554,6 +556,83 @@ func TestSeedContinuationTimeoutSproutAndVerifyFailureAccountPending(t *testing.
 			t.Fatalf("status = %q, want accounted withered", res.Status)
 		}
 	})
+}
+
+func TestSeedContinuationDoesNotConfirmDeliveryWithoutProviderRequest(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	var confirmCalls int
+	h := &continuationHarness{}
+	h.accept("keep going")
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		return SproutRunReport{Outcome: SproutOutcomeFailed, RequestsMade: false}, errors.New("dial refused before provider request")
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		t.Fatal("verify must not run after a pre-provider failure")
+		return seedVerifyReport{}
+	}
+	boundary := h.boundary()
+	origConfirm := boundary.ConfirmDelivery
+	boundary.ConfirmDelivery = func(ctx context.Context) error {
+		confirmCalls++
+		return origConfirm(ctx)
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 2,
+		SessionID: "tendril-cont-norequest", Continuation: boundary,
+	})
+	if confirmCalls != 0 || h.confirmed != 0 {
+		t.Fatalf("ConfirmDelivery called %d/%d times on RequestsMade=false", confirmCalls, h.confirmed)
+	}
+	if !errors.Is(err, core.ErrContinuationUndeliverable) {
+		t.Fatalf("err = %v, want undeliverable", err)
+	}
+	if res.Status == SeedStatusSatisfied {
+		t.Fatal("pre-provider failure reported satisfied")
+	}
+	h.mu.Lock()
+	unresolved := len(h.pending) > 0 || len(h.inFlight) > 0
+	h.mu.Unlock()
+	if !unresolved {
+		t.Fatal("claimed continuation was treated as delivered without a provider request")
+	}
+}
+
+func TestSeedContinuationConfirmsDeliveryWhenProviderWasInvoked(t *testing.T) {
+	restoreSeeds(t)
+	repo := newSeedRepo(t)
+	h := &continuationHarness{}
+	h.accept("keep going")
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		if !localBranchExists(orch.Substrate, orch.SubstrateBranch) {
+			if _, err := runGitCommand(ctx, orch.Substrate, "branch", orch.SubstrateBranch, "HEAD"); err != nil {
+				return SproutRunReport{}, err
+			}
+		}
+		return SproutRunReport{Outcome: SproutOutcomeFailed, RequestsMade: true}, errors.New("sprout crashed after provider request")
+	}
+	seedVerifyFn = func(context.Context, string, string, []string, []string) seedVerifyReport {
+		t.Fatal("verify must not run after a withered build")
+		return seedVerifyReport{}
+	}
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate: repo, Goal: "make it pass", Verify: []string{"true"}, MaxIterations: 2,
+		SessionID: "tendril-cont-requested", Continuation: h.boundary(),
+	})
+	if h.confirmed != 1 {
+		t.Fatalf("ConfirmDelivery calls = %d, want 1", h.confirmed)
+	}
+	if err != nil {
+		t.Fatalf("delivered continuation should not become an undeliverable error: %v", err)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	if res.Status == SeedStatusSatisfied {
+		t.Fatal("sprout failure reported satisfied")
+	}
 }
 
 func intPtr(v int) *int { return &v }

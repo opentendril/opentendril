@@ -21,7 +21,7 @@ func (t SeedTarget) trimmed() SeedTarget {
 }
 
 func (t SeedTarget) validate() error {
-	if t.PhytomerID == "" || t.Handle == "" || t.Pollen == "" || t.Substrate == "" {
+	if t.PhytomerID == "" || t.Handle == "" || t.Substrate == "" {
 		return ErrContinuationInvalid
 	}
 	return nil

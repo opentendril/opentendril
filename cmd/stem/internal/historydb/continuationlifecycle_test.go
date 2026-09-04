@@ -175,6 +175,89 @@ func TestContinuationLifecycleRefusesStaleAndCrossPollenTargets(t *testing.T) {
 	}
 }
 
+func TestLocalEmptyPollenSeedTargetLifecycle(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	mustRecordRunningSeed(t, store, "seed-local", "tendril-local", "", "myrepo")
+	target := SeedTarget{PhytomerID: "tendril-local", Handle: "seed-local", Pollen: "", Substrate: "myrepo"}
+
+	claimed, err := store.ClaimPendingContinuations(ctx, target)
+	if err != nil {
+		t.Fatalf("claim empty-pollen target: %v", err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("claimed = %+v", claimed)
+	}
+	fenced, err := store.AcquireSeedSettlementFence(ctx, target)
+	if err != nil || !fenced {
+		t.Fatalf("fence empty-pollen target: fenced=%v err=%v", fenced, err)
+	}
+	if err := store.CompleteSeedSettlement(ctx, target, SeedRun{
+		Status: seedStatusSatisfied, Iterations: 1, Diff: "diff",
+	}); err != nil {
+		t.Fatalf("complete empty-pollen settlement: %v", err)
+	}
+	seed, ok, err := store.GetSeedRunByPhytomer(ctx, "tendril-local")
+	if err != nil || !ok || seed.Status != seedStatusSatisfied || seed.Pollen != "" {
+		t.Fatalf("settled local seed = %+v ok=%v err=%v", seed, ok, err)
+	}
+}
+
+func TestEmptyPollenContinuationClaimDeliveryAndFence(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	mustRecordRunningSeed(t, store, "seed-local", "tendril-local", "", "myrepo")
+	target := SeedTarget{PhytomerID: "tendril-local", Handle: "seed-local", Pollen: "", Substrate: "myrepo"}
+	rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
+		PhytomerID: "tendril-local", Pollen: "", Substrate: "myrepo", Handle: "seed-local",
+		IdempotencyKey: "k-local", Intent: "keep going locally",
+	})
+	if err != nil {
+		t.Fatalf("accept empty pollen: %v", err)
+	}
+	if rec.Pollen != "" || rec.DeliveryState != continuationDeliveryPending {
+		t.Fatalf("record = %+v", rec)
+	}
+
+	claimed, err := store.ClaimPendingContinuations(ctx, target)
+	if err != nil || len(claimed) != 1 || claimed[0].ContinuationID != rec.ContinuationID {
+		t.Fatalf("claim: %+v err=%v", claimed, err)
+	}
+	if err := store.MarkContinuationsDelivered(ctx, target, []string{rec.ContinuationID}); err != nil {
+		t.Fatalf("deliver: %v", err)
+	}
+	fenced, err := store.AcquireSeedSettlementFence(ctx, target)
+	if err != nil || !fenced {
+		t.Fatalf("fence after empty-pollen delivery: fenced=%v err=%v", fenced, err)
+	}
+	if err := store.CompleteSeedSettlement(ctx, target, SeedRun{Status: seedStatusSatisfied, Iterations: 1}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+}
+
+func TestSeedTargetPollenMismatchEmptyVersusDelegated(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	mustRecordRunningSeed(t, store, "seed-codex", "tendril-codex", "codex", "myrepo")
+	mustRecordRunningSeed(t, store, "seed-local", "tendril-local", "", "myrepo")
+
+	delegatedEmpty := SeedTarget{PhytomerID: "tendril-codex", Handle: "seed-codex", Pollen: "", Substrate: "myrepo"}
+	if _, err := store.ClaimPendingContinuations(ctx, delegatedEmpty); !errors.Is(err, ErrContinuationPollenMismatch) {
+		t.Fatalf("delegated seed vs empty pollen: %v", err)
+	}
+	if _, err := store.AcquireSeedSettlementFence(ctx, delegatedEmpty); !errors.Is(err, ErrContinuationPollenMismatch) {
+		t.Fatalf("fence delegated vs empty: %v", err)
+	}
+
+	localDelegated := SeedTarget{PhytomerID: "tendril-local", Handle: "seed-local", Pollen: "codex", Substrate: "myrepo"}
+	if _, err := store.ClaimPendingContinuations(ctx, localDelegated); !errors.Is(err, ErrContinuationPollenMismatch) {
+		t.Fatalf("local seed vs delegated pollen: %v", err)
+	}
+	if _, err := store.AcquireSeedSettlementFence(ctx, localDelegated); !errors.Is(err, ErrContinuationPollenMismatch) {
+		t.Fatalf("fence local vs delegated: %v", err)
+	}
+}
+
 func TestSettlementFenceNoPendingAcquiresSettling(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

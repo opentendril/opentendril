@@ -225,7 +225,10 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		}
 
 		buildReport, runErr := seedBuildFn(ctx, orch, prompt)
-		if execution.Continuation.ConfirmDelivery != nil {
+		// RequestsMade is the typed evidence that continued intent crossed the
+		// Mycorrhizal/provider boundary. A pre-provider failure must not mark
+		// delivering continuation delivered.
+		if buildReport.RequestsMade && execution.Continuation.ConfirmDelivery != nil {
 			if confirmErr := execution.Continuation.ConfirmDelivery(seedBoundaryContext(ctx)); confirmErr != nil {
 				return SeedRunResult{}, confirmErr
 			}

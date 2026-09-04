@@ -78,6 +78,8 @@ var (
 // SeedTarget is the exact Stem-owned Seed identity used by continuation
 // lifecycle transactions. Callers must supply Stem-resolved values; this
 // type is never filled from session preferences, cwd, or caller Substrate.
+// Pollen may be empty: that is the canonical local/non-delegated ownership
+// value and is compared exactly against the persisted Seed row.
 type SeedTarget struct {
 	PhytomerID string
 	Handle     string
