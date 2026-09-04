@@ -251,8 +251,22 @@ EOF
 setup_default_fixtures() {
   local staging="${ROOT}/staging"
   mkdir -p "${staging}"
-  printf 'tendril-payload\n' >"${staging}/tendril"
-  printf 'mcp-payload\n' >"${staging}/tendril-mcp"
+  cat >"${staging}/tendril" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = --version ]; then
+  printf 'tendril %s\n' "${FIXTURE_VERSION:-0.3.13}"
+else
+  printf 'tendril-payload\n'
+fi
+EOF
+  cat >"${staging}/tendril-mcp" <<'EOF'
+#!/bin/sh
+if [ "${1:-}" = --version ]; then
+  printf 'tendril-mcp %s\n' "${FIXTURE_VERSION:-0.3.13}"
+else
+  printf 'mcp-payload\n'
+fi
+EOF
   chmod 0755 "${staging}/tendril" "${staging}/tendril-mcp"
   tar -C "${staging}" -czf "${FIXTURE_DIR}/bundle.tar.gz" tendril tendril-mcp
   local hash
@@ -293,6 +307,31 @@ run_installer() {
   local extra_path=""
   local installer_file="${installer}"
   local cwd="${ROOT}"
+  local fixture_version="${PIN_VERSION#v}"
+  local scan_arg scan_value
+  local scan_args=("$@")
+  local scan_index
+  for ((scan_index = 0; scan_index < ${#scan_args[@]}; scan_index++)); do
+    scan_arg="${scan_args[scan_index]}"
+    case "${scan_arg}" in
+      --version=*)
+        fixture_version="${scan_arg#--version=}"
+        ;;
+      --version)
+        if [ $((scan_index + 1)) -lt ${#scan_args[@]} ]; then
+          scan_value="${scan_args[scan_index + 1]}"
+          fixture_version="${scan_value#v}"
+          scan_index=$((scan_index + 1))
+        fi
+        ;;
+    esac
+  done
+  if [ -z "${fixture_version}" ]; then
+    fixture_version=0.3.13
+  fi
+  if [ -f "${ROOT}/fail-version" ]; then
+    fixture_version=9.9.9
+  fi
   while [ $# -gt 0 ]; do
     case "$1" in
       --stdin)
@@ -329,6 +368,7 @@ run_installer() {
     PATH="${SHIM_DIR}${extra_path:+:${extra_path}}"
     TMPDIR="${TMP_DIR}"
     LC_ALL=C
+    FIXTURE_VERSION="${fixture_version}"
     UNAME_S="${UNAME_S}"
     UNAME_M="${UNAME_M}"
   )
@@ -409,7 +449,7 @@ assert_success_local() {
     fail "${name}: tendril-mcp was installed"
     return
   fi
-  if [ "$(cat "${dest}")" != "tendril-payload" ]; then
+  if ! "${dest}" --version | grep -Eq '^tendril [0-9]+\.[0-9]+\.[0-9]+$'; then
     fail "${name}: installed bytes are not the tendril member"
     return
   fi
@@ -525,7 +565,7 @@ if [ "${status}" -eq 0 ] && [ ! -e "${HOME_DIR}/.local/bin/tendril-mcp" ]; then
 else
   fail "tendril-mcp is never installed"
 fi
-if [ "${status}" -eq 0 ] && [ "$(cat "$(dest_path)")" = "tendril-payload" ]; then
+if [ "${status}" -eq 0 ] && "$(dest_path)" --version | grep -Eq '^tendril [0-9]+\.[0-9]+\.[0-9]+$'; then
   pass "success installs only tendril"
 else
   fail "success installs only tendril"
@@ -673,6 +713,19 @@ if [ "${status}" -eq 0 ] && events_match 'CMD curl https://github.com/opentendri
   fi
 else
   fail "explicit version pin selects that release rather than latest" "status=${status} events=$(tr '\n' ' ' <"${events_file}") stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_case
+touch "${ROOT}/fail-version"
+run_installer --version v0.3.0
+if [ "${status}" -ne 0 ] && grep -q "reports 'tendril 9.9.9', expected 'tendril 0.3.0'" "${stderr_file}"; then
+  if [ -e "$(dest_path)" ]; then
+    fail "mismatched staged binary version is not installed"
+  else
+    pass "mismatched staged binary version fails closed"
+  fi
+else
+  fail "mismatched staged binary version fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
 
 new_case
@@ -1659,12 +1712,37 @@ EOF
 run_governed_installer() {
   : >"${events_file}"
   setup_governed_shims
+  local fixture_version="${PIN_VERSION#v}"
+  local scan_arg scan_value scan_index
+  local scan_args=("$@")
+  for ((scan_index = 0; scan_index < ${#scan_args[@]}; scan_index++)); do
+    scan_arg="${scan_args[scan_index]}"
+    case "${scan_arg}" in
+      --version=*)
+        fixture_version="${scan_arg#--version=}"
+        ;;
+      --version)
+        if [ $((scan_index + 1)) -lt ${#scan_args[@]} ]; then
+          scan_value="${scan_args[scan_index + 1]}"
+          fixture_version="${scan_value#v}"
+          scan_index=$((scan_index + 1))
+        fi
+        ;;
+    esac
+  done
+  if [ -z "${fixture_version}" ]; then
+    fixture_version=0.3.13
+  fi
+  if [ -f "${ROOT}/fail-version" ]; then
+    fixture_version=9.9.9
+  fi
   local env_args=(
     env -i
     HOME="${HOSTFS}/root"
     PATH="${SHIM_DIR}"
     TMPDIR="${TMP_DIR}"
     LC_ALL=C
+    FIXTURE_VERSION="${fixture_version}"
     UNAME_S="${UNAME_S}"
     UNAME_M="${UNAME_M}"
   )
@@ -2327,12 +2405,12 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   stem="${HOSTFS}/home/tendril/.local/bin/tendril"
   mcp="${HOSTFS}/home/alice/.local/bin/tendril-mcp"
   pollinator_tendril="${HOSTFS}/home/alice/.local/bin/tendril"
-  if [ -f "${stem}" ] && [ "$(cat "${stem}")" = "tendril-payload" ]; then
+  if [ -f "${stem}" ] && "${stem}" --version | grep -Eq '^tendril [0-9]+\.[0-9]+\.[0-9]+$'; then
     pass "Stem gets only protected tendril"
   else
     fail "Stem gets only protected tendril"
   fi
-  if [ -f "${mcp}" ] && [ "$(cat "${mcp}")" = "mcp-payload" ]; then
+  if [ -f "${mcp}" ] && "${mcp}" --version | grep -Eq '^tendril-mcp [0-9]+\.[0-9]+\.[0-9]+$'; then
     pass "Pollinator gets only tendril-mcp"
   else
     fail "Pollinator gets only tendril-mcp"

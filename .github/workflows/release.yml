@@ -110,17 +110,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          version="$(bash scripts/release-version.sh current)"
+          test "${version}" = "${{ needs.bind.outputs.version }}"
           mkdir -p dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             os="${target%/*}"
             arch="${target#*/}"
             staging="dist/staging-${os}-${arch}"
             mkdir -p "${staging}"
-            GOOS="${os}" GOARCH="${arch}" go build -ldflags="-s -w" -o "${staging}/tendril" ./cmd/stem
-            GOOS="${os}" GOARCH="${arch}" go build -ldflags="-s -w" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp
+            GOOS="${os}" GOARCH="${arch}" go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril" ./cmd/stem
+            GOOS="${os}" GOARCH="${arch}" go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp
             tar -C "${staging}" -czf "dist/opentendril-${os}-${arch}.tar.gz" tendril tendril-mcp
             rm -rf "${staging}"
           done
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf "${verify_dir}"' EXIT
+          go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${verify_dir}/tendril" ./cmd/stem
+          go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${verify_dir}/tendril-mcp" ./cmd/tendril-mcp
+          test "$("${verify_dir}/tendril" --version)" = "tendril ${version}"
+          test "$("${verify_dir}/tendril-mcp" --version)" = "tendril-mcp ${version}"
+          echo "Verified release binaries: tendril ${version}; tendril-mcp ${version}"
           want="$(printf '%s\n' tendril tendril-mcp)"
           for archive in \
             opentendril-linux-amd64.tar.gz \

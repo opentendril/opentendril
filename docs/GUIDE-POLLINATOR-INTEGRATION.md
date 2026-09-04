@@ -20,6 +20,8 @@ executables.
 ```text
 Pollinator
     -> tendril-mcp
+    -> named connection profile
+    -> profile credential reference
     -> durable Pollinator root
     -> short-lived access token
     -> governed Stem
@@ -32,10 +34,31 @@ owned Stem. Authorization and Pollen derivation stay at the Stem. The client
 cannot construct a Stem and has no in-process mode. Do not launch the protected
 `tendril` binary from a governed Pollinator account.
 
+Configure the Pollinator-owned connection separately from the MCP host:
+
+```bash
+tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
+tendril-mcp connection use local
+```
+
+This writes `~/.config/tendril/connections.yaml`. The credential referenced by
+`codex` must already be present at
+`~/.config/tendril/pollinators/codex`, mode `0600`, and owned by the Pollinator
+account. Use `tendril-mcp diagnose --connection local` to inspect connection
+preflight without invoking MCP capabilities.
+
+The connection profile can represent a URL origin, but the current restricted
+bridge forwards a durable Pollinator root only over HTTP to a literal same-host
+loopback address (`127.0.0.0/8` or `::1`). HTTPS and non-loopback endpoints are
+not currently supported for credential forwarding; `diagnose` refuses them
+before reading or presenting the credential. This does not claim secure remote
+support.
+
 **Single-user installation**
 
 `tendril mcp` is the supported single-user stdio command. It is a governed
-command surface and stdio bridge that may run in-process as the operator, or
+command surface and stdio bridge that retains its current environment-based
+forwarding and in-process behavior. It may run in-process as the operator, or
 forward to another-user Stem when a credential and reachable Stem are present.
 
 `tendril setup substrate` writes `~/.tendril/substrates.yaml` and prints a
@@ -45,6 +68,13 @@ Pollinator install path.
 The generated Substrate is named `default-workspace`. Use it when calling
 `sproutGrow` or `sequenceGrow` for code changes. Grants still name the
 canonical operation-classes `sprout.grow` and `sequence.grow`.
+
+**Independent REST client**
+
+An independent REST client reads its own Pollinator credential, then presents
+it to `POST /v1/pollinator/token`. The endpoint returns a short-lived access
+token, which the client uses on data routes. This credential flow is separate
+from both MCP executables.
 
 ## Bootstrap the config
 
@@ -111,27 +141,10 @@ Requests presenting the revoked credential are denied at once; access tokens
 already minted from it age out within their 15-minute cap.
 
 > [!NOTE]
-> **Two kinds of consumer, one location.** The path above is a convention. What
-> reads it depends on which surface the Pollinator speaks.
->
-> **MCP credential lookup.** `TENDRIL_POLLINATOR_CREDENTIAL` names the file
-> directly and takes precedence; `TENDRIL_MCP_CREDENTIAL` is honoured next.
-> With neither set the path defaults to `~/.config/tendril/pollinators/<pollen>`,
-> where `<pollen>` comes from `TENDRIL_POLLEN`. A missing file at the default
-> path is the ordinary unconfigured case and is not an error; a missing file at
-> a path you named explicitly is.
->
-> `TENDRIL_POLLEN` selects the default credential file. On a forwarded or
-> governed connection, the Stem derives Pollen from the presented credential;
-> the variable does not override that authorization identity. On the in-process
-> `tendril mcp` path, `TENDRIL_POLLEN` also binds the session Pollen used for
-> grant lookup.
->
-> **Where your own process is the client — REST.** None of those variables apply.
-> Your client reads the file itself, presents the credential to
-> `POST /v1/pollinator/token` to obtain an access token, and carries that token on
-> data routes. Follow the location above so `hardiness` can audit the file; no Stem
-> code path reads it on your behalf.
+> The restricted `tendril-mcp` path uses only the selected named connection and
+> ignores environment target and credential selectors. The full-binary
+> `tendril mcp` path retains its current environment-based and in-process
+> behavior.
 
 ## MCP config
 
@@ -142,16 +155,11 @@ already minted from it age out within their 15-minute cap.
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "env": {
-        "TENDRIL_POLLEN": "claude"
-      }
+      "args": ["--connection", "local"]
     }
   }
 }
 ```
-
-Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
-`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
 
 ### Single-user installations
 

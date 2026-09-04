@@ -36,8 +36,14 @@ const forwardingTimeout = 15 * time.Minute
 func NewForwarder(rootCred string) *Forwarder {
 	addr := ResolveStemAddress("")
 
+	return NewForwarderAt("http://"+addr, rootCred)
+}
+
+// NewForwarderAt builds a client pointed at the supplied URL origin. It never
+// consults host or port environment variables.
+func NewForwarderAt(endpoint, rootCred string) *Forwarder {
 	return &Forwarder{
-		BaseURL:    "http://" + addr,
+		BaseURL:    NormalizeEndpoint(endpoint),
 		RootCred:   rootCred,
 		HTTPClient: &http.Client{Timeout: forwardingTimeout},
 	}

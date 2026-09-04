@@ -303,6 +303,24 @@ func TestForwarder(t *testing.T) {
 	})
 }
 
+func TestNewForwarderAtUsesPassedEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/pollinator/token" {
+			t.Fatalf("request path = %s, want token endpoint", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"token":"token","expiresAt":"2099-01-01T00:00:00Z"}`)
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("TERROIR_HOST", "127.0.0.1")
+	t.Setenv("PORT", "1")
+
+	forwarder := NewForwarderAt(server.URL, "root")
+	if err := forwarder.Preflight(); err != nil {
+		t.Fatalf("Preflight: %v", err)
+	}
+}
+
 func TestForwarderPreflight(t *testing.T) {
 	t.Run("valid root caches token and later Forward does not remint", func(t *testing.T) {
 		var mintCount, v1Count int

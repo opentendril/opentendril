@@ -28,12 +28,25 @@ type OwnerProbe struct {
 // Shared by mode selection and by hardiness so the two cannot drift into
 // disagreeing about whether another principal is serving on this host.
 func ProbeOwner(ctx context.Context) OwnerProbe {
-	probe := OwnerProbe{Address: ResolveStemAddress("")}
+	address := ResolveStemAddress("")
+	probe := ProbeOwnerAt(ctx, "http://"+address)
+	// Preserve the legacy helper's host:port report for hardiness and mode
+	// selection callers. ProbeOwnerAt reports a URL origin because it accepts
+	// endpoint profiles directly.
+	probe.Address = address
+	return probe
+}
+
+// ProbeOwnerAt asks the supplied URL origin who owns the Stem there. It never
+// consults host or port environment variables.
+func ProbeOwnerAt(ctx context.Context, endpoint string) OwnerProbe {
+	endpoint = NormalizeEndpoint(endpoint)
+	probe := OwnerProbe{Address: endpoint}
 
 	client := &http.Client{
 		Timeout: 2 * time.Second, // probe carries its own 2-second bound
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+probe.Address+"/health", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.Address+"/health", nil)
 	if err != nil {
 		return probe
 	}

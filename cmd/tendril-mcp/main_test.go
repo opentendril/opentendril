@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,63 +15,44 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opentendril/opentendril/internal/mcpclient"
+	"github.com/opentendril/opentendril/internal/buildinfo"
+	"github.com/opentendril/opentendril/internal/pollinatorconfig"
 )
 
 const (
-	initFrame   = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"tendril-mcp-test","version":"0"}}}`
+	initFrame   = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
 	listFrame   = `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`
-	callFrame   = `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"example-tool","arguments":{}}}`
-	stemDenial  = `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"delegation denied: not granted"}],"isError":true}}`
 	mintedToken = "minted-access-token-not-the-root"
 )
 
 type stemTraffic struct {
-	mu        sync.Mutex
-	healthN   int
-	mintN     int
-	v1N       int
-	v1Bodies  [][]byte
-	v1Auths   []string
-	mintAuths []string
-}
-
-func (s *stemTraffic) snapshot() (healthN, mintN, v1N int, bodies [][]byte, v1Auths, mintAuths []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	bodies = append([][]byte(nil), s.v1Bodies...)
-	v1Auths = append([]string(nil), s.v1Auths...)
-	mintAuths = append([]string(nil), s.mintAuths...)
-	return s.healthN, s.mintN, s.v1N, bodies, v1Auths, mintAuths
+	mu       sync.Mutex
+	healthN  int
+	mintN    int
+	v1N      int
+	bodies   [][]byte
+	v1Auths  []string
+	mintAuth []string
 }
 
 type fakeStemOpts struct {
 	owner      *int
 	root       string
-	token      string
 	healthBody []byte
-	v1Handler  func(w http.ResponseWriter, r *http.Request, body []byte)
 }
 
-func startFakeStem(t *testing.T, opts fakeStemOpts) *stemTraffic {
+func startFakeStem(t *testing.T, opts fakeStemOpts) (string, *stemTraffic) {
 	t.Helper()
 	traffic := &stemTraffic{}
-	token := opts.token
-	if token == "" {
-		token = mintedToken
-	}
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		traffic.mu.Lock()
 		traffic.healthN++
 		traffic.mu.Unlock()
 		if opts.healthBody != nil {
-			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(opts.healthBody)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(struct {
 			Owner *int `json:"owner,omitempty"`
 		}{Owner: opts.owner})
@@ -82,478 +61,451 @@ func startFakeStem(t *testing.T, opts fakeStemOpts) *stemTraffic {
 		auth := r.Header.Get("Authorization")
 		traffic.mu.Lock()
 		traffic.mintN++
-		traffic.mintAuths = append(traffic.mintAuths, auth)
+		traffic.mintAuth = append(traffic.mintAuth, auth)
 		traffic.mu.Unlock()
 		if auth != "Bearer "+opts.root {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"token":     token,
-			"pollen":    "test",
+			"token":     mintedToken,
 			"expiresAt": time.Now().Add(2 * time.Minute),
 		})
 	})
 	mux.HandleFunc("POST /v1", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		auth := r.Header.Get("Authorization")
 		traffic.mu.Lock()
 		traffic.v1N++
-		traffic.v1Bodies = append(traffic.v1Bodies, append([]byte(nil), body...))
-		traffic.v1Auths = append(traffic.v1Auths, auth)
+		traffic.bodies = append(traffic.bodies, append([]byte(nil), body...))
+		traffic.v1Auths = append(traffic.v1Auths, r.Header.Get("Authorization"))
 		traffic.mu.Unlock()
-		if opts.v1Handler != nil {
-			opts.v1Handler(w, r, body)
-			return
-		}
 		writeMCPResult(w, body)
 	})
-
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
-	pointAt(t, server.URL)
-	return traffic
+	return server.URL, traffic
 }
 
 func writeMCPResult(w http.ResponseWriter, body []byte) {
 	var frame struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
+		ID json.RawMessage `json:"id"`
 	}
 	_ = json.Unmarshal(body, &frame)
-	id := json.RawMessage("null")
-	if len(frame.ID) > 0 {
-		id = frame.ID
+	if len(frame.ID) == 0 {
+		frame.ID = json.RawMessage("null")
 	}
-
-	var result any
-	switch frame.Method {
-	case "initialize":
-		result = map[string]any{
-			"protocolVersion": "2024-11-05",
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "governed-stem", "version": "0"},
-		}
-	case "tools/list":
-		result = map[string]any{
-			"tools": []map[string]any{
-				{"name": "example-tool", "description": "example", "inputSchema": map[string]any{"type": "object"}},
-			},
-		}
-	default:
-		result = map[string]any{"ok": true}
-	}
-	out, _ := json.Marshal(struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  any             `json:"result"`
-	}{JSONRPC: "2.0", ID: id, Result: result})
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write(out)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      json.RawMessage(frame.ID),
+		"result":  map[string]any{"ok": true},
+	})
 }
 
-func pointAt(t *testing.T, rawURL string) {
+func configureConnection(t *testing.T, name, endpoint, credential, secret string) {
 	t.Helper()
-	u, err := url.Parse(rawURL)
+	path, err := pollinatorconfig.ResolveCredentialReference(credential)
 	if err != nil {
-		t.Fatalf("parse server URL %q: %v", rawURL, err)
+		t.Fatal(err)
 	}
-	host, port, err := net.SplitHostPort(u.Host)
-	if err != nil {
-		t.Fatalf("split host port %q: %v", u.Host, err)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("TERROIR_HOST", host)
-	t.Setenv("PORT", port)
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pollinatorconfig.Save(pollinatorconfig.Config{
+		Version: 1,
+		Connections: map[string]pollinatorconfig.Connection{
+			name: {Endpoint: endpoint, Credential: credential},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
-func writeCred(t *testing.T, secret string, mode os.FileMode) string {
+func configureConnections(t *testing.T, cfg pollinatorconfig.Config, credentials map[string]string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "credential")
-	if err := os.WriteFile(path, []byte(secret), mode); err != nil {
-		t.Fatalf("write credential: %v", err)
+	for name, secret := range credentials {
+		path, err := pollinatorconfig.ResolveCredentialReference(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Chmod(path, mode); err != nil {
-		t.Fatalf("chmod credential: %v", err)
+	if err := pollinatorconfig.Save(cfg); err != nil {
+		t.Fatal(err)
 	}
-	return path
 }
 
-func setDurableCredential(t *testing.T, secret string) string {
-	t.Helper()
-	path := writeCred(t, secret, 0o600)
-	t.Setenv(mcpclient.EnvPollinatorCredential, path)
-	t.Setenv(mcpclient.EnvMCPCredential, "")
-	t.Setenv("TENDRIL_POLLEN", "")
-	return path
-}
-
-func unsetCredentials(t *testing.T) {
-	t.Helper()
-	t.Setenv(mcpclient.EnvPollinatorCredential, "")
-	t.Setenv(mcpclient.EnvMCPCredential, "")
-	t.Setenv("TENDRIL_POLLEN", "")
-}
-
-func otherOwner() int {
-	return os.Getuid() + 1
-}
-
-func runStdio(t *testing.T, ctx context.Context, stdin string) (stdout, stderr string, err error) {
+func runArgs(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	err = run(ctx, bytes.NewBufferString(stdin), &out, &errOut)
+	err := runCommand(context.Background(), args, strings.NewReader(initFrame+"\n"), &out, &errOut)
 	return out.String(), errOut.String(), err
 }
 
-func TestValidCredentialSeparatelyOwnedStemForwardsMCP(t *testing.T) {
-	root := "tendril_refresh_valid_root"
-	setDurableCredential(t, root)
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: root})
-
-	stdout, stderr, err := runStdio(t, context.Background(), initFrame+"\n"+listFrame+"\n")
+func pointLegacyEnvironmentAt(t *testing.T, endpoint string) {
+	t.Helper()
+	u, err := url.Parse(endpoint)
 	if err != nil {
-		t.Fatalf("run: %v\nstderr: %s", err, stderr)
+		t.Fatal(err)
 	}
+	t.Setenv("TERROIR_HOST", u.Hostname())
+	t.Setenv("PORT", u.Port())
+	t.Setenv("TENDRIL_POLLEN", "legacy")
+	t.Setenv("TENDRIL_POLLINATOR_CREDENTIAL", filepath.Join(t.TempDir(), "legacy"))
+	t.Setenv("TENDRIL_MCP_CREDENTIAL", filepath.Join(t.TempDir(), "legacy-two"))
+}
 
-	lines := nonEmptyLines(stdout)
-	if len(lines) != 2 {
-		t.Fatalf("stdout lines = %d, want 2\nstdout: %s", len(lines), stdout)
-	}
+func TestVersionRunsBeforeConfigurationOrNetwork(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "missing-config"))
+	old := buildinfo.Version
+	buildinfo.Version = "0.3.13+test"
+	t.Cleanup(func() { buildinfo.Version = old })
 
-	var initResp struct {
-		Result struct {
-			ProtocolVersion string `json:"protocolVersion"`
-			ServerInfo      struct {
-				Name string `json:"name"`
-			} `json:"serverInfo"`
-		} `json:"result"`
-		Error json.RawMessage `json:"error"`
+	var out, errOut bytes.Buffer
+	if err := runCommand(context.Background(), []string{"--version"}, strings.NewReader(""), &out, &errOut); err != nil {
+		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(lines[0]), &initResp); err != nil {
-		t.Fatalf("initialize response: %v (%s)", err, lines[0])
-	}
-	if len(initResp.Error) > 0 && string(initResp.Error) != "null" {
-		t.Fatalf("initialize returned error: %s", lines[0])
-	}
-	if initResp.Result.ProtocolVersion == "" || initResp.Result.ServerInfo.Name == "" {
-		t.Fatalf("initialize result not protocol-shaped: %s", lines[0])
-	}
-
-	var listResp struct {
-		Result struct {
-			Tools []struct {
-				Name string `json:"name"`
-			} `json:"tools"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal([]byte(lines[1]), &listResp); err != nil {
-		t.Fatalf("tools/list response: %v (%s)", err, lines[1])
-	}
-	if len(listResp.Result.Tools) == 0 || listResp.Result.Tools[0].Name == "" {
-		t.Fatalf("tools/list missing tool name: %s", lines[1])
-	}
-
-	_, mintN, v1N, bodies, v1Auths, _ := traffic.snapshot()
-	if mintN != 1 {
-		t.Fatalf("token mint calls = %d, want 1 (startup preflight caches the token)", mintN)
-	}
-	if v1N != 2 {
-		t.Fatalf("/v1 calls = %d, want 2", v1N)
-	}
-	if string(bodies[0]) != initFrame {
-		t.Fatalf("/v1 body 0 = %s, want initialize frame", bodies[0])
-	}
-	if string(bodies[1]) != listFrame {
-		t.Fatalf("/v1 body 1 = %s, want tools/list frame", bodies[1])
-	}
-	for i, auth := range v1Auths {
-		if auth != "Bearer "+mintedToken {
-			t.Fatalf("/v1 Authorization[%d] = %q, want minted token", i, auth)
-		}
-		if strings.Contains(auth, root) {
-			t.Fatal("durable root used as /v1 Authorization")
-		}
+	if out.String() != "tendril-mcp 0.3.13+test\n" || errOut.Len() != 0 {
+		t.Fatalf("version output = %q, stderr = %q", out.String(), errOut.String())
 	}
 }
 
-func TestUnreachableStemFailsClosed(t *testing.T) {
-	setDurableCredential(t, "tendril_refresh_unreachable")
+func TestConnectionCommandsManageProfilesWithoutReadingSecrets(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	secret := "never-print-this-root"
+	var out bytes.Buffer
+	if err := runConnectionCommand([]string{"set", "local", "--endpoint", "http://127.0.0.1:8080", "--credential", "codex"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConnectionCommand([]string{"set", "backup", "--endpoint", "http://127.0.0.1:8081", "--credential", "other"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	configBytes, err := os.ReadFile(pollinatorconfig.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(configBytes), secret) {
+		t.Fatal("connection metadata contained credential contents")
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Fatal("connection command output leaked a credential secret")
+	}
+
+	path, err := pollinatorconfig.ResolveCredentialReference("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(secret), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runConnectionCommand([]string{"list"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "local") || strings.Contains(out.String(), "default") {
+		t.Fatalf("list = %q, want names without an implicit default", out.String())
+	}
+	if err := runConnectionCommand([]string{"use", "local"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runConnectionCommand([]string{"show", "local"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"name: local", "endpoint: http://127.0.0.1:8080", "credential reference: codex", path} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("show = %q, missing %q", out.String(), want)
+		}
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Fatal("show output leaked credential contents")
+	}
+	if err := runConnectionCommand([]string{"remove", "local"}, &out); err == nil || !strings.Contains(err.Error(), "choose another default") {
+		t.Fatalf("remove default error = %v", err)
+	}
+	if err := runConnectionCommand([]string{"remove", "backup"}, &out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConnectionSetCreatesCanonicalRestrictiveConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var out bytes.Buffer
+	if err := runConnectionCommand([]string{"set", "local", "--endpoint", "http://127.0.0.1:8080/", "--credential", "codex"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pollinatorconfig.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Default != "" || cfg.Connections["local"].Endpoint != "http://127.0.0.1:8080" {
+		t.Fatalf("saved config = %+v, want no implicit default and normalized endpoint", cfg)
+	}
+	info, err := os.Stat(pollinatorconfig.ConfigFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("config mode = %04o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestExplicitAndDefaultSelectionIgnoreLegacyEnvironment(t *testing.T) {
+	owner := os.Getuid() + 1
+	endpointA, trafficA := startFakeStem(t, fakeStemOpts{owner: &owner, root: "root-a"})
+	endpointB, trafficB := startFakeStem(t, fakeStemOpts{owner: &owner, root: "root-b"})
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("TERROIR_HOST", "127.0.0.1")
-	t.Setenv("PORT", "65534")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	stdout, _, err := runStdio(t, ctx, initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed when no Stem is answering")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	if !strings.Contains(err.Error(), "no Stem is answering") {
-		t.Fatalf("error must name that no Stem is answering, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "65534") {
-		t.Fatalf("error must name the probed address, got %v", err)
-	}
-	if ctx.Err() != nil {
-		t.Fatal("run hung until the test deadline")
-	}
-}
-
-func TestHealthWithoutOwnerFailsClosed(t *testing.T) {
-	root := "tendril_refresh_no_owner"
-	setDurableCredential(t, root)
-	traffic := startFakeStem(t, fakeStemOpts{owner: nil, root: root, healthBody: []byte(`{}`)})
-
-	stdout, _, err := runStdio(t, context.Background(), initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed when ownership is not established")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	if !strings.Contains(err.Error(), "ownership was not established") {
-		t.Fatalf("error must name missing ownership, got %v", err)
-	}
-	_, mintN, v1N, _, _, _ := traffic.snapshot()
-	if mintN != 0 || v1N != 0 {
-		t.Fatalf("forwarding started: mint=%d v1=%d", mintN, v1N)
-	}
-}
-
-func TestSameOwnerFailsClosed(t *testing.T) {
-	root := "tendril_refresh_same_owner"
-	setDurableCredential(t, root)
-	owner := os.Getuid()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: root})
-
-	stdout, _, err := runStdio(t, context.Background(), initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed when the Stem reports this process's uid")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	if !strings.Contains(err.Error(), "separately owned governed Stem") {
-		t.Fatalf("error must refuse same-owner Stem, got %v", err)
-	}
-	_, mintN, v1N, _, _, _ := traffic.snapshot()
-	if mintN != 0 || v1N != 0 {
-		t.Fatalf("forwarding started: mint=%d v1=%d", mintN, v1N)
-	}
-}
-
-func TestMissingCredentialFailsClosed(t *testing.T) {
-	unsetCredentials(t)
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "unused"})
-
-	stdout, _, err := runStdio(t, context.Background(), initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed when no credential is configured")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	msg := err.Error()
-	for _, want := range []string{
-		mcpclient.EnvPollinatorCredential,
-		mcpclient.EnvMCPCredential,
-		"TENDRIL_POLLEN",
-		"~/.config/tendril/pollinators/<pollen>",
-		"tendril pollinator issue",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("actionable error missing %q, got %v", want, err)
-		}
-	}
-	_, mintN, v1N, _, _, _ := traffic.snapshot()
-	if mintN != 0 || v1N != 0 {
-		t.Fatalf("forwarding started: mint=%d v1=%d", mintN, v1N)
-	}
-}
-
-func TestUnsafeCredentialFailsClosed(t *testing.T) {
-	secret := "tendril_refresh_MUST_NOT_LEAK_unsafe"
-	path := writeCred(t, secret, 0o644)
-	t.Setenv(mcpclient.EnvPollinatorCredential, path)
-	t.Setenv(mcpclient.EnvMCPCredential, "")
-	t.Setenv("TENDRIL_POLLEN", "")
-
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: secret})
-
-	stdout, stderr, err := runStdio(t, context.Background(), initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed for a too-permissive credential file")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "too permissive") || !strings.Contains(msg, "0600") {
-		t.Fatalf("error must mention too permissive / 0600, got %v", err)
-	}
-	if strings.Contains(msg, secret) || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
-		t.Fatal("secret leaked into error, stdout, or stderr")
-	}
-	_, mintN, v1N, _, _, _ := traffic.snapshot()
-	if mintN != 0 || v1N != 0 {
-		t.Fatalf("forwarding started: mint=%d v1=%d", mintN, v1N)
-	}
-}
-
-func TestRejectedCredentialFailsAtStartup(t *testing.T) {
-	secret := "tendril_refresh_MUST_NOT_LEAK_rejected"
-	setDurableCredential(t, secret)
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "accepted-root"})
-
-	stdout, stderr, err := runStdio(t, context.Background(), initFrame+"\n")
-	if err == nil {
-		t.Fatal("expected fail-closed when the Stem refuses the durable root")
-	}
-	if stdout != "" {
-		t.Fatalf("expected empty stdout, got %q", stdout)
-	}
-	if strings.Contains(stderr, "forwarding to the governed Stem") {
-		t.Fatalf("forwarding-ready message emitted before authentication: %q", stderr)
-	}
-	msg := err.Error()
-	if !strings.Contains(msg, "the Stem refused you") {
-		t.Fatalf("error must name the credential refusal, got %v", err)
-	}
-	if strings.Contains(msg, secret) || strings.Contains(stdout, secret) || strings.Contains(stderr, secret) {
-		t.Fatal("durable root leaked into error, stdout, or stderr")
-	}
-	_, mintN, v1N, _, _, _ := traffic.snapshot()
-	if mintN == 0 {
-		t.Fatal("startup must present the durable root to the Stem")
-	}
-	if v1N != 0 {
-		t.Fatalf("startup authentication must not send /v1, got %d", v1N)
-	}
-}
-
-func TestAuthorizationRefusalPassedUnaltered(t *testing.T) {
-	root := "tendril_refresh_denied"
-	setDurableCredential(t, root)
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{
-		owner: &owner,
-		root:  root,
-		v1Handler: func(w http.ResponseWriter, r *http.Request, body []byte) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(stemDenial))
+	t.Setenv("PORT", "1")
+	t.Setenv("TENDRIL_POLLEN", "legacy")
+	t.Setenv("TENDRIL_POLLINATOR_CREDENTIAL", filepath.Join(t.TempDir(), "legacy"))
+	t.Setenv("TENDRIL_MCP_CREDENTIAL", filepath.Join(t.TempDir(), "legacy-two"))
+	configureConnections(t, pollinatorconfig.Config{
+		Version: 1,
+		Default: "first",
+		Connections: map[string]pollinatorconfig.Connection{
+			"first":  {Endpoint: endpointA, Credential: "root-a"},
+			"second": {Endpoint: endpointB, Credential: "root-b"},
 		},
-	})
+	}, map[string]string{"root-a": "root-a", "root-b": "root-b"})
 
-	stdout, stderr, err := runStdio(t, context.Background(), callFrame+"\n")
+	if _, _, err := runArgs(t, "--connection", "second"); err != nil {
+		t.Fatal(err)
+	}
+	trafficA.mu.Lock()
+	aHealth, aMint := trafficA.healthN, trafficA.mintN
+	trafficA.mu.Unlock()
+	trafficB.mu.Lock()
+	bHealth, bMint := trafficB.healthN, trafficB.mintN
+	trafficB.mu.Unlock()
+	if aHealth != 0 || aMint != 0 || bHealth != 1 || bMint != 1 {
+		t.Fatalf("explicit selection traffic A=(%d,%d) B=(%d,%d)", aHealth, aMint, bHealth, bMint)
+	}
+
+	if _, _, err := runArgs(t); err != nil {
+		t.Fatal(err)
+	}
+	trafficA.mu.Lock()
+	aHealth = trafficA.healthN
+	aMint = trafficA.mintN
+	trafficA.mu.Unlock()
+	if aHealth != 1 || aMint != 1 {
+		t.Fatalf("default selection traffic A=(%d,%d), want one additional preflight", aHealth, aMint)
+	}
+}
+
+func TestRestrictedBridgeRefusesUnqualifiedTransportBeforeCredentialPresentation(t *testing.T) {
+	owner := os.Getuid() + 1
+	legacyEndpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "legacy-root"})
+	pointLegacyEnvironmentAt(t, legacyEndpoint)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, endpoint := range []string{
+		"http://192.0.2.10:8080",
+		"https://127.0.0.1:8080",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			configureConnections(t, pollinatorconfig.Config{
+				Version: 1,
+				Connections: map[string]pollinatorconfig.Connection{
+					"selected": {Endpoint: endpoint, Credential: "selected-root"},
+				},
+			}, map[string]string{"selected-root": "selected-durable-root"})
+
+			_, _, err := runArgs(t, "--connection", "selected")
+			if err == nil || !strings.Contains(err.Error(), "transport is not supported") {
+				t.Fatalf("unqualified transport error = %v, want transport posture refusal", err)
+			}
+			if strings.Contains(err.Error(), "selected-durable-root") {
+				t.Fatal("transport refusal exposed the durable credential")
+			}
+			traffic.mu.Lock()
+			healthN, mintN := traffic.healthN, traffic.mintN
+			traffic.mu.Unlock()
+			if healthN != 0 || mintN != 0 {
+				t.Fatalf("legacy endpoint received traffic health=%d mint=%d", healthN, mintN)
+			}
+		})
+	}
+}
+
+func TestNoSelectionNeverFallsBackToLocalhost(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configureConnections(t, pollinatorconfig.Config{Version: 1, Connections: map[string]pollinatorconfig.Connection{
+		"local": {Endpoint: "http://127.0.0.1:8080", Credential: "codex"},
+	}}, map[string]string{"codex": "root"})
+	_, _, err := runArgs(t)
+	if err == nil || !strings.Contains(err.Error(), "no connection selected") {
+		t.Fatalf("run without selection = %v, want actionable selection error", err)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "empty"))
+	_, _, err = runArgs(t, "--connection", "local")
+	if err == nil || !strings.Contains(err.Error(), "no Pollinator connection config") {
+		t.Fatalf("missing config = %v, want fail-closed configuration error", err)
+	}
+}
+
+func TestPreflightRefusesSameUIDAndInvalidCredentials(t *testing.T) {
+	owner := os.Getuid()
+	endpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "root"})
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configureConnection(t, "local", endpoint, "codex", "root")
+	_, _, err := runArgs(t, "-c", "local")
+	if err == nil || !strings.Contains(err.Error(), "separately owned governed Stem") {
+		t.Fatalf("same-UID preflight = %v, want refusal", err)
+	}
+	traffic.mu.Lock()
+	if traffic.mintN != 0 {
+		t.Fatalf("same-UID preflight minted %d tokens", traffic.mintN)
+	}
+	traffic.mu.Unlock()
+
+	owner = os.Getuid() + 1
+	endpoint, traffic = startFakeStem(t, fakeStemOpts{owner: &owner, root: "accepted"})
+	configureConnection(t, "local", endpoint, "codex", "rejected")
+	_, _, err = runArgs(t, "-c", "local")
+	if err == nil || !strings.Contains(err.Error(), "the Stem refused you") {
+		t.Fatalf("invalid credential preflight = %v, want refusal", err)
+	}
+	traffic.mu.Lock()
+	if traffic.v1N != 0 || traffic.mintN != 1 {
+		t.Fatalf("invalid credential traffic = mint %d, v1 %d", traffic.mintN, traffic.v1N)
+	}
+	traffic.mu.Unlock()
+}
+
+func TestForwardingPreservesFramesAndDoesNotLeakCredential(t *testing.T) {
+	owner := os.Getuid() + 1
+	endpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "secret-root"})
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configureConnection(t, "local", endpoint, "codex", "secret-root")
+	var out, errOut bytes.Buffer
+	err := runCommand(context.Background(), []string{"--connection", "local"}, strings.NewReader(initFrame+"\n"+listFrame+"\n"), &out, &errOut)
 	if err != nil {
-		t.Fatalf("run: %v\nstderr: %s", err, stderr)
+		t.Fatalf("bridge: %v; stderr=%s", err, errOut.String())
 	}
-	if stdout != stemDenial+"\n" {
-		t.Fatalf("client rewrote the Stem denial\n got: %q\nwant: %q", stdout, stemDenial+"\n")
+	if strings.Contains(out.String(), "secret-root") || strings.Contains(errOut.String(), "secret-root") {
+		t.Fatal("credential appeared in bridge output")
 	}
-	_, _, v1N, _, _, _ := traffic.snapshot()
-	if v1N != 1 {
-		t.Fatalf("/v1 calls = %d, want 1", v1N)
+	traffic.mu.Lock()
+	defer traffic.mu.Unlock()
+	if traffic.v1N != 2 || string(traffic.bodies[0]) != initFrame || string(traffic.bodies[1]) != listFrame {
+		t.Fatalf("forwarded traffic = %d %#v", traffic.v1N, traffic.bodies)
 	}
-}
-
-func TestInProcessEnvDoesNotAlterBehavior(t *testing.T) {
-	root := "tendril_refresh_in_process_check"
-	setDurableCredential(t, root)
-
-	t.Setenv("TERROIR_HOST", "127.0.0.1")
-	t.Setenv("PORT", "65534")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	t.Setenv("TENDRIL_MCP_IN_PROCESS", "")
-	outUnset, _, errUnset := runStdio(t, ctx, "")
-	t.Setenv("TENDRIL_MCP_IN_PROCESS", "1")
-	outSet, _, errSet := runStdio(t, ctx, "")
-
-	if errUnset == nil || errSet == nil {
-		t.Fatalf("both no-Stem runs must fail closed; unset=%v set=%v", errUnset, errSet)
-	}
-	if errUnset.Error() != errSet.Error() {
-		t.Fatalf("TENDRIL_MCP_IN_PROCESS=1 changed the no-Stem error\nunset: %v\nset:   %v", errUnset, errSet)
-	}
-	if outUnset != "" || outSet != "" {
-		t.Fatalf("no-Stem runs must not write stdout; unset=%q set=%q", outUnset, outSet)
-	}
-
-	owner := otherOwner()
-	_ = startFakeStem(t, fakeStemOpts{owner: &owner, root: root})
-
-	t.Setenv("TENDRIL_MCP_IN_PROCESS", "")
-	outUnset, stderrUnset, errUnset := runStdio(t, context.Background(), initFrame+"\n")
-	t.Setenv("TENDRIL_MCP_IN_PROCESS", "1")
-	outSet, stderrSet, errSet := runStdio(t, context.Background(), initFrame+"\n")
-
-	if errUnset != nil || errSet != nil {
-		t.Fatalf("both other-owner runs must start forwarding; unset=%v set=%v\nstderr unset=%s\nstderr set=%s", errUnset, errSet, stderrUnset, stderrSet)
-	}
-	if strings.TrimSpace(outUnset) == "" || strings.TrimSpace(outSet) == "" {
-		t.Fatalf("both other-owner runs must pass a frame; unset=%q set=%q", outUnset, outSet)
+	for _, auth := range traffic.v1Auths {
+		if auth != "Bearer "+mintedToken {
+			t.Fatalf("forwarded auth = %q, want minted token", auth)
+		}
 	}
 }
 
-func TestDurableRootNeverAppears(t *testing.T) {
-	secret := fmt.Sprintf("tendril_refresh_MUST_NOT_LEAK_%d", time.Now().UnixNano())
-	setDurableCredential(t, secret)
-	owner := otherOwner()
-	traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: secret})
-
-	stdout, stderr, err := runStdio(t, context.Background(), initFrame+"\n")
+func TestDiagnoseReportsNonSecretPreflightState(t *testing.T) {
+	owner := os.Getuid() + 1
+	endpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "diagnose-root"})
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configureConnection(t, "local", endpoint, "codex", "diagnose-root")
+	stdout, _, err := runArgs(t, "diagnose", "-c", "local")
 	if err != nil {
-		t.Fatalf("run: %v\nstderr: %s", err, stderr)
+		t.Fatal(err)
 	}
-	if strings.TrimSpace(stdout) == "" {
-		t.Fatal("expected an initialize response")
-	}
-
-	if strings.Contains(stdout, secret) {
-		t.Fatal("durable root leaked onto stdout")
-	}
-	if strings.Contains(stderr, secret) {
-		t.Fatal("durable root leaked onto stderr")
-	}
-	if err != nil && strings.Contains(err.Error(), secret) {
-		t.Fatal("durable root leaked into the returned error")
-	}
-	for _, arg := range os.Args {
-		if strings.Contains(arg, secret) {
-			t.Fatal("durable root leaked into os.Args")
+	for _, want := range []string{
+		"tendril-mcp version:",
+		"config file:",
+		"selected connection: local",
+		"selection source: explicit",
+		"endpoint: " + endpoint,
+		"credential reference: codex",
+		"credential path:",
+		"credential permission/readability: accepted",
+		"Stem reachable: yes",
+		"reported Stem owner: uid",
+		"same-principal refusal: no",
+		"authentication: accepted",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("diagnose output missing %q:\n%s", want, stdout)
 		}
 	}
-	_, _, _, bodies, v1Auths, mintAuths := traffic.snapshot()
-	for _, body := range bodies {
-		if bytes.Contains(body, []byte(secret)) {
-			t.Fatal("durable root leaked into a forwarded MCP frame")
-		}
+	if strings.Contains(stdout, "diagnose-root") || strings.Contains(stdout, mintedToken) {
+		t.Fatal("diagnose leaked credential or access token")
 	}
-	for _, auth := range v1Auths {
-		if strings.Contains(auth, secret) {
-			t.Fatal("durable root used as /v1 Authorization")
-		}
-	}
-	if len(mintAuths) == 0 || mintAuths[0] != "Bearer "+secret {
-		t.Fatalf("mint must present the durable root as Authorization, got %v", mintAuths)
+	traffic.mu.Lock()
+	healthN, mintN := traffic.healthN, traffic.mintN
+	traffic.mu.Unlock()
+	if healthN != 1 || mintN != 1 {
+		t.Fatalf("loopback diagnose traffic health=%d mint=%d, want one governed preflight", healthN, mintN)
 	}
 }
 
-func nonEmptyLines(s string) []string {
-	var lines []string
-	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) != "" {
-			lines = append(lines, line)
+func TestDiagnoseReportsUnsupportedTransportWithoutCredentialOrNetworkAccess(t *testing.T) {
+	owner := os.Getuid() + 1
+	legacyEndpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "legacy-root"})
+	pointLegacyEnvironmentAt(t, legacyEndpoint)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := pollinatorconfig.Save(pollinatorconfig.Config{
+		Version: 1,
+		Connections: map[string]pollinatorconfig.Connection{
+			"remote": {Endpoint: "https://127.0.0.1:8080", Credential: "missing-root"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := runArgs(t, "diagnose", "--connection", "remote")
+	if err == nil {
+		t.Fatal("unsupported transport diagnose succeeded")
+	}
+	for _, want := range []string{
+		"selected connection: remote",
+		"endpoint: https://127.0.0.1:8080",
+		"transport posture: unsupported",
+		"authentication: refused (transport posture is not supported",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("diagnose output missing %q:\n%s", want, stdout)
 		}
 	}
-	return lines
+	for _, forbidden := range []string{
+		"credential permission/readability:",
+		"credential path:",
+		"Stem reachable:",
+	} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("diagnose output contains %q despite transport refusal:\n%s", forbidden, stdout)
+		}
+	}
+	traffic.mu.Lock()
+	healthN, mintN := traffic.healthN, traffic.mintN
+	traffic.mu.Unlock()
+	if healthN != 0 || mintN != 0 {
+		t.Fatalf("unsupported diagnose traffic health=%d mint=%d", healthN, mintN)
+	}
+}
+
+func TestDiagnoseReportsUnreachableAndInvalidCredential(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configureConnection(t, "local", "http://127.0.0.1:1", "codex", "root")
+	stdout, _, err := runArgs(t, "diagnose", "-c", "local")
+	if err == nil || !strings.Contains(stdout, "Stem reachable: no") || !strings.Contains(stdout, "authentication: refused") {
+		t.Fatalf("unreachable diagnose = err %v output:\n%s", err, stdout)
+	}
+
+	owner := os.Getuid() + 1
+	endpoint, _ := startFakeStem(t, fakeStemOpts{owner: &owner, root: "accepted"})
+	configureConnection(t, "local", endpoint, "codex", "")
+	stdout, _, err = runArgs(t, "diagnose", "-c", "local")
+	if err == nil || !strings.Contains(stdout, "credential permission/readability: refused") || !strings.Contains(stdout, "authentication: refused") {
+		t.Fatalf("invalid credential diagnose = err %v output:\n%s", err, stdout)
+	}
 }
