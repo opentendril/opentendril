@@ -35,6 +35,8 @@ want_help=0
 governed=0
 pollinator_user=""
 workdir=""
+staged_tendril_version=""
+staged_mcp_version=""
 docker_units_guarded=0
 governed_finished=0
 APT_LOCK_RETRY_DELAY_SECONDS=2
@@ -304,6 +306,19 @@ extract_tendril() {
     die "tendril-mcp was extracted; local mode installs only tendril"
   fi
   extracted="${workdir}/tendril"
+  staged_tendril_version=$(verify_binary_version "$extracted" tendril)
+}
+
+verify_binary_version() {
+  _binary=$1
+  _name=$2
+  _reported=$("$_binary" --version </dev/null 2>/dev/null) || die "${_name} binary could not report its version"
+  _expected=${version#v}
+  if [ -n "$version" ] && [ "$_reported" != "${_name} ${_expected}" ]; then
+    die "${_name} binary reports '${_reported}', expected '${_name} ${_expected}'"
+  fi
+  [ -n "$_reported" ] || die "${_name} binary reported an empty version"
+  printf '%s' "$_reported"
 }
 
 install_tendril() {
@@ -331,6 +346,7 @@ print_success() {
   fi
   printf '\n'
   printf 'Installed: %s\n' "$dest_path"
+  printf 'Version:   %s\n' "$staged_tendril_version"
   printf 'Platform:  %s\n' "$platform"
   printf 'Posture:   LOCAL / SINGLE-PRINCIPAL\n'
   printf '\n'
@@ -854,7 +870,9 @@ establish_rootless_docker() {
 
 install_governed_binaries() {
   extract_member tendril
+  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
   extract_member tendril-mcp
+  staged_mcp_version=$(verify_binary_version "${workdir}/tendril-mcp" tendril-mcp)
   _pollinator_tendril="${pollinator_home}/.local/bin/tendril"
   if fs_exists "$_pollinator_tendril"; then
     die "refusing to proceed: ${_pollinator_tendril} already exists. Governed mode will not place the full tendril executable on the Pollinator account, and will not delete the existing file."
@@ -1024,6 +1042,7 @@ print_governed_success() {
   printf 'Pollinator:  %s\n' "$pollinator_user"
   printf 'Protected:   %s\n' "$STEM_BIN"
   printf 'MCP client:  %s/.local/bin/tendril-mcp\n' "$pollinator_home"
+  printf 'Versions:    %s; %s\n' "$staged_tendril_version" "$staged_mcp_version"
   printf 'Rootless:    verified (docker info SecurityOptions contains rootless)\n'
   printf 'systemd:     %s installed; not enabled; not started\n' "$UNIT_PATH"
   printf '\n'

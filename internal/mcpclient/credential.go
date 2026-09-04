@@ -1,6 +1,7 @@
 package mcpclient
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,11 +49,27 @@ func LoadCredential() (string, error) {
 		return "", nil
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) && isDefault {
+	if isDefault {
+		secret, err := LoadCredentialFile(path)
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
+		return secret, err
+	}
+	return LoadCredentialFile(path)
+}
+
+// LoadCredentialFile reads and validates a specific durable Pollinator root.
+// The caller owns path selection; this function never consults environment
+// variables and never includes credential contents in an error.
+func LoadCredentialFile(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("credential file path is empty")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
 		return "", fmt.Errorf("credential file %s: %w", path, err)
 	}
 

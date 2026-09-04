@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// NormalizeEndpoint removes the optional root slash from a validated endpoint
+// before a transport client composes API paths. Validation belongs to the
+// Pollinator configuration package; this helper only handles the transport
+// boundary and remains useful to callers with an already validated origin.
+func NormalizeEndpoint(endpoint string) string {
+	return strings.TrimRight(strings.TrimSpace(endpoint), "/")
+}
+
 // ResolveStemAddress returns host:port for the Stem this client should
 // contact. TERROIR_HOST wins when set; otherwise fallbackHost, otherwise
 // 127.0.0.1. A TERROIR_HOST value that already includes a port contributes

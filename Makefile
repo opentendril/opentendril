@@ -9,13 +9,15 @@ STEM_VERSION := $(shell cat VERSION)
 ifeq ($(strip $(STEM_VERSION)),)
 $(error canonical VERSION is missing or empty)
 endif
+BUILD_VERSION := $(STEM_VERSION)+dev
+GO_LDFLAGS := -s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=$(BUILD_VERSION)
 STEM_DIR := cmd/stem
 DIST_DIR := cmd/stem/dist
 MCP_CLIENT_DIR := cmd/tendril-mcp
 
 stem: ## Build the tendril binary (does not install it)
-	@echo "🌱 Building the Stem for $$(go env GOOS)/$$(go env GOARCH)..."
-	@cd $(STEM_DIR) && go build -ldflags="-s -w" -o tendril .
+	@echo "🌱 Building the Stem version $(BUILD_VERSION) for $$(go env GOOS)/$$(go env GOARCH)..."
+	@cd $(STEM_DIR) && go build -ldflags="$(GO_LDFLAGS)" -o tendril .
 	@echo ""
 	@echo "✅ Built: $(STEM_DIR)/tendril"
 	@echo "   Nothing has been installed. Choose where it goes:"
@@ -31,14 +33,14 @@ stem: ## Build the tendril binary (does not install it)
 install: stem ## Build, then install tendril to your own ~/.local/bin
 	@mkdir -p ~/.local/bin
 	@mv $(STEM_DIR)/tendril ~/.local/bin/tendril
-	@echo "✅ Installed: ~/.local/bin/tendril"
+	@echo "✅ Installed: ~/.local/bin/tendril ($$(~/.local/bin/tendril --version))"
 	@echo "   This is a SINGLE-USER install — the Stem will run as you."
 	@echo "   Run 'tendril hardiness' to see what that means for the delegation boundary."
 	@echo "   Ensure ~/.local/bin is on your PATH."
 
 mcp-client: ## Build the restricted tendril-mcp client (does not install it)
-	@echo "🌱 Building the MCP client for $$(go env GOOS)/$$(go env GOARCH)..."
-	@cd $(MCP_CLIENT_DIR) && go build -ldflags="-s -w" -o tendril-mcp .
+	@echo "🌱 Building the MCP client version $(BUILD_VERSION) for $$(go env GOOS)/$$(go env GOARCH)..."
+	@cd $(MCP_CLIENT_DIR) && go build -ldflags="$(GO_LDFLAGS)" -o tendril-mcp .
 	@echo ""
 	@echo "✅ Built: $(MCP_CLIENT_DIR)/tendril-mcp"
 	@echo "   Nothing has been installed. This is the restricted MCP client only."
@@ -50,22 +52,23 @@ mcp-client: ## Build the restricted tendril-mcp client (does not install it)
 install-mcp-client: mcp-client ## Build, then install only tendril-mcp to your own ~/.local/bin
 	@mkdir -p ~/.local/bin
 	@mv $(MCP_CLIENT_DIR)/tendril-mcp ~/.local/bin/tendril-mcp
-	@echo "✅ Installed: ~/.local/bin/tendril-mcp"
+	@echo "✅ Installed: ~/.local/bin/tendril-mcp ($$(~/.local/bin/tendril-mcp --version))"
 	@echo "   This installs ONLY the restricted MCP client."
 	@echo "   It does not install, copy, or expose the full tendril Stem binary."
 	@echo "   Ensure ~/.local/bin is on your PATH."
 
 stem-all: ## Cross-compile Stem for linux and macOS
 	mkdir -p $(DIST_DIR)
-	cd $(STEM_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-linux-amd64 .
-	cd $(STEM_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-linux-arm64 .
-	cd $(STEM_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-darwin-amd64 .
-	cd $(STEM_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/tendril-$(STEM_VERSION)-darwin-arm64 .
+	cd $(STEM_DIR) && GOOS=linux GOARCH=amd64 go build -ldflags="$(GO_LDFLAGS)" -o dist/tendril-$(STEM_VERSION)-linux-amd64 .
+	cd $(STEM_DIR) && GOOS=linux GOARCH=arm64 go build -ldflags="$(GO_LDFLAGS)" -o dist/tendril-$(STEM_VERSION)-linux-arm64 .
+	cd $(STEM_DIR) && GOOS=darwin GOARCH=amd64 go build -ldflags="$(GO_LDFLAGS)" -o dist/tendril-$(STEM_VERSION)-darwin-amd64 .
+	cd $(STEM_DIR) && GOOS=darwin GOARCH=arm64 go build -ldflags="$(GO_LDFLAGS)" -o dist/tendril-$(STEM_VERSION)-darwin-arm64 .
 	@echo "✅ Binaries in $(DIST_DIR)/"
 	@ls -lh $(DIST_DIR)/
 
 # --- Docker ---
 build: ## Build all containers
+	@echo "🌱 Building containers from OpenTendril version $(BUILD_VERSION)..."
 	docker compose build
 
 up: ## Start the Go Stem orchestrator locally

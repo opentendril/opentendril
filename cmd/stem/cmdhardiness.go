@@ -15,6 +15,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
+	"github.com/opentendril/opentendril/internal/buildinfo"
 	"github.com/opentendril/opentendril/internal/mcpclient"
 )
 
@@ -72,6 +73,7 @@ func runHardinessCmd(ctx context.Context, args []string) {
 		who = current.Username
 	}
 	fmt.Printf("Hardiness — measured as %s, from %s\n", who, mustGetwdOrDot())
+	fmt.Printf("OpenTendril version: %s\n", buildinfo.Version)
 	fmt.Println(strings.Repeat("─", 72))
 
 	weak, notes := 0, 0

@@ -32,10 +32,14 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/opentendril/opentendril/internal/buildinfo"
 	"github.com/opentendril/opentendril/roots/llm"
 )
 
 func main() {
+	if handleVersion(os.Args[1:]) {
+		return
+	}
 	if warning := dotenvWarning(godotenv.Load(), workingDirForReport()); warning != "" {
 		fmt.Fprint(os.Stderr, warning)
 	}
@@ -133,6 +137,14 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func handleVersion(args []string) bool {
+	if len(args) != 1 || args[0] != "--version" {
+		return false
+	}
+	fmt.Printf("tendril %s\n", buildinfo.Version)
+	return true
 }
 
 func printUsage() {

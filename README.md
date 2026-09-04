@@ -161,6 +161,16 @@ owned Stem and cannot construct a Stem. Do not put the full `tendril`
 executable on that account's PATH, and do not launch `tendril mcp` from it.
 See [docs/GUIDE-INSTALL.md](docs/GUIDE-INSTALL.md) Stage 8.
 
+Configure a named connection independently of the MCP host configuration:
+
+```bash
+tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
+tendril-mcp connection use local
+```
+
+The credential file is the Pollinator-owned
+`~/.config/tendril/pollinators/codex` with mode `0600`.
+
 **Claude Code (CLI):**
 ```bash
 claude mcp add opentendril -- tendril-mcp
@@ -175,9 +185,7 @@ claude mcp add opentendril -- tendril-mcp
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "env": {
-        "TENDRIL_POLLEN": "<pollen>"
-      }
+      "args": ["--connection", "local"]
     }
   }
 }

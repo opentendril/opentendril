@@ -412,11 +412,17 @@ MCP-speaking Pollinator
 tokens automatically. Authorization and Pollen derivation stay at the governed
 Stem. The client cannot construct a Stem and has no in-process mode.
 
-Credential lookup, first match wins:
+Configure a named connection before starting the MCP host:
 
-1. `TENDRIL_POLLINATOR_CREDENTIAL`
-2. `TENDRIL_MCP_CREDENTIAL`
-3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
+```bash
+tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
+tendril-mcp connection use local
+```
+
+The credential reference resolves to
+`~/.config/tendril/pollinators/codex`, which must be mode `0600` and owned by
+the Pollinator account. The restricted client does not use environment
+variables to select its endpoint, credential, or Pollen.
 
 Startup fails closed when:
 
@@ -434,16 +440,11 @@ Only after all of those checks pass does MCP forwarding begin.
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "env": {
-        "TENDRIL_POLLEN": "<pollen>"
-      }
+      "args": ["--connection", "local"]
     }
   }
 }
 ```
-
-Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
-`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
 
 A granted `git.status` call uses the primary MCP identifier:
 

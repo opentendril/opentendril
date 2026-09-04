@@ -876,11 +876,20 @@ governed Stem, and forwards MCP frames only after that preflight succeeds.
 Authorization and Pollen derivation stay at the Stem. The client cannot
 construct a Stem and has no in-process mode.
 
-Credential lookup, first match wins:
+Configure a named connection independently through the restricted client:
 
-1. `TENDRIL_POLLINATOR_CREDENTIAL`
-2. `TENDRIL_MCP_CREDENTIAL`
-3. `~/.config/tendril/pollinators/<TENDRIL_POLLEN>`
+```bash
+tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
+tendril-mcp connection use local
+```
+
+This stores the connection metadata in
+`~/.config/tendril/connections.yaml`. The `codex` reference resolves to
+`~/.config/tendril/pollinators/codex`; that credential file must be mode `0600`
+and owned by the ordinary account. `tendril-mcp` has no implicit localhost
+fallback and does not use `TERROIR_HOST`, `PORT`, `TENDRIL_POLLEN`,
+`TENDRIL_POLLINATOR_CREDENTIAL`, or `TENDRIL_MCP_CREDENTIAL` for connection
+selection.
 
 Startup fails closed when there is no credential, the credential file is unsafe,
 no Stem answers, ownership is not established, the answering Stem has the
@@ -896,16 +905,14 @@ the client:
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "env": {
-        "TENDRIL_POLLEN": "<pollen>"
-      }
+      "args": ["--connection", "local"]
     }
   }
 }
 ```
 
-Name the credential file with `TENDRIL_POLLINATOR_CREDENTIAL` or
-`TENDRIL_MCP_CREDENTIAL` when the default path is not the one you want.
+Use `tendril-mcp diagnose --connection local` to check the non-secret
+connection and authentication preflight without invoking MCP capabilities.
 
 A credential-bearing Pollinator can also reach the Stem over the
 Representational State Transfer surface. It is admitted only on routes that

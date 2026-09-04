@@ -1020,12 +1020,14 @@ do
   fi
 done
 
-if grep -q 'go build -ldflags="-s -w" -o "${staging}/tendril" ./cmd/stem' "${release_yml}" &&
-  grep -q 'go build -ldflags="-s -w" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp' "${release_yml}" &&
+if grep -q 'go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril" ./cmd/stem' "${release_yml}" &&
+  grep -q 'go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp' "${release_yml}" &&
+  grep -q 'test "$("${verify_dir}/tendril" --version)" = "tendril ${version}"' "${release_yml}" &&
+  grep -q 'test "$("${verify_dir}/tendril-mcp" --version)" = "tendril-mcp ${version}"' "${release_yml}" &&
   grep -q 'tar -C "${staging}" -czf "dist/opentendril-${os}-${arch}.tar.gz" tendril tendril-mcp' "${release_yml}"; then
-  pass "release archives still contain independently built tendril and tendril-mcp"
+  pass "release archives inject one exact version into independently built tendril and tendril-mcp"
 else
-  fail "release archives still contain independently built tendril and tendril-mcp"
+  fail "release archives inject one exact version into independently built tendril and tendril-mcp"
 fi
 
 if grep -q 'sha256sum' "${release_yml}"; then

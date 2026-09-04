@@ -41,8 +41,9 @@ func TestProbeOwner_PublishesOwner(t *testing.T) {
 	if probe.Owner == nil || *probe.Owner != owner {
 		t.Fatalf("owner = %v, want %d", probe.Owner, owner)
 	}
-	if !strings.Contains(probe.Address, partsHost(server.URL)) {
-		t.Fatalf("address %q does not name the probed host", probe.Address)
+	wantAddress := strings.TrimPrefix(server.URL, "http://")
+	if probe.Address != wantAddress {
+		t.Fatalf("address = %q, want legacy host:port %q", probe.Address, wantAddress)
 	}
 }
 
@@ -96,10 +97,25 @@ func TestProbeOwner_Timeout(t *testing.T) {
 	}
 }
 
-func partsHost(url string) string {
-	host := strings.TrimPrefix(url, "http://")
-	if i := strings.Index(host, ":"); i >= 0 {
-		return host[:i]
+func TestProbeOwnerAtUsesPassedEndpoint(t *testing.T) {
+	owner := 99
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			t.Errorf("probed %s, want /health", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(struct {
+			Owner *int `json:"owner,omitempty"`
+		}{Owner: &owner})
+	}))
+	t.Cleanup(server.Close)
+	t.Setenv("TERROIR_HOST", "127.0.0.1")
+	t.Setenv("PORT", "1")
+
+	probe := ProbeOwnerAt(context.Background(), server.URL)
+	if !probe.Reached || probe.Owner == nil || *probe.Owner != owner {
+		t.Fatalf("ProbeOwnerAt(%q) = %+v, want owner %d", server.URL, probe, owner)
 	}
-	return host
+	if probe.Address != server.URL {
+		t.Fatalf("probe address = %q, want passed endpoint %q", probe.Address, server.URL)
+	}
 }
