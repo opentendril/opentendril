@@ -37,6 +37,10 @@ const (
 	// SeedStatusRunning is the durable opening status of a Seed-owned
 	// Phytomer. It is the only continuation-eligible lifecycle state.
 	SeedStatusRunning = "running"
+	// SeedStatusSettling is the non-terminal fence acquired after verification
+	// passes and before successful Fruit may be persisted. It is not
+	// continuation-eligible.
+	SeedStatusSettling = "settling"
 	// SeedStatusSatisfied means the verify predicate exited 0 within bounds.
 	SeedStatusSatisfied = "satisfied"
 	// SeedStatusExhausted means the iteration/time bounds were spent before
@@ -273,7 +277,12 @@ type SeedOperations struct {
 	// sealed Terrarium, iterate within bounds — and returns the reviewable
 	// Fruit. Implementations own substrate resolution, the sprout lifecycle,
 	// egress mediation, and worktree reconciliation.
-	Run func(ctx context.Context, spec SeedSpec) (SeedGrowResult, error)
+	//
+	// continuation is non-nil for every growth successfully opened through
+	// OpenPreparedSeed. OpenPreparedSeed refuses if the per-run continuation
+	// lifecycle is not wired. It is nil for ordinary synchronous SeedGrow;
+	// that path must not create a durable opening or continuation ledger.
+	Run func(ctx context.Context, spec SeedSpec, continuation *SeedContinuationLifecycle) (SeedGrowResult, error)
 }
 
 // WithSeed wires the Seed-growth execution port onto the Service and returns
@@ -332,7 +341,23 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
-	result, err := s.seed.Run(ctx, spec)
+	var lifecycle *SeedContinuationLifecycle
+	if opened {
+		if err := s.openedContinuationLifecycleWired(); err != nil {
+			return SeedGrowResult{}, err
+		}
+		lifecycle = s.newOpenedSeedContinuationLifecycle(ContinuationTarget{
+			PhytomerID: spec.PhytomerID,
+			Handle:     handle,
+			Pollen:     pollen,
+			Substrate:  spec.Substrate,
+			Status:     SeedStatusRunning,
+		})
+		if lifecycle == nil {
+			return SeedGrowResult{}, ErrContinuationNotWired
+		}
+	}
+	result, err := s.seed.Run(ctx, spec, lifecycle)
 	result.PhytomerID = spec.PhytomerID
 	publicationFailed := err != nil && result.PublicationDiagnostic != nil && result.PublicationDiagnostic.FailureCategory == SeedFailureCategoryFruitPublication
 	if publicationFailed {
@@ -340,38 +365,80 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 		result.Branch = ""
 		result.Commit = ""
 	}
-	if opened && s.seedPersist.RecordSettlement != nil {
-		settled := SeedSettlement{
-			Handle:     handle,
-			PhytomerID: spec.PhytomerID,
-			Pollen:     pollen,
-			Substrate:  spec.Substrate,
-			Goal:       spec.Goal,
-			StartedAt:  started,
-			FinishedAt: time.Now().UTC(),
-		}
-		settled.Iterations = result.Iterations
-		settled.Diff = result.Diff
-		settled.Logs = result.Logs
-		settled.VerificationDiagnostics = CopySeedVerificationDiagnostics(result.VerificationDiagnostics)
-		if publicationFailed {
-			settled.Status = SeedStatusFruitPublicationFailed
-			settled.Branch = ""
-			settled.Commit = ""
-			copied := *result.PublicationDiagnostic
-			settled.PublicationDiagnostic = &copied
-			settled.Error = copied.Message
-		} else if err != nil {
-			settled.Status = SeedStatusWithered
-			settled.Error = err.Error()
-		} else {
-			settled.Status = result.Status
-			settled.Branch = result.Branch
-			settled.Commit = result.Commit
-		}
-		_ = s.seedPersist.RecordSettlement(ctx, settled)
+	if opened {
+		return s.finalizeOpenedSeed(ctx, lifecycle, spec, pollen, handle, started, result, err, publicationFailed)
 	}
 	return result, err
+}
+
+func (s *Service) finalizeOpenedSeed(ctx context.Context, lifecycle *SeedContinuationLifecycle, spec SeedSpec, pollen, handle string, started time.Time, result SeedGrowResult, runErr error, publicationFailed bool) (SeedGrowResult, error) {
+	persistCtx, cancel := seedFinalizationContext(ctx)
+	defer cancel()
+	settled := composeOpenedSeedSettlement(spec, pollen, handle, started, result, runErr, publicationFailed)
+	if runErr == nil && !publicationFailed && result.Status == SeedStatusSatisfied {
+		if err := lifecycle.CompleteSuccessfulSettlement(persistCtx, settled); err != nil {
+			result.Status = SeedStatusWithered
+			return result, err
+		}
+		return result, nil
+	}
+	account, err := lifecycle.AccountTerminalFailure(persistCtx, settled)
+	if err != nil {
+		return result, err
+	}
+	if account.UnresolvedFailed > 0 {
+		result.Status = SeedStatusWithered
+		return result, ErrContinuationUndeliverable
+	}
+	return result, runErr
+}
+
+func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started time.Time, result SeedGrowResult, runErr error, publicationFailed bool) SeedSettlement {
+	settled := SeedSettlement{
+		Handle:                  handle,
+		PhytomerID:              spec.PhytomerID,
+		Pollen:                  pollen,
+		Substrate:               spec.Substrate,
+		Goal:                    spec.Goal,
+		StartedAt:               started,
+		FinishedAt:              time.Now().UTC(),
+		Iterations:              result.Iterations,
+		Diff:                    result.Diff,
+		Logs:                    result.Logs,
+		VerificationDiagnostics: CopySeedVerificationDiagnostics(result.VerificationDiagnostics),
+	}
+	if publicationFailed {
+		settled.Status = SeedStatusFruitPublicationFailed
+		settled.Branch = ""
+		settled.Commit = ""
+		copied := *result.PublicationDiagnostic
+		settled.PublicationDiagnostic = &copied
+		settled.Error = copied.Message
+		return settled
+	}
+	if runErr != nil {
+		settled.Status = SeedStatusWithered
+		if errors.Is(runErr, ErrContinuationUndeliverable) {
+			settled.Error = ErrContinuationUndeliverable.Error()
+		} else {
+			settled.Error = runErr.Error()
+		}
+		return settled
+	}
+	settled.Status = result.Status
+	settled.Branch = result.Branch
+	settled.Commit = result.Commit
+	return settled
+}
+
+const seedFinalizationTimeout = 15 * time.Second
+
+func seedFinalizationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	return context.WithTimeout(base, seedFinalizationTimeout)
 }
 
 // OpenPreparedSeed records durable Seed ownership from a Stem-issued growth
@@ -381,6 +448,9 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handl
 	handle = strings.TrimSpace(handle)
 	if handle == "" {
 		return SeedDispatch{}, fmt.Errorf("seed handle is required")
+	}
+	if err := s.openedContinuationLifecycleWired(); err != nil {
+		return SeedDispatch{}, err
 	}
 	if s.seedPersist.RecordOpening == nil {
 		return SeedDispatch{}, ErrSeedHistoryUnavailable

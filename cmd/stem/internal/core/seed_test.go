@@ -24,7 +24,7 @@ func newSeedService(t *testing.T) (*Service, *SeedSpec) {
 	}
 	captured := &SeedSpec{}
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			*captured = spec
 			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1}, nil
 		},
@@ -401,7 +401,7 @@ func TestOpenPreparedSeedComposesOwnershipFromTheEnvelope(t *testing.T) {
 			opening = got
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(wiredContinuationPersistence())
 	ctx := WithPollen(context.Background(), "claude")
 	growth, err := svc.PrepareSeed(ctx, validSeedInput())
 	if err != nil {
@@ -439,7 +439,7 @@ func TestOpenPreparedSeedRefusesSecondHandle(t *testing.T) {
 			openings.Add(1)
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(wiredContinuationPersistence())
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -469,7 +469,7 @@ func TestOpenPreparedSeedRefusesConcurrentSecondHandle(t *testing.T) {
 			<-persistRelease
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(wiredContinuationPersistence())
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -541,7 +541,7 @@ func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
 	}
 	var ran atomic.Int32
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			ran.Add(1)
 			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
@@ -554,7 +554,7 @@ func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
 			<-persistRelease
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(wiredContinuationPersistence())
 
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
@@ -647,7 +647,7 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 	}
 	var settled SeedSettlement
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			return SeedGrowResult{
 				Status:                SeedStatusSatisfied,
 				Iterations:            3,
@@ -661,11 +661,11 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 		},
 	}).WithSeedPersistence(SeedPersistence{
 		RecordOpening: func(context.Context, SeedOpening) error { return nil },
-		RecordSettlement: func(_ context.Context, got SeedSettlement) error {
-			settled = got
+		RecordSettlement: func(context.Context, SeedSettlement) error {
+			t.Fatal("best-effort RecordSettlement used for opened Seed settlement")
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(captureOpenedSettlement(&settled))
 
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
@@ -709,7 +709,7 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 	code := 2
 	var settled SeedSettlement
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			return SeedGrowResult{
 				Status:     SeedStatusExhausted,
 				Iterations: 1,
@@ -725,11 +725,11 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 		},
 	}).WithSeedPersistence(SeedPersistence{
 		RecordOpening: func(context.Context, SeedOpening) error { return nil },
-		RecordSettlement: func(_ context.Context, got SeedSettlement) error {
-			settled = got
+		RecordSettlement: func(context.Context, SeedSettlement) error {
+			t.Fatal("best-effort RecordSettlement used for opened Seed settlement")
 			return nil
 		},
-	})
+	}).WithContinuationPersistence(captureOpenedSettlement(&settled))
 	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
 	if err != nil {
 		t.Fatalf("prepare: %v", err)

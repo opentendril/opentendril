@@ -27,7 +27,7 @@ func newSeedTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.Serv
 		t.Fatalf("session manager: %v", err)
 	}
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			executed.Add(1)
 			*lastSpec = spec
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
@@ -222,7 +222,7 @@ func TestDelegatedSeedStampsPollenOnContext(t *testing.T) {
 	}
 	var saw string
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			saw = core.PollenFromContext(ctx)
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},

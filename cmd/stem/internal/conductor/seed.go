@@ -97,6 +97,20 @@ type SeedExecution struct {
 	// PrepareSprout runs after the iteration's orchestrator is configured and
 	// before Terrarium work, so the adapter can persist opening ownership.
 	PrepareSprout func(ctx context.Context, orch *DockerOrchestrator, iteration int) error
+	// Continuation, when set, is the Core-owned continuation boundary for an
+	// opened Seed. The conductor invokes these callbacks; it does not query
+	// persistence or decide continuation policy.
+	Continuation SeedContinuationBoundary
+}
+
+// SeedContinuationBoundary is the transport-free callback contract the
+// conductor invokes at deterministic Seed cognitive and settlement edges.
+// Zero value means continuation is not in play.
+type SeedContinuationBoundary struct {
+	DeliverPending         func(ctx context.Context, basePrompt string) (string, error)
+	ConfirmDelivery        func(ctx context.Context) error
+	AcquireSettlementFence func(ctx context.Context) (bool, error)
+	HasUnresolved          func(ctx context.Context) (bool, error)
 }
 
 // SeedRunResult is the reviewable outcome of a grown Seed — the Fruit.
@@ -202,7 +216,23 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			}
 		}
 
+		if execution.Continuation.DeliverPending != nil {
+			composed, deliverErr := execution.Continuation.DeliverPending(ctx, prompt)
+			if deliverErr != nil {
+				return SeedRunResult{}, deliverErr
+			}
+			prompt = composed
+		}
+
 		buildReport, runErr := seedBuildFn(ctx, orch, prompt)
+		// RequestsMade is the typed evidence that continued intent crossed the
+		// Mycorrhizal/provider boundary. A pre-provider failure must not mark
+		// delivering continuation delivered.
+		if buildReport.RequestsMade && execution.Continuation.ConfirmDelivery != nil {
+			if confirmErr := execution.Continuation.ConfirmDelivery(seedBoundaryContext(ctx)); confirmErr != nil {
+				return SeedRunResult{}, confirmErr
+			}
+		}
 		fmt.Fprintf(&logs, "\n🌱 Iteration %d — sprout %s\n", iterations, strings.TrimSpace(buildReport.Outcome))
 		candidateCommit := strings.TrimSpace(buildReport.seedCandidateCommit)
 		salvageableFailure := runErr != nil && isRecoverableSeedSproutFailure(runErr) && candidateCommit != ""
@@ -243,6 +273,27 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 		}
 		fmt.Fprintf(&logs, "🔬 verify %s\n%s\n", verifyVerdict(verifyReport.Passed), verifyReport.Output)
 		if verifyReport.Passed {
+			if execution.Continuation.AcquireSettlementFence != nil {
+				fenced, fenceErr := execution.Continuation.AcquireSettlementFence(seedBoundaryContext(ctx))
+				if fenceErr != nil {
+					return SeedRunResult{}, fenceErr
+				}
+				if fenced {
+					status = SeedStatusSatisfied
+					break
+				}
+				if iterations < maxIterations && ctx.Err() == nil {
+					if candidateRevision != candidateEvidenceRevision {
+						candidateEvidence = seedCandidateDiffFn(ctx, sourcePath, base, candidateRevision)
+						candidateEvidenceRevision = candidateRevision
+					}
+					prompt = seedGoalPromptWithCandidateEvidence(execution.Goal, execution.Verify, "", candidateEvidence)
+					continue
+				}
+				status = SeedStatusWithered
+				fmt.Fprintln(&logs, core.ErrContinuationUndeliverable.Error())
+				break
+			}
 			status = SeedStatusSatisfied
 			break
 		}
@@ -270,7 +321,13 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	}
 
 	if status != SeedStatusSatisfied {
-		return result("", ""), nil
+		unresolvedErr := seedUnresolvedContinuationError(seedBoundaryContext(ctx), execution, status)
+		out := result("", "")
+		if unresolvedErr != nil {
+			out.Status = SeedStatusWithered
+			return out, unresolvedErr
+		}
+		return out, nil
 	}
 
 	if commit != "" && commit != base {
@@ -653,6 +710,30 @@ func resolveSeedWorkspace(substrate string) (string, error) {
 // seedGoalPrompt composes the Sprout's task prompt: the goal, the verify
 // predicate it must satisfy, and — on a retry — the previous deterministic
 // verify failure so the Sprout fixes the real cause rather than guessing.
+func seedBoundaryContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	if ctx.Err() != nil {
+		return context.WithoutCancel(ctx)
+	}
+	return ctx
+}
+
+func seedUnresolvedContinuationError(ctx context.Context, execution SeedExecution, _ string) error {
+	if execution.Continuation.HasUnresolved == nil {
+		return nil
+	}
+	unresolved, err := execution.Continuation.HasUnresolved(ctx)
+	if err != nil {
+		return err
+	}
+	if unresolved {
+		return core.ErrContinuationUndeliverable
+	}
+	return nil
+}
+
 func seedGoalPrompt(goal string, verify []string, priorFailure string) string {
 	return seedGoalPromptWithCandidateEvidence(goal, verify, priorFailure, "")
 }

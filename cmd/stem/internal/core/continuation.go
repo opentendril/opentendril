@@ -10,11 +10,16 @@ import (
 	"time"
 )
 
-// Continuation delivery states. Slice 1 persists a single accepted/pending
-// state so later delivery transitions remain forward-compatible. Continuation
-// is a Stem-internal lifecycle contract, not a governed Pollinator command.
+// Continuation delivery states. Continuation is a Stem-internal lifecycle
+// contract, not a governed Pollinator command.
 const (
-	ContinuationDeliveryPending = "pending"
+	ContinuationDeliveryPending    = "pending"
+	ContinuationDeliveryDelivering = "delivering"
+	ContinuationDeliveryDelivered  = "delivered"
+	ContinuationDeliveryFailed     = "failed"
+
+	continuedIntentHeading = "Continued intent accepted for this Phytomer, in acceptance order:"
+	continuedIntentBounds  = "This continued intent does not change verification, isolation, egress, or iteration bounds."
 )
 
 // Continuation sentinels. Adapters map these; they are not HTTP/MCP types.
@@ -30,6 +35,16 @@ var (
 	ErrContinuationTargetChanged       = errors.New("phytomer continuation target ownership changed")
 	ErrContinuationIdempotencyConflict = errors.New("phytomer continuation idempotency key was reused with different intent")
 	ErrContinuationInvalid             = errors.New("phytomer continuation request is invalid")
+	ErrContinuationDeliveryState       = errors.New("phytomer continuation delivery state transition is not allowed")
+	ErrSeedSettlementNotFenced         = errors.New("seed settlement fence was not acquired")
+	ErrSeedSettlementInvalid           = errors.New("seed settlement is not valid for the exact target")
+	// ErrContinuationUndeliverable is the safe terminal failure when accepted
+	// continued intent cannot be delivered within original Seed bounds. It
+	// never includes raw continued intent.
+	ErrContinuationUndeliverable = errors.New("accepted continued intent could not be delivered within the Seed bounds")
+	// ErrSeedInterruptedByRestart is the safe diagnostic stamped onto orphaned
+	// active Seed work after Stem restart.
+	ErrSeedInterruptedByRestart = errors.New("seed growth was interrupted by Stem restart")
 )
 
 // ContinuationInput is the transport-free acceptance request. The caller names
@@ -95,12 +110,186 @@ func (t ContinuationTarget) ToDelegationRequest(operationClass string) Delegatio
 	}
 }
 
+// TerminalFailureAccount reports how many unresolved continuations a
+// terminal Seed transaction failed.
+type TerminalFailureAccount struct {
+	UnresolvedFailed int
+}
+
 // ContinuationPersistence is the injected durable continuation port. Core
 // owns semantic validation and composition; the port records and queries.
 // Core never imports historydb.
 type ContinuationPersistence struct {
-	ResolveTarget func(ctx context.Context, phytomerID string) (ContinuationTarget, bool, error)
-	Accept        func(ctx context.Context, in ContinuationAcceptance) (ContinuationRecord, error)
+	ResolveTarget                func(ctx context.Context, phytomerID string) (ContinuationTarget, bool, error)
+	Accept                       func(ctx context.Context, in ContinuationAcceptance) (ContinuationRecord, error)
+	ClaimPending                 func(ctx context.Context, target ContinuationTarget) ([]ContinuationRecord, error)
+	MarkDelivered                func(ctx context.Context, target ContinuationTarget, ids []string) error
+	HasUnresolved                func(ctx context.Context, target ContinuationTarget) (bool, error)
+	AcquireSettlementFence       func(ctx context.Context, target ContinuationTarget) (bool, error)
+	CompleteSuccessfulSettlement func(ctx context.Context, settled SeedSettlement) error
+	AccountTerminalFailure       func(ctx context.Context, settled SeedSettlement) (TerminalFailureAccount, error)
+	ReconcileOrphaned            func(ctx context.Context) error
+}
+
+// SeedContinuationLifecycle is the Core-owned continuation contract for one
+// opened Seed growth. A nil value means continuation is not in play
+// (synchronous/unopened growth).
+type SeedContinuationLifecycle struct {
+	persist ContinuationPersistence
+	target  ContinuationTarget
+	claimed []ContinuationRecord
+}
+
+// ComposeContinuedIntentPrompt appends a delimited continued-intent section
+// to an existing iteration prompt. It does not replace the original goal or
+// alter verify argv.
+func ComposeContinuedIntentPrompt(basePrompt string, intents []string) string {
+	selected := make([]string, 0, len(intents))
+	for _, intent := range intents {
+		if trimmed := strings.TrimSpace(intent); trimmed != "" {
+			selected = append(selected, trimmed)
+		}
+	}
+	if len(selected) == 0 {
+		return basePrompt
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(basePrompt, "\r\n"))
+	b.WriteString("\n\n")
+	b.WriteString(continuedIntentHeading)
+	b.WriteByte('\n')
+	for i, intent := range selected {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, intent)
+	}
+	b.WriteByte('\n')
+	b.WriteString(continuedIntentBounds)
+	return b.String()
+}
+
+// openedContinuationLifecycleWired reports whether the per-run continuation
+// operations required for durably opened Seed growth are present.
+// ReconcileOrphaned is startup-only and is not part of this contract.
+func (s *Service) openedContinuationLifecycleWired() error {
+	if s == nil {
+		return ErrContinuationNotWired
+	}
+	p := s.continuation
+	if p.ClaimPending == nil || p.MarkDelivered == nil || p.HasUnresolved == nil ||
+		p.AcquireSettlementFence == nil || p.CompleteSuccessfulSettlement == nil || p.AccountTerminalFailure == nil {
+		return ErrContinuationNotWired
+	}
+	return nil
+}
+
+func (s *Service) newOpenedSeedContinuationLifecycle(target ContinuationTarget) *SeedContinuationLifecycle {
+	if err := s.openedContinuationLifecycleWired(); err != nil {
+		return nil
+	}
+	target.PhytomerID = strings.TrimSpace(target.PhytomerID)
+	target.Handle = strings.TrimSpace(target.Handle)
+	target.Pollen = strings.TrimSpace(target.Pollen)
+	target.Substrate = strings.TrimSpace(target.Substrate)
+	if target.PhytomerID == "" || target.Handle == "" || target.Substrate == "" {
+		return nil
+	}
+	return &SeedContinuationLifecycle{persist: s.continuation, target: target}
+}
+
+// Target returns the exact Stem-owned identity this lifecycle is bound to.
+func (l *SeedContinuationLifecycle) Target() ContinuationTarget {
+	if l == nil {
+		return ContinuationTarget{}
+	}
+	return l.target
+}
+
+// DeliverPending claims pending continuations for the next Sprout and appends
+// them to the existing iteration prompt in durable sequence order.
+func (l *SeedContinuationLifecycle) DeliverPending(ctx context.Context, basePrompt string) (string, error) {
+	if l == nil || l.persist.ClaimPending == nil {
+		return basePrompt, nil
+	}
+	recs, err := l.persist.ClaimPending(ctx, l.target)
+	if err != nil {
+		return "", err
+	}
+	l.claimed = recs
+	intents := make([]string, 0, len(recs))
+	for _, rec := range recs {
+		intents = append(intents, rec.Intent)
+	}
+	return ComposeContinuedIntentPrompt(basePrompt, intents), nil
+}
+
+// ConfirmDelivery marks claimed continuations delivered at the Sprout
+// cognitive boundary. It is a no-op when nothing was claimed.
+func (l *SeedContinuationLifecycle) ConfirmDelivery(ctx context.Context) error {
+	if l == nil || l.persist.MarkDelivered == nil || len(l.claimed) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(l.claimed))
+	for _, rec := range l.claimed {
+		ids = append(ids, rec.ContinuationID)
+	}
+	if err := l.persist.MarkDelivered(ctx, l.target, ids); err != nil {
+		return err
+	}
+	l.claimed = nil
+	return nil
+}
+
+// AcquireSettlementFence asks persistence to fence successful settlement.
+func (l *SeedContinuationLifecycle) AcquireSettlementFence(ctx context.Context) (bool, error) {
+	if l == nil || l.persist.AcquireSettlementFence == nil {
+		return false, ErrContinuationNotWired
+	}
+	return l.persist.AcquireSettlementFence(ctx, l.target)
+}
+
+// HasUnresolved reports pending or delivering continuation for this target.
+func (l *SeedContinuationLifecycle) HasUnresolved(ctx context.Context) (bool, error) {
+	if l == nil || l.persist.HasUnresolved == nil {
+		return false, ErrContinuationNotWired
+	}
+	return l.persist.HasUnresolved(ctx, l.target)
+}
+
+// CompleteSuccessfulSettlement persists Fruit after a successful fence.
+func (l *SeedContinuationLifecycle) CompleteSuccessfulSettlement(ctx context.Context, settled SeedSettlement) error {
+	if l == nil || l.persist.CompleteSuccessfulSettlement == nil {
+		return ErrContinuationNotWired
+	}
+	settled = bindSettlementTarget(settled, l.target)
+	return l.persist.CompleteSuccessfulSettlement(ctx, settled)
+}
+
+// AccountTerminalFailure atomically terminalizes the Seed and fails unresolved
+// continuation. Persistence overwrites a silent success-incompatible outcome
+// when accepted intent was not delivered.
+func (l *SeedContinuationLifecycle) AccountTerminalFailure(ctx context.Context, settled SeedSettlement) (TerminalFailureAccount, error) {
+	if l == nil || l.persist.AccountTerminalFailure == nil {
+		return TerminalFailureAccount{}, ErrContinuationNotWired
+	}
+	settled = bindSettlementTarget(settled, l.target)
+	return l.persist.AccountTerminalFailure(ctx, settled)
+}
+
+func bindSettlementTarget(settled SeedSettlement, target ContinuationTarget) SeedSettlement {
+	settled.Handle = target.Handle
+	settled.PhytomerID = target.PhytomerID
+	settled.Pollen = target.Pollen
+	settled.Substrate = target.Substrate
+	return settled
+}
+
+// ReconcileOrphanedSeedWork terminalizes active durable Seed/continuation
+// state left by a previous process. Persistence disabled is not a memory
+// fallback; callers must not serve when durable history exists and this fails.
+func (s *Service) ReconcileOrphanedSeedWork(ctx context.Context) error {
+	if s == nil || s.continuation.ReconcileOrphaned == nil {
+		return ErrContinuationNotWired
+	}
+	return s.continuation.ReconcileOrphaned(ctx)
 }
 
 // WithContinuationPersistence wires the durable continuation port.

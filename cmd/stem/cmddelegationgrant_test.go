@@ -174,7 +174,7 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 		}
 		coreSvc := core.NewService(manager).
 			WithSeed(core.SeedOperations{
-				Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+				Run: func(ctx context.Context, spec core.SeedSpec, lifecycle *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 					ran.Add(1)
 					select {
 					case <-started:
@@ -186,6 +186,11 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 					case <-ctx.Done():
 						return core.SeedGrowResult{}, ctx.Err()
 					}
+					if lifecycle != nil {
+						if _, err := lifecycle.AcquireSettlementFence(ctx); err != nil {
+							return core.SeedGrowResult{}, err
+						}
+					}
 					// Return the Stem-created Phytomer identity only. Do not
 					// invent a Fruit branch or commit.
 					return core.SeedGrowResult{
@@ -196,6 +201,7 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 				},
 			}).
 			WithSeedPersistence(seedPersistence(store)).
+			WithContinuationPersistence(continuationPersistence(store)).
 			WithPhytomerObservationSource(phytomerObservationSource(store))
 		gate := &receptors.DelegationGate{
 			Authorizer: core.NewDelegationAuthorizer(grants),

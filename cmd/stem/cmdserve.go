@@ -239,6 +239,9 @@ func runServeCmd(ctx context.Context, args []string) {
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
 	// are adapters that route through this one service.
 	coreSvc := buildServeCore(sessions, tendrilDir, history, bus)
+	if err := reconcileServeSeedWork(ctx, coreSvc, history); err != nil {
+		log.Fatalf("❌ Failed to reconcile orphaned Seed continuation state: %v", err)
+	}
 
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
 
@@ -968,6 +971,20 @@ func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, trigg
 // durable continuation persistence port. Persistence disabled (nil history)
 // still wires the port so acceptance fails honestly instead of buffering
 // continued intent in memory.
+// reconcileServeSeedWork terminalizes orphaned active Seed/continuation state
+// from a previous process before the serving mux accepts Pollinator traffic.
+// Persistence disabled leaves continuation unavailable and is not a memory
+// fallback. Durable history that cannot be reconciled fails closed.
+func reconcileServeSeedWork(ctx context.Context, svc *core.Service, history *historydb.Store) error {
+	if history == nil {
+		return nil
+	}
+	if svc == nil {
+		return core.ErrContinuationNotWired
+	}
+	return svc.ReconcileOrphanedSeedWork(ctx)
+}
+
 func buildServeCore(sessions *session.Manager, tendrilDir string, history *historydb.Store, bus *eventbus.Bus) *core.Service {
 	return core.NewService(sessions).
 		WithTendrilDir(tendrilDir).

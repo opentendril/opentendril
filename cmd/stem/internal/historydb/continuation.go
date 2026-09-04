@@ -13,12 +13,22 @@ import (
 )
 
 const (
-	continuationDeliveryPending = "pending"
-	continuationIntentAAD       = "historydb/continuations/intent"
+	continuationDeliveryPending    = "pending"
+	continuationDeliveryDelivering = "delivering"
+	continuationDeliveryDelivered  = "delivered"
+	continuationDeliveryFailed     = "failed"
+	continuationIntentAAD          = "historydb/continuations/intent"
 	// seedStatusRunning is the only continuation-eligible Seed lifecycle
 	// status. It must stay aligned with core.SeedStatusRunning; historydb
 	// cannot import Core.
-	seedStatusRunning = "running"
+	seedStatusRunning                = "running"
+	seedStatusSettling               = "settling"
+	seedStatusSatisfied              = "satisfied"
+	seedStatusExhausted              = "exhausted"
+	seedStatusWithered               = "withered"
+	seedStatusFruitPublicationFailed = "fruit-publication-failed"
+	continuationUndeliverableError   = "accepted continued intent could not be delivered within the Seed bounds"
+	seedRestartInterruptedError      = "seed growth was interrupted by Stem restart"
 )
 
 // Continuation is one durable accepted continued-intent record for a
@@ -60,7 +70,28 @@ var (
 	ErrContinuationTargetChanged       = errors.New("phytomer continuation target ownership changed")
 	ErrContinuationIdempotencyConflict = errors.New("phytomer continuation idempotency key was reused with different intent")
 	ErrContinuationInvalid             = errors.New("phytomer continuation request is invalid")
+	ErrContinuationDeliveryState       = errors.New("phytomer continuation delivery state transition is not allowed")
+	ErrSeedSettlementNotFenced         = errors.New("seed settlement fence was not acquired")
+	ErrSeedSettlementInvalid           = errors.New("seed settlement is not valid for the exact target")
 )
+
+// SeedTarget is the exact Stem-owned Seed identity used by continuation
+// lifecycle transactions. Callers must supply Stem-resolved values; this
+// type is never filled from session preferences, cwd, or caller Substrate.
+// Pollen may be empty: that is the canonical local/non-delegated ownership
+// value and is compared exactly against the persisted Seed row.
+type SeedTarget struct {
+	PhytomerID string
+	Handle     string
+	Pollen     string
+	Substrate  string
+}
+
+// TerminalFailureAccount reports how many unresolved continuations a
+// terminal Seed transaction failed.
+type TerminalFailureAccount struct {
+	UnresolvedFailed int
+}
 
 func continuationIntentDigest(intent string) string {
 	sum := sha256.Sum256([]byte(intent))

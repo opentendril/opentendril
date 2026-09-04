@@ -22,15 +22,38 @@ import (
 
 func TestContinuationPersistenceNilHistoryFailsHonestly(t *testing.T) {
 	port := continuationPersistence(nil)
-	_, _, err := port.ResolveTarget(context.Background(), "tendril-1")
+	ctx := context.Background()
+	_, _, err := port.ResolveTarget(ctx, "tendril-1")
 	if !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
 		t.Fatalf("resolve: %v", err)
 	}
-	_, err = port.Accept(context.Background(), core.ContinuationAcceptance{
+	_, err = port.Accept(ctx, core.ContinuationAcceptance{
 		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "go",
 	})
 	if !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
 		t.Fatalf("accept: %v", err)
+	}
+	target := core.ContinuationTarget{PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo"}
+	if _, err := port.ClaimPending(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := port.MarkDelivered(ctx, target, []string{"continuation-1"}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("deliver: %v", err)
+	}
+	if _, err := port.HasUnresolved(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("unresolved: %v", err)
+	}
+	if _, err := port.AcquireSettlementFence(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("fence: %v", err)
+	}
+	if err := port.CompleteSuccessfulSettlement(ctx, core.SeedSettlement{Status: core.SeedStatusSatisfied}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := port.AccountTerminalFailure(ctx, core.SeedSettlement{Status: core.SeedStatusWithered}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("account: %v", err)
+	}
+	if err := port.ReconcileOrphaned(ctx); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("reconcile: %v", err)
 	}
 }
 
@@ -201,5 +224,147 @@ func TestSlice1DoesNotExposeContinuationSurface(t *testing.T) {
 		if name == "phytomer.continue" {
 			t.Fatal("REST projects phytomer.continue")
 		}
+	}
+}
+
+func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store, err := historydb.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	manager, err := session.NewManager(ctx, store)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+
+	intent := "keep going locally"
+	svc := core.NewService(manager).
+		WithSeed(core.SeedOperations{
+			Run: func(ctx context.Context, spec core.SeedSpec, lifecycle *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+				if lifecycle == nil {
+					t.Fatal("opened local seed missing continuation lifecycle")
+				}
+				if lifecycle.Target().Pollen != "" {
+					t.Fatalf("local lifecycle pollen = %q", lifecycle.Target().Pollen)
+				}
+				prompt, err := lifecycle.DeliverPending(ctx, spec.Goal)
+				if err != nil {
+					return core.SeedGrowResult{}, err
+				}
+				if !strings.Contains(prompt, intent) {
+					t.Fatalf("local continuation missing from prompt: %q", prompt)
+				}
+				if err := lifecycle.ConfirmDelivery(ctx); err != nil {
+					return core.SeedGrowResult{}, err
+				}
+				fenced, err := lifecycle.AcquireSettlementFence(ctx)
+				if err != nil || !fenced {
+					t.Fatalf("local fence: fenced=%v err=%v", fenced, err)
+				}
+				return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+			},
+		}).
+		WithSeedPersistence(seedPersistence(store)).
+		WithContinuationPersistence(continuationPersistence(store))
+
+	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-local"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{
+		PhytomerID: growth.PhytomerID(), Intent: intent, IdempotencyKey: "local-1",
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if accepted.Pollen != "" {
+		t.Fatalf("accepted pollen = %q", accepted.Pollen)
+	}
+
+	result, err := svc.GrowPreparedSeed(ctx, growth)
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if result.Status != core.SeedStatusSatisfied {
+		t.Fatalf("status = %q", result.Status)
+	}
+	seed, ok, err := store.GetSeedRunByPhytomer(ctx, growth.PhytomerID())
+	if err != nil || !ok || seed.Pollen != "" || seed.Status != core.SeedStatusSatisfied {
+		t.Fatalf("settled = %+v ok=%v err=%v", seed, ok, err)
+	}
+	got, ok, err := store.GetContinuation(ctx, accepted.ContinuationID)
+	if err != nil || !ok || got.DeliveryState != core.ContinuationDeliveryDelivered || got.Pollen != "" {
+		t.Fatalf("continuation = %+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestProductionPreProviderFailureFailsContinuationNotDelivered(t *testing.T) {
+	ctx := context.Background()
+	store, err := historydb.Open(ctx, filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	manager, err := session.NewManager(ctx, store)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+
+	intent := "SECRET-LOCAL-INTENT"
+	svc := core.NewService(manager).
+		WithSeed(core.SeedOperations{
+			Run: func(ctx context.Context, spec core.SeedSpec, lifecycle *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+				if _, err := lifecycle.DeliverPending(ctx, spec.Goal); err != nil {
+					return core.SeedGrowResult{}, err
+				}
+				return core.SeedGrowResult{
+					Status:     core.SeedStatusWithered,
+					Iterations: 1,
+					PhytomerID: spec.PhytomerID,
+				}, errors.New("dial refused before provider request")
+			},
+		}).
+		WithSeedPersistence(seedPersistence(store)).
+		WithContinuationPersistence(continuationPersistence(store))
+
+	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-preprovider"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{
+		PhytomerID: growth.PhytomerID(), Intent: intent, IdempotencyKey: "pre-1",
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	result, err := svc.GrowPreparedSeed(ctx, growth)
+	if !errors.Is(err, core.ErrContinuationUndeliverable) {
+		t.Fatalf("grow err = %v, want undeliverable", err)
+	}
+	if strings.Contains(err.Error(), intent) {
+		t.Fatalf("error leaked continued intent: %v", err)
+	}
+	if result.Status == core.SeedStatusSatisfied {
+		t.Fatal("pre-provider failure reported satisfied")
+	}
+	seed, ok, getErr := store.GetSeedRunByPhytomer(ctx, growth.PhytomerID())
+	if getErr != nil || !ok || seed.Status == core.SeedStatusSatisfied {
+		t.Fatalf("seed = %+v ok=%v err=%v", seed, ok, getErr)
+	}
+	got, ok, getErr := store.GetContinuation(ctx, accepted.ContinuationID)
+	if getErr != nil || !ok || got.DeliveryState != core.ContinuationDeliveryFailed {
+		t.Fatalf("continuation = %+v ok=%v err=%v", got, ok, getErr)
+	}
+	if strings.Contains(seed.Error, intent) {
+		t.Fatalf("seed error leaked continued intent: %q", seed.Error)
 	}
 }
