@@ -32,8 +32,11 @@ import (
 // is set only by the Stem's own call sites from an authorized grant and can
 // never be decoded from caller input — a caller structurally cannot widen it.
 
-// Seed growth terminal statuses.
+// Seed growth lifecycle statuses.
 const (
+	// SeedStatusRunning is the durable opening status of a Seed-owned
+	// Phytomer. It is the only continuation-eligible lifecycle state.
+	SeedStatusRunning = "running"
 	// SeedStatusSatisfied means the verify predicate exited 0 within bounds.
 	SeedStatusSatisfied = "satisfied"
 	// SeedStatusExhausted means the iteration/time bounds were spent before
@@ -401,7 +404,7 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handl
 		Pollen:     rec.pollen,
 		Substrate:  rec.spec.Substrate,
 		Goal:       rec.spec.Goal,
-		Status:     "running",
+		Status:     SeedStatusRunning,
 		StartedAt:  time.Now().UTC(),
 	}
 	s.seedMu.Unlock()
@@ -422,7 +425,7 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handl
 	return SeedDispatch{
 		Handle:     handle,
 		PhytomerID: phytomerID,
-		Status:     "running",
+		Status:     SeedStatusRunning,
 	}, nil
 }
 
