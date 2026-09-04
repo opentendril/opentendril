@@ -20,6 +20,8 @@ executables.
 ```text
 Pollinator
     -> tendril-mcp
+    -> named connection profile
+    -> profile credential reference
     -> durable Pollinator root
     -> short-lived access token
     -> governed Stem
@@ -45,10 +47,18 @@ This writes `~/.config/tendril/connections.yaml`. The credential referenced by
 account. Use `tendril-mcp diagnose --connection local` to inspect connection
 preflight without invoking MCP capabilities.
 
+The connection profile can represent a URL origin, but the current restricted
+bridge forwards a durable Pollinator root only over HTTP to a literal same-host
+loopback address (`127.0.0.0/8` or `::1`). HTTPS and non-loopback endpoints are
+not currently supported for credential forwarding; `diagnose` refuses them
+before reading or presenting the credential. This does not claim secure remote
+support.
+
 **Single-user installation**
 
 `tendril mcp` is the supported single-user stdio command. It is a governed
-command surface and stdio bridge that may run in-process as the operator, or
+command surface and stdio bridge that retains its current environment-based
+forwarding and in-process behavior. It may run in-process as the operator, or
 forward to another-user Stem when a credential and reachable Stem are present.
 
 `tendril setup substrate` writes `~/.tendril/substrates.yaml` and prints a
@@ -58,6 +68,13 @@ Pollinator install path.
 The generated Substrate is named `default-workspace`. Use it when calling
 `sproutGrow` or `sequenceGrow` for code changes. Grants still name the
 canonical operation-classes `sprout.grow` and `sequence.grow`.
+
+**Independent REST client**
+
+An independent REST client reads its own Pollinator credential, then presents
+it to `POST /v1/pollinator/token`. The endpoint returns a short-lived access
+token, which the client uses on data routes. This credential flow is separate
+from both MCP executables.
 
 ## Bootstrap the config
 
@@ -124,10 +141,10 @@ Requests presenting the revoked credential are denied at once; access tokens
 already minted from it age out within their 15-minute cap.
 
 > [!NOTE]
-> **Single-user compatibility.** The full-binary `tendril mcp` path retains its
-> existing environment-based forwarding and in-process behavior. The restricted
-> `tendril-mcp` path uses only the selected named connection and ignores those
-> legacy target and credential selectors.
+> The restricted `tendril-mcp` path uses only the selected named connection and
+> ignores environment target and credential selectors. The full-binary
+> `tendril mcp` path retains its current environment-based and in-process
+> behavior.
 
 ## MCP config
 

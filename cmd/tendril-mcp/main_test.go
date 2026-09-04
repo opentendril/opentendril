@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,6 +147,19 @@ func runArgs(t *testing.T, args ...string) (string, string, error) {
 	var out, errOut bytes.Buffer
 	err := runCommand(context.Background(), args, strings.NewReader(initFrame+"\n"), &out, &errOut)
 	return out.String(), errOut.String(), err
+}
+
+func pointLegacyEnvironmentAt(t *testing.T, endpoint string) {
+	t.Helper()
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERROIR_HOST", u.Hostname())
+	t.Setenv("PORT", u.Port())
+	t.Setenv("TENDRIL_POLLEN", "legacy")
+	t.Setenv("TENDRIL_POLLINATOR_CREDENTIAL", filepath.Join(t.TempDir(), "legacy"))
+	t.Setenv("TENDRIL_MCP_CREDENTIAL", filepath.Join(t.TempDir(), "legacy-two"))
 }
 
 func TestVersionRunsBeforeConfigurationOrNetwork(t *testing.T) {
@@ -290,6 +304,41 @@ func TestExplicitAndDefaultSelectionIgnoreLegacyEnvironment(t *testing.T) {
 	}
 }
 
+func TestRestrictedBridgeRefusesUnqualifiedTransportBeforeCredentialPresentation(t *testing.T) {
+	owner := os.Getuid() + 1
+	legacyEndpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "legacy-root"})
+	pointLegacyEnvironmentAt(t, legacyEndpoint)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	for _, endpoint := range []string{
+		"http://192.0.2.10:8080",
+		"https://127.0.0.1:8080",
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			configureConnections(t, pollinatorconfig.Config{
+				Version: 1,
+				Connections: map[string]pollinatorconfig.Connection{
+					"selected": {Endpoint: endpoint, Credential: "selected-root"},
+				},
+			}, map[string]string{"selected-root": "selected-durable-root"})
+
+			_, _, err := runArgs(t, "--connection", "selected")
+			if err == nil || !strings.Contains(err.Error(), "transport is not supported") {
+				t.Fatalf("unqualified transport error = %v, want transport posture refusal", err)
+			}
+			if strings.Contains(err.Error(), "selected-durable-root") {
+				t.Fatal("transport refusal exposed the durable credential")
+			}
+			traffic.mu.Lock()
+			healthN, mintN := traffic.healthN, traffic.mintN
+			traffic.mu.Unlock()
+			if healthN != 0 || mintN != 0 {
+				t.Fatalf("legacy endpoint received traffic health=%d mint=%d", healthN, mintN)
+			}
+		})
+	}
+}
+
 func TestNoSelectionNeverFallsBackToLocalhost(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	configureConnections(t, pollinatorconfig.Config{Version: 1, Connections: map[string]pollinatorconfig.Connection{
@@ -363,7 +412,7 @@ func TestForwardingPreservesFramesAndDoesNotLeakCredential(t *testing.T) {
 
 func TestDiagnoseReportsNonSecretPreflightState(t *testing.T) {
 	owner := os.Getuid() + 1
-	endpoint, _ := startFakeStem(t, fakeStemOpts{owner: &owner, root: "diagnose-root"})
+	endpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "diagnose-root"})
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	configureConnection(t, "local", endpoint, "codex", "diagnose-root")
 	stdout, _, err := runArgs(t, "diagnose", "-c", "local")
@@ -390,6 +439,57 @@ func TestDiagnoseReportsNonSecretPreflightState(t *testing.T) {
 	}
 	if strings.Contains(stdout, "diagnose-root") || strings.Contains(stdout, mintedToken) {
 		t.Fatal("diagnose leaked credential or access token")
+	}
+	traffic.mu.Lock()
+	healthN, mintN := traffic.healthN, traffic.mintN
+	traffic.mu.Unlock()
+	if healthN != 1 || mintN != 1 {
+		t.Fatalf("loopback diagnose traffic health=%d mint=%d, want one governed preflight", healthN, mintN)
+	}
+}
+
+func TestDiagnoseReportsUnsupportedTransportWithoutCredentialOrNetworkAccess(t *testing.T) {
+	owner := os.Getuid() + 1
+	legacyEndpoint, traffic := startFakeStem(t, fakeStemOpts{owner: &owner, root: "legacy-root"})
+	pointLegacyEnvironmentAt(t, legacyEndpoint)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := pollinatorconfig.Save(pollinatorconfig.Config{
+		Version: 1,
+		Connections: map[string]pollinatorconfig.Connection{
+			"remote": {Endpoint: "https://127.0.0.1:8080", Credential: "missing-root"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, _, err := runArgs(t, "diagnose", "--connection", "remote")
+	if err == nil {
+		t.Fatal("unsupported transport diagnose succeeded")
+	}
+	for _, want := range []string{
+		"selected connection: remote",
+		"endpoint: https://127.0.0.1:8080",
+		"transport posture: unsupported",
+		"authentication: refused (transport posture is not supported",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("diagnose output missing %q:\n%s", want, stdout)
+		}
+	}
+	for _, forbidden := range []string{
+		"credential permission/readability:",
+		"credential path:",
+		"Stem reachable:",
+	} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("diagnose output contains %q despite transport refusal:\n%s", forbidden, stdout)
+		}
+	}
+	traffic.mu.Lock()
+	healthN, mintN := traffic.healthN, traffic.mintN
+	traffic.mu.Unlock()
+	if healthN != 0 || mintN != 0 {
+		t.Fatalf("unsupported diagnose traffic health=%d mint=%d", healthN, mintN)
 	}
 }
 

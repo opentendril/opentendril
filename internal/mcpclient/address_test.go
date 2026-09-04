@@ -37,3 +37,26 @@ func TestResolveStemAddress(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateLocalGovernedEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"http://127.0.0.0:8080",
+		"http://127.255.255.255:8080",
+		"http://[::1]:8080",
+	} {
+		if err := ValidateLocalGovernedEndpoint(endpoint); err != nil {
+			t.Errorf("ValidateLocalGovernedEndpoint(%q) = %v; want accepted", endpoint, err)
+		}
+	}
+
+	for _, endpoint := range []string{
+		"http://localhost:8080",
+		"http://192.0.2.10:8080",
+		"https://127.0.0.1:8080",
+		"ftp://127.0.0.1:8080",
+	} {
+		if err := ValidateLocalGovernedEndpoint(endpoint); err == nil {
+			t.Errorf("ValidateLocalGovernedEndpoint(%q) succeeded; want unsupported transport", endpoint)
+		}
+	}
+}

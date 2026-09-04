@@ -114,28 +114,39 @@ func parseSelector(args []string) (bridgeOptions, error) {
 	return options, nil
 }
 
-func loadSelectedConnection(options bridgeOptions) (pollinatorconfig.Selection, string, error) {
+func loadSelectedConnection(options bridgeOptions) (pollinatorconfig.Selection, error) {
 	configPath := pollinatorconfig.ConfigFile()
 	cfg, err := pollinatorconfig.Load()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return pollinatorconfig.Selection{}, "", fmt.Errorf("no Pollinator connection config at %s; run 'tendril-mcp connection set <name> --endpoint <url> --credential <credential>'", configPath)
+			return pollinatorconfig.Selection{}, fmt.Errorf("no Pollinator connection config at %s; run 'tendril-mcp connection set <name> --endpoint <url> --credential <credential>'", configPath)
 		}
-		return pollinatorconfig.Selection{}, "", err
+		return pollinatorconfig.Selection{}, err
 	}
 	selection, err := cfg.Select(options.connection)
 	if err != nil {
-		return pollinatorconfig.Selection{}, "", err
+		return pollinatorconfig.Selection{}, err
 	}
+	return selection, nil
+}
+
+func resolveSelectedCredential(selection pollinatorconfig.Selection) (string, error) {
 	credentialPath, err := pollinatorconfig.ResolveCredentialReference(selection.Connection.Credential)
 	if err != nil {
-		return pollinatorconfig.Selection{}, "", err
+		return "", err
 	}
-	return selection, credentialPath, nil
+	return credentialPath, nil
 }
 
 func runBridge(ctx context.Context, options bridgeOptions, in io.Reader, out, errOut io.Writer) error {
-	selection, credentialPath, err := loadSelectedConnection(options)
+	selection, err := loadSelectedConnection(options)
+	if err != nil {
+		return err
+	}
+	if err := mcpclient.ValidateLocalGovernedEndpoint(selection.Connection.Endpoint); err != nil {
+		return fmt.Errorf("connection %q: %w", selection.Name, err)
+	}
+	credentialPath, err := resolveSelectedCredential(selection)
 	if err != nil {
 		return err
 	}
@@ -188,7 +199,7 @@ func runDiagnose(ctx context.Context, options bridgeOptions, out io.Writer) erro
 	fmt.Fprintf(out, "tendril-mcp version: %s\n", buildinfo.Version)
 	fmt.Fprintf(out, "config file: %s\n", configPath)
 
-	selection, credentialPath, err := loadSelectedConnection(options)
+	selection, err := loadSelectedConnection(options)
 	if err != nil {
 		fmt.Fprintf(out, "selected connection: unavailable\n")
 		fmt.Fprintf(out, "selection source: %s\n", selectionSource(options))
@@ -199,6 +210,17 @@ func runDiagnose(ctx context.Context, options bridgeOptions, out io.Writer) erro
 	fmt.Fprintf(out, "selection source: %s\n", selection.Source)
 	fmt.Fprintf(out, "endpoint: %s\n", selection.Connection.Endpoint)
 	fmt.Fprintf(out, "credential reference: %s\n", selection.Connection.Credential)
+	if err := mcpclient.ValidateLocalGovernedEndpoint(selection.Connection.Endpoint); err != nil {
+		fmt.Fprintf(out, "transport posture: unsupported (%v)\n", err)
+		fmt.Fprintln(out, "authentication: refused (transport posture is not supported by the current local-governed path)")
+		return errors.New("diagnose preflight failed")
+	}
+	fmt.Fprintln(out, "transport posture: accepted")
+	credentialPath, err := resolveSelectedCredential(selection)
+	if err != nil {
+		fmt.Fprintf(out, "preflight: refused (%v)\n", err)
+		return errors.New("diagnose preflight failed")
+	}
 	fmt.Fprintf(out, "credential path: %s\n", credentialPath)
 
 	root, credentialErr := mcpclient.LoadCredentialFile(credentialPath)
