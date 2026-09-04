@@ -34,7 +34,7 @@ func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.Ser
 	t.Cleanup(func() { _ = store.Close() })
 
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			return core.SeedGrowResult{
 				Status: core.SeedStatusSatisfied, Iterations: 1,
 				PhytomerID: spec.PhytomerID,
@@ -244,7 +244,7 @@ func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testin
 		RequestID:       "req-safe-123",
 	}
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(_ context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(_ context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			return core.SeedGrowResult{
 				Status:                core.SeedStatusSatisfied,
 				Iterations:            2,
@@ -345,7 +345,7 @@ func TestSeedAsyncPersistFailureDoesNotAccept(t *testing.T) {
 		t.Fatalf("session manager: %v", err)
 	}
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			t.Fatal("execution must not start when ownership cannot be persisted")
 			return core.SeedGrowResult{}, nil
 		},
@@ -400,7 +400,7 @@ func TestSeedAsyncWithoutHistoryDoesNotAccept(t *testing.T) {
 		t.Fatalf("session manager: %v", err)
 	}
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			t.Fatal("execution must not start when ownership cannot be persisted")
 			return core.SeedGrowResult{}, nil
 		},
@@ -424,7 +424,7 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 	var openings []core.SeedOpening
 	executed := make(chan core.SeedSpec, 1)
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			executed <- spec
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},

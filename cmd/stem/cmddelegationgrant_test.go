@@ -174,7 +174,7 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 		}
 		coreSvc := core.NewService(manager).
 			WithSeed(core.SeedOperations{
-				Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+				Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 					ran.Add(1)
 					select {
 					case <-started:

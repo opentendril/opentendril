@@ -22,15 +22,38 @@ import (
 
 func TestContinuationPersistenceNilHistoryFailsHonestly(t *testing.T) {
 	port := continuationPersistence(nil)
-	_, _, err := port.ResolveTarget(context.Background(), "tendril-1")
+	ctx := context.Background()
+	_, _, err := port.ResolveTarget(ctx, "tendril-1")
 	if !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
 		t.Fatalf("resolve: %v", err)
 	}
-	_, err = port.Accept(context.Background(), core.ContinuationAcceptance{
+	_, err = port.Accept(ctx, core.ContinuationAcceptance{
 		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "go",
 	})
 	if !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
 		t.Fatalf("accept: %v", err)
+	}
+	target := core.ContinuationTarget{PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo"}
+	if _, err := port.ClaimPending(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := port.MarkDelivered(ctx, target, []string{"continuation-1"}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("deliver: %v", err)
+	}
+	if _, err := port.HasUnresolved(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("unresolved: %v", err)
+	}
+	if _, err := port.AcquireSettlementFence(ctx, target); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("fence: %v", err)
+	}
+	if err := port.CompleteSuccessfulSettlement(ctx, core.SeedSettlement{Status: core.SeedStatusSatisfied}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := port.AccountTerminalFailure(ctx, core.SeedSettlement{Status: core.SeedStatusWithered}); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("account: %v", err)
+	}
+	if err := port.ReconcileOrphaned(ctx); !errors.Is(err, core.ErrContinuationHistoryUnavailable) {
+		t.Fatalf("reconcile: %v", err)
 	}
 }
 

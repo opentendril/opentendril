@@ -24,7 +24,7 @@ func newSeedService(t *testing.T) (*Service, *SeedSpec) {
 	}
 	captured := &SeedSpec{}
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			*captured = spec
 			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1}, nil
 		},
@@ -541,7 +541,7 @@ func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
 	}
 	var ran atomic.Int32
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			ran.Add(1)
 			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
@@ -647,7 +647,7 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 	}
 	var settled SeedSettlement
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			return SeedGrowResult{
 				Status:                SeedStatusSatisfied,
 				Iterations:            3,
@@ -709,7 +709,7 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 	code := 2
 	var settled SeedSettlement
 	svc := NewService(manager).WithSeed(SeedOperations{
-		Run: func(_ context.Context, spec SeedSpec) (SeedGrowResult, error) {
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 			return SeedGrowResult{
 				Status:     SeedStatusExhausted,
 				Iterations: 1,

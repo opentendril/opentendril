@@ -641,7 +641,7 @@ func TestPhytomerWatchDispatchToFruitIntegration(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	coreSvc := core.NewService(manager).WithSeed(core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			close(started)
 			select {
 			case <-release:

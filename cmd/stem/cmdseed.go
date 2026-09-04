@@ -159,7 +159,7 @@ func seedPersistence(history *historydb.Store) core.SeedPersistence {
 // reviewable Fruit back.
 func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SeedOperations {
 	return core.SeedOperations{
-		Run: func(ctx context.Context, spec core.SeedSpec) (core.SeedGrowResult, error) {
+		Run: func(ctx context.Context, spec core.SeedSpec, lifecycle *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
 			bus := ambientBus
 			if bus == nil {
 				bus = eventbus.New()
@@ -168,7 +168,7 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 				}
 				defer bus.Shutdown()
 			}
-			result, err := conductor.RunSeed(ctx, conductor.SeedExecution{
+			execution := conductor.SeedExecution{
 				Substrate:     spec.Substrate,
 				Goal:          spec.Goal,
 				Verify:        spec.Verify,
@@ -180,7 +180,16 @@ func seedOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.See
 				PrepareSprout: func(ctx context.Context, orch *conductor.DockerOrchestrator, iteration int) error {
 					return prepareSeedSprout(ctx, history, spec, orch, iteration)
 				},
-			})
+			}
+			if lifecycle != nil {
+				execution.Continuation = conductor.SeedContinuationBoundary{
+					DeliverPending:         lifecycle.DeliverPending,
+					ConfirmDelivery:        lifecycle.ConfirmDelivery,
+					AcquireSettlementFence: lifecycle.AcquireSettlementFence,
+					HasUnresolved:          lifecycle.HasUnresolved,
+				}
+			}
+			result, err := conductor.RunSeed(ctx, execution)
 			translated := core.SeedGrowResult{
 				Status:                  result.Status,
 				Iterations:              result.Iterations,

@@ -60,7 +60,7 @@ func TestWorkspaceResolutionConsistency(t *testing.T) {
 
 	// 3. Seed (via seedOperations)
 	seed := seedOperations(nil, nil)
-	_, errSeed := seed.Run(ctx, core.SeedSpec{Substrate: "missing_managed", PhytomerID: "tendril-resolver"})
+	_, errSeed := seed.Run(ctx, core.SeedSpec{Substrate: "missing_managed", PhytomerID: "tendril-resolver"}, nil)
 	expectError("Seed", errSeed)
 
 	// 4. Sprout (via sproutOperations)

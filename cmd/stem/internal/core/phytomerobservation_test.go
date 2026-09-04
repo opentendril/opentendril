@@ -375,7 +375,7 @@ func TestSeedStatusIsTerminal(t *testing.T) {
 			t.Fatalf("%q should be terminal", status)
 		}
 	}
-	for _, status := range []string{"", "running", "matured", "unknown"} {
+	for _, status := range []string{"", "running", "settling", "matured", "unknown"} {
 		if core.SeedStatusIsTerminal(status) {
 			t.Fatalf("%q should not be terminal", status)
 		}
