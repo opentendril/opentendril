@@ -27,6 +27,7 @@ var (
 	ErrContinuationTargetNotFound      = errors.New("phytomer continuation target not found")
 	ErrContinuationPollenMismatch      = errors.New("phytomer continuation pollen does not match seed ownership")
 	ErrContinuationNotEligible         = errors.New("phytomer is not continuation-eligible")
+	ErrContinuationTargetChanged       = errors.New("phytomer continuation target ownership changed")
 	ErrContinuationIdempotencyConflict = errors.New("phytomer continuation idempotency key was reused with different intent")
 	ErrContinuationInvalid             = errors.New("phytomer continuation request is invalid")
 )
@@ -42,11 +43,15 @@ type ContinuationInput struct {
 }
 
 // ContinuationAcceptance is the persist-port request Core composes after
-// resolving Stem-owned ownership. Substrate is not caller-supplied: history
-// records the Substrate from the Seed ownership row.
+// resolving Stem-owned ownership. Pollen, Substrate, and Handle are the
+// expected Stem-resolved identity used for atomic revalidation — not
+// caller-nominated authority. The stored Substrate is the live Seed row
+// after that equality check succeeds.
 type ContinuationAcceptance struct {
 	PhytomerID     string
 	Pollen         string
+	Substrate      string
+	Handle         string
 	IdempotencyKey string
 	Intent         string
 	IntentDigest   string
@@ -156,15 +161,16 @@ func continuationEligibilityError(status, substrate string) error {
 	if strings.TrimSpace(substrate) == "" {
 		return ErrContinuationNotEligible
 	}
-	if strings.TrimSpace(status) == "" || SeedStatusIsTerminal(status) {
+	if strings.TrimSpace(status) != SeedStatusRunning {
 		return ErrContinuationNotEligible
 	}
 	return nil
 }
 
 // AcceptContinuation durably records continued intent for an eligible
-// Seed-owned Phytomer. Pollen is taken from trusted context. Substrate is
-// resolved from durable Seed ownership. Idempotency is keyed by
+// Seed-owned Phytomer. It resolves Stem-owned ownership first, then passes
+// that expected Pollen/Substrate/Handle into persistence so the atomic
+// insert can refuse a TOCTOU ownership change. Idempotency is keyed by
 // Phytomer + Pollen + idempotency key; equality uses the intent digest.
 func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) (ContinuationRecord, error) {
 	if s == nil || s.continuation.Accept == nil || s.continuation.ResolveTarget == nil {
@@ -176,12 +182,15 @@ func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) 
 	if phytomerID == "" || intent == "" || key == "" {
 		return ContinuationRecord{}, fmt.Errorf("%w: phytomer id, intent, and idempotency key are required", ErrContinuationInvalid)
 	}
-	if _, err := s.ResolveContinuationTarget(ctx, phytomerID); err != nil {
+	target, err := s.ResolveContinuationTarget(ctx, phytomerID)
+	if err != nil {
 		return ContinuationRecord{}, err
 	}
 	rec, err := s.continuation.Accept(ctx, ContinuationAcceptance{
 		PhytomerID:     phytomerID,
-		Pollen:         PollenFromContext(ctx),
+		Pollen:         target.Pollen,
+		Substrate:      target.Substrate,
+		Handle:         target.Handle,
 		IdempotencyKey: key,
 		Intent:         intent,
 		IntentDigest:   ContinuationIntentDigest(intent),

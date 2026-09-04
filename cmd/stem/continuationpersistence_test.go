@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
@@ -39,7 +42,7 @@ func TestContinuationPersistenceAcceptsFromSeedOwnership(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
 		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo",
-		Status: "running", StartedAt: time.Now().UTC(),
+		Status: core.SeedStatusRunning, StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record seed: %v", err)
 	}
@@ -61,6 +64,56 @@ func TestContinuationPersistenceAcceptsFromSeedOwnership(t *testing.T) {
 	}
 }
 
+func TestAcceptContinuationFailsWhenSubstrateChangesAfterResolve(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "repo-a",
+		Status: core.SeedStatusRunning, StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+
+	manager, err := session.NewManager(context.Background(), store)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	port := continuationPersistence(store)
+	svc := core.NewService(manager).WithContinuationPersistence(core.ContinuationPersistence{
+		ResolveTarget: port.ResolveTarget,
+		Accept: func(ctx context.Context, in core.ContinuationAcceptance) (core.ContinuationRecord, error) {
+			if in.Substrate != "repo-a" || in.Pollen != "claude" || in.Handle != "seed-1" {
+				t.Errorf("expected resolved ownership not carried: %+v", in)
+			}
+			raw, err := sql.Open("sqlite", store.Path())
+			if err != nil {
+				t.Fatalf("raw open: %v", err)
+			}
+			defer raw.Close()
+			if _, err := raw.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+				t.Fatalf("busy_timeout: %v", err)
+			}
+			if _, err := raw.Exec(`UPDATE seedruns SET substrate = ? WHERE phytomerId = ?`, "repo-b", "tendril-1"); err != nil {
+				t.Fatalf("mutate substrate: %v", err)
+			}
+			return port.Accept(ctx, in)
+		},
+	})
+	_, err = svc.AcceptContinuation(core.WithPollen(context.Background(), "claude"), core.ContinuationInput{
+		PhytomerID: "tendril-1", Intent: "keep going", IdempotencyKey: "k1",
+	})
+	if !errors.Is(err, core.ErrContinuationTargetChanged) {
+		t.Fatalf("TOCTOU accept: %v", err)
+	}
+	listed, err := store.ListContinuationsByPhytomer(context.Background(), "tendril-1")
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("want no continuation after ownership change, got %+v err=%v", listed, err)
+	}
+}
+
 func TestBuildServeCoreWiresContinuationPersistence(t *testing.T) {
 	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
 	if err != nil {
@@ -69,7 +122,7 @@ func TestBuildServeCoreWiresContinuationPersistence(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
 		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo",
-		Status: "running", StartedAt: time.Now().UTC(),
+		Status: core.SeedStatusRunning, StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record seed: %v", err)
 	}

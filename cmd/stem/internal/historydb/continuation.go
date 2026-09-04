@@ -15,6 +15,10 @@ import (
 const (
 	continuationDeliveryPending = "pending"
 	continuationIntentAAD       = "historydb/continuations/intent"
+	// seedStatusRunning is the only continuation-eligible Seed lifecycle
+	// status. It must stay aligned with core.SeedStatusRunning; historydb
+	// cannot import Core.
+	seedStatusRunning = "running"
 )
 
 // Continuation is one durable accepted continued-intent record for a
@@ -35,12 +39,15 @@ type Continuation struct {
 	FailedAt       time.Time
 }
 
-// ContinuationAcceptance is the atomic insert request. Substrate is not
-// accepted from the caller: ownership is read from seedruns inside the
-// same transaction.
+// ContinuationAcceptance is the atomic insert request. Pollen, Substrate,
+// and Handle are the expected Stem-resolved ownership from Core's prior
+// target resolution. They are compared to the live seedruns row inside the
+// same transaction; the stored Substrate is that live row after equality.
 type ContinuationAcceptance struct {
 	PhytomerID     string
 	Pollen         string
+	Substrate      string
+	Handle         string
 	IdempotencyKey string
 	Intent         string
 	IntentDigest   string
@@ -50,6 +57,7 @@ var (
 	ErrContinuationNotFound            = errors.New("phytomer continuation target not found")
 	ErrContinuationPollenMismatch      = errors.New("phytomer continuation pollen does not match seed ownership")
 	ErrContinuationNotEligible         = errors.New("phytomer is not continuation-eligible")
+	ErrContinuationTargetChanged       = errors.New("phytomer continuation target ownership changed")
 	ErrContinuationIdempotencyConflict = errors.New("phytomer continuation idempotency key was reused with different intent")
 	ErrContinuationInvalid             = errors.New("phytomer continuation request is invalid")
 )
@@ -71,16 +79,10 @@ func seedRunIsContinuationEligible(status, substrate string) error {
 	if strings.TrimSpace(substrate) == "" {
 		return ErrContinuationNotEligible
 	}
-	status = strings.TrimSpace(status)
-	if status == "" {
+	if strings.TrimSpace(status) != seedStatusRunning {
 		return ErrContinuationNotEligible
 	}
-	switch status {
-	case "satisfied", "exhausted", "withered", "fruit-publication-failed":
-		return ErrContinuationNotEligible
-	default:
-		return nil
-	}
+	return nil
 }
 
 // ResolveContinuationTarget returns the Seed ownership row for phytomerID.
@@ -103,6 +105,8 @@ func (s *Store) AcceptContinuation(ctx context.Context, in ContinuationAcceptanc
 	}
 	phytomerID := strings.TrimSpace(in.PhytomerID)
 	pollen := strings.TrimSpace(in.Pollen)
+	expectedSubstrate := strings.TrimSpace(in.Substrate)
+	expectedHandle := strings.TrimSpace(in.Handle)
 	key := strings.TrimSpace(in.IdempotencyKey)
 	intent := strings.TrimSpace(in.Intent)
 	if phytomerID == "" || key == "" || intent == "" {
@@ -131,8 +135,17 @@ func (s *Store) AcceptContinuation(ctx context.Context, in ContinuationAcceptanc
 	if !found {
 		return Continuation{}, ErrContinuationNotFound
 	}
+	if expectedSubstrate == "" {
+		return Continuation{}, ErrContinuationInvalid
+	}
 	if strings.TrimSpace(seed.Pollen) != pollen {
 		return Continuation{}, ErrContinuationPollenMismatch
+	}
+	if strings.TrimSpace(seed.Substrate) != expectedSubstrate {
+		return Continuation{}, ErrContinuationTargetChanged
+	}
+	if expectedHandle != "" && strings.TrimSpace(seed.Handle) != expectedHandle {
+		return Continuation{}, ErrContinuationTargetChanged
 	}
 	if err := seedRunIsContinuationEligible(seed.Status, seed.Substrate); err != nil {
 		return Continuation{}, err

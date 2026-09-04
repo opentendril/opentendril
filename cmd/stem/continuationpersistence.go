@@ -41,6 +41,8 @@ func continuationPersistence(history *historydb.Store) core.ContinuationPersiste
 			rec, err := history.AcceptContinuation(ctx, historydb.ContinuationAcceptance{
 				PhytomerID:     in.PhytomerID,
 				Pollen:         in.Pollen,
+				Substrate:      in.Substrate,
+				Handle:         in.Handle,
 				IdempotencyKey: in.IdempotencyKey,
 				Intent:         in.Intent,
 				IntentDigest:   in.IntentDigest,
@@ -80,6 +82,8 @@ func mapContinuationErr(err error) error {
 		return core.ErrContinuationPollenMismatch
 	case errors.Is(err, historydb.ErrContinuationNotEligible):
 		return core.ErrContinuationNotEligible
+	case errors.Is(err, historydb.ErrContinuationTargetChanged):
+		return core.ErrContinuationTargetChanged
 	case errors.Is(err, historydb.ErrContinuationIdempotencyConflict):
 		return core.ErrContinuationIdempotencyConflict
 	case errors.Is(err, historydb.ErrContinuationInvalid):

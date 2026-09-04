@@ -12,20 +12,16 @@ import (
 )
 
 func TestContinuationInputHasNoCallerSubstrate(t *testing.T) {
-	for _, typ := range []reflect.Type{
-		reflect.TypeOf(core.ContinuationInput{}),
-		reflect.TypeOf(core.ContinuationAcceptance{}),
-	} {
-		for i := 0; i < typ.NumField(); i++ {
-			field := typ.Field(i)
-			name := strings.ToLower(field.Name)
-			if strings.Contains(name, "substrate") {
-				t.Errorf("%s field %s is a caller-controlled Substrate path", typ.Name(), field.Name)
-			}
-			tag := strings.ToLower(field.Tag.Get("json"))
-			if strings.Contains(tag, "substrate") {
-				t.Errorf("%s json tag %q is a caller-controlled Substrate path", typ.Name(), field.Tag.Get("json"))
-			}
+	typ := reflect.TypeOf(core.ContinuationInput{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name := strings.ToLower(field.Name)
+		if strings.Contains(name, "substrate") {
+			t.Errorf("ContinuationInput field %s is a caller-controlled Substrate path", field.Name)
+		}
+		tag := strings.ToLower(field.Tag.Get("json"))
+		if strings.Contains(tag, "substrate") {
+			t.Errorf("ContinuationInput json tag %q is a caller-controlled Substrate path", field.Tag.Get("json"))
 		}
 	}
 }
@@ -100,7 +96,7 @@ func TestResolveContinuationTargetNoSeedOwnershipFails(t *testing.T) {
 
 func TestResolveContinuationTargetUsesSeedOwnership(t *testing.T) {
 	svc := newContinuationService(t, owningContinuationPort(core.ContinuationTarget{
-		PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo", Status: "running",
+		PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo", Status: core.SeedStatusRunning,
 	}))
 	target, err := svc.ResolveContinuationTarget(core.WithPollen(context.Background(), "claude"), "tendril-1")
 	if err != nil {
@@ -117,7 +113,7 @@ func TestResolveContinuationTargetUsesSeedOwnership(t *testing.T) {
 
 func TestResolveContinuationTargetWrongPollenFails(t *testing.T) {
 	svc := newContinuationService(t, owningContinuationPort(core.ContinuationTarget{
-		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", Status: "running",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", Status: core.SeedStatusRunning,
 	}))
 	_, err := svc.ResolveContinuationTarget(core.WithPollen(context.Background(), "other"), "tendril-1")
 	if !errors.Is(err, core.ErrContinuationPollenMismatch) {
@@ -139,9 +135,21 @@ func TestResolveContinuationTargetTerminalSeedFails(t *testing.T) {
 	}
 }
 
+func TestResolveContinuationTargetUnrecognizedStatusFails(t *testing.T) {
+	for _, status := range []string{"unknown", "matured", "settling"} {
+		svc := newContinuationService(t, owningContinuationPort(core.ContinuationTarget{
+			PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", Status: status,
+		}))
+		_, err := svc.ResolveContinuationTarget(core.WithPollen(context.Background(), "claude"), "tendril-1")
+		if !errors.Is(err, core.ErrContinuationNotEligible) {
+			t.Fatalf("status %q: %v", status, err)
+		}
+	}
+}
+
 func TestResolveContinuationTargetBlankSubstrateFails(t *testing.T) {
 	svc := newContinuationService(t, owningContinuationPort(core.ContinuationTarget{
-		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "  ", Status: "running",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "  ", Status: core.SeedStatusRunning,
 	}))
 	_, err := svc.ResolveContinuationTarget(core.WithPollen(context.Background(), "claude"), "tendril-1")
 	if !errors.Is(err, core.ErrContinuationNotEligible) {
@@ -180,7 +188,7 @@ func TestAcceptContinuationComposesStemOwnedOwnership(t *testing.T) {
 	var got core.ContinuationAcceptance
 	svc := newContinuationService(t, core.ContinuationPersistence{
 		ResolveTarget: owningContinuationPort(core.ContinuationTarget{
-			PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", Status: "running",
+			PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo", Status: core.SeedStatusRunning,
 		}).ResolveTarget,
 		Accept: func(_ context.Context, in core.ContinuationAcceptance) (core.ContinuationRecord, error) {
 			got = in
@@ -188,7 +196,7 @@ func TestAcceptContinuationComposesStemOwnedOwnership(t *testing.T) {
 				ContinuationID: "continuation-1",
 				PhytomerID:     in.PhytomerID,
 				Pollen:         in.Pollen,
-				Substrate:      "myrepo",
+				Substrate:      in.Substrate,
 				IdempotencyKey: in.IdempotencyKey,
 				IntentDigest:   in.IntentDigest,
 				Intent:         in.Intent,
@@ -205,6 +213,9 @@ func TestAcceptContinuationComposesStemOwnedOwnership(t *testing.T) {
 	}
 	if got.Pollen != "claude" || got.PhytomerID != "tendril-1" || got.Intent != "keep going" {
 		t.Fatalf("acceptance = %+v", got)
+	}
+	if got.Substrate != "myrepo" || got.Handle != "seed-1" {
+		t.Fatalf("expected ownership not carried: %+v", got)
 	}
 	if got.IntentDigest != core.ContinuationIntentDigest("keep going") {
 		t.Fatalf("digest = %q", got.IntentDigest)

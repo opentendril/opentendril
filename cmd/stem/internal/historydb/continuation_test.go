@@ -21,7 +21,7 @@ func TestAcceptContinuationFirstInsert(t *testing.T) {
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 
 	rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "keep going",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "keep going",
 	})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
@@ -48,13 +48,13 @@ func TestAcceptContinuationIdempotentSameIntent(t *testing.T) {
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 
 	first, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "keep going",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "keep going",
 	})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	second, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "keep going",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "keep going",
 	})
 	if err != nil {
 		t.Fatalf("second: %v", err)
@@ -73,12 +73,12 @@ func TestAcceptContinuationIdempotencyConflict(t *testing.T) {
 	ctx := context.Background()
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	if _, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "first intent",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "first intent",
 	}); err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	_, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "different intent",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "different intent",
 	})
 	if !errors.Is(err, ErrContinuationIdempotencyConflict) {
 		t.Fatalf("conflict: %v", err)
@@ -101,7 +101,7 @@ func TestAcceptContinuationConcurrentIdentical(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-				PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "same", Intent: "same intent",
+				PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "same", Intent: "same intent",
 			})
 			errs[i] = err
 			ids[i] = rec.ContinuationID
@@ -140,7 +140,7 @@ func TestAcceptContinuationConcurrentDistinctSequences(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-				PhytomerID: "tendril-1", Pollen: "claude",
+				PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo",
 				IdempotencyKey: "k-" + string(rune('a'+i)), Intent: "intent-" + string(rune('a'+i)),
 			})
 			errs[i] = err
@@ -175,7 +175,7 @@ func TestAcceptContinuationSurvivesReopen(t *testing.T) {
 	}
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	first, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "keep going",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "keep going",
 	})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
@@ -204,7 +204,7 @@ func TestAcceptContinuationEncryptedAtRest(t *testing.T) {
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	secret := "PLAINTEXT-CONTINUATION-INTENT-DO-NOT-STORE"
 	rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: secret,
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: secret,
 	})
 	if err != nil {
 		t.Fatalf("accept: %v", err)
@@ -248,7 +248,7 @@ func TestAcceptContinuationEncryptionOptOut(t *testing.T) {
 	ctx := context.Background()
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	if _, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "claude", IdempotencyKey: "k1", Intent: "opt-out-intent",
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "opt-out-intent",
 	}); err != nil {
 		t.Fatalf("accept: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestAcceptContinuationRefusesUnknownAndTerminal(t *testing.T) {
 
 	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
 	_, err = store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-1", Pollen: "other", IdempotencyKey: "k1", Intent: "go",
+		PhytomerID: "tendril-1", Pollen: "other", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "go",
 	})
 	if !errors.Is(err, ErrContinuationPollenMismatch) {
 		t.Fatalf("wrong pollen: %v", err)
@@ -296,7 +296,7 @@ func TestAcceptContinuationRefusesUnknownAndTerminal(t *testing.T) {
 		t.Fatalf("record terminal: %v", err)
 	}
 	_, err = store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-term", Pollen: "claude", IdempotencyKey: "k1", Intent: "go",
+		PhytomerID: "tendril-term", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "go",
 	})
 	if !errors.Is(err, ErrContinuationNotEligible) {
 		t.Fatalf("terminal: %v", err)
@@ -304,15 +304,59 @@ func TestAcceptContinuationRefusesUnknownAndTerminal(t *testing.T) {
 
 	if err := store.RecordSeedRun(ctx, SeedRun{
 		Handle: "seed-blank", Pollen: "claude", PhytomerID: "tendril-blank", Substrate: "",
-		Status: "running", StartedAt: time.Now().UTC(),
+		Status: seedStatusRunning, StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record blank: %v", err)
 	}
 	_, err = store.AcceptContinuation(ctx, ContinuationAcceptance{
-		PhytomerID: "tendril-blank", Pollen: "claude", IdempotencyKey: "k1", Intent: "go",
+		PhytomerID: "tendril-blank", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "go",
 	})
-	if !errors.Is(err, ErrContinuationNotEligible) {
-		t.Fatalf("blank substrate: %v", err)
+	if !errors.Is(err, ErrContinuationTargetChanged) {
+		t.Fatalf("blank live substrate vs expected ownership: %v", err)
+	}
+}
+
+func TestAcceptContinuationRefusesUnrecognizedStatus(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	for _, status := range []string{"unknown", "matured", "settling"} {
+		phytomerID := "tendril-" + status
+		if err := store.RecordSeedRun(ctx, SeedRun{
+			Handle: "seed-" + status, Pollen: "claude", PhytomerID: phytomerID, Substrate: "myrepo",
+			Status: status, StartedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("record %q: %v", status, err)
+		}
+		_, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
+			PhytomerID: phytomerID, Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "k1", Intent: "go",
+		})
+		if !errors.Is(err, ErrContinuationNotEligible) {
+			t.Fatalf("status %q: %v", status, err)
+		}
+		listed, err := store.ListContinuationsByPhytomer(ctx, phytomerID)
+		if err != nil || len(listed) != 0 {
+			t.Fatalf("status %q inserted a continuation: %+v err=%v", status, listed, err)
+		}
+	}
+}
+
+func TestAcceptContinuationRefusesStaleExpectedSubstrate(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "repo-a")
+	if _, err := store.db.ExecContext(ctx, `UPDATE seedruns SET substrate = ? WHERE phytomerId = ?`, "repo-b", "tendril-1"); err != nil {
+		t.Fatalf("mutate substrate: %v", err)
+	}
+	_, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "repo-a", Handle: "seed-1",
+		IdempotencyKey: "k1", Intent: "keep going",
+	})
+	if !errors.Is(err, ErrContinuationTargetChanged) {
+		t.Fatalf("stale substrate: %v", err)
+	}
+	listed, err := store.ListContinuationsByPhytomer(ctx, "tendril-1")
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("want no continuation after ownership change, got %+v err=%v", listed, err)
 	}
 }
 
@@ -335,7 +379,7 @@ func mustRecordRunningSeed(t *testing.T, store *Store, handle, phytomerID, polle
 	t.Helper()
 	if err := store.RecordSeedRun(context.Background(), SeedRun{
 		Handle: handle, Pollen: pollen, PhytomerID: phytomerID, Substrate: substrate,
-		Status: "running", StartedAt: time.Now().UTC(),
+		Status: seedStatusRunning, StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("record seed: %v", err)
 	}
