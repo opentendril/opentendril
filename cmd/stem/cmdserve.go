@@ -238,18 +238,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	// lifecycle, genome, plasmid, substrate-grafting, mesh trait governance,
 	// sequence, and sprout/run capabilities; the REST, MCP, and CLI surfaces
 	// are adapters that route through this one service.
-	coreSvc := core.NewService(sessions).
-		WithTendrilDir(tendrilDir).
-		WithGenome(genomeOperations(resolveRepoRoot(""))).
-		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
-		WithMesh(meshOperations()).
-		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
-		WithSprout(sproutOperations(history, bus)).
-		WithStoma(stomaOperations()).
-		WithSeed(seedOperations(history, bus)).
-		WithSeedPersistence(seedPersistence(history)).
-		WithPhytomerObservationSource(phytomerObservationSource(history)).
-		WithGit(gitOperations())
+	coreSvc := buildServeCore(sessions, tendrilDir, history, bus)
 
 	meshServer := mesh.NewServer(resolveRepoRoot(""))
 
@@ -973,6 +962,26 @@ func resolveTriggerModeAndRunner(bus *eventbus.Bus) (triggers.TriggerMode, trigg
 	}
 
 	return triggersModeFromEnv(), terrariumRunner{providerName: providerName, bus: bus}
+}
+
+// buildServeCore constructs the long-lived daemon Core, including the
+// durable continuation persistence port. Persistence disabled (nil history)
+// still wires the port so acceptance fails honestly instead of buffering
+// continued intent in memory.
+func buildServeCore(sessions *session.Manager, tendrilDir string, history *historydb.Store, bus *eventbus.Bus) *core.Service {
+	return core.NewService(sessions).
+		WithTendrilDir(tendrilDir).
+		WithGenome(genomeOperations(resolveRepoRoot(""))).
+		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
+		WithMesh(meshOperations()).
+		WithSequence(serveSequenceOperations(resolveRepoRoot(""), bus)).
+		WithSprout(sproutOperations(history, bus)).
+		WithStoma(stomaOperations()).
+		WithSeed(seedOperations(history, bus)).
+		WithSeedPersistence(seedPersistence(history)).
+		WithPhytomerObservationSource(phytomerObservationSource(history)).
+		WithContinuationPersistence(continuationPersistence(history)).
+		WithGit(gitOperations())
 }
 
 type serveDependencies struct {

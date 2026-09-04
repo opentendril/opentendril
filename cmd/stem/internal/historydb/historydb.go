@@ -441,6 +441,24 @@ CREATE TABLE IF NOT EXISTS seedruns (
 );
 CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);
 
+CREATE TABLE IF NOT EXISTS continuations (
+	continuationId TEXT PRIMARY KEY,
+	phytomerId TEXT NOT NULL,
+	pollen TEXT NOT NULL,
+	substrate TEXT NOT NULL,
+	idempotencyKey TEXT NOT NULL,
+	intentDigest TEXT NOT NULL,
+	intent TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	deliveryState TEXT NOT NULL,
+	acceptedAt TEXT NOT NULL,
+	deliveredAt TEXT NOT NULL DEFAULT '',
+	failedAt TEXT NOT NULL DEFAULT '',
+	UNIQUE(phytomerId, pollen, idempotencyKey),
+	UNIQUE(phytomerId, sequence)
+);
+CREATE INDEX IF NOT EXISTS continuationsByPhytomer ON continuations(phytomerId, sequence);
+
 CREATE TABLE IF NOT EXISTS schemaMeta (
 	id INTEGER PRIMARY KEY CHECK (id = 1),
 	version INTEGER NOT NULL
