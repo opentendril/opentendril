@@ -41,7 +41,7 @@ func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.Ser
 				Branch:     "tendril/seed-x", Diff: "the diff", Logs: "the logs",
 			}, nil
 		},
-	}).WithSeedPersistence(testSeedPersistence(store))
+	}).WithSeedPersistence(testSeedPersistence(store)).WithContinuationPersistence(testContinuationPersistence(store))
 
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(grants), Bus: eventbus.New()}
 	handler := NewSeedHandler(coreSvc).WithDelegation(gate).WithHistory(store)
@@ -67,27 +67,81 @@ func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 			})
 		},
 		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
-			if store == nil {
-				return core.ErrSeedHistoryUnavailable
+			return testPersistSeedSettlement(ctx, store, settled)
+		},
+	}
+}
+
+func testPersistSeedSettlement(ctx context.Context, store *historydb.Store, settled core.SeedSettlement) error {
+	if store == nil {
+		return core.ErrSeedHistoryUnavailable
+	}
+	return store.RecordSeedRun(ctx, historydb.SeedRun{
+		Handle:                  settled.Handle,
+		Pollen:                  settled.Pollen,
+		PhytomerID:              settled.PhytomerID,
+		Substrate:               settled.Substrate,
+		Goal:                    settled.Goal,
+		Status:                  settled.Status,
+		Iterations:              settled.Iterations,
+		Branch:                  settled.Branch,
+		Commit:                  settled.Commit,
+		Diff:                    settled.Diff,
+		Logs:                    settled.Logs,
+		Error:                   settled.Error,
+		PublicationDiagnostic:   testHistorySeedPublicationDiagnostic(settled.PublicationDiagnostic),
+		VerificationDiagnostics: testHistorySeedVerificationDiagnostics(settled.VerificationDiagnostics),
+		StartedAt:               settled.StartedAt,
+		FinishedAt:              settled.FinishedAt,
+	})
+}
+
+func testContinuationPersistence(store *historydb.Store) core.ContinuationPersistence {
+	unavailable := func() error {
+		if store == nil {
+			return core.ErrContinuationHistoryUnavailable
+		}
+		return nil
+	}
+	return core.ContinuationPersistence{
+		ResolveTarget: func(context.Context, string) (core.ContinuationTarget, bool, error) {
+			return core.ContinuationTarget{}, false, unavailable()
+		},
+		Accept: func(context.Context, core.ContinuationAcceptance) (core.ContinuationRecord, error) {
+			return core.ContinuationRecord{}, core.ErrContinuationHistoryUnavailable
+		},
+		ClaimPending: func(context.Context, core.ContinuationTarget) ([]core.ContinuationRecord, error) {
+			if err := unavailable(); err != nil {
+				return nil, err
 			}
-			return store.RecordSeedRun(ctx, historydb.SeedRun{
-				Handle:                  settled.Handle,
-				Pollen:                  settled.Pollen,
-				PhytomerID:              settled.PhytomerID,
-				Substrate:               settled.Substrate,
-				Goal:                    settled.Goal,
-				Status:                  settled.Status,
-				Iterations:              settled.Iterations,
-				Branch:                  settled.Branch,
-				Commit:                  settled.Commit,
-				Diff:                    settled.Diff,
-				Logs:                    settled.Logs,
-				Error:                   settled.Error,
-				PublicationDiagnostic:   testHistorySeedPublicationDiagnostic(settled.PublicationDiagnostic),
-				VerificationDiagnostics: testHistorySeedVerificationDiagnostics(settled.VerificationDiagnostics),
-				StartedAt:               settled.StartedAt,
-				FinishedAt:              settled.FinishedAt,
-			})
+			return nil, nil
+		},
+		MarkDelivered: func(context.Context, core.ContinuationTarget, []string) error {
+			return unavailable()
+		},
+		HasUnresolved: func(context.Context, core.ContinuationTarget) (bool, error) {
+			return false, unavailable()
+		},
+		AcquireSettlementFence: func(context.Context, core.ContinuationTarget) (bool, error) {
+			return true, unavailable()
+		},
+		CompleteSuccessfulSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
+			if err := unavailable(); err != nil {
+				return err
+			}
+			return testPersistSeedSettlement(ctx, store, settled)
+		},
+		AccountTerminalFailure: func(ctx context.Context, settled core.SeedSettlement) (core.TerminalFailureAccount, error) {
+			if err := unavailable(); err != nil {
+				return core.TerminalFailureAccount{}, err
+			}
+			return core.TerminalFailureAccount{}, testPersistSeedSettlement(ctx, store, settled)
+		},
+		ReconcileOrphaned: func(ctx context.Context) error {
+			if err := unavailable(); err != nil {
+				return err
+			}
+			return store.ReconcileOrphanedSeedWork(ctx)
 		},
 	}
 }
@@ -256,7 +310,7 @@ func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testin
 				PublicationDiagnostic: diagnostic,
 			}, fmt.Errorf("upstream-secret-content")
 		},
-	}).WithSeedPersistence(testSeedPersistence(store))
+	}).WithSeedPersistence(testSeedPersistence(store)).WithContinuationPersistence(testContinuationPersistence(store))
 	gates := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("publication-pollinator")}), Bus: eventbus.New()}
 	handler := NewSeedHandler(coreSvc).WithDelegation(gates).WithHistory(store)
 	mux := http.NewServeMux()
@@ -353,7 +407,7 @@ func TestSeedAsyncPersistFailureDoesNotAccept(t *testing.T) {
 		RecordOpening: func(context.Context, core.SeedOpening) error {
 			return fmt.Errorf("disk full")
 		},
-	})
+	}).WithContinuationPersistence(testContinuationPersistence(nil))
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("local-pollinator")}), Bus: eventbus.New()}
 	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
 	mux := http.NewServeMux()
@@ -434,7 +488,7 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 			return nil
 		},
 		RecordSettlement: func(context.Context, core.SeedSettlement) error { return nil },
-	})
+	}).WithContinuationPersistence(testContinuationPersistence(nil))
 	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{seedGrantFor("local-pollinator")}), Bus: eventbus.New()}
 	handler := NewSeedHandler(coreSvc).WithDelegation(gate)
 	mux := http.NewServeMux()

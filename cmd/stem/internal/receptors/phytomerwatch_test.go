@@ -657,6 +657,7 @@ func TestPhytomerWatchDispatchToFruitIntegration(t *testing.T) {
 			}, nil
 		},
 	}).WithSeedPersistence(testSeedPersistence(store)).
+		WithContinuationPersistence(testContinuationPersistence(store)).
 		WithPhytomerObservationSource(testPhytomerObservationSource(store))
 
 	grants := []core.DelegationGrant{

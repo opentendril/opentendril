@@ -22,6 +22,121 @@ func TestSeedGrowInputHasNoDetachedContinuationSurface(t *testing.T) {
 	}
 }
 
+func TestSynchronousSeedGrowWithoutContinuationPersistenceStillRuns(t *testing.T) {
+	svc, captured := newSeedService(t)
+	result, err := svc.SeedGrow(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if result.Status != SeedStatusSatisfied || captured.Substrate != "core" || captured.PhytomerID == "" {
+		t.Fatalf("result=%+v spec=%+v", result, captured)
+	}
+}
+
+func TestOpenPreparedSeedRefusesUnwiredContinuationLifecycleBeforeRecordOpening(t *testing.T) {
+	svc, _ := newSeedService(t)
+	var openings int
+	svc.WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error {
+			openings++
+			return nil
+		},
+	})
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-unwired"); !errors.Is(err, ErrContinuationNotWired) {
+		t.Fatalf("open: %v, want ErrContinuationNotWired", err)
+	}
+	if openings != 0 {
+		t.Fatalf("RecordOpening ran %d time(s)", openings)
+	}
+}
+
+func TestOpenPreparedSeedRefusesPartialContinuationLifecycleBeforeRecordOpening(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*ContinuationPersistence)
+	}{
+		{"missing ClaimPending", func(p *ContinuationPersistence) { p.ClaimPending = nil }},
+		{"missing MarkDelivered", func(p *ContinuationPersistence) { p.MarkDelivered = nil }},
+		{"missing HasUnresolved", func(p *ContinuationPersistence) { p.HasUnresolved = nil }},
+		{"missing AcquireSettlementFence", func(p *ContinuationPersistence) { p.AcquireSettlementFence = nil }},
+		{"missing CompleteSuccessfulSettlement", func(p *ContinuationPersistence) { p.CompleteSuccessfulSettlement = nil }},
+		{"missing AccountTerminalFailure", func(p *ContinuationPersistence) { p.AccountTerminalFailure = nil }},
+		{"resolve and accept only", func(p *ContinuationPersistence) {
+			*p = ContinuationPersistence{ResolveTarget: p.ResolveTarget, Accept: p.Accept}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newSeedService(t)
+			var openings int
+			port := wiredContinuationPersistence()
+			tc.mutate(&port)
+			svc.WithSeedPersistence(SeedPersistence{
+				RecordOpening: func(context.Context, SeedOpening) error {
+					openings++
+					return nil
+				},
+			}).WithContinuationPersistence(port)
+			growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+			if err != nil {
+				t.Fatalf("prepare: %v", err)
+			}
+			if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-partial"); !errors.Is(err, ErrContinuationNotWired) {
+				t.Fatalf("open: %v, want ErrContinuationNotWired", err)
+			}
+			if openings != 0 {
+				t.Fatalf("RecordOpening ran %d time(s)", openings)
+			}
+		})
+	}
+}
+
+func TestGrowPreparedSeedRefusesOpenedSeedWhenLifecycleGoesMissing(t *testing.T) {
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	var ran int
+	var settlements int
+	svc := NewService(manager).WithSeed(SeedOperations{
+		Run: func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
+			ran++
+			return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+		},
+	}).WithSeedPersistence(SeedPersistence{
+		RecordOpening: func(context.Context, SeedOpening) error { return nil },
+		RecordSettlement: func(context.Context, SeedSettlement) error {
+			settlements++
+			return nil
+		},
+	}).WithContinuationPersistence(wiredContinuationPersistence())
+
+	growth, err := svc.PrepareSeed(context.Background(), validSeedInput())
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-defensive"); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	svc.WithContinuationPersistence(ContinuationPersistence{
+		ResolveTarget: wiredContinuationPersistence().ResolveTarget,
+		Accept:        wiredContinuationPersistence().Accept,
+	})
+	if _, err := svc.GrowPreparedSeed(context.Background(), growth); !errors.Is(err, ErrContinuationNotWired) {
+		t.Fatalf("grow: %v, want ErrContinuationNotWired", err)
+	}
+	if ran != 0 {
+		t.Fatalf("SeedOperations.Run ran %d time(s)", ran)
+	}
+	if settlements != 0 {
+		t.Fatalf("legacy RecordSettlement ran %d time(s)", settlements)
+	}
+}
+
 func TestSynchronousSeedGrowDoesNotReceiveContinuationLifecycle(t *testing.T) {
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -160,8 +275,33 @@ func TestCancelledExecutionContextStillGetsBoundedFinalization(t *testing.T) {
 	if persistCancelled {
 		t.Fatal("finalization context was already cancelled during persist")
 	}
-	if !persistHadDeadline || time.Until(persistDeadline) > 20*time.Second {
+	if !persistHadDeadline || time.Until(persistDeadline) > seedFinalizationTimeout+time.Second {
 		t.Fatalf("finalization context was not narrowly bounded: deadline=%v has=%v", persistDeadline, persistHadDeadline)
+	}
+}
+
+func TestSeedFinalizationContextSurvivesParentCancelAfterCreation(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	fin, stop := seedFinalizationContext(parent)
+	defer stop()
+	if fin.Err() != nil {
+		t.Fatalf("finalization context started cancelled: %v", fin.Err())
+	}
+	deadline, ok := fin.Deadline()
+	if !ok {
+		t.Fatal("finalization context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining > seedFinalizationTimeout || remaining <= 0 {
+		t.Fatalf("finalization bound = %v, want (0, %v]", remaining, seedFinalizationTimeout)
+	}
+	cancel()
+	if fin.Err() != nil {
+		t.Fatalf("parent cancel cancelled finalization: %v", fin.Err())
+	}
+	still, ok := fin.Deadline()
+	if !ok || !still.Equal(deadline) {
+		t.Fatalf("deadline changed after parent cancel: ok=%v was=%v now=%v", ok, deadline, still)
 	}
 }
 
@@ -239,6 +379,19 @@ func TestReconcileOrphanedSeedWorkNotWired(t *testing.T) {
 	if err := svc.ReconcileOrphanedSeedWork(context.Background()); !errors.Is(err, ErrContinuationNotWired) {
 		t.Fatalf("unwired reconcile: %v", err)
 	}
+}
+
+func captureOpenedSettlement(settled *SeedSettlement) ContinuationPersistence {
+	port := wiredContinuationPersistence()
+	port.CompleteSuccessfulSettlement = func(_ context.Context, got SeedSettlement) error {
+		*settled = got
+		return nil
+	}
+	port.AccountTerminalFailure = func(_ context.Context, got SeedSettlement) (TerminalFailureAccount, error) {
+		*settled = got
+		return TerminalFailureAccount{}, nil
+	}
+	return port
 }
 
 func wiredContinuationPersistence() ContinuationPersistence {

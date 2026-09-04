@@ -166,23 +166,33 @@ func ComposeContinuedIntentPrompt(basePrompt string, intents []string) string {
 	return b.String()
 }
 
-func (s *Service) newOpenedSeedContinuationLifecycle(target ContinuationTarget) *SeedContinuationLifecycle {
+// openedContinuationLifecycleWired reports whether the per-run continuation
+// operations required for durably opened Seed growth are present.
+// ReconcileOrphaned is startup-only and is not part of this contract.
+func (s *Service) openedContinuationLifecycleWired() error {
 	if s == nil {
-		return nil
+		return ErrContinuationNotWired
 	}
 	p := s.continuation
 	if p.ClaimPending == nil || p.MarkDelivered == nil || p.HasUnresolved == nil ||
 		p.AcquireSettlementFence == nil || p.CompleteSuccessfulSettlement == nil || p.AccountTerminalFailure == nil {
+		return ErrContinuationNotWired
+	}
+	return nil
+}
+
+func (s *Service) newOpenedSeedContinuationLifecycle(target ContinuationTarget) *SeedContinuationLifecycle {
+	if err := s.openedContinuationLifecycleWired(); err != nil {
 		return nil
 	}
 	target.PhytomerID = strings.TrimSpace(target.PhytomerID)
 	target.Handle = strings.TrimSpace(target.Handle)
 	target.Pollen = strings.TrimSpace(target.Pollen)
 	target.Substrate = strings.TrimSpace(target.Substrate)
-	if target.PhytomerID == "" || target.Handle == "" || target.Pollen == "" || target.Substrate == "" {
+	if target.PhytomerID == "" || target.Handle == "" || target.Substrate == "" {
 		return nil
 	}
-	return &SeedContinuationLifecycle{persist: p, target: target}
+	return &SeedContinuationLifecycle{persist: s.continuation, target: target}
 }
 
 // Target returns the exact Stem-owned identity this lifecycle is bound to.
