@@ -32,6 +32,10 @@ type SessionsHandler struct {
 	// headless current-state watch. A nil authority denies every delegated
 	// observer and leaves the operator's view unchanged.
 	watch *WatchAuthority
+	// delegation gates phytomer.continue per-invocation. Ordinary phytomer
+	// command routes stay on the blanket delegated-denial lane; continuation
+	// is the one delegated Phytomer command and must reach a grant decision.
+	delegation *DelegationGate
 	// watchPoll is the bounded interval used to re-read durable current state
 	// while a phytomer watch is open. Zero selects the default. EventBus
 	// wakeups can prompt a re-read sooner; this interval is the fallback so
@@ -54,6 +58,12 @@ func NewSessionsHandler(coreSvc core.Core, manager *session.Manager, history *hi
 // for chaining.
 func (h *SessionsHandler) WithWatch(watch *WatchAuthority) *SessionsHandler {
 	h.watch = watch
+	return h
+}
+
+// WithDelegation wires the grant authorizer used by phytomer.continue.
+func (h *SessionsHandler) WithDelegation(gate *DelegationGate) *SessionsHandler {
+	h.delegation = gate
 	return h
 }
 
@@ -80,6 +90,14 @@ func (h *SessionsHandler) governedRoutes() []governedRoute {
 	}
 }
 
+// delegatedGovernedRoutes are governed Phytomer commands that must reach a
+// per-invocation grant decision rather than the blanket delegated-denial lane.
+func (h *SessionsHandler) delegatedGovernedRoutes() []governedRoute {
+	return []governedRoute{
+		{"POST /v1/phytomers/{sessionId}/continue", core.CapContinuePhytomer, h.continuePhytomer},
+	}
+}
+
 // Capabilities reports the governed capability names this REST adapter has
 // actually mounted (populated by Register). The parity coverage test compares
 // this to core.CapabilityNames(); an unregistered governed route makes it
@@ -92,19 +110,28 @@ func (h *SessionsHandler) Capabilities() []string {
 
 // writeCoreErr maps a transport-neutral core error onto an HTTP status.
 func writeCoreErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, core.ErrNotFound) {
+	switch {
+	case errors.Is(err, core.ErrNotFound):
 		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
-	if errors.Is(err, core.ErrSeedHistoryUnavailable) {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	if errors.Is(err, conductor.ErrWorkspaceAbsent) {
+	case errors.Is(err, core.ErrContinuationInvalid):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, core.ErrContinuationTargetNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, core.ErrContinuationPollenMismatch):
+		http.Error(w, err.Error(), http.StatusForbidden)
+	case errors.Is(err, core.ErrContinuationNotEligible),
+		errors.Is(err, core.ErrContinuationIdempotencyConflict),
+		errors.Is(err, core.ErrContinuationTargetChanged):
 		http.Error(w, err.Error(), http.StatusConflict)
-		return
+	case errors.Is(err, core.ErrContinuationHistoryUnavailable),
+		errors.Is(err, core.ErrContinuationNotWired),
+		errors.Is(err, core.ErrSeedHistoryUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.Is(err, conductor.ErrWorkspaceAbsent):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
-	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
 // Register mounts the session routes onto the mux. Two lanes, because the
@@ -138,6 +165,18 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 	for _, route := range h.governedRoutes() {
 		mux.HandleFunc(route.pattern, auth(route.handler))
 		mux.HandleFunc(sessionAlias(route.pattern), auth(route.handler))
+		if !seen[route.capability] {
+			seen[route.capability] = true
+			h.registered = append(h.registered, route.capability)
+		}
+	}
+
+	// phytomer.continue is delegated: it uses the bare authentication lane
+	// (observeAuth in production) so a Pollinator reaches a grant decision.
+	// Ordinary phytomer command routes above stay on the refusing lane.
+	for _, route := range h.delegatedGovernedRoutes() {
+		mux.HandleFunc(route.pattern, observeAuth(route.handler))
+		mux.HandleFunc(sessionAlias(route.pattern), observeAuth(route.handler))
 		if !seen[route.capability] {
 			seen[route.capability] = true
 			h.registered = append(h.registered, route.capability)
@@ -252,6 +291,63 @@ func (h *SessionsHandler) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type continuePhytomerRequest struct {
+	Intent         string `json:"intent"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	SessionID      string `json:"sessionId"`
+}
+
+func (h *SessionsHandler) continuePhytomer(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("sessionId"))
+	var req continuePhytomerRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if sessionID == "" || strings.TrimSpace(req.Intent) == "" || strings.TrimSpace(req.IdempotencyKey) == "" {
+		http.Error(w, "sessionId, intent, and idempotencyKey are required", http.StatusBadRequest)
+		return
+	}
+
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK {
+		http.Error(w, "delegation denied: unknown or revoked Pollinator credential", http.StatusForbidden)
+		return
+	}
+	ctx := core.WithPollen(r.Context(), pollen)
+	in := core.ContinuationInput{
+		PhytomerID:     sessionID,
+		Intent:         req.Intent,
+		IdempotencyKey: req.IdempotencyKey,
+	}
+	if pollen != "" {
+		request, err := h.core.ResolveDelegationRequest(ctx, core.CapContinuePhytomer, map[string]any{
+			"sessionId":      sessionID,
+			"intent":         in.Intent,
+			"idempotencyKey": in.IdempotencyKey,
+		})
+		if err != nil {
+			writeCoreErr(w, err)
+			return
+		}
+		decision := h.delegation.Authorize(request)
+		if !decision.Authorized {
+			http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+			return
+		}
+		ctx = core.WithAuthorizedDelegationRequest(ctx, request)
+	}
+
+	result, err := h.core.ContinuePhytomer(ctx, in)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *SessionsHandler) messages(w http.ResponseWriter, r *http.Request) {

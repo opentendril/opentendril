@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -26,20 +27,32 @@ func TestContinuationInputHasNoCallerSubstrate(t *testing.T) {
 	}
 }
 
-func TestContinuationIsNotAGovernedCapability(t *testing.T) {
+func TestContinuePhytomerIsGovernedDelegatedCapability(t *testing.T) {
+	found := false
 	for _, name := range core.CapabilityNames() {
-		if name == "phytomer.continue" || strings.Contains(name, "continue") {
-			t.Fatalf("governed registry includes %q", name)
+		if name == core.CapContinuePhytomer {
+			found = true
+			break
 		}
 	}
-	if core.IsDelegatedCapability("phytomer.continue") {
-		t.Fatal("phytomer.continue was added to the delegated set")
+	if !found {
+		t.Fatal("CapabilityNames() missing phytomer.continue")
+	}
+	if !core.IsDelegatedCapability(core.CapContinuePhytomer) {
+		t.Fatal("phytomer.continue is not delegated")
+	}
+	if got := core.CapabilityImpact(core.CapContinuePhytomer); got != core.DelegationImpactHigh {
+		t.Fatalf("CapabilityImpact(phytomer.continue) = %q, want high", got)
 	}
 	svc := newTestCore(t)
-	if _, err := svc.Invoke(context.Background(), "phytomer.continue", map[string]any{
+	_, err := svc.Invoke(context.Background(), core.CapContinuePhytomer, map[string]any{
 		"sessionId": "tendril-1", "intent": "keep going", "idempotencyKey": "k1",
-	}); err == nil || !strings.Contains(err.Error(), "unknown capability") {
-		t.Fatalf("Invoke(phytomer.continue) = %v, want unknown capability", err)
+	})
+	if err == nil {
+		t.Fatal("unwired Invoke(phytomer.continue) succeeded")
+	}
+	if errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("unwired continue mapped to session-not-found: %v", err)
 	}
 }
 
@@ -222,6 +235,60 @@ func TestAcceptContinuationComposesStemOwnedOwnership(t *testing.T) {
 	}
 	if rec.Sequence != 1 || rec.DeliveryState != core.ContinuationDeliveryPending {
 		t.Fatalf("record = %+v", rec)
+	}
+}
+
+func TestContinuationResultOmitsPlaintextIntent(t *testing.T) {
+	typ := reflect.TypeOf(core.ContinuationResult{})
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name := strings.ToLower(field.Name + field.Tag.Get("json"))
+		if strings.Contains(name, "intent") && !strings.Contains(name, "idempotency") {
+			t.Errorf("ContinuationResult field %s discloses intent", field.Name)
+		}
+		if strings.Contains(name, "pollen") || strings.Contains(name, "substrate") || strings.Contains(name, "handle") {
+			t.Errorf("ContinuationResult field %s discloses Stem-internal ownership", field.Name)
+		}
+	}
+}
+
+func TestContinuePhytomerReturnsSafeAcceptance(t *testing.T) {
+	svc := newContinuationService(t, core.ContinuationPersistence{
+		ResolveTarget: owningContinuationPort(core.ContinuationTarget{
+			PhytomerID: "tendril-1", Handle: "seed-1", Pollen: "claude", Substrate: "myrepo", Status: core.SeedStatusRunning,
+		}).ResolveTarget,
+		Accept: func(_ context.Context, in core.ContinuationAcceptance) (core.ContinuationRecord, error) {
+			return core.ContinuationRecord{
+				ContinuationID: "continuation-1",
+				PhytomerID:     in.PhytomerID,
+				Pollen:         in.Pollen,
+				Substrate:      in.Substrate,
+				IdempotencyKey: in.IdempotencyKey,
+				IntentDigest:   in.IntentDigest,
+				Intent:         in.Intent,
+				Sequence:       1,
+				DeliveryState:  core.ContinuationDeliveryPending,
+			}, nil
+		},
+	})
+	result, err := svc.ContinuePhytomer(core.WithPollen(context.Background(), "claude"), core.ContinuationInput{
+		PhytomerID: "tendril-1", Intent: "SECRET-INTENT", IdempotencyKey: "retry-1",
+	})
+	if err != nil {
+		t.Fatalf("continue: %v", err)
+	}
+	if result.ContinuationID != "continuation-1" || result.PhytomerID != "tendril-1" || result.Sequence != 1 {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.DeliveryState != core.ContinuationDeliveryPending || result.IdempotencyKey != "retry-1" {
+		t.Fatalf("result = %+v", result)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "SECRET-INTENT") {
+		t.Fatalf("result JSON echoed plaintext intent: %s", encoded)
 	}
 }
 

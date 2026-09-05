@@ -188,42 +188,50 @@ func TestBuildServeCoreWiresContinuationPersistence(t *testing.T) {
 	}
 }
 
-func TestSlice1DoesNotExposeContinuationSurface(t *testing.T) {
+func TestPhytomerContinueIsProjectedOnEverySurface(t *testing.T) {
+	found := false
 	for _, name := range core.CapabilityNames() {
-		if name == "phytomer.continue" || strings.Contains(name, "continue") {
-			t.Fatalf("canonical capability set includes %q", name)
+		if name == core.CapContinuePhytomer {
+			found = true
+			break
 		}
 	}
-	if core.IsDelegatedCapability("phytomer.continue") {
-		t.Fatal("delegated set includes phytomer.continue")
+	if !found {
+		t.Fatal("canonical capability set missing phytomer.continue")
+	}
+	if !core.IsDelegatedCapability(core.CapContinuePhytomer) {
+		t.Fatal("delegated set missing phytomer.continue")
 	}
 	cli := append([]string{}, sessionCLICapabilityNames()...)
-	cli = append(cli, genomeCLICapabilityNames()...)
-	cli = append(cli, plasmidCLICapabilityNames()...)
-	cli = append(cli, meshCLICapabilityNames()...)
-	cli = append(cli, sequenceCLICapabilityNames()...)
-	cli = append(cli, sproutCLICapabilityNames()...)
-	cli = append(cli, stomaCLICapabilityNames()...)
-	cli = append(cli, seedCLICapabilityNames()...)
-	cli = append(cli, gitCLICapabilityNames()...)
-	cli = append(cli, genotypeCLICapabilityNames()...)
+	cliFound := false
 	for _, name := range cli {
-		if name == "phytomer.continue" {
-			t.Fatal("CLI projects phytomer.continue")
+		if name == core.CapContinuePhytomer {
+			cliFound = true
 		}
 	}
+	if !cliFound {
+		t.Fatal("CLI does not project phytomer.continue")
+	}
 	mcpNames := receptors.NewMCPHandler().WithCore(core.NewService(nil)).CoreCapabilityNames()
+	mcpFound := false
 	for _, name := range mcpNames {
-		if name == "phytomer.continue" {
-			t.Fatal("MCP projects phytomer.continue")
+		if name == core.CapContinuePhytomer {
+			mcpFound = true
 		}
+	}
+	if !mcpFound {
+		t.Fatal("MCP does not project phytomer.continue")
 	}
 	rest := receptors.NewSessionsHandler(core.NewService(nil), nil, nil, nil)
 	rest.Register(http.NewServeMux(), nil, nil)
+	restFound := false
 	for _, name := range rest.Capabilities() {
-		if name == "phytomer.continue" {
-			t.Fatal("REST projects phytomer.continue")
+		if name == core.CapContinuePhytomer {
+			restFound = true
 		}
+	}
+	if !restFound {
+		t.Fatal("REST does not project phytomer.continue")
 	}
 }
 
@@ -273,7 +281,7 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-local"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{
@@ -336,7 +344,7 @@ func TestProductionPreProviderFailureFailsContinuationNotDelivered(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-preprovider"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{

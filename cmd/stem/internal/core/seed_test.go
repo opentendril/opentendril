@@ -407,7 +407,8 @@ func TestOpenPreparedSeedComposesOwnershipFromTheEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	dispatch, err := svc.OpenPreparedSeed(ctx, growth, "seed-handle-1")
+	svc.WithSeedHandleMint(func() (string, error) { return "seed-handle-1", nil })
+	dispatch, err := svc.OpenPreparedSeed(ctx, growth)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -426,7 +427,7 @@ func TestOpenPreparedSeedComposesOwnershipFromTheEnvelope(t *testing.T) {
 	}
 	other.phytomerID = growth.PhytomerID()
 	other.spec.PhytomerID = growth.PhytomerID()
-	if _, err := svc.OpenPreparedSeed(ctx, other, "seed-stolen"); err == nil {
+	if _, err := svc.OpenPreparedSeed(ctx, other); err == nil {
 		t.Fatal("open accepted a substituted phytomer")
 	}
 }
@@ -444,10 +445,10 @@ func TestOpenPreparedSeedRefusesSecondHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-a"); err != nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err != nil {
 		t.Fatalf("first open: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-b"); err == nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err == nil {
 		t.Fatal("second open of the same growth was accepted")
 	} else if !errors.Is(err, ErrSeedGrowthInvalid) {
 		t.Fatalf("second open error = %v, want ErrSeedGrowthInvalid", err)
@@ -477,7 +478,7 @@ func TestOpenPreparedSeedRefusesConcurrentSecondHandle(t *testing.T) {
 
 	firstErr := make(chan error, 1)
 	go func() {
-		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-a")
+		_, err := svc.OpenPreparedSeed(context.Background(), growth)
 		firstErr <- err
 	}()
 	select {
@@ -488,7 +489,7 @@ func TestOpenPreparedSeedRefusesConcurrentSecondHandle(t *testing.T) {
 
 	secondErr := make(chan error, 1)
 	go func() {
-		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-b")
+		_, err := svc.OpenPreparedSeed(context.Background(), growth)
 		secondErr <- err
 	}()
 	select {
@@ -563,7 +564,7 @@ func TestGrowPreparedSeedCannotRaceOpeningPersistence(t *testing.T) {
 
 	openErr := make(chan error, 1)
 	go func() {
-		_, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-handle")
+		_, err := svc.OpenPreparedSeed(context.Background(), growth)
 		openErr <- err
 	}()
 	select {
@@ -671,7 +672,7 @@ func TestGrowPreparedSeedPreservesExecutionEvidenceOnFruitPublicationFailure(t *
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-publication-failure"); err != nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(context.Background(), growth)
@@ -734,7 +735,7 @@ func TestGrowPreparedSeedPersistsVerificationDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-verify-diag"); err != nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(context.Background(), growth)

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -49,6 +52,21 @@ func runSessionCmd(ctx context.Context, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+
+	if capName == core.CapContinuePhytomer {
+		result, err := submitPhytomerContinue(ctx, input)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s failed: %v\n", capName, err)
+			os.Exit(1)
+		}
+		payload, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "encode result: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(payload))
+		return
 	}
 
 	svc, cleanup, err := buildSessionCore(ctx)
@@ -120,6 +138,7 @@ var sessionCommands = []sessionCommand{
 	{"update", core.CapUpdatePhytomer},
 	{"delete", core.CapDeletePhytomer},
 	{"history", core.CapPhytomerHistory},
+	{"continue", core.CapContinuePhytomer},
 }
 
 // lookupSessionCommand resolves a CLI subcommand token to its registered entry.
@@ -205,6 +224,18 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 				return nil, err
 			}
 			prefs["substrate"] = v
+		case "--intent":
+			v, err := next()
+			if err != nil {
+				return nil, err
+			}
+			input["intent"] = v
+		case "--idempotency-key":
+			v, err := next()
+			if err != nil {
+				return nil, err
+			}
+			input["idempotencyKey"] = v
 		case "--limit":
 			v, err := next()
 			if err != nil {
@@ -236,12 +267,13 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 }
 
 var sessionCommandHelp = map[string]string{
-	core.CapCreatePhytomer:  "create a new session   (--provider --model --genotype --substrate --origin)",
-	core.CapListPhytomers:   "list live sessions",
-	core.CapGetPhytomer:     "get one session        (<id> | --id <id>)",
-	core.CapUpdatePhytomer:  "update preferences     (<id> --provider --model --genotype --substrate)",
-	core.CapDeletePhytomer:  "delete a session       (<id>)",
-	core.CapPhytomerHistory: "show chat history      (<id> --limit N)",
+	core.CapCreatePhytomer:   "create a new session   (--provider --model --genotype --substrate --origin)",
+	core.CapListPhytomers:    "list live sessions",
+	core.CapGetPhytomer:      "get one session        (<id> | --id <id>)",
+	core.CapUpdatePhytomer:   "update preferences     (<id> --provider --model --genotype --substrate)",
+	core.CapDeletePhytomer:   "delete a session       (<id>)",
+	core.CapPhytomerHistory:  "show chat history      (<id> --limit N)",
+	core.CapContinuePhytomer: "continue a live Seed   (<id> --intent ... --idempotency-key ...)",
 }
 
 func printSessionUsage() {
@@ -253,4 +285,45 @@ func printSessionUsage() {
 	}
 	fmt.Println()
 	fmt.Println("Any subcommand also accepts --json '{...}' for the raw capability input.")
+}
+
+// submitPhytomerContinue posts continued intent to the long-lived Stem daemon
+// that owns the active Seed executor. It does not open history.db or accept
+// continuation through a one-shot Core.
+func submitPhytomerContinue(ctx context.Context, input map[string]any) (core.ContinuationResult, error) {
+	sessionID, _ := input["sessionId"].(string)
+	intent, _ := input["intent"].(string)
+	key, _ := input["idempotencyKey"].(string)
+	sessionID = strings.TrimSpace(sessionID)
+	intent = strings.TrimSpace(intent)
+	key = strings.TrimSpace(key)
+	if sessionID == "" || intent == "" || key == "" {
+		return core.ContinuationResult{}, fmt.Errorf("%w: phytomer id, intent, and idempotency key are required", core.ErrContinuationInvalid)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"intent":         intent,
+		"idempotencyKey": key,
+	})
+	if err != nil {
+		return core.ContinuationResult{}, err
+	}
+	path := "/v1/phytomers/" + url.PathEscape(sessionID) + "/continue"
+	resp, err := stemDaemonRequest(ctx, http.MethodPost, path, payload)
+	if err != nil {
+		return core.ContinuationResult{}, fmt.Errorf("Stem daemon is unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		text := strings.TrimSpace(string(body))
+		if text == "" {
+			text = resp.Status
+		}
+		return core.ContinuationResult{}, fmt.Errorf("Stem daemon rejected continuation (status %d): %s", resp.StatusCode, text)
+	}
+	var result core.ContinuationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return core.ContinuationResult{}, fmt.Errorf("decode continuation result: %w", err)
+	}
+	return result, nil
 }

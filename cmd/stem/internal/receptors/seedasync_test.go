@@ -3,6 +3,7 @@ package receptors
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,7 @@ func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 			if store == nil {
 				return core.ErrSeedHistoryUnavailable
 			}
-			return store.RecordSeedRun(ctx, historydb.SeedRun{
+			return store.RecordSeedOpening(ctx, historydb.SeedRun{
 				Handle:     opening.Handle,
 				Pollen:     opening.Pollen,
 				PhytomerID: opening.PhytomerID,
@@ -104,11 +105,50 @@ func testContinuationPersistence(store *historydb.Store) core.ContinuationPersis
 		return nil
 	}
 	return core.ContinuationPersistence{
-		ResolveTarget: func(context.Context, string) (core.ContinuationTarget, bool, error) {
-			return core.ContinuationTarget{}, false, unavailable()
+		ResolveTarget: func(ctx context.Context, phytomerID string) (core.ContinuationTarget, bool, error) {
+			if err := unavailable(); err != nil {
+				return core.ContinuationTarget{}, false, err
+			}
+			seed, found, err := store.ResolveContinuationTarget(ctx, phytomerID)
+			if err != nil || !found {
+				return core.ContinuationTarget{}, found, mapTestContinuationErr(err)
+			}
+			return core.ContinuationTarget{
+				PhytomerID: seed.PhytomerID,
+				Handle:     seed.Handle,
+				Pollen:     seed.Pollen,
+				Substrate:  seed.Substrate,
+				Status:     seed.Status,
+			}, true, nil
 		},
-		Accept: func(context.Context, core.ContinuationAcceptance) (core.ContinuationRecord, error) {
-			return core.ContinuationRecord{}, core.ErrContinuationHistoryUnavailable
+		Accept: func(ctx context.Context, in core.ContinuationAcceptance) (core.ContinuationRecord, error) {
+			if err := unavailable(); err != nil {
+				return core.ContinuationRecord{}, err
+			}
+			rec, err := store.AcceptContinuation(ctx, historydb.ContinuationAcceptance{
+				PhytomerID:     in.PhytomerID,
+				Pollen:         in.Pollen,
+				Substrate:      in.Substrate,
+				Handle:         in.Handle,
+				IdempotencyKey: in.IdempotencyKey,
+				Intent:         in.Intent,
+				IntentDigest:   in.IntentDigest,
+			})
+			if err != nil {
+				return core.ContinuationRecord{}, mapTestContinuationErr(err)
+			}
+			return core.ContinuationRecord{
+				ContinuationID: rec.ContinuationID,
+				PhytomerID:     rec.PhytomerID,
+				Pollen:         rec.Pollen,
+				Substrate:      rec.Substrate,
+				IdempotencyKey: rec.IdempotencyKey,
+				IntentDigest:   rec.IntentDigest,
+				Intent:         rec.Intent,
+				Sequence:       rec.Sequence,
+				DeliveryState:  rec.DeliveryState,
+				AcceptedAt:     rec.AcceptedAt,
+			}, nil
 		},
 		ClaimPending: func(context.Context, core.ContinuationTarget) ([]core.ContinuationRecord, error) {
 			if err := unavailable(); err != nil {
@@ -178,6 +218,27 @@ func testHistorySeedPublicationDiagnostic(diagnostic *core.SeedPublicationDiagno
 		RetrySafe:       diagnostic.RetrySafe,
 		Message:         diagnostic.Message,
 		RequestID:       diagnostic.RequestID,
+	}
+}
+
+func mapTestContinuationErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, historydb.ErrContinuationNotFound):
+		return core.ErrContinuationTargetNotFound
+	case errors.Is(err, historydb.ErrContinuationPollenMismatch):
+		return core.ErrContinuationPollenMismatch
+	case errors.Is(err, historydb.ErrContinuationNotEligible):
+		return core.ErrContinuationNotEligible
+	case errors.Is(err, historydb.ErrContinuationTargetChanged):
+		return core.ErrContinuationTargetChanged
+	case errors.Is(err, historydb.ErrContinuationIdempotencyConflict):
+		return core.ErrContinuationIdempotencyConflict
+	case errors.Is(err, historydb.ErrContinuationInvalid):
+		return core.ErrContinuationInvalid
+	default:
+		return err
 	}
 }
 

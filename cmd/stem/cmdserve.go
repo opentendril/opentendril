@@ -985,6 +985,15 @@ func reconcileServeSeedWork(ctx context.Context, svc *core.Service, history *his
 	return svc.ReconcileOrphanedSeedWork(ctx)
 }
 
+func formatSeedLifecycleReport(report core.SeedLifecycleReport) string {
+	return fmt.Sprintf("Seed lifecycle failure: kind=%s phytomer=%s handle=%s",
+		report.Kind, report.PhytomerID, report.Handle)
+}
+
+func serveSeedLifecycleReporter(report core.SeedLifecycleReport) {
+	log.Printf("⚠️ %s", formatSeedLifecycleReport(report))
+}
+
 func buildServeCore(sessions *session.Manager, tendrilDir string, history *historydb.Store, bus *eventbus.Bus) *core.Service {
 	return core.NewService(sessions).
 		WithTendrilDir(tendrilDir).
@@ -998,6 +1007,7 @@ func buildServeCore(sessions *session.Manager, tendrilDir string, history *histo
 		WithSeedPersistence(seedPersistence(history)).
 		WithPhytomerObservationSource(phytomerObservationSource(history)).
 		WithContinuationPersistence(continuationPersistence(history)).
+		WithSeedLifecycleReporter(serveSeedLifecycleReporter).
 		WithGit(gitOperations())
 }
 
@@ -1058,7 +1068,9 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("GET /health", deps.DelegationGate.Middleware(handleHealth(deps.HealthMonitor, deps.Networked)))
 
 	// Tendril session REST API (adapter).
-	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).WithWatch(watch)
+	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).
+		WithWatch(watch).
+		WithDelegation(deps.DelegationGate)
 	sessionsHandler.Register(mux, guardedAuth, observeAuth)
 
 	// Genome REST API (adapter, slice 1).

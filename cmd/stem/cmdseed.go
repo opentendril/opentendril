@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -115,7 +113,7 @@ func seedPersistence(history *historydb.Store) core.SeedPersistence {
 			if history == nil {
 				return core.ErrSeedHistoryUnavailable
 			}
-			return history.RecordSeedRun(ctx, historydb.SeedRun{
+			return history.RecordSeedOpening(ctx, historydb.SeedRun{
 				Handle:     opening.Handle,
 				Pollen:     opening.Pollen,
 				PhytomerID: opening.PhytomerID,
@@ -422,33 +420,6 @@ func extractSeedAsyncFlag(args []string) ([]string, bool) {
 	return out, async
 }
 
-// seedDaemonRequest issues an authenticated request to the local Stem daemon —
-// the same bearer-authenticated client path the detached sprout and sequence
-// commands use. Async dispatch and collection are daemon operations because the
-// growth and its durable handle live in the persistent serve process, not in a
-// one-shot CLI invocation.
-func seedDaemonRequest(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
-	port := strings.TrimSpace(os.Getenv("PORT"))
-	if port == "" {
-		port = "8080"
-	}
-	var reader io.Reader
-	if body != nil {
-		reader = bytes.NewReader(body)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("http://localhost:%s%s", port, path), reader)
-	if err != nil {
-		return nil, err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	return http.DefaultClient.Do(req)
-}
-
 // submitSeedAsync dispatches a Seed to the daemon and prints the durable handle
 // the operator collects the Fruit by later.
 func submitSeedAsync(ctx context.Context, input map[string]any) {
@@ -464,7 +435,7 @@ func submitSeedAsync(ctx context.Context, input map[string]any) {
 		os.Exit(1)
 	}
 
-	resp, err := seedDaemonRequest(ctx, http.MethodPost, "/v1/seeds/grow/async", payload)
+	resp, err := stemDaemonRequest(ctx, http.MethodPost, "/v1/seeds/grow/async", payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`) to dispatch a Seed asynchronously.")
@@ -503,7 +474,7 @@ func runSeedCollect(ctx context.Context, args []string) {
 	}
 	handle := strings.TrimSpace(args[0])
 
-	resp, err := seedDaemonRequest(ctx, http.MethodGet, "/v1/seeds/runs/"+handle, nil)
+	resp, err := stemDaemonRequest(ctx, http.MethodGet, "/v1/seeds/runs/"+handle, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")

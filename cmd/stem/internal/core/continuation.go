@@ -10,8 +10,9 @@ import (
 	"time"
 )
 
-// Continuation delivery states. Continuation is a Stem-internal lifecycle
-// contract, not a governed Pollinator command.
+// Continuation delivery states. Delivery, claiming, and settlement remain
+// Stem-internal lifecycle. Pollinator acceptance is the governed
+// phytomer.continue command.
 const (
 	ContinuationDeliveryPending    = "pending"
 	ContinuationDeliveryDelivering = "delivering"
@@ -52,9 +53,32 @@ var (
 // Pollen comes from trusted Core context. Authoritative Substrate is resolved
 // from durable Seed ownership — this type has no Substrate field.
 type ContinuationInput struct {
-	PhytomerID     string
-	Intent         string
-	IdempotencyKey string
+	PhytomerID     string `json:"sessionId"`
+	Intent         string `json:"intent"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// ContinuationResult is the Pollinator-facing acceptance identity. It carries
+// lifecycle identity, order, and delivery state without echoing plaintext
+// intent or other Stem-internal ownership fields.
+type ContinuationResult struct {
+	ContinuationID string    `json:"continuationId"`
+	PhytomerID     string    `json:"sessionId"`
+	Sequence       int       `json:"sequence"`
+	DeliveryState  string    `json:"deliveryState"`
+	IdempotencyKey string    `json:"idempotencyKey"`
+	AcceptedAt     time.Time `json:"acceptedAt"`
+}
+
+func continuationResultOf(rec ContinuationRecord) ContinuationResult {
+	return ContinuationResult{
+		ContinuationID: rec.ContinuationID,
+		PhytomerID:     rec.PhytomerID,
+		Sequence:       rec.Sequence,
+		DeliveryState:  rec.DeliveryState,
+		IdempotencyKey: rec.IdempotencyKey,
+		AcceptedAt:     rec.AcceptedAt,
+	}
 }
 
 // ContinuationAcceptance is the persist-port request Core composes after
@@ -336,6 +360,9 @@ func (s *Service) authorizeContinuationTarget(ctx context.Context, target Contin
 	if target.PhytomerID == "" {
 		return ContinuationTarget{}, ErrContinuationTargetNotFound
 	}
+	if s.phytomerAccountingIncomplete(target.PhytomerID) {
+		return ContinuationTarget{}, ErrContinuationNotEligible
+	}
 	pollen := PollenFromContext(ctx)
 	if target.Pollen != pollen {
 		return ContinuationTarget{}, ErrContinuationPollenMismatch
@@ -344,6 +371,17 @@ func (s *Service) authorizeContinuationTarget(ctx context.Context, target Contin
 		return ContinuationTarget{}, err
 	}
 	return target, nil
+}
+
+func bindAuthorizedContinuationTarget(ctx context.Context, target ContinuationTarget) error {
+	authorized, ok := AuthorizedDelegationRequestFromContext(ctx)
+	if !ok || strings.TrimSpace(authorized.OperationClass) != CapContinuePhytomer {
+		return nil
+	}
+	if authorized.Pollen != target.Pollen || authorized.Substrate != target.Substrate {
+		return ErrContinuationTargetChanged
+	}
+	return nil
 }
 
 func continuationEligibilityError(status, substrate string) error {
@@ -375,6 +413,9 @@ func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) 
 	if err != nil {
 		return ContinuationRecord{}, err
 	}
+	if err := bindAuthorizedContinuationTarget(ctx, target); err != nil {
+		return ContinuationRecord{}, err
+	}
 	rec, err := s.continuation.Accept(ctx, ContinuationAcceptance{
 		PhytomerID:     phytomerID,
 		Pollen:         target.Pollen,
@@ -388,4 +429,15 @@ func (s *Service) AcceptContinuation(ctx context.Context, in ContinuationInput) 
 		return ContinuationRecord{}, err
 	}
 	return rec, nil
+}
+
+// ContinuePhytomer is the governed phytomer.continue operation. It accepts
+// continued intent through AcceptContinuation and returns the safe
+// Pollinator-facing identity/order/state result.
+func (s *Service) ContinuePhytomer(ctx context.Context, in ContinuationInput) (ContinuationResult, error) {
+	rec, err := s.AcceptContinuation(ctx, in)
+	if err != nil {
+		return ContinuationResult{}, err
+	}
+	return continuationResultOf(rec), nil
 }

@@ -11,13 +11,20 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
-func TestSeedGrowInputHasNoDetachedContinuationSurface(t *testing.T) {
+func TestSeedGrowInputDetachedIsLifecycleMode(t *testing.T) {
 	typ := reflect.TypeOf(SeedGrowInput{})
+	field, ok := typ.FieldByName("Detached")
+	if !ok {
+		t.Fatal("SeedGrowInput missing Detached")
+	}
+	if field.Tag.Get("json") != "detached,omitempty" {
+		t.Fatalf("Detached json tag = %q, want detached,omitempty", field.Tag.Get("json"))
+	}
 	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		name := strings.ToLower(field.Name + field.Tag.Get("json"))
-		if strings.Contains(name, "async") || strings.Contains(name, "detach") || strings.Contains(name, "continue") {
-			t.Fatalf("SeedGrowInput field %s introduces a detached/continuation surface", field.Name)
+		f := typ.Field(i)
+		name := strings.ToLower(f.Name + f.Tag.Get("json"))
+		if strings.Contains(name, "async") || strings.Contains(name, "continue") {
+			t.Fatalf("SeedGrowInput field %s introduces an async/continuation surface", f.Name)
 		}
 	}
 }
@@ -46,7 +53,7 @@ func TestOpenPreparedSeedRefusesUnwiredContinuationLifecycleBeforeRecordOpening(
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-unwired"); !errors.Is(err, ErrContinuationNotWired) {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); !errors.Is(err, ErrContinuationNotWired) {
 		t.Fatalf("open: %v, want ErrContinuationNotWired", err)
 	}
 	if openings != 0 {
@@ -85,7 +92,7 @@ func TestOpenPreparedSeedRefusesPartialContinuationLifecycleBeforeRecordOpening(
 			if err != nil {
 				t.Fatalf("prepare: %v", err)
 			}
-			if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-partial"); !errors.Is(err, ErrContinuationNotWired) {
+			if _, err := svc.OpenPreparedSeed(context.Background(), growth); !errors.Is(err, ErrContinuationNotWired) {
 				t.Fatalf("open: %v, want ErrContinuationNotWired", err)
 			}
 			if openings != 0 {
@@ -119,7 +126,7 @@ func TestGrowPreparedSeedRefusesOpenedSeedWhenLifecycleGoesMissing(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-defensive"); err != nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	svc.WithContinuationPersistence(ContinuationPersistence{
@@ -177,7 +184,8 @@ func TestOpenedSeedReceivesContinuationLifecycleWithExactTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-opened-1"); err != nil {
+	svc.WithSeedHandleMint(func() (string, error) { return "seed-opened-1", nil })
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	if _, err := svc.GrowPreparedSeed(ctx, growth); err != nil {
@@ -219,7 +227,7 @@ func TestOpenedSettlementPersistenceErrorsArePropagated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-persist-err"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(ctx, growth)
@@ -263,7 +271,7 @@ func TestCancelledExecutionContextStillGetsBoundedFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-cancelled"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	cancelled, cancel := context.WithCancel(WithPollen(context.Background(), "claude"))
@@ -333,7 +341,7 @@ func TestOpenedSeedTerminalFailureAccountsUndeliveredContinuation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-undelivered"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(ctx, growth)

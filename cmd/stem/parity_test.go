@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -479,6 +480,36 @@ func (m *mockCore) SessionHistory(_ context.Context, in core.SessionHistoryInput
 	return nil, nil
 }
 
+func (m *mockCore) ContinuePhytomer(_ context.Context, in core.ContinuationInput) (core.ContinuationResult, error) {
+	m.record("ContinuePhytomer", in)
+	return core.ContinuationResult{
+		ContinuationID: "continuation-mock",
+		PhytomerID:     in.PhytomerID,
+		Sequence:       1,
+		DeliveryState:  core.ContinuationDeliveryPending,
+		IdempotencyKey: in.IdempotencyKey,
+	}, nil
+}
+
+func (m *mockCore) ResolveDelegationRequest(ctx context.Context, operationClass string, input map[string]any) (core.DelegationRequest, error) {
+	m.record("ResolveDelegationRequest", operationClass)
+	substrate := ""
+	if input != nil {
+		if value, ok := input["substrate"].(string); ok {
+			substrate = strings.TrimSpace(value)
+		}
+	}
+	if operationClass == core.CapContinuePhytomer {
+		substrate = "core"
+	}
+	return core.DelegationRequest{
+		Pollen:         core.PollenFromContext(ctx),
+		OperationClass: operationClass,
+		Substrate:      substrate,
+		Impact:         core.CapabilityImpact(operationClass),
+	}, nil
+}
+
 func (m *mockCore) GenomeView(_ context.Context) ([]core.GenomeSeed, error) {
 	m.record("GenomeView", struct{}{})
 	return nil, nil
@@ -592,10 +623,10 @@ func (m *mockCore) GrowPreparedSeed(_ context.Context, growth core.SeedGrowth) (
 	}, nil
 }
 
-func (m *mockCore) OpenPreparedSeed(_ context.Context, growth core.SeedGrowth, handle string) (core.SeedDispatch, error) {
-	m.record("OpenPreparedSeed", handle)
+func (m *mockCore) OpenPreparedSeed(_ context.Context, growth core.SeedGrowth) (core.SeedDispatch, error) {
+	m.record("OpenPreparedSeed", growth.PhytomerID())
 	return core.SeedDispatch{
-		Handle:     handle,
+		Handle:     "seed-mock",
 		PhytomerID: "tendril-mock-seed",
 		Status:     "running",
 	}, nil
@@ -608,6 +639,13 @@ func (m *mockCore) ObservePhytomer(_ context.Context, phytomerID string) (core.P
 
 func (m *mockCore) SeedGrow(_ context.Context, in core.SeedGrowInput) (core.SeedGrowResult, error) {
 	m.record("SeedGrow", in)
+	if in.Detached {
+		return core.SeedGrowResult{
+			Status:     core.SeedStatusRunning,
+			Handle:     "seed-mock",
+			PhytomerID: "tendril-mock-seed",
+		}, nil
+	}
 	return core.SeedGrowResult{
 		Status:     core.SeedStatusSatisfied,
 		Iterations: 1,
@@ -748,6 +786,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 					return nil, err
 				}
 				return m.SessionHistory(ctx, in)
+			},
+		},
+		{
+			Name:        core.CapContinuePhytomer,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.ContinuationInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.ContinuePhytomer(ctx, in)
 			},
 		},
 		{
@@ -1042,6 +1091,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 		Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
 			Pollen: "parity-pollen",
 			OperationClasses: []string{
+				core.CapContinuePhytomer,
 				core.CapStomaPass,
 				core.CapSeedGrow,
 				core.CapGitCommit,
@@ -1223,6 +1273,30 @@ func TestBehavioralParity(t *testing.T) {
 			cliArgs:       []string{sessionID, "--limit", "10"},
 		},
 		{
+			name:   core.CapContinuePhytomer,
+			method: "ContinuePhytomer",
+			want: core.ContinuationInput{
+				PhytomerID:     sessionID,
+				Intent:         "keep going",
+				IdempotencyKey: "retry-1",
+			},
+			restRequest: func(t *testing.T, serverURL string) *http.Response {
+				body := bytes.NewBufferString(`{"intent":"keep going","idempotencyKey":"retry-1"}`)
+				resp, err := http.Post(serverURL+"/v1/phytomers/"+sessionID+"/continue", "application/json", body)
+				if err != nil {
+					t.Fatalf("REST phytomer.continue: %v", err)
+				}
+				return resp
+			},
+			mcpParams: map[string]any{
+				"sessionId":      sessionID,
+				"intent":         "keep going",
+				"idempotencyKey": "retry-1",
+			},
+			cliSubcommand: "continue",
+			cliArgs:       []string{sessionID, "--intent", "keep going", "--idempotency-key", "retry-1"},
+		},
+		{
 			name:   core.CapGenomeView,
 			method: "GenomeView",
 			want:   struct{}{},
@@ -1392,7 +1466,16 @@ func TestBehavioralParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CLI %s: parseArgs: %v", tc.name, err)
 			}
-			if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
+			if tc.name == core.CapContinuePhytomer {
+				u, parseErr := url.Parse(server.URL)
+				if parseErr != nil {
+					t.Fatalf("parse test server URL: %v", parseErr)
+				}
+				t.Setenv("PORT", u.Port())
+				if _, err = submitPhytomerContinue(ctx, input); err != nil {
+					t.Fatalf("CLI %s: submitPhytomerContinue: %v", tc.name, err)
+				}
+			} else if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
 				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
 			}
 			cliCalls := mock.inputsFor(tc.method)
@@ -2451,6 +2534,77 @@ func TestBehavioralParity_SeedGrow(t *testing.T) {
 		t.Fatalf("CLI seed.grow: Core.Invoke: %v", err)
 	}
 	assertOneGrowCall(t, "CLI")
+}
+
+func TestBehavioralParity_DetachedSeedGrow(t *testing.T) {
+	want := core.SeedGrowInput{
+		Substrate: "core",
+		Goal:      "fix test",
+		Verify:    []string{"go", "test", "./..."},
+		Origin:    "parity-origin",
+		Detached:  true,
+	}
+	mock, mux, mcp := newMockParityFixture(t)
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	assertDetachedGrow := func(t *testing.T, surface string) {
+		t.Helper()
+		calls := mock.inputsFor("SeedGrow")
+		if len(calls) != 1 {
+			t.Fatalf("%s detached seed.grow: Core.SeedGrow called %d times, want 1", surface, len(calls))
+		}
+		if !reflect.DeepEqual(calls[0], want) {
+			t.Errorf("%s detached seed.grow: received %#v, want %#v", surface, calls[0], want)
+		}
+		if len(mock.inputsFor("PrepareSeed")) != 0 || len(mock.inputsFor("OpenPreparedSeed")) != 0 {
+			t.Fatalf("%s adapter owned Prepare/Open: prepare=%d open=%d", surface, len(mock.inputsFor("PrepareSeed")), len(mock.inputsFor("OpenPreparedSeed")))
+		}
+	}
+
+	mock.reset()
+	resp, err := http.Post(server.URL+"/v1/seeds/grow", "application/json",
+		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true}`))
+	if err != nil {
+		t.Fatalf("REST detached seed.grow: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST detached status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertDetachedGrow(t, "REST grow")
+
+	mock.reset()
+	resp, err = http.Post(server.URL+"/v1/seeds/grow/async", "application/json",
+		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}`))
+	if err != nil {
+		t.Fatalf("REST async seed.grow: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("REST async status = %d, body = %s", resp.StatusCode, body)
+	}
+	assertDetachedGrow(t, "REST async")
+
+	mock.reset()
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seedGrow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true}}}`))
+	var parsed struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(mcpResp, &parsed); err != nil {
+		t.Fatalf("parse MCP detached seedGrow: %v", err)
+	}
+	if parsed.Error != nil || parsed.Result.IsError {
+		t.Fatalf("MCP detached seedGrow failed: %s", mcpResp)
+	}
+	assertDetachedGrow(t, "MCP")
 }
 
 // TestBehavioralParity_Git extends the zero-business-logic proof to

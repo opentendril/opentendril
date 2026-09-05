@@ -45,3 +45,31 @@ func PollenFromContext(ctx context.Context) string {
 	pollen, _ := ctx.Value(pollenKey{}).(string)
 	return pollen
 }
+
+type authorizedDelegationKey struct{}
+
+// WithAuthorizedDelegationRequest binds the Core-resolved, grant-authorized
+// DelegationRequest into context so later Core operations can refuse a
+// Substrate/Pollen mutation between authorization and acceptance.
+func WithAuthorizedDelegationRequest(ctx context.Context, request DelegationRequest) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	request.Pollen = strings.TrimSpace(request.Pollen)
+	request.OperationClass = strings.TrimSpace(request.OperationClass)
+	request.Substrate = strings.TrimSpace(request.Substrate)
+	if request.OperationClass == "" || request.Substrate == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, authorizedDelegationKey{}, request)
+}
+
+// AuthorizedDelegationRequestFromContext returns the grant-authorized
+// DelegationRequest bound after ResolveDelegationRequest, if any.
+func AuthorizedDelegationRequestFromContext(ctx context.Context) (DelegationRequest, bool) {
+	if ctx == nil {
+		return DelegationRequest{}, false
+	}
+	request, ok := ctx.Value(authorizedDelegationKey{}).(DelegationRequest)
+	return request, ok
+}
