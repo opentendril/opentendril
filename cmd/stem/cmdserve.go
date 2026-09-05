@@ -1159,8 +1159,13 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("/v1/config/substrates", guardedAuth(configHandler.ListSubstrates))
 
 	// Phase 5: MCP API (session-aware — shares the unified SessionManager and
-	// projects the same Core session capabilities as REST and the CLI)
-	mcpHandler := receptors.NewMCPHandler().WithSessions(deps.Sessions, deps.History).WithCore(deps.CoreService).WithDelegation(deps.DelegationGate, "")
+	// projects the same Core session capabilities as REST and the CLI).
+	// WatchAuthority is the same instance REST/SSE and the live stream use.
+	mcpHandler := receptors.NewMCPHandler().
+		WithSessions(deps.Sessions, deps.History).
+		WithCore(deps.CoreService).
+		WithDelegation(deps.DelegationGate, "").
+		WithWatch(watch)
 	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
