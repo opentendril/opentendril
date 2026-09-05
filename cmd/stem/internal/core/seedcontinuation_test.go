@@ -11,13 +11,20 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
 
-func TestSeedGrowInputHasNoDetachedContinuationSurface(t *testing.T) {
+func TestSeedGrowInputDetachedIsLifecycleMode(t *testing.T) {
 	typ := reflect.TypeOf(SeedGrowInput{})
+	field, ok := typ.FieldByName("Detached")
+	if !ok {
+		t.Fatal("SeedGrowInput missing Detached")
+	}
+	if field.Tag.Get("json") != "detached,omitempty" {
+		t.Fatalf("Detached json tag = %q, want detached,omitempty", field.Tag.Get("json"))
+	}
 	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		name := strings.ToLower(field.Name + field.Tag.Get("json"))
-		if strings.Contains(name, "async") || strings.Contains(name, "detach") || strings.Contains(name, "continue") {
-			t.Fatalf("SeedGrowInput field %s introduces a detached/continuation surface", field.Name)
+		f := typ.Field(i)
+		name := strings.ToLower(f.Name + f.Tag.Get("json"))
+		if strings.Contains(name, "async") || strings.Contains(name, "continue") {
+			t.Fatalf("SeedGrowInput field %s introduces an async/continuation surface", f.Name)
 		}
 	}
 }

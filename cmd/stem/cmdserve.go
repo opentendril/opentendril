@@ -1058,7 +1058,9 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	mux.HandleFunc("GET /health", deps.DelegationGate.Middleware(handleHealth(deps.HealthMonitor, deps.Networked)))
 
 	// Tendril session REST API (adapter).
-	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).WithWatch(watch)
+	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).
+		WithWatch(watch).
+		WithDelegation(deps.DelegationGate)
 	sessionsHandler.Register(mux, guardedAuth, observeAuth)
 
 	// Genome REST API (adapter, slice 1).

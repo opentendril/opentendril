@@ -45,6 +45,29 @@ func TestWriteCoreErr_OtherCoreErrorsMapCorrectly(t *testing.T) {
 	}
 }
 
+func TestWriteCoreErr_ContinuationFailures(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{core.ErrContinuationInvalid, http.StatusBadRequest},
+		{core.ErrContinuationTargetNotFound, http.StatusNotFound},
+		{core.ErrContinuationPollenMismatch, http.StatusForbidden},
+		{core.ErrContinuationNotEligible, http.StatusConflict},
+		{core.ErrContinuationIdempotencyConflict, http.StatusConflict},
+		{core.ErrContinuationTargetChanged, http.StatusConflict},
+		{core.ErrContinuationHistoryUnavailable, http.StatusServiceUnavailable},
+		{core.ErrContinuationNotWired, http.StatusServiceUnavailable},
+	}
+	for _, tc := range cases {
+		w := httptest.NewRecorder()
+		writeCoreErr(w, tc.err)
+		if w.Code != tc.want {
+			t.Errorf("writeCoreErr(%v) = %d, want %d", tc.err, w.Code, tc.want)
+		}
+	}
+}
+
 func TestUpdatePreferencesPersistsAndReturnsSubstrate(t *testing.T) {
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {

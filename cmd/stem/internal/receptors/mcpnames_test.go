@@ -16,6 +16,7 @@ var lockedPrimaryMCPNames = map[string]string{
 	"phytomer.update":   "phytomerUpdate",
 	"phytomer.delete":   "phytomerDelete",
 	"phytomer.history":  "phytomerHistory",
+	"phytomer.continue": "phytomerContinue",
 	"genome.view":       "genomeView",
 	"genome.reduce":     "genomeReduce",
 	"genome.evolve":     "genomeEvolve",
@@ -50,6 +51,16 @@ var lockedCompatibilityAliases = map[string]string{
 	"injectPlasmid":  core.CapPlasmidInject,
 	"graftSubstrate": core.CapMeshGraft,
 	"promotePR":      core.CapMeshPromote,
+}
+
+func TestMCPToolNamePhytomerContinue(t *testing.T) {
+	if got := MCPToolName(core.CapContinuePhytomer); got != "phytomerContinue" {
+		t.Fatalf("MCPToolName(%q) = %q, want phytomerContinue", core.CapContinuePhytomer, got)
+	}
+	canonical, ok := ResolveMCPToolName("phytomerContinue")
+	if !ok || canonical != core.CapContinuePhytomer {
+		t.Fatalf("ResolveMCPToolName(phytomerContinue) = %q ok=%v", canonical, ok)
+	}
 }
 
 func TestMCPToolNameLockedTable(t *testing.T) {

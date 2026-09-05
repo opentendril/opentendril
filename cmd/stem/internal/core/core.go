@@ -35,6 +35,17 @@ type Core interface {
 	UpdateSessionPreferences(ctx context.Context, in UpdateSessionInput) (session.Phytomer, error)
 	DeleteSession(ctx context.Context, in DeleteSessionInput) error
 	SessionHistory(ctx context.Context, in SessionHistoryInput) ([]session.Message, error)
+	// ContinuePhytomer is the governed phytomer.continue command: accept
+	// continued intent for an active Seed-owned Phytomer. Authoritative
+	// Pollen comes from trusted context; Substrate is resolved from Stem-owned
+	// Seed state.
+	ContinuePhytomer(ctx context.Context, in ContinuationInput) (ContinuationResult, error)
+	// ResolveDelegationRequest composes the transport-free DelegationRequest
+	// for one governed delegated invocation. Pollen comes from trusted
+	// context, never capability args. Substrate is taken from the capability
+	// input for explicit-Substrate commands, and from Stem-owned Seed state
+	// for phytomer.continue.
+	ResolveDelegationRequest(ctx context.Context, operationClass string, input map[string]any) (DelegationRequest, error)
 
 	// Genome family. Reading is pure filesystem work;
 	// reduce/evolve run through the injected GenomeOperations execution port.
@@ -208,6 +219,9 @@ type Service struct {
 	// newPreparedSeedToken, when set, replaces crypto/rand token minting.
 	// Tests inject a failing seam; production leaves it nil.
 	newPreparedSeedToken func() (string, error)
+	// newSeedHandle, when set, replaces crypto/rand Seed handle minting.
+	// Tests inject a deterministic or failing seam; production leaves it nil.
+	newSeedHandle func() (string, error)
 }
 
 // NewService builds a Core over the shared SessionManager.

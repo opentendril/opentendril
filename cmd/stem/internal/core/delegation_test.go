@@ -435,15 +435,15 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 }
 
 // TestDelegatedCapabilityTaxonomy pins the canonical delegated
-// operation-class set: exactly sprout.grow, stoma.pass, seed.grow and the
-// seven git classes are delegated, every one of them is a canonical capability,
-// and no non-delegated capability is misclassified. git.status is included
-// deliberately: read-only does not mean ungated, since a status response names
-// branches and changed file paths.
+// operation-class set: sprout.grow, stoma.pass, seed.grow, phytomer.continue,
+// genotype.create, and the seven git classes are delegated, every one of them
+// is a canonical capability, and no non-delegated capability is misclassified.
+// git.status is included deliberately: read-only does not mean ungated, since a
+// status response names branches and changed file paths.
 func TestDelegatedCapabilityTaxonomy(t *testing.T) {
-	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate}
-	if len(delegated) != 11 {
-		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 11: %v", len(delegated), delegated)
+	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate, core.CapContinuePhytomer}
+	if len(delegated) != 12 {
+		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 12: %v", len(delegated), delegated)
 	}
 	for _, name := range delegated {
 		if !core.IsDelegatedCapability(name) {

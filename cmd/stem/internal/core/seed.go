@@ -97,6 +97,10 @@ type SeedGrowInput struct {
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 	// Origin records which surface invoked the run (cli, mcp, rest).
 	Origin string `json:"origin,omitempty"`
+	// Detached asks Core to return the active Seed handle and Phytomer identity
+	// after durable opening, and to grow in the background. Omitted or false
+	// keeps the synchronous terminal SeedGrow behavior.
+	Detached bool `json:"detached,omitempty"`
 	// Egress is the authorized delegation grant's egress allow-list. It has no
 	// JSON surface on purpose: only the Stem's own call sites populate it,
 	// after the delegation authorizer has matched a grant, so no transport
@@ -252,6 +256,10 @@ type SeedGrowResult struct {
 	// PhytomerID is the Stem-created execution/observation identity for this
 	// Seed growth. It is distinct from the async Seed handle.
 	PhytomerID string `json:"phytomerId"`
+	// Handle is the Core-minted durable Seed identity. Present only for
+	// detached growth that has been durably opened; omitted on synchronous
+	// terminal results.
+	Handle string `json:"handle,omitempty"`
 	// Branch is the reconciled branch the work landed on, for review.
 	Branch string `json:"branch,omitempty"`
 	// Commit is the independently identifiable Fruit commit SHA when Seed
@@ -442,12 +450,16 @@ func seedFinalizationContext(ctx context.Context) (context.Context, context.Canc
 }
 
 // OpenPreparedSeed records durable Seed ownership from a Stem-issued growth
-// before async dispatch is accepted. The handle may be supplied by the
-// adapter; Phytomer, Pollen, and Substrate come only from the envelope.
+// before detached dispatch is accepted. An empty handle is minted by Core;
+// Phytomer, Pollen, and Substrate come only from the envelope.
 func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error) {
 	handle = strings.TrimSpace(handle)
 	if handle == "" {
-		return SeedDispatch{}, fmt.Errorf("seed handle is required")
+		minted, err := s.mintSeedHandle()
+		if err != nil {
+			return SeedDispatch{}, err
+		}
+		handle = minted
 	}
 	if err := s.openedContinuationLifecycleWired(); err != nil {
 		return SeedDispatch{}, err
@@ -510,7 +522,33 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
-	return s.GrowPreparedSeed(ctx, growth)
+	if !in.Detached {
+		return s.GrowPreparedSeed(ctx, growth)
+	}
+	return s.startDetachedSeed(ctx, growth)
+}
+
+// startDetachedSeed durably opens a prepared growth, launches bounded
+// background GrowPreparedSeed, and returns the active handle only after
+// opening has been recorded. Request cancellation after that opening must
+// not cancel the accepted growth.
+func (s *Service) startDetachedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error) {
+	dispatch, err := s.OpenPreparedSeed(ctx, growth, "")
+	if err != nil {
+		return SeedGrowResult{}, err
+	}
+	bgCtx := context.Background()
+	if ctx != nil {
+		bgCtx = context.WithoutCancel(ctx)
+	}
+	go func() {
+		_, _ = s.GrowPreparedSeed(bgCtx, growth)
+	}()
+	return SeedGrowResult{
+		Handle:     dispatch.Handle,
+		PhytomerID: dispatch.PhytomerID,
+		Status:     SeedStatusRunning,
+	}, nil
 }
 
 func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
@@ -577,6 +615,21 @@ func (s *Service) mintPreparedSeedToken() (string, error) {
 		return s.newPreparedSeedToken()
 	}
 	return generatePreparedSeedToken()
+}
+
+func (s *Service) mintSeedHandle() (string, error) {
+	if s != nil && s.newSeedHandle != nil {
+		return s.newSeedHandle()
+	}
+	return generateSeedHandle()
+}
+
+func generateSeedHandle() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("mint seed handle: %w", err)
+	}
+	return "seed-" + hex.EncodeToString(buf), nil
 }
 
 func generatePreparedSeedToken() (string, error) {
@@ -712,6 +765,7 @@ func (s *Service) seedCapabilities() []Capability {
 				"maxIterations":  map[string]any{"type": "integer", "description": "Maximum build/verify passes (default 3, maximum 10)."},
 				"timeoutSeconds": map[string]any{"type": "integer", "description": "Whole-growth wall-clock bound in seconds (default 900, maximum 3600)."},
 				"origin":         stringProp("Interaction origin recorded on the run (cli, mcp, rest)."),
+				"detached":       map[string]any{"type": "boolean", "description": "When true, return the active handle and Phytomer identity after durable opening and grow in the background. Default false: block until the Seed is terminal."},
 			}, []string{"substrate", "goal", "verify"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in SeedGrowInput

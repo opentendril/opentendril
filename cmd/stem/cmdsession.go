@@ -98,7 +98,11 @@ func buildSessionCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	return core.NewService(manager).WithGenome(genomeOperations(resolveRepoRoot(""))), cleanup, nil
+	svc := core.NewService(manager).WithGenome(genomeOperations(resolveRepoRoot("")))
+	if history != nil {
+		svc = svc.WithContinuationPersistence(continuationPersistence(history))
+	}
+	return svc, cleanup, nil
 }
 
 // sessionCommand is one subcommand actually registered on the `tendril session`
@@ -120,6 +124,7 @@ var sessionCommands = []sessionCommand{
 	{"update", core.CapUpdatePhytomer},
 	{"delete", core.CapDeletePhytomer},
 	{"history", core.CapPhytomerHistory},
+	{"continue", core.CapContinuePhytomer},
 }
 
 // lookupSessionCommand resolves a CLI subcommand token to its registered entry.
@@ -205,6 +210,18 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 				return nil, err
 			}
 			prefs["substrate"] = v
+		case "--intent":
+			v, err := next()
+			if err != nil {
+				return nil, err
+			}
+			input["intent"] = v
+		case "--idempotency-key":
+			v, err := next()
+			if err != nil {
+				return nil, err
+			}
+			input["idempotencyKey"] = v
 		case "--limit":
 			v, err := next()
 			if err != nil {
@@ -236,12 +253,13 @@ func parseSessionArgs(capName string, args []string) (map[string]any, error) {
 }
 
 var sessionCommandHelp = map[string]string{
-	core.CapCreatePhytomer:  "create a new session   (--provider --model --genotype --substrate --origin)",
-	core.CapListPhytomers:   "list live sessions",
-	core.CapGetPhytomer:     "get one session        (<id> | --id <id>)",
-	core.CapUpdatePhytomer:  "update preferences     (<id> --provider --model --genotype --substrate)",
-	core.CapDeletePhytomer:  "delete a session       (<id>)",
-	core.CapPhytomerHistory: "show chat history      (<id> --limit N)",
+	core.CapCreatePhytomer:   "create a new session   (--provider --model --genotype --substrate --origin)",
+	core.CapListPhytomers:    "list live sessions",
+	core.CapGetPhytomer:      "get one session        (<id> | --id <id>)",
+	core.CapUpdatePhytomer:   "update preferences     (<id> --provider --model --genotype --substrate)",
+	core.CapDeletePhytomer:   "delete a session       (<id>)",
+	core.CapPhytomerHistory:  "show chat history      (<id> --limit N)",
+	core.CapContinuePhytomer: "continue a live Seed   (<id> --intent ... --idempotency-key ...)",
 }
 
 func printSessionUsage() {

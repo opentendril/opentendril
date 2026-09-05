@@ -62,16 +62,19 @@ func (h *MCPHandler) isCoreCapability(name string) bool {
 // authorizeDelegatedTool gates one delegated-class tool invocation against
 // the bind-time pollen and the active grants. Deny-closed: with no gate
 // bound or no pollen bound the invocation is denied outright, so no MCP path
-// can ever reach a delegated capability ungoverned. The substrate is read
-// from the tool arguments' "substrate" field — the field every delegated
-// capability carries.
-func (h *MCPHandler) authorizeDelegatedTool(operationClass string, args map[string]interface{}) core.DelegationDecision {
-	substrate, _ := args["substrate"].(string)
-	request := core.DelegationRequest{
-		Pollen:         h.pollen,
-		OperationClass: operationClass,
-		Substrate:      strings.TrimSpace(substrate),
-		Impact:         core.CapabilityImpact(operationClass),
+// can ever reach a delegated capability ungoverned. The DelegationRequest
+// is resolved by Core from trusted context plus decoded capability input —
+// callers cannot nominate a continuation Substrate.
+func (h *MCPHandler) authorizeDelegatedTool(ctx context.Context, operationClass string, args map[string]interface{}) (core.DelegationDecision, core.DelegationRequest, error) {
+	if h.core == nil {
+		return core.DelegationDecision{}, core.DelegationRequest{}, fmt.Errorf("Core capability service is not configured")
+	}
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	request, err := h.core.ResolveDelegationRequest(ctx, operationClass, args)
+	if err != nil {
+		return core.DelegationDecision{}, core.DelegationRequest{}, err
 	}
 	if h.delegation == nil || h.pollen == "" {
 		decision := core.DelegationDecision{Reason: "delegation is not configured for this MCP session"}
@@ -79,9 +82,9 @@ func (h *MCPHandler) authorizeDelegatedTool(operationClass string, args map[stri
 		// audit impossible (best-effort, like every gate decision) but never
 		// weakens the enforcement.
 		h.delegation.audit(request, decision)
-		return decision
+		return decision, request, nil
 	}
-	return h.delegation.Authorize(request)
+	return h.delegation.Authorize(request), request, nil
 }
 
 // formatDelegationDenied renders a denied delegated-class invocation as an
@@ -407,11 +410,17 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 		var decision core.DelegationDecision
 		callCtx := context.Background()
 		if core.IsDelegatedCapability(canonical) {
-			decision = h.authorizeDelegatedTool(canonical, params.Arguments)
+			callCtx = core.WithPollen(callCtx, h.pollen)
+			var err error
+			var request core.DelegationRequest
+			decision, request, err = h.authorizeDelegatedTool(callCtx, canonical, params.Arguments)
+			if err != nil {
+				return h.formatCapabilityResult(id, nil, err)
+			}
 			if !decision.Authorized {
 				return h.formatDelegationDenied(id, decision)
 			}
-			callCtx = core.WithPollen(callCtx, h.pollen)
+			callCtx = core.WithAuthorizedDelegationRequest(callCtx, request)
 		}
 		if canonical == core.CapSproutGrow {
 			// Origin and the pinned stdio session are MCP-surface metadata
@@ -669,11 +678,15 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 			params.Arguments["substrate"] = "core"
 		}
 
-		decision := h.authorizeDelegatedTool(core.CapGenotypeCreate, params.Arguments)
+		callCtx := core.WithPollen(context.Background(), h.pollen)
+		decision, request, err := h.authorizeDelegatedTool(callCtx, core.CapGenotypeCreate, params.Arguments)
+		if err != nil {
+			return h.formatCapabilityResult(id, nil, err)
+		}
 		if !decision.Authorized {
 			return h.formatDelegationDenied(id, decision)
 		}
-		callCtx := core.WithPollen(context.Background(), h.pollen)
+		callCtx = core.WithAuthorizedDelegationRequest(callCtx, request)
 
 		resBytes := h.callCoreCapabilityAs(callCtx, id, core.CapGenotypeCreate, params.Arguments)
 		if !strings.Contains(string(resBytes), `"isError":true`) {
@@ -756,7 +769,10 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 	// operation-class, so it passes the same delegation gate as the
 	// canonical tool — no alias path may reach a delegated capability
 	// ungoverned.
-	if decision := h.authorizeDelegatedTool(core.CapSproutGrow, params.Arguments); !decision.Authorized {
+	sproutCtx := core.WithPollen(context.Background(), h.pollen)
+	if decision, _, err := h.authorizeDelegatedTool(sproutCtx, core.CapSproutGrow, params.Arguments); err != nil {
+		return h.formatCapabilityResult(id, nil, err)
+	} else if !decision.Authorized {
 		return h.formatDelegationDenied(id, decision)
 	}
 

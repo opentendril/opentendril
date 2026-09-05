@@ -1,13 +1,10 @@
 package receptors
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
@@ -19,9 +16,10 @@ import (
 // translates HTTP to and from the transport-free core.Core and holds no
 // business logic.
 //
-// POST /v1/seeds/grow grows a Seed synchronously. POST /v1/seeds/grow/async
-// dispatches the growth onto a background goroutine and returns a durable
-// handle immediately; GET /v1/seeds/runs/{handle} collects the reviewable Fruit
+// POST /v1/seeds/grow grows a Seed. Detached=false (default) is synchronous;
+// detached=true returns the active handle after Core durable opening.
+// POST /v1/seeds/grow/async is compatibility presentation of the same Core
+// detached contract. GET /v1/seeds/runs/{handle} collects the reviewable Fruit
 // by that handle. All three are gated per-invocation by the delegation
 // authorizer; collection is additionally scoped to the subject that dispatched
 // the run.
@@ -160,12 +158,16 @@ func (h *SeedHandler) grow(w http.ResponseWriter, r *http.Request) {
 		writeCoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	status := http.StatusOK
+	if req.Detached {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, result)
 }
 
-// growAsync dispatches the growth onto a background goroutine and returns a
-// durable handle immediately. The reviewable Fruit is collected later via
-// GET /v1/seeds/runs/{handle}.
+// growAsync is the compatibility presentation of detached seed.grow. It forces
+// Detached=true and calls the same Core SeedGrow contract; it does not mint a
+// handle or launch growth itself.
 func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeSeedRequest(w, r)
 	if !ok {
@@ -179,26 +181,15 @@ func (h *SeedHandler) growAsync(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Origin) == "" {
 		req.Origin = session.OriginREST
 	}
+	req.Detached = true
 	r = r.WithContext(core.WithPollen(r.Context(), pollen))
 
-	growth, err := h.core.PrepareSeed(r.Context(), req)
+	result, err := h.core.SeedGrow(r.Context(), req)
 	if err != nil {
 		writeCoreErr(w, err)
 		return
 	}
-	handle := fmt.Sprintf("seed-%d", time.Now().UTC().UnixNano())
-	dispatch, err := h.core.OpenPreparedSeed(r.Context(), growth, handle)
-	if err != nil {
-		writeCoreErr(w, err)
-		return
-	}
-
-	bgCtx := context.WithoutCancel(r.Context())
-	go func() {
-		_, _ = h.core.GrowPreparedSeed(bgCtx, growth)
-	}()
-
-	writeJSON(w, http.StatusAccepted, dispatch)
+	writeJSON(w, http.StatusAccepted, result)
 }
 
 // collect returns the reviewable Fruit for a dispatched growth by handle. It is

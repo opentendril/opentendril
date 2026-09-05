@@ -11,12 +11,13 @@ import (
 // tests under cmd/stem). Adding a name here without wiring every surface, or
 // wiring a surface without a name here, fails CI.
 const (
-	CapCreatePhytomer  = "phytomer.create"
-	CapListPhytomers   = "phytomer.list"
-	CapGetPhytomer     = "phytomer.get"
-	CapUpdatePhytomer  = "phytomer.update"
-	CapDeletePhytomer  = "phytomer.delete"
-	CapPhytomerHistory = "phytomer.history"
+	CapCreatePhytomer   = "phytomer.create"
+	CapListPhytomers    = "phytomer.list"
+	CapGetPhytomer      = "phytomer.get"
+	CapUpdatePhytomer   = "phytomer.update"
+	CapDeletePhytomer   = "phytomer.delete"
+	CapPhytomerHistory  = "phytomer.history"
+	CapContinuePhytomer = "phytomer.continue"
 
 	CapGenomeView   = "genome.view"
 	CapGenomeReduce = "genome.reduce"
@@ -85,6 +86,7 @@ func CapabilityNames() []string {
 		CapUpdatePhytomer,
 		CapDeletePhytomer,
 		CapPhytomerHistory,
+		CapContinuePhytomer,
 		CapGenomeView,
 		CapGenomeReduce,
 		CapGenomeEvolve,
@@ -122,6 +124,7 @@ func CapabilityNames() []string {
 func DelegatedCapabilityNames() []string {
 	names := []string{
 		CapGenotypeCreate,
+		CapContinuePhytomer,
 		CapSproutGrow,
 		CapStomaPass,
 		CapSeedGrow,
@@ -235,6 +238,22 @@ func (s *Service) Capabilities() []Capability {
 					return nil, err
 				}
 				return s.SessionHistory(ctx, in)
+			},
+		},
+		{
+			Name:        CapContinuePhytomer,
+			Description: "Accept continued intent for an active Seed-owned Phytomer. Substrate and Pollen are resolved from Stem-owned Seed state; callers cannot nominate them.",
+			InputSchema: schemaObject(map[string]any{
+				"sessionId":      stringProp("The Phytomer id of the active Seed-owned run."),
+				"intent":         stringProp("The continued developer intent to accept for the next Sprout."),
+				"idempotencyKey": stringProp("Caller retry identity for this continued intent."),
+			}, []string{"sessionId", "intent", "idempotencyKey"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in ContinuationInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.ContinuePhytomer(ctx, in)
 			},
 		},
 	}

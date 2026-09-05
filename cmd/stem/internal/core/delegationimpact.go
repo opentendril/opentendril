@@ -6,7 +6,7 @@ import "strings"
 // If the capability is unlisted or unknown, it securely defaults to High impact.
 func CapabilityImpact(operationClass string) string {
 	switch operationClass {
-	case CapGitPrune, CapGitPush, CapGitPR, CapSproutGrow, CapSeedGrow, CapMeshPromote, CapMeshGraft:
+	case CapGitPrune, CapGitPush, CapGitPR, CapSproutGrow, CapSeedGrow, CapMeshPromote, CapMeshGraft, CapContinuePhytomer:
 		return DelegationImpactHigh
 	case CapGitCommit, CapGitBranch, CapStomaPass, CapPlasmidInject, CapGenotypeCreate:
 		return DelegationImpactMedium
