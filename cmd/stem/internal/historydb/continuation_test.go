@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -357,6 +358,54 @@ func TestAcceptContinuationRefusesStaleExpectedSubstrate(t *testing.T) {
 	listed, err := store.ListContinuationsByPhytomer(ctx, "tendril-1")
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("want no continuation after ownership change, got %+v err=%v", listed, err)
+	}
+}
+
+func TestListContinuationObservationsByPhytomerDoesNotDecryptIntent(t *testing.T) {
+	if strings.Contains(continuationObservationSelectColumns, "intent") ||
+		strings.Contains(continuationObservationSelectColumns, "idempotencyKey") {
+		t.Fatalf("observation columns select sensitive fields: %s", continuationObservationSelectColumns)
+	}
+
+	store := openTestStore(t)
+	ctx := context.Background()
+	mustRecordRunningSeed(t, store, "seed-1", "tendril-1", "claude", "myrepo")
+	rec, err := store.AcceptContinuation(ctx, ContinuationAcceptance{
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo", IdempotencyKey: "secret-key",
+		Intent: "SECRET_CONTINUED_INTENT keep going",
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE continuations SET intent = ? WHERE continuationId = ?`,
+		heartwood.Prefix+"not-valid-ciphertext", rec.ContinuationID); err != nil {
+		t.Fatalf("corrupt intent: %v", err)
+	}
+
+	observed, err := store.ListContinuationObservationsByPhytomer(ctx, "tendril-1")
+	if err != nil {
+		t.Fatalf("observation query after corrupt intent: %v", err)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("observed = %+v", observed)
+	}
+	if observed[0].ContinuationID != rec.ContinuationID || observed[0].Sequence != rec.Sequence {
+		t.Fatalf("observation identity = %+v, want id %s seq %d", observed[0], rec.ContinuationID, rec.Sequence)
+	}
+	if observed[0].DeliveryState != continuationDeliveryPending {
+		t.Fatalf("delivery state = %q", observed[0].DeliveryState)
+	}
+	if observed[0].Pollen != "claude" || observed[0].Substrate != "myrepo" {
+		t.Fatalf("ownership evidence = %+v", observed[0])
+	}
+
+	_, err = store.ListContinuationsByPhytomer(ctx, "tendril-1")
+	if err == nil {
+		t.Fatal("full continuation loader succeeded after intent ciphertext was corrupted")
+	}
+	if !strings.Contains(err.Error(), "decrypt continuation intent") {
+		t.Fatalf("full loader error = %v, want decrypt failure", err)
 	}
 }
 

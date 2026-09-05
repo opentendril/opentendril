@@ -25,8 +25,16 @@ Pollinator
     -> durable Pollinator root
     -> short-lived access token
     -> governed Stem
-    -> governed capabilities
+    -> seedGrow(detached)
+    -> phytomerContinue
+    -> sproutWatch
 ```
+
+`seedGrow` requires `seed.grow`. `phytomerContinue` requires `phytomer.continue`.
+`sproutWatch` requires `sprout.watch`. Each grant is checked independently.
+Pollen comes from the governed credential. Continuation Substrate comes from
+Stem-owned Phytomer state; the caller cannot self-declare it. `sproutWatch` is a
+view, not a governed command.
 
 `tendril-mcp` is the Pollinator-side client. It holds that Pollinator's durable
 root, mints short-lived access tokens, and forwards MCP frames to the separately

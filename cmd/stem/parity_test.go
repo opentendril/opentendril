@@ -169,13 +169,19 @@ func assertMCPProjectionParity(t *testing.T, mcp *receptors.MCPHandler) {
 	var listedPrimary []string
 	var listedAliases []string
 	var listedDotted []string
+	var listedViews []string
 	for _, name := range listed {
 		if existing, ok := seen[name]; ok {
 			t.Errorf("tools/list name %q listed more than once (also bound as %q)", name, existing)
 		}
+		if view, ok := receptors.ResolveMCPViewToolName(name); ok {
+			seen[name] = view
+			listedViews = append(listedViews, name)
+			continue
+		}
 		canonical, ok := receptors.ResolveMCPToolName(name)
 		if !ok {
-			t.Errorf("tools/list name %q does not resolve to a canonical capability", name)
+			t.Errorf("tools/list name %q does not resolve to a canonical capability or locked MCP view", name)
 			seen[name] = ""
 			continue
 		}
@@ -220,6 +226,7 @@ func assertMCPProjectionParity(t *testing.T, mcp *receptors.MCPHandler) {
 		"promotePR",
 	}
 	equalSets(t, "MCP compatibility aliases vs locked alias set", listedAliases, wantAliases)
+	equalSets(t, "MCP views vs locked view set", listedViews, receptors.MCPViewToolNames())
 	knownCanonical := make(map[string]struct{}, len(canonicals))
 	for _, canonical := range canonicals {
 		knownCanonical[canonical] = struct{}{}
@@ -271,6 +278,21 @@ func TestInterfaceParityCoverage(t *testing.T) {
 	equalSets(t, "MCP adapter (live primary projection) vs canonical", mcpGovernedToolNames(t, mcp), canonical)
 	equalSets(t, "CLI adapter (registered subcommands) vs canonical", cliCaps, canonical)
 	assertMCPProjectionParity(t, mcp)
+
+	for _, name := range canonical {
+		if name == core.CapSproutWatch {
+			t.Fatal("sprout.watch is in CapabilityNames(); it must remain a view")
+		}
+	}
+	watchCount := 0
+	for _, name := range mcpListedToolNames(t, mcp) {
+		if name == receptors.MCPViewSproutWatch {
+			watchCount++
+		}
+	}
+	if watchCount != 1 {
+		t.Fatalf("sproutWatch listed %d times, want 1", watchCount)
+	}
 }
 
 // TestControlPlaneCapabilitiesExcluded asserts that core.CapabilityNames() contains no

@@ -69,18 +69,26 @@ authorizes observation without authorizing execution.
 Current view:
 
 - **`sprout.watch`** - authorizes watching a Phytomer's run records, persisted
-  events, live stream, and the headless current-state watch at
-  `GET /v1/phytomers/{phytomerId}/watch`. Defined as `CapSproutWatch` in the
-  registry constants, with a doc comment stating it is deliberately absent from
-  `CapabilityNames()` and the parity registry. Because it is not in
-  `CapabilityNames()`, the parity test never evaluates it. Its own
-  authorization semantics are exercised in `watch_test.go`, which verifies
-  that a delegated caller must hold a `sprout.watch` grant for every Substrate
+  events, live stream, and the headless current-state watch. Defined as
+  `CapSproutWatch` in the registry constants, with a doc comment stating it is
+  deliberately absent from `CapabilityNames()` and the parity registry. Because
+  it is not in `CapabilityNames()`, governed command parity never evaluates it.
+  MCP lists the view once as `sproutWatch`; that identifier is a locked MCP
+  view, not a governed command and not a compatibility alias. Both current
+  projections reuse the same ownership/grant rule:
+
+  - REST/SSE: `GET /v1/phytomers/{phytomerId}/watch`
+  - MCP: `sproutWatch({ sessionId })` — one current-state snapshot per call
+
+  A delegated caller must hold a `sprout.watch` grant covering every Substrate
   targeted by a Phytomer's runs. A Seed-owned Phytomer is observable under this
-  same rule even before the first Sprout exists. The watch view emits current
-  safe state immediately as Server-Sent Events and follows that Phytomer until
-  the associated Seed is terminal; it does not accept Fruit and does not grant
-  `seed.grow`. There is no `seed.watch` operation-class.
+  same rule even before the first Sprout exists. The observation includes safe
+  continuation summaries (`continuationId`, `sequence`, `deliveryState`) when
+  they exist. It does not expose raw continued intent, intent digest,
+  idempotency key, reasoning, or credentials. It does not accept Fruit and does
+  not grant `seed.grow` or `phytomer.continue`. There is no `seed.watch`
+  operation-class. `seed.grow` does not imply `sprout.watch`. `phytomer.continue`
+  does not imply `sprout.watch`.
 
 ### Control-plane operations
 
@@ -167,10 +175,12 @@ the same Core methods exactly once, proving adapters carry zero independent
 business logic. MCP behavioral arms invoke the primary identifier.
 
 **What parity does not cover.** Parity applies only to governed commands from
-`CapabilityNames()`. It does not apply to views (`sprout.watch`), control-plane
-operations, or compatibility aliases that may exist on MCP outside the
-governed set. Those aliases resolve to existing canonical capabilities and
-carry no independent authority.
+`CapabilityNames()`. It does not apply to views (`sprout.watch` / MCP
+`sproutWatch`), control-plane operations, or compatibility aliases that may
+exist on MCP outside the governed set. Those aliases resolve to existing
+canonical capabilities and carry no independent authority. Locked MCP views
+are listed by `tools/list` and resolved through a view-name map separate from
+`ResolveMCPToolName`.
 
 ---
 
@@ -247,14 +257,17 @@ Not every governed capability is delegated. The current delegated set is:
 | Family | Delegated capabilities |
 |---|---|
 | Genotype | `genotype.create` |
+| Phytomer | `phytomer.continue` |
 | Sprout | `sprout.grow` |
 | Stoma | `stoma.pass` |
 | Seed | `seed.grow` |
 | Git | `git.commit`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
 
-Capabilities outside this set (such as `phytomer.*`, `genome.*`, `plasmid.*`,
-`mesh.*`, `sequence.*`) are governed commands subject to parity but are not
-gated by the delegation authorizer on Pollinator-facing surfaces.
+`phytomer.continue` is delegated. Phytomer create/list/get/update/delete/history
+retain their current non-delegated command posture. Other families outside this
+set (such as `genome.*`, `plasmid.*`, `mesh.*`, `sequence.*`) are governed
+commands subject to parity but are not gated by the delegation authorizer on
+Pollinator-facing surfaces.
 
 `IsDelegatedCapability(name)` reports whether a named capability is in the
 delegated set. The surfaces that gate per-invocation consult it.
@@ -271,6 +284,16 @@ needed.
 
 Session lifecycle: create, list, get, update (preference overrides), delete
 (prune), and history (recent unified chat log).
+
+`phytomer.continue` accepts continued intent for an active Seed-owned Phytomer.
+Input is `sessionId`, `intent`, and `idempotencyKey`. Authoritative Pollen
+comes from trusted Stem context. Authoritative Substrate is the Phytomer's
+Stem-bound Seed ownership; the caller cannot nominate Pollen, Substrate,
+Handle, grant, or Egress. Accepted intent is durable before acknowledgment and
+is delivered only at the next permitted Mycorrhizal/Sprout cognitive boundary.
+It does not interrupt or inject into a live Sprout/Terrarium and does not
+widen Seed bounds. The grant is independently required; `seed.grow` does not
+imply `phytomer.continue`.
 
 ### Genome
 
@@ -307,11 +330,15 @@ controlled aperture in the isolation wall).
 ### Seed
 
 Grow a Seed - activate a product-level goal. Each Seed growth has one canonical
-Phytomer execution context. The Seed handle and Phytomer ID are distinct:
-dispatch and collection use the handle (`seed.grow`); observation of that
-growth uses the Phytomer ID under `sprout.watch`. Observation does not execute
-the Seed and does not accept Fruit. `seed.grow` and `sprout.watch` remain
-separately grantable.
+Phytomer execution context. Canonical `seed.grow` accepts `detached: true` and
+returns active `{ handle, phytomerId, status: "running" }` while Core owns
+handle mint, durable opening, and background growth. REST
+`POST /v1/seeds/grow/async` is compatibility presentation of that same Core
+lifecycle, not a second detached path. The Seed handle and Phytomer ID are
+distinct: dispatch and collection use the handle (`seed.grow`); observation of
+that growth uses the Phytomer ID under `sprout.watch`. Observation does not
+execute the Seed and does not accept Fruit. `seed.grow`, `phytomer.continue`,
+and `sprout.watch` remain separately grantable.
 
 Under the managed GitHub App/API posture, Seed writing iterations are chained
 through local `tendril/seed-*` checkpoints: each successful iteration advances

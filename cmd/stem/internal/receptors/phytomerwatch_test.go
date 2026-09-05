@@ -766,3 +766,188 @@ func TestPhytomerWatchNoHistoryIsNotImplemented(t *testing.T) {
 		t.Fatalf("watch without history = %d, want 501: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func acceptWatchContinuation(t *testing.T, store *historydb.Store, phytomerID, handle, key, intent string) historydb.Continuation {
+	t.Helper()
+	rec, err := store.AcceptContinuation(context.Background(), historydb.ContinuationAcceptance{
+		PhytomerID: phytomerID, Pollen: watchOwner, Substrate: "myrepo", Handle: handle,
+		IdempotencyKey: key, Intent: intent,
+	})
+	if err != nil {
+		t.Fatalf("accept continuation %s: %v", key, err)
+	}
+	return rec
+}
+
+func TestPhytomerWatchEmitsSafeContinuationSummariesInSequence(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-owned", Pollen: watchOwner, PhytomerID: "tendril-seed-owned",
+		Substrate: "myrepo", Status: "running",
+	})
+	first := acceptWatchContinuation(t, store, "tendril-seed-owned", "seed-owned", "k1", "SECRET_INTENT_ONE")
+	second := acceptWatchContinuation(t, store, "tendril-seed-owned", "seed-owned", "k2", "SECRET_INTENT_TWO")
+
+	stream := openPhytomerWatch(t, mux, "tendril-seed-owned", watchOwner)
+	if stream.status != http.StatusOK {
+		t.Fatalf("owner watch = %d", stream.status)
+	}
+	obs := stream.nextObservation(t, time.Second)
+	if len(obs.Continuations) != 2 {
+		t.Fatalf("continuations = %+v", obs.Continuations)
+	}
+	if obs.Continuations[0].ContinuationID != first.ContinuationID || obs.Continuations[0].Sequence != 1 {
+		t.Fatalf("first continuation = %+v, want %+v", obs.Continuations[0], first)
+	}
+	if obs.Continuations[1].ContinuationID != second.ContinuationID || obs.Continuations[1].Sequence != 2 {
+		t.Fatalf("second continuation = %+v, want %+v", obs.Continuations[1], second)
+	}
+	if obs.Continuations[0].DeliveryState != "pending" || obs.Continuations[1].DeliveryState != "pending" {
+		t.Fatalf("pending states = %+v", obs.Continuations)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, banned := range []string{
+		"SECRET_INTENT_ONE", "SECRET_INTENT_TWO", "idempotencyKey", "intentDigest", `"intent"`,
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unsafe continuation material %q in watch body: %s", banned, body)
+		}
+	}
+}
+
+func TestPhytomerWatchReflectsContinuationDeliveryStateChange(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-owned", Pollen: watchOwner, PhytomerID: "tendril-seed-owned",
+		Substrate: "myrepo", Status: "running",
+	})
+	rec := acceptWatchContinuation(t, store, "tendril-seed-owned", "seed-owned", "k1", "SECRET_INTENT")
+	target := historydb.SeedTarget{PhytomerID: "tendril-seed-owned", Handle: "seed-owned", Pollen: watchOwner, Substrate: "myrepo"}
+	if _, err := store.ClaimPendingContinuations(context.Background(), target); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	stream := openPhytomerWatch(t, mux, "tendril-seed-owned", watchOwner)
+	if stream.status != http.StatusOK {
+		t.Fatalf("owner watch = %d", stream.status)
+	}
+	obs := stream.nextObservation(t, time.Second)
+	if len(obs.Continuations) != 1 || obs.Continuations[0].DeliveryState != "delivering" {
+		t.Fatalf("delivering observation = %+v", obs.Continuations)
+	}
+
+	if err := store.MarkContinuationsDelivered(context.Background(), target, []string{rec.ContinuationID}); err != nil {
+		t.Fatalf("mark delivered: %v", err)
+	}
+	obs = stream.nextObservation(t, time.Second)
+	if len(obs.Continuations) != 1 || obs.Continuations[0].DeliveryState != "delivered" {
+		t.Fatalf("delivered observation = %+v", obs.Continuations)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "SECRET_INTENT") {
+		t.Fatalf("raw intent leaked after delivery: %s", raw)
+	}
+}
+
+func TestPhytomerWatchTerminalKeepsContinuationSummary(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-done", Pollen: watchOwner, PhytomerID: "tendril-done",
+		Substrate: "myrepo", Status: "running",
+	})
+	rec := acceptWatchContinuation(t, store, "tendril-done", "seed-done", "k1", "SECRET_INTENT")
+	target := historydb.SeedTarget{PhytomerID: "tendril-done", Handle: "seed-done", Pollen: watchOwner, Substrate: "myrepo"}
+	if _, err := store.ClaimPendingContinuations(context.Background(), target); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := store.MarkContinuationsDelivered(context.Background(), target, []string{rec.ContinuationID}); err != nil {
+		t.Fatalf("mark delivered: %v", err)
+	}
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-done", Pollen: watchOwner, PhytomerID: "tendril-done",
+		Substrate: "myrepo", Status: core.SeedStatusSatisfied, Iterations: 1,
+		Branch: "tendril/seed-fruit", Commit: "abc123def456", StartedAt: time.Now().UTC(),
+		FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record terminal seed: %v", err)
+	}
+
+	watch := watchRequest(t, mux, "/v1/phytomers/tendril-done/watch", watchOwner)
+	obs := observationFromRecorder(t, watch)
+	if obs.Status != core.SeedStatusSatisfied || obs.Commit != "abc123def456" {
+		t.Fatalf("terminal fruit = %+v", obs)
+	}
+	if len(obs.Continuations) != 1 || obs.Continuations[0].DeliveryState != "delivered" {
+		t.Fatalf("terminal continuation = %+v", obs.Continuations)
+	}
+	if strings.Contains(watch.Body.String(), "SECRET_INTENT") {
+		t.Fatalf("raw intent leaked on terminal watch: %s", watch.Body.String())
+	}
+}
+
+func TestPhytomerWatchContinuationOwnershipMismatchFailsClosed(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-owned", Pollen: watchOwner, PhytomerID: "tendril-seed-owned",
+		Substrate: "myrepo", Status: "running",
+	})
+	acceptWatchContinuation(t, store, "tendril-seed-owned", "seed-owned", "k1", "SECRET_INTENT")
+
+	src := testPhytomerObservationSource(store)
+	loadContinuations := src.ContinuationsByPhytomer
+	src.ContinuationsByPhytomer = func(ctx context.Context, phytomerID string) ([]core.ContinuationObservationEvidence, error) {
+		rows, err := loadContinuations(ctx, phytomerID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rows {
+			rows[i].Pollen = watchOther
+		}
+		return rows, nil
+	}
+
+	gate := &DelegationGate{Authorizer: core.NewDelegationAuthorizer(watchOwnerGrants()), Bus: eventbus.New()}
+	handler := NewSessionsHandler(core.NewService(nil).WithPhytomerObservationSource(src), nil, store, eventbus.New()).
+		WithWatch(NewWatchAuthority(gate, store))
+	mux := http.NewServeMux()
+	handler.Register(mux, gate.Middleware, nil)
+
+	rec := watchRequest(t, mux, "/v1/phytomers/tendril-seed-owned/watch", watchOwner)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ownership mismatch watch = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, banned := range []string{"SECRET_INTENT", "event: observation", "continuation-"} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("mismatched continuation leaked: %s", body)
+		}
+	}
+}
+
+func TestPhytomerWatchDeniedWithoutSproutWatchGrant(t *testing.T) {
+	mux, store, _ := newPhytomerWatchFixture(t, []core.DelegationGrant{
+		{Pollen: watchOwner, OperationClasses: []string{core.CapSeedGrow, core.CapContinuePhytomer}, Substrates: []string{"myrepo"}},
+	})
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-owned", Pollen: watchOwner, PhytomerID: "tendril-seed-owned",
+		Substrate: "myrepo", Status: "running",
+	})
+	denied := watchRequest(t, mux, "/v1/phytomers/tendril-seed-owned/watch", watchOwner)
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("missing sprout.watch = %d, want 403: %s", denied.Code, denied.Body.String())
+	}
+	if strings.Contains(denied.Body.String(), "event: observation") {
+		t.Fatalf("denied watch leaked state: %s", denied.Body.String())
+	}
+}
