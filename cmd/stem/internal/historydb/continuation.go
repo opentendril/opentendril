@@ -266,6 +266,60 @@ WHERE continuationId = ?`
 	return s.scanContinuationRow(s.db.QueryRowContext(ctx, query, continuationID))
 }
 
+// ContinuationObservation is the intent-free structural row used by
+// current-state observation. It never carries encrypted or plaintext intent,
+// the intent digest, or the idempotency key.
+type ContinuationObservation struct {
+	ContinuationID string
+	Pollen         string
+	Substrate      string
+	Sequence       int
+	DeliveryState  string
+}
+
+const continuationObservationSelectColumns = `continuationId, pollen, substrate, sequence, deliveryState`
+
+// ListContinuationObservationsByPhytomer returns identity, ownership, order,
+// and delivery state for accepted continuations. It does not select or decrypt
+// intent, intentDigest, or idempotencyKey.
+func (s *Store) ListContinuationObservationsByPhytomer(ctx context.Context, phytomerID string) ([]ContinuationObservation, error) {
+	if s == nil {
+		return nil, fmt.Errorf("history store is not available")
+	}
+	phytomerID = strings.TrimSpace(phytomerID)
+	if phytomerID == "" {
+		return nil, ErrContinuationInvalid
+	}
+	const query = `
+SELECT ` + continuationObservationSelectColumns + `
+FROM continuations
+WHERE phytomerId = ?
+ORDER BY sequence ASC`
+	rows, err := s.db.QueryContext(ctx, query, phytomerID)
+	if err != nil {
+		return nil, fmt.Errorf("list continuation observations: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ContinuationObservation, 0)
+	for rows.Next() {
+		var rec ContinuationObservation
+		if err := rows.Scan(
+			&rec.ContinuationID,
+			&rec.Pollen,
+			&rec.Substrate,
+			&rec.Sequence,
+			&rec.DeliveryState,
+		); err != nil {
+			return nil, fmt.Errorf("scan continuation observation: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate continuation observations: %w", err)
+	}
+	return out, nil
+}
+
 // ListContinuationsByPhytomer returns accepted continuations in sequence order.
 func (s *Store) ListContinuationsByPhytomer(ctx context.Context, phytomerID string) ([]Continuation, error) {
 	phytomerID = strings.TrimSpace(phytomerID)

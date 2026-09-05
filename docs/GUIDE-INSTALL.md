@@ -560,8 +560,8 @@ pollen: claude
 `git.prune` is deliberately absent: it deletes branches, and every other Git
 operation is recoverable.
 
-Then grant the bounded Seed hand-off and observation explicitly, using the same
-Pollen and Substrate names:
+Then grant the bounded Seed hand-off, continuation, and observation explicitly,
+using the same Pollen and Substrate names:
 
 ```bash
 # as tendril, in /home/tendril
@@ -569,21 +569,23 @@ tendril delegation grant \
   --pollen claude \
   --substrate myrepo \
   --operation seed.grow \
+  --operation phytomer.continue \
   --operation sprout.watch
 ```
 
 ```text
 pollen: claude
   substrates: [myrepo]
-  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, sprout.watch]
+  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, phytomer.continue, sprout.watch]
 ```
 
-`seed.grow` is the bounded task hand-off. `sprout.watch` is the read side: it
-lets this Pollen observe the Phytomer the Stem created for that Seed — first
-through `GET /v1/phytomers/{phytomerId}/watch`, and also the stored run
-records, persisted events, and live stream — and nothing anyone else
-dispatched. Granting `seed.grow` does not imply `sprout.watch`. `sprout.grow`
-is not part of this first-use grant.
+`seed.grow` is the bounded task hand-off. `phytomer.continue` accepts additional
+intent for the active owned Phytomer. `sprout.watch` is the read side: it lets
+this Pollen observe the Phytomer the Stem created for that Seed — REST
+`GET /v1/phytomers/{phytomerId}/watch` and MCP `sproutWatch` — and also the
+stored run records, persisted events, and live stream — and nothing anyone else
+dispatched. Each grant is independent. `sprout.grow` is not part of this
+first-use grant.
 
 Revoke the same way if you need to take an operation back:
 
@@ -943,6 +945,7 @@ The routes a Pollinator may use, each gated by the matching operation-class:
 | `POST /v1/seeds/grow` | `seed.grow` |
 | `POST /v1/seeds/grow/async` | `seed.grow` |
 | `GET /v1/seeds/runs/{handle}` | `seed.grow` |
+| `POST /v1/phytomers/{phytomerId}/continue` | `phytomer.continue` |
 | `POST /v1/sprouts/grow` | `sprout.grow` |
 | `GET /v1/phytomers/{phytomerId}/watch` | `sprout.watch` |
 | `GET /v1/phytomers/{phytomerId}/sprout-runs` | `sprout.watch` |
@@ -1009,17 +1012,21 @@ TOKEN=$(cat ~/.tendril-token)
 
 ```bash
 # Dispatch a bounded Seed. Substrate must be myrepo — the name granted above.
-curl -s -X POST localhost:8080/v1/seeds/grow/async \
+curl -s -X POST localhost:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true}'
 ```
 
-The Stem accepts the dispatch with HTTP 202 and returns three fields:
+Canonical `seed.grow` owns detached lifecycle and returns active identity
+immediately:
 
 ```json
 {"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
 ```
+
+`POST /v1/seeds/grow/async` remains a compatibility presentation of the same
+Core lifecycle.
 
 `handle` is the Fruit-collection identity. `phytomerId` is the
 lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
@@ -1041,9 +1048,23 @@ observation immediately, then follows durable state until the Seed is
 terminal Seed returns that terminal current state and closes.
 
 The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
-When the Stem actually produced Fruit, the same stream includes `branch` and
-`commit`. Those fields stay absent until those facts exist. `main` is not
-modified.
+When continuations exist, it also includes `continuationId`, `sequence`, and
+`deliveryState`. When the Stem actually produced Fruit, the same stream includes
+`branch` and `commit`. Those fields stay absent until those facts exist. Raw
+continued intent is never in this view. `main` is not modified.
+
+After the active `phytomerId` is returned, continue that owned Phytomer:
+
+```bash
+curl -s -X POST localhost:8080/v1/phytomers/<phytomerId>/continue \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"intent":"keep going on the remaining tests","idempotencyKey":"continue-1"}'
+```
+
+Accepted intent is durable before acknowledgment. It does not interrupt the
+currently running Sprout and is delivered at the next permitted cognitive
+boundary.
 
 When the documented workflow needs the collection view, use the Seed handle
 from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
@@ -1059,13 +1080,20 @@ or `withered` (the Sprout failed). Review the resulting Git Fruit on the
 reported branch. `main` remains unchanged until a human merges. One Pollinator
 can never read another's handle.
 
-The same routes exist for a synchronous grow (`POST /v1/seeds/grow`); the async
-dispatch is the ordinary-terminal first-use path.
+Synchronous `POST /v1/seeds/grow` without `detached` still waits for terminal
+Fruit. Detached `seed.grow` is the ordinary first-use path.
 
-An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
-MCP tool name is `seedGrow`; the grant stays `seed.grow`. Granting `seed.grow`
-does not grant `sprout.watch`, and granting `sprout.watch` does not grant
-`seed.grow`.
+An MCP-speaking Pollinator uses the same authority through `tendril-mcp`:
+
+```text
+seedGrow         detached:true
+sproutWatch      sessionId
+phytomerContinue sessionId + intent + idempotencyKey
+sproutWatch      sessionId
+```
+
+Grant names remain dotted. Each grant is checked independently. Granting
+`seed.grow` does not grant `sprout.watch` or `phytomer.continue`.
 
 ---
 

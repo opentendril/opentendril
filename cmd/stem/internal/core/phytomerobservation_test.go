@@ -13,11 +13,20 @@ import (
 
 func projectObservation(t *testing.T, seed core.SeedObservationEvidence, sprouts []core.SproutObservationEvidence) core.PhytomerObservation {
 	t.Helper()
-	obs, err := core.ProjectPhytomerObservation(seed, sprouts)
+	return projectObservationWithContinuations(t, seed, sprouts, nil)
+}
+
+func projectObservationWithContinuations(t *testing.T, seed core.SeedObservationEvidence, sprouts []core.SproutObservationEvidence, continuations []core.ContinuationObservationEvidence) core.PhytomerObservation {
+	t.Helper()
+	obs, err := core.ProjectPhytomerObservation(seed, sprouts, continuations)
 	if err != nil {
 		t.Fatalf("ProjectPhytomerObservation: %v", err)
 	}
 	return obs
+}
+
+func emptyContinuations(context.Context, string) ([]core.ContinuationObservationEvidence, error) {
+	return nil, nil
 }
 
 func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
@@ -34,8 +43,8 @@ func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
 	if obs.Status != "running" || obs.Iterations != 0 {
 		t.Fatalf("progress = status %q iterations %d", obs.Status, obs.Iterations)
 	}
-	if obs.Commit != "" || obs.Branch != "" || len(obs.Sprouts) != 0 {
-		t.Fatalf("fabricated fruit or sprout: %+v", obs)
+	if obs.Commit != "" || obs.Branch != "" || len(obs.Sprouts) != 0 || len(obs.Continuations) != 0 {
+		t.Fatalf("fabricated fruit, sprout, or continuation: %+v", obs)
 	}
 
 	raw, err := json.Marshal(obs)
@@ -44,6 +53,9 @@ func TestProjectPhytomerObservationBeforeSprout(t *testing.T) {
 	}
 	if strings.Contains(string(raw), `"sprouts"`) {
 		t.Fatalf("missing sprouts were rewritten as a list: %s", raw)
+	}
+	if strings.Contains(string(raw), `"continuations"`) {
+		t.Fatalf("missing continuations were rewritten as a list: %s", raw)
 	}
 	if strings.Contains(string(raw), `"commit"`) {
 		t.Fatalf("missing commit was fabricated: %s", raw)
@@ -239,6 +251,7 @@ func TestObservePhytomerUsesSourceAndProjectsSafely(t *testing.T) {
 				StartedAt: time.Unix(1, 0).UTC(),
 			}}, nil
 		},
+		ContinuationsByPhytomer: emptyContinuations,
 	})
 	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
 	if err != nil {
@@ -277,6 +290,7 @@ func TestObservePhytomerRefusesSproutWithOtherPollen(t *testing.T) {
 				Model:     "intruder-model",
 			}}, nil
 		},
+		ContinuationsByPhytomer: emptyContinuations,
 	})
 	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
 	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
@@ -303,6 +317,7 @@ func TestObservePhytomerRefusesSproutWithOtherSubstrate(t *testing.T) {
 				Model:     "foreign-model",
 			}}, nil
 		},
+		ContinuationsByPhytomer: emptyContinuations,
 	})
 	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
 	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
@@ -325,6 +340,7 @@ func TestObservePhytomerKeepsMatchingMultiSproutSeed(t *testing.T) {
 				{RunID: "run-a", Pollen: "claude", Substrate: "myrepo", Status: "matured", Provider: "anthropic", Model: "claude-sonnet", StartedAt: time.Unix(1, 0).UTC()},
 			}, nil
 		},
+		ContinuationsByPhytomer: emptyContinuations,
 	})
 	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
 	if err != nil {
@@ -337,7 +353,7 @@ func TestObservePhytomerKeepsMatchingMultiSproutSeed(t *testing.T) {
 
 func assertObservationDoesNotContain(t *testing.T, obs core.PhytomerObservation, banned ...string) {
 	t.Helper()
-	if len(obs.Sprouts) != 0 || obs.Handle != "" {
+	if len(obs.Sprouts) != 0 || len(obs.Continuations) != 0 || obs.Handle != "" {
 		t.Fatalf("contradictory observation was released: %+v", obs)
 	}
 	raw, err := json.Marshal(obs)
@@ -363,9 +379,21 @@ func TestObservePhytomerNotFoundAndNotWired(t *testing.T) {
 		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
 			return nil, nil
 		},
+		ContinuationsByPhytomer: emptyContinuations,
 	})
 	if _, err := svc.ObservePhytomer(context.Background(), "tendril-missing"); !errors.Is(err, core.ErrPhytomerObservationNotFound) {
 		t.Fatalf("missing = %v, want not found", err)
+	}
+	partial := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{Handle: "seed-1", PhytomerID: "tendril-1", Status: "running"}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return nil, nil
+		},
+	})
+	if _, err := partial.ObservePhytomer(context.Background(), "tendril-1"); !errors.Is(err, core.ErrPhytomerObservationNotWired) {
+		t.Fatalf("missing continuation loader = %v, want not wired", err)
 	}
 }
 
@@ -448,4 +476,145 @@ func TestProjectPhytomerObservationIncludesVerificationDiagnostics(t *testing.T)
 	if strings.Contains(body, "/home/") || strings.Contains(body, "Bearer ") {
 		t.Fatalf("unsafe material leaked: %s", body)
 	}
+}
+
+func TestProjectPhytomerObservationOrdersContinuationsBySequenceThenID(t *testing.T) {
+	obs := projectObservationWithContinuations(t, core.SeedObservationEvidence{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo", Status: "running",
+	}, nil, []core.ContinuationObservationEvidence{
+		{ContinuationID: "continuation-z", Pollen: "claude", Substrate: "myrepo", Sequence: 2, DeliveryState: core.ContinuationDeliveryPending},
+		{ContinuationID: "continuation-b", Pollen: "claude", Substrate: "myrepo", Sequence: 1, DeliveryState: core.ContinuationDeliveryDelivered},
+		{ContinuationID: "continuation-a", Pollen: "claude", Substrate: "myrepo", Sequence: 1, DeliveryState: core.ContinuationDeliveryFailed},
+	})
+	if len(obs.Continuations) != 3 {
+		t.Fatalf("continuations = %d, want 3", len(obs.Continuations))
+	}
+	got := []string{obs.Continuations[0].ContinuationID, obs.Continuations[1].ContinuationID, obs.Continuations[2].ContinuationID}
+	want := []string{"continuation-a", "continuation-b", "continuation-z"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("continuation order = %v, want %v", got, want)
+		}
+	}
+	if obs.Continuations[0].Sequence != 1 || obs.Continuations[2].Sequence != 2 {
+		t.Fatalf("continuation sequences = %+v", obs.Continuations)
+	}
+}
+
+func TestProjectPhytomerObservationOmitsContinuationSecrets(t *testing.T) {
+	obs := projectObservationWithContinuations(t, core.SeedObservationEvidence{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo",
+		Status: core.SeedStatusSatisfied, Goal: "PRIVATE_PROMPT_CONTENT",
+	}, nil, []core.ContinuationObservationEvidence{{
+		ContinuationID: "continuation-1",
+		Pollen:         "claude",
+		Substrate:      "myrepo",
+		Sequence:       1,
+		DeliveryState:  core.ContinuationDeliveryDelivered,
+	}})
+	if len(obs.Continuations) != 1 || obs.Continuations[0].ContinuationID != "continuation-1" {
+		t.Fatalf("continuations = %+v", obs.Continuations)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, banned := range []string{
+		"intent", "idempotencyKey", "intentDigest", "PRIVATE_PROMPT_CONTENT", "keep going secretly",
+	} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unsafe continuation material %q leaked: %s", banned, body)
+		}
+	}
+	if !strings.Contains(body, `"continuationId"`) || !strings.Contains(body, `"deliveryState"`) {
+		t.Fatalf("safe continuation summary missing: %s", body)
+	}
+}
+
+func TestProjectPhytomerObservationRefusesUnknownContinuationState(t *testing.T) {
+	for _, state := range []string{"", "paused", "unknown"} {
+		obs, err := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+			Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo", Status: "running",
+		}, nil, []core.ContinuationObservationEvidence{{
+			ContinuationID: "continuation-bad",
+			Pollen:         "claude",
+			Substrate:      "myrepo",
+			Sequence:       1,
+			DeliveryState:  state,
+		}})
+		if !errors.Is(err, core.ErrPhytomerObservationContinuationInvalid) {
+			t.Fatalf("state %q = %v, want invalid continuation evidence", state, err)
+		}
+		banned := []string{"continuation-bad"}
+		if state != "" {
+			banned = append(banned, state)
+		}
+		assertObservationDoesNotContain(t, obs, banned...)
+	}
+}
+
+func TestProjectPhytomerObservationRefusesContinuationOwnershipMismatch(t *testing.T) {
+	obs, err := core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo", Status: "running",
+	}, nil, []core.ContinuationObservationEvidence{{
+		ContinuationID: "continuation-other-pollen",
+		Pollen:         "codex",
+		Substrate:      "myrepo",
+		Sequence:       1,
+		DeliveryState:  core.ContinuationDeliveryPending,
+	}})
+	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		t.Fatalf("other pollen = %v, want ownership conflict", err)
+	}
+	assertObservationDoesNotContain(t, obs, "continuation-other-pollen", "codex")
+
+	obs, err = core.ProjectPhytomerObservation(core.SeedObservationEvidence{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "myrepo", Status: "running",
+	}, nil, []core.ContinuationObservationEvidence{{
+		ContinuationID: "continuation-other-repo",
+		Pollen:         "claude",
+		Substrate:      "otherrepo",
+		Sequence:       1,
+		DeliveryState:  core.ContinuationDeliveryPending,
+	}})
+	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		t.Fatalf("other substrate = %v, want ownership conflict", err)
+	}
+	assertObservationDoesNotContain(t, obs, "continuation-other-repo", "otherrepo")
+}
+
+func TestObservePhytomerProjectsContinuationsOnTerminalSeed(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: core.SeedStatusSatisfied,
+			}, true, nil
+		},
+		SproutsByPhytomer: emptySprouts,
+		ContinuationsByPhytomer: func(context.Context, string) ([]core.ContinuationObservationEvidence, error) {
+			return []core.ContinuationObservationEvidence{{
+				ContinuationID: "continuation-1",
+				Pollen:         "claude",
+				Substrate:      "myrepo",
+				Sequence:       1,
+				DeliveryState:  core.ContinuationDeliveryDelivered,
+			}}, nil
+		},
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if err != nil {
+		t.Fatalf("ObservePhytomer: %v", err)
+	}
+	if obs.Status != core.SeedStatusSatisfied || len(obs.Continuations) != 1 {
+		t.Fatalf("terminal observation = %+v", obs)
+	}
+	if obs.Continuations[0].ContinuationID != "continuation-1" || obs.Continuations[0].DeliveryState != core.ContinuationDeliveryDelivered {
+		t.Fatalf("terminal continuation = %+v", obs.Continuations[0])
+	}
+}
+
+func emptySprouts(context.Context, string) ([]core.SproutObservationEvidence, error) {
+	return nil, nil
 }

@@ -94,6 +94,28 @@ func mcpPrimaryIndex(canonicals []string) map[string]string {
 	return index
 }
 
+// MCPViewSproutWatch is the Pollinator-visible MCP identifier for the
+// sprout.watch current-state snapshot. It is a view, not a governed command.
+const MCPViewSproutWatch = "sproutWatch"
+
+// MCPViewToolNames returns the locked MCP view identifiers. Views are
+// outside core.CapabilityNames() and governed command parity.
+func MCPViewToolNames() []string {
+	return []string{MCPViewSproutWatch}
+}
+
+// ResolveMCPViewToolName maps an inbound MCP tool name onto a locked view
+// identifier. Views are not compatibility aliases and are not recovered from
+// CapabilityNames().
+func ResolveMCPViewToolName(name string) (string, bool) {
+	switch name {
+	case MCPViewSproutWatch:
+		return MCPViewSproutWatch, true
+	default:
+		return "", false
+	}
+}
+
 // mcpNameBindings builds the accepted-name → canonical map for the three
 // families (primary projection, canonical identifier, compatibility alias).
 // It fails if any accepted string would resolve to two different canonical

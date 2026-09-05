@@ -97,7 +97,44 @@ func TestPhytomerObservationSourceCopiesVerificationDiagnostics(t *testing.T) {
 
 func TestPhytomerObservationSourceNilHistoryIsUnwired(t *testing.T) {
 	src := phytomerObservationSource(nil)
-	if src.SeedByPhytomer != nil || src.SproutsByPhytomer != nil {
+	if src.SeedByPhytomer != nil || src.SproutsByPhytomer != nil || src.ContinuationsByPhytomer != nil {
 		t.Fatal("nil history still wired an observation source")
+	}
+}
+
+func TestPhytomerObservationSourceCopiesContinuationLifecycleWithoutIntent(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+	rec, err := store.AcceptContinuation(context.Background(), historydb.ContinuationAcceptance{
+		PhytomerID: "tendril-1", Pollen: "claude", Substrate: "myrepo",
+		IdempotencyKey: "secret-key", Intent: "SECRET_CONTINUED_INTENT",
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	src := phytomerObservationSource(store)
+	rows, err := src.ContinuationsByPhytomer(context.Background(), "tendril-1")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("continuation evidence = %+v err=%v", rows, err)
+	}
+	if rows[0].ContinuationID != rec.ContinuationID || rows[0].Sequence != rec.Sequence {
+		t.Fatalf("identity = %+v, want id %s seq %d", rows[0], rec.ContinuationID, rec.Sequence)
+	}
+	if rows[0].Pollen != "claude" || rows[0].Substrate != "myrepo" {
+		t.Fatalf("ownership evidence dropped: %+v", rows[0])
+	}
+	if rows[0].DeliveryState != "pending" {
+		t.Fatalf("delivery state = %q", rows[0].DeliveryState)
 	}
 }

@@ -74,11 +74,18 @@ func (a *WatchAuthority) Observer(w http.ResponseWriter, r *http.Request) (polle
 // entirely the observer's or it is not the observer's at all — and a phytomer
 // nothing was ever dispatched into belongs to nobody, which denies.
 func (a *WatchAuthority) AuthorizePhytomer(w http.ResponseWriter, r *http.Request, pollen, sessionID string) bool {
-	if err := a.checkPhytomer(r.Context(), pollen, sessionID); err != nil {
+	if err := a.CheckPhytomer(r.Context(), pollen, sessionID); err != nil {
 		writeWatchAuthError(w, err)
 		return false
 	}
 	return true
+}
+
+// CheckPhytomer is the transport-neutral ownership and sprout.watch grant
+// check used by REST and MCP. A blank Pollen is the operator view and is not
+// checked here; callers skip this for operator observation.
+func (a *WatchAuthority) CheckPhytomer(ctx context.Context, pollen, sessionID string) error {
+	return a.checkPhytomer(ctx, pollen, sessionID)
 }
 
 type watchAuthError struct {
@@ -350,7 +357,7 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if pollen != "" {
-			if err := h.watch.checkPhytomer(ctx, pollen, sessionID); err != nil {
+			if err := h.watch.CheckPhytomer(ctx, pollen, sessionID); err != nil {
 				_ = writeSSE(w, "error", []byte(`{"error":"delegation denied"}`))
 				return
 			}
@@ -358,7 +365,7 @@ func (h *SessionsHandler) phytomerWatch(w http.ResponseWriter, r *http.Request) 
 
 		current, err := h.core.ObservePhytomer(ctx, sessionID)
 		if err != nil {
-			if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+			if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) || errors.Is(err, core.ErrPhytomerObservationContinuationInvalid) {
 				_ = writeSSE(w, "error", []byte(`{"error":"observation closed"}`))
 			}
 			return
@@ -380,6 +387,10 @@ func writePhytomerObservationErr(w http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
 		http.Error(w, "delegation denied: seed and sprout ownership evidence disagree", http.StatusForbidden)
+		return
+	}
+	if errors.Is(err, core.ErrPhytomerObservationContinuationInvalid) {
+		http.Error(w, "delegation denied: phytomer continuation observation evidence is invalid", http.StatusForbidden)
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
