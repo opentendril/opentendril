@@ -360,6 +360,9 @@ func (s *Service) authorizeContinuationTarget(ctx context.Context, target Contin
 	if target.PhytomerID == "" {
 		return ContinuationTarget{}, ErrContinuationTargetNotFound
 	}
+	if s.phytomerAccountingIncomplete(target.PhytomerID) {
+		return ContinuationTarget{}, ErrContinuationNotEligible
+	}
 	pollen := PollenFromContext(ctx)
 	if target.Pollen != pollen {
 		return ContinuationTarget{}, ErrContinuationPollenMismatch

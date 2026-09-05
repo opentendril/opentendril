@@ -87,7 +87,7 @@ type Core interface {
 	// Seed lifecycle methods. They are not governed Pollinator commands.
 	PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth, error)
 	GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error)
-	OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error)
+	OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedDispatch, error)
 	// ObservePhytomer is the transport-free current-state view of one
 	// Seed-owned Phytomer. It is not a governed Pollinator command. Safety
 	// projection — which persisted fields may be released — is owned here.
@@ -222,6 +222,9 @@ type Service struct {
 	// newSeedHandle, when set, replaces crypto/rand Seed handle minting.
 	// Tests inject a deterministic or failing seam; production leaves it nil.
 	newSeedHandle func() (string, error)
+
+	quarantinedPhytomers map[string]struct{}
+	seedLifecycleReport  func(SeedLifecycleReport)
 }
 
 // NewService builds a Core over the shared SessionManager.

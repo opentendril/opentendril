@@ -132,6 +132,25 @@ var ErrSeedHistoryUnavailable = errors.New("seed run history is not available")
 // the Stem did not issue, or one whose bound identity was substituted.
 var ErrSeedGrowthInvalid = errors.New("seed growth is not a prepared Stem lifecycle")
 
+// ErrSeedAccountingIncomplete is returned when opened Seed execution finished
+// but terminal durable accounting did not complete. It is a typed lifecycle
+// failure, not a run-error string.
+var ErrSeedAccountingIncomplete = errors.New("seed terminal accounting did not complete")
+
+// SeedLifecycleAccountingIncomplete is the Core-owned report kind for a
+// detached (or opened) Seed whose executor exited without durable terminal
+// accounting.
+const SeedLifecycleAccountingIncomplete = "seed-accounting-incomplete"
+
+// SeedLifecycleReport is a transport-free, intent-free notice that a Seed
+// lifecycle event occurred. Adapters may log identity; they must not add
+// continued-intent plaintext.
+type SeedLifecycleReport struct {
+	PhytomerID string
+	Handle     string
+	Kind       string
+}
+
 // SeedGrowth is an opaque Stem-owned lifecycle envelope for one Seed growth.
 // Only PrepareSeed can issue a valid envelope. GrowPreparedSeed and
 // OpenPreparedSeed refuse construction, mutation, or substitution.
@@ -243,6 +262,20 @@ type SeedPersistence struct {
 // WithSeedPersistence wires the durable Seed-ownership port.
 func (s *Service) WithSeedPersistence(p SeedPersistence) *Service {
 	s.seedPersist = p
+	return s
+}
+
+// WithSeedHandleMint replaces Core handle minting. Production leaves this
+// unset so crypto/rand is used. Tests inject a deterministic or colliding seam.
+func (s *Service) WithSeedHandleMint(mint func() (string, error)) *Service {
+	s.newSeedHandle = mint
+	return s
+}
+
+// WithSeedLifecycleReporter receives Core-owned Seed lifecycle failure
+// reports. Production may leave this unset; tests inject a channel.
+func (s *Service) WithSeedLifecycleReporter(report func(SeedLifecycleReport)) *Service {
+	s.seedLifecycleReport = report
 	return s
 }
 
@@ -386,13 +419,15 @@ func (s *Service) finalizeOpenedSeed(ctx context.Context, lifecycle *SeedContinu
 	if runErr == nil && !publicationFailed && result.Status == SeedStatusSatisfied {
 		if err := lifecycle.CompleteSuccessfulSettlement(persistCtx, settled); err != nil {
 			result.Status = SeedStatusWithered
-			return result, err
+			s.noteSeedAccountingIncomplete(lifecycle.Target())
+			return result, fmt.Errorf("%w: %w", ErrSeedAccountingIncomplete, err)
 		}
 		return result, nil
 	}
 	account, err := lifecycle.AccountTerminalFailure(persistCtx, settled)
 	if err != nil {
-		return result, err
+		s.noteSeedAccountingIncomplete(lifecycle.Target())
+		return result, fmt.Errorf("%w: %w", ErrSeedAccountingIncomplete, err)
 	}
 	if account.UnresolvedFailed > 0 {
 		result.Status = SeedStatusWithered
@@ -450,16 +485,12 @@ func seedFinalizationContext(ctx context.Context) (context.Context, context.Canc
 }
 
 // OpenPreparedSeed records durable Seed ownership from a Stem-issued growth
-// before detached dispatch is accepted. An empty handle is minted by Core;
+// before detached dispatch is accepted. Core always mints the handle;
 // Phytomer, Pollen, and Substrate come only from the envelope.
-func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth, handle string) (SeedDispatch, error) {
-	handle = strings.TrimSpace(handle)
-	if handle == "" {
-		minted, err := s.mintSeedHandle()
-		if err != nil {
-			return SeedDispatch{}, err
-		}
-		handle = minted
+func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedDispatch, error) {
+	handle, err := s.mintSeedHandle()
+	if err != nil {
+		return SeedDispatch{}, err
 	}
 	if err := s.openedContinuationLifecycleWired(); err != nil {
 		return SeedDispatch{}, err
@@ -533,7 +564,7 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 // opening has been recorded. Request cancellation after that opening must
 // not cancel the accepted growth.
 func (s *Service) startDetachedSeed(ctx context.Context, growth SeedGrowth) (SeedGrowResult, error) {
-	dispatch, err := s.OpenPreparedSeed(ctx, growth, "")
+	dispatch, err := s.OpenPreparedSeed(ctx, growth)
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
@@ -542,7 +573,10 @@ func (s *Service) startDetachedSeed(ctx context.Context, growth SeedGrowth) (See
 		bgCtx = context.WithoutCancel(ctx)
 	}
 	go func() {
-		_, _ = s.GrowPreparedSeed(bgCtx, growth)
+		if _, growErr := s.GrowPreparedSeed(bgCtx, growth); errors.Is(growErr, ErrSeedAccountingIncomplete) {
+			// finalizeOpenedSeed already quarantined and reported.
+			return
+		}
 	}()
 	return SeedGrowResult{
 		Handle:     dispatch.Handle,
@@ -615,6 +649,38 @@ func (s *Service) mintPreparedSeedToken() (string, error) {
 		return s.newPreparedSeedToken()
 	}
 	return generatePreparedSeedToken()
+}
+
+func (s *Service) noteSeedAccountingIncomplete(target ContinuationTarget) {
+	phytomerID := strings.TrimSpace(target.PhytomerID)
+	handle := strings.TrimSpace(target.Handle)
+	if phytomerID == "" {
+		return
+	}
+	s.seedMu.Lock()
+	if s.quarantinedPhytomers == nil {
+		s.quarantinedPhytomers = make(map[string]struct{})
+	}
+	s.quarantinedPhytomers[phytomerID] = struct{}{}
+	reporter := s.seedLifecycleReport
+	s.seedMu.Unlock()
+	if reporter != nil {
+		reporter(SeedLifecycleReport{
+			PhytomerID: phytomerID,
+			Handle:     handle,
+			Kind:       SeedLifecycleAccountingIncomplete,
+		})
+	}
+}
+
+func (s *Service) phytomerAccountingIncomplete(phytomerID string) bool {
+	if s == nil {
+		return false
+	}
+	s.seedMu.Lock()
+	defer s.seedMu.Unlock()
+	_, ok := s.quarantinedPhytomers[strings.TrimSpace(phytomerID)]
+	return ok
 }
 
 func (s *Service) mintSeedHandle() (string, error) {

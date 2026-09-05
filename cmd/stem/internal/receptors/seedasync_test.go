@@ -57,7 +57,7 @@ func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 			if store == nil {
 				return core.ErrSeedHistoryUnavailable
 			}
-			return store.RecordSeedRun(ctx, historydb.SeedRun{
+			return store.RecordSeedOpening(ctx, historydb.SeedRun{
 				Handle:     opening.Handle,
 				Pollen:     opening.Pollen,
 				PhytomerID: opening.PhytomerID,

@@ -281,7 +281,7 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-local"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{
@@ -344,7 +344,7 @@ func TestProductionPreProviderFailureFailsContinuationNotDelivered(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-preprovider"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	accepted, err := svc.AcceptContinuation(ctx, core.ContinuationInput{

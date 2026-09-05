@@ -53,7 +53,7 @@ func TestOpenPreparedSeedRefusesUnwiredContinuationLifecycleBeforeRecordOpening(
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-unwired"); !errors.Is(err, ErrContinuationNotWired) {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); !errors.Is(err, ErrContinuationNotWired) {
 		t.Fatalf("open: %v, want ErrContinuationNotWired", err)
 	}
 	if openings != 0 {
@@ -92,7 +92,7 @@ func TestOpenPreparedSeedRefusesPartialContinuationLifecycleBeforeRecordOpening(
 			if err != nil {
 				t.Fatalf("prepare: %v", err)
 			}
-			if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-partial"); !errors.Is(err, ErrContinuationNotWired) {
+			if _, err := svc.OpenPreparedSeed(context.Background(), growth); !errors.Is(err, ErrContinuationNotWired) {
 				t.Fatalf("open: %v, want ErrContinuationNotWired", err)
 			}
 			if openings != 0 {
@@ -126,7 +126,7 @@ func TestGrowPreparedSeedRefusesOpenedSeedWhenLifecycleGoesMissing(t *testing.T)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(context.Background(), growth, "seed-defensive"); err != nil {
+	if _, err := svc.OpenPreparedSeed(context.Background(), growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	svc.WithContinuationPersistence(ContinuationPersistence{
@@ -184,7 +184,8 @@ func TestOpenedSeedReceivesContinuationLifecycleWithExactTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-opened-1"); err != nil {
+	svc.WithSeedHandleMint(func() (string, error) { return "seed-opened-1", nil })
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	if _, err := svc.GrowPreparedSeed(ctx, growth); err != nil {
@@ -226,7 +227,7 @@ func TestOpenedSettlementPersistenceErrorsArePropagated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-persist-err"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(ctx, growth)
@@ -270,7 +271,7 @@ func TestCancelledExecutionContextStillGetsBoundedFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-cancelled"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	cancelled, cancel := context.WithCancel(WithPollen(context.Background(), "claude"))
@@ -340,7 +341,7 @@ func TestOpenedSeedTerminalFailureAccountsUndeliveredContinuation(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if _, err := svc.OpenPreparedSeed(ctx, growth, "seed-undelivered"); err != nil {
+	if _, err := svc.OpenPreparedSeed(ctx, growth); err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	result, err := svc.GrowPreparedSeed(ctx, growth)

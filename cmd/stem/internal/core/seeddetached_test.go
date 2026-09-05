@@ -141,6 +141,205 @@ func TestSeedGrowDetachedCallerCannotSupplyHandle(t *testing.T) {
 	}
 }
 
+func TestDetachedAccountingFailureQuarantinesPhytomer(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	reported := make(chan SeedLifecycleReport, 1)
+	var accepted int
+	var live ContinuationTarget
+	port := wiredContinuationPersistence()
+	port.ResolveTarget = func(_ context.Context, phytomerID string) (ContinuationTarget, bool, error) {
+		if phytomerID != live.PhytomerID {
+			return ContinuationTarget{}, false, nil
+		}
+		return live, true, nil
+	}
+	port.Accept = func(context.Context, ContinuationAcceptance) (ContinuationRecord, error) {
+		accepted++
+		return ContinuationRecord{}, errors.New("accept must not run after accounting failure")
+	}
+	port.CompleteSuccessfulSettlement = func(context.Context, SeedSettlement) error {
+		return errors.New("settlement persist failed")
+	}
+
+	svc := newDetachedSeedService(t, func(ctx context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
+		close(started)
+		<-release
+		return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+	})
+	svc.WithContinuationPersistence(port).WithSeedLifecycleReporter(func(report SeedLifecycleReport) {
+		reported <- report
+	})
+
+	ctx := WithPollen(context.Background(), "claude")
+	result, err := svc.SeedGrow(ctx, detachedSeedInput())
+	if err != nil {
+		t.Fatalf("detached grow: %v", err)
+	}
+	live = ContinuationTarget{
+		PhytomerID: result.PhytomerID,
+		Handle:     result.Handle,
+		Pollen:     "claude",
+		Substrate:  "core",
+		Status:     SeedStatusRunning,
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("executor did not start")
+	}
+	close(release)
+	var report SeedLifecycleReport
+	select {
+	case report = <-reported:
+	case <-time.After(2 * time.Second):
+		t.Fatal("accounting failure was not reported")
+	}
+	if report.Kind != SeedLifecycleAccountingIncomplete || report.PhytomerID != result.PhytomerID || report.Handle != result.Handle {
+		t.Fatalf("report = %+v", report)
+	}
+	if _, err := svc.ResolveContinuationTarget(ctx, result.PhytomerID); !errors.Is(err, ErrContinuationNotEligible) {
+		t.Fatalf("resolve after accounting failure: %v", err)
+	}
+	if _, err := svc.ContinuePhytomer(ctx, ContinuationInput{
+		PhytomerID: result.PhytomerID, Intent: "keep going", IdempotencyKey: "k1",
+	}); !errors.Is(err, ErrContinuationNotEligible) {
+		t.Fatalf("continue after accounting failure: %v", err)
+	}
+	if accepted != 0 {
+		t.Fatalf("continuation accepted %d time(s)", accepted)
+	}
+}
+
+func TestDetachedFailedRunAccountingFailureQuarantines(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	reported := make(chan SeedLifecycleReport, 1)
+	var live ContinuationTarget
+	port := wiredContinuationPersistence()
+	port.ResolveTarget = func(_ context.Context, phytomerID string) (ContinuationTarget, bool, error) {
+		if phytomerID != live.PhytomerID {
+			return ContinuationTarget{}, false, nil
+		}
+		return live, true, nil
+	}
+	port.AccountTerminalFailure = func(context.Context, SeedSettlement) (TerminalFailureAccount, error) {
+		return TerminalFailureAccount{}, errors.New("account persist failed")
+	}
+	svc := newDetachedSeedService(t, func(ctx context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
+		close(started)
+		<-release
+		return SeedGrowResult{Status: SeedStatusWithered, Iterations: 1, PhytomerID: spec.PhytomerID}, errors.New("sprout failed")
+	})
+	svc.WithContinuationPersistence(port).WithSeedLifecycleReporter(func(report SeedLifecycleReport) {
+		reported <- report
+	})
+	ctx := WithPollen(context.Background(), "claude")
+	result, err := svc.SeedGrow(ctx, detachedSeedInput())
+	if err != nil {
+		t.Fatalf("detached grow: %v", err)
+	}
+	live = ContinuationTarget{
+		PhytomerID: result.PhytomerID, Handle: result.Handle, Pollen: "claude", Substrate: "core", Status: SeedStatusRunning,
+	}
+	<-started
+	close(release)
+	select {
+	case <-reported:
+	case <-time.After(2 * time.Second):
+		t.Fatal("failed-run accounting failure was not reported")
+	}
+	if _, err := svc.ResolveContinuationTarget(ctx, result.PhytomerID); !errors.Is(err, ErrContinuationNotEligible) {
+		t.Fatalf("resolve: %v", err)
+	}
+}
+
+func TestDetachedFailedRunWithCommittedAccountingIsNotQuarantine(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	accounted := make(chan struct{})
+	reported := make(chan SeedLifecycleReport, 1)
+	var live ContinuationTarget
+	port := wiredContinuationPersistence()
+	port.ResolveTarget = func(_ context.Context, phytomerID string) (ContinuationTarget, bool, error) {
+		if phytomerID != live.PhytomerID {
+			return ContinuationTarget{}, false, nil
+		}
+		return live, true, nil
+	}
+	port.AccountTerminalFailure = func(_ context.Context, settled SeedSettlement) (TerminalFailureAccount, error) {
+		live.Status = settled.Status
+		close(accounted)
+		return TerminalFailureAccount{}, nil
+	}
+	svc := newDetachedSeedService(t, func(ctx context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
+		close(started)
+		<-release
+		return SeedGrowResult{Status: SeedStatusWithered, Iterations: 1, PhytomerID: spec.PhytomerID}, errors.New("sprout failed")
+	})
+	svc.WithContinuationPersistence(port).WithSeedLifecycleReporter(func(report SeedLifecycleReport) {
+		reported <- report
+	})
+	ctx := WithPollen(context.Background(), "claude")
+	result, err := svc.SeedGrow(ctx, detachedSeedInput())
+	if err != nil {
+		t.Fatalf("detached grow: %v", err)
+	}
+	live = ContinuationTarget{
+		PhytomerID: result.PhytomerID, Handle: result.Handle, Pollen: "claude", Substrate: "core", Status: SeedStatusRunning,
+	}
+	<-started
+	close(release)
+	select {
+	case <-accounted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("terminal accounting did not commit")
+	}
+	select {
+	case report := <-reported:
+		t.Fatalf("committed accounting reported as failure: %+v", report)
+	default:
+	}
+	if _, err := svc.ResolveContinuationTarget(ctx, result.PhytomerID); !errors.Is(err, ErrContinuationNotEligible) {
+		t.Fatalf("terminal seed still continuation-eligible: %v", err)
+	}
+}
+
+func TestDetachedSuccessfulSettlementDoesNotReportAccountingFailure(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	settled := make(chan struct{})
+	reported := make(chan SeedLifecycleReport, 1)
+	port := wiredContinuationPersistence()
+	port.CompleteSuccessfulSettlement = func(context.Context, SeedSettlement) error {
+		close(settled)
+		return nil
+	}
+	svc := newDetachedSeedService(t, func(ctx context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
+		close(started)
+		<-release
+		return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+	})
+	svc.WithContinuationPersistence(port).WithSeedLifecycleReporter(func(report SeedLifecycleReport) {
+		reported <- report
+	})
+	if _, err := svc.SeedGrow(context.Background(), detachedSeedInput()); err != nil {
+		t.Fatalf("detached grow: %v", err)
+	}
+	<-started
+	close(release)
+	select {
+	case <-settled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("successful settlement did not complete")
+	}
+	select {
+	case report := <-reported:
+		t.Fatalf("successful settlement reported: %+v", report)
+	default:
+	}
+}
+
 func TestOpenPreparedSeedMintsHandleWhenEmpty(t *testing.T) {
 	svc := newDetachedSeedService(t, func(_ context.Context, spec SeedSpec, _ *SeedContinuationLifecycle) (SeedGrowResult, error) {
 		return SeedGrowResult{Status: SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
@@ -149,7 +348,7 @@ func TestOpenPreparedSeedMintsHandleWhenEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	dispatch, err := svc.OpenPreparedSeed(context.Background(), growth, "")
+	dispatch, err := svc.OpenPreparedSeed(context.Background(), growth)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

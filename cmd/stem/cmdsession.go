@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -49,6 +52,21 @@ func runSessionCmd(ctx context.Context, args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+
+	if capName == core.CapContinuePhytomer {
+		result, err := submitPhytomerContinue(ctx, input)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s failed: %v\n", capName, err)
+			os.Exit(1)
+		}
+		payload, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "encode result: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(string(payload))
+		return
 	}
 
 	svc, cleanup, err := buildSessionCore(ctx)
@@ -98,11 +116,7 @@ func buildSessionCore(ctx context.Context) (core.Core, func(), error) {
 		cleanup()
 		return nil, func() {}, err
 	}
-	svc := core.NewService(manager).WithGenome(genomeOperations(resolveRepoRoot("")))
-	if history != nil {
-		svc = svc.WithContinuationPersistence(continuationPersistence(history))
-	}
-	return svc, cleanup, nil
+	return core.NewService(manager).WithGenome(genomeOperations(resolveRepoRoot(""))), cleanup, nil
 }
 
 // sessionCommand is one subcommand actually registered on the `tendril session`
@@ -271,4 +285,45 @@ func printSessionUsage() {
 	}
 	fmt.Println()
 	fmt.Println("Any subcommand also accepts --json '{...}' for the raw capability input.")
+}
+
+// submitPhytomerContinue posts continued intent to the long-lived Stem daemon
+// that owns the active Seed executor. It does not open history.db or accept
+// continuation through a one-shot Core.
+func submitPhytomerContinue(ctx context.Context, input map[string]any) (core.ContinuationResult, error) {
+	sessionID, _ := input["sessionId"].(string)
+	intent, _ := input["intent"].(string)
+	key, _ := input["idempotencyKey"].(string)
+	sessionID = strings.TrimSpace(sessionID)
+	intent = strings.TrimSpace(intent)
+	key = strings.TrimSpace(key)
+	if sessionID == "" || intent == "" || key == "" {
+		return core.ContinuationResult{}, fmt.Errorf("%w: phytomer id, intent, and idempotency key are required", core.ErrContinuationInvalid)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"intent":         intent,
+		"idempotencyKey": key,
+	})
+	if err != nil {
+		return core.ContinuationResult{}, err
+	}
+	path := "/v1/phytomers/" + url.PathEscape(sessionID) + "/continue"
+	resp, err := stemDaemonRequest(ctx, http.MethodPost, path, payload)
+	if err != nil {
+		return core.ContinuationResult{}, fmt.Errorf("Stem daemon is unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		text := strings.TrimSpace(string(body))
+		if text == "" {
+			text = resp.Status
+		}
+		return core.ContinuationResult{}, fmt.Errorf("Stem daemon rejected continuation (status %d): %s", resp.StatusCode, text)
+	}
+	var result core.ContinuationResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return core.ContinuationResult{}, fmt.Errorf("decode continuation result: %w", err)
+	}
+	return result, nil
 }

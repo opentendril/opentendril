@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +64,77 @@ func TestSeedRunRoundTrip(t *testing.T) {
 	}
 	if run.FinishedAt.IsZero() {
 		t.Fatal("settled record has no FinishedAt")
+	}
+}
+
+func TestRecordSeedOpeningRejectsDuplicateHandle(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started := time.Now().UTC().Add(-time.Minute)
+	finished := started.Add(30 * time.Second)
+	original := SeedRun{
+		Handle:     "seed-collision",
+		Pollen:     "claude",
+		PhytomerID: "tendril-existing",
+		Substrate:  "core",
+		Goal:       "original goal",
+		Status:     "satisfied",
+		Iterations: 3,
+		Branch:     "tendril/existing",
+		Commit:     "deadbeef",
+		Diff:       "the original diff",
+		Logs:       "the original logs",
+		StartedAt:  started,
+		FinishedAt: finished,
+	}
+	if err := store.RecordSeedOpening(ctx, original); err != nil {
+		t.Fatalf("first opening: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle:     "seed-collision",
+		Pollen:     "attacker",
+		PhytomerID: "tendril-forged",
+		Substrate:  "other",
+		Goal:       "forged goal",
+		Status:     "running",
+		StartedAt:  time.Now().UTC(),
+	}); !errors.Is(err, ErrSeedHandleExists) {
+		t.Fatalf("duplicate opening: %v, want ErrSeedHandleExists", err)
+	}
+	got, found, err := store.GetSeedRun(ctx, "seed-collision")
+	if err != nil || !found {
+		t.Fatalf("get after collision: found=%v err=%v", found, err)
+	}
+	if got.Pollen != "claude" || got.PhytomerID != "tendril-existing" || got.Substrate != "core" {
+		t.Fatalf("ownership mutated: %+v", got)
+	}
+	if got.Status != "satisfied" || got.Iterations != 3 || got.Branch != "tendril/existing" || got.Commit != "deadbeef" || got.Diff != "the original diff" || got.Logs != "the original logs" {
+		t.Fatalf("Fruit/result mutated: %+v", got)
+	}
+}
+
+func TestRecordSeedOpeningThenRecordSeedRunSettles(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "seed-open-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "core",
+		Goal: "make it pass", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := store.RecordSeedRun(ctx, SeedRun{
+		Handle: "seed-open-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "core",
+		Status: "satisfied", Iterations: 1, Branch: "tendril/seed-open-1", Commit: "abc",
+		StartedAt: time.Now().UTC(), FinishedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	got, found, err := store.GetSeedRun(ctx, "seed-open-1")
+	if err != nil || !found {
+		t.Fatalf("get settled: found=%v err=%v", found, err)
+	}
+	if got.Status != "satisfied" || got.Commit != "abc" || got.PhytomerID != "tendril-1" {
+		t.Fatalf("settled = %+v", got)
 	}
 }
 

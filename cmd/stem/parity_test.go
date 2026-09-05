@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -622,10 +623,10 @@ func (m *mockCore) GrowPreparedSeed(_ context.Context, growth core.SeedGrowth) (
 	}, nil
 }
 
-func (m *mockCore) OpenPreparedSeed(_ context.Context, growth core.SeedGrowth, handle string) (core.SeedDispatch, error) {
-	m.record("OpenPreparedSeed", handle)
+func (m *mockCore) OpenPreparedSeed(_ context.Context, growth core.SeedGrowth) (core.SeedDispatch, error) {
+	m.record("OpenPreparedSeed", growth.PhytomerID())
 	return core.SeedDispatch{
-		Handle:     handle,
+		Handle:     "seed-mock",
 		PhytomerID: "tendril-mock-seed",
 		Status:     "running",
 	}, nil
@@ -1465,7 +1466,16 @@ func TestBehavioralParity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CLI %s: parseArgs: %v", tc.name, err)
 			}
-			if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
+			if tc.name == core.CapContinuePhytomer {
+				u, parseErr := url.Parse(server.URL)
+				if parseErr != nil {
+					t.Fatalf("parse test server URL: %v", parseErr)
+				}
+				t.Setenv("PORT", u.Port())
+				if _, err = submitPhytomerContinue(ctx, input); err != nil {
+					t.Fatalf("CLI %s: submitPhytomerContinue: %v", tc.name, err)
+				}
+			} else if _, err = mock.Invoke(ctx, commandCapability, input); err != nil {
 				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
 			}
 			cliCalls := mock.inputsFor(tc.method)

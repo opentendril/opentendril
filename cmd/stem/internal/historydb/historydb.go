@@ -23,13 +23,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 )
+
+// sqliteConstraint is SQLite's SQLITE_CONSTRAINT primary result code. Extended
+// constraint codes keep this in the low 8 bits.
+const sqliteConstraint = 19
+
+// ErrSeedHandleExists is returned when an insert-only Seed opening collides
+// with an already-recorded handle. Settlement of an established handle still
+// uses RecordSeedRun's upsert.
+var ErrSeedHandleExists = errors.New("seed handle already exists")
 
 const (
 	// EnvDBLogging toggles SQLite persistence. Defaults to enabled; set to
@@ -1181,12 +1190,27 @@ ORDER BY pollen, substrate`
 	return owners, nil
 }
 
-// RecordSeedRun upserts one seed.grow execution keyed by its handle; call it
-// once when the run is dispatched (status "running") and again when it settles
-// (satisfied / exhausted / withered / fruit-publication-failed).
-func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
+type encodedSeedRun struct {
+	handle      string
+	pollen      string
+	phytomerID  string
+	substrate   string
+	goal        string
+	status      string
+	iterations  int
+	branch      string
+	commit      string
+	diff        string
+	logs        string
+	runError    string
+	startedAt   string
+	finishedAt  string
+	observation string
+}
+
+func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 	if strings.TrimSpace(run.Handle) == "" {
-		return fmt.Errorf("seed run requires a handle")
+		return encodedSeedRun{}, fmt.Errorf("seed run requires a handle")
 	}
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now().UTC()
@@ -1199,23 +1223,94 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 
 	goal, err := s.enc(run.Goal, "historydb/seedruns/goal")
 	if err != nil {
-		return fmt.Errorf("encrypt seed run goal: %w", err)
+		return encodedSeedRun{}, fmt.Errorf("encrypt seed run goal: %w", err)
 	}
 	diff, err := s.enc(run.Diff, "historydb/seedruns/diff")
 	if err != nil {
-		return fmt.Errorf("encrypt seed run diff: %w", err)
+		return encodedSeedRun{}, fmt.Errorf("encrypt seed run diff: %w", err)
 	}
 	logs, err := s.enc(run.Logs, "historydb/seedruns/logs")
 	if err != nil {
-		return fmt.Errorf("encrypt seed run logs: %w", err)
+		return encodedSeedRun{}, fmt.Errorf("encrypt seed run logs: %w", err)
 	}
 	runError, err := s.enc(run.Error, "historydb/seedruns/error")
 	if err != nil {
-		return fmt.Errorf("encrypt seed run error: %w", err)
+		return encodedSeedRun{}, fmt.Errorf("encrypt seed run error: %w", err)
 	}
 	observation, err := encodeSeedRunObservation(run)
 	if err != nil {
-		return fmt.Errorf("encode seed run observation: %w", err)
+		return encodedSeedRun{}, fmt.Errorf("encode seed run observation: %w", err)
+	}
+	return encodedSeedRun{
+		handle:      run.Handle,
+		pollen:      run.Pollen,
+		phytomerID:  run.PhytomerID,
+		substrate:   run.Substrate,
+		goal:        goal,
+		status:      run.Status,
+		iterations:  run.Iterations,
+		branch:      run.Branch,
+		commit:      run.Commit,
+		diff:        diff,
+		logs:        logs,
+		runError:    runError,
+		startedAt:   run.StartedAt.UTC().Format(time.RFC3339Nano),
+		finishedAt:  finishedAt,
+		observation: observation,
+	}, nil
+}
+
+func sqliteConstraintFailed(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code()&0xff == sqliteConstraint
+}
+
+// RecordSeedOpening inserts a new Seed opening. Duplicate handles fail
+// atomically; this is not an upsert. Settlement of an already-opened handle
+// still uses RecordSeedRun.
+func (s *Store) RecordSeedOpening(ctx context.Context, run SeedRun) error {
+	encoded, err := s.encodeSeedRun(run)
+	if err != nil {
+		return err
+	}
+	const statement = `
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = s.db.ExecContext(ctx, statement,
+		encoded.handle,
+		encoded.pollen,
+		encoded.phytomerID,
+		encoded.substrate,
+		encoded.goal,
+		encoded.status,
+		encoded.iterations,
+		encoded.branch,
+		encoded.commit,
+		encoded.diff,
+		encoded.logs,
+		encoded.runError,
+		encoded.startedAt,
+		encoded.finishedAt,
+		encoded.observation,
+	)
+	if err != nil {
+		if sqliteConstraintFailed(err) {
+			return fmt.Errorf("%w", ErrSeedHandleExists)
+		}
+		return fmt.Errorf("record seed opening: %w", err)
+	}
+	return nil
+}
+
+// RecordSeedRun upserts one seed.grow execution keyed by its handle. Use it to
+// settle an already-opened handle. New openings must use RecordSeedOpening.
+func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
+	encoded, err := s.encodeSeedRun(run)
+	if err != nil {
+		return err
 	}
 
 	const statement = `
@@ -1234,21 +1329,21 @@ ON CONFLICT(handle) DO UPDATE SET
 	phytomerId = CASE WHEN seedruns.phytomerId = '' THEN excluded.phytomerId ELSE seedruns.phytomerId END`
 
 	_, err = s.db.ExecContext(ctx, statement,
-		run.Handle,
-		run.Pollen,
-		run.PhytomerID,
-		run.Substrate,
-		goal,
-		run.Status,
-		run.Iterations,
-		run.Branch,
-		run.Commit,
-		diff,
-		logs,
-		runError,
-		run.StartedAt.UTC().Format(time.RFC3339Nano),
-		finishedAt,
-		observation,
+		encoded.handle,
+		encoded.pollen,
+		encoded.phytomerID,
+		encoded.substrate,
+		encoded.goal,
+		encoded.status,
+		encoded.iterations,
+		encoded.branch,
+		encoded.commit,
+		encoded.diff,
+		encoded.logs,
+		encoded.runError,
+		encoded.startedAt,
+		encoded.finishedAt,
+		encoded.observation,
 	)
 	if err != nil {
 		return fmt.Errorf("record seed run: %w", err)
