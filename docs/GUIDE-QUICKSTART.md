@@ -211,14 +211,16 @@ for ordinary first use:
 sudo -u tendril -i tendril delegation grants --pollen claude --substrate myrepo
 ```
 
-After Git setup the grant is Git-only. The Botanist then grants `seed.grow` and
-`sprout.watch` explicitly, using the same Pollen and Substrate names:
+After Git setup the grant is Git-only. The Botanist then grants `seed.grow`,
+`phytomer.continue`, and `sprout.watch` explicitly, using the same Pollen and
+Substrate names:
 
 ```bash
 sudo -u tendril -i tendril delegation grant \
   --pollen claude \
   --substrate myrepo \
   --operation seed.grow \
+  --operation phytomer.continue \
   --operation sprout.watch
 ```
 
@@ -228,7 +230,7 @@ inspect again:
 ```text
 pollen: claude
   substrates: [myrepo]
-  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, sprout.watch]
+  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, phytomer.continue, sprout.watch]
 ```
 
 Read it as a sentence: *the Pollen `claude` may run these operation classes, on
@@ -284,17 +286,21 @@ and not the Botanist key.
 
 ```bash
 TOKEN=$(cat ~/.tendril-token)
-curl -s -X POST localhost:8080/v1/seeds/grow/async \
+curl -s -X POST localhost:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}'
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true}'
 ```
 
-The Stem accepts the dispatch with HTTP 202 and returns three fields:
+Canonical `seed.grow` owns detached lifecycle. The Stem returns active identity
+immediately:
 
 ```json
 {"handle":"seed-…","phytomerId":"tendril-…","status":"running"}
 ```
+
+`POST /v1/seeds/grow/async` remains a compatibility presentation of the same
+Core lifecycle.
 
 `handle` is the Fruit-collection identity. `phytomerId` is the
 lifecycle/observation identity. `status` starts as `running`. Copy `phytomerId`
@@ -316,9 +322,24 @@ observation immediately, then follows durable state until the Seed is
 terminal Seed returns that terminal current state and closes.
 
 The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
-When the Stem actually produced Fruit, the same stream includes `branch` and
-`commit`. Those fields stay absent until those facts exist. `main` is not
-modified.
+When continuations exist, it also includes `continuationId`, `sequence`, and
+`deliveryState`. When the Stem actually produced Fruit, the same stream includes
+`branch` and `commit`. Those fields stay absent until those facts exist. Raw
+continued intent is never in this view. `main` is not modified.
+
+After the active `phytomerId` is returned, continue that owned Phytomer:
+
+```bash
+curl -s -X POST localhost:8080/v1/phytomers/<phytomerId>/continue \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"intent":"keep going on the remaining tests","idempotencyKey":"continue-1"}'
+```
+
+Accepted intent is durable before acknowledgment. It applies only to the active
+owned Phytomer, does not interrupt or inject into the currently running Sprout,
+is delivered at the next permitted cognitive boundary, and does not widen Seed
+bounds. The grant is `phytomer.continue` on the Phytomer's Stem-bound Substrate.
 
 When the documented workflow needs the collection view, use the Seed handle
 from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
@@ -333,7 +354,18 @@ Review the resulting Git Fruit on the reported branch. `main` remains unchanged
 until a human merges.
 
 An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
-MCP tool name is `seedGrow`; the grant stays `seed.grow`.
+tool sequence is:
+
+```text
+seedGrow         detached:true
+sproutWatch      sessionId
+phytomerContinue sessionId + intent + idempotencyKey
+sproutWatch      sessionId
+```
+
+Grant names remain dotted (`seed.grow`, `sprout.watch`, `phytomer.continue`).
+Tool names are lower-camel MCP presentation. Each grant is checked
+independently. `sproutWatch` is a view, not a governed command.
 
 ## 7. Learn what a refusal looks like
 
@@ -466,7 +498,12 @@ It determines its mode based on the environment and credentials:
 - If no governed other-user Stem is reachable, or if the reachable Stem belongs to the caller, or if explicitly forced via `TENDRIL_MCP_IN_PROCESS=1`, it starts an **in-process Stem** reading its control plane from the caller's working directory.
 
 That in-process fallback belongs to `tendril mcp` only. It is not a property of
-`tendril-mcp`.
+`tendril-mcp`. In-process `tendril mcp` hosts the same Seed/continuation/observation
+Core lifecycle as the serving Stem, including restart reconciliation of orphaned
+Seed work before it accepts stdio frames. Delegated execution tools still require
+a bound `TENDRIL_POLLEN` and the corresponding grants. The operator/no-Pollen
+exception applies to the `sproutWatch` observation view only. Single-user
+in-process posture does not create the governed OS-principal boundary.
 
 Credential lookup for forwarding mode checks:
 

@@ -172,6 +172,23 @@ func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservat
 			}
 			return out, nil
 		},
+		ContinuationsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.ContinuationObservationEvidence, error) {
+			rows, err := store.ListContinuationObservationsByPhytomer(ctx, phytomerID)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]core.ContinuationObservationEvidence, 0, len(rows))
+			for _, row := range rows {
+				out = append(out, core.ContinuationObservationEvidence{
+					ContinuationID: row.ContinuationID,
+					Pollen:         row.Pollen,
+					Substrate:      row.Substrate,
+					Sequence:       row.Sequence,
+					DeliveryState:  row.DeliveryState,
+				})
+			}
+			return out, nil
+		},
 	}
 }
 

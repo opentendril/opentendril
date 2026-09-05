@@ -258,3 +258,31 @@ func TestMCPIdentifierSameCapabilityOverlap(t *testing.T) {
 		t.Fatalf("same-capability alias/primary/canonical overlap rejected: %v", err)
 	}
 }
+
+func TestMCPViewToolNamesLocked(t *testing.T) {
+	names := MCPViewToolNames()
+	if len(names) != 1 || names[0] != MCPViewSproutWatch {
+		t.Fatalf("MCPViewToolNames() = %v, want [%s]", names, MCPViewSproutWatch)
+	}
+	got, ok := ResolveMCPViewToolName(MCPViewSproutWatch)
+	if !ok || got != MCPViewSproutWatch {
+		t.Fatalf("ResolveMCPViewToolName(%q) = (%q, %v)", MCPViewSproutWatch, got, ok)
+	}
+	if _, ok := ResolveMCPViewToolName("sprout.watch"); ok {
+		t.Fatal("sprout.watch resolved as an MCP view tool name")
+	}
+	if _, ok := ResolveMCPViewToolName("seedWatch"); ok {
+		t.Fatal("seedWatch resolved as an MCP view")
+	}
+	if _, ok := ResolveMCPViewToolName("phytomerWatch"); ok {
+		t.Fatal("phytomerWatch resolved as an MCP view")
+	}
+	if _, ok := ResolveMCPToolName(MCPViewSproutWatch); ok {
+		t.Fatal("sproutWatch resolved as a governed MCP tool name")
+	}
+	for _, name := range core.CapabilityNames() {
+		if name == core.CapSproutWatch {
+			t.Fatal("sprout.watch is in CapabilityNames()")
+		}
+	}
+}

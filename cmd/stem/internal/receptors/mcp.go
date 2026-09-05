@@ -34,6 +34,9 @@ type MCPHandler struct {
 	// caller can never self-declare its own pollen. Empty means no pollen
 	// is bound and every delegated-class invocation is denied (deny-closed).
 	pollen string
+	// watch is the shared sprout.watch ownership/grant authority used by the
+	// MCP current-state view. REST uses the same type.
+	watch *WatchAuthority
 }
 
 func NewMCPHandler() *MCPHandler {
@@ -93,6 +96,12 @@ func (h *MCPHandler) WithCore(coreSvc core.Core) *MCPHandler {
 func (h *MCPHandler) WithDelegation(gate *DelegationGate, pollen string) *MCPHandler {
 	h.delegation = gate
 	h.pollen = strings.TrimSpace(pollen)
+	return h
+}
+
+// WithWatch binds the shared WatchAuthority used by the MCP sproutWatch view.
+func (h *MCPHandler) WithWatch(watch *WatchAuthority) *MCPHandler {
+	h.watch = watch
 	return h
 }
 

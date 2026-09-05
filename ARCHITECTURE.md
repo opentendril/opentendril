@@ -35,11 +35,23 @@ All external requests enter through a transport adapter (CLI, REST, or Model Con
 
 No business logic resides in the adapters. The adapters dispatch to the **Stem Core** (`cmd/stem/internal/core`), which holds the canonical governed capability registry. MCP transport identifiers are adapter projections of those canonical Core names. Interface parity is mechanically enforced across all adapters via tests. The Core executes the capability and enforces policy. Views and control-plane operations are distinct and not Pollinator-facing governed command capabilities.
 
+Continued intent follows this implemented path:
+
+```text
+Pollinator
+-> transport adapter
+-> Stem Core authorization
+-> durable continuation ledger bound to the Phytomer
+-> next permitted Mycorrhizal/Sprout boundary
+```
+
+There is no direct Pollinator → Sprout/Terrarium channel. Accepted continued intent is not injected into a live Sprout.
+
 ## Cognitive path
 
 The **Mycorrhizae** (LLM) is the cognitive engine, running entirely externally. The Stem interacts with the Mycorrhizae via the `roots/llm` package, which acts as the provider connectivity and model routing layer. 
 
-The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. The Mycorrhizae receives context via Plasmids (injected context or capability payloads) and repository maps (structural maps of the Substrate), and returns tool calls or text.
+The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. The Mycorrhizae receives context via Plasmids (injected context or capability payloads) and repository maps (structural maps of the Substrate), and returns tool calls or text. Continued developer intent reaches the Mycorrhizae only as a delimited section of the next Sprout prompt, composed at a new cognitive boundary from the durable continuation ledger.
 
 ## Execution/Containment
 
@@ -96,9 +108,11 @@ Runtime state is persisted by default when history logging is enabled. **Phytome
 
 The system publishes lifecycle events (e.g., `sprout-emerged`, `sprout-withered`) over an EventBus.
 
-Every `seed.grow` establishes exactly one canonical Phytomer for that Seed growth. The Seed handle is the durable Fruit-collection identity; the Phytomer ID is the lifecycle/observation identity. Sprouts grown while satisfying that Seed are attributed to that Phytomer. Ownership (Pollen, Substrate, Phytomer) is recorded at dispatch so `sprout.watch` can authorize observation before the first Sprout exists.
+Every `seed.grow` establishes exactly one canonical Phytomer for that Seed growth. Canonical `seed.grow` accepts `detached: true` and returns active `{ handle, phytomerId, status: "running" }`. Core owns handle mint, durable opening, background growth, same-process accounting-failure quarantine, and the safe accounting-failure report. REST `POST /v1/seeds/grow/async` is compatibility presentation of that same Core lifecycle. The Seed handle is the durable Fruit-collection identity; the Phytomer ID is the lifecycle/observation identity. Sprouts grown while satisfying that Seed are attributed to that Phytomer. Ownership (Pollen, Substrate, Phytomer) is recorded at dispatch so `sprout.watch` can authorize observation before the first Sprout exists.
 
-`GET /v1/phytomers/{phytomerId}/watch` is the headless Server-Sent Events view of that current state. It is authorized by `sprout.watch` using the same ownership rule as the Phytomer's events and live stream. After authenticating, it emits the current safe observation immediately, then follows durable state changes until the associated Seed reaches `satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`, then closes. Connecting after a terminal Seed returns that terminal current state and closes. The Stem Core owns the safe current-state projection. REST authenticates, authorizes, and frames Server-Sent Events. The projection fails closed if any Sprout's Pollen or Substrate disagrees with the Seed; it does not release a mixed-ownership current state. The projection reports Pollen, Substrate, Seed handle, Phytomer ID, Seed status, iteration progress, actual Sprout lifecycle, provider/model, `providerRequestAttempted`, `toolInvocations`, structured `failureCategory`, a safe `providerDiagnostic`, a safe Seed Fruit-publication diagnostic when present, bounded Seed verification diagnostics when present, and real Fruit branch and commit when those facts exist. It does not invent Fruit, expose raw Seed error text, raw model reasoning, or credentials, accept Fruit, or grant execution. Seed collection remains `seed.grow`. `seed.grow` does not imply `sprout.watch`, and `sprout.watch` does not imply `seed.grow`.
+A long-lived Stem that can accept detached Seeds reconciles orphaned running/settling Seed and unresolved continuation state from a previous process before it accepts Pollinator traffic. Persistence disabled leaves continuation unavailable and is not a memory-only fallback.
+
+`GET /v1/phytomers/{phytomerId}/watch` is the headless Server-Sent Events view of that current state. MCP `sproutWatch({ sessionId })` is the headless snapshot of the same Core projection; a Pollinator may call it again to refresh. Both are authorized by `sprout.watch` using the same ownership rule as the Phytomer's events and live stream. After authenticating, REST emits the current safe observation immediately, then follows durable state changes until the associated Seed reaches `satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`, then closes. Connecting after a terminal Seed returns that terminal current state and closes. The Stem Core owns the safe current-state projection. REST authenticates, authorizes, and frames Server-Sent Events. MCP authenticates, authorizes, and returns one snapshot. The projection fails closed if any Sprout's or continuation's Pollen or Substrate disagrees with the Seed; it does not release a mixed-ownership current state. The projection reports Pollen, Substrate, Seed handle, Phytomer ID, Seed status, iteration progress, actual Sprout lifecycle, provider/model, `providerRequestAttempted`, `toolInvocations`, structured `failureCategory`, a safe `providerDiagnostic`, a safe Seed Fruit-publication diagnostic when present, bounded Seed verification diagnostics when present, safe continuation summaries (`continuationId`, `sequence`, `deliveryState`) when they exist, and real Fruit branch and commit when those facts exist. It does not invent Fruit, expose raw Seed error text, raw continued intent, intent digest, idempotency key, raw model reasoning, or credentials, accept Fruit, or grant execution. Seed collection remains `seed.grow`. `seed.grow` does not imply `sprout.watch`, `phytomer.continue` does not imply `sprout.watch`, and `sprout.watch` does not imply either execution grant.
 
 For reviewable successful Fruit with a diff, an Epigenetic Chronicler consumes the Sprout transcript, diff, and session logs to distill durable learnings, appending them to epigenetic genome material.
 

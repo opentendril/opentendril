@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`cmd/stem/internal/historydb` is the Go Stem's durable state backbone. It persists the unified organism state to a lightweight local SQLite database at `.tendril/history.db` using the CGO-free `modernc.org/sqlite` driver, so the `tendril` binary stays purely portable. Everything the Greenhouse must survive a browser refresh lives here: Tendril sessions and their preferences, unified chat logs, all EventBus telemetry, Sprout execution histories, and bounded `seed.grow` runs.
+`cmd/stem/internal/historydb` is the Go Stem's durable state backbone. It persists the unified organism state to a lightweight local SQLite database at `.tendril/history.db` using the CGO-free `modernc.org/sqlite` driver, so the `tendril` binary stays purely portable. Everything the Greenhouse must survive a browser refresh lives here: Tendril sessions and their preferences, unified chat logs, all EventBus telemetry, Sprout execution histories, bounded `seed.grow` runs, and accepted Phytomer continuations.
 
-The whole package is a single file (`historydb.go`). It plays two roles at once through Go's dependency-inversion: it **implements** `session.Store` (the port that `session` defines) so the `SessionManager` can persist without importing SQLite, and it **implements** `eventbus.Sink` so every published event lands in the database on the bus's own goroutine. Setting `TENDRIL_DB_LOGGING=false` bypasses SQLite entirely for high-performance headless runs.
+It plays two roles at once through Go's dependency-inversion: it **implements** `session.Store` (the port that `session` defines) so the `SessionManager` can persist without importing SQLite, and it **implements** `eventbus.Sink` so every published event lands in the database on the bus's own goroutine. Setting `TENDRIL_DB_LOGGING=false` bypasses SQLite entirely for high-performance headless runs.
 
 ## Responsibilities
 
@@ -18,8 +18,10 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 - Persist Sprout execution history as a lifecycle upsert — once when the Sprout emerges (`running`) and again when it matures or withers — recording the dispatching Pollen, the substrate the work targeted, the resolved provider, the usage envelope, and the structured observation envelope (outcome, failure category, safe provider diagnostic, whether a Mycorrhizal request was attempted, and tool invocation count) so a read can be scoped to the subject that owns it and a Botanist can explain the run without parsing free-text errors (`RecordSproutRun` / `LoadSproutRuns`).
 - Report the distinct subjects that dispatched the Sprout runs recorded against one phytomer, each paired with the substrate that run targeted, without loading or decrypting any run content (`SproutRunOwners`).
 - Persist `seed.grow` bounded-task runs keyed by the durable `handle` a Pollinator collects against, recording the dispatching Pollen so collection can be scoped, plus the reviewable Fruit — status, iterations, branch, diff, logs — and the structured observation envelope (safe Fruit-publication diagnostic and bounded verification diagnostics) (`RecordSeedRun` / `GetSeedRun`).
+- Persist accepted Phytomer continuations as durable records in the `continuations` table: encrypted raw intent payload, plus structural ownership, sequence, delivery state (`pending`, `delivering`, `delivered`, `failed`), and idempotency keyed by Phytomer + Pollen + idempotency key (`AcceptContinuation` / `ListContinuationsByPhytomer`). Restart reconciliation terminalizes orphaned running/settling Seeds and fails unresolved continuation (`ReconcileOrphanedSeedWork`).
+- Provide a dedicated observation query that returns continuation identity, ownership, sequence, and delivery state without selecting or decrypting `intent`, `intentDigest`, or `idempotencyKey` (`ListContinuationObservationsByPhytomer`).
 - Honor the persistence toggle: `OpenFromEnv` returns `(nil, nil)` when logging is disabled so callers run fully headless without touching disk (`LoggingEnabled` / `OpenFromEnv`).
-- Encrypt payload columns at rest (`messages.content`, `sessions.preferences`, `sproutruns.transcript`/`output`/`error`/`genotype`, `seedruns.goal`/`diff`/`logs`/`error`, `events.data`) via AES-GCM using `heartwood` and the key shared with `rhizome` (`.tendril/rhizome.key` or `OPEN_TENDRIL_INDEX_KEY`). Structural/index columns stay plaintext for queries. `events.data` is redact-then-encrypt (`telemetry.RedactEvent` before sealing). Opt-out is available via `TENDRIL_ENCRYPT_AT_REST`. Note: The Tier-1 auto-key is defense-in-depth, not a boundary against a full disk read (see DESIGN-HEARTWOOD.md).
+- Encrypt payload columns at rest (`messages.content`, `sessions.preferences`, `sproutruns.transcript`/`output`/`error`/`genotype`, `seedruns.goal`/`diff`/`logs`/`error`, `continuations.intent`, `events.data`) via AES-GCM using `heartwood` and the key shared with `rhizome` (`.tendril/rhizome.key` or `OPEN_TENDRIL_INDEX_KEY`). Structural/index columns stay plaintext for queries. `events.data` is redact-then-encrypt (`telemetry.RedactEvent` before sealing). Opt-out is available via `TENDRIL_ENCRYPT_AT_REST`. Note: The Tier-1 auto-key is defense-in-depth, not a boundary against a full disk read (see DESIGN-HEARTWOOD.md).
 
 **Does not:**
 
@@ -50,10 +52,13 @@ The whole package is a single file (`historydb.go`). It plays two roles at once 
 | `RecordSproutRun` / `LoadSproutRuns` | Upsert a Sprout run by `runId` / load recent, optionally by session (default limit 50). Ownership is settled by the first write and never reassigned. |
 | `SproutRunOwners` | Distinct `{Pollen, Substrate}` pairings recorded against one phytomer's Sprout runs; an empty result means nothing was ever dispatched into it. |
 | `RecordSeedRun` / `GetSeedRun` | Upsert a seed run by `handle` / fetch one by handle (returns `found bool`; a missing handle is not an error). |
+| `AcceptContinuation` / `ListContinuationsByPhytomer` | Durably accept continued intent / load full continuation rows including decrypted intent. |
+| `ListContinuationObservationsByPhytomer` | Load continuation identity, ownership, sequence, and delivery state without selecting or decrypting intent. |
+| `ReconcileOrphanedSeedWork` | Terminalize orphaned running/settling Seeds and fail unresolved continuation. |
 | `PruneOlderThan` | Delete rows from messages, events, sproutruns, and seedruns older than a cutoff, then `VACUUM` if any were deleted. |
 | `StartRetentionSweep` | Launch a background loop that prunes rows older than `TENDRIL_HISTORY_RETENTION_DAYS`. |
 
-**Sentinel errors:** none. The package exports no error values; validation returns dynamically formatted errors (for example, `RecordSproutRun` requires `runId`, `RecordSeedRun` requires a non-empty `handle`, `GetSeedRun` requires a handle), and all storage failures are wrapped with `fmt.Errorf(... %w ...)`. A not-found `GetSeedRun` is signalled by a `false` boolean rather than a sentinel.
+**Sentinel errors:** continuation lifecycle exports typed failures such as `ErrContinuationNotFound`, `ErrContinuationPollenMismatch`, `ErrContinuationNotEligible`, `ErrContinuationTargetChanged`, `ErrContinuationIdempotencyConflict`, `ErrContinuationInvalid`, and `ErrContinuationDeliveryState`. Other validation returns dynamically formatted errors (for example, `RecordSproutRun` requires `runId`, `RecordSeedRun` requires a non-empty `handle`, `GetSeedRun` requires a handle), and remaining storage failures are wrapped with `fmt.Errorf(... %w ...)`. A not-found `GetSeedRun` is signalled by a `false` boolean rather than a sentinel.
 
 ## Dependencies
 

@@ -62,8 +62,13 @@ func runMCPCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "🔏 Delegation is governed by the Stem at %s: a presented credential derives its Pollen there. Local grants and %s do not affect this connection.\n",
 			mcpclient.ResolveStemAddress(""), envPollen)
 	} else {
+		var err error
 		var release func()
-		handler, release = newInProcessMCPHandler(ctx)
+		handler, release, err = newInProcessMCPHandler(ctx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Failed to reconcile orphaned Seed continuation state: %v\n", err)
+			os.Exit(1)
+		}
 		defer release()
 	}
 
@@ -104,7 +109,8 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 // newInProcessMCPHandler builds the Stem this surface serves from when no
 // governed Stem is being forwarded to, and returns the handler with a release
-// function for the resources it opened.
+// function for the resources it opened. Durable history that cannot be
+// reconciled fails closed; the caller must not begin serving MCP frames.
 //
 // It exists as a function so that forwarding mode can decline to call it. When
 // this surface forwards, every frame goes to the governed Stem and the handler
@@ -116,7 +122,7 @@ func runMCPCmd(ctx context.Context, args []string) {
 // Release order is the reason this returns a function rather than leaving the
 // caller to close two things: the bus must drain its sink BEFORE the history
 // store is released, or queued audit records are written to a closed database.
-func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func()) {
+func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func(), error) {
 	tendrilDir := "./.tendril"
 	handler := receptors.NewMCPHandler()
 
@@ -150,24 +156,43 @@ func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func())
 		}
 	}
 
-	if manager, err := session.NewManager(ctx, sessionStore); err != nil {
+	var manager *session.Manager
+	if next, err := session.NewManager(ctx, sessionStore); err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️ Session manager unavailable: %v (continuing without sessions)\n", err)
-	} else if sess, err := manager.Initiate(ctx, session.OriginMCP, session.Preferences{}); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️ Failed to initiate MCP session: %v (continuing without sessions)\n", err)
 	} else {
-		coreSvc := core.NewService(manager).
-			WithGenome(genomeOperations(resolveRepoRoot(""))).
-			WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
-			WithMesh(meshOperations()).
-			// Sequence runs on this stdio server stay telemetry-silent (a nil
-			// bus), exactly as before; the EventBus above carries only the
-			// delegation audit lane.
-			WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
-			WithSprout(sproutOperations(history, nil)).
-			WithStoma(stomaOperations()).
-			WithGit(gitOperations())
-		handler = handler.WithSessions(manager, history).WithDefaultSession(sess.ID).WithCore(coreSvc)
-		fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
+		manager = next
+	}
+	var defaultSessionID string
+	if manager != nil {
+		if sess, err := manager.Initiate(ctx, session.OriginMCP, session.Preferences{}); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ Failed to initiate MCP session: %v (continuing without sessions)\n", err)
+		} else {
+			defaultSessionID = sess.ID
+			fmt.Fprintf(os.Stderr, "🪴 MCP interactions bound to Tendril session %s\n", sess.ID)
+		}
+	}
+
+	coreSvc := core.NewService(manager).
+		WithTendrilDir(tendrilDir).
+		WithGenome(genomeOperations(resolveRepoRoot(""))).
+		WithPlasmid(plasmidOperations(resolveRepoRoot(""))).
+		WithMesh(meshOperations()).
+		// Sequence runs on this stdio server stay telemetry-silent (a nil
+		// bus), exactly as before; the EventBus above carries only the
+		// delegation audit lane.
+		WithSequence(serveSequenceOperations(resolveRepoRoot(""), nil)).
+		WithSprout(sproutOperations(history, nil)).
+		WithStoma(stomaOperations()).
+		WithSeed(seedOperations(history, bus)).
+		WithSeedPersistence(seedPersistence(history)).
+		WithPhytomerObservationSource(phytomerObservationSource(history)).
+		WithContinuationPersistence(continuationPersistence(history)).
+		WithSeedLifecycleReporter(serveSeedLifecycleReporter).
+		WithGit(gitOperations())
+	handler = handler.WithSessions(manager, history).WithDefaultSession(defaultSessionID).WithCore(coreSvc)
+	if err := reconcileServeSeedWork(ctx, coreSvc, history); err != nil {
+		release()
+		return nil, func() {}, err
 	}
 
 	// Delegated-execution control plane (mirroring the REST server): grants
@@ -207,6 +232,7 @@ func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func())
 	pollinatorCredentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
 	if credentialsErr != nil {
 		fmt.Fprintf(os.Stderr, "❌ Pollinator credentials could not be read: %v\n", credentialsErr)
+		release()
 		os.Exit(1)
 	}
 	delegationGate := &receptors.DelegationGate{
@@ -232,7 +258,8 @@ func newInProcessMCPHandler(ctx context.Context) (*receptors.MCPHandler, func())
 	} else {
 		fmt.Fprintf(os.Stderr, "🔏 No Pollen bound (%s is unset): delegated capabilities are denied over MCP (deny-closed)\n", envPollen)
 	}
-	handler = handler.WithDelegation(delegationGate, pollen)
+	handler = handler.WithDelegation(delegationGate, pollen).
+		WithWatch(receptors.NewWatchAuthority(delegationGate, history))
 
-	return handler, release
+	return handler, release, nil
 }
