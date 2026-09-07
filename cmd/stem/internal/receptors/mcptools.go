@@ -381,9 +381,65 @@ func (h *MCPHandler) handleToolsList(id interface{}) []byte {
 	// Project one primary MCP identifier per Core capability. Compatibility
 	// aliases stay listed above; canonical dotted names are not republished.
 	tools = append(tools, h.coreToolDefs()...)
+	tools = append(tools, h.mcpViewToolDefs()...)
 	return h.formatResult(id, map[string]interface{}{
 		"tools": tools,
 	})
+}
+
+func (h *MCPHandler) mcpViewToolDefs() []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"name":        MCPViewSproutWatch,
+			"description": "Current-state observation of one Seed-owned Phytomer. This is a view, not a governed command. Delegated callers need a sprout.watch grant covering the Phytomer's Stem-bound Substrate. Returns one safe snapshot; call again to refresh.",
+			"inputSchema": map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"sessionId": map[string]interface{}{
+						"type":        "string",
+						"description": "The Phytomer identifier to observe.",
+					},
+				},
+				"required": []string{"sessionId"},
+			},
+		},
+	}
+}
+
+func (h *MCPHandler) callMCPView(id interface{}, name string, args map[string]interface{}) []byte {
+	switch name {
+	case MCPViewSproutWatch:
+		return h.callSproutWatch(id, args)
+	default:
+		return h.formatError(id, -32601, "Tool not found", nil)
+	}
+}
+
+func (h *MCPHandler) callSproutWatch(id interface{}, args map[string]interface{}) []byte {
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	sessionID, _ := args["sessionId"].(string)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return h.formatError(id, -32602, "Invalid arguments", "The 'sessionId' parameter is required.")
+	}
+
+	pollen := strings.TrimSpace(h.pollen)
+	ctx := context.Background()
+	if pollen != "" {
+		if err := h.watch.CheckPhytomer(ctx, pollen, sessionID); err != nil {
+			return h.formatResult(id, map[string]interface{}{
+				"content": []map[string]interface{}{{"type": "text", "text": err.Error()}},
+				"isError": true,
+			})
+		}
+	}
+	if h.core == nil {
+		return h.formatCapabilityResult(id, nil, core.ErrPhytomerObservationNotWired)
+	}
+	obs, err := h.core.ObservePhytomer(ctx, sessionID)
+	return h.formatCapabilityResult(id, obs, err)
 }
 
 func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) []byte {
@@ -393,6 +449,10 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 	}
 	if err := json.Unmarshal(rawParams, &params); err != nil {
 		return h.formatError(id, -32602, "Invalid params", err.Error())
+	}
+
+	if view, ok := ResolveMCPViewToolName(params.Name); ok {
+		return h.callMCPView(id, view, params.Arguments)
 	}
 
 	canonical, ok := ResolveMCPToolName(params.Name)

@@ -13,9 +13,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 )
@@ -218,5 +220,149 @@ func TestMCPTransport_ConcurrentCallersIsolated(t *testing.T) {
 	close(errs)
 	for e := range errs {
 		t.Error(e)
+	}
+}
+
+const (
+	mcpWatchPhytomerID = "tendril-watch"
+	mcpWatchHandle     = "seed-watch"
+	mcpWatchPollen     = "alpha-pollen"
+	mcpWatchSubstrate  = "core"
+)
+
+// setupTestMCPWatchTransport stands up the governed daemon mux exactly as
+// production does: buildServeMux binds the shared WatchAuthority into MCP,
+// Core observes through phytomerObservationSource(history), and Pollinator
+// credentials authenticate POST /v1.
+func setupTestMCPWatchTransport(t *testing.T, grants []core.DelegationGrant) (*httptest.Server, string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	secretAlpha, _, err := core.IssuePollinatorCredential(dir, "alpha-pollen", "")
+	if err != nil {
+		t.Fatalf("issue alpha: %v", err)
+	}
+	secretBeta, _, err := core.IssuePollinatorCredential(dir, "beta-pollen", "")
+	if err != nil {
+		t.Fatalf("issue beta: %v", err)
+	}
+	creds, err := core.LoadPollinatorCredentials(dir)
+	if err != nil {
+		t.Fatalf("load creds: %v", err)
+	}
+
+	store, err := historydb.Open(context.Background(), filepath.Join(dir, "history.db"))
+	if err != nil {
+		t.Fatalf("open history: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle:     mcpWatchHandle,
+		Pollen:     mcpWatchPollen,
+		PhytomerID: mcpWatchPhytomerID,
+		Substrate:  mcpWatchSubstrate,
+		Status:     core.SeedStatusRunning,
+		StartedAt:  time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+
+	bus := eventbus.New()
+	sessions, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	coreSvc := core.NewService(sessions).WithPhytomerObservationSource(phytomerObservationSource(store))
+	deps := serveDependencies{
+		APIKey:                "botanist-key",
+		PollinatorCredentials: creds,
+		DelegationGate: &receptors.DelegationGate{
+			Authorizer:  core.NewDelegationAuthorizer(grants),
+			Bus:         bus,
+			Pollinators: creds,
+		},
+		EventBus:    bus,
+		Sessions:    sessions,
+		History:     store,
+		CoreService: coreSvc,
+	}
+	srv := httptest.NewServer(buildServeMux(deps))
+	t.Cleanup(srv.Close)
+	return srv, secretAlpha, secretBeta
+}
+
+func TestMCPTransport_SproutWatchAuthorized(t *testing.T) {
+	srv, secretAlpha, _ := setupTestMCPWatchTransport(t, []core.DelegationGrant{
+		{Pollen: "alpha-pollen", OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"core"}},
+		{Pollen: "beta-pollen", OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"core"}},
+	})
+
+	text, isError, err := invokeMCPTool(t, srv, secretAlpha, receptors.MCPViewSproutWatch, map[string]any{
+		"sessionId": mcpWatchPhytomerID,
+	})
+	if err != nil {
+		t.Fatalf("owner sproutWatch HTTP: %v", err)
+	}
+	if isError {
+		t.Fatalf("owner sproutWatch denied: %s", text)
+	}
+	if !strings.Contains(text, `"phytomerId": "`+mcpWatchPhytomerID+`"`) && !strings.Contains(text, `"phytomerId":"`+mcpWatchPhytomerID+`"`) {
+		t.Fatalf("missing phytomerId: %s", text)
+	}
+	if !strings.Contains(text, `"handle": "`+mcpWatchHandle+`"`) && !strings.Contains(text, `"handle":"`+mcpWatchHandle+`"`) {
+		t.Fatalf("missing handle: %s", text)
+	}
+	if !strings.Contains(text, `"status": "`+core.SeedStatusRunning+`"`) && !strings.Contains(text, `"status":"`+core.SeedStatusRunning+`"`) {
+		t.Fatalf("missing status: %s", text)
+	}
+	for _, banned := range []string{`"intent"`, "intentDigest", "idempotencyKey"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("unsafe field %q in observation: %s", banned, text)
+		}
+	}
+}
+
+func TestMCPTransport_SproutWatchDeniedWrongPollen(t *testing.T) {
+	srv, _, secretBeta := setupTestMCPWatchTransport(t, []core.DelegationGrant{
+		{Pollen: "alpha-pollen", OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"core"}},
+		{Pollen: "beta-pollen", OperationClasses: []string{core.CapSproutWatch}, Substrates: []string{"core"}},
+	})
+
+	text, isError, err := invokeMCPTool(t, srv, secretBeta, receptors.MCPViewSproutWatch, map[string]any{
+		"sessionId": mcpWatchPhytomerID,
+	})
+	if err != nil {
+		t.Fatalf("wrong-pollen sproutWatch HTTP: %v", err)
+	}
+	if !isError {
+		t.Fatalf("wrong pollen was allowed: %s", text)
+	}
+	if !strings.Contains(text, "delegation denied: this phytomer carries a run dispatched by another subject") {
+		t.Fatalf("wrong pollen denial missing: %s", text)
+	}
+	if strings.Contains(text, mcpWatchHandle) || strings.Contains(text, `"phytomerId"`) || strings.Contains(text, `"handle"`) || strings.Contains(text, `"status"`) {
+		t.Fatalf("wrong pollen leaked observation identity: %s", text)
+	}
+}
+
+func TestMCPTransport_SproutWatchDeniedWithoutGrant(t *testing.T) {
+	srv, secretAlpha, _ := setupTestMCPWatchTransport(t, []core.DelegationGrant{
+		{Pollen: "alpha-pollen", OperationClasses: []string{core.CapSeedGrow}, Substrates: []string{"core"}},
+	})
+
+	text, isError, err := invokeMCPTool(t, srv, secretAlpha, receptors.MCPViewSproutWatch, map[string]any{
+		"sessionId": mcpWatchPhytomerID,
+	})
+	if err != nil {
+		t.Fatalf("no-grant sproutWatch HTTP: %v", err)
+	}
+	if !isError {
+		t.Fatalf("no sprout.watch grant was allowed: %s", text)
+	}
+	if !strings.Contains(text, `no active grant covers Pollen "alpha-pollen", operation-class "sprout.watch", substrate "core"`) {
+		t.Fatalf("no-grant denial missing: %s", text)
+	}
+	if strings.Contains(text, mcpWatchHandle) || strings.Contains(text, `"phytomerId"`) || strings.Contains(text, `"handle"`) || strings.Contains(text, `"status"`) {
+		t.Fatalf("no-grant leaked observation identity: %s", text)
 	}
 }

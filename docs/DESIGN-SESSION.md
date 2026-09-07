@@ -21,6 +21,7 @@
 - Implement the persistence layer itself (the `Store` interface is injected, e.g., by `internal/historydb`).
 - Enforce token/cost accounting or rate limits.
 - Permanently delete idle sessions from durable storage (that remains `Prune`'s explicit, user-triggered job).
+- Own active Seed continuation. A Phytomer remains the session identity/context managed here. Accepted continued intent is bound to that Phytomer identity, is not ordinary chat message history, is persisted through the Core/history continuation lifecycle, is consumed at Seed cognitive boundaries, and is observable only as a safe lifecycle summary. `session.Manager` does not own the continuation queue.
 
 ## Public interface
 

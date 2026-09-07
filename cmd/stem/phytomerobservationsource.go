@@ -10,9 +10,10 @@ import (
 const phytomerObservationSproutLimit = 100
 
 // phytomerObservationSource is the historydb-backed evidence port for Core
-// current-state observation. It copies persisted Seed/Sprout fields into
-// evidence, including fields Core will refuse to release. Safety projection
-// stays in Core.
+// current-state observation. It copies persisted Seed/Sprout/continuation
+// fields into evidence, including fields Core will refuse to release.
+// Continuation evidence is loaded without decrypting raw intent. Safety
+// projection stays in Core.
 func phytomerObservationSource(history *historydb.Store) core.PhytomerObservationSource {
 	if history == nil {
 		return core.PhytomerObservationSource{}
@@ -72,6 +73,23 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 					evidence.ProviderDiagnostic = &copied
 				}
 				out = append(out, evidence)
+			}
+			return out, nil
+		},
+		ContinuationsByPhytomer: func(ctx context.Context, phytomerID string) ([]core.ContinuationObservationEvidence, error) {
+			rows, err := history.ListContinuationObservationsByPhytomer(ctx, phytomerID)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]core.ContinuationObservationEvidence, 0, len(rows))
+			for _, row := range rows {
+				out = append(out, core.ContinuationObservationEvidence{
+					ContinuationID: row.ContinuationID,
+					Pollen:         row.Pollen,
+					Substrate:      row.Substrate,
+					Sequence:       row.Sequence,
+					DeliveryState:  row.DeliveryState,
+				})
 			}
 			return out, nil
 		},
