@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1519,15 +1520,20 @@ type pathBackedHostSnapshot struct {
 }
 
 type pathBackedSeedRunner struct {
-	file            string
-	contents        string
-	extraFiles      map[string]string
-	runErr          error
-	boundaryFailure bool
-	wroteWorkspace  *bool
-	workspace       string
-	startHEAD       string
-	startHELLO      string
+	file              string
+	contents          string
+	extraFiles        map[string]string
+	overwriteExisting string
+	overwriteContents string
+	overwroteExisting bool
+	workspaceCacheDev uint64
+	workspaceCacheIno uint64
+	runErr            error
+	boundaryFailure   bool
+	wroteWorkspace    *bool
+	workspace         string
+	startHEAD         string
+	startHELLO        string
 }
 
 func (runner *pathBackedSeedRunner) setWorkspace(workspace string) {
@@ -1549,6 +1555,22 @@ func (runner *pathBackedSeedRunner) Run(ctx context.Context, _ string) (sproutRe
 		}
 	}
 	wrote := false
+	if runner.overwriteExisting != "" {
+		full := filepath.Join(runner.workspace, filepath.FromSlash(runner.overwriteExisting))
+		info, err := os.Stat(full)
+		if err != nil {
+			return sproutResult{}, fmt.Errorf("copied cache %s is missing; overwrite requires an existing file: %w", runner.overwriteExisting, err)
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			runner.workspaceCacheDev = st.Dev
+			runner.workspaceCacheIno = st.Ino
+		}
+		if err := os.WriteFile(full, []byte(runner.overwriteContents), 0o644); err != nil {
+			return sproutResult{}, err
+		}
+		runner.overwroteExisting = true
+		wrote = true
+	}
 	if runner.file != "" {
 		full := filepath.Join(runner.workspace, filepath.FromSlash(runner.file))
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
@@ -2312,6 +2334,106 @@ func TestPathBackedSeedDoesNotFallBackToHostWorkspace(t *testing.T) {
 	if !strings.Contains(runErr.Error(), "does not fall back to the active workspace") {
 		t.Fatalf("error = %q, want Seed host-fallback refusal", runErr)
 	}
+}
+
+func TestPathBackedSeedCopiedCacheDoesNotShareSourceInode(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("node_modules/\n"), 0o644); err != nil {
+		t.Fatalf("write gitignore: %v", err)
+	}
+	for _, args := range [][]string{{"add", ".gitignore"}, {"commit", "-q", "-m", "ignore dependency cache"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+
+	const hostCache = "HOST_CACHE_ORIGINAL"
+	cacheRel := filepath.ToSlash(filepath.Join("node_modules", "pkg", "cache.txt"))
+	sourceCache := filepath.Join(repo, filepath.FromSlash(cacheRel))
+	if err := os.MkdirAll(filepath.Dir(sourceCache), 0o755); err != nil {
+		t.Fatalf("mkdir host cache: %v", err)
+	}
+	if err := os.WriteFile(sourceCache, []byte(hostCache), 0o644); err != nil {
+		t.Fatalf("write host cache: %v", err)
+	}
+	sourceDev, sourceIno := fileIdent(t, sourceCache)
+
+	seedBranch := "tendril/seed-path-cache-inode"
+	stepID := "path-seed-cache-inode"
+	runner := &pathBackedSeedRunner{
+		file:              "HELLO.md",
+		contents:          "Hello from OpenTendril.\n",
+		overwriteExisting: cacheRel,
+		overwriteContents: "TERRARIUM_MUTATED_CACHE\n",
+	}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	before := snapshotPathBackedHost(t, repo)
+
+	report, _ := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if !runner.overwroteExisting {
+		t.Fatal("Sprout did not overwrite an existing copied cache file")
+	}
+	if runner.workspaceCacheDev == 0 && runner.workspaceCacheIno == 0 {
+		t.Fatal("workspace cache identity was not recorded")
+	}
+	if runner.workspaceCacheDev == sourceDev && runner.workspaceCacheIno == sourceIno {
+		t.Fatal("copied Seed cache shares a writable inode with the Botanist checkout")
+	}
+
+	got, err := os.ReadFile(sourceCache)
+	if err != nil {
+		t.Fatalf("read host cache after Seed: %v", err)
+	}
+	if string(got) != hostCache {
+		t.Fatalf("host cache = %q, want %q (Seed worktree mutation leaked through a shared inode)", got, hostCache)
+	}
+	afterDev, afterIno := fileIdent(t, sourceCache)
+	if afterDev != sourceDev || afterIno != sourceIno {
+		t.Fatalf("host cache identity changed: dev/ino %d/%d -> %d/%d", sourceDev, sourceIno, afterDev, afterIno)
+	}
+	assertPathBackedHostUnchanged(t, repo, before)
+
+	assertTreeOmitsCopiedCache := func(rev string) {
+		t.Helper()
+		listing, err := runGitCommandRawOutput(ctx, repo, "ls-tree", "-r", "--name-only", rev)
+		if err != nil {
+			t.Fatalf("ls-tree %s: %v", rev, err)
+		}
+		for _, name := range strings.Split(listing, "\n") {
+			normalized := filepath.ToSlash(strings.TrimSpace(name))
+			if normalized == cacheRel || strings.HasPrefix(normalized, "node_modules/") {
+				t.Fatalf("copied dependency cache %q appeared in revision %s", normalized, rev)
+			}
+		}
+	}
+	if report.seedCandidateCommit != "" {
+		assertTreeOmitsCopiedCache(report.seedCandidateCommit)
+	}
+	if localBranchExists(repo, seedBranch) {
+		assertTreeOmitsCopiedCache(seedBranch)
+	}
+	if report.FruitCommit != "" {
+		assertTreeOmitsCopiedCache(report.FruitCommit)
+	}
+}
+
+func fileIdent(t *testing.T, path string) (dev, ino uint64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || st == nil {
+		t.Fatalf("stat %s: syscall.Stat_t unavailable", path)
+	}
+	return st.Dev, st.Ino
 }
 
 func TestNonSeedPathBackedShadowAndMergeUnchanged(t *testing.T) {

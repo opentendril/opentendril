@@ -802,7 +802,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				mountPath = shadowPath
 				seedCandidateWorktreeOwned = true
 				isolatedSeedCandidateWorkspace = true
-				injectMycorrhizalCacheFn(sourcePath, shadowPath)
 				generatedState, err = newRunWorkspaceGeneratedState(mountPath)
 				cleanup = func() {
 					if !seedCandidateWorktreeOwned {
@@ -814,6 +813,21 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				if err != nil {
 					cleanup()
 					return report, err
+				}
+				// Copy, do not hard-link, dependency caches. A Sprout mutating a
+				// hardlinked cache would mutate the Botanist checkout.
+				cachePaths, copyErr := copyMycorrhizalCacheFn(ctx, sourcePath, mountPath)
+				for _, cachePath := range cachePaths {
+					cacheState, stateErr := newRunWorkspaceCacheState(mountPath, cachePath)
+					if stateErr != nil {
+						cleanup()
+						return report, stateErr
+					}
+					managedCacheStates = append(managedCacheStates, cacheState)
+				}
+				if copyErr != nil {
+					cleanup()
+					return report, copyErr
 				}
 			} else {
 				shadowPath, err := createShadowWorktreeFn(sourcePath, plan.cloneBranch)
@@ -1078,6 +1092,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			report.FilesUnmeasured = diffErr.Error()
 			fmt.Fprintf(os.Stderr, "⚠️ Could not measure the files this run changed: %v\n", diffErr)
 		} else {
+			if isolatedSeedCandidateWorkspace {
+				measuredFiles = dropCopiedMycorrhizalCacheFiles(mountPath, managedCacheStates, measuredFiles)
+			}
 			changes.measured = true
 			changes.measuredFiles = measuredFiles
 		}
@@ -1169,17 +1186,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 					generatedState = nil
 				}
+				for _, state := range managedCacheStates {
+					if err := state.cleanup(); err != nil {
+						cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
+						return report, changes, errors.Join(runErr, cleanupErr)
+					}
+				}
+				managedCacheStates = nil
 
 				var integrateErr error
 				if managedRun {
-					for _, state := range managedCacheStates {
-						if err := state.cleanup(); err != nil {
-							cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
-							return report, changes, errors.Join(runErr, cleanupErr)
-						}
-					}
-					managedCacheStates = nil
-
 					integrateErr = integrateSeedCheckpoint(postMortemCtx, managedWorkspace, d.SubstrateBranch, commitHash, d.SeedStartRevision)
 					if integrateErr == nil {
 						managedWorkspaceAllocated = false
@@ -2919,9 +2935,6 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 }
 
 func integratePathBackedSeedCheckpoint(ctx context.Context, sourcePath, worktreePath, seedBranch, checkpointCommit, expectedOldTip string) error {
-	if err := removeUntrackedMycorrhizalCaches(ctx, worktreePath); err != nil {
-		return err
-	}
 	if err := validateSeedCandidatePaths(ctx, sourcePath, expectedOldTip, checkpointCommit, worktreePath); err != nil {
 		return err
 	}
@@ -2944,25 +2957,26 @@ func integratePathBackedSeedCheckpoint(ctx context.Context, sourcePath, worktree
 	return nil
 }
 
-func removeUntrackedMycorrhizalCaches(ctx context.Context, worktreePath string) error {
-	for _, dir := range mycorrhizalCacheDirs {
-		tracked, err := runGitCommand(ctx, worktreePath, "ls-files", "--", dir)
-		if err != nil {
-			return fmt.Errorf("seed integration failed: inspect Mycorrhizal cache %s: %w", dir, err)
-		}
-		if strings.TrimSpace(tracked) != "" {
+func dropCopiedMycorrhizalCacheFiles(mountPath string, caches []runWorkspaceCacheState, files []string) []string {
+	if len(caches) == 0 || len(files) == 0 {
+		return files
+	}
+	kept := make([]string, 0, len(files))
+	for _, file := range files {
+		absolute := filepath.Join(mountPath, filepath.FromSlash(file))
+		if copiedMycorrhizalCacheContains(caches, absolute) {
 			continue
 		}
-		cachePath := filepath.Join(worktreePath, dir)
-		if _, err := os.Lstat(cachePath); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("seed integration failed: inspect Mycorrhizal cache %s: %w", dir, err)
-		}
-		if err := os.RemoveAll(cachePath); err != nil {
-			return fmt.Errorf("seed integration failed: remove injected Mycorrhizal cache %s: %w", dir, err)
+		kept = append(kept, file)
+	}
+	return kept
+}
+
+func copiedMycorrhizalCacheContains(caches []runWorkspaceCacheState, absolute string) bool {
+	for _, cache := range caches {
+		if sameFilePath(absolute, cache.cacheRoot) || pathIsUnder(absolute, cache.cacheRoot) {
+			return true
 		}
 	}
-	return nil
+	return false
 }
