@@ -112,3 +112,35 @@ func hostPathProjectedIntoGitPath(gitPath, hostRunWorkspace string) bool {
 	}
 	return false
 }
+
+const gitZeroOID = "0000000000000000000000000000000000000000"
+
+// advanceSeedCandidateRef atomically creates or advances the dedicated Seed
+// ref using expected-old-tip compare-and-swap. A missing ref is created
+// against the zero OID; an unexpected tip fails closed.
+func advanceSeedCandidateRef(ctx context.Context, repo, seedBranch, checkpointCommit, expectedOldTip string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	repo = strings.TrimSpace(repo)
+	seedBranch = strings.TrimSpace(seedBranch)
+	checkpointCommit = strings.TrimSpace(checkpointCommit)
+	expectedOldTip = strings.TrimSpace(expectedOldTip)
+	if repo == "" || seedBranch == "" || checkpointCommit == "" {
+		return fmt.Errorf("seed integration checkpoint identity is incomplete")
+	}
+
+	ref := "refs/heads/" + strings.TrimPrefix(seedBranch, "refs/heads/")
+	oldTip := expectedOldTip
+	if !localBranchExists(repo, seedBranch) {
+		oldTip = gitZeroOID
+	}
+	if _, err := runGitCommand(ctx, repo, "update-ref", ref, checkpointCommit, oldTip); err != nil {
+		return fmt.Errorf("seed integration checkpoint failed to advance %s: %w", seedBranch, err)
+	}
+	resolved, err := runGitCommand(ctx, repo, "rev-parse", ref)
+	if err != nil || strings.TrimSpace(resolved) != checkpointCommit {
+		return fmt.Errorf("seed integration checkpoint verification failed for %s", seedBranch)
+	}
+	return nil
+}
