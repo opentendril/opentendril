@@ -3,6 +3,7 @@ package conductor
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1503,5 +1504,860 @@ func TestSeedCandidateExecutionLeakReasonCoversBoundaryShapes(t *testing.T) {
 		if !tc.want && reason != "" {
 			t.Errorf("%q was classified as leakage (%s)", tc.path, reason)
 		}
+	}
+}
+
+type pathBackedHostSnapshot struct {
+	branch      string
+	head        string
+	main        string
+	status      string
+	stash       string
+	tracked     string
+	untracked   string
+	currentName string
+}
+
+type pathBackedSeedRunner struct {
+	file            string
+	contents        string
+	extraFiles      map[string]string
+	runErr          error
+	boundaryFailure bool
+	wroteWorkspace  *bool
+	workspace       string
+	startHEAD       string
+	startHELLO      string
+}
+
+func (runner *pathBackedSeedRunner) setWorkspace(workspace string) {
+	runner.workspace = workspace
+}
+
+func (runner *pathBackedSeedRunner) setSeedIntegrationCheckpoint(bool) {}
+
+func (runner *pathBackedSeedRunner) Run(ctx context.Context, _ string) (sproutResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if runner.workspace != "" {
+		if head, err := runGitCommand(ctx, runner.workspace, "rev-parse", "HEAD"); err == nil {
+			runner.startHEAD = strings.TrimSpace(head)
+		}
+		if contents, err := os.ReadFile(filepath.Join(runner.workspace, "HELLO.md")); err == nil {
+			runner.startHELLO = string(contents)
+		}
+	}
+	wrote := false
+	if runner.file != "" {
+		full := filepath.Join(runner.workspace, filepath.FromSlash(runner.file))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return sproutResult{}, err
+		}
+		if err := os.WriteFile(full, []byte(runner.contents), 0o644); err != nil {
+			return sproutResult{}, err
+		}
+		wrote = true
+	}
+	for rel, contents := range runner.extraFiles {
+		full := filepath.Join(runner.workspace, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return sproutResult{}, err
+		}
+		if err := os.WriteFile(full, []byte(contents), 0o644); err != nil {
+			return sproutResult{}, err
+		}
+		wrote = true
+	}
+	if runner.wroteWorkspace != nil {
+		wrote = *runner.wroteWorkspace
+	}
+	if runner.runErr != nil {
+		return sproutResult{Response: "", WroteWorkspace: wrote, BoundaryFailure: runner.boundaryFailure}, runner.runErr
+	}
+	return sproutResult{Response: "path-backed seed complete", WroteWorkspace: wrote}, nil
+}
+
+type pathBackedSeedProbe struct {
+	mu            sync.Mutex
+	shadowCalls   int
+	seedTreeCalls int
+	stashCalls    int
+	mergeCalls    int
+	pushCalls     int
+	mounts        []string
+}
+
+func preparePathBackedGitRepo(t *testing.T) string {
+	t.Helper()
+	clearLLMEnv(t)
+	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", t.TempDir())
+	chdirToTempDir(t)
+
+	repo := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "path-seed@example.invalid"},
+		{"config", "user.name", "Path Seed Test"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "keep.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write keep.txt: %v", err)
+	}
+	for _, args := range [][]string{{"add", "keep.txt"}, {"commit", "-q", "-m", "base"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = runGitCommand(context.Background(), repo, "worktree", "prune")
+	})
+	return repo
+}
+
+func installPathBackedSeedSeams(t *testing.T, runners map[string]sproutRunner) *pathBackedSeedProbe {
+	t.Helper()
+	probe := &pathBackedSeedProbe{}
+
+	originalPreflight := runSproutPreflightChecksFn
+	originalRepoMap := generateRepoMapFn
+	originalMemoryMap := generateMemoryMapFn
+	originalEnsure := ensureSproutImageFn
+	originalStart := startTerrariumSessionFn
+	originalNew := newSproutFn
+	originalShadow := createShadowWorktreeFn
+	originalSeedTree := createSeedCandidateWorktreeFn
+	originalStash := stashHostWorkspaceFn
+	originalMerge := mergeTerrariumCommitFn
+	originalPush := pushTerrariumCommitFn
+	t.Cleanup(func() {
+		runSproutPreflightChecksFn = originalPreflight
+		generateRepoMapFn = originalRepoMap
+		generateMemoryMapFn = originalMemoryMap
+		ensureSproutImageFn = originalEnsure
+		startTerrariumSessionFn = originalStart
+		newSproutFn = originalNew
+		createShadowWorktreeFn = originalShadow
+		createSeedCandidateWorktreeFn = originalSeedTree
+		stashHostWorkspaceFn = originalStash
+		mergeTerrariumCommitFn = originalMerge
+		pushTerrariumCommitFn = originalPush
+	})
+
+	runSproutPreflightChecksFn = func(context.Context, *llm.Client) error { return nil }
+	generateRepoMapFn = func(context.Context, string) (string, error) { return "# path-backed repo map\n", nil }
+	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
+	ensureSproutImageFn = func(context.Context, string) error { return nil }
+	startTerrariumSessionFn = func(context.Context, string, string, string, bool, []string, []string, time.Duration, ...terrarium.ActivationObserver) (toolSession, error) {
+		return &stubToolSession{}, nil
+	}
+	createShadowWorktreeFn = func(sourcePath, branch string) (string, error) {
+		probe.mu.Lock()
+		probe.shadowCalls++
+		probe.mu.Unlock()
+		return originalShadow(sourcePath, branch)
+	}
+	createSeedCandidateWorktreeFn = func(sourcePath, revision string) (string, error) {
+		probe.mu.Lock()
+		probe.seedTreeCalls++
+		probe.mu.Unlock()
+		return originalSeedTree(sourcePath, revision)
+	}
+	stashHostWorkspaceFn = func(ctx context.Context, root, runID string) (bool, error) {
+		probe.mu.Lock()
+		probe.stashCalls++
+		probe.mu.Unlock()
+		return originalStash(ctx, root, runID)
+	}
+	mergeTerrariumCommitFn = func(ctx context.Context, sourcePath, commitHash string) error {
+		probe.mu.Lock()
+		probe.mergeCalls++
+		probe.mu.Unlock()
+		return originalMerge(ctx, sourcePath, commitHash)
+	}
+	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string, credential ResolvedCredential, allowDefault bool, stepID string) error {
+		probe.mu.Lock()
+		probe.pushCalls++
+		probe.mu.Unlock()
+		return originalPush(ctx, mountPath, branch, credential, allowDefault, stepID)
+	}
+	newSproutFn = func(_ context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, stepID, _ string) (sproutRunner, error) {
+		runner, ok := runners[stepID]
+		if !ok {
+			if fallback, exists := runners["*"]; exists {
+				runner = fallback
+			} else {
+				return nil, fmt.Errorf("missing path-backed test runner for %s", stepID)
+			}
+		}
+		if setter, ok := runner.(interface{ setWorkspace(string) }); ok {
+			setter.setWorkspace(workspace)
+		}
+		probe.mu.Lock()
+		probe.mounts = append(probe.mounts, workspace)
+		probe.mu.Unlock()
+		return runner, nil
+	}
+	return probe
+}
+
+func (probe *pathBackedSeedProbe) counts() (shadow, seedTree, stash, merge, push int) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	return probe.shadowCalls, probe.seedTreeCalls, probe.stashCalls, probe.mergeCalls, probe.pushCalls
+}
+
+func snapshotPathBackedHost(t *testing.T, repo string) pathBackedHostSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	branch, err := runGitCommand(ctx, repo, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	head, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	main, err := runGitCommand(ctx, repo, "rev-parse", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("main: %v", err)
+	}
+	status, err := runGitCommandRawOutput(ctx, repo, "status", "--porcelain", "-uall")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	stash, err := runGitCommand(ctx, repo, "stash", "list")
+	if err != nil {
+		t.Fatalf("stash list: %v", err)
+	}
+	tracked, err := os.ReadFile(filepath.Join(repo, "keep.txt"))
+	if err != nil {
+		t.Fatalf("read keep.txt: %v", err)
+	}
+	untracked, _ := os.ReadFile(filepath.Join(repo, "host-untracked.txt"))
+	return pathBackedHostSnapshot{
+		branch:      strings.TrimSpace(branch),
+		head:        strings.TrimSpace(head),
+		main:        strings.TrimSpace(main),
+		status:      status,
+		stash:       stash,
+		tracked:     string(tracked),
+		untracked:   string(untracked),
+		currentName: strings.TrimSpace(branch),
+	}
+}
+
+func assertPathBackedHostUnchanged(t *testing.T, repo string, before pathBackedHostSnapshot) {
+	t.Helper()
+	after := snapshotPathBackedHost(t, repo)
+	if after.branch != before.branch {
+		t.Fatalf("checked-out branch changed: %q -> %q", before.branch, after.branch)
+	}
+	if after.head != before.head {
+		t.Fatalf("checked-out HEAD changed: %q -> %q", before.head, after.head)
+	}
+	if after.main != before.main {
+		t.Fatalf("default branch tip changed: %q -> %q", before.main, after.main)
+	}
+	if after.status != before.status {
+		t.Fatalf("host git status changed:\nbefore=%q\nafter=%q", before.status, after.status)
+	}
+	if after.stash != before.stash {
+		t.Fatalf("host stash changed:\nbefore=%q\nafter=%q", before.stash, after.stash)
+	}
+	if after.tracked != before.tracked {
+		t.Fatalf("dirty tracked file changed: %q -> %q", before.tracked, after.tracked)
+	}
+	if after.untracked != before.untracked {
+		t.Fatalf("untracked host file changed: %q -> %q", before.untracked, after.untracked)
+	}
+}
+
+func runPathBackedSeedSprout(t *testing.T, repo, stepID, seedBranch, start string, runner sproutRunner) (SproutRunReport, error) {
+	t.Helper()
+	return (&DockerOrchestrator{
+		Substrate:                 repo,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		DisableMergeBack:          true,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         start,
+		AwaitsRunEnding:           true,
+	}).RunSprout(context.Background(), "create HELLO.md")
+}
+
+func TestPathBackedSeedCheckpointCreatesImmutableCandidate(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-path-create"
+	stepID := "path-seed-create"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "Hello from OpenTendril.\n"}
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	before := snapshotPathBackedHost(t, repo)
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if report.seedCandidateCommit == "" {
+		t.Fatal("path-backed Seed checkpoint did not return seedCandidateCommit")
+	}
+	if report.FruitBranch != "" || report.FruitCommit != "" {
+		t.Fatalf("path-backed Seed exposed Fruit identity %q/%q", report.FruitBranch, report.FruitCommit)
+	}
+	resolved, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed ref: %v", err)
+	}
+	if strings.TrimSpace(resolved) != report.seedCandidateCommit {
+		t.Fatalf("seed ref = %q, want %q", strings.TrimSpace(resolved), report.seedCandidateCommit)
+	}
+	content, err := runGitCommandRawOutput(ctx, repo, "show", report.seedCandidateCommit+":HELLO.md")
+	if err != nil {
+		t.Fatalf("show candidate HELLO.md: %v", err)
+	}
+	if content != "Hello from OpenTendril.\n" {
+		t.Fatalf("candidate HELLO.md = %q", content)
+	}
+	parent, err := runGitCommand(ctx, repo, "rev-parse", report.seedCandidateCommit+"^")
+	if err != nil {
+		t.Fatalf("candidate parent: %v", err)
+	}
+	if strings.TrimSpace(parent) != base {
+		t.Fatalf("candidate parent = %q, want start revision %q", strings.TrimSpace(parent), base)
+	}
+	assertPathBackedHostUnchanged(t, repo, before)
+	shadow, seedTree, stash, merge, push := probe.counts()
+	if shadow != 0 || seedTree != 1 || stash != 0 || merge != 0 || push != 0 {
+		t.Fatalf("isolation/publication counts shadow=%d seed=%d stash=%d merge=%d push=%d", shadow, seedTree, stash, merge, push)
+	}
+	if localBranchExists(repo, "sprout/task-"+stepID) {
+		t.Fatal("path-backed Seed created a reviewable isolation branch on the host")
+	}
+}
+
+func TestPathBackedSeedCheckpointStartsFromExactSeedStartRevision(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	start, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	start = strings.TrimSpace(start)
+	if err := os.WriteFile(filepath.Join(repo, "only-on-head.txt"), []byte("incidental HEAD\n"), 0o644); err != nil {
+		t.Fatalf("write head-only file: %v", err)
+	}
+	for _, args := range [][]string{{"add", "only-on-head.txt"}, {"commit", "-q", "-m", "incidental host HEAD"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	head, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	head = strings.TrimSpace(head)
+	if head == start {
+		t.Fatal("setup failed: host HEAD still equals SeedStartRevision")
+	}
+
+	seedBranch := "tendril/seed-path-exact-start"
+	stepID := "path-seed-exact-start"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "from start revision\n"}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, start, runner)
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if strings.TrimSpace(runner.startHEAD) != start {
+		t.Fatalf("candidate worktree HEAD at Sprout start = %q, want SeedStartRevision %q (host HEAD was %q)", runner.startHEAD, start, head)
+	}
+	if _, err := runGitCommand(ctx, repo, "cat-file", "-e", report.seedCandidateCommit+":only-on-head.txt"); err == nil {
+		t.Fatal("candidate contains the incidental host HEAD file; worktree was based on HEAD rather than SeedStartRevision")
+	}
+	parent, err := runGitCommand(ctx, repo, "rev-parse", report.seedCandidateCommit+"^")
+	if err != nil {
+		t.Fatalf("candidate parent: %v", err)
+	}
+	if strings.TrimSpace(parent) != start {
+		t.Fatalf("candidate parent = %q, want SeedStartRevision %q", strings.TrimSpace(parent), start)
+	}
+	hostHEAD, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("host HEAD after run: %v", err)
+	}
+	if strings.TrimSpace(hostHEAD) != head {
+		t.Fatalf("host HEAD moved from %q to %q", head, strings.TrimSpace(hostHEAD))
+	}
+}
+
+func TestPathBackedSeedVerificationSeesCheckpointMutation(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := preparePathBackedGitRepo(t)
+	stepID := "path-seed-verify"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "Hello from OpenTendril.\n"}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner, stepID: runner})
+
+	var verifiedCandidates []string
+	var verifiedContents []string
+	var reports []SproutRunReport
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		report, err := orch.RunSprout(ctx, prompt)
+		reports = append(reports, report)
+		return report, err
+	}
+	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
+		verifiedCandidates = append(verifiedCandidates, candidate)
+		content, err := runGitCommandRawOutput(ctx, sourcePath, "show", candidate+":HELLO.md")
+		if err != nil {
+			t.Fatalf("verify candidate missing HELLO.md: %v", err)
+		}
+		verifiedContents = append(verifiedContents, content)
+		return runSeedVerify(ctx, sourcePath, candidate, verify, egress)
+	}
+
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "create HELLO.md",
+		Verify:        round16HelloVerifyArgv(),
+		MaxIterations: 1,
+		SessionID:     "path-seed-verify-sees-candidate",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if result.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied; logs:\n%s", result.Status, result.Logs)
+	}
+	if len(reports) != 1 || reports[0].seedCandidateCommit == "" {
+		t.Fatalf("builder reports = %+v, want one checkpointed candidate", reports)
+	}
+	if len(verifiedCandidates) != 1 || verifiedCandidates[0] != reports[0].seedCandidateCommit {
+		t.Fatalf("verified candidate = %v, want %q", verifiedCandidates, reports[0].seedCandidateCommit)
+	}
+	if len(verifiedContents) != 1 || verifiedContents[0] != "Hello from OpenTendril.\n" {
+		t.Fatalf("verify received HELLO.md = %q, want the checkpointed mutation", verifiedContents)
+	}
+	if result.Commit == "" || result.Branch == "" {
+		t.Fatalf("satisfied Seed omitted Fruit identity: branch=%q commit=%q", result.Branch, result.Commit)
+	}
+	main, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("main: %v", err)
+	}
+	base, err := runGitCommand(context.Background(), repo, "rev-parse", result.Commit+"^")
+	if err != nil {
+		t.Fatalf("fruit parent: %v", err)
+	}
+	if strings.TrimSpace(main) != strings.TrimSpace(base) {
+		t.Fatalf("default branch moved: main=%s fruit-parent=%s", strings.TrimSpace(main), strings.TrimSpace(base))
+	}
+}
+
+func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := preparePathBackedGitRepo(t)
+	var runners []*pathBackedSeedRunner
+	var startRevisions []string
+	iteration := 0
+	installPathBackedSeedSeams(t, nil)
+	newSproutFn = func(_ context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, _, _ string) (sproutRunner, error) {
+		iteration++
+		runner := &pathBackedSeedRunner{workspace: workspace}
+		if iteration == 1 {
+			runner.file = "HELLO.md"
+			runner.contents = "Hello from OpenTendril."
+		} else {
+			runner.file = "HELLO.md"
+			runner.contents = "Hello from OpenTendril.\n"
+		}
+		runners = append(runners, runner)
+		return runner, nil
+	}
+
+	seedBuildFn = func(ctx context.Context, orch *DockerOrchestrator, prompt string) (SproutRunReport, error) {
+		startRevisions = append(startRevisions, strings.TrimSpace(orch.SeedStartRevision))
+		return orch.RunSprout(ctx, prompt)
+	}
+
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "create HELLO.md",
+		Verify:        round16HelloVerifyArgv(),
+		MaxIterations: 2,
+		SessionID:     "path-seed-two-iteration-inheritance",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if result.Status != SeedStatusSatisfied || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want satisfied after two iterations; logs:\n%s", result, result.Logs)
+	}
+	if len(runners) != 2 || len(startRevisions) != 2 {
+		t.Fatalf("iterations = runners %d starts %d, want 2", len(runners), len(startRevisions))
+	}
+	if runners[1].startHELLO != "Hello from OpenTendril." {
+		t.Fatalf("iteration 2 inherited HELLO.md = %q, want iteration 1's checkpointed partial write", runners[1].startHELLO)
+	}
+	if startRevisions[1] == startRevisions[0] {
+		t.Fatalf("iteration 2 started from the original base %q rather than iteration 1's checkpoint", startRevisions[0])
+	}
+	if strings.TrimSpace(runners[1].startHEAD) != startRevisions[1] {
+		t.Fatalf("iteration 2 worktree HEAD = %q, want SeedStartRevision %q", runners[1].startHEAD, startRevisions[1])
+	}
+}
+
+func TestPathBackedSeedCheckpointPreservesDirtyHostWorktree(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	if _, err := runGitCommand(ctx, repo, "checkout", "-b", "work"); err != nil {
+		t.Fatalf("checkout work: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "keep.txt"), []byte("dirty tracked\n"), 0o644); err != nil {
+		t.Fatalf("dirty tracked: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "host-untracked.txt"), []byte("dirty untracked\n"), 0o644); err != nil {
+		t.Fatalf("dirty untracked: %v", err)
+	}
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-path-dirty-host"
+	stepID := "path-seed-dirty-host"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "isolated mutation\n"}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	before := snapshotPathBackedHost(t, repo)
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if report.seedCandidateCommit == "" {
+		t.Fatal("dirty host prevented path-backed Seed checkpoint")
+	}
+	assertPathBackedHostUnchanged(t, repo, before)
+	if _, err := os.Stat(filepath.Join(repo, "HELLO.md")); !os.IsNotExist(err) {
+		t.Fatal("Seed mutation leaked into the Botanist checkout")
+	}
+}
+
+func TestPathBackedSeedNoChangeCreatesNoCandidate(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	stepID := "path-seed-no-change"
+	runner := &pathBackedSeedRunner{}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner, "*": runner})
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, "tendril/seed-path-no-change", base, runner)
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if report.seedCandidateCommit != "" || report.FruitBranch != "" || report.FruitCommit != "" {
+		t.Fatalf("no-change exposed identity Fruit %q/%q candidate %q", report.FruitBranch, report.FruitCommit, report.seedCandidateCommit)
+	}
+	if localBranchExists(repo, "tendril/seed-path-no-change") {
+		t.Fatal("no-change iteration created a Seed ref")
+	}
+
+	result, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "create HELLO.md",
+		Verify:        round16HelloVerifyArgv(),
+		MaxIterations: 1,
+		SessionID:     "path-seed-no-change-fruit",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if result.Branch != "" || result.Commit != "" {
+		t.Fatalf("no-change Seed fabricated Fruit %q/%q", result.Branch, result.Commit)
+	}
+}
+
+func TestPathBackedSeedFailuresDoNotCheckpoint(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+
+	t.Run("capability-boundary", func(t *testing.T) {
+		seedBranch := "tendril/seed-path-boundary"
+		stepID := "path-seed-boundary"
+		runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "partial\n", runErr: errUnusableReply, boundaryFailure: true}
+		installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+		report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+		if !errors.Is(runErr, errUnusableReply) {
+			t.Fatalf("error = %v, want unusable reply", runErr)
+		}
+		if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+			t.Fatalf("boundary failure exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
+		}
+		if localBranchExists(repo, seedBranch) {
+			t.Fatal("boundary failure created a Seed ref")
+		}
+	})
+
+	t.Run("non-recoverable", func(t *testing.T) {
+		seedBranch := "tendril/seed-path-nonrecoverable"
+		stepID := "path-seed-nonrecoverable"
+		providerErr := errors.New("provider exploded")
+		runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "partial\n", runErr: providerErr}
+		installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+		report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+		if !errors.Is(runErr, providerErr) {
+			t.Fatalf("error = %v, want provider failure", runErr)
+		}
+		if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+			t.Fatalf("non-recoverable failure exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
+		}
+		if localBranchExists(repo, seedBranch) {
+			t.Fatal("non-recoverable failure created a Seed ref")
+		}
+	})
+
+	t.Run("commit-failure", func(t *testing.T) {
+		seedBranch := "tendril/seed-path-commit-failure"
+		stepID := "path-seed-commit-failure"
+		runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "partial\n"}
+		installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+		commitErr := errors.New("checkpoint commit unavailable")
+		originalCommit := commitTerrariumExecutionFn
+		t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+		commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
+			return "", commitErr
+		}
+		report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+		if !errors.Is(runErr, commitErr) {
+			t.Fatalf("error = %v, want commit failure", runErr)
+		}
+		if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+			t.Fatalf("commit failure exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
+		}
+		if localBranchExists(repo, seedBranch) {
+			t.Fatal("commit failure created a Seed ref")
+		}
+	})
+}
+
+func TestPathBackedSeedRecoverableFailureMayCheckpoint(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-path-salvage"
+	stepID := "path-seed-salvage"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "Hello from OpenTendril.", runErr: errUnusableReply}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if !errors.Is(runErr, errUnusableReply) {
+		t.Fatalf("error = %v, want recoverable failure", runErr)
+	}
+	if report.seedCandidateCommit == "" {
+		t.Fatal("recoverable failure with stageable work did not checkpoint")
+	}
+	if report.FruitCommit != "" || report.FruitBranch != "" {
+		t.Fatalf("salvage exposed Fruit %q/%q", report.FruitBranch, report.FruitCommit)
+	}
+	content, err := runGitCommandRawOutput(ctx, repo, "show", report.seedCandidateCommit+":HELLO.md")
+	if err != nil {
+		t.Fatalf("salvaged HELLO.md: %v", err)
+	}
+	if content != "Hello from OpenTendril." {
+		t.Fatalf("salvaged HELLO.md = %q", content)
+	}
+}
+
+func TestPathBackedSeedRefRaceFailsClosed(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	if _, err := runGitCommand(ctx, repo, "commit", "--allow-empty", "-q", "-m", "unexpected seed tip"); err != nil {
+		t.Fatalf("unexpected commit: %v", err)
+	}
+	unexpected, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("unexpected tip: %v", err)
+	}
+	unexpected = strings.TrimSpace(unexpected)
+	if _, err := runGitCommand(ctx, repo, "update-ref", "refs/heads/main", base); err != nil {
+		t.Fatalf("restore main: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "reset", "--hard", base); err != nil {
+		t.Fatalf("reset worktree: %v", err)
+	}
+	seedBranch := "tendril/seed-path-race"
+	if _, err := runGitCommand(ctx, repo, "update-ref", "refs/heads/"+seedBranch, unexpected); err != nil {
+		t.Fatalf("plant unexpected seed ref: %v", err)
+	}
+
+	stepID := "path-seed-race"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "should not land\n"}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	beforeMain, err := runGitCommand(ctx, repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("main: %v", err)
+	}
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if runErr == nil {
+		t.Fatal("expected CAS failure when the Seed ref tip does not match SeedStartRevision")
+	}
+	if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+		t.Fatalf("CAS failure exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
+	}
+	still, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("seed ref after race: %v", err)
+	}
+	if strings.TrimSpace(still) != unexpected {
+		t.Fatalf("Seed ref was overwritten: got %q, want unexpected tip %q", strings.TrimSpace(still), unexpected)
+	}
+	main, err := runGitCommand(ctx, repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("main after race: %v", err)
+	}
+	if strings.TrimSpace(main) != strings.TrimSpace(beforeMain) {
+		t.Fatalf("main moved during CAS failure")
+	}
+}
+
+func TestPathBackedSeedCandidateRejectsExecutionLocationLeak(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	seedBranch := "tendril/seed-path-leak"
+	stepID := "path-seed-leak"
+	runner := &pathBackedSeedRunner{
+		extraFiles: map[string]string{
+			"~/tendril/.tendril/run-workspaces/ca0d0f46f7bdf5d26af23e9433890534/HELLO.md": "leaked\n",
+		},
+	}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+	if runErr == nil {
+		t.Fatal("expected path-integrity failure for execution-location leakage")
+	}
+	if !strings.Contains(runErr.Error(), "execution-location leakage") {
+		t.Fatalf("error = %q, want path-integrity failure", runErr)
+	}
+	if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+		t.Fatalf("leaked candidate was accepted: %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
+	}
+	if localBranchExists(repo, seedBranch) {
+		t.Fatal("leaked candidate advanced the Seed ref")
+	}
+}
+
+func TestPathBackedSeedDoesNotFallBackToHostWorkspace(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	t.Setenv(EnvAllowHostWorkspace, "true")
+	ctx := context.Background()
+	base, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	stepID := "path-seed-no-host-fallback"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "must not run\n"}
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	originalSeedTree := createSeedCandidateWorktreeFn
+	t.Cleanup(func() { createSeedCandidateWorktreeFn = originalSeedTree })
+	createSeedCandidateWorktreeFn = func(string, string) (string, error) {
+		return "", fmt.Errorf("simulated seed worktree failure")
+	}
+
+	_, runErr := runPathBackedSeedSprout(t, repo, stepID, "tendril/seed-path-no-host-fallback", strings.TrimSpace(base), runner)
+	if runErr == nil {
+		t.Fatal("expected fail-closed isolation error")
+	}
+	if !strings.Contains(runErr.Error(), "does not fall back to the active workspace") {
+		t.Fatalf("error = %q, want Seed host-fallback refusal", runErr)
+	}
+}
+
+func TestNonSeedPathBackedShadowAndMergeUnchanged(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+	if _, err := runGitCommand(ctx, repo, "checkout", "-b", "dev"); err != nil {
+		t.Fatalf("checkout dev: %v", err)
+	}
+	stepID := "non-seed-path-merge"
+	runner := &pathBackedSeedRunner{file: "sprout.txt", contents: "ordinary fruit\n"}
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:        repo,
+		StepID:           stepID,
+		DisableMergeBack: false,
+		AwaitsRunEnding:  true,
+	}).RunSprout(context.Background(), "write sprout.txt")
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if report.Outcome != SproutOutcomeComplete {
+		t.Fatalf("outcome = %q, want complete", report.Outcome)
+	}
+	shadow, seedTree, _, merge, _ := probe.counts()
+	if seedTree != 0 {
+		t.Fatalf("non-Seed path used the Seed candidate worktree helper %d time(s)", seedTree)
+	}
+	if shadow == 0 {
+		t.Fatal("non-Seed path did not use the ordinary shadow worktree helper")
+	}
+	if merge == 0 {
+		t.Fatal("non-Seed path did not merge back from the shadow worktree")
+	}
+	got, err := os.ReadFile(filepath.Join(repo, "sprout.txt"))
+	if err != nil {
+		t.Fatalf("merged file missing from host checkout: %v", err)
+	}
+	if string(got) != "ordinary fruit\n" {
+		t.Fatalf("merged file = %q", got)
+	}
+	branch, err := runGitCommand(ctx, repo, "branch", "--show-current")
+	if err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	if strings.TrimSpace(branch) != "dev" {
+		t.Fatalf("non-Seed run left host on %q, want dev", strings.TrimSpace(branch))
 	}
 }

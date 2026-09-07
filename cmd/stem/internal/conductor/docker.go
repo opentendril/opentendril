@@ -109,6 +109,7 @@ var (
 	stashHostWorkspaceFn           = stashHostWorkspace
 	restoreHostStashFn             = restoreHostStash
 	createShadowWorktreeFn         = createShadowWorktree
+	createSeedCandidateWorktreeFn  = createSeedCandidateWorktree
 	removeShadowWorktreeFn         = removeShadowWorktree
 	injectMycorrhizalCacheFn       = injectMycorrhizalCache
 	copyMycorrhizalCacheFn         = copyMycorrhizalCache
@@ -554,6 +555,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var managedWorkspaceAllocated bool
 	var generatedState *runWorkspaceGeneratedState
 	var managedCacheStates []runWorkspaceCacheState
+	var isolatedSeedCandidateWorkspace bool
+	var seedCandidateWorktreeOwned bool
 	cleanupManagedWorkspace := func() {
 		if !managedWorkspaceAllocated {
 			return
@@ -788,6 +791,30 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				// Read-only managed execution keeps the existing direct mount. A
 				// writable managed execution is handled above by a run workspace.
 				mountPath = sourcePath
+			} else if d.SeedIntegrationCheckpoint {
+				shadowPath, err := createSeedCandidateWorktreeFn(sourcePath, d.SeedStartRevision)
+				if err != nil {
+					return report, fmt.Errorf("isolation could not be established (create Seed candidate worktree: %w); Seed execution does not fall back to the active workspace", err)
+				}
+				if sameFilePath(shadowPath, sourcePath) {
+					return report, fmt.Errorf("isolation could not be established: Seed candidate worktree must not be the Botanist checkout")
+				}
+				mountPath = shadowPath
+				seedCandidateWorktreeOwned = true
+				isolatedSeedCandidateWorkspace = true
+				injectMycorrhizalCacheFn(sourcePath, shadowPath)
+				generatedState, err = newRunWorkspaceGeneratedState(mountPath)
+				cleanup = func() {
+					if !seedCandidateWorktreeOwned {
+						return
+					}
+					removeShadowWorktreeFn(sourcePath, shadowPath)
+					seedCandidateWorktreeOwned = false
+				}
+				if err != nil {
+					cleanup()
+					return report, err
+				}
 			} else {
 				shadowPath, err := createShadowWorktreeFn(sourcePath, plan.cloneBranch)
 				if err == nil {
@@ -1091,7 +1118,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			runErr == nil &&
 			!plan.readOnly && !d.Investigation
 		isSeedCandidateCheckpoint := d.SeedIntegrationCheckpoint &&
-			managedRun &&
+			gitRepo && !plan.readOnly && !d.Investigation &&
+			(managedRun || isolatedSeedCandidateWorkspace) &&
 			(runErr == nil || isRecoverableSeedSproutFailure(runErr)) &&
 			!sproutResult.BoundaryFailure &&
 			changes.hasMeasuredStageableChanges()
@@ -1141,15 +1169,27 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 					generatedState = nil
 				}
-				for _, state := range managedCacheStates {
-					if err := state.cleanup(); err != nil {
-						cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
-						return report, changes, errors.Join(runErr, cleanupErr)
+
+				var integrateErr error
+				if managedRun {
+					for _, state := range managedCacheStates {
+						if err := state.cleanup(); err != nil {
+							cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
+							return report, changes, errors.Join(runErr, cleanupErr)
+						}
+					}
+					managedCacheStates = nil
+
+					integrateErr = integrateSeedCheckpoint(postMortemCtx, managedWorkspace, d.SubstrateBranch, commitHash, d.SeedStartRevision)
+					if integrateErr == nil {
+						managedWorkspaceAllocated = false
+					}
+				} else {
+					integrateErr = integratePathBackedSeedCheckpoint(postMortemCtx, sourcePath, mountPath, d.SubstrateBranch, commitHash, d.SeedStartRevision)
+					if integrateErr == nil {
+						seedCandidateWorktreeOwned = false
 					}
 				}
-				managedCacheStates = nil
-
-				integrateErr := integrateSeedCheckpoint(postMortemCtx, managedWorkspace, d.SubstrateBranch, commitHash, d.SeedStartRevision)
 				if integrateErr != nil {
 					report.Outcome = ""
 					if runErr != nil {
@@ -1157,7 +1197,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 					return report, changes, integrateErr
 				}
-				managedWorkspaceAllocated = false
 				report.seedCandidateCommit = strings.TrimSpace(commitHash)
 				report.Output = sproutResult.Response
 				return report, changes, runErr
@@ -1938,6 +1977,34 @@ func createShadowWorktree(sourcePath, substrateBranch string) (string, error) {
 		return "", fmt.Errorf("git worktree add failed: %w, output: %s", err, string(output))
 	}
 
+	return shadowPath, nil
+}
+
+// createSeedCandidateWorktree creates a temporary Git worktree detached from
+// the exact Seed start revision so candidate identity never depends on the
+// Botanist's current HEAD.
+func createSeedCandidateWorktree(sourcePath, seedStartRevision string) (string, error) {
+	revision := strings.TrimSpace(seedStartRevision)
+	if revision == "" {
+		return "", fmt.Errorf("SeedIntegrationCheckpoint requires a non-empty SeedStartRevision")
+	}
+	if _, err := runGitCommand(context.Background(), sourcePath, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}"); err != nil {
+		return "", fmt.Errorf("invalid SeedStartRevision %q: %w", revision, err)
+	}
+
+	bytes := make([]byte, 4)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	runID := hex.EncodeToString(bytes)
+	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-seed-candidate-%s", runID))
+
+	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, revision)
+	cmd.Dir = sourcePath
+	if output, err := cmd.CombinedOutput(); err != nil {
+		_ = os.RemoveAll(shadowPath)
+		return "", fmt.Errorf("git worktree add --detach failed: %w, output: %s", err, string(output))
+	}
 	return shadowPath, nil
 }
 
@@ -2811,19 +2878,8 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 		return err
 	}
 
-	// a. atomically create/advance tendril/seed-* using expected previous tip
-	oldTip := expectedOldTip
-	if !localBranchExists(managedWorkspace.Repository, seedBranch) {
-		oldTip = "0000000000000000000000000000000000000000" // pseudo-zero for creation
-	}
-	if _, err := runGitCommand(ctx, managedWorkspace.Repository, "update-ref", "refs/heads/"+seedBranch, checkpointCommit, oldTip); err != nil {
-		return fmt.Errorf("seed integration checkpoint failed to advance %s: %w", seedBranch, err)
-	}
-
-	// b. verify the Seed ref resolves to the exact checkpoint commit
-	resolved, err := runGitCommand(ctx, managedWorkspace.Repository, "rev-parse", "refs/heads/"+seedBranch)
-	if err != nil || strings.TrimSpace(resolved) != checkpointCommit {
-		return fmt.Errorf("seed integration checkpoint verification failed for %s", seedBranch)
+	if err := advanceSeedCandidateRef(ctx, managedWorkspace.Repository, seedBranch, checkpointCommit, expectedOldTip); err != nil {
+		return err
 	}
 
 	// c. verify the RunWorkspace remains owned and clean
@@ -2859,5 +2915,54 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 		return fmt.Errorf("seed integration failed: reclaim temporary branch %s: %s", managedWorkspace.Branch, outcome.Reason)
 	}
 
+	return nil
+}
+
+func integratePathBackedSeedCheckpoint(ctx context.Context, sourcePath, worktreePath, seedBranch, checkpointCommit, expectedOldTip string) error {
+	if err := removeUntrackedMycorrhizalCaches(ctx, worktreePath); err != nil {
+		return err
+	}
+	if err := validateSeedCandidatePaths(ctx, sourcePath, expectedOldTip, checkpointCommit, worktreePath); err != nil {
+		return err
+	}
+
+	status, statusErr := runGitCommandRawOutput(ctx, worktreePath, "status", "--porcelain", "-uall", "-z")
+	if statusErr != nil {
+		return fmt.Errorf("seed integration failed: inspect worktree %s: %w", worktreePath, statusErr)
+	}
+	if status != "" {
+		return fmt.Errorf("seed integration failed: worktree %s is not clean after commit. status=[%s]", worktreePath, status)
+	}
+
+	if err := advanceSeedCandidateRef(ctx, sourcePath, seedBranch, checkpointCommit, expectedOldTip); err != nil {
+		return err
+	}
+
+	if _, removeErr := runGitCommand(ctx, sourcePath, "worktree", "remove", worktreePath); removeErr != nil {
+		return fmt.Errorf("seed integration failed: remove worktree %s: %w", worktreePath, removeErr)
+	}
+	return nil
+}
+
+func removeUntrackedMycorrhizalCaches(ctx context.Context, worktreePath string) error {
+	for _, dir := range mycorrhizalCacheDirs {
+		tracked, err := runGitCommand(ctx, worktreePath, "ls-files", "--", dir)
+		if err != nil {
+			return fmt.Errorf("seed integration failed: inspect Mycorrhizal cache %s: %w", dir, err)
+		}
+		if strings.TrimSpace(tracked) != "" {
+			continue
+		}
+		cachePath := filepath.Join(worktreePath, dir)
+		if _, err := os.Lstat(cachePath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("seed integration failed: inspect Mycorrhizal cache %s: %w", dir, err)
+		}
+		if err := os.RemoveAll(cachePath); err != nil {
+			return fmt.Errorf("seed integration failed: remove injected Mycorrhizal cache %s: %w", dir, err)
+		}
+	}
 	return nil
 }
