@@ -5,9 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -300,30 +297,6 @@ func submitPhytomerContinue(ctx context.Context, input map[string]any) (core.Con
 	if sessionID == "" || intent == "" || key == "" {
 		return core.ContinuationResult{}, fmt.Errorf("%w: phytomer id, intent, and idempotency key are required", core.ErrContinuationInvalid)
 	}
-	payload, err := json.Marshal(map[string]any{
-		"intent":         intent,
-		"idempotencyKey": key,
-	})
-	if err != nil {
-		return core.ContinuationResult{}, err
-	}
-	path := "/v1/phytomers/" + url.PathEscape(sessionID) + "/continue"
-	resp, err := stemDaemonRequest(ctx, http.MethodPost, path, payload)
-	if err != nil {
-		return core.ContinuationResult{}, fmt.Errorf("Stem daemon is unreachable: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		text := strings.TrimSpace(string(body))
-		if text == "" {
-			text = resp.Status
-		}
-		return core.ContinuationResult{}, fmt.Errorf("Stem daemon rejected continuation (status %d): %s", resp.StatusCode, text)
-	}
-	var result core.ContinuationResult
-	if err := json.Unmarshal(body, &result); err != nil {
-		return core.ContinuationResult{}, fmt.Errorf("decode continuation result: %w", err)
-	}
-	return result, nil
+	client := newLocalStemClient()
+	return client.ContinuePhytomer(ctx, sessionID, intent, key)
 }
