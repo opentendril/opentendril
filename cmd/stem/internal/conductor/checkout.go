@@ -63,7 +63,7 @@ func ResolveSubstrateWorkspace(substrate string, spec *SubstrateSpec) (string, e
 		if trimmed := strings.TrimSpace(spec.Path); trimmed != "" {
 			workspace = trimmed
 		}
-		if mode := strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)); mode != "" && mode != "path" {
+		if mode := strings.ToLower(strings.TrimSpace(spec.Checkout.Mode)); mode != "" {
 			plan, err := resolveCheckoutPlan(substrate, spec.Checkout)
 			if err != nil {
 				return "", err
