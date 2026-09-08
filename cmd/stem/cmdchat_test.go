@@ -1046,7 +1046,7 @@ func TestEventLoopContinuationWhileWatchOpen(t *testing.T) {
 	fmt.Fprintln(pw, "continued intent")
 
 	// Give the continuation enough time to land, then release the watch.
-	// We poll until /continue is recorded to avoid a fixed sleep.
+	// Poll until /continue is recorded before releasing the watch stream.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
@@ -1055,6 +1055,7 @@ func TestEventLoopContinuationWhileWatchOpen(t *testing.T) {
 		if n > 0 {
 			break
 		}
+		// poll: waiting for /continue to arrive before releasing the watch stream
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -1136,6 +1137,7 @@ func TestEventLoopObservationLostByError(t *testing.T) {
 
 	// Run with a cancellable context so we can stop after the observation loss.
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan struct{})
 	go func() {
@@ -1143,32 +1145,28 @@ func TestEventLoopObservationLostByError(t *testing.T) {
 		runChatLoop(ctx, sess, pr)
 	}()
 
-	// Give the loop time to dispatch the Seed, start the watch, receive the
-	// error event, and enter chatStateObservationLost.
+	// Poll until the event loop publishes chatStateObservationLost.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		// The session state becomes ObservationLost after the watch event is processed.
 		if sess.loadState() == chatStateObservationLost {
 			break
 		}
+		// poll: waiting for the event loop to publish chatStateObservationLost
 		time.Sleep(10 * time.Millisecond)
 	}
 	if sess.loadState() != chatStateObservationLost {
 		t.Fatalf("state = %v after error-event watch close, want chatStateObservationLost", sess.loadState())
 	}
 
-	// Now send another line — it must NOT dispatch a new Seed.
+	// Send a follow-up line, then close stdin and wait for the loop to return.
+	// Stdin ordering guarantees the follow-up is processed before the EOF, so
+	// return of runChatLoop proves it was handled without requiring a dwell.
 	fmt.Fprintln(pw, "another line after loss")
-	// Brief pause to allow the event loop to process the line.
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel and drain.
-	cancel()
 	pw.Close()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for runChatLoop to return after cancel")
+		t.Fatal("timed out waiting for runChatLoop to return after observation loss")
 	}
 	pr.Close()
 
@@ -1238,34 +1236,35 @@ func TestEventLoopObservationLostByCleanEOF(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		runChatLoop(ctx, sess, pr)
 	}()
 
-	// Wait for observation loss state.
+	// Poll until the event loop publishes chatStateObservationLost.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if sess.loadState() == chatStateObservationLost {
 			break
 		}
+		// poll: waiting for the event loop to publish chatStateObservationLost
 		time.Sleep(10 * time.Millisecond)
 	}
 	if sess.loadState() != chatStateObservationLost {
 		t.Fatalf("state = %v after clean EOF watch close, want chatStateObservationLost", sess.loadState())
 	}
 
-	// Send another line — must not dispatch a replacement Seed.
+	// Send a follow-up line, then close stdin and wait for the loop to return.
+	// Stdin ordering guarantees the follow-up is processed before the EOF, so
+	// return of runChatLoop proves it was handled without requiring a dwell.
 	fmt.Fprintln(pw, "follow-up after eof")
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
 	pw.Close()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for runChatLoop to return after cancel")
+		t.Fatal("timed out waiting for runChatLoop to return after clean EOF observation loss")
 	}
 	pr.Close()
 
@@ -1333,12 +1332,13 @@ func TestEventLoopTerminalSettlementReturnsToIdle(t *testing.T) {
 		runChatLoop(ctx, sess, pr)
 	}()
 
-	// Wait for settlement back to Idle.
+	// Poll until the loop settles back to Idle after the terminal observation.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if sess.loadState() == chatStateIdle && len(func() []string { mu.Lock(); defer mu.Unlock(); return growPaths }()) >= 1 {
 			break
 		}
+		// poll: waiting for terminal settlement to return the session to chatStateIdle
 		time.Sleep(10 * time.Millisecond)
 	}
 	if sess.loadState() != chatStateIdle {
@@ -1355,6 +1355,7 @@ func TestEventLoopTerminalSettlementReturnsToIdle(t *testing.T) {
 		if n >= 2 {
 			break
 		}
+		// poll: waiting for the second goal to dispatch a fresh Seed after terminal settlement
 		time.Sleep(10 * time.Millisecond)
 	}
 
