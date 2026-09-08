@@ -3,324 +3,564 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
-	"time"
+	"sync/atomic"
 
-	"github.com/gorilla/websocket"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+// ---------------------------------------------------------------------------
+// chatArgs holds the parsed pre-separator flags for `tendril chat`.
+// ---------------------------------------------------------------------------
+
+type chatArgs struct {
+	substrate     string // explicit --substrate value; empty means auto-resolve
+	maxIterations int    // 0 means omit from Seed spec
+	timeout       int    // 0 means omit; seconds
+	verifyArgv    []string
 }
 
-type ChatRequest struct {
-	Model     string    `json:"model"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Messages  []Message `json:"messages"`
-	Stream    bool      `json:"stream"`
-}
+// parseChatArgs parses:
+//
+//	tendril chat [--substrate <n>] [--max-iterations N] [--timeout N] -- <verify argv...>
+//
+// Rules:
+//   - bare "--" separator is required
+//   - everything after "--" is the verifier argv (must be non-empty)
+//   - "--ws" is explicitly rejected (it must never fall back to WS)
+//   - unknown pre-separator flags are a local failure, not dispatched
+func parseChatArgs(args []string) (chatArgs, error) {
+	var (
+		out    chatArgs
+		sepIdx = -1
+		wsFlag = false
+	)
 
-type ChatResponse struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	SessionID string `json:"sessionId,omitempty"`
-	Choices   []struct {
-		Message Message `json:"message"`
-	} `json:"choices"`
-}
-
-type sessionCreateResponse struct {
-	SessionID string `json:"sessionId"`
-}
-
-type WSMessage struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
-}
-
-// connectWS establishes a WebSocket connection to the gateway. The gateway
-// dialer can set real headers (unlike a browser), so the bearer key rides
-// along the way it does for every other Stem call.
-func connectWS(base *url.URL) (*websocket.Conn, error) {
-	u := url.URL{Scheme: "ws", Host: base.Host, Path: "/ws"}
-	log.Printf("Connecting to WS: %s", u.String())
-	header := http.Header{"Authorization": []string{"Bearer " + chatAPIKey()}}
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
-	if err != nil {
-		log.Printf("WS connect failed: %v", err)
-		return nil, err
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			sepIdx = i
+			break
+		}
+		if arg == "--ws" {
+			wsFlag = true
+			continue
+		}
+		nextVal := func() (string, error) {
+			if i+1 >= len(args) || args[i+1] == "--" {
+				return "", fmt.Errorf("flag %s requires a value", arg)
+			}
+			i++
+			return args[i], nil
+		}
+		switch arg {
+		case "--substrate":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			out.substrate = v
+		case "--max-iterations":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			n, convErr := strconv.Atoi(v)
+			if convErr != nil {
+				return chatArgs{}, fmt.Errorf("--max-iterations must be an integer: %w", convErr)
+			}
+			out.maxIterations = n
+		case "--timeout":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			n, convErr := strconv.Atoi(v)
+			if convErr != nil {
+				return chatArgs{}, fmt.Errorf("--timeout must be an integer: %w", convErr)
+			}
+			out.timeout = n
+		default:
+			return chatArgs{}, fmt.Errorf("unknown flag %q (use -- to separate verifier argv)", arg)
+		}
 	}
-	return conn, nil
+
+	if wsFlag {
+		return chatArgs{}, fmt.Errorf("--ws is not supported: tendril chat uses the canonical Seed/Phytomer lifecycle, not WebSocket execution")
+	}
+
+	if sepIdx == -1 {
+		return chatArgs{}, fmt.Errorf("verifier argv requires a bare -- separator\n\nUsage: tendril chat [--substrate <name>] [--max-iterations N] [--timeout N] -- <verify argv...>")
+	}
+
+	verifyArgv := args[sepIdx+1:]
+	if len(verifyArgv) == 0 {
+		return chatArgs{}, fmt.Errorf("verifier argv after -- must be non-empty\n\nExample: tendril chat -- go test ./...")
+	}
+	out.verifyArgv = verifyArgv
+	return out, nil
 }
 
-// sendWS sends a message over WebSocket and reads the response.
-func sendWS(conn *websocket.Conn, msg string) (string, error) {
-	err := conn.WriteJSON(WSMessage{Type: "userMessage", Data: msg})
+// ---------------------------------------------------------------------------
+// resolveDirectChatSubstrate resolves the Substrate name to use for direct chat.
+//
+// If --substrate was explicit, use it directly (no implicit selection needed).
+// If omitted, load the configured Substrates and apply the 0/1/N rule.
+// ---------------------------------------------------------------------------
+
+func resolveDirectChatSubstrate(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	config, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("load substrates config: %w", err)
+	}
+	if config == nil || len(config.Substrates) == 0 {
+		return "", fmt.Errorf("no Substrates configured\n\nRun `tendril setup substrate` to configure one")
+	}
+	names := sortedSubstrateNames(config)
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	// 2+ — fail with deterministic sorted list
+	return "", fmt.Errorf("multiple Substrates configured; use --substrate to select one:\n  %s", strings.Join(names, "\n  "))
+}
+
+// sortedSubstrateNames returns the substrate names in deterministic sorted order.
+// Exported as a testable helper.
+func sortedSubstrateNames(config *conductor.SubstratesConfig) []string {
+	if config == nil {
+		return nil
+	}
+	names := make([]string, 0, len(config.Substrates))
+	for name := range config.Substrates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ---------------------------------------------------------------------------
+// newContinuationKey generates a cryptographically opaque idempotency key for
+// one distinct interactive continuation. It is deterministic only in that the
+// same call can be retried with the same key; it never derives the key from
+// the intent text or timestamps alone.
+// ---------------------------------------------------------------------------
+
+func newContinuationKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate idempotency key: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// randReader allows tests to replace rand.Read without a package-level var.
+// We expose the key-generation path through newContinuationKey; tests that
+// need deterministic keys inject via continuationKeySource.
+var continuationKeySource = newContinuationKey
+
+// ---------------------------------------------------------------------------
+// chatState is the explicit terminal-safe state machine for direct chat.
+// ---------------------------------------------------------------------------
+
+type chatState = int32
+
+const (
+	chatStateIdle            chatState = iota // waiting for a goal
+	chatStateActive                           // Seed dispatched; Phytomer active
+	chatStateObservationLost                  // watch ended before terminal; identity preserved
+)
+
+// ---------------------------------------------------------------------------
+// directChatSession holds the mutable state of one `tendril chat` run.
+//
+// The event loop goroutine is the sole writer of the mutable fields; it never
+// needs a lock for its own accesses. The state field uses atomic load/store so
+// that test goroutines (and future read-only observers) can safely sample it
+// without introducing a data race.
+// ---------------------------------------------------------------------------
+
+type directChatSession struct {
+	client     *localStemClient
+	substrate  string
+	verifyArgv []string
+	maxIter    int
+	timeout    int
+
+	state      atomic.Int32 // chatState constants; use loadState/storeState
+	handle     string
+	phytomerID string
+}
+
+// loadState returns the current chatState with acquire semantics.
+func (s *directChatSession) loadState() chatState { return s.state.Load() }
+
+// storeState writes the new chatState with release semantics.
+func (s *directChatSession) storeState(st chatState) { s.state.Store(st) }
+
+// dispatchSeed posts the first developer goal as a canonical Seed.
+func (s *directChatSession) dispatchSeed(ctx context.Context, goal string) (SeedDispatchResult, error) {
+	input := map[string]any{
+		"substrate": s.substrate,
+		"goal":      goal,
+		"verify":    toAnySlice(s.verifyArgv),
+		"origin":    "cli",
+	}
+	if s.maxIter > 0 {
+		input["maxIterations"] = s.maxIter
+	}
+	if s.timeout > 0 {
+		input["timeoutSeconds"] = s.timeout
+	}
+	return s.client.DispatchSeed(ctx, input)
+}
+
+// ---------------------------------------------------------------------------
+// renderObservation prints safe observation state changes to stdout.
+// It never prints raw goal text, continued intent, reasoning, or internal keys.
+// ---------------------------------------------------------------------------
+
+func renderObservation(prev, obs core.PhytomerObservation) {
+	statusChanged := prev.Status != obs.Status
+	iterChanged := prev.Iterations != obs.Iterations
+
+	if statusChanged {
+		fmt.Printf("Status:     %s\n", obs.Status)
+	}
+	if iterChanged && obs.Iterations > 0 {
+		fmt.Printf("Iterations: %d\n", obs.Iterations)
+	}
+
+	// Sprout lifecycle changes.
+	if len(obs.Sprouts) > len(prev.Sprouts) {
+		for i := len(prev.Sprouts); i < len(obs.Sprouts); i++ {
+			sp := obs.Sprouts[i]
+			fmt.Printf("Sprout:     %s  status=%s", sp.RunID, sp.Status)
+			if sp.Outcome != "" {
+				fmt.Printf("  outcome=%s", sp.Outcome)
+			}
+			fmt.Println()
+		}
+	} else {
+		// Update status of existing sprouts.
+		for i, sp := range obs.Sprouts {
+			if i < len(prev.Sprouts) && prev.Sprouts[i].Status != sp.Status {
+				fmt.Printf("Sprout:     %s  status=%s", sp.RunID, sp.Status)
+				if sp.Outcome != "" {
+					fmt.Printf("  outcome=%s", sp.Outcome)
+				}
+				fmt.Println()
+			}
+		}
+	}
+
+	// Continuation delivery changes.
+	prevConts := make(map[string]string, len(prev.Continuations))
+	for _, c := range prev.Continuations {
+		prevConts[c.ContinuationID] = c.DeliveryState
+	}
+	for _, c := range obs.Continuations {
+		if prevConts[c.ContinuationID] != c.DeliveryState {
+			fmt.Printf("Continuation: %s  sequence=%d  state=%s\n",
+				c.ContinuationID, c.Sequence, c.DeliveryState)
+		}
+	}
+
+	// Branch/commit appear only when real.
+	if obs.Branch != "" && obs.Branch != prev.Branch {
+		fmt.Printf("Branch:     %s\n", obs.Branch)
+	}
+	if obs.Commit != "" && obs.Commit != prev.Commit {
+		fmt.Printf("Commit:     %s\n", obs.Commit)
+	}
+}
+
+// renderTerminalSettlement prints the safe terminal summary.
+func renderTerminalSettlement(obs core.PhytomerObservation) {
+	fmt.Println()
+	fmt.Printf("Status:     %s\n", obs.Status)
+	fmt.Printf("Handle:     %s\n", obs.Handle)
+	fmt.Printf("Phytomer:   %s\n", obs.PhytomerID)
+	fmt.Printf("Iterations: %d\n", obs.Iterations)
+	if obs.Branch != "" {
+		fmt.Printf("Branch:     %s\n", obs.Branch)
+	}
+	if obs.Commit != "" {
+		fmt.Printf("Commit:     %s\n", obs.Commit)
+	}
+	if obs.Status == core.SeedStatusSatisfied {
+		fmt.Println("✅ Seed satisfied.")
+	} else {
+		fmt.Printf("⚠️  Seed ended with non-success status: %s\n", obs.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Event types for the chat event loop.
+// ---------------------------------------------------------------------------
+
+// chatInputEvent carries a line typed by the developer.
+type chatInputEvent struct {
+	line string
+}
+
+// chatObsEvent carries the result of one WatchPhytomer call.
+// lastObs is the final observation seen (zero value if none).
+// terminal is true when a terminal observation was received before the stream closed.
+// err is non-nil when the stream closed with a transport failure.
+type chatObsEvent struct {
+	lastObs  core.PhytomerObservation
+	terminal bool
+	err      error
+}
+
+// ---------------------------------------------------------------------------
+// runChatCmd is the entry point called from main.go.
+// ---------------------------------------------------------------------------
+
+func runChatCmd(ctx context.Context, args []string) {
+	parsed, err := parseChatArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tendril chat: %v\n", err)
+		os.Exit(1)
+	}
+
+	substrate, err := resolveDirectChatSubstrate(parsed.substrate)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tendril chat: %v\n", err)
+		os.Exit(1)
+	}
+
+	sess := &directChatSession{
+		client:     newLocalStemClient(),
+		substrate:  substrate,
+		verifyArgv: parsed.verifyArgv,
+		maxIter:    parsed.maxIterations,
+		timeout:    parsed.timeout,
+	}
+
+	fmt.Printf("🌱 OpenTendril direct chat  [substrate: %s  verify: %s]\n",
+		substrate, strings.Join(parsed.verifyArgv, " "))
+	fmt.Println("Type your coding goal and press Enter. Type 'exit' or '/exit' to quit.")
+	fmt.Println()
+
+	runChatLoop(ctx, sess, os.Stdin)
+}
+
+// runChatLoop drives the interactive lifecycle using a real concurrent event
+// loop. It accepts a reader so tests can inject deterministic input without
+// real stdin.
+//
+// Architecture:
+//   - A stdin-reader goroutine sends non-empty non-exit lines on inputCh.
+//   - When a Seed is accepted, a watch goroutine sends one chatObsEvent on obsCh.
+//   - The event loop (this goroutine) is the sole owner of *directChatSession
+//     state; it processes events serially so no lock is needed.
+func runChatLoop(ctx context.Context, sess *directChatSession, input *os.File) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// inputCh carries lines from stdin. Closed by the reader goroutine on EOF.
+	inputCh := make(chan string)
+	// obsCh carries the result of exactly one WatchPhytomer call. Buffered so
+	// the watch goroutine never blocks even if the event loop is busy.
+	obsCh := make(chan chatObsEvent, 1)
+
+	// Stdin reader goroutine.
+	go func() {
+		scanner := bufio.NewScanner(input)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			select {
+			case inputCh <- line:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "stdin error: %v\n", err)
+		}
+		close(inputCh)
+	}()
+
+	// watchActive tracks whether a watch goroutine is running.
+	// Only one watch is permitted at a time.
+	watchActive := false
+
+	startWatch := func(phytomerID string) {
+		watchActive = true
+		go func() {
+			var lastObs core.PhytomerObservation
+			var prev core.PhytomerObservation
+			var terminal bool
+
+			err := sess.client.WatchPhytomer(ctx, phytomerID, func(obs core.PhytomerObservation) error {
+				renderObservation(prev, obs)
+				prev = obs
+				lastObs = obs
+				if core.SeedStatusIsTerminal(obs.Status) {
+					terminal = true
+				}
+				return nil
+			})
+
+			obsCh <- chatObsEvent{lastObs: lastObs, terminal: terminal, err: err}
+		}()
 	}
 
 	for {
-		_, rawMsg, err := conn.ReadMessage()
+		select {
+		case <-ctx.Done():
+			return
+
+		case line, ok := <-inputCh:
+			if !ok {
+				// stdin closed (EOF). If a watch is still running, wait for its
+				// result so that terminal settlement can complete before we return.
+				if watchActive {
+					ev := <-obsCh
+					handleObsEvent(sess, ev)
+				}
+				return
+			}
+			if line == "exit" || line == "/exit" {
+				fmt.Println("Exiting.")
+				return
+			}
+			handleLoopInput(ctx, sess, line, &watchActive, startWatch)
+
+		case ev := <-obsCh:
+			watchActive = false
+			handleObsEvent(sess, ev)
+		}
+	}
+}
+
+// handleLoopInput is called by the event loop for each developer input line.
+// It owns the state transition from Idle→Active (Seed dispatch + watch start)
+// and the Active/ObservationLost continuation path.
+func handleLoopInput(
+	ctx context.Context,
+	sess *directChatSession,
+	line string,
+	watchActive *bool,
+	startWatch func(string),
+) {
+	switch sess.loadState() {
+	case chatStateIdle:
+		result, err := sess.dispatchSeed(ctx, line)
 		if err != nil {
-			return "", err
+			fmt.Fprintf(os.Stderr, "Seed dispatch failed: %v\n", err)
+			return
 		}
 
-		// Try to parse as WSMessage
-		var response WSMessage
-		if err := json.Unmarshal(rawMsg, &response); err == nil && response.Type != "" {
-			if response.Type == "event" || response.Type == "telemetry" {
-				// Ignore background events, keep waiting for the real response
-				continue
-			}
-			if respData, ok := response.Data.(string); ok {
-				return respData, nil
-			}
-			// If it's a JSON object, format it as string
-			bytes, _ := json.MarshalIndent(response.Data, "", "  ")
-			return string(bytes), nil
+		sess.handle = result.Handle
+		sess.phytomerID = result.PhytomerID
+		sess.storeState(chatStateActive)
+
+		fmt.Printf("\nHandle:   %s\n", result.Handle)
+		fmt.Printf("Phytomer: %s\n", result.PhytomerID)
+		fmt.Printf("Status:   %s\n", result.Status)
+		fmt.Println()
+		fmt.Println("Watching progress... (type continued intent at any time)")
+		fmt.Println()
+
+		if !*watchActive {
+			startWatch(sess.phytomerID)
 		}
 
-		// Try to parse as OpenAI-compatible ChatResponse
-		var chatResp ChatResponse
-		if err := json.Unmarshal(rawMsg, &chatResp); err == nil && len(chatResp.Choices) > 0 {
-			return chatResp.Choices[0].Message.Content, nil
-		}
+	case chatStateActive:
+		doActiveInput(ctx, sess, line)
 
-		// Fallback: treat the raw payload as standard text/markdown stream
-		return string(rawMsg), nil
+	case chatStateObservationLost:
+		// Observation was lost before terminal settlement. Refuse a replacement Seed.
+		// The developer may type "exit" to leave; any other line reports the fenced state.
+		fmt.Fprintln(os.Stderr, "⚠️  Observation was lost for Phytomer "+sess.phytomerID+": terminal state is unknown.")
+		fmt.Fprintln(os.Stderr, "The Seed may still be running. Use `tendril session get` to check status.")
+		fmt.Fprintln(os.Stderr, "Type 'exit' or '/exit' to leave without starting a replacement Seed.")
 	}
 }
 
-// sproutCLISession asks the Go Stem for a new CLI-origin Tendril session so
-// every message in this chat run shares one unified session ID.
-func sproutCLISession(base *url.URL) (string, error) {
-	u := *base
-	u.Path = "/v1/sessions"
-
-	req, err := http.NewRequest("POST", u.String(), strings.NewReader(`{"origin":"cli"}`))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+// handleObsEvent processes the result of a completed WatchPhytomer call.
+// It is always called from the event loop goroutine.
+func handleObsEvent(sess *directChatSession, ev chatObsEvent) {
+	if ev.terminal {
+		renderTerminalSettlement(ev.lastObs)
+		// Terminal observation is the only normal transition back to Idle.
+		sess.handle = ""
+		sess.phytomerID = ""
+		sess.storeState(chatStateIdle)
+		return
 	}
 
-	var created sessionCreateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
-		return "", err
-	}
-	if created.SessionID == "" {
-		return "", fmt.Errorf("server returned no sessionId")
-	}
-	return created.SessionID, nil
-}
-
-// chatAPIKey resolves the bearer key this CLI sends to the local Stem. It
-// mirrors getOrCreateAPIKey's resolution order (cmdserve.go) without ever
-// generating a key itself: the `serve` command owns key creation, and
-// persists it to the same "./.tendril/api-key" file this reads, so this client
-// never assumes a keyless server.
-func chatAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
-		return key
-	}
-	if key := readPersistedAPIKey("./.tendril"); key != "" {
-		return key
-	}
-	return "sk-123" // Only reached against a Stem predating issue the auto-generated key
-}
-
-// sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.
-func sendHTTP(base *url.URL, msg, sessionID string) (string, error) {
-	u := *base
-	u.Path = "/v1/chat/completions"
-	reqBody := ChatRequest{
-		// Use model name from env, default to "local" so Go Stem routes correctly
-		Model:     getEnvOrDefaultStr("LOCAL_MODEL_NAME", os.Getenv("DEFAULT_LLM_PROVIDER")),
-		SessionID: sessionID,
-		Messages: []Message{
-			{Role: "user", Content: msg},
-		},
-		Stream: false,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequest("POST", u.String(), strings.NewReader(string(jsonData)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
-	if sessionID != "" {
-		req.Header.Set("X-Phytomer", sessionID)
-	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var chatResp ChatResponse
-	err = json.NewDecoder(resp.Body).Decode(&chatResp)
-	if err != nil {
-		return "", err
-	}
-
-	if len(chatResp.Choices) > 0 {
-		return chatResp.Choices[0].Message.Content, nil
-	}
-	return "", fmt.Errorf("no content in response")
-}
-
-// connect attempts WS first, falls back to HTTP after retries.
-func connect(base *url.URL, useWS bool, sessionID string) (func(string) (string, error), error) {
-	if !useWS {
-		log.Println("Using HTTP mode")
-		return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
-	}
-
-	// Try WS with retries
-	for i := 0; i < 3; i++ {
-		conn, err := connectWS(base)
-		if err == nil {
-			log.Println("Connected via WebSocket")
-			return func(msg string) (string, error) { return sendWS(conn, msg) }, nil
-		}
-		log.Printf("WS retry %d/3 failed: %v. Waiting 2s...", i+1, err)
-		time.Sleep(2 * time.Second)
-	}
-
-	log.Println("WS failed; falling back to HTTP")
-	return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
-}
-
-func runChatCmd(ctx context.Context, args []string) {
-	useWS := false // Default to HTTP for Go Stem
-	for _, arg := range args {
-		if arg == "--ws" {
-			useWS = true
-		}
-	}
-
-	base, err := url.Parse("http://localhost:8080") // Go Stem default port
-	if err != nil {
-		log.Fatal("Invalid URL:", err)
-	}
-
-	// Check Go Stem is reachable
-	fmt.Println("🌱 Connecting to OpenTendril Stem...")
-	ensureBackendOnline(ctx, "http://localhost:8080")
-
-	// Bind this chat run to a unified Tendril session; older servers without
-	// the sessions API still work (messages just run session-less).
-	sessionID, err := sproutCLISession(base)
-	if err != nil {
-		log.Printf("⚠️ Could not initiate a session (continuing without one): %v", err)
+	// Watch ended without a terminal observation — either a transport error
+	// or a clean premature EOF. Preserve identity; do not permit a new Seed.
+	phytomerID := sess.phytomerID
+	if ev.err != nil {
+		fmt.Fprintf(os.Stderr, "\nFailed to observe Phytomer %s: %v\n", phytomerID, ev.err)
 	} else {
-		log.Printf("🪴 Chat bound to Tendril session %s", sessionID)
+		fmt.Fprintf(os.Stderr, "\nObservation stream for Phytomer %s closed before terminal state was received.\n", phytomerID)
 	}
+	fmt.Fprintf(os.Stderr, "Terminal state is unknown. The Seed may still be running.\n")
+	fmt.Fprintf(os.Stderr, "Use `tendril session get %s` to check.\n", phytomerID)
 
-	sendFunc, err := connect(base, useWS, sessionID)
-	if err != nil {
-		log.Fatal("Failed to connect:", err)
-	}
-
-	log.Println("Connected! Type your task below, or 'exit' to quit.")
-	log.Println("Tip: Use 'tendril chat --ws' to force WebSocket mode (if gateway is running).")
-
-	scanner := bufio.NewScanner(os.Stdin)
-
-	for scanner.Scan() {
-		msg := strings.TrimSpace(scanner.Text())
-		if msg == "" || msg == "exit" || msg == "/exit" {
-			break
-		}
-
-		// --- Host-side Command Interception ---
-		if msg == "/restart" {
-			restartBackend(ctx, "http://localhost:8080")
-			continue
-		}
-
-		if msg == "/test" {
-			log.Println("🧪 Running health checks...")
-			cmd := exec.Command("docker", "compose", "ps")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			_ = cmd.Run()
-			log.Println("✅ Config OK.")
-			continue
-		}
-
-		// Let the backend process these first to save to .env, then intercept to restart Docker
-		isRepoCmd := strings.HasPrefix(msg, "/repo ")
-		isLocalCmd := msg == "/local"
-		isInitCmd := strings.HasPrefix(msg, "/init")
-		isSecureCmd := msg == "/secure"
-
-		response, err := sendFunc(msg)
-		if err != nil {
-			log.Printf("Error: %v", err)
-			continue
-		}
-		fmt.Println(response)
-
-		// After backend responds successfully, trigger the host-side Docker restart
-		if (isRepoCmd || isInitCmd || isSecureCmd) && !strings.Contains(response, "❌") {
-			restartBackend(ctx, "http://localhost:8080")
-		} else if isLocalCmd && !strings.Contains(response, "❌") {
-			log.Println("🔄 Restarting with GPU Profile enabled...")
-			cmd1 := exec.Command("docker", "compose", "down")
-			_ = cmd1.Run()
-			cmd2 := exec.Command("docker", "compose", "--profile", "gpu", "up", "-d")
-			cmd2.Stdout = os.Stdout
-			cmd2.Stderr = os.Stderr
-			_ = cmd2.Run()
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("Scanner error: %v", err)
-	}
+	// Transition to observation-lost: handle and phytomerID are retained;
+	// no new Seed may be started in this run.
+	sess.storeState(chatStateObservationLost)
+	// handle and phytomerID are deliberately preserved.
 }
 
-func getEnvOrDefaultStr(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+// doActiveInput posts continued intent to the active Phytomer. If the
+// Phytomer has become terminal, it reports the rejection without dispatching
+// a new Seed and without reinterpreting the input as a fresh goal.
+func doActiveInput(ctx context.Context, sess *directChatSession, intent string) {
+	key, err := continuationKeySource()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate idempotency key: %v\n", err)
+		return
 	}
-	if fallback != "" {
-		return fallback
+
+	result, err := sess.client.ContinuePhytomer(ctx, sess.phytomerID, intent, key)
+	if err != nil {
+		// Terminal-race: the Phytomer became terminal between the user typing
+		// and the POST arriving. Report it honestly and do not dispatch a new Seed.
+		fmt.Fprintf(os.Stderr, "Continuation rejected: %v\n", err)
+		fmt.Fprintln(os.Stderr, "The Phytomer may have reached a terminal state. Check status with `tendril session get`.")
+		return
 	}
-	return "local" // final fallback for the Go Stem router
+
+	// Print safe acceptance lifecycle. Never print the idempotency key.
+	fmt.Printf("Continuation: %s\n", result.ContinuationID)
+	fmt.Printf("Sequence:     %d\n", result.Sequence)
+	fmt.Printf("State:        %s\n", result.DeliveryState)
+}
+
+// handleActiveInput is retained as a focused helper for existing unit tests
+// that call it directly to verify continuation semantics.
+func handleActiveInput(ctx context.Context, sess *directChatSession, intent string) {
+	doActiveInput(ctx, sess, intent)
+}
+
+// ---------------------------------------------------------------------------
+// toAnySlice converts []string → []any (required by DispatchSeed input map).
+// ---------------------------------------------------------------------------
+
+func toAnySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
