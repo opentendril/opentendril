@@ -628,6 +628,154 @@ func TestResolveSubstrateWorkspaceTreatsEmptyManagedDirAsAbsent(t *testing.T) {
 	}
 }
 
+func TestResolveSubstrateWorkspacePathModeUsesConfiguredCheckoutPath(t *testing.T) {
+	checkout := t.TempDir()
+	got, err := ResolveSubstrateWorkspace("q906", &SubstrateSpec{
+		URL:      checkout,
+		Checkout: CheckoutSpec{Mode: "path", Path: checkout},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+	}
+	if got != checkout {
+		t.Fatalf("resolved path = %q, want configured checkout.path %q", got, checkout)
+	}
+}
+
+func TestResolveSubstrateWorkspacePathModeDoesNotUseSubstrateName(t *testing.T) {
+	cwd := chdirToTempDir(t)
+	nameDir := filepath.Join(cwd, "q906")
+	if err := os.MkdirAll(nameDir, 0o755); err != nil {
+		t.Fatalf("mkdir substrate-name dir: %v", err)
+	}
+	checkout := t.TempDir()
+
+	got, err := ResolveSubstrateWorkspace("q906", &SubstrateSpec{
+		Checkout: CheckoutSpec{Mode: "path", Path: checkout},
+	})
+	if err != nil {
+		t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+	}
+	if got != checkout {
+		t.Fatalf("resolved path = %q, want checkout.path %q, not Substrate name %q", got, checkout, nameDir)
+	}
+}
+
+func TestResolveSubstrateWorkspacePathModeFailsClosed(t *testing.T) {
+	t.Run("missing checkout path", func(t *testing.T) {
+		_, err := ResolveSubstrateWorkspace("q906", &SubstrateSpec{
+			Checkout: CheckoutSpec{Mode: "path"},
+		})
+		if err == nil {
+			t.Fatal("empty checkout.path resolved; want fail closed")
+		}
+		if !strings.Contains(err.Error(), "requires a path") {
+			t.Fatalf("error = %v, want checkout mode path to require a path", err)
+		}
+	})
+
+	t.Run("path does not exist", func(t *testing.T) {
+		cwd := chdirToTempDir(t)
+		if err := os.MkdirAll(filepath.Join(cwd, "q906"), 0o755); err != nil {
+			t.Fatalf("mkdir substrate-name dir: %v", err)
+		}
+		missing := filepath.Join(cwd, "absent-checkout")
+		_, err := ResolveSubstrateWorkspace("q906", &SubstrateSpec{
+			Checkout: CheckoutSpec{Mode: "path", Path: missing},
+		})
+		if err == nil {
+			t.Fatal("missing checkout.path resolved via Substrate name; want fail closed")
+		}
+		if !strings.Contains(err.Error(), "does not resolve to a local workspace directory") {
+			t.Fatalf("error = %v, want missing path to fail closed", err)
+		}
+	})
+
+	t.Run("path is a file", func(t *testing.T) {
+		dir := t.TempDir()
+		file := filepath.Join(dir, "not-a-directory")
+		if err := os.WriteFile(file, []byte("x\n"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		_, err := ResolveSubstrateWorkspace("q906", &SubstrateSpec{
+			Checkout: CheckoutSpec{Mode: "path", Path: file},
+		})
+		if err == nil {
+			t.Fatal("file checkout.path resolved as a workspace; want fail closed")
+		}
+		if !strings.Contains(err.Error(), "does not resolve to a local workspace directory") {
+			t.Fatalf("error = %v, want file path to fail closed", err)
+		}
+	})
+}
+
+func TestResolveSubstrateWorkspaceExistingModesUnchanged(t *testing.T) {
+	specPath := t.TempDir()
+	rawPath := t.TempDir()
+
+	t.Run("SubstrateSpec.Path", func(t *testing.T) {
+		got, err := ResolveSubstrateWorkspace("named", &SubstrateSpec{Path: specPath})
+		if err != nil {
+			t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+		}
+		if got != specPath {
+			t.Fatalf("resolved path = %q, want SubstrateSpec.Path %q", got, specPath)
+		}
+	})
+
+	t.Run("raw path", func(t *testing.T) {
+		got, err := ResolveSubstrateWorkspace(rawPath, nil)
+		if err != nil {
+			t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+		}
+		if got != rawPath {
+			t.Fatalf("resolved path = %q, want raw path %q", got, rawPath)
+		}
+	})
+
+	t.Run("ephemeral keeps spec.Path", func(t *testing.T) {
+		got, err := ResolveSubstrateWorkspace("named", &SubstrateSpec{
+			Path:     specPath,
+			Checkout: CheckoutSpec{Mode: "ephemeral"},
+		})
+		if err != nil {
+			t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+		}
+		if got != specPath {
+			t.Fatalf("resolved path = %q, want SubstrateSpec.Path %q", got, specPath)
+		}
+	})
+
+	t.Run("managed uses Tendril checkout", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", root)
+		checkout := filepath.Join(root, "managed")
+		if err := os.MkdirAll(checkout, 0o755); err != nil {
+			t.Fatalf("mkdir managed checkout: %v", err)
+		}
+		ctx := context.Background()
+		for _, args := range [][]string{
+			{"init", "-q", "-b", "main"},
+			{"config", "user.email", "t@example.com"},
+			{"config", "user.name", "Tester"},
+			{"commit", "--allow-empty", "-q", "-m", "init"},
+		} {
+			if _, err := runGitCommand(ctx, checkout, args...); err != nil {
+				t.Fatalf("git %v: %v", args, err)
+			}
+		}
+		got, err := ResolveSubstrateWorkspace("managed", &SubstrateSpec{
+			Checkout: CheckoutSpec{Mode: "managed"},
+		})
+		if err != nil {
+			t.Fatalf("ResolveSubstrateWorkspace: %v", err)
+		}
+		if got != checkout {
+			t.Fatalf("resolved path = %q, want managed checkout %q", got, checkout)
+		}
+	})
+}
+
 func TestIsUnsuitableImplicitWorkspaceDetectsStemHomeLayout(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".local", "share", "docker"), 0o755); err != nil {

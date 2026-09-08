@@ -604,6 +604,62 @@ func TestRunSeedRequiresGitSubstrate(t *testing.T) {
 	}
 }
 
+func TestResolveSeedWorkspaceNamedPathModeUsesCheckoutPath(t *testing.T) {
+	checkout := t.TempDir()
+	cwd := chdirToTempDir(t)
+	if err := os.MkdirAll(filepath.Join(cwd, "q906"), 0o755); err != nil {
+		t.Fatalf("mkdir substrate-name dir: %v", err)
+	}
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), fmt.Sprintf(`
+substrates:
+  q906:
+    url: %q
+    branch: main
+    auth:
+      method: none
+    checkout:
+      mode: path
+      path: %q
+    provider: docker
+`, checkout, checkout))
+
+	got, err := resolveSeedWorkspace("q906")
+	if err != nil {
+		t.Fatalf("resolveSeedWorkspace: %v", err)
+	}
+	if got != checkout {
+		t.Fatalf("resolveSeedWorkspace = %q, want checkout.path %q, not the Substrate name", got, checkout)
+	}
+}
+
+func TestResolveSeedWorkspaceNamedPathModeFailsClosedWhenPathMissing(t *testing.T) {
+	cwd := chdirToTempDir(t)
+	if err := os.MkdirAll(filepath.Join(cwd, "q906"), 0o755); err != nil {
+		t.Fatalf("mkdir substrate-name dir: %v", err)
+	}
+	missing := filepath.Join(cwd, "absent-checkout")
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), fmt.Sprintf(`
+substrates:
+  q906:
+    url: %q
+    branch: main
+    auth:
+      method: none
+    checkout:
+      mode: path
+      path: %q
+    provider: docker
+`, missing, missing))
+
+	_, err := resolveSeedWorkspace("q906")
+	if err == nil {
+		t.Fatal("missing checkout.path resolved via Substrate name; want fail closed")
+	}
+	if !strings.Contains(err.Error(), "does not resolve to a local workspace directory") {
+		t.Fatalf("error = %v, want missing path to fail closed", err)
+	}
+}
+
 func TestRunSeedRequiresPhytomer(t *testing.T) {
 	restoreSeeds(t)
 	repo := newSeedRepo(t)
