@@ -3,324 +3,453 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/url"
 	"os"
-	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/gorilla/websocket"
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+// ---------------------------------------------------------------------------
+// chatArgs holds the parsed pre-separator flags for `tendril chat`.
+// ---------------------------------------------------------------------------
+
+type chatArgs struct {
+	substrate     string // explicit --substrate value; empty means auto-resolve
+	maxIterations int    // 0 means omit from Seed spec
+	timeout       int    // 0 means omit; seconds
+	verifyArgv    []string
 }
 
-type ChatRequest struct {
-	Model     string    `json:"model"`
-	SessionID string    `json:"sessionId,omitempty"`
-	Messages  []Message `json:"messages"`
-	Stream    bool      `json:"stream"`
-}
+// parseChatArgs parses:
+//
+//	tendril chat [--substrate <n>] [--max-iterations N] [--timeout N] -- <verify argv...>
+//
+// Rules:
+//   - bare "--" separator is required
+//   - everything after "--" is the verifier argv (must be non-empty)
+//   - "--ws" is explicitly rejected (it must never fall back to WS)
+//   - unknown pre-separator flags are a local failure, not dispatched
+func parseChatArgs(args []string) (chatArgs, error) {
+	var (
+		out    chatArgs
+		sepIdx = -1
+		wsFlag = false
+	)
 
-type ChatResponse struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`
-	SessionID string `json:"sessionId,omitempty"`
-	Choices   []struct {
-		Message Message `json:"message"`
-	} `json:"choices"`
-}
-
-type sessionCreateResponse struct {
-	SessionID string `json:"sessionId"`
-}
-
-type WSMessage struct {
-	Type string      `json:"type"`
-	Data interface{} `json:"data"`
-}
-
-// connectWS establishes a WebSocket connection to the gateway. The gateway
-// dialer can set real headers (unlike a browser), so the bearer key rides
-// along the way it does for every other Stem call.
-func connectWS(base *url.URL) (*websocket.Conn, error) {
-	u := url.URL{Scheme: "ws", Host: base.Host, Path: "/ws"}
-	log.Printf("Connecting to WS: %s", u.String())
-	header := http.Header{"Authorization": []string{"Bearer " + chatAPIKey()}}
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), header)
-	if err != nil {
-		log.Printf("WS connect failed: %v", err)
-		return nil, err
-	}
-	return conn, nil
-}
-
-// sendWS sends a message over WebSocket and reads the response.
-func sendWS(conn *websocket.Conn, msg string) (string, error) {
-	err := conn.WriteJSON(WSMessage{Type: "userMessage", Data: msg})
-	if err != nil {
-		return "", err
-	}
-
-	for {
-		_, rawMsg, err := conn.ReadMessage()
-		if err != nil {
-			return "", err
-		}
-
-		// Try to parse as WSMessage
-		var response WSMessage
-		if err := json.Unmarshal(rawMsg, &response); err == nil && response.Type != "" {
-			if response.Type == "event" || response.Type == "telemetry" {
-				// Ignore background events, keep waiting for the real response
-				continue
-			}
-			if respData, ok := response.Data.(string); ok {
-				return respData, nil
-			}
-			// If it's a JSON object, format it as string
-			bytes, _ := json.MarshalIndent(response.Data, "", "  ")
-			return string(bytes), nil
-		}
-
-		// Try to parse as OpenAI-compatible ChatResponse
-		var chatResp ChatResponse
-		if err := json.Unmarshal(rawMsg, &chatResp); err == nil && len(chatResp.Choices) > 0 {
-			return chatResp.Choices[0].Message.Content, nil
-		}
-
-		// Fallback: treat the raw payload as standard text/markdown stream
-		return string(rawMsg), nil
-	}
-}
-
-// sproutCLISession asks the Go Stem for a new CLI-origin Tendril session so
-// every message in this chat run shares one unified session ID.
-func sproutCLISession(base *url.URL) (string, error) {
-	u := *base
-	u.Path = "/v1/sessions"
-
-	req, err := http.NewRequest("POST", u.String(), strings.NewReader(`{"origin":"cli"}`))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var created sessionCreateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
-		return "", err
-	}
-	if created.SessionID == "" {
-		return "", fmt.Errorf("server returned no sessionId")
-	}
-	return created.SessionID, nil
-}
-
-// chatAPIKey resolves the bearer key this CLI sends to the local Stem. It
-// mirrors getOrCreateAPIKey's resolution order (cmdserve.go) without ever
-// generating a key itself: the `serve` command owns key creation, and
-// persists it to the same "./.tendril/api-key" file this reads, so this client
-// never assumes a keyless server.
-func chatAPIKey() string {
-	if key := strings.TrimSpace(os.Getenv(EnvBotanistKey)); key != "" {
-		return key
-	}
-	if key := readPersistedAPIKey("./.tendril"); key != "" {
-		return key
-	}
-	return "sk-123" // Only reached against a Stem predating issue the auto-generated key
-}
-
-// sendHTTP sends a message via HTTP to the OpenAI-compatible endpoint.
-func sendHTTP(base *url.URL, msg, sessionID string) (string, error) {
-	u := *base
-	u.Path = "/v1/chat/completions"
-	reqBody := ChatRequest{
-		// Use model name from env, default to "local" so Go Stem routes correctly
-		Model:     getEnvOrDefaultStr("LOCAL_MODEL_NAME", os.Getenv("DEFAULT_LLM_PROVIDER")),
-		SessionID: sessionID,
-		Messages: []Message{
-			{Role: "user", Content: msg},
-		},
-		Stream: false,
-	}
-
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", err
-	}
-
-	req, err := http.NewRequest("POST", u.String(), strings.NewReader(string(jsonData)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+chatAPIKey())
-	if sessionID != "" {
-		req.Header.Set("X-Phytomer", sessionID)
-	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var chatResp ChatResponse
-	err = json.NewDecoder(resp.Body).Decode(&chatResp)
-	if err != nil {
-		return "", err
-	}
-
-	if len(chatResp.Choices) > 0 {
-		return chatResp.Choices[0].Message.Content, nil
-	}
-	return "", fmt.Errorf("no content in response")
-}
-
-// connect attempts WS first, falls back to HTTP after retries.
-func connect(base *url.URL, useWS bool, sessionID string) (func(string) (string, error), error) {
-	if !useWS {
-		log.Println("Using HTTP mode")
-		return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
-	}
-
-	// Try WS with retries
-	for i := 0; i < 3; i++ {
-		conn, err := connectWS(base)
-		if err == nil {
-			log.Println("Connected via WebSocket")
-			return func(msg string) (string, error) { return sendWS(conn, msg) }, nil
-		}
-		log.Printf("WS retry %d/3 failed: %v. Waiting 2s...", i+1, err)
-		time.Sleep(2 * time.Second)
-	}
-
-	log.Println("WS failed; falling back to HTTP")
-	return func(msg string) (string, error) { return sendHTTP(base, msg, sessionID) }, nil
-}
-
-func runChatCmd(ctx context.Context, args []string) {
-	useWS := false // Default to HTTP for Go Stem
-	for _, arg := range args {
-		if arg == "--ws" {
-			useWS = true
-		}
-	}
-
-	base, err := url.Parse("http://localhost:8080") // Go Stem default port
-	if err != nil {
-		log.Fatal("Invalid URL:", err)
-	}
-
-	// Check Go Stem is reachable
-	fmt.Println("🌱 Connecting to OpenTendril Stem...")
-	ensureBackendOnline(ctx, "http://localhost:8080")
-
-	// Bind this chat run to a unified Tendril session; older servers without
-	// the sessions API still work (messages just run session-less).
-	sessionID, err := sproutCLISession(base)
-	if err != nil {
-		log.Printf("⚠️ Could not initiate a session (continuing without one): %v", err)
-	} else {
-		log.Printf("🪴 Chat bound to Tendril session %s", sessionID)
-	}
-
-	sendFunc, err := connect(base, useWS, sessionID)
-	if err != nil {
-		log.Fatal("Failed to connect:", err)
-	}
-
-	log.Println("Connected! Type your task below, or 'exit' to quit.")
-	log.Println("Tip: Use 'tendril chat --ws' to force WebSocket mode (if gateway is running).")
-
-	scanner := bufio.NewScanner(os.Stdin)
-
-	for scanner.Scan() {
-		msg := strings.TrimSpace(scanner.Text())
-		if msg == "" || msg == "exit" || msg == "/exit" {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			sepIdx = i
 			break
 		}
-
-		// --- Host-side Command Interception ---
-		if msg == "/restart" {
-			restartBackend(ctx, "http://localhost:8080")
+		if arg == "--ws" {
+			wsFlag = true
 			continue
 		}
-
-		if msg == "/test" {
-			log.Println("🧪 Running health checks...")
-			cmd := exec.Command("docker", "compose", "ps")
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			_ = cmd.Run()
-			log.Println("✅ Config OK.")
-			continue
+		nextVal := func() (string, error) {
+			if i+1 >= len(args) || args[i+1] == "--" {
+				return "", fmt.Errorf("flag %s requires a value", arg)
+			}
+			i++
+			return args[i], nil
 		}
-
-		// Let the backend process these first to save to .env, then intercept to restart Docker
-		isRepoCmd := strings.HasPrefix(msg, "/repo ")
-		isLocalCmd := msg == "/local"
-		isInitCmd := strings.HasPrefix(msg, "/init")
-		isSecureCmd := msg == "/secure"
-
-		response, err := sendFunc(msg)
-		if err != nil {
-			log.Printf("Error: %v", err)
-			continue
-		}
-		fmt.Println(response)
-
-		// After backend responds successfully, trigger the host-side Docker restart
-		if (isRepoCmd || isInitCmd || isSecureCmd) && !strings.Contains(response, "❌") {
-			restartBackend(ctx, "http://localhost:8080")
-		} else if isLocalCmd && !strings.Contains(response, "❌") {
-			log.Println("🔄 Restarting with GPU Profile enabled...")
-			cmd1 := exec.Command("docker", "compose", "down")
-			_ = cmd1.Run()
-			cmd2 := exec.Command("docker", "compose", "--profile", "gpu", "up", "-d")
-			cmd2.Stdout = os.Stdout
-			cmd2.Stderr = os.Stderr
-			_ = cmd2.Run()
+		switch arg {
+		case "--substrate":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			out.substrate = v
+		case "--max-iterations":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			n, convErr := strconv.Atoi(v)
+			if convErr != nil {
+				return chatArgs{}, fmt.Errorf("--max-iterations must be an integer: %w", convErr)
+			}
+			out.maxIterations = n
+		case "--timeout":
+			v, err := nextVal()
+			if err != nil {
+				return chatArgs{}, err
+			}
+			n, convErr := strconv.Atoi(v)
+			if convErr != nil {
+				return chatArgs{}, fmt.Errorf("--timeout must be an integer: %w", convErr)
+			}
+			out.timeout = n
+		default:
+			return chatArgs{}, fmt.Errorf("unknown flag %q (use -- to separate verifier argv)", arg)
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		log.Printf("Scanner error: %v", err)
+	if wsFlag {
+		return chatArgs{}, fmt.Errorf("--ws is not supported: tendril chat uses the canonical Seed/Phytomer lifecycle, not WebSocket execution")
+	}
+
+	if sepIdx == -1 {
+		return chatArgs{}, fmt.Errorf("verifier argv requires a bare -- separator\n\nUsage: tendril chat [--substrate <name>] [--max-iterations N] [--timeout N] -- <verify argv...>")
+	}
+
+	verifyArgv := args[sepIdx+1:]
+	if len(verifyArgv) == 0 {
+		return chatArgs{}, fmt.Errorf("verifier argv after -- must be non-empty\n\nExample: tendril chat -- go test ./...")
+	}
+	out.verifyArgv = verifyArgv
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// resolveDirectChatSubstrate resolves the Substrate name to use for direct chat.
+//
+// If --substrate was explicit, use it directly (no implicit selection needed).
+// If omitted, load the configured Substrates and apply the 0/1/N rule.
+// ---------------------------------------------------------------------------
+
+func resolveDirectChatSubstrate(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	config, err := conductor.LoadSubstratesConfig("")
+	if err != nil {
+		return "", fmt.Errorf("load substrates config: %w", err)
+	}
+	if config == nil || len(config.Substrates) == 0 {
+		return "", fmt.Errorf("no Substrates configured\n\nRun `tendril setup substrate` to configure one")
+	}
+	names := sortedSubstrateNames(config)
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	// 2+ — fail with deterministic sorted list
+	return "", fmt.Errorf("multiple Substrates configured; use --substrate to select one:\n  %s", strings.Join(names, "\n  "))
+}
+
+// sortedSubstrateNames returns the substrate names in deterministic sorted order.
+// Exported as a testable helper.
+func sortedSubstrateNames(config *conductor.SubstratesConfig) []string {
+	if config == nil {
+		return nil
+	}
+	names := make([]string, 0, len(config.Substrates))
+	for name := range config.Substrates {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ---------------------------------------------------------------------------
+// newContinuationKey generates a cryptographically opaque idempotency key for
+// one distinct interactive continuation. It is deterministic only in that the
+// same call can be retried with the same key; it never derives the key from
+// the intent text or timestamps alone.
+// ---------------------------------------------------------------------------
+
+func newContinuationKey() (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate idempotency key: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// randReader allows tests to replace rand.Read without a package-level var.
+// We expose the key-generation path through newContinuationKey; tests that
+// need deterministic keys inject via continuationKeySource.
+var continuationKeySource = newContinuationKey
+
+// ---------------------------------------------------------------------------
+// chatState is the explicit terminal-safe state machine for direct chat.
+// ---------------------------------------------------------------------------
+
+type chatState int
+
+const (
+	chatStateIdle   chatState = iota // waiting for a goal
+	chatStateActive                  // Seed dispatched; Phytomer active
+)
+
+// ---------------------------------------------------------------------------
+// directChatSession holds the mutable state of one `tendril chat` run.
+// It is not concurrency-safe on its own; the event loop serialises access.
+// ---------------------------------------------------------------------------
+
+type directChatSession struct {
+	client     *localStemClient
+	substrate  string
+	verifyArgv []string
+	maxIter    int
+	timeout    int
+
+	state      chatState
+	handle     string
+	phytomerID string
+}
+
+// dispatchSeed posts the first developer goal as a canonical Seed.
+func (s *directChatSession) dispatchSeed(ctx context.Context, goal string) (SeedDispatchResult, error) {
+	input := map[string]any{
+		"substrate": s.substrate,
+		"goal":      goal,
+		"verify":    toAnySlice(s.verifyArgv),
+		"origin":    "cli",
+	}
+	if s.maxIter > 0 {
+		input["maxIterations"] = s.maxIter
+	}
+	if s.timeout > 0 {
+		input["timeoutSeconds"] = s.timeout
+	}
+	return s.client.DispatchSeed(ctx, input)
+}
+
+// ---------------------------------------------------------------------------
+// renderObservation prints safe observation state changes to stdout.
+// It never prints raw goal text, continued intent, reasoning, or internal keys.
+// ---------------------------------------------------------------------------
+
+func renderObservation(prev, obs core.PhytomerObservation) {
+	statusChanged := prev.Status != obs.Status
+	iterChanged := prev.Iterations != obs.Iterations
+
+	if statusChanged {
+		fmt.Printf("Status:     %s\n", obs.Status)
+	}
+	if iterChanged && obs.Iterations > 0 {
+		fmt.Printf("Iterations: %d\n", obs.Iterations)
+	}
+
+	// Sprout lifecycle changes.
+	if len(obs.Sprouts) > len(prev.Sprouts) {
+		for i := len(prev.Sprouts); i < len(obs.Sprouts); i++ {
+			sp := obs.Sprouts[i]
+			fmt.Printf("Sprout:     %s  status=%s", sp.RunID, sp.Status)
+			if sp.Outcome != "" {
+				fmt.Printf("  outcome=%s", sp.Outcome)
+			}
+			fmt.Println()
+		}
+	} else {
+		// Update status of existing sprouts.
+		for i, sp := range obs.Sprouts {
+			if i < len(prev.Sprouts) && prev.Sprouts[i].Status != sp.Status {
+				fmt.Printf("Sprout:     %s  status=%s", sp.RunID, sp.Status)
+				if sp.Outcome != "" {
+					fmt.Printf("  outcome=%s", sp.Outcome)
+				}
+				fmt.Println()
+			}
+		}
+	}
+
+	// Continuation delivery changes.
+	prevConts := make(map[string]string, len(prev.Continuations))
+	for _, c := range prev.Continuations {
+		prevConts[c.ContinuationID] = c.DeliveryState
+	}
+	for _, c := range obs.Continuations {
+		if prevConts[c.ContinuationID] != c.DeliveryState {
+			fmt.Printf("Continuation: %s  sequence=%d  state=%s\n",
+				c.ContinuationID, c.Sequence, c.DeliveryState)
+		}
+	}
+
+	// Branch/commit appear only when real.
+	if obs.Branch != "" && obs.Branch != prev.Branch {
+		fmt.Printf("Branch:     %s\n", obs.Branch)
+	}
+	if obs.Commit != "" && obs.Commit != prev.Commit {
+		fmt.Printf("Commit:     %s\n", obs.Commit)
 	}
 }
 
-func getEnvOrDefaultStr(key, fallback string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
+// renderTerminalSettlement prints the safe terminal summary.
+func renderTerminalSettlement(obs core.PhytomerObservation) {
+	fmt.Println()
+	fmt.Printf("Status:     %s\n", obs.Status)
+	fmt.Printf("Handle:     %s\n", obs.Handle)
+	fmt.Printf("Phytomer:   %s\n", obs.PhytomerID)
+	fmt.Printf("Iterations: %d\n", obs.Iterations)
+	if obs.Branch != "" {
+		fmt.Printf("Branch:     %s\n", obs.Branch)
 	}
-	if fallback != "" {
-		return fallback
+	if obs.Commit != "" {
+		fmt.Printf("Commit:     %s\n", obs.Commit)
 	}
-	return "local" // final fallback for the Go Stem router
+	if obs.Status == core.SeedStatusSatisfied {
+		fmt.Println("✅ Seed satisfied.")
+	} else {
+		fmt.Printf("⚠️  Seed ended with non-success status: %s\n", obs.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// runChatCmd is the entry point called from main.go.
+// ---------------------------------------------------------------------------
+
+func runChatCmd(ctx context.Context, args []string) {
+	parsed, err := parseChatArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tendril chat: %v\n", err)
+		os.Exit(1)
+	}
+
+	substrate, err := resolveDirectChatSubstrate(parsed.substrate)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tendril chat: %v\n", err)
+		os.Exit(1)
+	}
+
+	sess := &directChatSession{
+		client:     newLocalStemClient(),
+		substrate:  substrate,
+		verifyArgv: parsed.verifyArgv,
+		maxIter:    parsed.maxIterations,
+		timeout:    parsed.timeout,
+	}
+
+	fmt.Printf("🌱 OpenTendril direct chat  [substrate: %s  verify: %s]\n",
+		substrate, strings.Join(parsed.verifyArgv, " "))
+	fmt.Println("Type your coding goal and press Enter. Type 'exit' or '/exit' to quit.")
+	fmt.Println()
+
+	runChatLoop(ctx, sess, os.Stdin)
+}
+
+// runChatLoop drives the interactive lifecycle. It accepts a reader so tests
+// can inject deterministic input without real stdin.
+func runChatLoop(ctx context.Context, sess *directChatSession, input *os.File) {
+	scanner := bufio.NewScanner(input)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if line == "exit" || line == "/exit" {
+			fmt.Println("Exiting.")
+			return
+		}
+
+		switch sess.state {
+		case chatStateIdle:
+			handleIdleInput(ctx, sess, line)
+		case chatStateActive:
+			handleActiveInput(ctx, sess, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "stdin error: %v\n", err)
+	}
+}
+
+// handleIdleInput dispatches the first developer goal as a new Seed.
+func handleIdleInput(ctx context.Context, sess *directChatSession, goal string) {
+	result, err := sess.dispatchSeed(ctx, goal)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Seed dispatch failed: %v\n", err)
+		return
+	}
+
+	sess.handle = result.Handle
+	sess.phytomerID = result.PhytomerID
+	sess.state = chatStateActive
+
+	fmt.Printf("\nHandle:   %s\n", result.Handle)
+	fmt.Printf("Phytomer: %s\n", result.PhytomerID)
+	fmt.Printf("Status:   %s\n", result.Status)
+	fmt.Println()
+	fmt.Println("Watching progress... (type continued intent at any time)")
+	fmt.Println()
+
+	// Watch the Phytomer until terminal settlement. Input after this returns
+	// to the event loop; chatStateActive handles continuation.
+	watchAndSettle(ctx, sess)
+}
+
+// watchAndSettle opens the watch stream and blocks until terminal observation
+// or a transport error. On return the session is always in chatStateIdle.
+func watchAndSettle(ctx context.Context, sess *directChatSession) {
+	var prev core.PhytomerObservation
+	var lastObs core.PhytomerObservation
+	var terminal bool
+
+	err := sess.client.WatchPhytomer(ctx, sess.phytomerID, func(obs core.PhytomerObservation) error {
+		renderObservation(prev, obs)
+		prev = obs
+		lastObs = obs
+		if core.SeedStatusIsTerminal(obs.Status) {
+			terminal = true
+			// Return nil so we drain any remaining frames before the server
+			// closes the stream.
+		}
+		return nil
+	})
+
+	// A transport failure before terminal settlement is an observation failure,
+	// not a success. It must not be treated as completion.
+	if err != nil && !terminal {
+		fmt.Fprintf(os.Stderr, "\nFailed to observe Phytomer %s: %v\n", sess.phytomerID, err)
+		fmt.Fprintf(os.Stderr, "The Seed may still be running. Use `tendril session get %s` to check.\n", sess.phytomerID)
+		// Reset to idle; the user can start a new interaction but this one is
+		// no longer tracked.
+		sess.state = chatStateIdle
+		sess.handle = ""
+		sess.phytomerID = ""
+		return
+	}
+
+	if terminal {
+		renderTerminalSettlement(lastObs)
+	}
+
+	// Always return to idle after watch ends (terminal or connection closed).
+	sess.state = chatStateIdle
+	sess.handle = ""
+	sess.phytomerID = ""
+}
+
+// handleActiveInput posts continued intent to the active Phytomer. If the
+// Phytomer has become terminal, it reports the rejection without dispatching
+// a new Seed and without reinterpreting the input as a fresh goal.
+func handleActiveInput(ctx context.Context, sess *directChatSession, intent string) {
+	key, err := continuationKeySource()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to generate idempotency key: %v\n", err)
+		return
+	}
+
+	result, err := sess.client.ContinuePhytomer(ctx, sess.phytomerID, intent, key)
+	if err != nil {
+		// Terminal-race: the Phytomer became terminal between the user typing
+		// and the POST arriving. Report it honestly and do not dispatch a new Seed.
+		fmt.Fprintf(os.Stderr, "Continuation rejected: %v\n", err)
+		fmt.Fprintln(os.Stderr, "The Phytomer may have reached a terminal state. Check status with `tendril session get`.")
+		return
+	}
+
+	// Print safe acceptance lifecycle. Never print the idempotency key.
+	fmt.Printf("Continuation: %s\n", result.ContinuationID)
+	fmt.Printf("Sequence:     %d\n", result.Sequence)
+	fmt.Printf("State:        %s\n", result.DeliveryState)
+}
+
+// ---------------------------------------------------------------------------
+// toAnySlice converts []string → []any (required by DispatchSeed input map).
+// ---------------------------------------------------------------------------
+
+func toAnySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }
