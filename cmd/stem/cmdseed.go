@@ -459,19 +459,15 @@ func runSeedCollect(ctx context.Context, args []string) {
 		var httpErr *stemHTTPError
 		switch {
 		case errors.As(err, &httpErr) && httpErr.StatusCode == 404:
-			// Unreachable: CollectSeed converts 404 into a "no seed run for handle"
-			// plain error, not a stemHTTPError. This case is kept as defence-in-depth.
+			// CollectSeed returns *stemHTTPError for every non-2xx status,
+			// including 404. Classify by typed error and StatusCode only.
 			fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
 		case errors.As(err, &httpErr):
 			fmt.Fprintf(os.Stderr, "❌ Collect failed (status %d): %s\n", httpErr.StatusCode, httpErr.Body)
 		default:
-			// Plain error: either 404-turned-string or transport failure.
-			if strings.Contains(err.Error(), "no seed run for handle") {
-				fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
-			} else {
-				fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
-				fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
-			}
+			// Non-*stemHTTPError: transport or unreachable daemon.
+			fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
 		}
 		os.Exit(1)
 	}

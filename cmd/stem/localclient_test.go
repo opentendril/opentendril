@@ -393,10 +393,11 @@ func TestCollectSeedMalformedJSONFails(t *testing.T) {
 	}
 }
 
-// TestCollectSeedNotFoundIsNotTypedHTTP verifies that a 404 response is
-// returned as a plain descriptive error (not *stemHTTPError), matching the
-// CLI's "no seed run for handle" output path.
-func TestCollectSeedNotFoundIsNotTypedHTTP(t *testing.T) {
+// TestCollectSeedNotFoundIsTypedHTTP verifies that a 404 response is returned
+// as *stemHTTPError with StatusCode == 404, consistent with the contract that
+// every non-2xx HTTP response produces a typed error. Callers classify by
+// StatusCode; no message substring matching is required.
+func TestCollectSeedNotFoundIsTypedHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	}))
@@ -409,11 +410,11 @@ func TestCollectSeedNotFoundIsNotTypedHTTP(t *testing.T) {
 		t.Fatal("expected error on 404, got nil")
 	}
 	var httpErr *stemHTTPError
-	if errors.As(err, &httpErr) {
-		t.Fatalf("404 should NOT be *stemHTTPError (it becomes a plain no-handle error); got %v", err)
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("404 must be *stemHTTPError; got %T: %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "no seed run for handle") {
-		t.Fatalf("error = %q, want 'no seed run for handle' mention", err.Error())
+	if httpErr.StatusCode != http.StatusNotFound {
+		t.Fatalf("StatusCode = %d, want %d", httpErr.StatusCode, http.StatusNotFound)
 	}
 }
 

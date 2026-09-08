@@ -169,8 +169,9 @@ func (c *localStemClient) DispatchSeed(ctx context.Context, input map[string]any
 // via GET /v1/seeds/runs/{handle}. The decoded SeedCollectResult carries
 // only the public Fruit contract fields.
 //
-// A 404 is returned as a descriptive error. Any other non-2xx status is
-// returned as an error with the status code included.
+// Every non-2xx HTTP response — including 404 — is returned as *stemHTTPError
+// carrying the exact status code and safe response body. Callers classify by
+// typed error and StatusCode; no substring matching is required.
 func (c *localStemClient) CollectSeed(ctx context.Context, handle string) (SeedCollectResult, error) {
 	resp, err := c.do(ctx, http.MethodGet, "/v1/seeds/runs/"+url.PathEscape(handle), nil)
 	if err != nil {
@@ -179,9 +180,6 @@ func (c *localStemClient) CollectSeed(ctx context.Context, handle string) (SeedC
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 
-	if resp.StatusCode == http.StatusNotFound {
-		return SeedCollectResult{}, fmt.Errorf("no seed run for handle %s", handle)
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return SeedCollectResult{}, newStemHTTPError(resp.StatusCode, raw, resp.Status)
 	}
