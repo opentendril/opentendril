@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -171,16 +172,21 @@ var continuationKeySource = newContinuationKey
 // chatState is the explicit terminal-safe state machine for direct chat.
 // ---------------------------------------------------------------------------
 
-type chatState int
+type chatState = int32
 
 const (
-	chatStateIdle   chatState = iota // waiting for a goal
-	chatStateActive                  // Seed dispatched; Phytomer active
+	chatStateIdle            chatState = iota // waiting for a goal
+	chatStateActive                           // Seed dispatched; Phytomer active
+	chatStateObservationLost                  // watch ended before terminal; identity preserved
 )
 
 // ---------------------------------------------------------------------------
 // directChatSession holds the mutable state of one `tendril chat` run.
-// It is not concurrency-safe on its own; the event loop serialises access.
+//
+// The event loop goroutine is the sole writer of the mutable fields; it never
+// needs a lock for its own accesses. The state field uses atomic load/store so
+// that test goroutines (and future read-only observers) can safely sample it
+// without introducing a data race.
 // ---------------------------------------------------------------------------
 
 type directChatSession struct {
@@ -190,10 +196,16 @@ type directChatSession struct {
 	maxIter    int
 	timeout    int
 
-	state      chatState
+	state      atomic.Int32 // chatState constants; use loadState/storeState
 	handle     string
 	phytomerID string
 }
+
+// loadState returns the current chatState with acquire semantics.
+func (s *directChatSession) loadState() chatState { return s.state.Load() }
+
+// storeState writes the new chatState with release semantics.
+func (s *directChatSession) storeState(st chatState) { s.state.Store(st) }
 
 // dispatchSeed posts the first developer goal as a canonical Seed.
 func (s *directChatSession) dispatchSeed(ctx context.Context, goal string) (SeedDispatchResult, error) {
@@ -293,6 +305,25 @@ func renderTerminalSettlement(obs core.PhytomerObservation) {
 }
 
 // ---------------------------------------------------------------------------
+// Event types for the chat event loop.
+// ---------------------------------------------------------------------------
+
+// chatInputEvent carries a line typed by the developer.
+type chatInputEvent struct {
+	line string
+}
+
+// chatObsEvent carries the result of one WatchPhytomer call.
+// lastObs is the final observation seen (zero value if none).
+// terminal is true when a terminal observation was received before the stream closed.
+// err is non-nil when the stream closed with a transport failure.
+type chatObsEvent struct {
+	lastObs  core.PhytomerObservation
+	terminal bool
+	err      error
+}
+
+// ---------------------------------------------------------------------------
 // runChatCmd is the entry point called from main.go.
 // ---------------------------------------------------------------------------
 
@@ -325,102 +356,176 @@ func runChatCmd(ctx context.Context, args []string) {
 	runChatLoop(ctx, sess, os.Stdin)
 }
 
-// runChatLoop drives the interactive lifecycle. It accepts a reader so tests
-// can inject deterministic input without real stdin.
+// runChatLoop drives the interactive lifecycle using a real concurrent event
+// loop. It accepts a reader so tests can inject deterministic input without
+// real stdin.
+//
+// Architecture:
+//   - A stdin-reader goroutine sends non-empty non-exit lines on inputCh.
+//   - When a Seed is accepted, a watch goroutine sends one chatObsEvent on obsCh.
+//   - The event loop (this goroutine) is the sole owner of *directChatSession
+//     state; it processes events serially so no lock is needed.
 func runChatLoop(ctx context.Context, sess *directChatSession, input *os.File) {
-	scanner := bufio.NewScanner(input)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// inputCh carries lines from stdin. Closed by the reader goroutine on EOF.
+	inputCh := make(chan string)
+	// obsCh carries the result of exactly one WatchPhytomer call. Buffered so
+	// the watch goroutine never blocks even if the event loop is busy.
+	obsCh := make(chan chatObsEvent, 1)
+
+	// Stdin reader goroutine.
+	go func() {
+		scanner := bufio.NewScanner(input)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			select {
+			case inputCh <- line:
+			case <-ctx.Done():
+				return
+			}
 		}
-		if line == "exit" || line == "/exit" {
-			fmt.Println("Exiting.")
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "stdin error: %v\n", err)
+		}
+		close(inputCh)
+	}()
+
+	// watchActive tracks whether a watch goroutine is running.
+	// Only one watch is permitted at a time.
+	watchActive := false
+
+	startWatch := func(phytomerID string) {
+		watchActive = true
+		go func() {
+			var lastObs core.PhytomerObservation
+			var prev core.PhytomerObservation
+			var terminal bool
+
+			err := sess.client.WatchPhytomer(ctx, phytomerID, func(obs core.PhytomerObservation) error {
+				renderObservation(prev, obs)
+				prev = obs
+				lastObs = obs
+				if core.SeedStatusIsTerminal(obs.Status) {
+					terminal = true
+				}
+				return nil
+			})
+
+			obsCh <- chatObsEvent{lastObs: lastObs, terminal: terminal, err: err}
+		}()
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case line, ok := <-inputCh:
+			if !ok {
+				// stdin closed (EOF). If a watch is still running, wait for its
+				// result so that terminal settlement can complete before we return.
+				if watchActive {
+					ev := <-obsCh
+					handleObsEvent(sess, ev)
+				}
+				return
+			}
+			if line == "exit" || line == "/exit" {
+				fmt.Println("Exiting.")
+				return
+			}
+			handleLoopInput(ctx, sess, line, &watchActive, startWatch)
+
+		case ev := <-obsCh:
+			watchActive = false
+			handleObsEvent(sess, ev)
+		}
+	}
+}
+
+// handleLoopInput is called by the event loop for each developer input line.
+// It owns the state transition from Idle→Active (Seed dispatch + watch start)
+// and the Active/ObservationLost continuation path.
+func handleLoopInput(
+	ctx context.Context,
+	sess *directChatSession,
+	line string,
+	watchActive *bool,
+	startWatch func(string),
+) {
+	switch sess.loadState() {
+	case chatStateIdle:
+		result, err := sess.dispatchSeed(ctx, line)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Seed dispatch failed: %v\n", err)
 			return
 		}
 
-		switch sess.state {
-		case chatStateIdle:
-			handleIdleInput(ctx, sess, line)
-		case chatStateActive:
-			handleActiveInput(ctx, sess, line)
+		sess.handle = result.Handle
+		sess.phytomerID = result.PhytomerID
+		sess.storeState(chatStateActive)
+
+		fmt.Printf("\nHandle:   %s\n", result.Handle)
+		fmt.Printf("Phytomer: %s\n", result.PhytomerID)
+		fmt.Printf("Status:   %s\n", result.Status)
+		fmt.Println()
+		fmt.Println("Watching progress... (type continued intent at any time)")
+		fmt.Println()
+
+		if !*watchActive {
+			startWatch(sess.phytomerID)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "stdin error: %v\n", err)
+
+	case chatStateActive:
+		doActiveInput(ctx, sess, line)
+
+	case chatStateObservationLost:
+		// Observation was lost before terminal settlement. Refuse a replacement Seed.
+		// The developer may type "exit" to leave; any other line reports the fenced state.
+		fmt.Fprintln(os.Stderr, "⚠️  Observation was lost for Phytomer "+sess.phytomerID+": terminal state is unknown.")
+		fmt.Fprintln(os.Stderr, "The Seed may still be running. Use `tendril session get` to check status.")
+		fmt.Fprintln(os.Stderr, "Type 'exit' or '/exit' to leave without starting a replacement Seed.")
 	}
 }
 
-// handleIdleInput dispatches the first developer goal as a new Seed.
-func handleIdleInput(ctx context.Context, sess *directChatSession, goal string) {
-	result, err := sess.dispatchSeed(ctx, goal)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Seed dispatch failed: %v\n", err)
-		return
-	}
-
-	sess.handle = result.Handle
-	sess.phytomerID = result.PhytomerID
-	sess.state = chatStateActive
-
-	fmt.Printf("\nHandle:   %s\n", result.Handle)
-	fmt.Printf("Phytomer: %s\n", result.PhytomerID)
-	fmt.Printf("Status:   %s\n", result.Status)
-	fmt.Println()
-	fmt.Println("Watching progress... (type continued intent at any time)")
-	fmt.Println()
-
-	// Watch the Phytomer until terminal settlement. Input after this returns
-	// to the event loop; chatStateActive handles continuation.
-	watchAndSettle(ctx, sess)
-}
-
-// watchAndSettle opens the watch stream and blocks until terminal observation
-// or a transport error. On return the session is always in chatStateIdle.
-func watchAndSettle(ctx context.Context, sess *directChatSession) {
-	var prev core.PhytomerObservation
-	var lastObs core.PhytomerObservation
-	var terminal bool
-
-	err := sess.client.WatchPhytomer(ctx, sess.phytomerID, func(obs core.PhytomerObservation) error {
-		renderObservation(prev, obs)
-		prev = obs
-		lastObs = obs
-		if core.SeedStatusIsTerminal(obs.Status) {
-			terminal = true
-			// Return nil so we drain any remaining frames before the server
-			// closes the stream.
-		}
-		return nil
-	})
-
-	// A transport failure before terminal settlement is an observation failure,
-	// not a success. It must not be treated as completion.
-	if err != nil && !terminal {
-		fmt.Fprintf(os.Stderr, "\nFailed to observe Phytomer %s: %v\n", sess.phytomerID, err)
-		fmt.Fprintf(os.Stderr, "The Seed may still be running. Use `tendril session get %s` to check.\n", sess.phytomerID)
-		// Reset to idle; the user can start a new interaction but this one is
-		// no longer tracked.
-		sess.state = chatStateIdle
+// handleObsEvent processes the result of a completed WatchPhytomer call.
+// It is always called from the event loop goroutine.
+func handleObsEvent(sess *directChatSession, ev chatObsEvent) {
+	if ev.terminal {
+		renderTerminalSettlement(ev.lastObs)
+		// Terminal observation is the only normal transition back to Idle.
 		sess.handle = ""
 		sess.phytomerID = ""
+		sess.storeState(chatStateIdle)
 		return
 	}
 
-	if terminal {
-		renderTerminalSettlement(lastObs)
+	// Watch ended without a terminal observation — either a transport error
+	// or a clean premature EOF. Preserve identity; do not permit a new Seed.
+	phytomerID := sess.phytomerID
+	if ev.err != nil {
+		fmt.Fprintf(os.Stderr, "\nFailed to observe Phytomer %s: %v\n", phytomerID, ev.err)
+	} else {
+		fmt.Fprintf(os.Stderr, "\nObservation stream for Phytomer %s closed before terminal state was received.\n", phytomerID)
 	}
+	fmt.Fprintf(os.Stderr, "Terminal state is unknown. The Seed may still be running.\n")
+	fmt.Fprintf(os.Stderr, "Use `tendril session get %s` to check.\n", phytomerID)
 
-	// Always return to idle after watch ends (terminal or connection closed).
-	sess.state = chatStateIdle
-	sess.handle = ""
-	sess.phytomerID = ""
+	// Transition to observation-lost: handle and phytomerID are retained;
+	// no new Seed may be started in this run.
+	sess.storeState(chatStateObservationLost)
+	// handle and phytomerID are deliberately preserved.
 }
 
-// handleActiveInput posts continued intent to the active Phytomer. If the
+// doActiveInput posts continued intent to the active Phytomer. If the
 // Phytomer has become terminal, it reports the rejection without dispatching
 // a new Seed and without reinterpreting the input as a fresh goal.
-func handleActiveInput(ctx context.Context, sess *directChatSession, intent string) {
+func doActiveInput(ctx context.Context, sess *directChatSession, intent string) {
 	key, err := continuationKeySource()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to generate idempotency key: %v\n", err)
@@ -440,6 +545,12 @@ func handleActiveInput(ctx context.Context, sess *directChatSession, intent stri
 	fmt.Printf("Continuation: %s\n", result.ContinuationID)
 	fmt.Printf("Sequence:     %d\n", result.Sequence)
 	fmt.Printf("State:        %s\n", result.DeliveryState)
+}
+
+// handleActiveInput is retained as a focused helper for existing unit tests
+// that call it directly to verify continuation semantics.
+func handleActiveInput(ctx context.Context, sess *directChatSession, intent string) {
+	doActiveInput(ctx, sess, intent)
 }
 
 // ---------------------------------------------------------------------------
