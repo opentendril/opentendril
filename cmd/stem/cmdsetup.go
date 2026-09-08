@@ -111,7 +111,20 @@ func runSetupSubstrateCmd() {
 		os.Exit(1)
 	}
 
-	fmt.Fprintln(os.Stderr, "Use the default-workspace Substrate when calling sproutGrow or sequenceGrow.")
+	fmt.Fprintln(os.Stderr, `Substrate "default-workspace" is ready.
+
+Start the Stem (PORT defaults to 8080):
+  tendril serve
+
+Start direct coding with:
+  tendril chat --substrate default-workspace -- <verification command...>
+
+With exactly one Substrate configured, --substrate may be omitted:
+  tendril chat -- go test ./...
+
+Enter the coding goal at the prompt. Further input while a Seed is active
+continues the same Phytomer. The terminal reports the Seed handle, Phytomer
+identity, safe progress, and Fruit branch/commit on settlement.`)
 }
 
 func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string, error) {

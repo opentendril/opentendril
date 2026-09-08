@@ -340,6 +340,48 @@ that growth uses the Phytomer ID under `sprout.watch`. Observation does not
 execute the Seed and does not accept Fruit. `seed.grow`, `phytomer.continue`,
 and `sprout.watch` remain separately grantable.
 
+#### Direct interactive coding — `tendril chat`
+
+`tendril chat` provides lightweight direct interactive coding for the single-user
+posture. It is a Pollinator-facing presentation adapter over `seed.grow`,
+`phytomer.continue`, and `sprout.watch`; it carries the same Stem authority and
+is subject to the same governed lifecycle. It is not a separate capability system.
+
+**Syntax:**
+
+```
+tendril chat [--substrate <name>] [--max-iterations N] [--timeout N] -- <verify argv...>
+```
+
+A bare `--` is required. Everything after it is the explicit verification command
+argv that bounds success. No automatic verifier is supplied.
+
+**Substrate selection:**
+
+- With exactly one configured Substrate, `--substrate` may be omitted.
+- With multiple configured Substrates, `--substrate` must name the target.
+
+**PORT:** `PORT` controls the local Stem endpoint, defaulting to `8080`. Both the
+Stem (`tendril serve`) and the local client read the same variable; set it once
+in the environment to coexist on an alternate port with no other configuration.
+
+**Active work:** The first non-empty terminal line starts a detached Seed. The
+terminal immediately exposes the Seed handle and Phytomer identity. Safe progress
+(`PhytomerObservation`) streams while the Seed is active.
+
+**Continued intent:** Further non-empty input during an active Seed continues the
+same Phytomer. Intent is durable before acknowledgment and delivered at the next
+permitted cognitive boundary. It does not start a new Seed.
+
+**Terminal settlement:** When the Seed reaches a terminal state the terminal
+reports it. When Fruit exists, the terminal identifies the branch and commit.
+The default branch remains unchanged until a human merges.
+
+**Local controls:** `exit` / `/exit` close the terminal session. `--ws` is not
+the direct coding path and is rejected at parse time.
+
+
+
 Under the managed GitHub App/API posture, Seed writing iterations are chained
 through local `tendril/seed-*` checkpoints: each successful iteration advances
 the checkpoint, and the next iteration starts from its tip. These checkpoints
