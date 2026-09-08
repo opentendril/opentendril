@@ -15,6 +15,29 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
+// stemHTTPError is a typed error produced when the local Stem daemon responds
+// with a non-2xx HTTP status. It carries the exact status code and safe
+// response body text so callers can distinguish an HTTP rejection from a
+// transport/unreachable failure without substring matching.
+type stemHTTPError struct {
+	StatusCode int
+	Body       string // trimmed response body; may be the status text if the body was empty
+}
+
+func (e *stemHTTPError) Error() string {
+	return fmt.Sprintf("Stem daemon rejected the request (status %d): %s", e.StatusCode, e.Body)
+}
+
+// newStemHTTPError reads body text from raw, trims whitespace, and falls back
+// to the HTTP status text when the body is empty.
+func newStemHTTPError(statusCode int, raw []byte, statusText string) *stemHTTPError {
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		text = statusText
+	}
+	return &stemHTTPError{StatusCode: statusCode, Body: text}
+}
+
 // localStemClient is a typed, authenticated HTTP client scoped to the local
 // Stem daemon. It is the single place that knows how to reach the daemon,
 // resolve the bearer, and decode the governed response contracts.
@@ -92,9 +115,7 @@ type SeedDispatchResult struct {
 }
 
 // SeedCollectResult is the decoded Fruit from a /v1/seeds/runs/{handle}
-// response. It maps only the existing public Fruit fields; private fields
-// (goal, diff, logs, raw error, reasoning) are not part of this client
-// contract.
+// response. It maps the public Fruit fields returned by tendril seed collect.
 type SeedCollectResult struct {
 	Status     string `json:"status"`
 	Iterations int    `json:"iterations"`
@@ -134,11 +155,7 @@ func (c *localStemClient) DispatchSeed(ctx context.Context, input map[string]any
 	raw, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusAccepted {
-		text := strings.TrimSpace(string(raw))
-		if text == "" {
-			text = resp.Status
-		}
-		return SeedDispatchResult{}, fmt.Errorf("Stem daemon rejected the dispatch (status %d): %s", resp.StatusCode, text)
+		return SeedDispatchResult{}, newStemHTTPError(resp.StatusCode, raw, resp.Status)
 	}
 
 	var result SeedDispatchResult
@@ -166,11 +183,7 @@ func (c *localStemClient) CollectSeed(ctx context.Context, handle string) (SeedC
 		return SeedCollectResult{}, fmt.Errorf("no seed run for handle %s", handle)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		text := strings.TrimSpace(string(raw))
-		if text == "" {
-			text = resp.Status
-		}
-		return SeedCollectResult{}, fmt.Errorf("collect failed (status %d): %s", resp.StatusCode, text)
+		return SeedCollectResult{}, newStemHTTPError(resp.StatusCode, raw, resp.Status)
 	}
 
 	var result SeedCollectResult
@@ -204,11 +217,7 @@ func (c *localStemClient) ContinuePhytomer(ctx context.Context, phytomerID, inte
 	raw, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		text := strings.TrimSpace(string(raw))
-		if text == "" {
-			text = resp.Status
-		}
-		return core.ContinuationResult{}, fmt.Errorf("Stem daemon rejected continuation (status %d): %s", resp.StatusCode, text)
+		return core.ContinuationResult{}, newStemHTTPError(resp.StatusCode, raw, resp.Status)
 	}
 
 	var result core.ContinuationResult

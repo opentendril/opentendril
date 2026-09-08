@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,11 +61,7 @@ func TestLocalBearerBotanistKeyTakesPrecedence(t *testing.T) {
 	}
 
 	// Change the working directory so "./.tendril" resolves to tmp.
-	orig, _ := os.Getwd()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	defer os.Chdir(orig)
+	t.Chdir(tmp)
 
 	t.Setenv(EnvBotanistKey, "botanist-wins")
 	bearer := resolveLocalBearer()
@@ -83,11 +80,7 @@ func TestLocalBearerPersistedKeyWhenBotanistAbsent(t *testing.T) {
 		t.Fatalf("write api-key: %v", err)
 	}
 
-	orig, _ := os.Getwd()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	defer os.Chdir(orig)
+	t.Chdir(tmp)
 
 	// BOTANIST_KEY must be absent.
 	t.Setenv(EnvBotanistKey, "")
@@ -99,11 +92,7 @@ func TestLocalBearerPersistedKeyWhenBotanistAbsent(t *testing.T) {
 
 func TestLocalBearerEmptyWhenNeitherSourcePresent(t *testing.T) {
 	tmp := t.TempDir()
-	orig, _ := os.Getwd()
-	if err := os.Chdir(tmp); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
-	defer os.Chdir(orig)
+	t.Chdir(tmp)
 
 	t.Setenv(EnvBotanistKey, "")
 	bearer := resolveLocalBearer()
@@ -247,6 +236,51 @@ func TestDispatchSeedMalformedJSONFails(t *testing.T) {
 	}
 }
 
+// TestDispatchSeedHTTPRejectionIsTyped verifies that a non-2xx response from
+// the Stem daemon is returned as a *stemHTTPError carrying the status code,
+// not as a transport/unreachable error.
+func TestDispatchSeedHTTPRejectionIsTyped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "quota exceeded", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+
+	c := &localStemClient{port: u.Port(), bearer: ""}
+	_, err := c.DispatchSeed(context.Background(), map[string]any{"substrate": "r", "goal": "g"})
+	if err == nil {
+		t.Fatal("expected error on 429, got nil")
+	}
+	var httpErr *stemHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *stemHTTPError, got %T: %v", err, err)
+	}
+	if httpErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want %d", httpErr.StatusCode, http.StatusTooManyRequests)
+	}
+	if !strings.Contains(httpErr.Body, "quota exceeded") {
+		t.Fatalf("Body = %q, want quota exceeded mention", httpErr.Body)
+	}
+}
+
+// TestDispatchSeedTransportFailureIsNotTypedHTTP verifies that a network-level
+// failure (unreachable daemon) is NOT returned as *stemHTTPError so callers
+// can distinguish transport from HTTP rejection without substring matching.
+func TestDispatchSeedTransportFailureIsNotTypedHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := &localStemClient{port: "65533", bearer: ""}
+	_, err := c.DispatchSeed(ctx, map[string]any{"substrate": "r", "goal": "g"})
+	if err == nil {
+		t.Fatal("expected error connecting to port 65533, got nil")
+	}
+	var httpErr *stemHTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("transport failure returned *stemHTTPError; must not: %v", err)
+	}
+}
+
 func TestDispatchSeedSendsBearer(t *testing.T) {
 	var gotAuth string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -359,6 +393,70 @@ func TestCollectSeedMalformedJSONFails(t *testing.T) {
 	}
 }
 
+// TestCollectSeedNotFoundIsNotTypedHTTP verifies that a 404 response is
+// returned as a plain descriptive error (not *stemHTTPError), matching the
+// CLI's "no seed run for handle" output path.
+func TestCollectSeedNotFoundIsNotTypedHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+
+	c := &localStemClient{port: u.Port(), bearer: ""}
+	_, err := c.CollectSeed(context.Background(), "missing-handle")
+	if err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+	var httpErr *stemHTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("404 should NOT be *stemHTTPError (it becomes a plain no-handle error); got %v", err)
+	}
+	if !strings.Contains(err.Error(), "no seed run for handle") {
+		t.Fatalf("error = %q, want 'no seed run for handle' mention", err.Error())
+	}
+}
+
+// TestCollectSeedHTTPRejectionIsTyped verifies that a non-2xx, non-404
+// response is returned as *stemHTTPError with the exact status code.
+func TestCollectSeedHTTPRejectionIsTyped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+
+	c := &localStemClient{port: u.Port(), bearer: ""}
+	_, err := c.CollectSeed(context.Background(), "h")
+	if err == nil {
+		t.Fatal("expected error on 500, got nil")
+	}
+	var httpErr *stemHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *stemHTTPError for 500, got %T: %v", err, err)
+	}
+	if httpErr.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("StatusCode = %d, want 500", httpErr.StatusCode)
+	}
+}
+
+// TestCollectSeedTransportFailureIsNotTypedHTTP verifies that an unreachable
+// daemon does not surface as *stemHTTPError.
+func TestCollectSeedTransportFailureIsNotTypedHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := &localStemClient{port: "65533", bearer: ""}
+	_, err := c.CollectSeed(ctx, "some-handle")
+	if err == nil {
+		t.Fatal("expected error connecting to port 65533, got nil")
+	}
+	var httpErr *stemHTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("transport failure returned *stemHTTPError; must not: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ContinuePhytomer (POST /v1/phytomers/{id}/continue)
 // ---------------------------------------------------------------------------
@@ -450,6 +548,50 @@ func TestContinuePhytomerMalformedJSONFails(t *testing.T) {
 	_, err := c.ContinuePhytomer(context.Background(), "s1", "intent", "k1")
 	if err == nil {
 		t.Fatal("expected error on malformed JSON, got nil")
+	}
+}
+
+// TestContinuePhytomerHTTPRejectionIsTyped verifies that a non-2xx response
+// from the Stem daemon is returned as *stemHTTPError so the caller can
+// distinguish it from a transport failure without substring matching.
+func TestContinuePhytomerHTTPRejectionIsTyped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "phytomer is locked", http.StatusConflict)
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+
+	c := &localStemClient{port: u.Port(), bearer: ""}
+	_, err := c.ContinuePhytomer(context.Background(), "s1", "intent", "k1")
+	if err == nil {
+		t.Fatal("expected error on 409, got nil")
+	}
+	var httpErr *stemHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *stemHTTPError for 409, got %T: %v", err, err)
+	}
+	if httpErr.StatusCode != http.StatusConflict {
+		t.Fatalf("StatusCode = %d, want 409", httpErr.StatusCode)
+	}
+	if !strings.Contains(httpErr.Body, "phytomer is locked") {
+		t.Fatalf("Body = %q, want phytomer is locked mention", httpErr.Body)
+	}
+}
+
+// TestContinuePhytomerTransportFailureIsNotTypedHTTP verifies that an
+// unreachable daemon is NOT returned as *stemHTTPError.
+func TestContinuePhytomerTransportFailureIsNotTypedHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	c := &localStemClient{port: "65533", bearer: ""}
+	_, err := c.ContinuePhytomer(ctx, "s1", "intent", "k1")
+	if err == nil {
+		t.Fatal("expected error connecting to port 65533, got nil")
+	}
+	var httpErr *stemHTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("transport failure returned *stemHTTPError; must not: %v", err)
 	}
 }
 

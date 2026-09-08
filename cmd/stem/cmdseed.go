@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -426,8 +427,13 @@ func submitSeedAsync(ctx context.Context, input map[string]any) {
 	client := newLocalStemClient()
 	accepted, err := client.DispatchSeed(ctx, input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`) to dispatch a Seed asynchronously.")
+		var httpErr *stemHTTPError
+		if errors.As(err, &httpErr) {
+			fmt.Fprintf(os.Stderr, "❌ Stem daemon rejected the dispatch (status %d): %s\n", httpErr.StatusCode, httpErr.Body)
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`) to dispatch a Seed asynchronously.")
+		}
 		os.Exit(1)
 	}
 
@@ -450,13 +456,22 @@ func runSeedCollect(ctx context.Context, args []string) {
 	client := newLocalStemClient()
 	run, err := client.CollectSeed(ctx, handle)
 	if err != nil {
-		if strings.Contains(err.Error(), "no seed run for handle") {
+		var httpErr *stemHTTPError
+		switch {
+		case errors.As(err, &httpErr) && httpErr.StatusCode == 404:
+			// Unreachable: CollectSeed converts 404 into a "no seed run for handle"
+			// plain error, not a stemHTTPError. This case is kept as defence-in-depth.
 			fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
-		} else if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connect") {
-			fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
-			fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
-		} else {
-			fmt.Fprintf(os.Stderr, "❌ Collect failed: %v\n", err)
+		case errors.As(err, &httpErr):
+			fmt.Fprintf(os.Stderr, "❌ Collect failed (status %d): %s\n", httpErr.StatusCode, httpErr.Body)
+		default:
+			// Plain error: either 404-turned-string or transport failure.
+			if strings.Contains(err.Error(), "no seed run for handle") {
+				fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
+			}
 		}
 		os.Exit(1)
 	}
