@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -420,41 +419,15 @@ func extractSeedAsyncFlag(args []string) ([]string, bool) {
 	return out, async
 }
 
-// submitSeedAsync dispatches a Seed to the daemon and prints the durable handle
-// the operator collects the Fruit by later.
+// submitSeedAsync dispatches a Seed to the daemon via the canonical
+// POST /v1/seeds/grow with detached:true and prints the durable handle the
+// operator collects the Fruit by later.
 func submitSeedAsync(ctx context.Context, input map[string]any) {
-	body := map[string]any{}
-	for _, key := range []string{"substrate", "goal", "verify", "maxIterations", "timeoutSeconds", "origin"} {
-		if v, ok := input[key]; ok {
-			body[key] = v
-		}
-	}
-	payload, err := json.Marshal(body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to encode seed request: %v\n", err)
-		os.Exit(1)
-	}
-
-	resp, err := stemDaemonRequest(ctx, http.MethodPost, "/v1/seeds/grow/async", payload)
+	client := newLocalStemClient()
+	accepted, err := client.DispatchSeed(ctx, input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`) to dispatch a Seed asynchronously.")
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusAccepted {
-		fmt.Fprintf(os.Stderr, "❌ Stem daemon rejected the dispatch (status %d)\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	var accepted struct {
-		Handle     string `json:"handle"`
-		PhytomerID string `json:"phytomerId"`
-		Status     string `json:"status"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to decode daemon response: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -474,34 +447,17 @@ func runSeedCollect(ctx context.Context, args []string) {
 	}
 	handle := strings.TrimSpace(args[0])
 
-	resp, err := stemDaemonRequest(ctx, http.MethodGet, "/v1/seeds/runs/"+handle, nil)
+	client := newLocalStemClient()
+	run, err := client.CollectSeed(ctx, handle)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
-		os.Exit(1)
-	}
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "❌ Collect failed (status %d)\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	var run struct {
-		Status     string `json:"status"`
-		Iterations int    `json:"iterations"`
-		PhytomerID string `json:"phytomerId"`
-		Branch     string `json:"branch"`
-		Commit     string `json:"commit"`
-		Diff       string `json:"diff"`
-		Logs       string `json:"logs"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&run); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Failed to decode Fruit: %v\n", err)
+		if strings.Contains(err.Error(), "no seed run for handle") {
+			fmt.Fprintf(os.Stderr, "❌ No seed run for handle %s\n", handle)
+		} else if strings.Contains(err.Error(), "connection refused") || strings.Contains(err.Error(), "connect") {
+			fmt.Fprintf(os.Stderr, "❌ Failed to connect to Stem daemon: %v\n", err)
+			fmt.Fprintln(os.Stderr, "Ensure the OpenTendril daemon is running (`tendril serve`).")
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Collect failed: %v\n", err)
+		}
 		os.Exit(1)
 	}
 
