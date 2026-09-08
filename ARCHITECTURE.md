@@ -35,6 +35,18 @@ All external requests enter through a transport adapter (CLI, REST, or Model Con
 
 No business logic resides in the adapters. The adapters dispatch to the **Stem Core** (`cmd/stem/internal/core`), which holds the canonical governed capability registry. MCP transport identifiers are adapter projections of those canonical Core names. Interface parity is mechanically enforced across all adapters via tests. The Core executes the capability and enforces policy. Views and control-plane operations are distinct and not Pollinator-facing governed command capabilities.
 
+### Direct local coding path
+
+`tendril chat` is an L1 Pollinator-facing presentation adapter. It does not own a separate coding lifecycle.
+
+A first non-empty terminal line is routed to `seed.grow` on the running Stem, with `detached: true`. The Stem owns handle mint, durable opening, and background growth through the canonical Seed lifecycle. The returned Phytomer is the active interaction identity. The terminal is a presentation layer over the Stem-owned lifecycle; it does not communicate directly with Sprouts or Terraria.
+
+Further terminal input during an active Seed reaches `phytomer.continue` on that same Phytomer. Intent is durable before acknowledgment and delivered at the next permitted cognitive boundary. It does not interrupt or inject into a live Sprout. The terminal does not widen Seed bounds.
+
+Observation is the safe `PhytomerObservation` projection (`sprout.watch`). It does not expose raw intent, reasoning, or credentials. Fruit is Git-reviewable output reported on a branch; the default branch remains unchanged until a human merges.
+
+`PORT` controls the local Stem endpoint, defaulting to `8080`. Both the Stem and the local client read the same environment variable; no additional configuration is required for coexistence on an alternate port.
+
 Continued intent follows this implemented path:
 
 ```text

@@ -413,17 +413,143 @@ The supported MCP client on this installation is `tendril-mcp`, not
 The binary is on your own path and the Stem runs as you. There is no boundary to
 cross, so the credential steps above do not apply.
 
+## 1. Confirm the install
+
 ```bash
-tendril --help          # confirm the install
-tendril serve           # start the Stem
-curl -s localhost:8080/health
-tendril chat            # interactive session
+tendril --version
+tendril hardiness   # reports; does not gate
 ```
 
-`tendril chat` resolves its key from `BOTANIST_KEY`, then from
-`./.tendril/api-key` in the working directory.
+## 2. Start the Stem
+
+```bash
+tendril serve
+```
+
+`PORT` controls the bind endpoint and defaults to `8080`. Both the Stem and the
+local client read the same environment variable, so they agree without
+configuration:
+
+```bash
+PORT=18080 tendril serve
+```
+
+```bash
+PORT=18080 tendril chat -- go test ./...
+```
+
+## 3. Configure a Substrate
+
+If you have not yet configured a Substrate, run the setup wizard:
+
+```bash
+tendril setup substrate
+tendril git setup --verify --substrate default-workspace
+```
+
+## 4. Start direct coding — `tendril chat`
+
+`tendril chat` is the direct local coding path. It is a presentation adapter
+over the same Stem-owned Seed lifecycle that governs all coding work.
+
+```
+tendril chat [--substrate <name>] [--max-iterations N] [--timeout N] -- <verify argv...>
+```
+
+A bare `--` is required. Everything after it is the verification command that
+bounds success. The verifier is not invented automatically — you must supply it
+explicitly.
+
+**With one configured Substrate**, `--substrate` may be omitted:
+
+```bash
+tendril chat -- go test ./...
+```
+
+**With multiple configured Substrates**, you must name the one to use:
+
+```bash
+tendril chat --substrate myrepo -- go test ./...
+```
+
+## 5. What happens when you enter a goal
+
+Enter a non-empty line at the prompt. That line is the coding goal.
+
+The Stem opens a detached Seed in the canonical lifecycle immediately. The
+terminal prints the Seed handle and Phytomer identity:
+
+```
+Seed: seed-abc123   Phytomer: tendril-xyz789
+```
+
+Safe progress (`PhytomerObservation`) streams while the Seed is active.
+The default branch is not modified.
+
+## 6. Continued intent
+
+While the Seed is active, further non-empty input lines continue the same
+Phytomer. They do not start a new Seed. Intent is accepted durably before
+acknowledgment and delivered at the next permitted cognitive boundary.
+
+## 7. Terminal settlement
+
+When the Seed reaches a terminal state (`satisfied`, `exhausted`, or
+`withered`) the terminal reports it. When Fruit exists:
+
+```
+Branch: staging/ai-... Commit: <sha>
+```
+
+Review that Fruit on the reported branch. The default branch remains unchanged
+until a human merges.
+
+After settlement the prompt is ready for the next goal, which starts a fresh
+Seed in the same session.
+
+## 8. Local controls
+
+`exit` or `/exit` closes the terminal session. They are local controls; they do
+not affect a Seed that is still active on the Stem.
+
+> [!NOTE]
+> `--ws` is not the direct coding path. It is rejected by `tendril chat` at
+> parse time. The direct path routes through the Stem-owned Seed/Phytomer
+> lifecycle, not a WebSocket channel.
 
 ---
+
+## How the direct path relates to the governed lifecycle
+
+`tendril chat` is a Pollinator-facing presentation adapter. It does not own a
+separate coding lifecycle.
+
+```text
+Direct local developer
+    → tendril chat
+    → local Stem client projection
+    → canonical Seed/Phytomer lifecycle owned by the Stem
+
+External Pollinator
+    → REST or MCP
+    → same Stem-owned lifecycle and authority
+```
+
+The Stem is a deterministic routing and lifecycle kernel; it does not reason.
+The terminal does not communicate directly with Sprouts or Terraria.
+
+An external Pollinator uses the same lifecycle through the transport surface:
+
+```text
+seedGrow         detached:true
+sproutWatch      sessionId
+phytomerContinue sessionId + intent + idempotencyKey
+```
+
+Those are valid lifecycle operations for Pollinators connecting over REST or
+MCP. They are not required ceremony for the direct terminal path.
+
+
 
 # Model Context Protocol over stdio
 
