@@ -317,9 +317,11 @@ curl -N \
 ```
 
 The stream is Server-Sent Events. After authenticating it emits the current safe
-observation immediately, then follows durable state until the Seed is
-`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
-terminal Seed returns that terminal current state and closes.
+observation immediately, then follows durable state until the Seed reaches a
+terminal state (`satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`),
+then closes. Only `satisfied` is success; the other terminal states are
+non-successful outcomes. Connecting after a terminal Seed returns that terminal
+current state and closes.
 
 The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
 When continuations exist, it also includes `continuationId`, `sequence`, and
@@ -476,11 +478,12 @@ tendril chat --substrate myrepo -- go test ./...
 
 Enter a non-empty line at the prompt. That line is the coding goal.
 
-The Stem opens a detached Seed in the canonical lifecycle immediately. The
-terminal prints the Seed handle and Phytomer identity:
+The Stem opens a detached Seed in the canonical lifecycle immediately. The terminal prints the Seed handle and Phytomer identity:
 
-```
-Seed: seed-abc123   Phytomer: tendril-xyz789
+```text
+Handle:   seed-abc123
+Phytomer: tendril-xyz789
+Status:   running
 ```
 
 Safe progress (`PhytomerObservation`) streams while the Seed is active.
@@ -494,8 +497,9 @@ acknowledgment and delivered at the next permitted cognitive boundary.
 
 ## 7. Terminal settlement
 
-When the Seed reaches a terminal state (`satisfied`, `exhausted`, or
-`withered`) the terminal reports it. When Fruit exists:
+When the Seed reaches a terminal state (`satisfied`, `exhausted`, `withered`,
+or `fruit-publication-failed`) the terminal reports it. Only `satisfied` is
+success; the other terminal states are non-successful outcomes. When Fruit exists:
 
 ```
 Branch: staging/ai-... Commit: <sha>
