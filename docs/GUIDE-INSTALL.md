@@ -720,11 +720,12 @@ tendril pollinator list
 
 > **Preference.** Axis: lifecycle (*free*). A system service, a user service, and
 > a foreground process are valid variations when the invariants are satisfied.
-> A system service is chosen here because its unit definition and Terrarium policy
-> are administratively owned rather than writable by the Stem principal itself.
-> The Stem process remains fully unprivileged as `tendril`, keeping rootless
-> Docker as its user runtime. Because `linger` already provides logout survival,
-> administrative ownership of the definition is the distinguishing reason.
+> For this worked posture, a system service is preferred because its unit
+> definition and systemd hardening policy are administratively owned rather than
+> writable by the Stem principal itself. The Stem process still runs as the
+> unprivileged `tendril` principal, while rootless Docker remains the `tendril`
+> user runtime. Because `linger` already provides logout survival, administrative
+> ownership of the unit and its hardening policy is the distinguishing reason.
 
 ```ini
 # [root] /etc/systemd/system/tendril.service
