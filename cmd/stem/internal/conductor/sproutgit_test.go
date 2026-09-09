@@ -42,7 +42,11 @@ func TestManagedGitDiffResponse(t *testing.T) {
 		t.Fatalf(".git is not a file: %v", err)
 	}
 
-	// 3. no external Git metadata is copied into the candidate (implicitly true since we didn't mount anything)
+	// 3. no external Git metadata is copied into the candidate
+	gitContent, err := os.ReadFile(gitFile)
+	if err != nil || !strings.HasPrefix(string(gitContent), "gitdir: ") {
+		t.Fatalf(".git is not a valid gitdir link, metadata might have been copied: %q", gitContent)
+	}
 
 	// Create a sprout pointing to the worktree
 	sprout := &Sprout{
@@ -138,6 +142,27 @@ func TestManagedGitDiffResponse(t *testing.T) {
 		t.Fatalf("expected traverse outside error, got %v", resp)
 	}
 
+	// 8b. execution-location path refusal
+	resp = sprout.managedGitDiffResponse(ctx, ToolCall{
+		Tool: "gitDiff",
+		Arguments: map[string]any{
+			"paths": []string{".tendril/run-workspaces/fake"},
+		},
+	})
+	if resp.Status != "error" || !strings.Contains(resp.Error, "not a repository-relative workspace path") {
+		t.Fatalf("expected execution-location refusal, got %v", resp)
+	}
+
+	resp = sprout.managedGitDiffResponse(ctx, ToolCall{
+		Tool: "gitDiff",
+		Arguments: map[string]any{
+			"paths": []string{"~/.tendril/something"},
+		},
+	})
+	if resp.Status != "error" || !strings.Contains(resp.Error, "not a repository-relative workspace path") {
+		t.Fatalf("expected pseudo-home refusal, got %v", resp)
+	}
+
 	// 9. unexpected widening arguments fail
 	resp = sprout.managedGitDiffResponse(ctx, ToolCall{
 		Tool: "gitDiff",
@@ -171,9 +196,84 @@ func TestManagedGitDiffResponse(t *testing.T) {
 	if err := os.Remove(gitFile); err != nil {
 		t.Fatal(err)
 	}
-	// We have to bypass the checkoutHasGitMetadata check to simulate git failing.
-	// We'll restore it after.
-	// Actually, wait, checkoutHasGitMetadata will catch this! That's good.
-	// But what if git fails for some other reason?
-	// It's covered by the safe bounding in the implementation.
+	// checkoutHasGitMetadata will catch this
+	resp = sprout.managedGitDiffResponse(ctx, ToolCall{
+		Tool: "gitDiff",
+	})
+	if resp.Status != "error" || !strings.Contains(resp.Error, "not a valid git repository checkout") {
+		t.Fatalf("expected not valid git checkout error, got %v", resp)
+	}
+
+	// 12. ordinary Git-checkout diff works
+	ordinarySprout := &Sprout{
+		workspace: repo,
+	}
+	if err := os.WriteFile(filepath.Join(repo, "file_ord.txt"), []byte("ordinary\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(repo, "add", "file_ord.txt")
+	resp = ordinarySprout.managedGitDiffResponse(ctx, ToolCall{
+		Tool: "gitDiff",
+		Arguments: map[string]any{
+			"cached": true,
+		},
+	})
+	if resp.Status != "success" {
+		t.Fatalf("expected success for ordinary checkout, got error: %s", resp.Error)
+	}
+
+	// 13. executeTool intercepts gitDiff and gitCommit, and does not call the Terrarium session
+	if err := os.WriteFile(gitFile, gitContent, 0644); err != nil {
+		t.Fatal(err) // restore .git
+	}
+	fakeSession := &sproutgitStubToolSession{}
+	sprout.session = fakeSession
+	sprout.toolIndex = map[string]ToolDefinition{
+		"gitDiff":   {Name: "gitDiff"},
+		"gitCommit": {Name: "gitCommit"},
+	}
+
+	resp, obs, err := sprout.executeTool(ctx, ToolCall{Tool: "gitDiff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fakeSession.called {
+		t.Fatalf("expected executeTool to intercept gitDiff, but it called the session")
+	}
+	if resp.Status != "success" {
+		t.Fatalf("expected success, got %v", resp)
+	}
+	if !strings.Contains(obs, "Tool result for gitDiff") {
+		t.Fatalf("expected tool observation, got %q", obs)
+	}
+
+	resp, obs, err = sprout.executeTool(ctx, ToolCall{Tool: "gitCommit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fakeSession.called {
+		t.Fatalf("expected executeTool to intercept gitCommit, but it called the session")
+	}
+	if resp.Status != "success" || !strings.Contains(resp.Output.(map[string]any)["message"].(string), "automatically commits and merges") {
+		t.Fatalf("expected managed gitCommit response, got %v", resp)
+	}
+	if !strings.Contains(obs, "Tool result for gitCommit") {
+		t.Fatalf("expected tool observation, got %q", obs)
+	}
 }
+
+type sproutgitStubToolSession struct {
+	called bool
+}
+
+func (s *sproutgitStubToolSession) ListAvailableTools(ctx context.Context) ([]ToolDefinition, error) {
+	return nil, nil
+}
+
+func (s *sproutgitStubToolSession) Call(ctx context.Context, call ToolCall) (ToolResponse, error) {
+	s.called = true
+	return ToolResponse{Status: "error", Error: "stub called"}, nil
+}
+
+func (s *sproutgitStubToolSession) Close() error { return nil }
+func (s *sproutgitStubToolSession) Logs() string { return "" }

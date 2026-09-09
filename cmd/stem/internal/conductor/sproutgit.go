@@ -54,6 +54,26 @@ func (a *Sprout) managedGitDiffResponse(ctx context.Context, call ToolCall) Tool
 				Error:  fmt.Sprintf("gitDiff refused: path %q traverses outside the workspace", p),
 			}
 		}
+
+		normalized := filepath.ToSlash(strings.TrimSpace(p))
+		for strings.Contains(normalized, "//") {
+			normalized = strings.ReplaceAll(normalized, "//", "/")
+		}
+		if normalized == "~" || strings.HasPrefix(normalized, "~/") {
+			return ToolResponse{
+				Status: "error",
+				Error:  fmt.Sprintf("gitDiff refused: path %q is not a repository-relative workspace path", p),
+			}
+		}
+		if strings.Contains(normalized, "/.tendril/run-workspaces/") ||
+			strings.HasPrefix(normalized, ".tendril/run-workspaces/") ||
+			normalized == ".tendril/run-workspaces" {
+			return ToolResponse{
+				Status: "error",
+				Error:  fmt.Sprintf("gitDiff refused: path %q is not a repository-relative workspace path", p),
+			}
+		}
+
 		validatedPaths = append(validatedPaths, clean)
 	}
 
@@ -61,25 +81,11 @@ func (a *Sprout) managedGitDiffResponse(ctx context.Context, call ToolCall) Tool
 	if cached {
 		args = append(args, "--cached")
 	}
+	args = append(args, "--")
 	if len(validatedPaths) > 0 {
-		args = append(args, "--")
 		args = append(args, validatedPaths...)
 	}
 
-	// Bounded raw output
-	// The maximum output size for git diff to avoid bloat. Let's say 1MB or what boundedGitOutput limit is used?
-	// The prompt does not specify the exact byte bound, just "Return a safe bounded tool error on failure".
-	// And "Return a safe bounded tool error on failure." might just mean "do not dump unlimited stdout/stderr in the error".
-	// We can use runGitCommandBoundedRawOutput with a reasonable limit like 10MB or 1MB for the diff itself if needed,
-	// but the instruction specifically says "Return a safe bounded tool error on failure."
-	// Let's use runGitCommandRawOutput for the command execution, but if it fails, return a static error.
-
-	// Wait, runGitCommandBoundedRawOutput exists. We can just use it with maxOutput=10*1024*1024 (10MB) for diff,
-	// or 2000 for tool observation event limit? The diff itself should probably be limited to a few MBs so it doesn't OOM the model.
-	// But let's check what runGitCommandBoundedRawOutput uses. It is up to the caller to provide `maxOutput`.
-	// I'll just use runGitCommandRawOutput and if it fails return "git diff failed" safely.
-
-	// Wait! The instruction says: "Return a safe bounded tool error on failure."
 	diffOut, err := runGitCommandRawOutput(ctx, a.workspace, args...)
 	if err != nil {
 		// Do not expose host workspace absolute paths, linked-worktree Git metadata paths, or source-repository .git paths.
