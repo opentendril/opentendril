@@ -16,19 +16,7 @@ const seedVerificationWorktreePrefix = "seed-verification-"
 const seedVerificationCleanupTimeout = 30 * time.Second
 
 func seedVerificationWorkspaceRoot() (string, error) {
-	root := strings.TrimSpace(runWorkspaceRoot())
-	if root == "" {
-		return "", fmt.Errorf("seed verification workspace root is unavailable")
-	}
-	absRoot, err := filepath.Abs(root)
-	if err != nil {
-		return "", fmt.Errorf("resolve seed verification workspace root: %w", err)
-	}
-	resolvedRoot, err := resolveRunWorkspacePath(absRoot)
-	if err != nil {
-		return "", fmt.Errorf("resolve seed verification workspace root: %w", err)
-	}
-	return resolvedRoot, nil
+	return resolvedRunWorkspaceRoot()
 }
 
 // createSeedVerificationWorktree materializes one detached view of the exact
