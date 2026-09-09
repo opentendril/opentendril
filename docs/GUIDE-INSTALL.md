@@ -718,9 +718,13 @@ tendril pollinator list
 
 ## Stage 7 — Run the Stem as a service
 
-> **Preference.** Axis: lifecycle (*free*). A user service or a foreground
-> process satisfies every invariant equally; a system service is chosen here
-> because it starts without a login session.
+> **Preference.** Axis: lifecycle (*free*). A system service, a user service, and
+> a foreground process are valid variations when the invariants are satisfied.
+> A system service is chosen here because its unit definition and Terrarium policy
+> are administratively owned rather than writable by the Stem principal itself.
+> The Stem process remains fully unprivileged as `tendril`, keeping rootless
+> Docker as its user runtime. Because `linger` already provides logout survival,
+> administrative ownership of the definition is the distinguishing reason.
 
 ```ini
 # [root] /etc/systemd/system/tendril.service
