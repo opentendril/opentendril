@@ -146,6 +146,27 @@ func runWorkspaceRoot() string {
 	return filepath.Join(expandHome("~/.tendril"), "run-workspaces")
 }
 
+// resolvedRunWorkspaceRoot returns the absolute, symlink-resolved Stem-owned
+// run-workspace root. Callers must fail closed when this returns an error.
+func resolvedRunWorkspaceRoot() (string, error) {
+	root := strings.TrimSpace(runWorkspaceRoot())
+	if root == "" {
+		return "", fmt.Errorf("run workspace root is unavailable")
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve run workspace root: %w", err)
+	}
+	resolvedRoot, err := resolveRunWorkspacePath(absRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve run workspace root: %w", err)
+	}
+	if strings.TrimSpace(resolvedRoot) == "" {
+		return "", fmt.Errorf("run workspace root is unavailable")
+	}
+	return resolvedRoot, nil
+}
+
 // CreateRunWorkspace allocates a linked Git worktree for one run. startRevision
 // is required and is resolved to a commit before branch/worktree creation; no
 // implicit HEAD or default-branch choice is made here.

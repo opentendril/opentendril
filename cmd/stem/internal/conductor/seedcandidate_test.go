@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -1736,6 +1737,14 @@ func (probe *pathBackedSeedProbe) counts() (shadow, seedTree, stash, merge, push
 	return probe.shadowCalls, probe.seedTreeCalls, probe.stashCalls, probe.mergeCalls, probe.pushCalls
 }
 
+func (probe *pathBackedSeedProbe) mountPaths() []string {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	out := make([]string, len(probe.mounts))
+	copy(out, probe.mounts)
+	return out
+}
+
 func snapshotPathBackedHost(t *testing.T, repo string) pathBackedHostSnapshot {
 	t.Helper()
 	ctx := context.Background()
@@ -2481,5 +2490,382 @@ func TestNonSeedPathBackedShadowAndMergeUnchanged(t *testing.T) {
 	}
 	if strings.TrimSpace(branch) != "dev" {
 		t.Fatalf("non-Seed run left host on %q, want dev", strings.TrimSpace(branch))
+	}
+}
+
+func prepareSeedCandidateWorktreeRepo(t *testing.T) (repo, revision string) {
+	t.Helper()
+	repo = t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.email", "seed-candidate@example.invalid"},
+		{"config", "user.name", "Seed Candidate Test"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "keep.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write keep.txt: %v", err)
+	}
+	for _, args := range [][]string{{"add", "keep.txt"}, {"commit", "-q", "-m", "base"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	head, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = runGitCommand(context.Background(), repo, "worktree", "prune")
+	})
+	return repo, strings.TrimSpace(head)
+}
+
+func snapshotSeedCandidateSource(t *testing.T, repo string) (head, status, keep string) {
+	t.Helper()
+	ctx := context.Background()
+	headOut, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("source HEAD: %v", err)
+	}
+	statusOut, err := runGitCommandRawOutput(ctx, repo, "status", "--porcelain", "-uall")
+	if err != nil {
+		t.Fatalf("source status: %v", err)
+	}
+	keepBytes, err := os.ReadFile(filepath.Join(repo, "keep.txt"))
+	if err != nil {
+		t.Fatalf("read keep.txt: %v", err)
+	}
+	return strings.TrimSpace(headOut), statusOut, string(keepBytes)
+}
+
+func assertSeedCandidateSourceUnchanged(t *testing.T, repo, head, status, keep string) {
+	t.Helper()
+	gotHead, gotStatus, gotKeep := snapshotSeedCandidateSource(t, repo)
+	if gotHead != head {
+		t.Fatalf("source HEAD changed: %q -> %q", head, gotHead)
+	}
+	if gotStatus != status {
+		t.Fatalf("source git status changed:\nbefore=%q\nafter=%q", status, gotStatus)
+	}
+	if gotKeep != keep {
+		t.Fatalf("source keep.txt changed: %q -> %q", keep, gotKeep)
+	}
+}
+
+func TestCreateSeedCandidateWorktreeUsesRunWorkspaceRootNotTMPDIR(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	privateTmp := t.TempDir()
+	t.Setenv("TMPDIR", privateTmp)
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(repo, revision)
+	if err != nil {
+		t.Fatalf("createSeedCandidateWorktree: %v", err)
+	}
+	t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+
+	root := runWorkspaceRoot()
+	if !pathIsUnder(candidate, root) {
+		t.Fatalf("candidate = %q, want a path below the Stem run-workspace root %q", candidate, root)
+	}
+	if !strings.HasPrefix(filepath.Base(candidate), seedCandidateWorktreePrefix) {
+		t.Fatalf("candidate = %q, want prefix %q", candidate, seedCandidateWorktreePrefix)
+	}
+	if pathIsUnder(candidate, privateTmp) || sameFilePath(candidate, privateTmp) {
+		t.Fatalf("candidate = %q was placed under TMPDIR %q", candidate, privateTmp)
+	}
+	if strings.HasPrefix(candidate, filepath.Join(privateTmp, seedCandidateWorktreePrefix)) {
+		t.Fatalf("candidate still uses process temporary storage: %q", candidate)
+	}
+
+	head, err := runGitCommand(context.Background(), candidate, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("candidate HEAD: %v", err)
+	}
+	if strings.TrimSpace(head) != revision {
+		t.Fatalf("candidate HEAD = %q, want SeedStartRevision %q", strings.TrimSpace(head), revision)
+	}
+	abbrev, err := runGitCommand(context.Background(), candidate, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("candidate symbolic HEAD: %v", err)
+	}
+	if strings.TrimSpace(abbrev) != "HEAD" {
+		t.Fatalf("candidate is not detached: abbrev-ref HEAD = %q", strings.TrimSpace(abbrev))
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeDetachesAtExactStartRevision(t *testing.T) {
+	repo, start := prepareSeedCandidateWorktreeRepo(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(repo, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatalf("write later.txt: %v", err)
+	}
+	for _, args := range [][]string{{"add", "later.txt"}, {"commit", "-q", "-m", "later"}} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	head, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("HEAD: %v", err)
+	}
+	head = strings.TrimSpace(head)
+	if head == start {
+		t.Fatal("setup failed: host HEAD still equals SeedStartRevision")
+	}
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(repo, start)
+	if err != nil {
+		t.Fatalf("createSeedCandidateWorktree: %v", err)
+	}
+	t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+
+	got, err := runGitCommand(ctx, candidate, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		t.Fatalf("candidate HEAD: %v", err)
+	}
+	if strings.TrimSpace(got) != start {
+		t.Fatalf("candidate HEAD = %q, want SeedStartRevision %q (host HEAD was %q)", strings.TrimSpace(got), start, head)
+	}
+	if _, err := os.Stat(filepath.Join(candidate, "later.txt")); !os.IsNotExist(err) {
+		t.Fatal("candidate contains the later host commit; worktree was not detached at SeedStartRevision")
+	}
+	abbrev, err := runGitCommand(ctx, candidate, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		t.Fatalf("candidate symbolic HEAD: %v", err)
+	}
+	if strings.TrimSpace(abbrev) != "HEAD" {
+		t.Fatalf("candidate is not detached: abbrev-ref HEAD = %q", strings.TrimSpace(abbrev))
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeRefusesSourceSubstrate(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	home := filepath.Join(repo, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("create HOME inside source: %v", err)
+	}
+	t.Setenv("HOME", home)
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(repo, revision)
+	if err == nil {
+		t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+		t.Fatalf("accepted candidate %q inside the Botanist source Substrate", candidate)
+	}
+	if !strings.Contains(err.Error(), "must not be the Botanist source Substrate") {
+		t.Fatalf("error = %v, want source Substrate refusal", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(home, ".tendril")); !os.IsNotExist(statErr) {
+		t.Fatalf("refusal created Tendril state inside the source Substrate: %v", statErr)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeRefusesSymlinkAliasInsideRealSource(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	home := filepath.Join(repo, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("create HOME inside real source: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	alias := filepath.Join(t.TempDir(), "source-alias")
+	if err := os.Symlink(repo, alias); err != nil {
+		t.Fatalf("create source alias: %v", err)
+	}
+
+	root, err := resolvedRunWorkspaceRoot()
+	if err != nil {
+		t.Fatalf("resolved run workspace root: %v", err)
+	}
+	if !pathIsUnder(root, repo) && !sameFilePath(root, repo) {
+		t.Fatalf("setup failed: run workspace root %q is not beneath the real source %q", root, repo)
+	}
+	if pathIsUnder(root, alias) || sameFilePath(root, alias) {
+		t.Fatal("setup failed: run workspace root is already beneath the symlink alias; the regression would not be exercised")
+	}
+
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(alias, revision)
+	if err == nil {
+		t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+		t.Fatalf("accepted candidate %q for symlink alias %q inside the real Botanist source %q", candidate, alias, repo)
+	}
+	if !strings.Contains(err.Error(), "must not be the Botanist source Substrate") {
+		t.Fatalf("error = %v, want source Substrate refusal", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(home, ".tendril")); !os.IsNotExist(statErr) {
+		t.Fatalf("refusal created Tendril state inside the source Substrate: %v", statErr)
+	}
+	listing, listErr := runGitCommand(context.Background(), repo, "worktree", "list", "--porcelain")
+	if listErr != nil {
+		t.Fatalf("worktree list: %v", listErr)
+	}
+	if strings.Contains(listing, seedCandidateWorktreePrefix) {
+		t.Fatalf("refusal registered a Seed candidate worktree:\n%s", listing)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeFailsClosedOnUnresolvableSource(t *testing.T) {
+	dangling := filepath.Join(t.TempDir(), "missing-source")
+	alias := filepath.Join(t.TempDir(), "dangling-alias")
+	if err := os.Symlink(dangling, alias); err != nil {
+		t.Fatalf("create dangling source alias: %v", err)
+	}
+
+	if _, err := createSeedCandidateWorktree(alias, strings.Repeat("a", 40)); err == nil {
+		t.Fatal("unresolvable canonical source identity was accepted")
+	}
+}
+
+func TestCreateSeedCandidateWorktreeEnforcesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner-only directory mode is asserted on the governed Unix platform")
+	}
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(repo, revision)
+	if err != nil {
+		t.Fatalf("createSeedCandidateWorktree: %v", err)
+	}
+	t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		t.Fatalf("stat candidate: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("candidate %q is not a directory", candidate)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("candidate mode = %04o, want 0700", perm)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeFailsClosedOnUnresolvableRoot(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	blocked := filepath.Join(t.TempDir(), "blocked-home")
+	if err := os.WriteFile(blocked, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write blocked HOME: %v", err)
+	}
+	t.Setenv("HOME", blocked)
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	if _, err := createSeedCandidateWorktree(repo, revision); err == nil {
+		t.Fatal("unresolvable owned root was accepted")
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestRemoveShadowWorktreeRemovesOnlyExactSeedCandidate(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	first, err := createSeedCandidateWorktree(repo, revision)
+	if err != nil {
+		t.Fatalf("create first candidate: %v", err)
+	}
+	second, err := createSeedCandidateWorktree(repo, revision)
+	if err != nil {
+		t.Fatalf("create second candidate: %v", err)
+	}
+	root := runWorkspaceRoot()
+	sentinel := filepath.Join(root, "unrelated-keep")
+	if err := os.MkdirAll(sentinel, 0o700); err != nil {
+		t.Fatalf("create sentinel: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sentinel, "keep.txt"), []byte("keep\n"), 0o600); err != nil {
+		t.Fatalf("write sentinel: %v", err)
+	}
+	t.Cleanup(func() {
+		removeShadowWorktree(repo, first)
+		removeShadowWorktree(repo, second)
+		_ = os.RemoveAll(sentinel)
+	})
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	removeShadowWorktree(repo, first)
+
+	if _, err := os.Lstat(first); !os.IsNotExist(err) {
+		t.Fatalf("exact candidate still exists after cleanup: stat error = %v", err)
+	}
+	listing, err := runGitCommand(context.Background(), repo, "worktree", "list", "--porcelain")
+	if err != nil {
+		t.Fatalf("worktree list: %v", err)
+	}
+	if strings.Contains(listing, first) {
+		t.Fatalf("git still lists removed candidate %q:\n%s", first, listing)
+	}
+	if _, err := os.Lstat(second); err != nil {
+		t.Fatalf("cleanup removed another candidate: %v", err)
+	}
+	if !strings.Contains(listing, second) {
+		t.Fatalf("git lost the remaining candidate %q:\n%s", second, listing)
+	}
+	if _, err := os.Lstat(sentinel); err != nil {
+		t.Fatalf("cleanup removed unrelated path under the run-workspace root: %v", err)
+	}
+	if _, err := os.Lstat(root); err != nil {
+		t.Fatalf("cleanup removed the run-workspace root: %v", err)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestPathBackedSeedCandidateUsesRunWorkspaceRoot(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	privateTmp := t.TempDir()
+	t.Setenv("TMPDIR", privateTmp)
+	ctx := context.Background()
+	start, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	start = strings.TrimSpace(start)
+	seedBranch := "tendril/seed-path-runworkspace"
+	stepID := "path-seed-runworkspace"
+	runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "Hello from OpenTendril.\n"}
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	before := snapshotPathBackedHost(t, repo)
+
+	report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, start, runner)
+	if runErr != nil {
+		t.Fatalf("RunSprout: %v", runErr)
+	}
+	if report.seedCandidateCommit == "" {
+		t.Fatal("path-backed Seed checkpoint did not return seedCandidateCommit")
+	}
+
+	mounts := probe.mountPaths()
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %v, want exactly one Seed candidate workspace", mounts)
+	}
+	mounted := mounts[0]
+	root := runWorkspaceRoot()
+	if !pathIsUnder(mounted, root) {
+		t.Fatalf("mounted candidate = %q, want a path below the Stem run-workspace root %q", mounted, root)
+	}
+	if pathIsUnder(mounted, privateTmp) || sameFilePath(mounted, privateTmp) {
+		t.Fatalf("mounted candidate = %q was placed under TMPDIR %q", mounted, privateTmp)
+	}
+	if strings.TrimSpace(runner.startHEAD) != start {
+		t.Fatalf("candidate worktree HEAD at Sprout start = %q, want SeedStartRevision %q", runner.startHEAD, start)
+	}
+	if _, err := os.Lstat(mounted); !os.IsNotExist(err) {
+		t.Fatalf("candidate still exists after RunSprout: stat error = %v", err)
+	}
+	assertPathBackedHostUnchanged(t, repo, before)
+	_, seedTree, stash, merge, push := probe.counts()
+	if seedTree != 1 || stash != 0 || merge != 0 || push != 0 {
+		t.Fatalf("isolation/publication counts seed=%d stash=%d merge=%d push=%d", seedTree, stash, merge, push)
 	}
 }

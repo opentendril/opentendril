@@ -30,6 +30,8 @@ const (
 	// shadow-worktree isolation cannot be established. Default (unset) is fail-closed.
 	EnvAllowHostWorkspace = "TENDRIL_ALLOW_HOST_WORKSPACE"
 
+	seedCandidateWorktreePrefix = "opentendril-seed-candidate-"
+
 	// terrariumWatchdogFallback is the terrarium watchdog timeout used when the
 	// caller's context carries no deadline. It is a backstop against a hung
 	// container, not a statement about how long work should take — callers that
@@ -1996,30 +1998,82 @@ func createShadowWorktree(sourcePath, substrateBranch string) (string, error) {
 	return shadowPath, nil
 }
 
-// createSeedCandidateWorktree creates a temporary Git worktree detached from
-// the exact Seed start revision so candidate identity never depends on the
-// Botanist's current HEAD.
+// createSeedCandidateWorktree creates a Git worktree detached from the exact
+// Seed start revision so candidate identity never depends on the Botanist's
+// current HEAD. The worktree is allocated under the Stem-owned run-workspace
+// root so the Terrarium provider can resolve the same host path the Stem selected.
 func createSeedCandidateWorktree(sourcePath, seedStartRevision string) (string, error) {
 	revision := strings.TrimSpace(seedStartRevision)
 	if revision == "" {
 		return "", fmt.Errorf("SeedIntegrationCheckpoint requires a non-empty SeedStartRevision")
 	}
-	if _, err := runGitCommand(context.Background(), sourcePath, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}"); err != nil {
+	canonicalSource, err := absoluteRunWorkspaceRepository(context.Background(), sourcePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve Seed candidate source repository: %w", err)
+	}
+	sourcePath = canonicalSource
+
+	resolvedCommit, err := runGitCommand(context.Background(), sourcePath, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
+	if err != nil {
 		return "", fmt.Errorf("invalid SeedStartRevision %q: %w", revision, err)
 	}
+	resolvedCommit = strings.TrimSpace(resolvedCommit)
+	if resolvedCommit == "" {
+		return "", fmt.Errorf("invalid SeedStartRevision %q returned no commit", revision)
+	}
 
-	bytes := make([]byte, 4)
-	if _, err := rand.Read(bytes); err != nil {
+	absRoot, err := resolvedRunWorkspaceRoot()
+	if err != nil {
 		return "", err
 	}
-	runID := hex.EncodeToString(bytes)
-	shadowPath := filepath.Join(os.TempDir(), fmt.Sprintf("opentendril-seed-candidate-%s", runID))
+	runID, err := newRunWorkspaceID()
+	if err != nil {
+		return "", err
+	}
+	shadowPath := filepath.Join(absRoot, seedCandidateWorktreePrefix+runID)
+	if !pathIsUnder(shadowPath, absRoot) {
+		return "", fmt.Errorf("Seed candidate worktree path %q is outside its owned root", shadowPath)
+	}
+	if sameFilePath(shadowPath, sourcePath) || pathIsUnder(shadowPath, sourcePath) {
+		return "", fmt.Errorf("Seed candidate worktree path %q must not be the Botanist source Substrate", shadowPath)
+	}
+	if _, err := os.Lstat(shadowPath); err == nil {
+		return "", fmt.Errorf("Seed candidate worktree path %q already exists", shadowPath)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("inspect Seed candidate worktree path %q: %w", shadowPath, err)
+	}
+	if err := os.MkdirAll(absRoot, 0o700); err != nil {
+		return "", fmt.Errorf("create Seed candidate workspace root: %w", err)
+	}
 
-	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, revision)
+	cmd := exec.Command("git", "worktree", "add", "--detach", shadowPath, resolvedCommit)
 	cmd.Dir = sourcePath
 	if output, err := cmd.CombinedOutput(); err != nil {
 		_ = os.RemoveAll(shadowPath)
 		return "", fmt.Errorf("git worktree add --detach failed: %w, output: %s", err, string(output))
+	}
+
+	head, headErr := runGitCommand(context.Background(), shadowPath, "rev-parse", "--verify", "HEAD^{commit}")
+	if headErr != nil {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("resolve Seed candidate worktree HEAD: %w", headErr)
+	}
+	if strings.TrimSpace(head) != resolvedCommit {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("Seed candidate worktree HEAD %s does not equal start revision %s", strings.TrimSpace(head), resolvedCommit)
+	}
+	if err := os.Chmod(shadowPath, 0o700); err != nil {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("enforce Seed candidate workspace permissions: %w", err)
+	}
+	info, err := os.Lstat(shadowPath)
+	if err != nil {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("inspect Seed candidate workspace permissions: %w", err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("Seed candidate workspace path %q is not owner-only", shadowPath)
 	}
 	return shadowPath, nil
 }
