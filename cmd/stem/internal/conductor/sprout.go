@@ -763,6 +763,11 @@ func (a *Sprout) executeTool(ctx context.Context, call ToolCall) (ToolResponse, 
 		return response, renderToolObservation(call.Tool, response), nil
 	}
 
+	if call.Tool == "gitDiff" {
+		response := a.managedGitDiffResponse(ctx, call)
+		return response, renderToolObservation(call.Tool, response), nil
+	}
+
 	// Recorded before the call, not after it: a tool call the terrarium never
 	// finished — a watchdog kill mid-write — has still written, and the
 	// post-mortem commits what it left behind. Everything above this line
