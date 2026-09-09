@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -2664,6 +2665,91 @@ func TestCreateSeedCandidateWorktreeRefusesSourceSubstrate(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(filepath.Join(home, ".tendril")); !os.IsNotExist(statErr) {
 		t.Fatalf("refusal created Tendril state inside the source Substrate: %v", statErr)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeRefusesSymlinkAliasInsideRealSource(t *testing.T) {
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	home := filepath.Join(repo, "home")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		t.Fatalf("create HOME inside real source: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	alias := filepath.Join(t.TempDir(), "source-alias")
+	if err := os.Symlink(repo, alias); err != nil {
+		t.Fatalf("create source alias: %v", err)
+	}
+
+	root, err := resolvedRunWorkspaceRoot()
+	if err != nil {
+		t.Fatalf("resolved run workspace root: %v", err)
+	}
+	if !pathIsUnder(root, repo) && !sameFilePath(root, repo) {
+		t.Fatalf("setup failed: run workspace root %q is not beneath the real source %q", root, repo)
+	}
+	if pathIsUnder(root, alias) || sameFilePath(root, alias) {
+		t.Fatal("setup failed: run workspace root is already beneath the symlink alias; the regression would not be exercised")
+	}
+
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(alias, revision)
+	if err == nil {
+		t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+		t.Fatalf("accepted candidate %q for symlink alias %q inside the real Botanist source %q", candidate, alias, repo)
+	}
+	if !strings.Contains(err.Error(), "must not be the Botanist source Substrate") {
+		t.Fatalf("error = %v, want source Substrate refusal", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(home, ".tendril")); !os.IsNotExist(statErr) {
+		t.Fatalf("refusal created Tendril state inside the source Substrate: %v", statErr)
+	}
+	listing, listErr := runGitCommand(context.Background(), repo, "worktree", "list", "--porcelain")
+	if listErr != nil {
+		t.Fatalf("worktree list: %v", listErr)
+	}
+	if strings.Contains(listing, seedCandidateWorktreePrefix) {
+		t.Fatalf("refusal registered a Seed candidate worktree:\n%s", listing)
+	}
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestCreateSeedCandidateWorktreeFailsClosedOnUnresolvableSource(t *testing.T) {
+	dangling := filepath.Join(t.TempDir(), "missing-source")
+	alias := filepath.Join(t.TempDir(), "dangling-alias")
+	if err := os.Symlink(dangling, alias); err != nil {
+		t.Fatalf("create dangling source alias: %v", err)
+	}
+
+	if _, err := createSeedCandidateWorktree(alias, strings.Repeat("a", 40)); err == nil {
+		t.Fatal("unresolvable canonical source identity was accepted")
+	}
+}
+
+func TestCreateSeedCandidateWorktreeEnforcesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner-only directory mode is asserted on the governed Unix platform")
+	}
+	repo, revision := prepareSeedCandidateWorktreeRepo(t)
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	candidate, err := createSeedCandidateWorktree(repo, revision)
+	if err != nil {
+		t.Fatalf("createSeedCandidateWorktree: %v", err)
+	}
+	t.Cleanup(func() { removeShadowWorktree(repo, candidate) })
+
+	info, err := os.Lstat(candidate)
+	if err != nil {
+		t.Fatalf("stat candidate: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("candidate %q is not a directory", candidate)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("candidate mode = %04o, want 0700", perm)
 	}
 	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
 }

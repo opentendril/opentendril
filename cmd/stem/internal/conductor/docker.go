@@ -2007,15 +2007,11 @@ func createSeedCandidateWorktree(sourcePath, seedStartRevision string) (string, 
 	if revision == "" {
 		return "", fmt.Errorf("SeedIntegrationCheckpoint requires a non-empty SeedStartRevision")
 	}
-	sourcePath = strings.TrimSpace(sourcePath)
-	if sourcePath == "" {
-		return "", fmt.Errorf("Seed candidate source repository is required")
-	}
-	absSourcePath, err := filepath.Abs(sourcePath)
+	canonicalSource, err := absoluteRunWorkspaceRepository(context.Background(), sourcePath)
 	if err != nil {
 		return "", fmt.Errorf("resolve Seed candidate source repository: %w", err)
 	}
-	sourcePath = absSourcePath
+	sourcePath = canonicalSource
 
 	resolvedCommit, err := runGitCommand(context.Background(), sourcePath, "rev-parse", "--verify", "--end-of-options", revision+"^{commit}")
 	if err != nil {
@@ -2065,6 +2061,19 @@ func createSeedCandidateWorktree(sourcePath, seedStartRevision string) (string, 
 	if strings.TrimSpace(head) != resolvedCommit {
 		removeShadowWorktree(sourcePath, shadowPath)
 		return "", fmt.Errorf("Seed candidate worktree HEAD %s does not equal start revision %s", strings.TrimSpace(head), resolvedCommit)
+	}
+	if err := os.Chmod(shadowPath, 0o700); err != nil {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("enforce Seed candidate workspace permissions: %w", err)
+	}
+	info, err := os.Lstat(shadowPath)
+	if err != nil {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("inspect Seed candidate workspace permissions: %w", err)
+	}
+	if !info.IsDir() || info.Mode().Perm() != 0o700 {
+		removeShadowWorktree(sourcePath, shadowPath)
+		return "", fmt.Errorf("Seed candidate workspace path %q is not owner-only", shadowPath)
 	}
 	return shadowPath, nil
 }
