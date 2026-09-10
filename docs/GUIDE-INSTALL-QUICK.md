@@ -147,8 +147,7 @@ the ordinary Pollinator-hosting account. Do **not** pipe the installer into
 `sudo sh`.
 
 ```bash
-# [root] Linux amd64 — substitute the newer release tag.
-RELEASE=v0.3.14
+# [root] Linux amd64 — same RELEASE pin as governed installation above.
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \

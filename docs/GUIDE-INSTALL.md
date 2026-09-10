@@ -1266,6 +1266,7 @@ curl -fsSL -o checksums.txt \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
 grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
 
+RELEASE=v0.3.14
 sudo sh install.sh \
   --governed-upgrade \
   --pollinator-user <ordinary-user> \
