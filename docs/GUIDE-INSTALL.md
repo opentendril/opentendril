@@ -1253,7 +1253,11 @@ The preflight must establish, before any protected host mutation:
   `tendril:tendril` with mode `0750`;
 - the named Pollinator is an ordinary separate principal, is not in the
   `tendril` group, and has no unattended/passwordless escalation to root,
-  `tendril`, ALL, or equivalent privileged authority;
+  `tendril`, ALL, or equivalent privileged authority; if that account has
+  sudo authority, the effective matching sudo Defaults must establish
+  `timestamp_timeout=0`. Absence of sudo remains acceptable. Ambiguous or
+  non-zero timestamp timeouts fail closed. Governed upgrade does not
+  rewrite sudo policy or invalidate a sudo timestamp;
 - `/run/user/<uid>` exists as a directory owned by `tendril`; rootless Docker
   is reachable as `tendril` through `/run/user/<uid>/docker.sock`, Docker
   SecurityOptions contains `rootless`, and rootful `docker.service` /

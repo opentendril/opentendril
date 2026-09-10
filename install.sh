@@ -1008,6 +1008,107 @@ EOF
   return 1
 }
 
+sudo_listing_lacks_sudo_authority() {
+  case "$1" in
+    *'not allowed to run sudo'*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+sudo_listing_classify_timestamp_timeout() {
+  _rest=$1
+  _saw_zero=0
+  _saw_nonzero=0
+  _saw_ambiguous=0
+  while :; do
+    case "$_rest" in
+      *timestamp_timeout*)
+        _rest=${_rest#*timestamp_timeout}
+        while :; do
+          case "$_rest" in
+            ' '*) _rest=${_rest# } ;;
+            '	'*) _rest=${_rest#	} ;;
+            *) break ;;
+          esac
+        done
+        case "$_rest" in
+          =*)
+            _rest=${_rest#=}
+            while :; do
+              case "$_rest" in
+                ' '*) _rest=${_rest# } ;;
+                '	'*) _rest=${_rest#	} ;;
+                *) break ;;
+              esac
+            done
+            _val=$_rest
+            _val=${_val%%,*}
+            _val=${_val%% *}
+            _val=${_val%%	*}
+            _val=${_val%%
+*}
+            case "$_val" in
+              0)
+                _saw_zero=1
+                ;;
+              [1-9]*)
+                case "$_val" in
+                  *[!0-9]*)
+                    _saw_ambiguous=1
+                    ;;
+                  *)
+                    _saw_nonzero=1
+                    ;;
+                esac
+                ;;
+              -[1-9]*)
+                case "$_val" in
+                  -*[!0-9]*)
+                    _saw_ambiguous=1
+                    ;;
+                  *)
+                    _saw_nonzero=1
+                    ;;
+                esac
+                ;;
+              *)
+                _saw_ambiguous=1
+                ;;
+            esac
+            if [ -n "$_rest" ]; then
+              _rest=${_rest#?}
+            fi
+            ;;
+          timestamp_timeout*)
+            ;;
+          *)
+            _saw_ambiguous=1
+            if [ -n "$_rest" ]; then
+              _rest=${_rest#?}
+            fi
+            ;;
+        esac
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  if [ "$_saw_ambiguous" -eq 1 ]; then
+    printf 'ambiguous\n'
+  elif [ "$_saw_zero" -eq 1 ] && [ "$_saw_nonzero" -eq 1 ]; then
+    printf 'ambiguous\n'
+  elif [ "$_saw_nonzero" -eq 1 ]; then
+    printf 'nonzero\n'
+  elif [ "$_saw_zero" -eq 1 ]; then
+    printf 'zero\n'
+  else
+    printf 'omitted\n'
+  fi
+}
+
 enforce_p2() {
   require_cmd sudo
   require_cmd visudo
@@ -1490,6 +1591,22 @@ inspect_pollinator_privilege_readonly() {
   fi
   if sudo_listing_has_passwordless_privilege "$_listing"; then
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Governed upgrade will not loosen sudo policy."
+  fi
+  if ! sudo_listing_lacks_sudo_authority "$_listing"; then
+    _timeout_class=$(sudo_listing_classify_timestamp_timeout "$_listing")
+    case "$_timeout_class" in
+      zero)
+        ;;
+      omitted)
+        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo authority without Defaults timestamp_timeout=0. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
+        ;;
+      nonzero)
+        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo Defaults timestamp_timeout other than 0. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
+        ;;
+      *)
+        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo Defaults timestamp_timeout that cannot be classified. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
+        ;;
+    esac
   fi
   if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture. Governed upgrade will not rewrite sudo policy."

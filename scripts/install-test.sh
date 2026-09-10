@@ -1863,7 +1863,7 @@ while [ \$# -gt 0 ]; do
       shift
       ;;
     -l) list=1; shift ;;
-    -K) kill_ts=1; shift ;;
+    -K|-k) kill_ts=1; shift ;;
     --) shift; break ;;
     *=*) export "\$1"; shift ;;
     -*) shift ;;
@@ -2134,6 +2134,10 @@ assert_no_upgrade_bootstrap() {
     fail "${name}: performed governed host-bootstrap operations" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
+  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
+    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
   if grep -Eq 'tendril init' "${events_file}"; then
     fail "${name}: ran tendril init" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
@@ -2151,6 +2155,16 @@ prepare_upgrade_rootless_runtime() {
   touch "${ROOT}/state/docker-rootless-ready"
 }
 
+write_governed_p2_sudo_listing() {
+  cat >"${ROOT}/state/sudo-l" <<'EOF'
+Matching Defaults entries for alice on testhost:
+    env_reset, mail_badpass, timestamp_timeout=0
+
+User alice may run the following commands on testhost:
+    (ALL : ALL) ALL
+EOF
+}
+
 prepare_upgrade_host() {
   preseed_tendril_user with-subid
   place_old_stem_binary
@@ -2158,6 +2172,32 @@ prepare_upgrade_host() {
   write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
   write_floor_systemctl_show 2001
   prepare_upgrade_rootless_runtime
+  write_governed_p2_sudo_listing
+}
+
+assert_upgrade_p2_posture() {
+  local name=$1
+  if ! grep -q 'timestamp_timeout=0' "${ROOT}/state/sudo-l"; then
+    fail "${name}: success fixture omitted timestamp_timeout=0"
+    return 1
+  fi
+  if ! grep -q '(ALL : ALL) ALL' "${ROOT}/state/sudo-l"; then
+    fail "${name}: success fixture omitted passworded (ALL : ALL) ALL"
+    return 1
+  fi
+  if [ -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
+    fail "${name}: wrote /etc/sudoers.d/opentendril-p2"
+    return 1
+  fi
+  if events_match '^CMD visudo '; then
+    fail "${name}: invoked visudo" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
+    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
 }
 
 assert_no_sudo_timestamp_mutation() {
@@ -3022,10 +3062,14 @@ if [ -z "${upgrade_privilege_preflight}" ]; then
   fail "governed-upgrade privilege preflight is defined"
 elif printf '%s\n' "${upgrade_privilege_preflight}" | grep -Eq -- '(^|[[:space:]])-[Kk]([[:space:]]|$)'; then
   fail "governed-upgrade privilege preflight does not use sudo -K/-k" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" | tr '\n' ' ')"
+elif printf '%s\n' "${upgrade_privilege_preflight}" | grep -q visudo; then
+  fail "governed-upgrade privilege preflight does not rewrite sudoers" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" | tr '\n' ' ')"
 elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -l -U'; then
   fail "governed-upgrade privilege preflight keeps read-only sudo -l -U"
 elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -n -u'; then
   fail "governed-upgrade privilege preflight keeps the sudo -n probe"
+elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'timestamp_timeout=0'; then
+  fail "governed-upgrade privilege preflight requires timestamp_timeout=0 when the Pollinator may sudo"
 else
   pass "governed-upgrade privilege preflight is observational"
 fi
@@ -3370,6 +3414,9 @@ if [ "${status}" -eq 0 ]; then
   if assert_no_sudo_timestamp_mutation "successful governed upgrade does not invalidate sudo timestamps"; then
     pass "successful governed upgrade does not invalidate sudo timestamps"
   fi
+  if assert_upgrade_p2_posture "Ubuntu 24.04 upgrade success fixture carries P2 timestamp_timeout=0"; then
+    pass "Ubuntu 24.04 upgrade success fixture carries P2 timestamp_timeout=0"
+  fi
 else
   fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
@@ -3431,6 +3478,7 @@ preseed_tendril_user with-subid
 place_old_stem_binary
 seed_durable_stem_state
 write_floor_systemctl_show 2001
+write_governed_p2_sudo_listing
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
   pass "governed upgrade fails if base unit is missing"
@@ -3445,6 +3493,7 @@ seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 write_floor_systemctl_show 2001
 prepare_upgrade_rootless_runtime
+write_governed_p2_sudo_listing
 legacy_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
 run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
 if [ "${status}" -eq 0 ] \
@@ -3473,6 +3522,7 @@ seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 printf 'x' >>"${HOSTFS}/etc/systemd/system/tendril.service"
 write_floor_systemctl_show 2001
+write_governed_p2_sudo_listing
 before_legacy="$(cat "${HOSTFS}/etc/systemd/system/tendril.service")"
 before_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
 run_governed_upgrade_installer --pollinator-user alice
@@ -3725,6 +3775,12 @@ if [ "${status}" -eq 0 ] \
   fi
   if assert_durable_untouched "Ubuntu 26.04 upgrade leaves durable Stem state untouched"; then
     :
+  fi
+  if assert_upgrade_p2_posture "Ubuntu 26.04 upgrade success fixture carries P2 timestamp_timeout=0"; then
+    pass "Ubuntu 26.04 upgrade success fixture carries P2 timestamp_timeout=0"
+  fi
+  if assert_no_sudo_timestamp_mutation "Ubuntu 26.04 upgrade performs no sudo timestamp mutation"; then
+    pass "Ubuntu 26.04 upgrade performs no sudo timestamp mutation"
   fi
 else
   fail "valid Ubuntu 26.04 existing governed upgrade" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
@@ -4000,6 +4056,97 @@ if [ "${status}" -ne 0 ] && grep -qi 'non-interactively' "${stderr_file}"; then
   fi
 else
   fail "Pollinator sudo -n to Stem fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice is not allowed to run sudo on testhost.
+EOF
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
+  pass "Pollinator without sudo authority is upgrade-admissible"
+  if assert_no_upgrade_bootstrap "Pollinator without sudo authority is upgrade-admissible"; then
+    pass "Pollinator without sudo authority does not bootstrap the host"
+  fi
+  if assert_no_sudo_timestamp_mutation "Pollinator without sudo authority performs no sudo timestamp mutation"; then
+    pass "Pollinator without sudo authority performs no sudo timestamp mutation"
+  fi
+  if [ -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
+    fail "Pollinator without sudo authority is upgrade-admissible: wrote sudoers policy"
+  else
+    pass "Pollinator without sudo authority does not write sudoers policy"
+  fi
+else
+  fail "Pollinator without sudo authority is upgrade-admissible" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_governed_p2_sudo_listing
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
+  pass "passworded Pollinator ALL with timestamp_timeout=0 is upgrade-admissible"
+  if assert_upgrade_p2_posture "passworded Pollinator ALL with timestamp_timeout=0 is upgrade-admissible"; then
+    pass "passworded Pollinator ALL with timestamp_timeout=0 leaves P2 policy unwritten"
+  fi
+  if events_match '^CMD sudo -l -U alice' \
+    && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
+    && assert_no_sudo_timestamp_mutation "successful timestamp_timeout=0 preflight performs no sudo timestamp mutation"; then
+    pass "successful timestamp_timeout=0 preflight performs no sudo timestamp mutation"
+  else
+    fail "successful timestamp_timeout=0 preflight performs no sudo timestamp mutation" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+else
+  fail "passworded Pollinator ALL with timestamp_timeout=0 is upgrade-admissible" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on testhost:
+    (ALL : ALL) ALL
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'timestamp_timeout=0' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "passworded Pollinator ALL without timestamp_timeout=0 fails before mutation"; then
+    pass "passworded Pollinator ALL without timestamp_timeout=0 fails before mutation"
+    if events_match '^CMD sudo -l -U alice' \
+      && ! events_match '^CMD sudo -K' \
+      && ! events_match '^CMD sudo -k' \
+      && assert_no_sudo_timestamp_mutation "omitted timestamp_timeout preflight performs no sudo timestamp mutation"; then
+      pass "omitted timestamp_timeout preflight performs no sudo timestamp mutation"
+    else
+      fail "omitted timestamp_timeout preflight performs no sudo timestamp mutation" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
+  fi
+else
+  fail "passworded Pollinator ALL without timestamp_timeout=0 fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+Matching Defaults entries for alice on testhost:
+    env_reset, mail_badpass, timestamp_timeout=15
+
+User alice may run the following commands on testhost:
+    (ALL : ALL) ALL
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'timestamp_timeout other than 0' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "explicit non-zero timestamp_timeout fails before mutation"; then
+    pass "explicit non-zero timestamp_timeout fails before mutation"
+    if assert_no_sudo_timestamp_mutation "non-zero timestamp_timeout preflight performs no sudo timestamp mutation"; then
+      pass "non-zero timestamp_timeout preflight performs no sudo timestamp mutation"
+    fi
+  fi
+else
+  fail "explicit non-zero timestamp_timeout fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
 
 # --- host isolation ---------------------------------------------------------
