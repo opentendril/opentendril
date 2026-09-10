@@ -896,7 +896,7 @@ new_governed_case() {
 }
 
 setup_governed_shims() {
-  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch real_cmp
+  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch real_cmp real_ls
   setup_shims
   real_stat="$(type -P stat)"
   real_mkdir="$(type -P mkdir)"
@@ -907,6 +907,7 @@ setup_governed_shims() {
   real_cp="$(type -P cp)"
   real_touch="$(type -P touch)"
   real_cmp="$(type -P cmp)"
+  real_ls="$(type -P ls)"
   ln -sf "$(type -P true)" "${SHIM_DIR}/true"
   ln -sf "$(type -P false)" "${SHIM_DIR}/false"
 
@@ -941,6 +942,21 @@ get_owner() {
     ${real_cat} "\$f"
   else
     printf 'root\\n'
+  fi
+}
+set_group() {
+  p=\$1
+  g=\$2
+  ${real_mkdir} -p "${ROOT}/meta/groups"
+  printf '%s\\n' "\$g" > "${ROOT}/meta/groups/\$(owner_key "\$p")"
+}
+get_group() {
+  p=\$1
+  f="${ROOT}/meta/groups/\$(owner_key "\$p")"
+  if [ -f "\$f" ]; then
+    ${real_cat} "\$f"
+  else
+    get_owner "\$p"
   fi
 }
 logcmd() {
@@ -1035,12 +1051,27 @@ logcmd cmp "\$*"
 args=""
 for a in "\$@"; do
   case "\$a" in
+    -) args="\$args -" ;;
     -*) args="\$args \$a" ;;
     *) args="\$args \$(hostpath "\$a")" ;;
   esac
 done
 # shellcheck disable=SC2086
 exec ${real_cmp} \$args
+EOF
+  write_exec "${SHIM_DIR}/ls" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd ls "\$*"
+args=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *) args="\$args \$(hostpath "\$a")" ;;
+  esac
+done
+# shellcheck disable=SC2086
+exec ${real_ls} \$args
 EOF
   write_exec "${SHIM_DIR}/cat" <<EOF
 #!/bin/sh
@@ -1080,6 +1111,9 @@ if [ -n "\$fmt" ]; then
       ;;
     %U)
       get_owner "\$path"
+      ;;
+    %G)
+      get_group "\$path"
       ;;
     %a)
       ${real_stat} -c '%a' "\$rpath"
@@ -1205,6 +1239,9 @@ if [ "\$directory" -eq 1 ]; then
     if [ -n "\$owner" ]; then
       set_owner "\$dest" "\$owner"
     fi
+    if [ -n "\$group" ]; then
+      set_group "\$dest" "\$group"
+    fi
   done
   exit 0
 fi
@@ -1235,6 +1272,9 @@ ${real_mkdir} -p "\$parent"
 ${real_install} -m "\$mode" "\$src" "\$rdest"
 if [ -n "\$owner" ]; then
   set_owner "\$dest" "\$owner"
+fi
+if [ -n "\$group" ]; then
+  set_group "\$dest" "\$group"
 fi
 exit 0
 EOF
@@ -1725,6 +1765,22 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd docker "\$*"
+case "\${DOCKER_HOST:-}" in
+  unix:///run/user/*/docker.sock)
+    if [ -f "${ROOT}/state/docker-tendril-info-fail" ]; then
+      exit 1
+    fi
+    if [ -f "${ROOT}/state/docker-tendril-info" ]; then
+      ${real_cat} "${ROOT}/state/docker-tendril-info"
+      exit 0
+    fi
+    if [ -f "${ROOT}/state/docker-rootless-ready" ]; then
+      printf '[name=seccomp,name=rootless,name=cgroupns]\\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
 if [ -f "${ROOT}/state/docker-info-fail" ]; then
   exit 1
 fi
@@ -1823,7 +1879,15 @@ while [ \$# -gt 0 ]; do
       shift
       ;;
     -l) list=1; shift ;;
-    -K) kill_ts=1; shift ;;
+    -ll)
+      list=1
+      shift
+      ;;
+    -v)
+      ${real_touch} "${ROOT}/state/sudo-v-\${user:-self}"
+      shift
+      ;;
+    -K|-k) kill_ts=1; shift ;;
     --) shift; break ;;
     *=*) export "\$1"; shift ;;
     -*) shift ;;
@@ -1864,6 +1928,13 @@ if [ "\$1" = -c ] && [ "\$2" = -f ]; then
     exit 1
   fi
   grep timestamp_timeout "\$3" >/dev/null || exit 1
+  exit 0
+fi
+if [ "\$1" = -c ]; then
+  if [ -f "${ROOT}/state/visudo-c-fail" ]; then
+    printf 'visudo: parse error in /etc/sudoers near line 1\\n' >&2
+    exit 1
+  fi
   exit 0
 fi
 exit 0
@@ -2088,10 +2159,22 @@ assert_durable_untouched() {
   return 1
 }
 
+events_have_mutating_visudo() {
+  grep '^CMD visudo ' "${events_file}" | grep -vqE '^CMD visudo -c$'
+}
+
 assert_no_upgrade_bootstrap() {
   local name=$1
-  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo )' "${events_file}"; then
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless)' "${events_file}"; then
     fail "${name}: performed governed host-bootstrap operations" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_have_mutating_visudo; then
+    fail "${name}: visudo ran in a mutating mode" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
+    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
   if grep -Eq 'tendril init' "${events_file}"; then
@@ -2105,18 +2188,186 @@ assert_no_upgrade_bootstrap() {
   return 0
 }
 
+prepare_upgrade_rootless_runtime() {
+  mkdir -p "${HOSTFS}/run/user/2001" "${ROOT}/meta/owners"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%run%user%2001"
+  touch "${ROOT}/state/docker-rootless-ready"
+}
+
+write_classic_sudo_privilege_listing() {
+  cat >"${ROOT}/state/sudo-l" <<'EOF'
+Matching Defaults entries for alice on testhost:
+    env_reset, mail_badpass, timestamp_timeout=0
+
+User alice may run the following commands on testhost:
+    (ALL : ALL) ALL
+EOF
+}
+
+write_sudo_rs_privilege_listing() {
+  cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on testhost:
+    (ALL : ALL) ALL
+EOF
+}
+
+write_governed_sudoers_primary() {
+  mkdir -p "${HOSTFS}/etc/sudoers.d"
+  cat >"${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+root ALL=(ALL:ALL) ALL
+#includedir /etc/sudoers.d
+EOF
+  chmod 0440 "${HOSTFS}/etc/sudoers"
+}
+
+place_canonical_p2_snippet() {
+  local user=${1:-alice}
+  mkdir -p "${HOSTFS}/etc/sudoers.d" "${ROOT}/meta/owners" "${ROOT}/meta/groups"
+  rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+  printf 'Defaults:%s timestamp_timeout=0\n' "${user}" >"${HOSTFS}/etc/sudoers.d/opentendril-p2"
+  chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+  printf 'root\n' >"${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2"
+  printf 'root\n' >"${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2"
+}
+
+rewrite_host_file() {
+  local path=$1
+  mkdir -p "$(dirname "${path}")"
+  rm -f "${path}"
+  cat >"${path}"
+}
+
+place_sudoers_d_readme() {
+  mkdir -p "${HOSTFS}/etc/sudoers.d"
+  cat >"${HOSTFS}/etc/sudoers.d/README" <<'EOF'
+# See sudoers(5) for how this directory is used.
+EOF
+}
+
+prepare_upgrade_p2_provenance() {
+  write_governed_sudoers_primary
+  place_canonical_p2_snippet alice
+  place_sudoers_d_readme
+  write_classic_sudo_privilege_listing
+}
+
 prepare_upgrade_host() {
   preseed_tendril_user with-subid
   place_old_stem_binary
   seed_durable_stem_state
   write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
   write_floor_systemctl_show 2001
+  prepare_upgrade_rootless_runtime
+  prepare_upgrade_p2_provenance
+}
+
+assert_canonical_p2_file() {
+  local name=$1
+  local snippet="${HOSTFS}/etc/sudoers.d/opentendril-p2"
+  if [ ! -f "${snippet}" ]; then
+    fail "${name}: missing canonical P2 snippet"
+    return 1
+  fi
+  if [ "$(stat -c '%a' "${snippet}")" != 440 ]; then
+    fail "${name}: P2 snippet mode is not 0440"
+    return 1
+  fi
+  if [ "$(cat "${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2" 2>/dev/null || echo root)" != root ] \
+    || [ "$(cat "${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2" 2>/dev/null || echo root)" != root ]; then
+    fail "${name}: P2 snippet owner/group is not root:root"
+    return 1
+  fi
+  printf 'Defaults:alice timestamp_timeout=0\n' >"${ROOT}/expected-p2"
+  if ! cmp -s "${snippet}" "${ROOT}/expected-p2"; then
+    fail "${name}: P2 snippet is not the canonical alice rule"
+    return 1
+  fi
+  return 0
+}
+
+assert_p2_inspection_readonly() {
+  local name=$1
+  if grep -Eq '^CMD install .*/etc/sudoers' "${events_file}"; then
+    fail "${name}: rewrote sudoers policy" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_have_mutating_visudo; then
+    fail "${name}: visudo ran in a mutating mode" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
+    return 1
+  fi
+  return 0
+}
+
+assert_upgrade_p2_posture() {
+  local name=$1
+  if ! grep -q '(ALL : ALL) ALL' "${ROOT}/state/sudo-l"; then
+    fail "${name}: success fixture omitted passworded (ALL : ALL) ALL"
+    return 1
+  fi
+  if ! assert_canonical_p2_file "${name}"; then
+    return 1
+  fi
+  if ! events_match '^CMD visudo -c$'; then
+    fail "${name}: did not validate sudoers with visudo -c" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_match '^CMD visudo -c -f'; then
+    fail "${name}: visudo -c -f ran during upgrade" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if ! assert_p2_inspection_readonly "${name}"; then
+    return 1
+  fi
+  return 0
+}
+
+assert_no_sudo_timestamp_mutation() {
+  local name=$1
+  if grep -Eq '^CMD sudo( .*)? -[Kkv]( |$)' "${events_file}"; then
+    fail "${name}: mutated a sudo timestamp or credential cache" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if find "${ROOT}/state" -maxdepth 1 \( -name 'sudo-k-*' -o -name 'sudo-v-*' \) | grep -q .; then
+    fail "${name}: sudo timestamp marker was created"
+    return 1
+  fi
+  return 0
+}
+
+assert_upgrade_preflight_unmutated() {
+  local name=$1
+  if ! assert_no_host_write "${name}"; then
+    return 1
+  fi
+  if ! assert_no_upgrade_bootstrap "${name}"; then
+    return 1
+  fi
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
+    return 1
+  fi
+  if grep -q 'Attempting rollback' "${stderr_file}"; then
+    fail "${name}: attempted rollback after a preflight failure"
+    return 1
+  fi
+  if events_match '^CMD tar '; then
+    fail "${name}: extracted the archive after a preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
 }
 
 assert_no_host_mutation() {
   local name=$1
-  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo |systemctl )' "${events_file}"; then
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|systemctl )' "${events_file}"; then
     fail "${name}: privileged command ran after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_have_mutating_visudo; then
+    fail "${name}: visudo ran in a mutating mode after a pre-mutation failure" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
   if grep -Eq '^CMD install .*(/home/tendril|/etc/systemd|/etc/sudoers|/etc/apt)' "${events_file}"; then
@@ -2132,8 +2383,12 @@ assert_no_host_mutation() {
 
 assert_no_host_write() {
   local name=$1
-  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo )' "${events_file}"; then
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless)' "${events_file}"; then
     fail "${name}: write command ran after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if events_have_mutating_visudo; then
+    fail "${name}: visudo ran in a mutating mode after a closed preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
     return 1
   fi
   if grep -Eq '^CMD systemctl (mask |unmask |disable|enable |start |stop |daemon-reload)' "${events_file}"; then
@@ -2353,6 +2608,19 @@ if assert_governed_failure "wrong Ubuntu release rejected"; then
     fi
   else
     fail "wrong Ubuntu release rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 26.04
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "Ubuntu 26.04 fresh governed rejected before mutation"; then
+  if grep -q '24.04' "${stderr_file}" && grep -q '26.04' "${stderr_file}"; then
+    if assert_no_host_mutation "Ubuntu 26.04 fresh governed rejected before mutation"; then
+      pass "Ubuntu 26.04 fresh governed rejected before mutation"
+    fi
+  else
+    fail "Ubuntu 26.04 fresh governed rejected before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
   fi
 fi
 
@@ -2922,6 +3190,36 @@ else
   pass "installer source never uses --skip-iptables"
 fi
 
+upgrade_privilege_preflight="$(awk '/^inspect_pollinator_privilege_readonly\(\)/,/^}$/' "${installer}")"
+upgrade_p2_provenance="$(awk '/^prove_canonical_p2_provenance\(\)/,/^}$/' "${installer}")"
+if [ -z "${upgrade_privilege_preflight}" ] || [ -z "${upgrade_p2_provenance}" ]; then
+  fail "governed-upgrade privilege preflight is defined"
+elif printf '%s\n' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | grep -Eq -- '(^|[[:space:]])-[Kkv]([[:space:]]|$)'; then
+  fail "governed-upgrade privilege preflight does not use sudo -K/-k/-v" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | tr '\n' ' ')"
+elif printf '%s\n' "${upgrade_privilege_preflight}" "${upgrade_p2_provenance}" | grep -q -- 'sudo -ll'; then
+  fail "governed-upgrade privilege preflight does not use sudo -ll"
+elif grep -q sudo_listing_classify_timestamp_timeout "${installer}"; then
+  fail "governed-upgrade privilege preflight does not parse timestamp_timeout from sudo -l"
+elif printf '%s\n' "${upgrade_privilege_preflight}" | grep -q timestamp_timeout; then
+  fail "governed-upgrade privilege listing path does not parse timestamp_timeout" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" | tr '\n' ' ')"
+elif printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'visudo -c -f'; then
+  fail "governed-upgrade P2 provenance does not use visudo -c -f"
+elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'visudo -c'; then
+  fail "governed-upgrade P2 provenance validates with visudo -c"
+elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -l -U'; then
+  fail "governed-upgrade privilege preflight keeps read-only sudo -l -U"
+elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -n -u'; then
+  fail "governed-upgrade privilege preflight keeps the sudo -n probe"
+elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'timestamp_timeout=0'; then
+  fail "governed-upgrade P2 provenance requires the canonical timestamp_timeout=0 rule"
+elif ! grep -q 'SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"' "${installer}"; then
+  fail "governed-upgrade P2 provenance requires the canonical snippet path"
+elif ! printf '%s\n' "${upgrade_p2_provenance}" | grep -q -- 'SUDOERS_SNIPPET'; then
+  fail "governed-upgrade P2 provenance inspects the canonical snippet path"
+else
+  pass "governed-upgrade privilege preflight is observational"
+fi
+
 new_governed_case
 GOVERNED_SUDO_USER=alice
 run_governed_installer
@@ -3253,6 +3551,23 @@ if [ "${status}" -eq 0 ]; then
   else
     pass "enablement state is unchanged"
   fi
+  if grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
+    && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
+    pass "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix"
+  else
+    fail "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  if assert_no_sudo_timestamp_mutation "successful governed upgrade does not invalidate sudo timestamps"; then
+    pass "successful governed upgrade does not invalidate sudo timestamps"
+  fi
+  if assert_upgrade_p2_posture "Ubuntu 24.04 upgrade success fixture uses canonical P2 provenance"; then
+    pass "Ubuntu 24.04 upgrade success fixture uses canonical P2 provenance"
+  fi
+  if grep -q 'timestamp_timeout=0' "${ROOT}/state/sudo-l"; then
+    pass "Ubuntu 24.04 success fixture uses classic-sudo-shaped privilege-list output"
+  else
+    fail "Ubuntu 24.04 success fixture uses classic-sudo-shaped privilege-list output"
+  fi
 else
   fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
@@ -3314,6 +3629,7 @@ preseed_tendril_user with-subid
 place_old_stem_binary
 seed_durable_stem_state
 write_floor_systemctl_show 2001
+prepare_upgrade_p2_provenance
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
   pass "governed upgrade fails if base unit is missing"
@@ -3327,6 +3643,8 @@ place_old_stem_binary
 seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 write_floor_systemctl_show 2001
+prepare_upgrade_rootless_runtime
+prepare_upgrade_p2_provenance
 legacy_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
 run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
 if [ "${status}" -eq 0 ] \
@@ -3355,6 +3673,7 @@ seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 printf 'x' >>"${HOSTFS}/etc/systemd/system/tendril.service"
 write_floor_systemctl_show 2001
+prepare_upgrade_p2_provenance
 before_legacy="$(cat "${HOSTFS}/etc/systemd/system/tendril.service")"
 before_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
 run_governed_upgrade_installer --pollinator-user alice
@@ -3421,9 +3740,11 @@ if [ "${status}" -ne 0 ] && grep -q 'effective service validation failed' "${std
   pass "effective-property weakening"
   if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
     && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ]; then
-    pass "effective-property weakening rolls back the service layout and binary"
+    if assert_upgrade_preflight_unmutated "weakened pre-upgrade effective service fails before mutation"; then
+      pass "weakened pre-upgrade effective service fails before mutation"
+    fi
   else
-    fail "effective-property weakening rolls back the service layout and binary"
+    fail "weakened pre-upgrade effective service fails before mutation: host files changed"
   fi
 else
   fail "effective-property weakening" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
@@ -3449,7 +3770,9 @@ ReadWritePaths=/home/tendril /run/user/2001 /tmp
 EOF
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -q 'ReadWritePaths' "${stderr_file}"; then
-  pass "ReadWritePaths widening rejection"
+  if assert_upgrade_preflight_unmutated "ReadWritePaths widening rejection"; then
+    pass "ReadWritePaths widening rejection"
+  fi
 else
   fail "ReadWritePaths widening rejection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
@@ -3568,11 +3891,11 @@ fi
 
 new_governed_case
 prepare_upgrade_host
-sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
+touch "${ROOT}/state/fail-install-tendril"
 touch "${ROOT}/state/fail-rollback-cp"
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] \
-  && grep -q 'effective service validation failed' "${stderr_file}" \
+  && grep -q 'failed to replace the protected Stem binary' "${stderr_file}" \
   && grep -q 'rollback failed' "${stderr_file}" \
   && ! grep -q 'governed upgrade completed' "${stdout_file}"; then
   pass "rollback failure reporting"
@@ -3586,6 +3909,569 @@ if [ "${status}" -ne 0 ] && grep -q 'tendril account does not exist' "${stderr_f
   pass "governed upgrade fails if tendril principal is missing"
 else
   fail "governed upgrade fails if tendril principal is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_os_release ubuntu 26.04
+write_sudo_rs_privilege_listing
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+  && grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+  && grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
+  && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
+  pass "valid Ubuntu 26.04 existing governed upgrade"
+  if assert_no_upgrade_bootstrap "valid Ubuntu 26.04 existing governed upgrade"; then
+    pass "Ubuntu 26.04 upgrade does not bootstrap Docker or the Stem principal"
+  fi
+  if assert_durable_untouched "Ubuntu 26.04 upgrade leaves durable Stem state untouched"; then
+    :
+  fi
+  if assert_upgrade_p2_posture "Ubuntu 26.04 upgrade success fixture uses canonical P2 provenance"; then
+    pass "Ubuntu 26.04 upgrade success fixture uses canonical P2 provenance"
+  fi
+  if grep -q 'timestamp_timeout' "${ROOT}/state/sudo-l"; then
+    fail "Ubuntu 26.04 success fixture uses sudo-rs-shaped privilege-list output: listing still mentioned timestamp_timeout"
+  else
+    pass "Ubuntu 26.04 success fixture uses sudo-rs-shaped privilege-list output"
+  fi
+  if assert_no_sudo_timestamp_mutation "Ubuntu 26.04 upgrade performs no sudo timestamp mutation"; then
+    pass "Ubuntu 26.04 upgrade performs no sudo timestamp mutation"
+  fi
+else
+  fail "valid Ubuntu 26.04 existing governed upgrade" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+write_os_release debian 12
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'requires Ubuntu' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "non-Ubuntu governed upgrade rejected"; then
+    pass "non-Ubuntu governed upgrade rejected"
+  fi
+else
+  fail "non-Ubuntu governed upgrade rejected" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+WSL_DISTRO=Ubuntu
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'does not support WSL' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "WSL governed upgrade rejected"; then
+    pass "WSL governed upgrade rejected"
+  fi
+else
+  fail "WSL governed upgrade rejected" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -rf "${HOSTFS}/run/user/2001"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/run/user/2001 is missing' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "missing tendril runtime directory fails before mutation"; then
+    pass "missing tendril runtime directory fails before mutation"
+  fi
+else
+  fail "missing tendril runtime directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%run%user%2001"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/run/user/2001 is owned by root' "${stderr_file}"; then
+  if [ "$(cat "${ROOT}/meta/owners/%run%user%2001")" = root ]; then
+    if assert_upgrade_preflight_unmutated "wrong-owner tendril runtime directory fails before mutation"; then
+      pass "wrong-owner tendril runtime directory fails before mutation"
+    fi
+  else
+    fail "wrong-owner tendril runtime directory fails before mutation: ownership was repaired"
+  fi
+else
+  fail "wrong-owner tendril runtime directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${ROOT}/state/docker-rootless-ready"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'failed to query the tendril Docker daemon\|will not install, start, or repair Docker' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "unreachable tendril Docker fails before mutation"; then
+    pass "unreachable tendril Docker fails before mutation"
+  fi
+else
+  fail "unreachable tendril Docker fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf '[name=seccomp]\n' >"${ROOT}/state/docker-tendril-info"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'not rootless' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "non-rootless tendril Docker fails before mutation"; then
+    pass "non-rootless tendril Docker fails before mutation"
+  fi
+else
+  fail "non-rootless tendril Docker fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/active/docker.service"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'docker.service is active' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects active rootful docker.service"; then
+    pass "upgrade rejects active rootful docker.service"
+  fi
+else
+  fail "upgrade rejects active rootful docker.service" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/enabled/docker.socket"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'enabled' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects enabled rootful docker.socket"; then
+    pass "upgrade rejects enabled rootful docker.socket"
+  fi
+else
+  fail "upgrade rejects enabled rootful docker.socket" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf '[name=seccomp]\n' >"${ROOT}/state/docker-info"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'rootful' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects usable ambient rootful Docker"; then
+    pass "upgrade rejects usable ambient rootful Docker"
+  fi
+else
+  fail "upgrade rejects usable ambient rootful Docker" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%home%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/home/tendril is owned by root' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid Stem home ownership fails before mutation"; then
+    pass "invalid Stem home ownership fails before mutation"
+  fi
+else
+  fail "invalid Stem home ownership fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'tendril:$6$notlocked:19600:0:99999:7:::\n' >"${HOSTFS}/etc/shadow.tmp"
+grep -v '^tendril:' "${HOSTFS}/etc/shadow" >>"${HOSTFS}/etc/shadow.tmp"
+mv "${HOSTFS}/etc/shadow.tmp" "${HOSTFS}/etc/shadow"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'interactive password' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "interactive Stem principal fails before mutation"; then
+    pass "interactive Stem principal fails before mutation"
+  fi
+else
+  fail "interactive Stem principal fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+rm -rf "${HOSTFS}/home/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/home/tendril is missing' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "missing Stem home fails before mutation"; then
+    pass "missing Stem home fails before mutation"
+  fi
+else
+  fail "missing Stem home fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${HOSTFS}/home/tendril/.local/bin/tendril"
+mkdir -p "${HOSTFS}/home/tendril/.local/bin/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'not a regular file' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "protected Stem directory fails before mutation"; then
+    pass "protected Stem directory fails before mutation"
+  fi
+else
+  fail "protected Stem directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%home%tendril%.local%bin%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'owned by root' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem owner fails before mutation"; then
+    pass "invalid protected Stem owner fails before mutation"
+  fi
+else
+  fail "invalid protected Stem owner fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+mkdir -p "${ROOT}/meta/groups"
+printf 'alice\n' >"${ROOT}/meta/groups/%home%tendril%.local%bin%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'group is alice' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem group fails before mutation"; then
+    pass "invalid protected Stem group fails before mutation"
+  fi
+else
+  fail "invalid protected Stem group fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+chmod 0755 "${HOSTFS}/home/tendril/.local/bin/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'mode is 755' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem mode fails before mutation"; then
+    pass "invalid protected Stem mode fails before mutation"
+  fi
+else
+  fail "invalid protected Stem mode fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user tendril
+if [ "${status}" -ne 0 ] && grep -q 'cannot be tendril' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator/Stem overlap fails before mutation"; then
+    pass "Pollinator/Stem overlap fails before mutation"
+  fi
+else
+  fail "Pollinator/Stem overlap fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'alice tendril\n' >"${ROOT}/state/groups-alice"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'is in group tendril' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator in Stem group fails before mutation"; then
+    pass "Pollinator in Stem group fails before mutation"
+  fi
+else
+  fail "Pollinator in Stem group fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (ALL) NOPASSWD: ALL
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator NOPASSWD ALL fails before mutation"; then
+    pass "Pollinator NOPASSWD ALL fails before mutation"
+  fi
+else
+  fail "Pollinator NOPASSWD ALL fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (root) NOPASSWD: /bin/sh
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator root NOPASSWD fails before mutation"; then
+    pass "Pollinator root NOPASSWD fails before mutation"
+  fi
+else
+  fail "Pollinator root NOPASSWD fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/passwordless-tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'non-interactively' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator sudo -n to Stem fails before mutation"; then
+    pass "Pollinator sudo -n to Stem fails before mutation"
+    if events_match '^CMD sudo -l -U alice' \
+      && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
+      && assert_no_sudo_timestamp_mutation "failed upgrade preflight performs no sudo -K"; then
+      pass "failed upgrade preflight performs no sudo -K"
+    else
+      fail "failed upgrade preflight performs no sudo -K" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
+  fi
+else
+  fail "Pollinator sudo -n to Stem fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice is not allowed to run sudo on testhost.
+EOF
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
+  pass "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"
+  if assert_no_upgrade_bootstrap "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"; then
+    pass "Pollinator without sudo authority does not bootstrap the host"
+  fi
+  if assert_p2_inspection_readonly "Pollinator without sudo authority is upgrade-admissible without the P2 snippet"; then
+    pass "Pollinator without sudo authority performs read-only P2 inspection"
+  fi
+  if events_match '^CMD visudo '; then
+    fail "Pollinator without sudo authority invoked visudo" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "Pollinator without sudo authority does not invoke visudo"
+  fi
+  if [ -e "${HOSTFS}/etc/sudoers.d/opentendril-p2" ]; then
+    fail "Pollinator without sudo authority is upgrade-admissible: wrote sudoers policy"
+  else
+    pass "Pollinator without sudo authority does not write sudoers policy"
+  fi
+else
+  fail "Pollinator without sudo authority is upgrade-admissible without the P2 snippet" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] && grep -q 'governed upgrade completed' "${stdout_file}"; then
+  pass "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults"
+  if assert_upgrade_p2_posture "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults"; then
+    pass "canonical P2 provenance leaves P2 policy unwritten"
+  fi
+  if grep -q 'timestamp_timeout' "${ROOT}/state/sudo-l"; then
+    fail "sudo-rs-shaped listing still mentioned timestamp_timeout"
+  else
+    pass "sudo-rs-shaped listing omits timestamp_timeout"
+  fi
+  if events_match '^CMD sudo -l -U alice' \
+    && ! events_match '^CMD sudo -ll' \
+    && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
+    && assert_p2_inspection_readonly "successful canonical P2 provenance preflight is read-only"; then
+    pass "successful canonical P2 provenance preflight is read-only"
+  else
+    fail "successful canonical P2 provenance preflight is read-only" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+else
+  fail "sudo authority with canonical P2 provenance is admissible when sudo -l omits Defaults" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+rm -f "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q '/etc/sudoers.d/opentendril-p2 is missing' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "canonical P2 file missing fails before mutation"; then
+    pass "canonical P2 file missing fails before mutation"
+    if events_match '^CMD visudo '; then
+      fail "missing P2 file invoked visudo" "events=$(tr '\n' ' ' <"${events_file}")"
+    elif assert_p2_inspection_readonly "missing P2 file inspection is read-only"; then
+      pass "missing P2 file inspection is read-only"
+    fi
+  fi
+else
+  fail "canonical P2 file missing fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+printf 'alice\n' >"${ROOT}/meta/owners/%etc%sudoers.d%opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'owned by alice:root' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "wrong P2 owner fails before mutation"; then
+    pass "wrong P2 owner fails before mutation"
+    if assert_p2_inspection_readonly "wrong P2 owner inspection is read-only"; then
+      pass "wrong P2 owner inspection is read-only"
+    fi
+  fi
+else
+  fail "wrong P2 owner fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+printf 'alice\n' >"${ROOT}/meta/groups/%etc%sudoers.d%opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'owned by root:alice' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "wrong P2 group fails before mutation"; then
+    pass "wrong P2 group fails before mutation"
+  fi
+else
+  fail "wrong P2 group fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+chmod 0644 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'mode is 644' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "wrong P2 mode fails before mutation"; then
+    pass "wrong P2 mode fails before mutation"
+  fi
+else
+  fail "wrong P2 mode fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+rewrite_host_file "${HOSTFS}/etc/sudoers.d/opentendril-p2" <<'EOF'
+Defaults:bob timestamp_timeout=0
+EOF
+chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'canonical Defaults:alice timestamp_timeout=0 rule' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "wrong Pollinator name in P2 file fails before mutation"; then
+    pass "wrong Pollinator name in P2 file fails before mutation"
+  fi
+else
+  fail "wrong Pollinator name in P2 file fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+rewrite_host_file "${HOSTFS}/etc/sudoers.d/opentendril-p2" <<'EOF'
+Defaults:alice timestamp_timeout=15
+EOF
+chmod 0440 "${HOSTFS}/etc/sudoers.d/opentendril-p2"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'canonical Defaults:alice timestamp_timeout=0 rule' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "non-zero timeout in P2 file fails before mutation"; then
+    pass "non-zero timeout in P2 file fails before mutation"
+    if assert_p2_inspection_readonly "non-zero timeout in P2 file inspection is read-only"; then
+      pass "non-zero timeout in P2 file inspection is read-only"
+    fi
+  fi
+else
+  fail "non-zero timeout in P2 file fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+printf 'Defaults env_reset\n' >"${HOSTFS}/etc/sudoers-rs"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q '/etc/sudoers-rs exists' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "alternate sudo policy source fails closed"; then
+    pass "alternate sudo policy source fails closed"
+    if assert_p2_inspection_readonly "alternate sudo policy source inspection is read-only"; then
+      pass "alternate sudo policy source inspection is read-only"
+    fi
+  fi
+else
+  fail "alternate sudo policy source fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+root ALL=(ALL:ALL) ALL
+EOF
+chmod 0440 "${HOSTFS}/etc/sudoers"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'does not include /etc/sudoers.d' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "unprovable sudoers.d include fails closed"; then
+    pass "unprovable sudoers.d include fails closed"
+  fi
+else
+  fail "unprovable sudoers.d include fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+rewrite_host_file "${HOSTFS}/etc/sudoers" <<'EOF'
+Defaults env_reset
+Defaults timestamp_timeout=15
+root ALL=(ALL:ALL) ALL
+#includedir /etc/sudoers.d
+EOF
+chmod 0440 "${HOSTFS}/etc/sudoers"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q '/etc/sudoers declares timestamp_timeout' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "conflicting timestamp_timeout in /etc/sudoers fails closed"; then
+    pass "conflicting timestamp_timeout in /etc/sudoers fails closed"
+  fi
+else
+  fail "conflicting timestamp_timeout in /etc/sudoers fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+printf 'Defaults timestamp_timeout=15\n' >"${HOSTFS}/etc/sudoers.d/99-timeout"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q '/etc/sudoers.d/99-timeout declares timestamp_timeout' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "conflicting timestamp_timeout drop-in fails closed"; then
+    pass "conflicting timestamp_timeout drop-in fails closed"
+    if assert_p2_inspection_readonly "conflicting timestamp_timeout drop-in inspection is read-only"; then
+      pass "conflicting timestamp_timeout drop-in inspection is read-only"
+    fi
+  fi
+else
+  fail "conflicting timestamp_timeout drop-in fails closed" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_sudo_rs_privilege_listing
+touch "${ROOT}/state/visudo-c-fail"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'visudo -c rejected the sudoers configuration' "${stderr_file}" \
+  && grep -q 'will not rewrite sudo policy' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "visudo -c failure fails before mutation"; then
+    pass "visudo -c failure fails before mutation"
+    if events_match '^CMD visudo -c$' \
+      && assert_p2_inspection_readonly "visudo -c failure inspection is read-only"; then
+      pass "visudo -c failure inspection is read-only"
+    else
+      fail "visudo -c failure inspection is read-only" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
+  fi
+else
+  fail "visudo -c failure fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
 
 # --- host isolation ---------------------------------------------------------

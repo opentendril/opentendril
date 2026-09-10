@@ -58,6 +58,12 @@ thing.
 | **Local / evaluation** | LOCAL / SINGLE-PRINCIPAL. The Stem runs as this account. It does not claim the governed boundary. | Linux amd64, Linux arm64, WSL2 amd64, WSL2 arm64, macOS Intel, macOS Apple Silicon |
 | **Governed** | Separate Stem principal; protected `tendril`; Pollinator-only `tendril-mcp`. | Ubuntu 24.04 LTS, Linux amd64, systemd, rootless Docker |
 
+An existing governed Ubuntu installation may be eligible for
+`--governed-upgrade` outside that fresh-install matrix when the installer can
+prove the current governed posture. Upgrade admissibility is not fresh-install
+qualification, does not qualify that Ubuntu release generally, and fails
+closed when the required properties cannot be established.
+
 WSL and macOS are not governed. Neither path requires cloning this repository,
 installing Go, or installing GNU Make.
 

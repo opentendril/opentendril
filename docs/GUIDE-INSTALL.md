@@ -195,7 +195,10 @@ the automated realization of this procedure's host-bootstrap steps.
   places protected `tendril` and Pollinator-only `tendril-mcp`, installs the
   system unit without starting it, and applies the Stage 9 administrative
   posture. It does not run `tendril init` and does not start the Stem. WSL and
-  macOS are not governed.
+  macOS are not governed. `--governed-upgrade` is a separate contract: an
+  existing governed Ubuntu host may be upgraded outside that fresh-install
+  matrix only after a read-only proof of the current governed posture. Upgrade
+  admissibility is not fresh-install qualification.
 
 Pin the governed installer to the release declared in
 [GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md), download `install.sh` and
@@ -1231,9 +1234,52 @@ rerun `tendril init`.** Existing durable configuration and state remain in
 place, including `.env`, `.tendril/`, GitHub App credentials, Pollinator
 credentials, grants, Substrate definitions, and other runtime state.
 
-Governed upgrade is an administrator-run installer operation. It verifies the
-pinned release, reconciles the release-owned `tendril.service` baseline at
-`/usr/local/lib/systemd/system/tendril.service`, replaces the protected Stem
+Governed upgrade is an administrator-run installer operation. Fresh governed
+installation remains qualified only on Ubuntu 24.04 LTS, linux/amd64, systemd,
+and rootless Docker. `--governed-upgrade` is not that qualification. An
+existing governed Ubuntu linux/amd64 host may proceed on another Ubuntu
+release only after a read-only proof of the current governed posture. That
+proof does not install or repair Docker, create users, invoke rootless setup,
+run `loginctl`, rewrite sudo policy, invalidate a cached sudo timestamp, run
+`tendril init`, or alter binaries, service files, or durable Stem state.
+
+The preflight must establish, before any protected host mutation:
+
+- effective uid is root; Linux amd64; non-WSL Ubuntu;
+- the `tendril` principal exists with an ordinary non-root UID, home exactly
+  `/home/tendril`, correct home ownership, and the locked/non-interactive
+  Stem posture;
+- `/home/tendril/.local/bin/tendril` exists as a regular file owned by
+  `tendril:tendril` with mode `0750`;
+- the named Pollinator is an ordinary separate principal, is not in the
+  `tendril` group, and has no unattended/passwordless escalation to root,
+  `tendril`, ALL, or equivalent privileged authority. Absence of sudo
+  remains acceptable. If that account has sudo authority, read-only
+  provenance must prove the canonical `/etc/sudoers.d/opentendril-p2`
+  rule `Defaults:<account> timestamp_timeout=0` (regular file, `root:root`,
+  mode `0440`) is the active non-cache policy: `/etc/sudoers` must include
+  `/etc/sudoers.d` with a known include directive, no competing
+  `timestamp_timeout` declaration may be present in that known layout, an
+  alternate primary sudoers source that would bypass the snippet fails
+  closed, and `visudo -c` must accept the configuration. Missing,
+  noncanonical, or unprovable P2 configuration fails closed. The live
+  `sudo -n -u tendril` probe remains defense in depth. Governed upgrade
+  does not rewrite sudo policy, create or repair that snippet, or
+  invalidate a sudo timestamp;
+- `/run/user/<uid>` exists as a directory owned by `tendril`; rootless Docker
+  is reachable as `tendril` through `/run/user/<uid>/docker.sock`, Docker
+  SecurityOptions contains `rootless`, and rootful `docker.service` /
+  `docker.socket` are not active or enabled;
+- service layout/provenance classification succeeds, and the currently
+  effective service already satisfies the governed hardening floor.
+
+If any of those properties cannot be proven, upgrade fails closed and names
+the missing property. Passing this preflight does not advertise the host OS
+as a fresh governed-install platform.
+
+It then verifies the pinned release, reconciles the release-owned
+`tendril.service` baseline at `/usr/local/lib/systemd/system/tendril.service`,
+validates the resulting effective service again, replaces the protected Stem
 binary, and upgrades `tendril-mcp` only when that executable already exists for
 the named Pollinator-hosting account. It does not install or reconfigure
 Docker, create the Stem principal, rewrite P2 sudo policy, run `tendril init`,

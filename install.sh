@@ -11,6 +11,10 @@
 # tendril-mcp under the Pollinator-hosting account. Does not start an
 # unconfigured Stem.
 #
+# Governed upgrade: an existing governed Ubuntu linux/amd64 host may be
+# upgraded after a read-only proof of the current governed posture. That
+# proof is not a fresh-install qualification of other Ubuntu releases.
+#
 # This script must work when supplied on stdin for LOCAL installation:
 #   curl -fsSL <release>/install.sh | sh
 # Do not consult $0 as a filesystem path.
@@ -32,6 +36,9 @@ STEM_BIN="${STEM_HOME}/.local/bin/tendril"
 UNIT_PATH="/usr/local/lib/systemd/system/tendril.service"
 LEGACY_UNIT_PATH="/etc/systemd/system/tendril.service"
 SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"
+SUDOERS_PRIMARY="/etc/sudoers"
+SUDOERS_RS="/etc/sudoers-rs"
+SUDOERS_DIR="/etc/sudoers.d"
 
 version="${OPENTENDRIL_VERSION:-}"
 want_help=0
@@ -83,10 +90,12 @@ Options:
                                Also accepted as OPENTENDRIL_VERSION.
   --governed                   Establish the Ubuntu 24.04 LTS governed host.
                                Requires root. Does not install locally.
-  --governed-upgrade           Upgrade an existing governed host.
+  --governed-upgrade           Upgrade an existing governed Ubuntu host.
                                Requires root. Does not bootstrap Docker,
                                create the Stem principal, rewrite P2 policy,
                                run tendril init, or reinitialize durable state.
+                               Other Ubuntu releases are not thereby qualified
+                               for fresh governed installation.
   --pollinator-user <account>  Ordinary Pollinator-hosting account. Required
                                for --governed unless sudo already set SUDO_USER
                                to a non-root ordinary account. Required for
@@ -105,6 +114,12 @@ Governed platform (--governed):
   WSL, macOS, other Linux distributions, other Ubuntu releases, and arm64
   are not qualified. Installs protected tendril for the tendril principal
   and tendril-mcp for the Pollinator account. Does not start the Stem.
+
+Governed upgrade (--governed-upgrade):
+  Existing governed Ubuntu linux/amd64 host with systemd and rootless Docker.
+  Fresh-install qualification stays Ubuntu 24.04 LTS. Upgrade may proceed on
+  another Ubuntu release only after a read-only proof of the existing
+  governed posture; it fails closed when that posture cannot be established.
 EOF
 }
 
@@ -411,6 +426,14 @@ fs_is_dir() {
 
 fs_owner() {
   stat -c '%U' "$1" 2>/dev/null || return 1
+}
+
+fs_group() {
+  stat -c '%G' "$1" 2>/dev/null || return 1
+}
+
+fs_mode() {
+  stat -c '%a' "$1" 2>/dev/null || return 1
 }
 
 parse_passwd_line() {
@@ -988,6 +1011,103 @@ EOF
   return 1
 }
 
+sudo_listing_lacks_sudo_authority() {
+  case "$1" in
+    *'not allowed to run sudo'*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+canonical_p2_contents() {
+  printf 'Defaults:%s timestamp_timeout=0\n' "$pollinator_user"
+}
+
+text_has_timestamp_timeout() {
+  case "$1" in
+    *timestamp_timeout*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+p2_upgrade_refuse() {
+  die "cannot upgrade: $1 Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
+}
+
+prove_canonical_p2_provenance() {
+  require_cmd visudo
+  require_cmd cat
+  require_cmd cmp
+  require_cmd ls
+  require_cmd stat
+
+  if fs_exists "$SUDOERS_RS"; then
+    p2_upgrade_refuse "alternate primary sudoers source ${SUDOERS_RS} exists, so ${SUDOERS_SNIPPET} cannot be proven as the active non-cache policy."
+  fi
+
+  fs_exists "$SUDOERS_PRIMARY" || p2_upgrade_refuse "${SUDOERS_PRIMARY} is missing, so ${SUDOERS_SNIPPET} cannot be proven active."
+  _kind=$(stat -c '%F' "$SUDOERS_PRIMARY" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_PRIMARY}."
+  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} is not a regular file, so ${SUDOERS_SNIPPET} cannot be proven active."
+
+  _sudoers_text=$(cat "$SUDOERS_PRIMARY") || p2_upgrade_refuse "cannot read ${SUDOERS_PRIMARY}."
+  _have_includedir=0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      '#includedir /etc/sudoers.d'|'@includedir /etc/sudoers.d')
+        _have_includedir=1
+        ;;
+      '#include '*|'#includedir '*|'@include '*|'@includedir '*)
+        p2_upgrade_refuse "${SUDOERS_PRIMARY} has an additional include directive; ${SUDOERS_SNIPPET} precedence cannot be proven."
+        ;;
+    esac
+  done <<OPENTENDRIL_SUDOERS_END
+${_sudoers_text}
+OPENTENDRIL_SUDOERS_END
+  [ "$_have_includedir" -eq 1 ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} does not include ${SUDOERS_DIR} with a known include directive, so ${SUDOERS_SNIPPET} cannot be proven active."
+  if text_has_timestamp_timeout "$_sudoers_text"; then
+    p2_upgrade_refuse "${SUDOERS_PRIMARY} declares timestamp_timeout; precedence cannot be proven."
+  fi
+
+  fs_exists "$SUDOERS_SNIPPET" || p2_upgrade_refuse "Pollinator-hosting account ${pollinator_user} has sudo authority, but ${SUDOERS_SNIPPET} is missing."
+  _kind=$(stat -c '%F' "$SUDOERS_SNIPPET" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_SNIPPET}."
+  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_SNIPPET} is not a regular file."
+  _owner=$(fs_owner "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine owner of ${SUDOERS_SNIPPET}."
+  _group=$(fs_group "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine group of ${SUDOERS_SNIPPET}."
+  if [ "$_owner" != root ] || [ "$_group" != root ]; then
+    p2_upgrade_refuse "${SUDOERS_SNIPPET} is owned by ${_owner}:${_group}, expected root:root."
+  fi
+  _mode=$(fs_mode "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine mode of ${SUDOERS_SNIPPET}."
+  case "$_mode" in
+    440|0440) ;;
+    *)
+      p2_upgrade_refuse "${SUDOERS_SNIPPET} mode is ${_mode}, expected 0440."
+      ;;
+  esac
+  if ! canonical_p2_contents | cmp -s "$SUDOERS_SNIPPET" -; then
+    p2_upgrade_refuse "${SUDOERS_SNIPPET} is not the canonical Defaults:${pollinator_user} timestamp_timeout=0 rule."
+  fi
+
+  _dropins=$(ls -1 "$SUDOERS_DIR") || p2_upgrade_refuse "cannot list ${SUDOERS_DIR}."
+  while IFS= read -r _name || [ -n "$_name" ]; do
+    [ -n "$_name" ] || continue
+    if [ "$_name" = opentendril-p2 ]; then
+      continue
+    fi
+    _dropin="${SUDOERS_DIR}/${_name}"
+    _dropin_text=$(cat "$_dropin") || p2_upgrade_refuse "cannot read ${_dropin}."
+    if text_has_timestamp_timeout "$_dropin_text"; then
+      p2_upgrade_refuse "${_dropin} declares timestamp_timeout; precedence cannot be proven."
+    fi
+  done <<OPENTENDRIL_SUDOERS_D_END
+${_dropins}
+OPENTENDRIL_SUDOERS_D_END
+
+  visudo -c </dev/null || p2_upgrade_refuse "visudo -c rejected the sudoers configuration."
+}
+
 enforce_p2() {
   require_cmd sudo
   require_cmd visudo
@@ -1058,12 +1178,17 @@ print_governed_success() {
   printf '  systemctl enable --now tendril\n'
 }
 
-require_governed_platform() {
+require_governed_root() {
+  _op=$1
   require_cmd id
   _uid=$(id -u) || die "id -u failed"
   if [ "$_uid" != 0 ]; then
-    die "governed installation requires root (effective uid 0). Re-run as root, for example: sudo sh install.sh --governed --pollinator-user <account>"
+    die "${_op} requires root (effective uid 0). Re-run as root, for example: sudo sh install.sh --governed --pollinator-user <account>"
   fi
+}
+
+require_governed_fresh_platform() {
+  require_governed_root "governed installation"
   detect_platform
   if [ "$os" != linux ]; then
     die "governed installation requires Linux; ${raw_os} is not a qualified governed platform (Ubuntu 24.04 LTS linux/amd64 only)"
@@ -1083,8 +1208,26 @@ require_governed_platform() {
   fi
 }
 
+require_governed_upgrade_platform() {
+  require_governed_root "governed upgrade"
+  detect_platform
+  if [ "$os" != linux ]; then
+    die "governed upgrade requires Linux; ${raw_os} is not a governed-upgrade host"
+  fi
+  if [ "$wsl" -eq 1 ]; then
+    die "governed upgrade does not support WSL"
+  fi
+  if [ "$arch" != amd64 ]; then
+    die "governed upgrade requires linux/amd64; linux/${arch} is not a governed-upgrade host"
+  fi
+  parse_os_release
+  if [ "$os_id" != ubuntu ]; then
+    die "governed upgrade requires Ubuntu; /etc/os-release ID=${os_id} is not a governed-upgrade host"
+  fi
+}
+
 install_governed() {
-  require_governed_platform
+  require_governed_fresh_platform
   require_cmd cat
   require_cmd stat
   require_cmd getent
@@ -1376,16 +1519,120 @@ classify_upgrade_service_layout() {
   die "cannot upgrade: neither ${UNIT_PATH} nor ${LEGACY_UNIT_PATH} exists. This does not appear to be a governed host."
 }
 
+require_existing_tendril_principal() {
+  _pw=$(passwd_entry "$STEM_USER" || true)
+  if [ -z "$_pw" ]; then
+    die "cannot upgrade: ${STEM_USER} account does not exist. Is this a governed host?"
+  fi
+  parse_passwd_line "$_pw"
+  tendril_uid=$pw_uid
+  case "$tendril_uid" in
+    ''|*[!0-9]*) die "cannot upgrade: ${STEM_USER} account has an unusable uid" ;;
+  esac
+  if [ "$tendril_uid" -eq 0 ]; then
+    die "cannot upgrade: ${STEM_USER} uid is 0. The Stem must remain an unprivileged principal."
+  fi
+  if [ "$tendril_uid" -lt 1000 ]; then
+    die "cannot upgrade: ${STEM_USER} uid ${tendril_uid} is a system account. Is this a governed host?"
+  fi
+  if [ "$pw_home" != "$STEM_HOME" ]; then
+    die "cannot upgrade: ${STEM_USER} account has home ${pw_home}, expected ${STEM_HOME}"
+  fi
+  fs_is_dir "$STEM_HOME" || die "cannot upgrade: ${STEM_HOME} is missing"
+  _owner=$(fs_owner "$STEM_HOME") || die "cannot determine owner of ${STEM_HOME}"
+  if [ "$_owner" != "$STEM_USER" ]; then
+    die "cannot upgrade: ${STEM_HOME} is owned by ${_owner}, expected ${STEM_USER}"
+  fi
+  _hash=$(shadow_hash "$STEM_USER") || die "cannot upgrade: cannot read the ${STEM_USER} shadow entry"
+  if ! password_is_locked "$_hash"; then
+    die "cannot upgrade: ${STEM_USER} account has an interactive password; the Stem principal must remain locked and non-interactive"
+  fi
+}
+
+require_pollinator_separated_from_stem() {
+  _groups=$(id -Gn "$pollinator_user") || die "cannot read groups for ${pollinator_user}"
+  for _g in $_groups; do
+    if [ "$_g" = "$STEM_USER" ]; then
+      die "cannot upgrade: Pollinator-hosting account ${pollinator_user} is in group ${STEM_USER}, so it can write the Stem resolution path. Remove that group membership. Governed upgrade will not rewrite group membership."
+    fi
+  done
+}
+
 require_protected_stem_binary() {
   fs_exists "$STEM_BIN" || die "cannot upgrade: protected Stem binary ${STEM_BIN} is missing"
   _kind=$(stat -c '%F' "$STEM_BIN" 2>/dev/null) || die "cannot upgrade: cannot stat ${STEM_BIN}"
   [ "$_kind" = "regular file" ] || die "cannot upgrade: protected Stem binary ${STEM_BIN} is not a regular file"
   _owner=$(fs_owner "$STEM_BIN") || die "cannot determine owner of ${STEM_BIN}"
   [ "$_owner" = "$STEM_USER" ] || die "cannot upgrade: ${STEM_BIN} is owned by ${_owner}, expected ${STEM_USER}"
+  _group=$(fs_group "$STEM_BIN") || die "cannot determine group of ${STEM_BIN}"
+  [ "$_group" = "$STEM_USER" ] || die "cannot upgrade: ${STEM_BIN} group is ${_group}, expected ${STEM_USER}"
+  _mode=$(fs_mode "$STEM_BIN") || die "cannot determine mode of ${STEM_BIN}"
+  case "$_mode" in
+    750|0750) ;;
+    *)
+      die "cannot upgrade: ${STEM_BIN} mode is ${_mode}, expected 0750"
+      ;;
+  esac
+}
+
+inspect_pollinator_privilege_readonly() {
+  require_cmd sudo
+  _listing_status=0
+  _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>&1) || _listing_status=$?
+  if [ "$_listing_status" -ne 0 ]; then
+    case "$_listing" in
+      *'not allowed to run sudo'*)
+        ;;
+      *)
+        die "cannot upgrade: failed to read sudo policy for ${pollinator_user} (sudo -l -U exited ${_listing_status}); refusing to classify the P2 posture. Governed upgrade will not rewrite sudo policy."
+        ;;
+    esac
+  fi
+  if sudo_listing_has_passwordless_privilege "$_listing"; then
+    die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Governed upgrade will not loosen sudo policy."
+  fi
+  if ! sudo_listing_lacks_sudo_authority "$_listing"; then
+    prove_canonical_p2_provenance
+  fi
+  if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
+    die "cannot upgrade: Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture. Governed upgrade will not rewrite sudo policy."
+  fi
+}
+
+verify_existing_tendril_rootless_docker() {
+  _runtime="/run/user/${tendril_uid}"
+  if ! fs_exists "$_runtime"; then
+    die "cannot upgrade: ${STEM_USER} runtime directory ${_runtime} is missing. Governed upgrade will not create it or start a user session."
+  fi
+  fs_is_dir "$_runtime" || die "cannot upgrade: ${_runtime} is not a directory"
+  _runtime_owner=$(fs_owner "$_runtime") || die "cannot upgrade: cannot determine owner of ${_runtime}"
+  if [ "$_runtime_owner" != "$STEM_USER" ]; then
+    die "cannot upgrade: ${_runtime} is owned by ${_runtime_owner}, expected ${STEM_USER}. Governed upgrade will not take ownership of the runtime directory."
+  fi
+  if unit_is_active docker.service; then
+    die "cannot upgrade: system docker.service is active (rootful). Governed upgrade will not disable, remove, or repurpose a foreign rootful Docker daemon."
+  fi
+  if unit_is_active docker.socket; then
+    die "cannot upgrade: system docker.socket is active (rootful). Governed upgrade will not disable, remove, or repurpose a foreign rootful Docker socket."
+  fi
+  if unit_is_enabled docker.service || unit_is_enabled docker.socket; then
+    die "cannot upgrade: system docker.service or docker.socket is enabled. That is a rootful boot path. Governed upgrade will not disable or repurpose it."
+  fi
+  if rootful_cli_usable; then
+    die "cannot upgrade: a usable rootful Docker daemon answered docker info. Governed upgrade will not take over a foreign rootful Docker posture."
+  fi
+  command -v docker >/dev/null 2>&1 || die "cannot upgrade: docker CLI is missing; cannot prove the ${STEM_USER} rootless daemon. Governed upgrade will not install Docker."
+  _opts=$(tendril_docker_opts) || die "cannot upgrade: failed to query the ${STEM_USER} Docker daemon at unix://${_runtime}/docker.sock. Governed upgrade will not install, start, or repair Docker."
+  case "$_opts" in
+    *rootless*) ;;
+    *)
+      die "cannot upgrade: ${STEM_USER} Docker daemon is not rootless (SecurityOptions: ${_opts}). Governed upgrade will not reconfigure Docker."
+      ;;
+  esac
 }
 
 install_governed_upgrade() {
-  require_governed_platform
+  require_governed_upgrade_platform
   require_cmd cat
   require_cmd stat
   require_cmd getent
@@ -1393,6 +1640,7 @@ install_governed_upgrade() {
   require_cmd systemctl
   require_cmd cmp
   require_cmd id
+  require_cmd sudo
 
   governed_upgrade_started=0
   governed_upgrade_finished=0
@@ -1411,24 +1659,10 @@ install_governed_upgrade() {
     die "--governed-upgrade requires --pollinator-user <account>. Direct root execution cannot identify the Pollinator-hosting account."
   fi
   resolve_pollinator
-
-  _pw=$(passwd_entry "$STEM_USER" || true)
-  if [ -z "$_pw" ]; then
-    die "cannot upgrade: ${STEM_USER} account does not exist. Is this a governed host?"
-  fi
-  parse_passwd_line "$_pw"
-  tendril_uid=$pw_uid
-  case "$tendril_uid" in
-    ''|*[!0-9]*) die "cannot upgrade: ${STEM_USER} account has an unusable uid" ;;
-  esac
-  if [ "$tendril_uid" -lt 1000 ]; then
-    die "cannot upgrade: ${STEM_USER} uid ${tendril_uid} is a system account. Is this a governed host?"
-  fi
-  if [ "$pw_home" != "$STEM_HOME" ]; then
-    die "cannot upgrade: ${STEM_USER} account has home ${pw_home}, expected ${STEM_HOME}"
-  fi
-
+  require_existing_tendril_principal
+  require_pollinator_separated_from_stem
   require_protected_stem_binary
+  inspect_pollinator_privilege_readonly
 
   mcp_dest="${pollinator_home}/.local/bin/tendril-mcp"
   if fs_exists "$mcp_dest"; then
@@ -1437,15 +1671,13 @@ install_governed_upgrade() {
     upgrade_mcp=1
   fi
 
-  if ! fs_exists "$UNIT_PATH" && ! fs_exists "$LEGACY_UNIT_PATH"; then
-    die "cannot upgrade: neither ${UNIT_PATH} nor ${LEGACY_UNIT_PATH} exists. This does not appear to be a governed host."
-  fi
-
   archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
   prepare_workdir governed_upgrade_cleanup
-  obtain_verified_archive
   classify_upgrade_service_layout
+  validate_effective_service
+  verify_existing_tendril_rootless_docker
 
+  obtain_verified_archive
   extract_member tendril
   staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
   if [ "$upgrade_mcp" -eq 1 ]; then
@@ -1534,6 +1766,8 @@ install_governed_upgrade() {
   printf '\n'
   printf 'This upgrade did not run tendril init and did not reinitialize durable Stem state.\n'
   printf 'The host retains its P1-P5 governed posture.\n'
+  printf 'This upgrade does not qualify this Ubuntu release for fresh governed installation.\n'
+  printf 'Fresh governed installation remains Ubuntu 24.04 LTS, linux/amd64, systemd, and rootless Docker.\n'
 }
 
 main() {

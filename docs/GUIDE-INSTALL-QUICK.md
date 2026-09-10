@@ -5,8 +5,11 @@ Two postures. They are not interchangeable.
 **Local / evaluation** is LOCAL / SINGLE-PRINCIPAL. The Stem runs as this
 account. It does not claim the governed boundary.
 
-**Governed** is a separately owned Stem. It is qualified only on the matrix
-below. WSL and macOS are not governed.
+**Governed** is a separately owned Stem. Fresh governed installation is
+qualified only on the matrix below. WSL and macOS are not governed. An
+existing governed Ubuntu host may be eligible for `--governed-upgrade`
+outside that matrix only after a read-only proof of the current governed
+posture. That is not fresh-install qualification.
 
 The deeper hardened/manual reference — invariants, rationale, the full
 procedure, variations, and troubleshooting — is
@@ -145,6 +148,12 @@ the Git Fruit. `main` stays unchanged until a human merges.
 Use the same verified installer and release pin as governed installation. Name
 the ordinary Pollinator-hosting account. Do **not** pipe the installer into
 `sudo sh`.
+
+`--governed-upgrade` upgrades an existing governed Ubuntu host. It does not
+qualify that host for a fresh `--governed` installation. Fresh governed
+installation remains Ubuntu 24.04 LTS, linux/amd64, systemd, and rootless
+Docker. If the installer cannot prove the existing governed posture, it fails
+closed before changing protected host state.
 
 ```bash
 # [root] Linux amd64 — same RELEASE pin as governed installation above.
