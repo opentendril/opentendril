@@ -42,6 +42,7 @@ need_host_cmd id
 need_host_cmd stat
 need_host_cmd grep
 need_host_cmd touch
+need_host_cmd cmp
 
 real_home="${HOME}"
 host_tendril=""
@@ -811,6 +812,15 @@ if events_match '^CMD (apt-get |adduser |usermod |loginctl |systemctl )'; then
   fail "--governed without root must not mutate the host" "events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
+new_case
+run_installer --governed --governed-upgrade --pollinator-user alice
+assert_failure_no_extract "--governed and --governed-upgrade are mutually exclusive"
+if grep -q 'mutually exclusive' "${stderr_file}"; then
+  pass "--governed and --governed-upgrade are mutually exclusive"
+else
+  fail "--governed and --governed-upgrade are mutually exclusive" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
 # --- governed helpers -------------------------------------------------------
 
 HOSTFS=""
@@ -885,9 +895,8 @@ new_governed_case() {
   setup_governed_host
 }
 
-setup_governed_host
 setup_governed_shims() {
-  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch
+  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch real_cmp
   setup_shims
   real_stat="$(type -P stat)"
   real_mkdir="$(type -P mkdir)"
@@ -897,6 +906,7 @@ setup_governed_shims() {
   real_install="$(type -P install)"
   real_cp="$(type -P cp)"
   real_touch="$(type -P touch)"
+  real_cmp="$(type -P cmp)"
   ln -sf "$(type -P true)" "${SHIM_DIR}/true"
   ln -sf "$(type -P false)" "${SHIM_DIR}/false"
 
@@ -1018,31 +1028,19 @@ case "\$db" in
 esac
 EOF
 
-  write_exec "${SHIM_DIR}/diff" <<'EOF'
+  write_exec "${SHIM_DIR}/cmp" <<EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
+logcmd cmp "\$*"
 args=""
-for arg in "$@"; do
-  if [ -f "$(hostpath "$arg")" ]; then
-    args="$args $(hostpath "$arg")"
-  else
-    args="$args $arg"
-  fi
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *) args="\$args \$(hostpath "\$a")" ;;
+  esac
 done
-exec ${real_diff} $args
-EOF
-  write_exec "${SHIM_DIR}/cmp" <<'EOF'
-#!/bin/sh
-. "${SHIM_DIR}/hostpath.lib"
-args=""
-for arg in "$@"; do
-  if [ -f "$(hostpath "$arg")" ]; then
-    args="$args $(hostpath "$arg")"
-  else
-    args="$args $arg"
-  fi
-done
-exec ${real_cmp} $args
+# shellcheck disable=SC2086
+exec ${real_cmp} \$args
 EOF
   write_exec "${SHIM_DIR}/cat" <<EOF
 #!/bin/sh
@@ -1151,22 +1149,34 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd cp "\$*"
-src=""
-dest=""
-prev=""
+first_file=""
 for a in "\$@"; do
   case "\$a" in
     -*) ;;
     *)
-      if [ -n "\$dest" ]; then
-        src="\$src \$dest"
+      if [ -z "\$first_file" ]; then
+        first_file=\$a
       fi
-      dest=\$a
       ;;
   esac
-  prev=\$a
 done
-exec ${real_cp} "\$src" "\$(hostpath "\$dest")"
+if [ -f "${ROOT}/state/fail-rollback-cp" ]; then
+  case "\$first_file" in
+    */rollback/*)
+      printf 'cp shim: simulated rollback copy failure\\n' >&2
+      exit 1
+      ;;
+  esac
+fi
+args=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *) args="\$args \$(hostpath "\$a")" ;;
+  esac
+done
+# shellcheck disable=SC2086
+exec ${real_cp} \$args
 EOF
 
   write_exec "${SHIM_DIR}/install" <<EOF
@@ -1203,6 +1213,22 @@ if [ \$# -lt 2 ]; then
 fi
 src=\$1
 dest=\$2
+if [ -f "${ROOT}/state/fail-install-unit" ] && [ "\$dest" = "/usr/local/lib/systemd/system/tendril.service" ]; then
+  printf 'install shim: simulated unit install failure\\n' >&2
+  exit 1
+fi
+if [ -f "${ROOT}/state/fail-install-tendril" ] && [ "\$dest" = "/home/tendril/.local/bin/tendril" ]; then
+  printf 'install shim: simulated Stem binary install failure\\n' >&2
+  exit 1
+fi
+if [ -f "${ROOT}/state/fail-install-mcp" ]; then
+  case "\$dest" in
+    */tendril-mcp)
+      printf 'install shim: simulated MCP install failure\\n' >&2
+      exit 1
+      ;;
+  esac
+fi
 rdest=\$(hostpath "\$dest")
 parent=\${rdest%/*}
 ${real_mkdir} -p "\$parent"
@@ -1413,12 +1439,12 @@ while [ \$# -gt 0 ]; do
   case "\$1" in
     --user) user_mode=1; shift ;;
     --now) now=1; shift ;;
+    --quiet|-q) shift ;;
     is-active|is-enabled|mask|unmask|disable|enable|start|stop|daemon-reload|show)
       action=\$1
       shift
       ;;
     --property=*)
-      # Ignore --property filter in shim for simplicity, just dump all
       shift
       ;;
     *)
@@ -1509,6 +1535,17 @@ case "\$action" in
     fi
     for u in "\$@"; do
       n=\$(norm "\$u")
+      if [ "\$n" = tendril.service ]; then
+        if [ -f "${ROOT}/state/fail-start-tendril-once" ]; then
+          ${real_rm} -f "${ROOT}/state/fail-start-tendril-once"
+          printf 'Failed to start tendril.service\\n' >&2
+          exit 1
+        fi
+        if [ -f "${ROOT}/state/fail-start-tendril" ]; then
+          printf 'Failed to start tendril.service\\n' >&2
+          exit 1
+        fi
+      fi
       ${real_touch} "${ROOT}/state/active/\$n"
     done
     exit 0
@@ -1521,23 +1558,99 @@ case "\$action" in
     exit 0
     ;;
   daemon-reload)
+    if [ -f "${ROOT}/state/fail-daemon-reload-once" ]; then
+      ${real_rm} -f "${ROOT}/state/fail-daemon-reload-once"
+      printf 'Failed to reload daemon\\n' >&2
+      exit 1
+    fi
     ${real_touch} "${ROOT}/state/daemon-reload"
     exit 0
     ;;
   show)
     u=\$(norm "\$1")
-    # If the test case provided a fake show output, use it
     if [ -f "${ROOT}/state/systemctl-show-\$u" ]; then
       ${real_cat} "${ROOT}/state/systemctl-show-\$u"
       exit 0
     fi
-    # Otherwise just dump the unit file contents (which is enough for simple grep tests)
-    if [ -f "${HOSTFS}/usr/local/lib/systemd/system/\$u" ]; then
-      ${real_cat} "${HOSTFS}/usr/local/lib/systemd/system/\$u"
-    elif [ -f "${HOSTFS}/etc/systemd/system/\$u" ]; then
-      ${real_cat} "${HOSTFS}/etc/systemd/system/\$u"
+    etc="${HOSTFS}/etc/systemd/system/\$u"
+    vendor="${HOSTFS}/usr/local/lib/systemd/system/\$u"
+    if [ -f "\$etc" ]; then
+      base="\$etc"
+    elif [ -f "\$vendor" ]; then
+      base="\$vendor"
     else
       exit 1
+    fi
+    keydir="${ROOT}/state/showparse-\$u"
+    ${real_rm} -rf "\$keydir"
+    ${real_mkdir} -p "\$keydir"
+    parse_unit() {
+      while IFS= read -r line || [ -n "\$line" ]; do
+        case "\$line" in
+          \[*) ;;
+          \#*) ;;
+          '') ;;
+          *=*)
+            k=\${line%%=*}
+            v=\${line#*=}
+            case "\$k" in
+              Environment)
+                printf '%s\\n' "\$v" >> "\$keydir/Environment.list"
+                ;;
+              ReadWritePaths)
+                printf '%s\\n' "\$v" >> "\$keydir/ReadWritePaths.list"
+                ;;
+              *)
+                printf '%s\\n' "\$v" > "\$keydir/\$k"
+                ;;
+            esac
+            ;;
+        esac
+      done < "\$1"
+    }
+    parse_unit "\$base"
+    dropdir="${HOSTFS}/etc/systemd/system/\${u}.d"
+    if [ -d "\$dropdir" ]; then
+      for f in "\$dropdir"/*.conf; do
+        if [ -f "\$f" ]; then
+          parse_unit "\$f"
+        fi
+      done
+    fi
+    for k in User Group WorkingDirectory StateDirectory StateDirectoryMode NoNewPrivileges PrivateTmp ProtectSystem ProtectKernelTunables ProtectControlGroups RestrictSUIDSGID; do
+      if [ -f "\$keydir/\$k" ]; then
+        printf '%s=%s\\n' "\$k" "\$(${real_cat} "\$keydir/\$k")"
+      fi
+    done
+    if [ -f "\$keydir/ExecStart" ]; then
+      es=\$(${real_cat} "\$keydir/ExecStart")
+      case "\$es" in
+        \{*)
+          printf 'ExecStart=%s\\n' "\$es"
+          ;;
+        *)
+          path=\${es%% *}
+          printf 'ExecStart={ path=%s ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\\n' "\$path" "\$es"
+          ;;
+      esac
+    fi
+    if [ -f "\$keydir/Environment.list" ]; then
+      while IFS= read -r ev || [ -n "\$ev" ]; do
+        [ -n "\$ev" ] || continue
+        printf 'Environment=%s\\n' "\$ev"
+      done < "\$keydir/Environment.list"
+    fi
+    if [ -f "\$keydir/ReadWritePaths.list" ]; then
+      rwp=""
+      while IFS= read -r p || [ -n "\$p" ]; do
+        [ -n "\$p" ] || continue
+        if [ -z "\$rwp" ]; then
+          rwp=\$p
+        else
+          rwp="\$rwp \$p"
+        fi
+      done < "\$keydir/ReadWritePaths.list"
+      printf 'ReadWritePaths=%s\\n' "\$rwp"
     fi
     exit 0
     ;;
@@ -1812,6 +1925,194 @@ run_governed_installer() {
   set -e
 }
 
+run_governed_upgrade_installer() {
+  : >"${events_file}"
+  setup_governed_shims
+  local fixture_version="${PIN_VERSION#v}"
+  local scan_arg scan_value scan_index
+  local scan_args=("$@")
+  for ((scan_index = 0; scan_index < ${#scan_args[@]}; scan_index++)); do
+    scan_arg="${scan_args[scan_index]}"
+    case "${scan_arg}" in
+      --version=*)
+        fixture_version="${scan_arg#--version=}"
+        ;;
+      --version)
+        if [ $((scan_index + 1)) -lt ${#scan_args[@]} ]; then
+          scan_value="${scan_args[scan_index + 1]}"
+          fixture_version="${scan_value#v}"
+          scan_index=$((scan_index + 1))
+        fi
+        ;;
+    esac
+  done
+  if [ -z "${fixture_version}" ]; then
+    fixture_version=0.3.13
+  fi
+  if [ -f "${ROOT}/fail-version" ]; then
+    fixture_version=9.9.9
+  fi
+  local env_args=(
+    env -i
+    HOME="${HOSTFS}/root"
+    PATH="${SHIM_DIR}"
+    TMPDIR="${TMP_DIR}"
+    LC_ALL=C
+    FIXTURE_VERSION="${fixture_version}"
+    UNAME_S="${UNAME_S}"
+    UNAME_M="${UNAME_M}"
+  )
+  if [ -n "${WSL_DISTRO}" ]; then
+    env_args+=(WSL_DISTRO_NAME="${WSL_DISTRO}")
+  fi
+  if [ -n "${PIN_VERSION}" ]; then
+    env_args+=(OPENTENDRIL_VERSION="${PIN_VERSION}")
+  fi
+  if [ -n "${GOVERNED_SUDO_USER}" ]; then
+    env_args+=(SUDO_USER="${GOVERNED_SUDO_USER}")
+  fi
+  set +e
+  (
+    cd "${ROOT}" || exit 1
+    "${env_args[@]}" /bin/sh "${installer}" --governed-upgrade "$@"
+  ) >"${stdout_file}" 2>"${stderr_file}"
+  status=$?
+  set -e
+}
+
+write_tendril_unit_file() {
+  local path=$1
+  local uid=${2:-2001}
+  mkdir -p "$(dirname "${path}")"
+  cat >"${path}" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/${uid}
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril /run/user/${uid}
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+write_floor_systemctl_show() {
+  local uid=${1:-2001}
+  mkdir -p "${ROOT}/state"
+  cat >"${ROOT}/state/systemctl-show-tendril.service" <<EOF
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock XDG_RUNTIME_DIR=/run/user/${uid} TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/home/tendril /run/user/${uid}
+EOF
+}
+
+place_old_stem_binary() {
+  mkdir -p "${HOSTFS}/home/tendril/.local/bin" "${ROOT}/meta/owners"
+  printf '#!/bin/sh\nprintf "tendril old\\n"\n' >"${HOSTFS}/home/tendril/.local/bin/tendril"
+  chmod 0750 "${HOSTFS}/home/tendril/.local/bin/tendril"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril%.local%bin%tendril"
+}
+
+place_old_mcp() {
+  local user=${1:-alice}
+  mkdir -p "${HOSTFS}/home/${user}/.local/bin" "${ROOT}/meta/owners"
+  printf '#!/bin/sh\nprintf "tendril-mcp old\\n"\n' >"${HOSTFS}/home/${user}/.local/bin/tendril-mcp"
+  chmod 0755 "${HOSTFS}/home/${user}/.local/bin/tendril-mcp"
+  printf '%s\n' "${user}" >"${ROOT}/meta/owners/%home%${user}%.local%bin%tendril-mcp"
+}
+
+seed_durable_stem_state() {
+  mkdir -p \
+    "${HOSTFS}/home/tendril/.tendril/substrates/myrepo" \
+    "${HOSTFS}/home/tendril/.tendril/workspaces" \
+    "${HOSTFS}/home/tendril/.tendril/run-workspaces" \
+    "${ROOT}/meta/owners"
+  printf 'SENTINEL-ENV\n' >"${HOSTFS}/home/tendril/.env"
+  printf 'SENTINEL-DOT\n' >"${HOSTFS}/home/tendril/.tendril/marker"
+  printf 'SENTINEL-KEY\n' >"${HOSTFS}/home/tendril/.tendril/app.pem"
+  printf 'SENTINEL-GRANT\n' >"${HOSTFS}/home/tendril/.tendril/grants.yaml"
+  printf 'SENTINEL-CRED\n' >"${HOSTFS}/home/tendril/.tendril/credentials"
+  printf 'SENTINEL-SUB\n' >"${HOSTFS}/home/tendril/substrates.yaml"
+  printf 'SENTINEL-REPO\n' >"${HOSTFS}/home/tendril/.tendril/substrates/myrepo/HEAD"
+  printf 'SENTINEL-WS\n' >"${HOSTFS}/home/tendril/.tendril/workspaces/ws1"
+  printf 'SENTINEL-RW\n' >"${HOSTFS}/home/tendril/.tendril/run-workspaces/rw1"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril%.env"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%home%tendril%.tendril"
+}
+
+assert_durable_untouched() {
+  local name=$1
+  if [ "$(cat "${HOSTFS}/home/tendril/.env")" = "SENTINEL-ENV" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/marker")" = "SENTINEL-DOT" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/app.pem")" = "SENTINEL-KEY" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/grants.yaml")" = "SENTINEL-GRANT" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/credentials")" = "SENTINEL-CRED" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/substrates.yaml")" = "SENTINEL-SUB" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/substrates/myrepo/HEAD")" = "SENTINEL-REPO" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/workspaces/ws1")" = "SENTINEL-WS" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.tendril/run-workspaces/rw1")" = "SENTINEL-RW" ]; then
+    pass "${name}"
+    return 0
+  fi
+  fail "${name}"
+  return 1
+}
+
+assert_no_upgrade_bootstrap() {
+  local name=$1
+  if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo )' "${events_file}"; then
+    fail "${name}: performed governed host-bootstrap operations" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq 'tendril init' "${events_file}"; then
+    fail "${name}: ran tendril init" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if grep -Eq '^CMD systemctl (mask |unmask )docker' "${events_file}"; then
+    fail "${name}: mutated Docker units" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
+}
+
+prepare_upgrade_host() {
+  preseed_tendril_user with-subid
+  place_old_stem_binary
+  seed_durable_stem_state
+  write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
+  write_floor_systemctl_show 2001
+}
+
 assert_no_host_mutation() {
   local name=$1
   if grep -Eq '^CMD (apt-get |adduser |usermod |loginctl |dockerd-rootless|visudo |systemctl )' "${events_file}"; then
@@ -1923,7 +2224,8 @@ assert_no_post_netfilter_mutation() {
     fail "${name}: binaries were placed"
     return 1
   fi
-  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ] \
+    || [ -e "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ]; then
     fail "${name}: unit was installed"
     return 1
   fi
@@ -2514,6 +2816,11 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   else
     fail "generated unit uses actual tendril UID and protected ExecStart: missing unit"
   fi
+  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    fail "fresh install created an OpenTendril base unit under /etc/systemd/system"
+  else
+    pass "fresh install does not create an OpenTendril base unit under /etc/systemd/system"
+  fi
   if grep -Eq '^CMD systemctl (enable |start )tendril' "${events_file}"; then
     fail "unit is started or enabled before configuration" "events=$(tr '\n' ' ' <"${events_file}")"
   else
@@ -2824,6 +3131,463 @@ else
   fi
 fi
 
+# --- fresh install collision and effective validation -----------------------
+
+new_governed_case
+mkdir -p "${HOSTFS}/etc/systemd/system"
+printf 'pre-existing-full-unit\n' >"${HOSTFS}/etc/systemd/system/tendril.service"
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "fresh install rejects a pre-existing /etc full-unit collision"; then
+  if grep -q -- '--governed-upgrade' "${stderr_file}" \
+    && grep -q '/etc/systemd/system/tendril.service already exists' "${stderr_file}"; then
+    if [ "$(cat "${HOSTFS}/etc/systemd/system/tendril.service")" = "pre-existing-full-unit" ]; then
+      if assert_no_host_mutation "fresh install rejects a pre-existing /etc full-unit collision"; then
+        pass "fresh install rejects a pre-existing /etc full-unit collision"
+      fi
+    else
+      fail "fresh install rejects a pre-existing /etc full-unit collision: /etc unit was rewritten"
+    fi
+  else
+    fail "fresh install rejects a pre-existing /etc full-unit collision: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+mkdir -p "${HOSTFS}/etc/systemd/system/tendril.service.d"
+cat >"${HOSTFS}/etc/systemd/system/tendril.service.d/weaken.conf" <<'EOF'
+[Service]
+User=root
+EOF
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "fresh install effective-validation rejects a weakening drop-in"; then
+  if grep -q 'effective service validation failed' "${stderr_file}"; then
+    if [ -f "${HOSTFS}/etc/systemd/system/tendril.service.d/weaken.conf" ]; then
+      pass "fresh install effective-validation rejects a weakening drop-in"
+    else
+      fail "fresh install effective-validation rejects a weakening drop-in: drop-in was removed"
+    fi
+  else
+    fail "fresh install effective-validation rejects a weakening drop-in: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+# --- governed upgrade -------------------------------------------------------
+
+new_governed_case
+printf '1000\n' >"${ROOT}/euid"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'requires root' "${stderr_file}"; then
+  pass "governed upgrade requires root"
+else
+  fail "governed upgrade requires root" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+run_governed_installer --governed-upgrade --pollinator-user alice
+if assert_governed_failure "mutual exclusion is enforced in governed mode"; then
+  if grep -q 'mutually exclusive' "${stderr_file}"; then
+    pass "mutual-exclusion failure"
+  else
+    fail "mutual-exclusion failure: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_governed_upgrade_installer
+if [ "${status}" -ne 0 ] && grep -q -- '--pollinator-user' "${stderr_file}"; then
+  pass "governed upgrade requires named --pollinator-user"
+else
+  fail "governed upgrade requires named --pollinator-user" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+GOVERNED_SUDO_USER=alice
+run_governed_upgrade_installer
+if [ "${status}" -ne 0 ] && grep -q -- '--pollinator-user' "${stderr_file}"; then
+  pass "governed upgrade does not guess a Pollinator from SUDO_USER"
+else
+  fail "governed upgrade does not guess a Pollinator from SUDO_USER" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ]; then
+  pass "named Pollinator selection"
+  if events_match 'CMD curl https://github.com/opentendril/opentendril/releases/download/v0.3.0/opentendril-linux-amd64.tar.gz'; then
+    pass "governed upgrade pins the requested release"
+  else
+    fail "governed upgrade pins the requested release" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match '^CMD install -o tendril -g tendril -m 0750 .* /home/tendril/.local/bin/tendril$'; then
+    pass "Stem binary remains owner tendril:tendril mode 0750"
+  else
+    fail "Stem binary remains owner tendril:tendril mode 0750" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+    && ! grep -q 'tendril old' "${HOSTFS}/home/tendril/.local/bin/tendril"; then
+    pass "existing release baseline upgrades in place"
+  else
+    fail "existing release baseline upgrades in place"
+  fi
+  if [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "MCP absence remains absence: MCP was created"
+  else
+    pass "MCP absent remains absent"
+  fi
+  if grep -q 'tendril-mcp: absent' "${stdout_file}"; then
+    pass "MCP absence is reported"
+  else
+    fail "MCP absence is reported" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  if assert_no_upgrade_bootstrap "no governed host-bootstrap operations during upgrade"; then
+    pass "no governed host-bootstrap operations during upgrade"
+  fi
+  if assert_durable_untouched "durable .env, .tendril, credentials, grants and Substrates untouched"; then
+    :
+  fi
+  if grep -Eq '^CMD systemctl (enable |disable).*tendril' "${events_file}"; then
+    fail "enablement state is unchanged: enable/disable was invoked" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "enablement state is unchanged"
+  fi
+else
+  fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+place_old_mcp alice
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && grep -q 'mcp-payload' "${HOSTFS}/home/alice/.local/bin/tendril-mcp" \
+  && ! grep -q 'tendril-mcp old' "${HOSTFS}/home/alice/.local/bin/tendril-mcp"; then
+  pass "MCP present is upgraded at the named Pollinator path"
+  if events_match '^CMD install -o alice -g alice -m 0755 .* /home/alice/.local/bin/tendril-mcp$'; then
+    pass "MCP replacement uses the named Pollinator owner"
+  else
+    fail "MCP replacement uses the named Pollinator owner" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+else
+  fail "MCP present is upgraded at the named Pollinator path" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'bob:x:1001:1001:Bob:/home/bob:/bin/bash\n' >>"${HOSTFS}/etc/passwd"
+printf 'bob:!:19600:0:99999:7:::\n' >>"${HOSTFS}/etc/shadow"
+printf 'bob:x:1001:\n' >>"${HOSTFS}/etc/group"
+mkdir -p "${HOSTFS}/home/bob"
+printf 'bob\n' >"${ROOT}/meta/owners/%home%bob"
+place_old_mcp bob
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ]; then
+  if [ -e "${HOSTFS}/home/alice/.local/bin/tendril-mcp" ]; then
+    fail "named Pollinator without MCP does not create MCP"
+  elif ! grep -q 'tendril-mcp old' "${HOSTFS}/home/bob/.local/bin/tendril-mcp"; then
+    fail "MCP at an unnamed account was mutated"
+  else
+    pass "MCP is upgraded only at the named Pollinator path"
+  fi
+else
+  fail "MCP is upgraded only at the named Pollinator path" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${HOSTFS}/home/tendril/.local/bin/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'protected Stem binary' "${stderr_file}"; then
+  if events_match '^CMD tar '; then
+    fail "missing protected Stem binary: mutated after failure" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "missing protected Stem binary"
+  fi
+else
+  fail "missing protected Stem binary" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+place_old_stem_binary
+seed_durable_stem_state
+write_floor_systemctl_show 2001
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
+  pass "governed upgrade fails if base unit is missing"
+else
+  fail "governed upgrade fails if base unit is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+place_old_stem_binary
+seed_durable_stem_state
+write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
+write_floor_systemctl_show 2001
+legacy_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+  && [ ! -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+  pass "exact known legacy unit migrates"
+  if grep -q 'Known legacy unit migrated' "${stdout_file}"; then
+    pass "exact legacy migration is reported"
+  else
+    fail "exact legacy migration is reported" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  if grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+    && ! grep -q 'tendril old' "${HOSTFS}/home/tendril/.local/bin/tendril"; then
+    pass "legacy migration replaces the protected Stem binary"
+  else
+    fail "legacy migration replaces the protected Stem binary"
+  fi
+else
+  fail "exact known legacy unit migrates" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+place_old_stem_binary
+seed_durable_stem_state
+write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
+printf 'x' >>"${HOSTFS}/etc/systemd/system/tendril.service"
+write_floor_systemctl_show 2001
+before_legacy="$(cat "${HOSTFS}/etc/systemd/system/tendril.service")"
+before_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'fails closed before mutation' "${stderr_file}"; then
+  if [ -e "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ]; then
+    fail "one-byte legacy rejection: vendor unit was written"
+  elif [ "$(cat "${HOSTFS}/etc/systemd/system/tendril.service")" != "${before_legacy}" ]; then
+    fail "one-byte legacy rejection: /etc unit was mutated"
+  elif [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" != "${before_stem}" ]; then
+    fail "one-byte legacy rejection: Stem binary was mutated"
+  elif events_match '^CMD (install |systemctl stop |systemctl start )'; then
+    fail "one-byte legacy rejection: host mutation occurred" "events=$(tr '\n' ' ' <"${events_file}")"
+  else
+    pass "one-byte legacy rejection"
+    pass "ambiguous /etc base unit fails closed"
+  fi
+else
+  fail "one-byte legacy rejection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+mkdir -p "${HOSTFS}/etc/systemd/system/tendril.service.d"
+printf '[Service]\nEnvironment=CUSTOM_ADMIN=1\n' >"${HOSTFS}/etc/systemd/system/tendril.service.d/10-admin.conf"
+dropin_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service.d/10-admin.conf")"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ "$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service.d/10-admin.conf")" = "${dropin_hash}" ]; then
+  pass "administrator drop-in preservation"
+  if grep -q 'Administrator drop-ins preserved' "${stdout_file}"; then
+    pass "administrator drop-ins are reported"
+  else
+    fail "administrator drop-ins are reported" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+else
+  fail "administrator drop-in preservation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'SENTINEL-FULL-UNIT\n' >"${HOSTFS}/etc/systemd/system/tendril.service"
+full_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ "$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")" = "${full_hash}" ] \
+  && [ "$(cat "${HOSTFS}/etc/systemd/system/tendril.service")" = "SENTINEL-FULL-UNIT" ]; then
+  pass "administrator full-unit preservation"
+  if grep -q 'Administrator full-unit override preserved' "${stdout_file}"; then
+    pass "administrator full-unit override is reported"
+  else
+    fail "administrator full-unit override is reported" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+else
+  fail "administrator full-unit preservation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
+old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
+old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'effective service validation failed' "${stderr_file}"; then
+  pass "effective-property weakening"
+  if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ]; then
+    pass "effective-property weakening rolls back the service layout and binary"
+  else
+    fail "effective-property weakening rolls back the service layout and binary"
+  fi
+else
+  fail "effective-property weakening" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/systemctl-show-tendril.service" <<'EOF'
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+Environment=DOCKER_HOST=unix:///run/user/2001/docker.sock XDG_RUNTIME_DIR=/run/user/2001 TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/home/tendril /run/user/2001 /tmp
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'ReadWritePaths' "${stderr_file}"; then
+  pass "ReadWritePaths widening rejection"
+else
+  fail "ReadWritePaths widening rejection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/active/tendril.service"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && events_match '^CMD systemctl stop tendril.service' \
+  && events_match '^CMD systemctl start tendril.service' \
+  && [ -f "${ROOT}/state/active/tendril.service" ]; then
+  pass "active Stem is restarted and verified active"
+else
+  fail "active Stem is restarted and verified active" "status=${status} events=$(tr '\n' ' ' <"${events_file}") stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && ! events_match '^CMD systemctl start tendril.service' \
+  && [ ! -f "${ROOT}/state/active/tendril.service" ]; then
+  pass "inactive Stem remains inactive"
+else
+  fail "inactive Stem remains inactive" "status=${status} events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/enabled/tendril.service"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ -f "${ROOT}/state/enabled/tendril.service" ] \
+  && ! grep -Eq '^CMD systemctl (enable |disable).*tendril' "${events_file}"; then
+  pass "enablement preservation"
+else
+  fail "enablement preservation" "status=${status} events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
+old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+touch "${ROOT}/state/fail-daemon-reload-once"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'daemon-reload failed' "${stderr_file}"; then
+  if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ]; then
+    pass "service-definition failure rollback"
+  else
+    fail "service-definition failure rollback: prior state was not restored"
+  fi
+else
+  fail "service-definition failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
+old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+touch "${ROOT}/state/fail-install-tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'failed to replace the protected Stem binary' "${stderr_file}"; then
+  if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ]; then
+    pass "Stem binary replacement failure rollback"
+  else
+    fail "Stem binary replacement failure rollback: prior state was not restored"
+  fi
+else
+  fail "Stem binary replacement failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+place_old_mcp alice
+old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
+old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+old_mcp="$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")"
+touch "${ROOT}/state/fail-install-mcp"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'failed to replace tendril-mcp' "${stderr_file}"; then
+  if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ] \
+    && [ "$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")" = "${old_mcp}" ]; then
+    pass "MCP replacement failure rollback"
+  else
+    fail "MCP replacement failure rollback: prior state was not restored"
+  fi
+else
+  fail "MCP replacement failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+place_old_mcp alice
+old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
+old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
+old_mcp="$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")"
+touch "${ROOT}/state/active/tendril.service"
+touch "${ROOT}/state/fail-start-tendril-once"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'failed to restart tendril.service' "${stderr_file}"; then
+  if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
+    && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ] \
+    && [ "$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")" = "${old_mcp}" ] \
+    && [ -f "${ROOT}/state/active/tendril.service" ]; then
+    pass "restart failure rollback"
+  else
+    fail "restart failure rollback: prior state was not restored"
+  fi
+else
+  fail "restart failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
+touch "${ROOT}/state/fail-rollback-cp"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] \
+  && grep -q 'effective service validation failed' "${stderr_file}" \
+  && grep -q 'rollback failed' "${stderr_file}" \
+  && ! grep -q 'governed upgrade completed' "${stdout_file}"; then
+  pass "rollback failure reporting"
+else
+  fail "rollback failure reporting" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'tendril account does not exist' "${stderr_file}"; then
+  pass "governed upgrade fails if tendril principal is missing"
+else
+  fail "governed upgrade fails if tendril principal is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
 # --- host isolation ---------------------------------------------------------
 
 if [ -n "${host_tendril}" ]; then
@@ -2874,191 +3638,3 @@ fi
 
 echo
 echo "All ${passes} installer tests passed."
-
-# --- governed upgrade -------------------------------------------------------
-
-setup_legacy_unit() {
-  local uid=$1
-  local path="${HOSTFS}/etc/systemd/system/tendril.service"
-  mkdir -p "${HOSTFS}/etc/systemd/system"
-  cat >"$path" <<EOF
-[Unit]
-Description=OpenTendril Stem
-After=network-online.target
-
-[Service]
-User=tendril
-Group=tendril
-WorkingDirectory=/home/tendril
-Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock
-Environment=XDG_RUNTIME_DIR=/run/user/${uid}
-StateDirectory=opentendril-transport
-StateDirectoryMode=0755
-Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
-ExecStart=/home/tendril/.local/bin/tendril serve
-Restart=on-failure
-
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=/home/tendril /run/user/${uid}
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictSUIDSGID=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
-setup_systemctl_show() {
-  local uid=$1
-  local prop_file="${ROOT}/state/systemctl-show-tendril.service"
-  mkdir -p "${ROOT}/state"
-  cat >"$prop_file" <<EOF
-User=tendril
-Group=tendril
-WorkingDirectory=/home/tendril
-ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
-Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock XDG_RUNTIME_DIR=/run/user/${uid} TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
-StateDirectory=opentendril-transport
-StateDirectoryMode=0755
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictSUIDSGID=yes
-EOF
-}
-
-new_governed_case
-run_installer --governed-upgrade
-assert_failure_no_extract "governed upgrade requires root"
-if grep -q 'requires root' "${stderr_file}"; then
-  pass "governed upgrade requires root names uid 0"
-else
-  fail "governed upgrade requires root names uid 0" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-# Don't create tendril principal
-setup_governed_host
-setup_governed_shims
-run_installer --governed-upgrade
-if grep -q 'cannot upgrade: tendril account does not exist' "${stderr_file}"; then
-  pass "governed upgrade fails if tendril principal is missing"
-else
-  fail "governed upgrade fails if tendril principal is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-run_installer --governed-upgrade
-if grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
-  pass "governed upgrade fails if base unit is missing"
-else
-  fail "governed upgrade fails if base unit is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-setup_legacy_unit 2001
-setup_systemctl_show 2001
-run_installer --governed-upgrade
-if [ "${status}" -eq 0 ]; then
-  pass "exact known legacy unit migrates successfully"
-  if [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ]; then
-    pass "legacy migration wrote to /usr/local/lib"
-  else
-    fail "legacy migration did not write to /usr/local/lib"
-  fi
-  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
-    fail "legacy migration did not remove /etc unit"
-  else
-    pass "legacy migration removed /etc unit"
-  fi
-else
-  fail "exact known legacy unit migrates successfully" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-setup_legacy_unit 2001
-echo "# Modified" >> "${HOSTFS}/etc/systemd/system/tendril.service"
-setup_systemctl_show 2001
-run_installer --governed-upgrade
-if [ "${status}" -ne 0 ] && grep -q 'Ambiguous legacy base unit fails closed' "${stderr_file}"; then
-  pass "ambiguous /etc base unit fails closed"
-else
-  fail "ambiguous /etc base unit fails closed" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-mkdir -p "${HOSTFS}/usr/local/lib/systemd/system"
-touch "${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
-setup_legacy_unit 2001
-echo "# Modified" >> "${HOSTFS}/etc/systemd/system/tendril.service"
-setup_systemctl_show 2001
-run_installer --governed-upgrade
-if [ "${status}" -eq 0 ]; then
-  pass "existing release baseline upgrades in place"
-  if [ -f "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
-    pass "administrator full-unit override survives byte-for-byte and is reported"
-  else
-    fail "administrator full-unit override was removed"
-  fi
-else
-  fail "existing release baseline upgrades in place" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-setup_legacy_unit 2001
-setup_systemctl_show 2001
-sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
-run_installer --governed-upgrade
-if [ "${status}" -ne 0 ] && grep -q 'effective service validation failed' "${stderr_file}"; then
-  pass "weakening override causes effective-service validation failure"
-else
-  fail "weakening override causes effective-service validation failure" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-setup_legacy_unit 2001
-setup_systemctl_show 2001
-touch "${ROOT}/state/active/tendril.service"
-run_installer --governed-upgrade
-if [ "${status}" -eq 0 ] && events_match '^CMD systemctl start tendril.service'; then
-  pass "service active-state preservation restarts active service"
-else
-  fail "service active-state preservation restarts active service" "events=$(tr '\n' ' ' <"${events_file}")"
-fi
-
-new_governed_case
-setup_governed_host
-setup_governed_shims
-"${SHIM_DIR}/adduser" tendril >/dev/null
-setup_legacy_unit 2001
-setup_systemctl_show 2001
-run_installer --governed-upgrade
-if [ "${status}" -eq 0 ] && ! events_match '^CMD systemctl start tendril.service'; then
-  pass "service active-state preservation ignores inactive service"
-else
-  fail "service active-state preservation ignores inactive service" "events=$(tr '\n' ' ' <"${events_file}")"
-fi

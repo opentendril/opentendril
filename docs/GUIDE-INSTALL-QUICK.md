@@ -142,7 +142,9 @@ the Git Fruit. `main` stays unchanged until a human merges.
 
 ## Upgrade
 
-The governed upgrade verifies the release, replaces the binaries, and validates the new configuration. It fails safely if there is an error, preserving the prior installation.
+Use the same verified installer and release pin as governed installation. Name
+the ordinary Pollinator-hosting account. Do **not** pipe the installer into
+`sudo sh`.
 
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
@@ -158,3 +160,9 @@ sudo sh install.sh \
   --pollinator-user <ordinary-user> \
   --version "${RELEASE}"
 ```
+
+The upgrade does not run `tendril init` and does not reinitialize durable Stem
+state. An exact known historical `/etc/systemd/system/tendril.service` is
+migrated; a modified or otherwise ambiguous `/etc` unit fails closed. See
+[GUIDE-INSTALL.md](./GUIDE-INSTALL.md) for the ownership model, fail-closed
+cases, and how restoration is reported if a step fails.
