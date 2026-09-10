@@ -943,6 +943,21 @@ get_owner() {
     printf 'root\\n'
   fi
 }
+set_group() {
+  p=\$1
+  g=\$2
+  ${real_mkdir} -p "${ROOT}/meta/groups"
+  printf '%s\\n' "\$g" > "${ROOT}/meta/groups/\$(owner_key "\$p")"
+}
+get_group() {
+  p=\$1
+  f="${ROOT}/meta/groups/\$(owner_key "\$p")"
+  if [ -f "\$f" ]; then
+    ${real_cat} "\$f"
+  else
+    get_owner "\$p"
+  fi
+}
 logcmd() {
   printf 'CMD %s\\n' "\$*" >> "${events_file}"
 }
@@ -1081,6 +1096,9 @@ if [ -n "\$fmt" ]; then
     %U)
       get_owner "\$path"
       ;;
+    %G)
+      get_group "\$path"
+      ;;
     %a)
       ${real_stat} -c '%a' "\$rpath"
       ;;
@@ -1205,6 +1223,9 @@ if [ "\$directory" -eq 1 ]; then
     if [ -n "\$owner" ]; then
       set_owner "\$dest" "\$owner"
     fi
+    if [ -n "\$group" ]; then
+      set_group "\$dest" "\$group"
+    fi
   done
   exit 0
 fi
@@ -1235,6 +1256,9 @@ ${real_mkdir} -p "\$parent"
 ${real_install} -m "\$mode" "\$src" "\$rdest"
 if [ -n "\$owner" ]; then
   set_owner "\$dest" "\$owner"
+fi
+if [ -n "\$group" ]; then
+  set_group "\$dest" "\$group"
 fi
 exit 0
 EOF
@@ -1725,6 +1749,22 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd docker "\$*"
+case "\${DOCKER_HOST:-}" in
+  unix:///run/user/*/docker.sock)
+    if [ -f "${ROOT}/state/docker-tendril-info-fail" ]; then
+      exit 1
+    fi
+    if [ -f "${ROOT}/state/docker-tendril-info" ]; then
+      ${real_cat} "${ROOT}/state/docker-tendril-info"
+      exit 0
+    fi
+    if [ -f "${ROOT}/state/docker-rootless-ready" ]; then
+      printf '[name=seccomp,name=rootless,name=cgroupns]\\n'
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
 if [ -f "${ROOT}/state/docker-info-fail" ]; then
   exit 1
 fi
@@ -2105,12 +2145,38 @@ assert_no_upgrade_bootstrap() {
   return 0
 }
 
+prepare_upgrade_rootless_runtime() {
+  mkdir -p "${HOSTFS}/run/user/2001" "${ROOT}/meta/owners"
+  printf 'tendril\n' >"${ROOT}/meta/owners/%run%user%2001"
+  touch "${ROOT}/state/docker-rootless-ready"
+}
+
 prepare_upgrade_host() {
   preseed_tendril_user with-subid
   place_old_stem_binary
   seed_durable_stem_state
   write_tendril_unit_file "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" 2001
   write_floor_systemctl_show 2001
+  prepare_upgrade_rootless_runtime
+}
+
+assert_upgrade_preflight_unmutated() {
+  local name=$1
+  if ! assert_no_host_write "${name}"; then
+    return 1
+  fi
+  if ! assert_no_upgrade_bootstrap "${name}"; then
+    return 1
+  fi
+  if grep -q 'Attempting rollback' "${stderr_file}"; then
+    fail "${name}: attempted rollback after a preflight failure"
+    return 1
+  fi
+  if events_match '^CMD tar '; then
+    fail "${name}: extracted the archive after a preflight failure" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  return 0
 }
 
 assert_no_host_mutation() {
@@ -2353,6 +2419,19 @@ if assert_governed_failure "wrong Ubuntu release rejected"; then
     fi
   else
     fail "wrong Ubuntu release rejected: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  fi
+fi
+
+new_governed_case
+write_os_release ubuntu 26.04
+run_governed_installer --pollinator-user alice
+if assert_governed_failure "Ubuntu 26.04 fresh governed rejected before mutation"; then
+  if grep -q '24.04' "${stderr_file}" && grep -q '26.04' "${stderr_file}"; then
+    if assert_no_host_mutation "Ubuntu 26.04 fresh governed rejected before mutation"; then
+      pass "Ubuntu 26.04 fresh governed rejected before mutation"
+    fi
+  else
+    fail "Ubuntu 26.04 fresh governed rejected before mutation: message" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
   fi
 fi
 
@@ -3253,6 +3332,12 @@ if [ "${status}" -eq 0 ]; then
   else
     pass "enablement state is unchanged"
   fi
+  if grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
+    && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
+    pass "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix"
+  else
+    fail "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
 else
   fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
@@ -3327,6 +3412,7 @@ place_old_stem_binary
 seed_durable_stem_state
 write_tendril_unit_file "${HOSTFS}/etc/systemd/system/tendril.service" 2001
 write_floor_systemctl_show 2001
+prepare_upgrade_rootless_runtime
 legacy_hash="$(file_hash "${HOSTFS}/etc/systemd/system/tendril.service")"
 run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
 if [ "${status}" -eq 0 ] \
@@ -3421,9 +3507,11 @@ if [ "${status}" -ne 0 ] && grep -q 'effective service validation failed' "${std
   pass "effective-property weakening"
   if [ "$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")" = "${old_unit}" ] \
     && [ "$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")" = "${old_stem}" ]; then
-    pass "effective-property weakening rolls back the service layout and binary"
+    if assert_upgrade_preflight_unmutated "weakened pre-upgrade effective service fails before mutation"; then
+      pass "weakened pre-upgrade effective service fails before mutation"
+    fi
   else
-    fail "effective-property weakening rolls back the service layout and binary"
+    fail "weakened pre-upgrade effective service fails before mutation: host files changed"
   fi
 else
   fail "effective-property weakening" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
@@ -3449,7 +3537,9 @@ ReadWritePaths=/home/tendril /run/user/2001 /tmp
 EOF
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -q 'ReadWritePaths' "${stderr_file}"; then
-  pass "ReadWritePaths widening rejection"
+  if assert_upgrade_preflight_unmutated "ReadWritePaths widening rejection"; then
+    pass "ReadWritePaths widening rejection"
+  fi
 else
   fail "ReadWritePaths widening rejection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
@@ -3568,11 +3658,11 @@ fi
 
 new_governed_case
 prepare_upgrade_host
-sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
+touch "${ROOT}/state/fail-install-tendril"
 touch "${ROOT}/state/fail-rollback-cp"
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] \
-  && grep -q 'effective service validation failed' "${stderr_file}" \
+  && grep -q 'failed to replace the protected Stem binary' "${stderr_file}" \
   && grep -q 'rollback failed' "${stderr_file}" \
   && ! grep -q 'governed upgrade completed' "${stdout_file}"; then
   pass "rollback failure reporting"
@@ -3586,6 +3676,275 @@ if [ "${status}" -ne 0 ] && grep -q 'tendril account does not exist' "${stderr_f
   pass "governed upgrade fails if tendril principal is missing"
 else
   fail "governed upgrade fails if tendril principal is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+write_os_release ubuntu 26.04
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.0
+if [ "${status}" -eq 0 ] \
+  && [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ] \
+  && grep -q 'tendril-payload' "${HOSTFS}/home/tendril/.local/bin/tendril" \
+  && grep -q 'does not qualify this Ubuntu release for fresh governed installation' "${stdout_file}" \
+  && grep -q 'Fresh governed installation remains Ubuntu 24.04 LTS' "${stdout_file}"; then
+  pass "valid Ubuntu 26.04 existing governed upgrade"
+  if assert_no_upgrade_bootstrap "valid Ubuntu 26.04 existing governed upgrade"; then
+    pass "Ubuntu 26.04 upgrade does not bootstrap Docker or the Stem principal"
+  fi
+  if assert_durable_untouched "Ubuntu 26.04 upgrade leaves durable Stem state untouched"; then
+    :
+  fi
+else
+  fail "valid Ubuntu 26.04 existing governed upgrade" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") stdout=$(tr '\n' ' ' <"${stdout_file}")"
+fi
+
+new_governed_case
+write_os_release debian 12
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'requires Ubuntu' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "non-Ubuntu governed upgrade rejected"; then
+    pass "non-Ubuntu governed upgrade rejected"
+  fi
+else
+  fail "non-Ubuntu governed upgrade rejected" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+WSL_DISTRO=Ubuntu
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'does not support WSL' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "WSL governed upgrade rejected"; then
+    pass "WSL governed upgrade rejected"
+  fi
+else
+  fail "WSL governed upgrade rejected" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -rf "${HOSTFS}/run/user/2001"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/run/user/2001 is missing' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "missing tendril runtime directory fails before mutation"; then
+    pass "missing tendril runtime directory fails before mutation"
+  fi
+else
+  fail "missing tendril runtime directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${ROOT}/state/docker-rootless-ready"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'failed to query the tendril Docker daemon\|will not install, start, or repair Docker' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "unreachable tendril Docker fails before mutation"; then
+    pass "unreachable tendril Docker fails before mutation"
+  fi
+else
+  fail "unreachable tendril Docker fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf '[name=seccomp]\n' >"${ROOT}/state/docker-tendril-info"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'not rootless' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "non-rootless tendril Docker fails before mutation"; then
+    pass "non-rootless tendril Docker fails before mutation"
+  fi
+else
+  fail "non-rootless tendril Docker fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/active/docker.service"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'docker.service is active' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects active rootful docker.service"; then
+    pass "upgrade rejects active rootful docker.service"
+  fi
+else
+  fail "upgrade rejects active rootful docker.service" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/enabled/docker.socket"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'enabled' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects enabled rootful docker.socket"; then
+    pass "upgrade rejects enabled rootful docker.socket"
+  fi
+else
+  fail "upgrade rejects enabled rootful docker.socket" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf '[name=seccomp]\n' >"${ROOT}/state/docker-info"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'rootful' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "upgrade rejects usable ambient rootful Docker"; then
+    pass "upgrade rejects usable ambient rootful Docker"
+  fi
+else
+  fail "upgrade rejects usable ambient rootful Docker" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%home%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/home/tendril is owned by root' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid Stem home ownership fails before mutation"; then
+    pass "invalid Stem home ownership fails before mutation"
+  fi
+else
+  fail "invalid Stem home ownership fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'tendril:$6$notlocked:19600:0:99999:7:::\n' >"${HOSTFS}/etc/shadow.tmp"
+grep -v '^tendril:' "${HOSTFS}/etc/shadow" >>"${HOSTFS}/etc/shadow.tmp"
+mv "${HOSTFS}/etc/shadow.tmp" "${HOSTFS}/etc/shadow"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'interactive password' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "interactive Stem principal fails before mutation"; then
+    pass "interactive Stem principal fails before mutation"
+  fi
+else
+  fail "interactive Stem principal fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+preseed_tendril_user with-subid
+rm -rf "${HOSTFS}/home/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/home/tendril is missing' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "missing Stem home fails before mutation"; then
+    pass "missing Stem home fails before mutation"
+  fi
+else
+  fail "missing Stem home fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+rm -f "${HOSTFS}/home/tendril/.local/bin/tendril"
+mkdir -p "${HOSTFS}/home/tendril/.local/bin/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'not a regular file' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "protected Stem directory fails before mutation"; then
+    pass "protected Stem directory fails before mutation"
+  fi
+else
+  fail "protected Stem directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%home%tendril%.local%bin%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'owned by root' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem owner fails before mutation"; then
+    pass "invalid protected Stem owner fails before mutation"
+  fi
+else
+  fail "invalid protected Stem owner fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+mkdir -p "${ROOT}/meta/groups"
+printf 'alice\n' >"${ROOT}/meta/groups/%home%tendril%.local%bin%tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'group is alice' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem group fails before mutation"; then
+    pass "invalid protected Stem group fails before mutation"
+  fi
+else
+  fail "invalid protected Stem group fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+chmod 0755 "${HOSTFS}/home/tendril/.local/bin/tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'mode is 755' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "invalid protected Stem mode fails before mutation"; then
+    pass "invalid protected Stem mode fails before mutation"
+  fi
+else
+  fail "invalid protected Stem mode fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+run_governed_upgrade_installer --pollinator-user tendril
+if [ "${status}" -ne 0 ] && grep -q 'cannot be tendril' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator/Stem overlap fails before mutation"; then
+    pass "Pollinator/Stem overlap fails before mutation"
+  fi
+else
+  fail "Pollinator/Stem overlap fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+printf 'alice tendril\n' >"${ROOT}/state/groups-alice"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q 'is in group tendril' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator in Stem group fails before mutation"; then
+    pass "Pollinator in Stem group fails before mutation"
+  fi
+else
+  fail "Pollinator in Stem group fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (ALL) NOPASSWD: ALL
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator NOPASSWD ALL fails before mutation"; then
+    pass "Pollinator NOPASSWD ALL fails before mutation"
+  fi
+else
+  fail "Pollinator NOPASSWD ALL fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+cat >"${ROOT}/state/sudo-l" <<'EOF'
+User alice may run the following commands on this host:
+    (root) NOPASSWD: /bin/sh
+EOF
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'passwordless sudo' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator root NOPASSWD fails before mutation"; then
+    pass "Pollinator root NOPASSWD fails before mutation"
+  fi
+else
+  fail "Pollinator root NOPASSWD fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/passwordless-tendril"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -qi 'non-interactively' "${stderr_file}"; then
+  if assert_upgrade_preflight_unmutated "Pollinator sudo -n to Stem fails before mutation"; then
+    pass "Pollinator sudo -n to Stem fails before mutation"
+  fi
+else
+  fail "Pollinator sudo -n to Stem fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
 
 # --- host isolation ---------------------------------------------------------
