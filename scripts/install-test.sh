@@ -1018,6 +1018,32 @@ case "\$db" in
 esac
 EOF
 
+  write_exec "${SHIM_DIR}/diff" <<'EOF'
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+args=""
+for arg in "$@"; do
+  if [ -f "$(hostpath "$arg")" ]; then
+    args="$args $(hostpath "$arg")"
+  else
+    args="$args $arg"
+  fi
+done
+exec ${real_diff} $args
+EOF
+  write_exec "${SHIM_DIR}/cmp" <<'EOF'
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+args=""
+for arg in "$@"; do
+  if [ -f "$(hostpath "$arg")" ]; then
+    args="$args $(hostpath "$arg")"
+  else
+    args="$args $arg"
+  fi
+done
+exec ${real_cmp} $args
+EOF
   write_exec "${SHIM_DIR}/cat" <<EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"

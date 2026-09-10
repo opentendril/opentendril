@@ -139,3 +139,22 @@ systemctl enable --now tendril
 The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md):
 dispatch a Seed with the Pollinator credential, watch that Phytomer, and review
 the Git Fruit. `main` stays unchanged until a human merges.
+
+## Upgrade
+
+The governed upgrade verifies the release, replaces the binaries, and validates the new configuration. It fails safely if there is an error, preserving the prior installation.
+
+```bash
+# [root] Linux amd64 — substitute the newer release tag.
+RELEASE=v0.3.14
+curl -fsSL -o install.sh \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
+curl -fsSL -o checksums.txt \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
+
+sudo sh install.sh \
+  --governed-upgrade \
+  --pollinator-user <ordinary-user> \
+  --version "${RELEASE}"
+```

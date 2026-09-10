@@ -924,6 +924,10 @@ ensure_control_plane() {
 }
 
 install_tendril_unit() {
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot install: $LEGACY_UNIT_PATH already exists. Use --governed-upgrade to reconcile an existing installation."
+  fi
+  mkdir -p "/usr/local/lib/systemd/system"
   install_tendril_unit_generate "${workdir}/tendril.service"
   install -m 0644 "${workdir}/tendril.service" "$UNIT_PATH" </dev/null || die "failed to install ${UNIT_PATH}"
   systemctl daemon-reload </dev/null || die "systemctl daemon-reload failed"
@@ -1097,6 +1101,7 @@ install_governed() {
   install_governed_binaries
   ensure_control_plane
   install_tendril_unit
+  validate_effective_service
   enforce_p2
   governed_finished=1
   print_governed_success
@@ -1116,8 +1121,120 @@ install_local() {
 }
 
 
+governed_upgrade_cleanup() {
+  if [ -n "${governed_upgrade_finished:-}" ] && [ "$governed_upgrade_finished" -eq 1 ]; then
+    cleanup
+    return
+  fi
+  if [ -n "${governed_upgrade_started:-}" ]; then
+    rollback_upgrade
+  fi
+  cleanup
+}
+
+rollback_upgrade() {
+  _rollback_failed=0
+  printf 'Attempting rollback...\n' >&2
+
+  if fs_exists "${workdir}/rollback/baseline.service"; then
+    cp -a "${workdir}/rollback/baseline.service" "$UNIT_PATH" || _rollback_failed=1
+  elif [ -n "${legacy_migration:-}" ] && [ "$legacy_migration" -eq 1 ]; then
+    rm -f "$UNIT_PATH" || _rollback_failed=1
+    cp -a "${workdir}/legacy_expected.service" "$LEGACY_UNIT_PATH" || _rollback_failed=1
+  fi
+
+  if fs_exists "${workdir}/rollback/tendril"; then
+    cp -a "${workdir}/rollback/tendril" "$STEM_BIN" || _rollback_failed=1
+  fi
+  if [ -n "${mcp_dest:-}" ] && fs_exists "${workdir}/rollback/tendril-mcp"; then
+    cp -a "${workdir}/rollback/tendril-mcp" "$mcp_dest" || _rollback_failed=1
+  fi
+
+  systemctl daemon-reload </dev/null || _rollback_failed=1
+  if [ -n "${was_active:-}" ] && [ "$was_active" -eq 1 ]; then
+    systemctl start tendril.service </dev/null || _rollback_failed=1
+  fi
+  if [ "$_rollback_failed" -eq 1 ]; then
+    printf 'Upgrade failed and rollback encountered errors.\n' >&2
+  else
+    printf 'Upgrade aborted. Rollback completed.\n' >&2
+  fi
+}
+
+rollback_and_die() {
+  _msg=$1
+  printf 'Upgrade failed: %s\n' "$_msg" >&2
+  exit 1
+}
+
+validate_effective_service() {
+  _eff=$(systemctl show tendril.service --property=User,Group,WorkingDirectory,ExecStart,Environment,StateDirectory,StateDirectoryMode,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectKernelTunables,ProtectControlGroups,RestrictSUIDSGID </dev/null 2>/dev/null || true)
+
+  check_eff() {
+    _key=$1
+    _val=$2
+    if ! echo "$_eff" | awk -v k="$_key" -v v="$_val" '
+      BEGIN { found=0 }
+      {
+        if ($0 == (k "=" v)) found=1
+        else if (index($0, k "=") == 1) {
+          n = split(substr($0, length(k)+2), arr, " ")
+          for (i=1; i<=n; i++) {
+            if (arr[i] == v) found=1
+          }
+        }
+      }
+      END { exit (found ? 0 : 1) }'; then
+      if [ -n "${governed_upgrade_started:-}" ]; then
+        rollback_and_die "effective service validation failed: missing or weakened ${_key}=${_val}. Administrator override may be too loose."
+      else
+        die "effective service validation failed: missing or weakened ${_key}=${_val}. Administrator override may be too loose."
+      fi
+    fi
+  }
+  
+  check_eff_exact_line() {
+    _line=$1
+    if ! echo "$_eff" | grep -Fqx "$_line"; then
+      if [ -n "${governed_upgrade_started:-}" ]; then
+        rollback_and_die "effective service validation failed: expected exact property '${_line}'"
+      else
+        die "effective service validation failed: expected exact property '${_line}'"
+      fi
+    fi
+  }
+
+  check_eff User tendril
+  check_eff Group tendril
+  check_eff WorkingDirectory /home/tendril
+  check_eff_exact_line "ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+  check_eff Environment "DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock"
+  check_eff Environment "XDG_RUNTIME_DIR=/run/user/${tendril_uid}"
+  check_eff Environment "TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock"
+  check_eff StateDirectory opentendril-transport
+  check_eff StateDirectoryMode 0755
+  check_eff NoNewPrivileges yes
+  check_eff PrivateTmp yes
+  check_eff ProtectSystem strict
+  check_eff ProtectKernelTunables yes
+  check_eff ProtectControlGroups yes
+  check_eff RestrictSUIDSGID yes
+  
+  _rwp=$(systemctl show tendril.service --property=ReadWritePaths </dev/null 2>/dev/null || true)
+  if ! echo "$_rwp" | grep -q "^ReadWritePaths=/home/tendril /run/user/${tendril_uid}$"; then
+      if [ -n "${governed_upgrade_started:-}" ]; then
+        rollback_and_die "effective service validation failed: missing or weakened ReadWritePaths"
+      else
+        die "effective service validation failed: missing or weakened ReadWritePaths"
+      fi
+  fi
+}
+
 install_governed_upgrade() {
   require_governed_platform
+  if [ "$(id -u)" -ne 0 ]; then
+    die "this governed install requires root (uid 0)"
+  fi
   require_cmd cat
   require_cmd stat
   require_cmd getent
@@ -1169,14 +1286,12 @@ install_governed_upgrade() {
   extract_member tendril
   staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
   
+  resolve_pollinator
   upgrade_mcp=0
-  mcp_dest=""
-  _mcp_paths=$(find /home -maxdepth 3 -name tendril-mcp -path '*/.local/bin/tendril-mcp' 2>/dev/null || true)
-  for p in $_mcp_paths; do
-    mcp_dest="$p"
+  mcp_dest="${pollinator_home}/.local/bin/tendril-mcp"
+  if fs_exists "$mcp_dest"; then
     upgrade_mcp=1
-    break
-  done
+  fi
   
   if [ "$upgrade_mcp" -eq 1 ]; then
     extract_member tendril-mcp
@@ -1301,6 +1416,38 @@ validate_effective_service() {
   check_eff RestrictSUIDSGID yes
 }
 
+install_legacy_unit_generate() {
+  _out=$1
+  cat >"$_out" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/${tendril_uid}
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril /run/user/${tendril_uid}
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 install_tendril_unit_generate() {
   _out=$1
   cat >"$_out" <<EOF
@@ -1338,6 +1485,9 @@ main() {
   if [ "$want_help" -eq 1 ]; then
     usage
     exit 0
+  fi
+  if [ "$governed" -eq 1 ] && [ "$governed_upgrade" -eq 1 ]; then
+    die "--governed and --governed-upgrade are mutually exclusive"
   fi
   if [ "$governed" -eq 1 ]; then
     install_governed

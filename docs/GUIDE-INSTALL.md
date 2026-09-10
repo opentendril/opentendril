@@ -1231,17 +1231,17 @@ rerun `tendril init`.** Existing durable configuration and state remain in
 place, including `.env`, `.tendril/`, GitHub App credentials, Pollinator
 credentials, grants, Substrate definitions, and other runtime state.
 
-The `--governed-upgrade` installer path atomically verifies the release archive, captures a rollback state, replaces the protected executables and service definition, and restarts the Stem (if it was active). It verifies the resulting effective systemd service against the required security floor.
+The `--governed-upgrade` installer path verifies the release archive, captures a rollback state, replaces the protected executables and service definition, and restarts the Stem (if it was active). It uses strict transaction semantics: if any step fails, it restores the previous binaries and systemd unit before exiting. Finally, it verifies the resulting effective systemd service against the required security floor.
 
-If you have historical ambiguous base units left in `/etc/systemd/system/tendril.service`, the upgrade will fail closed. Remove or migrate them to drop-ins to proceed.
+The upgrade cleanly migrates exact-known legacy unit files from `/etc` to `/usr/local/lib`. If you have historical ambiguous or modified base units left in `/etc/systemd/system/tendril.service`, the upgrade will fail closed rather than risk destroying customized administrator state. Remove or migrate them to drop-ins to proceed.
 
 ```bash
 curl -fsSL -O https://github.com/opentendril/opentendril/releases/latest/download/install.sh
 curl -fsSL -O https://github.com/opentendril/opentendril/releases/latest/download/checksums.txt
 grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
 
-# [root] governed upgrade does not take --pollinator-user
-sudo sh install.sh --governed-upgrade
+# [root] Linux amd64 — substitute the newer release tag
+sudo sh install.sh --governed-upgrade --pollinator-user tendril-mcp-owner --version v0.3.14
 ```
 
 If Stage 8 installed `tendril-mcp`, replace it from a separately verified
