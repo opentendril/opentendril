@@ -885,6 +885,7 @@ new_governed_case() {
   setup_governed_host
 }
 
+setup_governed_host
 setup_governed_shims() {
   local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch
   setup_shims
@@ -906,7 +907,7 @@ EVENTS="${events_file}"
 hostpath() {
   p=\$1
   case "\$p" in
-    /etc/*|/home/*|/run/*|/var/*|/proc/sys/kernel/osrelease|/proc/modules|/sys/module/*|/lib/modules/*)
+    /usr/*|/etc/*|/home/*|/run/*|/var/*|/proc/sys/kernel/osrelease|/proc/modules|/sys/module/*|/lib/modules/*)
       printf '%s%s' "${HOSTFS}" "\$p"
       ;;
     *)
@@ -1386,8 +1387,12 @@ while [ \$# -gt 0 ]; do
   case "\$1" in
     --user) user_mode=1; shift ;;
     --now) now=1; shift ;;
-    is-active|is-enabled|mask|unmask|disable|enable|start|stop|daemon-reload)
+    is-active|is-enabled|mask|unmask|disable|enable|start|stop|daemon-reload|show)
       action=\$1
+      shift
+      ;;
+    --property=*)
+      # Ignore --property filter in shim for simplicity, just dump all
       shift
       ;;
     *)
@@ -1491,6 +1496,23 @@ case "\$action" in
     ;;
   daemon-reload)
     ${real_touch} "${ROOT}/state/daemon-reload"
+    exit 0
+    ;;
+  show)
+    u=\$(norm "\$1")
+    # If the test case provided a fake show output, use it
+    if [ -f "${ROOT}/state/systemctl-show-\$u" ]; then
+      ${real_cat} "${ROOT}/state/systemctl-show-\$u"
+      exit 0
+    fi
+    # Otherwise just dump the unit file contents (which is enough for simple grep tests)
+    if [ -f "${HOSTFS}/usr/local/lib/systemd/system/\$u" ]; then
+      ${real_cat} "${HOSTFS}/usr/local/lib/systemd/system/\$u"
+    elif [ -f "${HOSTFS}/etc/systemd/system/\$u" ]; then
+      ${real_cat} "${HOSTFS}/etc/systemd/system/\$u"
+    else
+      exit 1
+    fi
     exit 0
     ;;
 esac
@@ -2445,7 +2467,7 @@ if assert_governed_success_core "clean Ubuntu governed bootstrap"; then
   else
     fail "accepted posture proves sudo -n escalation does not work" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
-  unit="${HOSTFS}/etc/systemd/system/tendril.service"
+  unit="${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
   if [ -f "${unit}" ]; then
     if grep -q 'WorkingDirectory=/home/tendril' "${unit}" \
       && grep -q 'ExecStart=/home/tendril/.local/bin/tendril serve' "${unit}" \
@@ -2691,6 +2713,7 @@ if assert_governed_failure "unreadable sudo policy fails P2 closed"; then
 fi
 
 new_governed_case
+setup_governed_host
 setup_governed_shims
 write_exec "${SHIM_DIR}/docker" <<EOF
 #!/bin/sh
@@ -2825,3 +2848,191 @@ fi
 
 echo
 echo "All ${passes} installer tests passed."
+
+# --- governed upgrade -------------------------------------------------------
+
+setup_legacy_unit() {
+  local uid=$1
+  local path="${HOSTFS}/etc/systemd/system/tendril.service"
+  mkdir -p "${HOSTFS}/etc/systemd/system"
+  cat >"$path" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/${uid}
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril /run/user/${uid}
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+setup_systemctl_show() {
+  local uid=$1
+  local prop_file="${ROOT}/state/systemctl-show-tendril.service"
+  mkdir -p "${ROOT}/state"
+  cat >"$prop_file" <<EOF
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }
+Environment=DOCKER_HOST=unix:///run/user/${uid}/docker.sock XDG_RUNTIME_DIR=/run/user/${uid} TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+EOF
+}
+
+new_governed_case
+run_installer --governed-upgrade
+assert_failure_no_extract "governed upgrade requires root"
+if grep -q 'requires root' "${stderr_file}"; then
+  pass "governed upgrade requires root names uid 0"
+else
+  fail "governed upgrade requires root names uid 0" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+# Don't create tendril principal
+setup_governed_host
+setup_governed_shims
+run_installer --governed-upgrade
+if grep -q 'cannot upgrade: tendril account does not exist' "${stderr_file}"; then
+  pass "governed upgrade fails if tendril principal is missing"
+else
+  fail "governed upgrade fails if tendril principal is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+run_installer --governed-upgrade
+if grep -q 'neither /usr/local/lib/systemd/system/tendril.service nor /etc/systemd/system/tendril.service exists' "${stderr_file}"; then
+  pass "governed upgrade fails if base unit is missing"
+else
+  fail "governed upgrade fails if base unit is missing" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+setup_legacy_unit 2001
+setup_systemctl_show 2001
+run_installer --governed-upgrade
+if [ "${status}" -eq 0 ]; then
+  pass "exact known legacy unit migrates successfully"
+  if [ -f "${HOSTFS}/usr/local/lib/systemd/system/tendril.service" ]; then
+    pass "legacy migration wrote to /usr/local/lib"
+  else
+    fail "legacy migration did not write to /usr/local/lib"
+  fi
+  if [ -e "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    fail "legacy migration did not remove /etc unit"
+  else
+    pass "legacy migration removed /etc unit"
+  fi
+else
+  fail "exact known legacy unit migrates successfully" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+setup_legacy_unit 2001
+echo "# Modified" >> "${HOSTFS}/etc/systemd/system/tendril.service"
+setup_systemctl_show 2001
+run_installer --governed-upgrade
+if [ "${status}" -ne 0 ] && grep -q 'Ambiguous legacy base unit fails closed' "${stderr_file}"; then
+  pass "ambiguous /etc base unit fails closed"
+else
+  fail "ambiguous /etc base unit fails closed" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+mkdir -p "${HOSTFS}/usr/local/lib/systemd/system"
+touch "${HOSTFS}/usr/local/lib/systemd/system/tendril.service"
+setup_legacy_unit 2001
+echo "# Modified" >> "${HOSTFS}/etc/systemd/system/tendril.service"
+setup_systemctl_show 2001
+run_installer --governed-upgrade
+if [ "${status}" -eq 0 ]; then
+  pass "existing release baseline upgrades in place"
+  if [ -f "${HOSTFS}/etc/systemd/system/tendril.service" ]; then
+    pass "administrator full-unit override survives byte-for-byte and is reported"
+  else
+    fail "administrator full-unit override was removed"
+  fi
+else
+  fail "existing release baseline upgrades in place" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+setup_legacy_unit 2001
+setup_systemctl_show 2001
+sed -i 's/User=tendril/User=root/' "${ROOT}/state/systemctl-show-tendril.service"
+run_installer --governed-upgrade
+if [ "${status}" -ne 0 ] && grep -q 'effective service validation failed' "${stderr_file}"; then
+  pass "weakening override causes effective-service validation failure"
+else
+  fail "weakening override causes effective-service validation failure" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+setup_legacy_unit 2001
+setup_systemctl_show 2001
+touch "${ROOT}/state/active/tendril.service"
+run_installer --governed-upgrade
+if [ "${status}" -eq 0 ] && events_match '^CMD systemctl start tendril.service'; then
+  pass "service active-state preservation restarts active service"
+else
+  fail "service active-state preservation restarts active service" "events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+setup_governed_host
+setup_governed_shims
+"${SHIM_DIR}/adduser" tendril >/dev/null
+setup_legacy_unit 2001
+setup_systemctl_show 2001
+run_installer --governed-upgrade
+if [ "${status}" -eq 0 ] && ! events_match '^CMD systemctl start tendril.service'; then
+  pass "service active-state preservation ignores inactive service"
+else
+  fail "service active-state preservation ignores inactive service" "events=$(tr '\n' ' ' <"${events_file}")"
+fi
