@@ -36,6 +36,9 @@ STEM_BIN="${STEM_HOME}/.local/bin/tendril"
 UNIT_PATH="/usr/local/lib/systemd/system/tendril.service"
 LEGACY_UNIT_PATH="/etc/systemd/system/tendril.service"
 SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"
+SUDOERS_PRIMARY="/etc/sudoers"
+SUDOERS_RS="/etc/sudoers-rs"
+SUDOERS_DIR="/etc/sudoers.d"
 
 version="${OPENTENDRIL_VERSION:-}"
 want_help=0
@@ -1017,96 +1020,92 @@ sudo_listing_lacks_sudo_authority() {
   return 1
 }
 
-sudo_listing_classify_timestamp_timeout() {
-  _rest=$1
-  _saw_zero=0
-  _saw_nonzero=0
-  _saw_ambiguous=0
-  while :; do
-    case "$_rest" in
-      *timestamp_timeout*)
-        _rest=${_rest#*timestamp_timeout}
-        while :; do
-          case "$_rest" in
-            ' '*) _rest=${_rest# } ;;
-            '	'*) _rest=${_rest#	} ;;
-            *) break ;;
-          esac
-        done
-        case "$_rest" in
-          =*)
-            _rest=${_rest#=}
-            while :; do
-              case "$_rest" in
-                ' '*) _rest=${_rest# } ;;
-                '	'*) _rest=${_rest#	} ;;
-                *) break ;;
-              esac
-            done
-            _val=$_rest
-            _val=${_val%%,*}
-            _val=${_val%% *}
-            _val=${_val%%	*}
-            _val=${_val%%
-*}
-            case "$_val" in
-              0)
-                _saw_zero=1
-                ;;
-              [1-9]*)
-                case "$_val" in
-                  *[!0-9]*)
-                    _saw_ambiguous=1
-                    ;;
-                  *)
-                    _saw_nonzero=1
-                    ;;
-                esac
-                ;;
-              -[1-9]*)
-                case "$_val" in
-                  -*[!0-9]*)
-                    _saw_ambiguous=1
-                    ;;
-                  *)
-                    _saw_nonzero=1
-                    ;;
-                esac
-                ;;
-              *)
-                _saw_ambiguous=1
-                ;;
-            esac
-            if [ -n "$_rest" ]; then
-              _rest=${_rest#?}
-            fi
-            ;;
-          timestamp_timeout*)
-            ;;
-          *)
-            _saw_ambiguous=1
-            if [ -n "$_rest" ]; then
-              _rest=${_rest#?}
-            fi
-            ;;
-        esac
+canonical_p2_contents() {
+  printf 'Defaults:%s timestamp_timeout=0\n' "$pollinator_user"
+}
+
+text_has_timestamp_timeout() {
+  case "$1" in
+    *timestamp_timeout*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+p2_upgrade_refuse() {
+  die "cannot upgrade: $1 Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
+}
+
+prove_canonical_p2_provenance() {
+  require_cmd visudo
+  require_cmd cat
+  require_cmd cmp
+  require_cmd ls
+  require_cmd stat
+
+  if fs_exists "$SUDOERS_RS"; then
+    p2_upgrade_refuse "alternate primary sudoers source ${SUDOERS_RS} exists, so ${SUDOERS_SNIPPET} cannot be proven as the active non-cache policy."
+  fi
+
+  fs_exists "$SUDOERS_PRIMARY" || p2_upgrade_refuse "${SUDOERS_PRIMARY} is missing, so ${SUDOERS_SNIPPET} cannot be proven active."
+  _kind=$(stat -c '%F' "$SUDOERS_PRIMARY" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_PRIMARY}."
+  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} is not a regular file, so ${SUDOERS_SNIPPET} cannot be proven active."
+
+  _sudoers_text=$(cat "$SUDOERS_PRIMARY") || p2_upgrade_refuse "cannot read ${SUDOERS_PRIMARY}."
+  _have_includedir=0
+  while IFS= read -r _line || [ -n "$_line" ]; do
+    case "$_line" in
+      '#includedir /etc/sudoers.d'|'@includedir /etc/sudoers.d')
+        _have_includedir=1
         ;;
-      *)
-        break
+      '#include '*|'#includedir '*|'@include '*|'@includedir '*)
+        p2_upgrade_refuse "${SUDOERS_PRIMARY} has an additional include directive; ${SUDOERS_SNIPPET} precedence cannot be proven."
         ;;
     esac
-  done
-  if [ "$_saw_ambiguous" -eq 1 ]; then
-    printf 'ambiguous\n'
-  elif [ "$_saw_zero" -eq 1 ] && [ "$_saw_nonzero" -eq 1 ]; then
-    printf 'ambiguous\n'
-  elif [ "$_saw_nonzero" -eq 1 ]; then
-    printf 'nonzero\n'
-  elif [ "$_saw_zero" -eq 1 ]; then
-    printf 'zero\n'
-  else
-    printf 'omitted\n'
+  done <<OPENTENDRIL_SUDOERS_END
+${_sudoers_text}
+OPENTENDRIL_SUDOERS_END
+  [ "$_have_includedir" -eq 1 ] || p2_upgrade_refuse "${SUDOERS_PRIMARY} does not include ${SUDOERS_DIR} with a known include directive, so ${SUDOERS_SNIPPET} cannot be proven active."
+  if text_has_timestamp_timeout "$_sudoers_text"; then
+    p2_upgrade_refuse "${SUDOERS_PRIMARY} declares timestamp_timeout; precedence cannot be proven."
   fi
+
+  fs_exists "$SUDOERS_SNIPPET" || p2_upgrade_refuse "Pollinator-hosting account ${pollinator_user} has sudo authority, but ${SUDOERS_SNIPPET} is missing."
+  _kind=$(stat -c '%F' "$SUDOERS_SNIPPET" 2>/dev/null) || p2_upgrade_refuse "cannot stat ${SUDOERS_SNIPPET}."
+  [ "$_kind" = "regular file" ] || p2_upgrade_refuse "${SUDOERS_SNIPPET} is not a regular file."
+  _owner=$(fs_owner "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine owner of ${SUDOERS_SNIPPET}."
+  _group=$(fs_group "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine group of ${SUDOERS_SNIPPET}."
+  if [ "$_owner" != root ] || [ "$_group" != root ]; then
+    p2_upgrade_refuse "${SUDOERS_SNIPPET} is owned by ${_owner}:${_group}, expected root:root."
+  fi
+  _mode=$(fs_mode "$SUDOERS_SNIPPET") || p2_upgrade_refuse "cannot determine mode of ${SUDOERS_SNIPPET}."
+  case "$_mode" in
+    440|0440) ;;
+    *)
+      p2_upgrade_refuse "${SUDOERS_SNIPPET} mode is ${_mode}, expected 0440."
+      ;;
+  esac
+  if ! canonical_p2_contents | cmp -s "$SUDOERS_SNIPPET" -; then
+    p2_upgrade_refuse "${SUDOERS_SNIPPET} is not the canonical Defaults:${pollinator_user} timestamp_timeout=0 rule."
+  fi
+
+  _dropins=$(ls -1 "$SUDOERS_DIR") || p2_upgrade_refuse "cannot list ${SUDOERS_DIR}."
+  while IFS= read -r _name || [ -n "$_name" ]; do
+    [ -n "$_name" ] || continue
+    if [ "$_name" = opentendril-p2 ]; then
+      continue
+    fi
+    _dropin="${SUDOERS_DIR}/${_name}"
+    _dropin_text=$(cat "$_dropin") || p2_upgrade_refuse "cannot read ${_dropin}."
+    if text_has_timestamp_timeout "$_dropin_text"; then
+      p2_upgrade_refuse "${_dropin} declares timestamp_timeout; precedence cannot be proven."
+    fi
+  done <<OPENTENDRIL_SUDOERS_D_END
+${_dropins}
+OPENTENDRIL_SUDOERS_D_END
+
+  visudo -c </dev/null || p2_upgrade_refuse "visudo -c rejected the sudoers configuration."
 }
 
 enforce_p2() {
@@ -1593,20 +1592,7 @@ inspect_pollinator_privilege_readonly() {
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Governed upgrade will not loosen sudo policy."
   fi
   if ! sudo_listing_lacks_sudo_authority "$_listing"; then
-    _timeout_class=$(sudo_listing_classify_timestamp_timeout "$_listing")
-    case "$_timeout_class" in
-      zero)
-        ;;
-      omitted)
-        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo authority without Defaults timestamp_timeout=0. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
-        ;;
-      nonzero)
-        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo Defaults timestamp_timeout other than 0. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
-        ;;
-      *)
-        die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has sudo Defaults timestamp_timeout that cannot be classified. Cached sudo is not an accepted governed P2 posture. Governed upgrade will not rewrite sudo policy."
-        ;;
-    esac
+    prove_canonical_p2_provenance
   fi
   if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture. Governed upgrade will not rewrite sudo policy."

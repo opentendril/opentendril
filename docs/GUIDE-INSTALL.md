@@ -1253,11 +1253,19 @@ The preflight must establish, before any protected host mutation:
   `tendril:tendril` with mode `0750`;
 - the named Pollinator is an ordinary separate principal, is not in the
   `tendril` group, and has no unattended/passwordless escalation to root,
-  `tendril`, ALL, or equivalent privileged authority; if that account has
-  sudo authority, the effective matching sudo Defaults must establish
-  `timestamp_timeout=0`. Absence of sudo remains acceptable. Ambiguous or
-  non-zero timestamp timeouts fail closed. Governed upgrade does not
-  rewrite sudo policy or invalidate a sudo timestamp;
+  `tendril`, ALL, or equivalent privileged authority. Absence of sudo
+  remains acceptable. If that account has sudo authority, read-only
+  provenance must prove the canonical `/etc/sudoers.d/opentendril-p2`
+  rule `Defaults:<account> timestamp_timeout=0` (regular file, `root:root`,
+  mode `0440`) is the active non-cache policy: `/etc/sudoers` must include
+  `/etc/sudoers.d` with a known include directive, no competing
+  `timestamp_timeout` declaration may be present in that known layout, an
+  alternate primary sudoers source that would bypass the snippet fails
+  closed, and `visudo -c` must accept the configuration. Missing,
+  noncanonical, or unprovable P2 configuration fails closed. The live
+  `sudo -n -u tendril` probe remains defense in depth. Governed upgrade
+  does not rewrite sudo policy, create or repair that snippet, or
+  invalidate a sudo timestamp;
 - `/run/user/<uid>` exists as a directory owned by `tendril`; rootless Docker
   is reachable as `tendril` through `/run/user/<uid>/docker.sock`, Docker
   SecurityOptions contains `rootless`, and rootful `docker.service` /
