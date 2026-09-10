@@ -16,6 +16,8 @@
 # Do not consult $0 as a filesystem path.
 # Governed installation is invoked from an already-obtained installer:
 #   sudo sh install.sh --governed --pollinator-user <user>
+# Governed upgrade of an existing host:
+#   sudo sh install.sh --governed-upgrade --pollinator-user <user> --version <tag>
 
 set -eu
 
@@ -27,12 +29,14 @@ DEST_NAME="tendril"
 STEM_USER="tendril"
 STEM_HOME="/home/tendril"
 STEM_BIN="${STEM_HOME}/.local/bin/tendril"
-UNIT_PATH="/etc/systemd/system/tendril.service"
+UNIT_PATH="/usr/local/lib/systemd/system/tendril.service"
+LEGACY_UNIT_PATH="/etc/systemd/system/tendril.service"
 SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"
 
 version="${OPENTENDRIL_VERSION:-}"
 want_help=0
 governed=0
+governed_upgrade=0
 pollinator_user=""
 workdir=""
 staged_tendril_version=""
@@ -72,15 +76,22 @@ Usage:
   curl -fsSL <url>/install.sh | sh -s -- --version <tag>
 
   sudo sh install.sh --governed --pollinator-user <user> [--version <tag>]
+  sudo sh install.sh --governed-upgrade --pollinator-user <user> [--version <tag>]
 
 Options:
   --version <tag>              Pin to one GitHub Release (v0.3.0 or 0.3.0).
                                Also accepted as OPENTENDRIL_VERSION.
   --governed                   Establish the Ubuntu 24.04 LTS governed host.
                                Requires root. Does not install locally.
+  --governed-upgrade           Upgrade an existing governed host.
+                               Requires root. Does not bootstrap Docker,
+                               create the Stem principal, rewrite P2 policy,
+                               run tendril init, or reinitialize durable state.
   --pollinator-user <account>  Ordinary Pollinator-hosting account. Required
                                for --governed unless sudo already set SUDO_USER
-                               to a non-root ordinary account.
+                               to a non-root ordinary account. Required for
+                               --governed-upgrade; the named account is the
+                               only Pollinator whose tendril-mcp is considered.
   -h, --help                   Show this help.
 
 Local platforms (default; no --governed):
@@ -139,6 +150,10 @@ parse_args() {
         ;;
       --governed)
         governed=1
+        shift
+        ;;
+      --governed-upgrade)
+        governed_upgrade=1
         shift
         ;;
       --pollinator-user)
@@ -915,34 +930,11 @@ ensure_control_plane() {
 }
 
 install_tendril_unit() {
-  cat >"${workdir}/tendril.service" <<EOF
-[Unit]
-Description=OpenTendril Stem
-After=network-online.target
-
-[Service]
-User=tendril
-Group=tendril
-WorkingDirectory=/home/tendril
-Environment=DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock
-Environment=XDG_RUNTIME_DIR=/run/user/${tendril_uid}
-StateDirectory=opentendril-transport
-StateDirectoryMode=0755
-Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
-ExecStart=/home/tendril/.local/bin/tendril serve
-Restart=on-failure
-
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=/home/tendril /run/user/${tendril_uid}
-ProtectKernelTunables=yes
-ProtectControlGroups=yes
-RestrictSUIDSGID=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot install: ${LEGACY_UNIT_PATH} already exists. Use --governed-upgrade to reconcile an existing installation."
+  fi
+  mkdir -p "/usr/local/lib/systemd/system"
+  render_release_tendril_unit "${workdir}/tendril.service"
   install -m 0644 "${workdir}/tendril.service" "$UNIT_PATH" </dev/null || die "failed to install ${UNIT_PATH}"
   systemctl daemon-reload </dev/null || die "systemctl daemon-reload failed"
 }
@@ -1101,6 +1093,9 @@ install_governed() {
   require_cmd dpkg
   require_cmd dpkg-query
   resolve_pollinator
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot install: ${LEGACY_UNIT_PATH} already exists. Use --governed-upgrade to reconcile an existing installation."
+  fi
   refuse_unsafe_docker
   archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
   prepare_workdir governed_cleanup
@@ -1115,6 +1110,7 @@ install_governed() {
   install_governed_binaries
   ensure_control_plane
   install_tendril_unit
+  validate_effective_service
   enforce_p2
   governed_finished=1
   print_governed_success
@@ -1133,18 +1129,432 @@ install_local() {
   print_success
 }
 
+
+governed_upgrade_cleanup() {
+  if [ "${governed_upgrade_finished:-0}" -eq 1 ]; then
+    cleanup
+    return
+  fi
+  if [ "${governed_upgrade_started:-0}" -eq 1 ] && [ "${governed_upgrade_rolled_back:-0}" -ne 1 ]; then
+    rollback_upgrade
+  fi
+  cleanup
+}
+
+rollback_upgrade() {
+  if [ "${governed_upgrade_rolled_back:-0}" -eq 1 ]; then
+    return
+  fi
+  governed_upgrade_rolled_back=1
+  rollback_failed=0
+  printf 'Attempting rollback...\n' >&2
+
+  if [ "${rollback_had_baseline:-0}" -eq 1 ]; then
+    mkdir -p "/usr/local/lib/systemd/system" || rollback_failed=1
+    cp -a "${workdir}/rollback/baseline.service" "$UNIT_PATH" || rollback_failed=1
+  else
+    if fs_exists "$UNIT_PATH"; then
+      rm -f "$UNIT_PATH" || rollback_failed=1
+    fi
+  fi
+
+  if [ "${rollback_had_legacy:-0}" -eq 1 ]; then
+    mkdir -p "/etc/systemd/system" || rollback_failed=1
+    cp -a "${workdir}/rollback/legacy.service" "$LEGACY_UNIT_PATH" || rollback_failed=1
+  fi
+
+  if fs_exists "${workdir}/rollback/tendril"; then
+    cp -a "${workdir}/rollback/tendril" "$STEM_BIN" || rollback_failed=1
+  fi
+  if [ -n "${mcp_dest:-}" ] && fs_exists "${workdir}/rollback/tendril-mcp"; then
+    cp -a "${workdir}/rollback/tendril-mcp" "$mcp_dest" || rollback_failed=1
+  fi
+
+  systemctl daemon-reload </dev/null || rollback_failed=1
+  if [ "${was_active:-0}" -eq 1 ]; then
+    systemctl start tendril.service </dev/null || rollback_failed=1
+  fi
+
+  if [ "$rollback_failed" -eq 1 ]; then
+    printf 'Rollback failed while recovering from: %s\n' "${upgrade_failed_msg:-unknown upgrade failure}" >&2
+  else
+    printf 'Rollback completed.\n' >&2
+  fi
+}
+
+rollback_and_die() {
+  upgrade_failed_msg=$1
+  printf 'Upgrade failed: %s\n' "$upgrade_failed_msg" >&2
+  rollback_upgrade
+  if [ "${rollback_failed:-0}" -eq 1 ]; then
+    die "upgrade aborted; original failure: ${upgrade_failed_msg}; rollback failed"
+  fi
+  die "upgrade aborted; original failure: ${upgrade_failed_msg}"
+}
+
+die_effective() {
+  _reason=$1
+  _msg="effective service validation failed: ${_reason}"
+  if [ "${governed_upgrade_started:-0}" -eq 1 ]; then
+    rollback_and_die "$_msg"
+  fi
+  die "$_msg"
+}
+
+eff_has_assignment() {
+  _k=$1
+  _v=$2
+  _found=0
+  while IFS= read -r _line || [ -n "${_line:-}" ]; do
+    if [ "$_line" = "${_k}=${_v}" ]; then
+      _found=1
+      break
+    fi
+    case "$_line" in
+      "${_k}="*)
+        _rest=${_line#${_k}=}
+        for _tok in $_rest; do
+          if [ "$_tok" = "$_v" ]; then
+            _found=1
+          fi
+        done
+        ;;
+    esac
+  done <<EOF
+${_eff}
+EOF
+  [ "$_found" -eq 1 ]
+}
+
+eff_execstart_is_canonical() {
+  _found=0
+  while IFS= read -r _line || [ -n "${_line:-}" ]; do
+    case "$_line" in
+      'ExecStart=/home/tendril/.local/bin/tendril serve')
+        _found=1
+        break
+        ;;
+      'ExecStart={ path=/home/tendril/.local/bin/tendril ; argv[]=/home/tendril/.local/bin/tendril serve ;'*)
+        _found=1
+        break
+        ;;
+    esac
+  done <<EOF
+${_eff}
+EOF
+  [ "$_found" -eq 1 ]
+}
+
+require_eff() {
+  _k=$1
+  _v=$2
+  if ! eff_has_assignment "$_k" "$_v"; then
+    die_effective "missing or weakened ${_k}=${_v}"
+  fi
+}
+
+validate_effective_service() {
+  _eff=$(systemctl show tendril.service --property=User,Group,WorkingDirectory,ExecStart,Environment,StateDirectory,StateDirectoryMode,NoNewPrivileges,PrivateTmp,ProtectSystem,ProtectKernelTunables,ProtectControlGroups,RestrictSUIDSGID </dev/null 2>/dev/null) || _eff=
+  [ -n "$_eff" ] || die_effective "systemctl show produced no properties"
+
+  require_eff User tendril
+  require_eff Group tendril
+  require_eff WorkingDirectory /home/tendril
+  if ! eff_execstart_is_canonical; then
+    die_effective "ExecStart must be exactly /home/tendril/.local/bin/tendril serve"
+  fi
+  require_eff Environment "DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock"
+  require_eff Environment "XDG_RUNTIME_DIR=/run/user/${tendril_uid}"
+  require_eff Environment "TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock"
+  require_eff StateDirectory opentendril-transport
+  require_eff StateDirectoryMode 0755
+  require_eff NoNewPrivileges yes
+  require_eff PrivateTmp yes
+  require_eff ProtectSystem strict
+  require_eff ProtectKernelTunables yes
+  require_eff ProtectControlGroups yes
+  require_eff RestrictSUIDSGID yes
+
+  _rwp=$(systemctl show tendril.service --property=ReadWritePaths </dev/null 2>/dev/null) || _rwp=
+  _rwp_found=0
+  while IFS= read -r _line || [ -n "${_line:-}" ]; do
+    if [ "$_line" = "ReadWritePaths=/home/tendril /run/user/${tendril_uid}" ]; then
+      _rwp_found=1
+    fi
+  done <<EOF
+${_rwp}
+EOF
+  if [ "$_rwp_found" -ne 1 ]; then
+    die_effective "ReadWritePaths must be exactly /home/tendril and /run/user/${tendril_uid}"
+  fi
+}
+
+# Historical OpenTendril-generated unit previously installed at
+# /etc/systemd/system/tendril.service. Used only for exact recognition.
+render_legacy_tendril_unit() {
+  _out=$1
+  cat >"$_out" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/${tendril_uid}
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril /run/user/${tendril_uid}
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Canonical current release-owned unit. Shared by fresh install and upgrade.
+render_release_tendril_unit() {
+  _out=$1
+  cat >"$_out" <<EOF
+[Unit]
+Description=OpenTendril Stem
+After=network-online.target
+
+[Service]
+User=tendril
+Group=tendril
+WorkingDirectory=/home/tendril
+Environment=DOCKER_HOST=unix:///run/user/${tendril_uid}/docker.sock
+Environment=XDG_RUNTIME_DIR=/run/user/${tendril_uid}
+StateDirectory=opentendril-transport
+StateDirectoryMode=0755
+Environment=TENDRIL_LOCAL_SOCKET=/var/lib/opentendril-transport/stem.sock
+ExecStart=/home/tendril/.local/bin/tendril serve
+Restart=on-failure
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/home/tendril /run/user/${tendril_uid}
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+classify_upgrade_service_layout() {
+  legacy_migration=0
+  admin_override=0
+  if fs_exists "$UNIT_PATH"; then
+    if fs_exists "$LEGACY_UNIT_PATH"; then
+      admin_override=1
+    fi
+    return 0
+  fi
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    render_legacy_tendril_unit "${workdir}/legacy_expected.service"
+    if cmp -s "$LEGACY_UNIT_PATH" "${workdir}/legacy_expected.service"; then
+      legacy_migration=1
+      return 0
+    fi
+    die "cannot upgrade: ${LEGACY_UNIT_PATH} is present but is not a known OpenTendril legacy unit. Ambiguous or modified administrator state fails closed before mutation."
+  fi
+  die "cannot upgrade: neither ${UNIT_PATH} nor ${LEGACY_UNIT_PATH} exists. This does not appear to be a governed host."
+}
+
+require_protected_stem_binary() {
+  fs_exists "$STEM_BIN" || die "cannot upgrade: protected Stem binary ${STEM_BIN} is missing"
+  _kind=$(stat -c '%F' "$STEM_BIN" 2>/dev/null) || die "cannot upgrade: cannot stat ${STEM_BIN}"
+  [ "$_kind" = "regular file" ] || die "cannot upgrade: protected Stem binary ${STEM_BIN} is not a regular file"
+  _owner=$(fs_owner "$STEM_BIN") || die "cannot determine owner of ${STEM_BIN}"
+  [ "$_owner" = "$STEM_USER" ] || die "cannot upgrade: ${STEM_BIN} is owned by ${_owner}, expected ${STEM_USER}"
+}
+
+install_governed_upgrade() {
+  require_governed_platform
+  require_cmd cat
+  require_cmd stat
+  require_cmd getent
+  require_cmd install
+  require_cmd systemctl
+  require_cmd cmp
+  require_cmd id
+
+  governed_upgrade_started=0
+  governed_upgrade_finished=0
+  governed_upgrade_rolled_back=0
+  rollback_failed=0
+  rollback_had_baseline=0
+  rollback_had_legacy=0
+  legacy_migration=0
+  admin_override=0
+  was_active=0
+  upgrade_mcp=0
+  mcp_dest=""
+  upgrade_failed_msg=""
+
+  if [ -z "$pollinator_user" ]; then
+    die "--governed-upgrade requires --pollinator-user <account>. Direct root execution cannot identify the Pollinator-hosting account."
+  fi
+  resolve_pollinator
+
+  _pw=$(passwd_entry "$STEM_USER" || true)
+  if [ -z "$_pw" ]; then
+    die "cannot upgrade: ${STEM_USER} account does not exist. Is this a governed host?"
+  fi
+  parse_passwd_line "$_pw"
+  tendril_uid=$pw_uid
+  case "$tendril_uid" in
+    ''|*[!0-9]*) die "cannot upgrade: ${STEM_USER} account has an unusable uid" ;;
+  esac
+  if [ "$tendril_uid" -lt 1000 ]; then
+    die "cannot upgrade: ${STEM_USER} uid ${tendril_uid} is a system account. Is this a governed host?"
+  fi
+  if [ "$pw_home" != "$STEM_HOME" ]; then
+    die "cannot upgrade: ${STEM_USER} account has home ${pw_home}, expected ${STEM_HOME}"
+  fi
+
+  require_protected_stem_binary
+
+  mcp_dest="${pollinator_home}/.local/bin/tendril-mcp"
+  if fs_exists "$mcp_dest"; then
+    _mcp_kind=$(stat -c '%F' "$mcp_dest" 2>/dev/null) || die "cannot upgrade: cannot stat ${mcp_dest}"
+    [ "$_mcp_kind" = "regular file" ] || die "cannot upgrade: ${mcp_dest} exists and is not a regular file"
+    upgrade_mcp=1
+  fi
+
+  if ! fs_exists "$UNIT_PATH" && ! fs_exists "$LEGACY_UNIT_PATH"; then
+    die "cannot upgrade: neither ${UNIT_PATH} nor ${LEGACY_UNIT_PATH} exists. This does not appear to be a governed host."
+  fi
+
+  archive="${ARCHIVE_PREFIX}-${os}-${arch}.tar.gz"
+  prepare_workdir governed_upgrade_cleanup
+  obtain_verified_archive
+  classify_upgrade_service_layout
+
+  extract_member tendril
+  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
+  if [ "$upgrade_mcp" -eq 1 ]; then
+    extract_member tendril-mcp
+    staged_mcp_version=$(verify_binary_version "${workdir}/tendril-mcp" tendril-mcp)
+  fi
+
+  mkdir -p "${workdir}/rollback" || die "failed to create rollback directory"
+  cp -a "$STEM_BIN" "${workdir}/rollback/tendril" || die "failed to capture the protected Stem binary for rollback"
+  if [ "$upgrade_mcp" -eq 1 ]; then
+    cp -a "$mcp_dest" "${workdir}/rollback/tendril-mcp" || die "failed to capture tendril-mcp for rollback"
+  fi
+  if fs_exists "$UNIT_PATH"; then
+    cp -a "$UNIT_PATH" "${workdir}/rollback/baseline.service" || die "failed to capture the release-owned unit for rollback"
+    rollback_had_baseline=1
+  fi
+  if fs_exists "$LEGACY_UNIT_PATH"; then
+    cp -a "$LEGACY_UNIT_PATH" "${workdir}/rollback/legacy.service" || die "failed to capture ${LEGACY_UNIT_PATH} for rollback"
+    rollback_had_legacy=1
+  fi
+
+  if systemctl is-active --quiet tendril.service; then
+    was_active=1
+  fi
+
+  governed_upgrade_started=1
+  if [ "$was_active" -eq 1 ]; then
+    systemctl stop tendril.service </dev/null || rollback_and_die "failed to stop tendril.service"
+  fi
+
+  mkdir -p "/usr/local/lib/systemd/system" || rollback_and_die "failed to create /usr/local/lib/systemd/system"
+  render_release_tendril_unit "${workdir}/tendril.service"
+  install -m 0644 "${workdir}/tendril.service" "$UNIT_PATH" </dev/null || rollback_and_die "failed to install ${UNIT_PATH}"
+  if [ "$legacy_migration" -eq 1 ]; then
+    rm -f "$LEGACY_UNIT_PATH" || rollback_and_die "failed to remove the migrated ${LEGACY_UNIT_PATH}"
+  fi
+
+  systemctl daemon-reload </dev/null || rollback_and_die "systemctl daemon-reload failed"
+  validate_effective_service
+
+  install -o "$STEM_USER" -g "$STEM_USER" -m 0750 "${workdir}/tendril" "$STEM_BIN" </dev/null || rollback_and_die "failed to replace the protected Stem binary"
+  if [ "$upgrade_mcp" -eq 1 ]; then
+    _pgrp=$(id -gn "$pollinator_user") || _pgrp=$pollinator_user
+    install -o "$pollinator_user" -g "$_pgrp" -m 0755 "${workdir}/tendril-mcp" "$mcp_dest" </dev/null || rollback_and_die "failed to replace tendril-mcp"
+  fi
+
+  if [ "$was_active" -eq 1 ]; then
+    systemctl start tendril.service </dev/null || rollback_and_die "failed to restart tendril.service"
+    if ! systemctl is-active --quiet tendril.service; then
+      rollback_and_die "tendril.service is not active after restart"
+    fi
+  else
+    if systemctl is-active --quiet tendril.service; then
+      rollback_and_die "inactive Stem was started during upgrade"
+    fi
+  fi
+
+  governed_upgrade_finished=1
+
+  printf '\n'
+  printf 'OpenTendril governed upgrade completed.\n'
+  printf '\n'
+  printf 'Installed:\n'
+  printf '  %s (%s)\n' "$STEM_BIN" "$staged_tendril_version"
+  if [ "$upgrade_mcp" -eq 1 ]; then
+    printf '  %s (%s)\n' "$mcp_dest" "$staged_mcp_version"
+  else
+    printf '  tendril-mcp: absent at %s (not created)\n' "$mcp_dest"
+  fi
+  printf '\n'
+  printf 'Release-owned baseline:\n'
+  printf '  %s\n' "$UNIT_PATH"
+  if [ "$admin_override" -eq 1 ]; then
+    printf '\n'
+    printf 'Administrator full-unit override preserved (shadows the release baseline):\n'
+    printf '  %s\n' "$LEGACY_UNIT_PATH"
+  elif [ "$legacy_migration" -eq 1 ]; then
+    printf '\n'
+    printf 'Known legacy unit migrated from %s to %s.\n' "$LEGACY_UNIT_PATH" "$UNIT_PATH"
+  fi
+  if fs_is_dir "/etc/systemd/system/tendril.service.d"; then
+    printf '\n'
+    printf 'Administrator drop-ins preserved:\n'
+    printf '  /etc/systemd/system/tendril.service.d\n'
+  fi
+  printf '\n'
+  printf 'This upgrade did not run tendril init and did not reinitialize durable Stem state.\n'
+  printf 'The host retains its P1-P5 governed posture.\n'
+}
+
 main() {
   parse_args "$@"
   if [ "$want_help" -eq 1 ]; then
     usage
     exit 0
   fi
+  if [ "$governed" -eq 1 ] && [ "$governed_upgrade" -eq 1 ]; then
+    die "--governed and --governed-upgrade are mutually exclusive"
+  fi
   if [ "$governed" -eq 1 ]; then
     install_governed
     return
   fi
+  if [ "$governed_upgrade" -eq 1 ]; then
+    install_governed_upgrade
+    return
+  fi
   if [ -n "$pollinator_user" ]; then
-    die "--pollinator-user is only valid with --governed"
+    die "--pollinator-user is only valid with --governed or --governed-upgrade"
   fi
   install_local
 }

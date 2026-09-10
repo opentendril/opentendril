@@ -139,3 +139,29 @@ systemctl enable --now tendril
 The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md):
 dispatch a Seed with the Pollinator credential, watch that Phytomer, and review
 the Git Fruit. `main` stays unchanged until a human merges.
+
+## Upgrade
+
+Use the same verified installer and release pin as governed installation. Name
+the ordinary Pollinator-hosting account. Do **not** pipe the installer into
+`sudo sh`.
+
+```bash
+# [root] Linux amd64 — same RELEASE pin as governed installation above.
+curl -fsSL -o install.sh \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
+curl -fsSL -o checksums.txt \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
+
+sudo sh install.sh \
+  --governed-upgrade \
+  --pollinator-user <ordinary-user> \
+  --version "${RELEASE}"
+```
+
+The upgrade does not run `tendril init` and does not reinitialize durable Stem
+state. An exact known historical `/etc/systemd/system/tendril.service` is
+migrated; a modified or otherwise ambiguous `/etc` unit fails closed. See
+[GUIDE-INSTALL.md](./GUIDE-INSTALL.md) for the ownership model, fail-closed
+cases, and how restoration is reported if a step fails.

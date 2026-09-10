@@ -728,7 +728,7 @@ tendril pollinator list
 > ownership of the unit and its hardening policy is the distinguishing reason.
 
 ```ini
-# [root] /etc/systemd/system/tendril.service
+# [root] /usr/local/lib/systemd/system/tendril.service
 [Unit]
 Description=OpenTendril Stem
 After=network-online.target
@@ -775,6 +775,11 @@ Replace **both** occurrences of `1001` with `id -u tendril`, then:
 systemctl daemon-reload && systemctl enable --now tendril
 journalctl -u tendril -f
 ```
+
+> [!NOTE]
+> The governed release baseline is installed to `/usr/local/lib/systemd/system/tendril.service`.
+> Administrator overrides belong in `/etc/systemd/system/tendril.service.d/*.conf` (drop-ins)
+> or a full override unit at `/etc/systemd/system/tendril.service` which shadows the release baseline.
 
 On first start the Stem generates a bearer key at
 `/home/tendril/.tendril/api-key`, mode `0600`. That key authenticates **you**,
@@ -1226,69 +1231,52 @@ rerun `tendril init`.** Existing durable configuration and state remain in
 place, including `.env`, `.tendril/`, GitHub App credentials, Pollinator
 credentials, grants, Substrate definitions, and other runtime state.
 
-1. Obtain the newer release archive and its `checksums.txt` from the same tag.
-2. Verify the archive with SHA-256 **before** replacing anything.
-3. Stop the Stem.
-4. Replace the protected `tendril` at the Stage 3 path, keeping the same owner
-   and mode.
-5. If the Pollinator-hosting account has `tendril-mcp`, replace that executable
-   the same way as Stage 8.
-6. Restart the Stem.
-7. Run the existing health and hardiness checks.
+Governed upgrade is an administrator-run installer operation. It verifies the
+pinned release, reconciles the release-owned `tendril.service` baseline at
+`/usr/local/lib/systemd/system/tendril.service`, replaces the protected Stem
+binary, and upgrades `tendril-mcp` only when that executable already exists for
+the named Pollinator-hosting account. It does not install or reconfigure
+Docker, create the Stem principal, rewrite P2 sudo policy, run `tendril init`,
+or recreate durable Stem state.
 
-Stop the Stem, then replace the protected executable. Substitute the newer
-release tag for `RELEASE`.
+Administrator drop-ins under `/etc/systemd/system/tendril.service.d/*.conf` are
+left in place. A full unit at `/etc/systemd/system/tendril.service` is treated
+as an administrator override that shadows the release baseline: it is preserved
+and reported, and the resulting effective service must still satisfy the
+governed floor. An exact known historical unit at that `/etc` path is migrated
+to the release-owned baseline. Any other `/etc` unit — including a one-byte
+manual edit — fails closed before mutation.
+
+If a step fails after host files have changed, the installer attempts to restore
+the previous binaries, service layout, and prior active or inactive state. That
+restoration is best-effort, not atomic. If restoration itself fails, both the
+original failure and the rollback failure are reported, and the upgrade is not
+reported as successful.
+
+Download `install.sh` and `checksums.txt` from the same release, verify the
+installer, then invoke `--governed-upgrade` with the named Pollinator and the
+same release pin. Do **not** pipe the installer into `sudo sh`.
 
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
-# The subshell exits on checksum failure, so extract/install do not run.
 RELEASE=v0.3.14
-ARCHIVE=opentendril-linux-amd64.tar.gz
-WORKDIR=$(mktemp -d)
-(
-  set -euo pipefail
-  cd "$WORKDIR"
-  curl -fsSL -o "$ARCHIVE" \
-    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-  curl -fsSL -o checksums.txt \
-    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
-  tar -xzf "$ARCHIVE" tendril
-  systemctl stop tendril
-  install -o tendril -g tendril -m 750 tendril /home/tendril/.local/bin/tendril
-)
-rm -rf "$WORKDIR"
+curl -fsSL -o install.sh \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
+curl -fsSL -o checksums.txt \
+  "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
+grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
+
+RELEASE=v0.3.14
+sudo sh install.sh \
+  --governed-upgrade \
+  --pollinator-user <ordinary-user> \
+  --version "${RELEASE}"
 ```
 
-If Stage 8 installed `tendril-mcp`, replace it from a separately verified
-archive on the Pollinator-hosting account. Do not copy the full `tendril`
-executable onto that account's PATH.
+After a successful upgrade, confirm the Stem with the existing health and
+hardiness checks if it is running:
 
 ```bash
-# as the ordinary (Pollinator-hosting) account — same RELEASE as above
-# The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.14
-ARCHIVE=opentendril-linux-amd64.tar.gz
-WORKDIR=$(mktemp -d)
-(
-  set -euo pipefail
-  cd "$WORKDIR"
-  curl -fsSL -o "$ARCHIVE" \
-    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/${ARCHIVE}"
-  curl -fsSL -o checksums.txt \
-    "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
-  grep "${ARCHIVE}$" checksums.txt | sha256sum -c || exit 1
-  tar -xzf "$ARCHIVE" tendril-mcp
-  install -m 755 tendril-mcp "$HOME/.local/bin/tendril-mcp"
-)
-rm -rf "$WORKDIR"
-```
-
-Then restart the Stem and run the existing checks:
-
-```bash
-# [root]
-systemctl start tendril
 curl -s localhost:8080/health
 sudo -u tendril -i tendril hardiness
 ```
