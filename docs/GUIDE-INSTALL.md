@@ -1240,8 +1240,8 @@ and rootless Docker. `--governed-upgrade` is not that qualification. An
 existing governed Ubuntu linux/amd64 host may proceed on another Ubuntu
 release only after a read-only proof of the current governed posture. That
 proof does not install or repair Docker, create users, invoke rootless setup,
-run `loginctl`, rewrite sudo policy, run `tendril init`, or alter binaries,
-service files, or durable Stem state.
+run `loginctl`, rewrite sudo policy, invalidate a cached sudo timestamp, run
+`tendril init`, or alter binaries, service files, or durable Stem state.
 
 The preflight must establish, before any protected host mutation:
 
@@ -1254,9 +1254,10 @@ The preflight must establish, before any protected host mutation:
 - the named Pollinator is an ordinary separate principal, is not in the
   `tendril` group, and has no unattended/passwordless escalation to root,
   `tendril`, ALL, or equivalent privileged authority;
-- rootless Docker is reachable as `tendril` through
-  `/run/user/<uid>/docker.sock`, Docker SecurityOptions contains `rootless`,
-  and rootful `docker.service` / `docker.socket` are not active or enabled;
+- `/run/user/<uid>` exists as a directory owned by `tendril`; rootless Docker
+  is reachable as `tendril` through `/run/user/<uid>/docker.sock`, Docker
+  SecurityOptions contains `rootless`, and rootful `docker.service` /
+  `docker.socket` are not active or enabled;
 - service layout/provenance classification succeeds, and the currently
   effective service already satisfies the governed hardening floor.
 

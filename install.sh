@@ -1477,7 +1477,6 @@ require_protected_stem_binary() {
 
 inspect_pollinator_privilege_readonly() {
   require_cmd sudo
-  sudo -u "$pollinator_user" sudo -K </dev/null 2>/dev/null || true
   _listing_status=0
   _listing=$(sudo -l -U "$pollinator_user" </dev/null 2>&1) || _listing_status=$?
   if [ "$_listing_status" -ne 0 ]; then
@@ -1492,7 +1491,6 @@ inspect_pollinator_privilege_readonly() {
   if sudo_listing_has_passwordless_privilege "$_listing"; then
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} has passwordless sudo that can become root, ${STEM_USER}, ALL, or another unattended privileged identity. That violates P2. Governed upgrade will not loosen sudo policy."
   fi
-  sudo -u "$pollinator_user" sudo -K </dev/null 2>/dev/null || true
   if sudo -u "$pollinator_user" sudo -n -u "$STEM_USER" true </dev/null 2>/dev/null; then
     die "cannot upgrade: Pollinator-hosting account ${pollinator_user} can become ${STEM_USER} non-interactively (sudo -n -u ${STEM_USER}). That violates P2. Cached or passwordless escalation is not an accepted governed posture. Governed upgrade will not rewrite sudo policy."
   fi
@@ -1504,6 +1502,10 @@ verify_existing_tendril_rootless_docker() {
     die "cannot upgrade: ${STEM_USER} runtime directory ${_runtime} is missing. Governed upgrade will not create it or start a user session."
   fi
   fs_is_dir "$_runtime" || die "cannot upgrade: ${_runtime} is not a directory"
+  _runtime_owner=$(fs_owner "$_runtime") || die "cannot upgrade: cannot determine owner of ${_runtime}"
+  if [ "$_runtime_owner" != "$STEM_USER" ]; then
+    die "cannot upgrade: ${_runtime} is owned by ${_runtime_owner}, expected ${STEM_USER}. Governed upgrade will not take ownership of the runtime directory."
+  fi
   if unit_is_active docker.service; then
     die "cannot upgrade: system docker.service is active (rootful). Governed upgrade will not disable, remove, or repurpose a foreign rootful Docker daemon."
   fi

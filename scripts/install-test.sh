@@ -2160,12 +2160,28 @@ prepare_upgrade_host() {
   prepare_upgrade_rootless_runtime
 }
 
+assert_no_sudo_timestamp_mutation() {
+  local name=$1
+  if grep -Eq '^CMD sudo( .*)? -[Kk]( |$)' "${events_file}"; then
+    fail "${name}: invalidated a sudo timestamp or credential cache" "events=$(tr '\n' ' ' <"${events_file}")"
+    return 1
+  fi
+  if find "${ROOT}/state" -maxdepth 1 -name 'sudo-k-*' | grep -q .; then
+    fail "${name}: sudo timestamp-kill marker was created"
+    return 1
+  fi
+  return 0
+}
+
 assert_upgrade_preflight_unmutated() {
   local name=$1
   if ! assert_no_host_write "${name}"; then
     return 1
   fi
   if ! assert_no_upgrade_bootstrap "${name}"; then
+    return 1
+  fi
+  if ! assert_no_sudo_timestamp_mutation "${name}"; then
     return 1
   fi
   if grep -q 'Attempting rollback' "${stderr_file}"; then
@@ -3001,6 +3017,19 @@ else
   pass "installer source never uses --skip-iptables"
 fi
 
+upgrade_privilege_preflight="$(awk '/^inspect_pollinator_privilege_readonly\(\)/,/^}$/' "${installer}")"
+if [ -z "${upgrade_privilege_preflight}" ]; then
+  fail "governed-upgrade privilege preflight is defined"
+elif printf '%s\n' "${upgrade_privilege_preflight}" | grep -Eq -- '(^|[[:space:]])-[Kk]([[:space:]]|$)'; then
+  fail "governed-upgrade privilege preflight does not use sudo -K/-k" "preflight=$(printf '%s' "${upgrade_privilege_preflight}" | tr '\n' ' ')"
+elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -l -U'; then
+  fail "governed-upgrade privilege preflight keeps read-only sudo -l -U"
+elif ! printf '%s\n' "${upgrade_privilege_preflight}" | grep -q -- 'sudo -n -u'; then
+  fail "governed-upgrade privilege preflight keeps the sudo -n probe"
+else
+  pass "governed-upgrade privilege preflight is observational"
+fi
+
 new_governed_case
 GOVERNED_SUDO_USER=alice
 run_governed_installer
@@ -3337,6 +3366,9 @@ if [ "${status}" -eq 0 ]; then
     pass "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix"
   else
     fail "Ubuntu 24.04 governed upgrade does not expand the fresh-install matrix" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+  fi
+  if assert_no_sudo_timestamp_mutation "successful governed upgrade does not invalidate sudo timestamps"; then
+    pass "successful governed upgrade does not invalidate sudo timestamps"
   fi
 else
   fail "named Pollinator selection" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
@@ -3736,6 +3768,22 @@ fi
 
 new_governed_case
 prepare_upgrade_host
+printf 'root\n' >"${ROOT}/meta/owners/%run%user%2001"
+run_governed_upgrade_installer --pollinator-user alice
+if [ "${status}" -ne 0 ] && grep -q '/run/user/2001 is owned by root' "${stderr_file}"; then
+  if [ "$(cat "${ROOT}/meta/owners/%run%user%2001")" = root ]; then
+    if assert_upgrade_preflight_unmutated "wrong-owner tendril runtime directory fails before mutation"; then
+      pass "wrong-owner tendril runtime directory fails before mutation"
+    fi
+  else
+    fail "wrong-owner tendril runtime directory fails before mutation: ownership was repaired"
+  fi
+else
+  fail "wrong-owner tendril runtime directory fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
 rm -f "${ROOT}/state/docker-rootless-ready"
 run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -qi 'failed to query the tendril Docker daemon\|will not install, start, or repair Docker' "${stderr_file}"; then
@@ -3942,6 +3990,13 @@ run_governed_upgrade_installer --pollinator-user alice
 if [ "${status}" -ne 0 ] && grep -qi 'non-interactively' "${stderr_file}"; then
   if assert_upgrade_preflight_unmutated "Pollinator sudo -n to Stem fails before mutation"; then
     pass "Pollinator sudo -n to Stem fails before mutation"
+    if events_match '^CMD sudo -l -U alice' \
+      && events_match '^CMD sudo -u alice sudo -n -u tendril true' \
+      && assert_no_sudo_timestamp_mutation "failed upgrade preflight performs no sudo -K"; then
+      pass "failed upgrade preflight performs no sudo -K"
+    else
+      fail "failed upgrade preflight performs no sudo -K" "events=$(tr '\n' ' ' <"${events_file}")"
+    fi
   fi
 else
   fail "Pollinator sudo -n to Stem fails before mutation" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
