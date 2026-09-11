@@ -2929,6 +2929,14 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 		},
 	}
 
+	var verifiedCandidate string
+	originalSeedVerifyFn := seedVerifyFn
+	t.Cleanup(func() { seedVerifyFn = originalSeedVerifyFn })
+	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
+		verifiedCandidate = candidate
+		return runSeedVerify(ctx, sourcePath, candidate, verify, egress)
+	}
+
 	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner})
 	_ = probe
 	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
@@ -2938,7 +2946,7 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 		Goal:          "mutate python",
 		SessionID:     stepID,
 		MaxIterations: 1,
-		Verify:        []string{"true"},
+		Verify:        []string{"sh", "-c", "grep -q \"return 'mutated'\" mutation.py"},
 	})
 
 	if err != nil {
@@ -2947,6 +2955,10 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 
 	if res.Status != SeedStatusSatisfied {
 		t.Fatalf("status = %q, want satisfied. Logs:\n%s", res.Status, res.Logs)
+	}
+
+	if verifiedCandidate != res.Commit {
+		t.Fatalf("verified candidate = %q, want seedCandidateCommit %q", verifiedCandidate, res.Commit)
 	}
 
 	commit := res.Commit
@@ -3092,8 +3104,12 @@ func TestSettleSeedCandidateWorkspace_SymlinkEscape(t *testing.T) {
 		t.Fatalf("expected settlement to succeed by safely removing the symlink, but got: %v", err)
 	}
 
-	if _, err := os.Stat(outsideFile); os.IsNotExist(err) {
-		t.Fatal("symlink target file was incorrectly deleted")
+	afterContent, err := os.ReadFile(outsideFile)
+	if err != nil {
+		t.Fatalf("read victim.txt after settlement: %v", err)
+	}
+	if string(afterContent) != "victim" {
+		t.Fatalf("symlink target file was modified: got %q, want %q", afterContent, "victim")
 	}
 }
 
@@ -3130,5 +3146,112 @@ func TestSettleSeedCandidateWorkspace_RemovalFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "remove untracked path") {
 		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	// 1. Setup seed branch and get start ref.
+	seedBranch := "tendril/" + newSproutExecutionID("seed")
+	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
+		t.Fatalf("create seed branch: %v", err)
+	}
+	startRef, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("rev-parse seed branch: %v", err)
+	}
+	startRef = strings.TrimSpace(startRef)
+
+	// 2. Create external object to test symlink protection.
+	externalDir := t.TempDir()
+	externalFile := filepath.Join(externalDir, "external.txt")
+	externalContent := []byte("original external")
+	if err := os.WriteFile(externalFile, externalContent, 0o644); err != nil {
+		t.Fatalf("write external: %v", err)
+	}
+
+	stepID := "path-seed-settle-fail"
+	runner := &pathBackedSeedRunner{
+		file:     "keep.txt",
+		contents: "modified tracked file",
+		execute: func(workspace string) error {
+			// Sprout creates a symlink to the external object.
+			// It should be untracked. We put it in .tendril so collectStageableFiles ignores it,
+			// leaving it for settleSeedCandidateWorkspace to process (and remove).
+			tendrilDir := filepath.Join(workspace, ".tendril")
+			if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+				return err
+			}
+			symlinkPath := filepath.Join(tendrilDir, "escape_link")
+			if err := os.Symlink(externalFile, symlinkPath); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner})
+	_ = probe
+
+	originalCommit := commitTerrariumExecutionFn
+	t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
+		// Just create an empty commit so the candidate exists, leaving keep.txt modified
+		// and .tendril/escape_link untracked.
+		if _, err := runGitCommand(ctx, mountPath, "commit", "--allow-empty", "-m", "empty commit leaving worktree dirty"); err != nil {
+			return "", err
+		}
+		commitHash, err := runGitCommand(ctx, mountPath, "rev-parse", "HEAD")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(commitHash), nil
+	}
+
+	res, err := RunSeed(ctx, SeedExecution{
+		Substrate:     repo,
+		Goal:          "modify keep.txt and fail settlement",
+		SessionID:     stepID,
+		MaxIterations: 1,
+		Verify:        []string{"true"},
+	})
+	if err != nil {
+		t.Fatalf("RunSeed failed: %v", err)
+	}
+
+	// 3. Prove settlement failure cannot advance the Seed ref
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered for infrastructure failure (settlement)", res.Status)
+	}
+	if res.Commit != "" {
+		t.Fatalf("produced Fruit commit %q, want none", res.Commit)
+	}
+
+	endRef, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("end ref: %v", err)
+	}
+	endRef = strings.TrimSpace(endRef)
+
+	if endRef != startRef {
+		t.Fatalf("seed ref advanced from %q to %q despite settlement failure", startRef, endRef)
+	}
+
+	// Assert the integration logged a settlement error for the tracked modification
+	if !strings.Contains(res.Logs, "tracked modification rejected") {
+		t.Fatalf("expected settlement failure log for tracked modification, got:\n%s", res.Logs)
+	}
+
+	// 4. Explicitly assert that external objects reached via symlinks remain byte-for-byte unchanged
+	afterContent, err := os.ReadFile(externalFile)
+	if err != nil {
+		t.Fatalf("read external file after run: %v", err)
+	}
+	if string(afterContent) != string(externalContent) {
+		t.Fatalf("external file modified! got %q, want %q", afterContent, string(externalContent))
 	}
 }
