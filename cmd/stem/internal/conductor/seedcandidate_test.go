@@ -2909,10 +2909,22 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 		execute: func(workspace string) error {
 			cmd := exec.Command("python3", "-c", "import mutation; mutation.mutate()")
 			cmd.Dir = workspace
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("python execution failed: %v\nOutput: %s", err, out)
+
+			// Prevent inherited Python environment from disabling or redirecting bytecode generation
+			cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=", "PYTHONPYCACHEPREFIX=")
+
+			out, execErr := cmd.CombinedOutput()
+			if execErr != nil {
+				return fmt.Errorf("python execution failed: %v\nOutput: %s", execErr, out)
 			}
+
+			// explicitly assert that __pycache__/*.pyc exists before settlement
+			pycacheDir := filepath.Join(workspace, "__pycache__")
+			entries, readErr := os.ReadDir(pycacheDir)
+			if readErr != nil || len(entries) == 0 {
+				return fmt.Errorf("python execution did not generate __pycache__ inside candidate: %v", readErr)
+			}
+
 			return nil
 		},
 	}
@@ -2961,5 +2973,162 @@ func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
 		t.Fatalf("Fruit commit missing the mutation:\n%s", content)
 	}
 
+	// verify protected/default branch remains unchanged
+	currentMain, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("rev-parse main: %v", err)
+	}
+	if strings.TrimSpace(currentMain) != start {
+		t.Fatalf("main branch moved from %s to %s", start, strings.TrimSpace(currentMain))
+	}
+
 	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestSettleSeedCandidateWorkspace_TrackedTransient(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	transientPath := filepath.Join(repo, "__pycache__", "module.pyc")
+	if err := os.MkdirAll(filepath.Dir(transientPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(transientPath, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"add", "__pycache__/module.pyc"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on tracked transient modification")
+	}
+	if !strings.Contains(err.Error(), "tracked modification rejected: __pycache__/module.pyc") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	if _, err := os.Stat(transientPath); os.IsNotExist(err) {
+		t.Fatal("tracked transient file was incorrectly deleted")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_UntrackedNonTransient(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	untrackedPath := filepath.Join(repo, "untracked.go")
+	if err := os.WriteFile(untrackedPath, []byte("code"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on untracked non-transient file")
+	}
+	if !strings.Contains(err.Error(), "untracked path rejected: untracked.go") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	if _, err := os.Stat(untrackedPath); os.IsNotExist(err) {
+		t.Fatal("untracked non-transient file was incorrectly deleted")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_RenameCopyPorcelain(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	if err := os.WriteFile(filepath.Join(repo, "original.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write original.txt: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "original.txt"); err != nil {
+		t.Fatalf("git add original.txt: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-m", "add original"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	if _, err := runGitCommand(ctx, repo, "mv", "original.txt", "renamed.txt"); err != nil {
+		t.Fatalf("git mv: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on rename modification")
+	}
+	if !strings.Contains(err.Error(), "tracked modification rejected: renamed.txt") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_SymlinkEscape(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "victim.txt")
+	if err := os.WriteFile(outsideFile, []byte("victim"), 0o644); err != nil {
+		t.Fatalf("write victim.txt: %v", err)
+	}
+
+	symlinkPath := filepath.Join(repo, "__pycache__")
+	if err := os.Symlink(outsideDir, symlinkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	untrackedInsideSymlink := filepath.Join(symlinkPath, "module.pyc")
+	if err := os.WriteFile(untrackedInsideSymlink, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err != nil {
+		t.Fatalf("expected settlement to succeed by safely removing the symlink, but got: %v", err)
+	}
+
+	if _, err := os.Stat(outsideFile); os.IsNotExist(err) {
+		t.Fatal("symlink target file was incorrectly deleted")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_RemovalFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based directory removal blocking is not reliably supported on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based directory removal blocking does not apply to root")
+	}
+
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	cacheDir := filepath.Join(repo, "__pycache__")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	transientPath := filepath.Join(cacheDir, "module.pyc")
+	if err := os.WriteFile(transientPath, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := os.Chmod(cacheDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(cacheDir, 0o755)
+	})
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail due to removal error")
+	}
+	if !strings.Contains(err.Error(), "remove untracked path") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
 }

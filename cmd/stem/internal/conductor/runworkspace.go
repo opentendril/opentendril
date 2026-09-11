@@ -516,19 +516,29 @@ func runWorkspaceWorktreeMatches(ctx context.Context, repository, path, branch s
 		return false, fmt.Errorf("list Git worktrees: %w", err)
 	}
 	wantedPath := filepath.Clean(path)
-	wantedBranch := "refs/heads/" + branch
+	wantedBranch := ""
+	if branch != "" {
+		wantedBranch = "refs/heads/" + branch
+	}
 	for _, block := range strings.Split(listing, "\n\n") {
 		var listedPath, listedBranch string
+		var listedDetached bool
 		for _, line := range strings.Split(block, "\n") {
 			switch {
 			case strings.HasPrefix(line, "worktree "):
 				listedPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
 			case strings.HasPrefix(line, "branch "):
 				listedBranch = strings.TrimSpace(strings.TrimPrefix(line, "branch "))
+			case line == "detached":
+				listedDetached = true
 			}
 		}
-		if filepath.Clean(listedPath) == wantedPath && listedBranch == wantedBranch {
-			return true, nil
+		if filepath.Clean(listedPath) == wantedPath {
+			if wantedBranch == "" && listedDetached {
+				return true, nil
+			} else if wantedBranch != "" && listedBranch == wantedBranch {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

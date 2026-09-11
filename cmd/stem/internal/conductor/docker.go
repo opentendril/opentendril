@@ -2952,6 +2952,12 @@ func settleSeedCandidateWorkspace(ctx context.Context, worktreePath string) erro
 		return nil
 	}
 
+	canonicalWorktree, err := filepath.EvalSymlinks(worktreePath)
+	if err != nil {
+		return fmt.Errorf("seed candidate settlement: resolve canonical worktree path: %w", err)
+	}
+	canonicalWorktree = filepath.Clean(canonicalWorktree)
+
 	entries := strings.Split(status, "\x00")
 	for i := 0; i < len(entries); i++ {
 		entry := entries[i]
@@ -2966,7 +2972,7 @@ func settleSeedCandidateWorkspace(ctx context.Context, worktreePath string) erro
 		code := entry[:2]
 		path := entry[3:]
 
-		if code == "R " || code == "C " || code == "RM" || code == "CM" {
+		if code[0] == 'R' || code[0] == 'C' {
 			i++
 			if i >= len(entries) {
 				return fmt.Errorf("seed candidate settlement: malformed rename/copy record")
@@ -2982,12 +2988,36 @@ func settleSeedCandidateWorkspace(ctx context.Context, worktreePath string) erro
 			return fmt.Errorf("seed candidate settlement: untracked path rejected: %s", path)
 		}
 
-		absolutePath := filepath.Join(worktreePath, filepath.FromSlash(path))
-		if !pathIsUnder(absolutePath, worktreePath) {
+		absolutePath := filepath.Join(canonicalWorktree, filepath.FromSlash(path))
+
+		parentDir := filepath.Dir(absolutePath)
+		canonicalParent, err := filepath.EvalSymlinks(parentDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("seed candidate settlement: resolve parent path for %s: %w", path, err)
+		}
+
+		if !pathIsUnder(canonicalParent, canonicalWorktree) && !sameFilePath(canonicalParent, canonicalWorktree) {
 			return fmt.Errorf("seed candidate settlement: path escaped worktree: %s", path)
 		}
 
-		if err := os.Remove(absolutePath); err != nil && !os.IsNotExist(err) {
+		safeTarget := filepath.Join(canonicalParent, filepath.Base(absolutePath))
+
+		info, err := os.Lstat(safeTarget)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("seed candidate settlement: stat untracked path %s: %w", path, err)
+		}
+
+		if info.IsDir() {
+			return fmt.Errorf("seed candidate settlement: unexpected directory target for untracked file %s", path)
+		}
+
+		if err := os.Remove(safeTarget); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("seed candidate settlement: remove untracked path %s: %w", path, err)
 		}
 	}
@@ -3061,12 +3091,25 @@ func integratePathBackedSeedCheckpoint(ctx context.Context, sourcePath, worktree
 		return fmt.Errorf("seed integration failed: exact candidate worktree %s is not beneath the Stem-owned run workspace root %s", worktreePath, runRoot)
 	}
 
+	expectedPrefix := filepath.Join(runRoot, seedCandidateWorktreePrefix)
+	if !strings.HasPrefix(absWorktree, expectedPrefix) {
+		return fmt.Errorf("seed integration failed: candidate location %s does not conform to allocation contract", worktreePath)
+	}
+
 	absSource, err := absoluteRunWorkspaceRepository(ctx, sourcePath)
 	if err != nil {
 		return err
 	}
 	if sameFilePath(absWorktree, absSource) {
 		return fmt.Errorf("seed integration failed: candidate worktree must not be the Botanist checkout")
+	}
+
+	registered, err := runWorkspaceWorktreeMatches(ctx, sourcePath, worktreePath, "")
+	if err != nil {
+		return fmt.Errorf("seed integration failed: verify linked worktree %s: %w", worktreePath, err)
+	}
+	if !registered {
+		return fmt.Errorf("seed integration failed: %s is not the linked detached worktree of %s", worktreePath, sourcePath)
 	}
 
 	if err := settleSeedCandidateWorkspace(ctx, worktreePath); err != nil {
