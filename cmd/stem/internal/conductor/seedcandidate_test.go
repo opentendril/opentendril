@@ -1535,6 +1535,7 @@ type pathBackedSeedRunner struct {
 	workspace         string
 	startHEAD         string
 	startHELLO        string
+	execute           func(workspace string) error
 }
 
 func (runner *pathBackedSeedRunner) setWorkspace(workspace string) {
@@ -1594,6 +1595,12 @@ func (runner *pathBackedSeedRunner) Run(ctx context.Context, _ string) (sproutRe
 	}
 	if runner.wroteWorkspace != nil {
 		wrote = *runner.wroteWorkspace
+	}
+	if runner.execute != nil {
+		if err := runner.execute(runner.workspace); err != nil {
+			return sproutResult{}, err
+		}
+		wrote = true
 	}
 	if runner.runErr != nil {
 		return sproutResult{Response: "", WroteWorkspace: wrote, BoundaryFailure: runner.boundaryFailure}, runner.runErr
@@ -2868,4 +2875,91 @@ func TestPathBackedSeedCandidateUsesRunWorkspaceRoot(t *testing.T) {
 	if seedTree != 1 || stash != 0 || merge != 0 || push != 0 {
 		t.Fatalf("isolation/publication counts seed=%d stash=%d merge=%d push=%d", seedTree, stash, merge, push)
 	}
+}
+
+func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not available")
+	}
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+
+	scriptPath := filepath.Join(repo, "mutation.py")
+	if err := os.WriteFile(scriptPath, []byte("def mutate():\n    pass\n"), 0o644); err != nil {
+		t.Fatalf("write mutation.py: %v", err)
+	}
+	for _, args := range [][]string{{"add", "mutation.py"}, {"commit", "-m", "add script"}} {
+		if _, err := runGitCommand(context.Background(), repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	start, err := runGitCommand(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	start = strings.TrimSpace(start)
+
+	stepID := "path-seed-python-settle"
+
+	runner := &pathBackedSeedRunner{
+		file:     "mutation.py",
+		contents: "def mutate():\n    return 'mutated'\n",
+		execute: func(workspace string) error {
+			cmd := exec.Command("python3", "-c", "import mutation; mutation.mutate()")
+			cmd.Dir = workspace
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("python execution failed: %v\nOutput: %s", err, out)
+			}
+			return nil
+		},
+	}
+
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner})
+	_ = probe
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "mutate python",
+		SessionID:     stepID,
+		MaxIterations: 1,
+		Verify:        []string{"true"},
+	})
+
+	if err != nil {
+		t.Fatalf("RunSeed failed: %v", err)
+	}
+
+	if res.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied. Logs:\n%s", res.Status, res.Logs)
+	}
+
+	commit := res.Commit
+	if commit == "" {
+		t.Fatalf("no Fruit commit produced")
+	}
+
+	tree, err := runGitCommand(context.Background(), repo, "ls-tree", "-r", "--name-only", commit)
+	if err != nil {
+		t.Fatalf("ls-tree: %v", err)
+	}
+	if strings.Contains(tree, "__pycache__") || strings.Contains(tree, ".pyc") {
+		t.Fatalf("Fruit commit %s contains transient python cache artifacts:\n%s", commit, tree)
+	}
+	if !strings.Contains(tree, "mutation.py") {
+		t.Fatalf("Fruit commit %s missing mutation.py", commit)
+	}
+
+	content, err := runGitCommand(context.Background(), repo, "show", commit+":mutation.py")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(content, "return 'mutated'") {
+		t.Fatalf("Fruit commit missing the mutation:\n%s", content)
+	}
+
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
 }

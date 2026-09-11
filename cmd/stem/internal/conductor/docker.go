@@ -2943,12 +2943,68 @@ func ensureNotGitVisible(targetPath string) {
 	}
 }
 
-func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace, seedBranch, checkpointCommit, expectedOldTip string) error {
-	if err := validateSeedCandidatePaths(ctx, managedWorkspace.Repository, expectedOldTip, checkpointCommit, managedWorkspace.Path); err != nil {
-		return err
+func settleSeedCandidateWorkspace(ctx context.Context, worktreePath string) error {
+	status, err := runGitCommandRawOutput(ctx, worktreePath, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		return fmt.Errorf("seed candidate settlement: inspect worktree %s: %w", worktreePath, err)
+	}
+	if status == "" {
+		return nil
 	}
 
-	if err := advanceSeedCandidateRef(ctx, managedWorkspace.Repository, seedBranch, checkpointCommit, expectedOldTip); err != nil {
+	entries := strings.Split(status, "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) == 0 {
+			continue
+		}
+
+		if len(entry) < 3 {
+			return fmt.Errorf("seed candidate settlement: malformed porcelain record [%s]", entry)
+		}
+
+		code := entry[:2]
+		path := entry[3:]
+
+		if code == "R " || code == "C " || code == "RM" || code == "CM" {
+			i++
+			if i >= len(entries) {
+				return fmt.Errorf("seed candidate settlement: malformed rename/copy record")
+			}
+			return fmt.Errorf("seed candidate settlement: tracked modification rejected: %s", path)
+		}
+
+		if code != "??" {
+			return fmt.Errorf("seed candidate settlement: tracked modification rejected: %s", path)
+		}
+
+		if !shouldIgnoreStagePath(path) {
+			return fmt.Errorf("seed candidate settlement: untracked path rejected: %s", path)
+		}
+
+		absolutePath := filepath.Join(worktreePath, filepath.FromSlash(path))
+		if !pathIsUnder(absolutePath, worktreePath) {
+			return fmt.Errorf("seed candidate settlement: path escaped worktree: %s", path)
+		}
+
+		if err := os.Remove(absolutePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("seed candidate settlement: remove untracked path %s: %w", path, err)
+		}
+	}
+
+	cleanStatus, err := runGitCommandRawOutput(ctx, worktreePath, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		return fmt.Errorf("seed candidate settlement: verify clean worktree %s: %w", worktreePath, err)
+	}
+	if cleanStatus != "" {
+		return fmt.Errorf("seed candidate settlement: worktree %s is not clean after settlement. status=[%s]", worktreePath, cleanStatus)
+	}
+
+	return nil
+}
+
+func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace, seedBranch, checkpointCommit, expectedOldTip string) error {
+	if err := validateSeedCandidatePaths(ctx, managedWorkspace.Repository, expectedOldTip, checkpointCommit, managedWorkspace.Path); err != nil {
 		return err
 	}
 
@@ -2966,12 +3022,12 @@ func integrateSeedCheckpoint(ctx context.Context, managedWorkspace RunWorkspace,
 		return fmt.Errorf("seed integration failed: %s is not the registered linked worktree for %s", managedWorkspace.Path, managedWorkspace.Branch)
 	}
 
-	status, statusErr := runGitCommandRawOutput(ctx, managedWorkspace.Path, "status", "--porcelain", "-uall", "-z")
-	if statusErr != nil {
-		return fmt.Errorf("seed integration failed: inspect worktree %s: %w", managedWorkspace.Path, statusErr)
+	if err := settleSeedCandidateWorkspace(ctx, managedWorkspace.Path); err != nil {
+		return err
 	}
-	if status != "" {
-		return fmt.Errorf("seed integration failed: worktree %s is not clean after commit. status=[%s]", managedWorkspace.Path, status)
+
+	if err := advanceSeedCandidateRef(ctx, managedWorkspace.Repository, seedBranch, checkpointCommit, expectedOldTip); err != nil {
+		return err
 	}
 
 	// d. remove the linked worktree
@@ -2993,12 +3049,28 @@ func integratePathBackedSeedCheckpoint(ctx context.Context, sourcePath, worktree
 		return err
 	}
 
-	status, statusErr := runGitCommandRawOutput(ctx, worktreePath, "status", "--porcelain", "-uall", "-z")
-	if statusErr != nil {
-		return fmt.Errorf("seed integration failed: inspect worktree %s: %w", worktreePath, statusErr)
+	absWorktree, err := absoluteRunWorkspaceRepository(ctx, worktreePath)
+	if err != nil {
+		return err
 	}
-	if status != "" {
-		return fmt.Errorf("seed integration failed: worktree %s is not clean after commit. status=[%s]", worktreePath, status)
+	runRoot, err := resolvedRunWorkspaceRoot()
+	if err != nil {
+		return err
+	}
+	if !pathIsUnder(absWorktree, runRoot) {
+		return fmt.Errorf("seed integration failed: exact candidate worktree %s is not beneath the Stem-owned run workspace root %s", worktreePath, runRoot)
+	}
+
+	absSource, err := absoluteRunWorkspaceRepository(ctx, sourcePath)
+	if err != nil {
+		return err
+	}
+	if sameFilePath(absWorktree, absSource) {
+		return fmt.Errorf("seed integration failed: candidate worktree must not be the Botanist checkout")
+	}
+
+	if err := settleSeedCandidateWorkspace(ctx, worktreePath); err != nil {
+		return err
 	}
 
 	if err := advanceSeedCandidateRef(ctx, sourcePath, seedBranch, checkpointCommit, expectedOldTip); err != nil {
