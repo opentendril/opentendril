@@ -3150,21 +3150,21 @@ func TestSettleSeedCandidateWorkspace_RemovalFailure(t *testing.T) {
 }
 
 func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
-	restoreSeeds(t)
-	stubLocalStoma(t)
-	repo := newSeedRepo(t)
+	repo := preparePathBackedGitRepo(t)
 	ctx := context.Background()
 
-	// 1. Setup seed branch and get start ref.
-	seedBranch := "tendril/" + newSproutExecutionID("seed")
+	// 1. Create/identify the exact `seedBranch` supplied to the path-backed Sprout integration.
+	seedBranch := "tendril/seed-path-settlement-failure"
+
+	startRef, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	startRef = strings.TrimSpace(startRef)
+
 	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
 		t.Fatalf("create seed branch: %v", err)
 	}
-	startRef, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
-	if err != nil {
-		t.Fatalf("rev-parse seed branch: %v", err)
-	}
-	startRef = strings.TrimSpace(startRef)
 
 	// 2. Create external object to test symlink protection.
 	externalDir := t.TempDir()
@@ -3194,7 +3194,7 @@ func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
 		},
 	}
 
-	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner})
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
 	_ = probe
 
 	originalCommit := commitTerrariumExecutionFn
@@ -3212,25 +3212,18 @@ func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
 		return strings.TrimSpace(commitHash), nil
 	}
 
-	res, err := RunSeed(ctx, SeedExecution{
-		Substrate:     repo,
-		Goal:          "modify keep.txt and fail settlement",
-		SessionID:     stepID,
-		MaxIterations: 1,
-		Verify:        []string{"true"},
-	})
-	if err != nil {
-		t.Fatalf("RunSeed failed: %v", err)
+	// 3. Run the real path-backed RunSprout checkpoint/integration path with that exact branch.
+	_, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, startRef, runner)
+
+	// 4. Require settlement/integration failure.
+	if runErr == nil {
+		t.Fatal("expected runPathBackedSeedSprout to fail due to settlement error, but it succeeded")
+	}
+	if !strings.Contains(runErr.Error(), "tracked modification rejected") {
+		t.Fatalf("expected settlement failure log for tracked modification, got:\n%v", runErr)
 	}
 
-	// 3. Prove settlement failure cannot advance the Seed ref
-	if res.Status != SeedStatusWithered {
-		t.Fatalf("status = %q, want withered for infrastructure failure (settlement)", res.Status)
-	}
-	if res.Commit != "" {
-		t.Fatalf("produced Fruit commit %q, want none", res.Commit)
-	}
-
+	// 5. Assert the exact supplied Seed ref is unchanged from its pre-run state.
 	endRef, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
 	if err != nil {
 		t.Fatalf("end ref: %v", err)
@@ -3241,12 +3234,7 @@ func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
 		t.Fatalf("seed ref advanced from %q to %q despite settlement failure", startRef, endRef)
 	}
 
-	// Assert the integration logged a settlement error for the tracked modification
-	if !strings.Contains(res.Logs, "tracked modification rejected") {
-		t.Fatalf("expected settlement failure log for tracked modification, got:\n%s", res.Logs)
-	}
-
-	// 4. Explicitly assert that external objects reached via symlinks remain byte-for-byte unchanged
+	// 6. Retain the external symlink-target byte-for-byte preservation assertion.
 	afterContent, err := os.ReadFile(externalFile)
 	if err != nil {
 		t.Fatalf("read external file after run: %v", err)
