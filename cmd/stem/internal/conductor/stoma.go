@@ -161,15 +161,18 @@ func (p EgressPolicy) Authorize(rawURL string) error {
 // payloads addressed under the Terrarium egress directory. Any denial or
 // failure aborts the whole execution before a container exists.
 func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []StomaFetch) ([]terrarium.FilePayload, error) {
-	return fetchEgressPayloadsBounded(ctx, policy, fetches, 0)
+	return fetchEgressPayloadsBounded(ctx, policy, fetches, stomaFetchResponseLimit, 0)
 }
 
 // fetchEgressPayloadsBounded is fetchEgressPayloads with an optional
-// aggregate byte cap. A non-positive aggregateLimit means "no aggregate cap";
-// each object is still bounded by stomaFetchResponseLimit.
-func fetchEgressPayloadsBounded(ctx context.Context, policy EgressPolicy, fetches []StomaFetch, aggregateLimit int) ([]terrarium.FilePayload, error) {
+// per-object and aggregate byte cap. A non-positive aggregateLimit means "no
+// aggregate cap"; perObjectLimit must be positive.
+func fetchEgressPayloadsBounded(ctx context.Context, policy EgressPolicy, fetches []StomaFetch, perObjectLimit, aggregateLimit int) ([]terrarium.FilePayload, error) {
 	if len(fetches) == 0 {
 		return nil, nil
+	}
+	if perObjectLimit <= 0 {
+		return nil, fmt.Errorf("mediated fetch per-object bound must be positive")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -195,7 +198,7 @@ func fetchEgressPayloadsBounded(ctx context.Context, policy EgressPolicy, fetche
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: %w", fetch.URL, err)
 		}
-		content, err := io.ReadAll(io.LimitReader(response.Body, stomaFetchResponseLimit+1))
+		content, err := io.ReadAll(io.LimitReader(response.Body, int64(perObjectLimit)+1))
 		_ = response.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: read response: %w", fetch.URL, err)
@@ -203,8 +206,8 @@ func fetchEgressPayloadsBounded(ctx context.Context, policy EgressPolicy, fetche
 		if response.StatusCode < 200 || response.StatusCode > 299 {
 			return nil, fmt.Errorf("mediated fetch %q: status %d", fetch.URL, response.StatusCode)
 		}
-		if len(content) > stomaFetchResponseLimit {
-			return nil, fmt.Errorf("mediated fetch %q: response exceeds the %d-byte bound", fetch.URL, stomaFetchResponseLimit)
+		if len(content) > perObjectLimit {
+			return nil, fmt.Errorf("mediated fetch %q: response exceeds the %d-byte bound", fetch.URL, perObjectLimit)
 		}
 		total += len(content)
 		if aggregateLimit > 0 && total > aggregateLimit {
@@ -282,16 +285,20 @@ func RunStoma(ctx context.Context, execution StomaExecution) (StomaResult, error
 		timeout = verifierContainerTimeout
 	}
 
-	aggregateLimit := 0
-	if execution.PopulateGoModuleCache {
-		aggregateLimit = seedGoModuleAggregateLimit
-	}
-	payloads, err := fetchEgressPayloadsBounded(ctx, NewEgressPolicy(execution.Egress), execution.Fetches, aggregateLimit)
+	perObjectLimit, aggregateLimit := stomaFetchBounds(execution.PopulateGoModuleCache)
+	payloads, err := fetchEgressPayloadsBounded(ctx, NewEgressPolicy(execution.Egress), execution.Fetches, perObjectLimit, aggregateLimit)
 	if err != nil {
 		return StomaResult{}, err
 	}
 
 	return runStomaCommandFn(ctx, execution, payloads, timeout)
+}
+
+func stomaFetchBounds(populateGoModuleCache bool) (perObjectLimit, aggregateLimit int) {
+	if populateGoModuleCache {
+		return seedGoModuleObjectLimit, seedGoModuleAggregateLimit
+	}
+	return stomaFetchResponseLimit, 0
 }
 
 // runStomaCommand owns the Terrarium lifecycle for one stoma

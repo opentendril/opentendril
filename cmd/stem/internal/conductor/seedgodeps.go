@@ -38,6 +38,9 @@ const (
 	// seedGoMetadataFileLimit caps go.mod / go.sum / vendor/modules.txt.
 	seedGoMetadataFileLimit = 2 << 20
 
+	// seedGoModuleObjectLimit caps one locked Go proxy object.
+	seedGoModuleObjectLimit = 64 << 20
+
 	// seedGoModuleAggregateLimit caps the sum of retrieved proxy objects.
 	seedGoModuleAggregateLimit = 256 << 20
 )

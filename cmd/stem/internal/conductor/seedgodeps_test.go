@@ -444,6 +444,73 @@ func TestSeedGoPreparationFailureWithersWithoutAnotherSprout(t *testing.T) {
 	}
 }
 
+func TestSeedGoOversizeModuleObjectWithersAsInfrastructureFailure(t *testing.T) {
+	restoreSeeds(t)
+	restoreSeedGoProxy(t)
+	leaf := testLeafModule(t)
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if strings.HasSuffix(r.URL.Path, goModuleZipSuffix) {
+			_ = writeSizedTestResponse(w, int64(seedGoModuleObjectLimit+1))
+			return
+		}
+		body, ok := leaf.objects[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	seedGoModuleProxyBase = server.URL
+
+	repo := newSeedRepo(t)
+	commit := commitFiles(t, repo, map[string]string{
+		"go.mod": leaf.consumerMod,
+		"go.sum": leaf.goSum,
+	})
+	origRun := runStomaCommandFn
+	t.Cleanup(func() { runStomaCommandFn = origRun })
+	runStomaCommandFn = func(context.Context, StomaExecution, []terrarium.FilePayload, time.Duration) (StomaResult, error) {
+		t.Fatal("predicate ran after an over-limit module object")
+		return StomaResult{}, nil
+	}
+
+	var builds int
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		builds++
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: commit, RequestsMade: true}, nil
+	}
+	seedVerifyFn = runSeedVerify
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "keep tests green",
+		Verify:        []string{"go", "test", "."},
+		MaxIterations: 2,
+		Egress:        []string{hostOf(t, server.URL)},
+		SessionID:     "seed-go-object-over-limit",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if builds != 1 {
+		t.Fatalf("Sprout builds = %d, want 1", builds)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = %q/%q, want none", res.Branch, res.Commit)
+	}
+	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("diagnostics = %+v, want infrastructure-failed", res.VerificationDiagnostics)
+	}
+	if hits.Load() != 3 {
+		t.Fatalf("proxy requests = %d, want .info, .mod, and the rejected .zip", hits.Load())
+	}
+}
+
 func TestSeedGoPredicateFailureAfterSuccessfulPreparation(t *testing.T) {
 	restoreSeeds(t)
 	restoreSeedGoProxy(t)

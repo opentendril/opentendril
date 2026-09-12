@@ -3,6 +3,7 @@ package conductor
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -237,7 +238,7 @@ func TestFetchEgressPayloadsAllowsIndependentlyGrantedRedirect(t *testing.T) {
 
 func TestFetchEgressPayloadsEnforcesPerObjectBound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(bytes.Repeat([]byte("a"), stomaFetchResponseLimit+1))
+		_ = writeSizedTestResponse(w, int64(stomaFetchResponseLimit+1))
 	}))
 	defer server.Close()
 
@@ -246,6 +247,39 @@ func TestFetchEgressPayloadsEnforcesPerObjectBound(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "exceeds the") {
 		t.Fatalf("oversize object error = %v, want the per-object bound", err)
+	}
+}
+
+func TestRunStomaSeedGoPreparationAllowsLargerObject(t *testing.T) {
+	objectSize := int64(stomaFetchResponseLimit + 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = writeSizedTestResponse(w, objectSize)
+	}))
+	defer server.Close()
+
+	originalRun := runStomaCommandFn
+	var gotPayloads []terrarium.FilePayload
+	runStomaCommandFn = func(_ context.Context, _ StomaExecution, payloads []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
+		gotPayloads = payloads
+		return StomaResult{ExitCode: 0}, nil
+	}
+	defer func() { runStomaCommandFn = originalRun }()
+
+	_, err := RunStoma(context.Background(), StomaExecution{
+		Workspace:             t.TempDir(),
+		Command:               []string{"go", "test", "."},
+		Egress:                []string{hostOf(t, server.URL)},
+		PopulateGoModuleCache: true,
+		Fetches:               []StomaFetch{{URL: server.URL + "/module.zip", Path: "go-proxy/module.zip"}},
+	})
+	if err != nil {
+		t.Fatalf("Seed Go preparation rejected a %d-byte object within its limit: %v", objectSize, err)
+	}
+	if len(gotPayloads) != 1 {
+		t.Fatalf("payloads = %d, want one Seed Go object", len(gotPayloads))
+	}
+	if int64(len(gotPayloads[0].Content)) != objectSize {
+		t.Fatalf("payload size = %d, want %d", len(gotPayloads[0].Content), objectSize)
 	}
 }
 
@@ -260,9 +294,48 @@ func TestFetchEgressPayloadsEnforcesAggregateBound(t *testing.T) {
 		{URL: server.URL + "/a", Path: "a.bin"},
 		{URL: server.URL + "/b", Path: "b.bin"},
 	}
-	if _, err := fetchEgressPayloadsBounded(context.Background(), policy, fetches, 15); err == nil || !strings.Contains(err.Error(), "aggregate") {
+	if _, err := fetchEgressPayloadsBounded(context.Background(), policy, fetches, stomaFetchResponseLimit, 15); err == nil || !strings.Contains(err.Error(), "aggregate") {
 		t.Fatalf("aggregate error = %v, want the aggregate bound", err)
 	}
+}
+
+func TestStomaFetchBoundsKeepSeedGoLimitScoped(t *testing.T) {
+	ordinaryObjectLimit, ordinaryAggregateLimit := stomaFetchBounds(false)
+	if ordinaryObjectLimit != stomaFetchResponseLimit || ordinaryAggregateLimit != 0 {
+		t.Fatalf("ordinary bounds = %d/%d, want %d/0", ordinaryObjectLimit, ordinaryAggregateLimit, stomaFetchResponseLimit)
+	}
+	seedGoObjectLimit, seedGoAggregateLimit := stomaFetchBounds(true)
+	if seedGoObjectLimit != seedGoModuleObjectLimit {
+		t.Fatalf("Seed Go object bound = %d, want configured Seed Go bound %d", seedGoObjectLimit, seedGoModuleObjectLimit)
+	}
+	if seedGoModuleObjectLimit != 64<<20 {
+		t.Fatalf("configured Seed Go object bound = %d, want 64 MiB", seedGoModuleObjectLimit)
+	}
+	if seedGoAggregateLimit != seedGoModuleAggregateLimit {
+		t.Fatalf("Seed Go aggregate bound = %d, want configured aggregate bound %d", seedGoAggregateLimit, seedGoModuleAggregateLimit)
+	}
+	if seedGoModuleAggregateLimit != 256<<20 {
+		t.Fatalf("configured Seed Go aggregate bound = %d, want 256 MiB", seedGoModuleAggregateLimit)
+	}
+}
+
+func writeSizedTestResponse(w io.Writer, size int64) error {
+	chunk := bytes.Repeat([]byte("a"), 32<<10)
+	for size > 0 {
+		writeSize := int64(len(chunk))
+		if size < writeSize {
+			writeSize = size
+		}
+		written, err := w.Write(chunk[:writeSize])
+		size -= int64(written)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 func hostOf(t *testing.T, rawURL string) string {
