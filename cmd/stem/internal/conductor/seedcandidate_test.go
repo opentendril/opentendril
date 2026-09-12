@@ -1535,6 +1535,7 @@ type pathBackedSeedRunner struct {
 	workspace         string
 	startHEAD         string
 	startHELLO        string
+	execute           func(workspace string) error
 }
 
 func (runner *pathBackedSeedRunner) setWorkspace(workspace string) {
@@ -1594,6 +1595,12 @@ func (runner *pathBackedSeedRunner) Run(ctx context.Context, _ string) (sproutRe
 	}
 	if runner.wroteWorkspace != nil {
 		wrote = *runner.wroteWorkspace
+	}
+	if runner.execute != nil {
+		if err := runner.execute(runner.workspace); err != nil {
+			return sproutResult{}, err
+		}
+		wrote = true
 	}
 	if runner.runErr != nil {
 		return sproutResult{Response: "", WroteWorkspace: wrote, BoundaryFailure: runner.boundaryFailure}, runner.runErr
@@ -2867,5 +2874,372 @@ func TestPathBackedSeedCandidateUsesRunWorkspaceRoot(t *testing.T) {
 	_, seedTree, stash, merge, push := probe.counts()
 	if seedTree != 1 || stash != 0 || merge != 0 || push != 0 {
 		t.Fatalf("isolation/publication counts seed=%d stash=%d merge=%d push=%d", seedTree, stash, merge, push)
+	}
+}
+
+func TestRunSeedPathBackedPythonSettlement(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not available")
+	}
+	restoreSeeds(t)
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+
+	scriptPath := filepath.Join(repo, "mutation.py")
+	if err := os.WriteFile(scriptPath, []byte("def mutate():\n    pass\n"), 0o644); err != nil {
+		t.Fatalf("write mutation.py: %v", err)
+	}
+	for _, args := range [][]string{{"add", "mutation.py"}, {"commit", "-m", "add script"}} {
+		if _, err := runGitCommand(context.Background(), repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	start, err := runGitCommand(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	start = strings.TrimSpace(start)
+
+	stepID := "path-seed-python-settle"
+
+	runner := &pathBackedSeedRunner{
+		file:     "mutation.py",
+		contents: "def mutate():\n    return 'mutated'\n",
+		execute: func(workspace string) error {
+			cmd := exec.Command("python3", "-c", "import mutation; mutation.mutate()")
+			cmd.Dir = workspace
+
+			// Prevent inherited Python environment from disabling or redirecting bytecode generation
+			cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=", "PYTHONPYCACHEPREFIX=")
+
+			out, execErr := cmd.CombinedOutput()
+			if execErr != nil {
+				return fmt.Errorf("python execution failed: %v\nOutput: %s", execErr, out)
+			}
+
+			// explicitly assert that __pycache__/*.pyc exists before settlement
+			pycacheDir := filepath.Join(workspace, "__pycache__")
+			entries, readErr := os.ReadDir(pycacheDir)
+			if readErr != nil || len(entries) == 0 {
+				return fmt.Errorf("python execution did not generate __pycache__ inside candidate: %v", readErr)
+			}
+
+			return nil
+		},
+	}
+
+	var verifiedCandidate string
+	originalSeedVerifyFn := seedVerifyFn
+	t.Cleanup(func() { seedVerifyFn = originalSeedVerifyFn })
+	seedVerifyFn = func(ctx context.Context, sourcePath, candidate string, verify, egress []string) seedVerifyReport {
+		verifiedCandidate = candidate
+		return runSeedVerify(ctx, sourcePath, candidate, verify, egress)
+	}
+
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{"*": runner})
+	_ = probe
+	beforeHead, beforeStatus, beforeKeep := snapshotSeedCandidateSource(t, repo)
+
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "mutate python",
+		SessionID:     stepID,
+		MaxIterations: 1,
+		Verify:        []string{"sh", "-c", "grep -q \"return 'mutated'\" mutation.py"},
+	})
+
+	if err != nil {
+		t.Fatalf("RunSeed failed: %v", err)
+	}
+
+	if res.Status != SeedStatusSatisfied {
+		t.Fatalf("status = %q, want satisfied. Logs:\n%s", res.Status, res.Logs)
+	}
+
+	if verifiedCandidate != res.Commit {
+		t.Fatalf("verified candidate = %q, want seedCandidateCommit %q", verifiedCandidate, res.Commit)
+	}
+
+	commit := res.Commit
+	if commit == "" {
+		t.Fatalf("no Fruit commit produced")
+	}
+
+	tree, err := runGitCommand(context.Background(), repo, "ls-tree", "-r", "--name-only", commit)
+	if err != nil {
+		t.Fatalf("ls-tree: %v", err)
+	}
+	if strings.Contains(tree, "__pycache__") || strings.Contains(tree, ".pyc") {
+		t.Fatalf("Fruit commit %s contains transient python cache artifacts:\n%s", commit, tree)
+	}
+	if !strings.Contains(tree, "mutation.py") {
+		t.Fatalf("Fruit commit %s missing mutation.py", commit)
+	}
+
+	content, err := runGitCommand(context.Background(), repo, "show", commit+":mutation.py")
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	if !strings.Contains(content, "return 'mutated'") {
+		t.Fatalf("Fruit commit missing the mutation:\n%s", content)
+	}
+
+	// verify protected/default branch remains unchanged
+	currentMain, err := runGitCommand(context.Background(), repo, "rev-parse", "main")
+	if err != nil {
+		t.Fatalf("rev-parse main: %v", err)
+	}
+	if strings.TrimSpace(currentMain) != start {
+		t.Fatalf("main branch moved from %s to %s", start, strings.TrimSpace(currentMain))
+	}
+
+	assertSeedCandidateSourceUnchanged(t, repo, beforeHead, beforeStatus, beforeKeep)
+}
+
+func TestSettleSeedCandidateWorkspace_TrackedTransient(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	transientPath := filepath.Join(repo, "__pycache__", "module.pyc")
+	if err := os.MkdirAll(filepath.Dir(transientPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(transientPath, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"add", "__pycache__/module.pyc"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on tracked transient modification")
+	}
+	if !strings.Contains(err.Error(), "tracked modification rejected: __pycache__/module.pyc") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	if _, err := os.Stat(transientPath); os.IsNotExist(err) {
+		t.Fatal("tracked transient file was incorrectly deleted")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_UntrackedNonTransient(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	untrackedPath := filepath.Join(repo, "untracked.go")
+	if err := os.WriteFile(untrackedPath, []byte("code"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on untracked non-transient file")
+	}
+	if !strings.Contains(err.Error(), "untracked path rejected: untracked.go") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+
+	if _, err := os.Stat(untrackedPath); os.IsNotExist(err) {
+		t.Fatal("untracked non-transient file was incorrectly deleted")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_RenameCopyPorcelain(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	if err := os.WriteFile(filepath.Join(repo, "original.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatalf("write original.txt: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "original.txt"); err != nil {
+		t.Fatalf("git add original.txt: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-m", "add original"); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+
+	if _, err := runGitCommand(ctx, repo, "mv", "original.txt", "renamed.txt"); err != nil {
+		t.Fatalf("git mv: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail on rename modification")
+	}
+	if !strings.Contains(err.Error(), "tracked modification rejected: renamed.txt") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_SymlinkEscape(t *testing.T) {
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "victim.txt")
+	if err := os.WriteFile(outsideFile, []byte("victim"), 0o644); err != nil {
+		t.Fatalf("write victim.txt: %v", err)
+	}
+
+	symlinkPath := filepath.Join(repo, "__pycache__")
+	if err := os.Symlink(outsideDir, symlinkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	untrackedInsideSymlink := filepath.Join(symlinkPath, "module.pyc")
+	if err := os.WriteFile(untrackedInsideSymlink, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err != nil {
+		t.Fatalf("expected settlement to succeed by safely removing the symlink, but got: %v", err)
+	}
+
+	afterContent, err := os.ReadFile(outsideFile)
+	if err != nil {
+		t.Fatalf("read victim.txt after settlement: %v", err)
+	}
+	if string(afterContent) != "victim" {
+		t.Fatalf("symlink target file was modified: got %q, want %q", afterContent, "victim")
+	}
+}
+
+func TestSettleSeedCandidateWorkspace_RemovalFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod-based directory removal blocking is not reliably supported on Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("chmod-based directory removal blocking does not apply to root")
+	}
+
+	repo := newSeedRepo(t)
+	ctx := context.Background()
+
+	cacheDir := filepath.Join(repo, "__pycache__")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	transientPath := filepath.Join(cacheDir, "module.pyc")
+	if err := os.WriteFile(transientPath, []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if err := os.Chmod(cacheDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(cacheDir, 0o755)
+	})
+
+	err := settleSeedCandidateWorkspace(ctx, repo)
+	if err == nil {
+		t.Fatal("expected settlement to fail due to removal error")
+	}
+	if !strings.Contains(err.Error(), "remove untracked path") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestRunSeedPathBackedSettlementFailureDoesNotAdvanceRef(t *testing.T) {
+	repo := preparePathBackedGitRepo(t)
+	ctx := context.Background()
+
+	// 1. Create/identify the exact `seedBranch` supplied to the path-backed Sprout integration.
+	seedBranch := "tendril/seed-path-settlement-failure"
+
+	startRef, err := runGitCommand(ctx, repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	startRef = strings.TrimSpace(startRef)
+
+	if _, err := runGitCommand(ctx, repo, "branch", seedBranch); err != nil {
+		t.Fatalf("create seed branch: %v", err)
+	}
+
+	// 2. Create external object to test symlink protection.
+	externalDir := t.TempDir()
+	externalFile := filepath.Join(externalDir, "external.txt")
+	externalContent := []byte("original external")
+	if err := os.WriteFile(externalFile, externalContent, 0o644); err != nil {
+		t.Fatalf("write external: %v", err)
+	}
+
+	stepID := "path-seed-settle-fail"
+	runner := &pathBackedSeedRunner{
+		file:     "keep.txt",
+		contents: "modified tracked file",
+		execute: func(workspace string) error {
+			// Sprout creates a symlink to the external object.
+			// It should be untracked. We put it in .tendril so collectStageableFiles ignores it,
+			// leaving it for settleSeedCandidateWorkspace to process (and remove).
+			tendrilDir := filepath.Join(workspace, ".tendril")
+			if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+				return err
+			}
+			symlinkPath := filepath.Join(tendrilDir, "escape_link")
+			if err := os.Symlink(externalFile, symlinkPath); err != nil {
+				return err
+			}
+			return nil
+		},
+	}
+
+	probe := installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+	_ = probe
+
+	originalCommit := commitTerrariumExecutionFn
+	t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
+		// Just create an empty commit so the candidate exists, leaving keep.txt modified
+		// and .tendril/escape_link untracked.
+		if _, err := runGitCommand(ctx, mountPath, "commit", "--allow-empty", "-m", "empty commit leaving worktree dirty"); err != nil {
+			return "", err
+		}
+		commitHash, err := runGitCommand(ctx, mountPath, "rev-parse", "HEAD")
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(commitHash), nil
+	}
+
+	// 3. Run the real path-backed RunSprout checkpoint/integration path with that exact branch.
+	_, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, startRef, runner)
+
+	// 4. Require settlement/integration failure.
+	if runErr == nil {
+		t.Fatal("expected runPathBackedSeedSprout to fail due to settlement error, but it succeeded")
+	}
+	if !strings.Contains(runErr.Error(), "tracked modification rejected") {
+		t.Fatalf("expected settlement failure log for tracked modification, got:\n%v", runErr)
+	}
+
+	// 5. Assert the exact supplied Seed ref is unchanged from its pre-run state.
+	endRef, err := runGitCommand(ctx, repo, "rev-parse", seedBranch)
+	if err != nil {
+		t.Fatalf("end ref: %v", err)
+	}
+	endRef = strings.TrimSpace(endRef)
+
+	if endRef != startRef {
+		t.Fatalf("seed ref advanced from %q to %q despite settlement failure", startRef, endRef)
+	}
+
+	// 6. Retain the external symlink-target byte-for-byte preservation assertion.
+	afterContent, err := os.ReadFile(externalFile)
+	if err != nil {
+		t.Fatalf("read external file after run: %v", err)
+	}
+	if string(afterContent) != string(externalContent) {
+		t.Fatalf("external file modified! got %q, want %q", afterContent, string(externalContent))
 	}
 }
