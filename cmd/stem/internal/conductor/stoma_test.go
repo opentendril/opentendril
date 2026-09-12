@@ -1,6 +1,7 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -183,6 +184,84 @@ func TestRunStomaThreadsPayloadsAndTimeout(t *testing.T) {
 	}
 	if gotTimeout != 42*time.Second {
 		t.Fatalf("timeout = %v, want 42s", gotTimeout)
+	}
+}
+
+func TestFetchEgressPayloadsDeniesUngrantedRedirect(t *testing.T) {
+	var destHits atomic.Int64
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		destHits.Add(1)
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer dest.Close()
+
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/artifact", http.StatusFound)
+	}))
+	defer src.Close()
+
+	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{hostOf(t, src.URL)}), []StomaFetch{
+		{URL: src.URL + "/start", Path: "artifact.bin"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("redirect error = %v, want an egress denial", err)
+	}
+	if destHits.Load() != 0 {
+		t.Fatal("a redirect to an ungranted host was followed")
+	}
+}
+
+func TestFetchEgressPayloadsAllowsIndependentlyGrantedRedirect(t *testing.T) {
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("redirected"))
+	}))
+	defer dest.Close()
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/artifact", http.StatusFound)
+	}))
+	defer src.Close()
+
+	payloads, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{
+		hostOf(t, src.URL),
+		hostOf(t, dest.URL),
+	}), []StomaFetch{
+		{URL: src.URL + "/start", Path: "artifact.bin"},
+	})
+	if err != nil {
+		t.Fatalf("granted redirect fetch: %v", err)
+	}
+	if len(payloads) != 1 || string(payloads[0].Content) != "redirected" {
+		t.Fatalf("payloads = %v, want the independently granted redirect body", payloads)
+	}
+}
+
+func TestFetchEgressPayloadsEnforcesPerObjectBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte("a"), stomaFetchResponseLimit+1))
+	}))
+	defer server.Close()
+
+	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{hostOf(t, server.URL)}), []StomaFetch{
+		{URL: server.URL + "/big", Path: "big.bin"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds the") {
+		t.Fatalf("oversize object error = %v, want the per-object bound", err)
+	}
+}
+
+func TestFetchEgressPayloadsEnforcesAggregateBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("0123456789"))
+	}))
+	defer server.Close()
+	host := hostOf(t, server.URL)
+	policy := NewEgressPolicy([]string{host})
+	fetches := []StomaFetch{
+		{URL: server.URL + "/a", Path: "a.bin"},
+		{URL: server.URL + "/b", Path: "b.bin"},
+	}
+	if _, err := fetchEgressPayloadsBounded(context.Background(), policy, fetches, 15); err == nil || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("aggregate error = %v, want the aggregate bound", err)
 	}
 }
 

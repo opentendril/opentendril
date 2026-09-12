@@ -41,8 +41,19 @@ const stomaFetchResponseLimit = 32 << 20
 const stomaFetchTimeout = 30 * time.Second
 
 // stomaHTTPClient performs Stem-mediated fetches; a package variable so
-// tests can observe or replace transport behavior.
+// tests can observe or replace transport behavior. Redirect authorization is
+// attached per request from the active EgressPolicy — a shared CheckRedirect
+// cannot see the grant for the current fetch.
 var stomaHTTPClient = &http.Client{Timeout: stomaFetchTimeout}
+
+// consultHostGoModCache is the Stoma-only host cache lookup. Seed Go
+// verification never calls it. Macrophage and Sequence verifiers keep their
+// own call sites unchanged.
+var consultHostGoModCache = hostGoModCache
+
+// stomaMaxRedirects bounds Stem-mediated redirect following. Each hop is
+// independently authorized; this cap only prevents a grant-internal loop.
+const stomaMaxRedirects = 10
 
 // StomaFetch is one Stem-mediated egress retrieval.
 type StomaFetch struct {
@@ -67,6 +78,18 @@ type StomaExecution struct {
 	Egress []string
 	// Timeout bounds the command's execution.
 	Timeout time.Duration
+	// SkipHostModuleCache, when true, never bind-mounts or consults the host
+	// GOMODCACHE. Seed Go verification uses this so the verdict cannot depend
+	// on incidental host toolchain state.
+	SkipHostModuleCache bool
+	// GoVendorMode runs the command against the candidate vendor tree with
+	// GOPROXY=off and no Stem-mediated module fetches.
+	GoVendorMode bool
+	// PopulateGoModuleCache runs `go mod download` against the mediated
+	// file:// GOPROXY before the configured command, populating a
+	// container-local module cache. The configured predicate then runs with
+	// GOPROXY=off.
+	PopulateGoModuleCache bool
 }
 
 // StomaResult reports the executed command's outcome.
@@ -133,6 +156,13 @@ func (p EgressPolicy) Authorize(rawURL string) error {
 // payloads addressed under the Terrarium egress directory. Any denial or
 // failure aborts the whole execution before a container exists.
 func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []StomaFetch) ([]terrarium.FilePayload, error) {
+	return fetchEgressPayloadsBounded(ctx, policy, fetches, 0)
+}
+
+// fetchEgressPayloadsBounded is fetchEgressPayloads with an optional
+// aggregate byte cap. A non-positive aggregateLimit means "no aggregate cap";
+// each object is still bounded by stomaFetchResponseLimit.
+func fetchEgressPayloadsBounded(ctx context.Context, policy EgressPolicy, fetches []StomaFetch, aggregateLimit int) ([]terrarium.FilePayload, error) {
 	if len(fetches) == 0 {
 		return nil, nil
 	}
@@ -140,7 +170,9 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Sto
 		ctx = context.Background()
 	}
 
+	client := mediatedHTTPClient(policy)
 	payloads := make([]terrarium.FilePayload, 0, len(fetches))
+	total := 0
 	for _, fetch := range fetches {
 		if err := policy.Authorize(fetch.URL); err != nil {
 			return nil, err
@@ -154,7 +186,7 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Sto
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: %w", fetch.URL, err)
 		}
-		response, err := stomaHTTPClient.Do(request)
+		response, err := client.Do(request)
 		if err != nil {
 			return nil, fmt.Errorf("mediated fetch %q: %w", fetch.URL, err)
 		}
@@ -169,6 +201,10 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Sto
 		if len(content) > stomaFetchResponseLimit {
 			return nil, fmt.Errorf("mediated fetch %q: response exceeds the %d-byte bound", fetch.URL, stomaFetchResponseLimit)
 		}
+		total += len(content)
+		if aggregateLimit > 0 && total > aggregateLimit {
+			return nil, fmt.Errorf("mediated fetch %q: aggregate response exceeds the %d-byte bound", fetch.URL, aggregateLimit)
+		}
 
 		payloads = append(payloads, terrarium.FilePayload{
 			Path:    destination,
@@ -177,6 +213,26 @@ func fetchEgressPayloads(ctx context.Context, policy EgressPolicy, fetches []Sto
 		})
 	}
 	return payloads, nil
+}
+
+// mediatedHTTPClient copies the shared transport/timeout and authorizes every
+// redirect destination independently through the same EgressPolicy. A redirect
+// is not trusted because the original URL was granted.
+func mediatedHTTPClient(policy EgressPolicy) *http.Client {
+	return &http.Client{
+		Timeout:   stomaHTTPClient.Timeout,
+		Transport: stomaHTTPClient.Transport,
+		Jar:       stomaHTTPClient.Jar,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= stomaMaxRedirects {
+				return fmt.Errorf("mediated fetch: stopped after %d redirects", stomaMaxRedirects)
+			}
+			if req == nil || req.URL == nil {
+				return fmt.Errorf("mediated fetch: redirect named no URL")
+			}
+			return policy.Authorize(req.URL.String())
+		},
+	}
 }
 
 // stomaEgressPath validates one fetch destination and anchors it under
@@ -221,7 +277,11 @@ func RunStoma(ctx context.Context, execution StomaExecution) (StomaResult, error
 		timeout = verifierContainerTimeout
 	}
 
-	payloads, err := fetchEgressPayloads(ctx, NewEgressPolicy(execution.Egress), execution.Fetches)
+	aggregateLimit := 0
+	if execution.PopulateGoModuleCache {
+		aggregateLimit = seedGoModuleAggregateLimit
+	}
+	payloads, err := fetchEgressPayloadsBounded(ctx, NewEgressPolicy(execution.Egress), execution.Fetches, aggregateLimit)
 	if err != nil {
 		return StomaResult{}, err
 	}
@@ -257,15 +317,8 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 		// uses 0:0 so the mount is readable; otherwise the Stem host UID:GID
 		// so workspace writes remain owned by the operator.
 		RunAsUser: terrariumBindMountRunAsUser(),
-		Mounts: []terrarium.MountSpec{
-			{Source: execution.Workspace, Target: "/app"},
-		},
-		Files: payloads,
-	}
-	if modCache, ok := hostGoModCache(); ok {
-		spec.Mounts = append(spec.Mounts, terrarium.MountSpec{
-			Source: modCache, Target: "/go/pkg/mod", ReadOnly: true,
-		})
+		Mounts:    stomaBindMounts(execution),
+		Files:     payloads,
 	}
 
 	instance, err := provider.Create(ctx, spec)
@@ -274,22 +327,17 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 	}
 	defer func() { _ = instance.Stop(context.Background()) }()
 
+	if execution.PopulateGoModuleCache {
+		if err := populateStomaGoModuleCache(ctx, instance, timeout); err != nil {
+			return StomaResult{}, err
+		}
+	}
+
 	result, runErr := instance.Run(ctx, terrarium.CommandSpec{
-		Command:    execution.Command,
-		WorkingDir: "/app",
-		Environment: map[string]string{
-			"GOPATH":     "/go",
-			"GOMODCACHE": "/go/pkg/mod",
-			"GOCACHE":    "/tmp/gocache",
-			// The container is network-sealed, so module fetches can never
-			// succeed anyway; GOPROXY=off makes that failure immediate and
-			// explicit. -buildvcs=false matches the verifier runner: VCS
-			// stamping shells out to git against a bind mount owned by a
-			// different uid than the container user.
-			"GOFLAGS": "-buildvcs=false",
-			"GOPROXY": "off",
-		},
-		Timeout: timeout,
+		Command:     execution.Command,
+		WorkingDir:  "/app",
+		Environment: stomaCommandEnvironment(execution, false),
+		Timeout:     timeout,
 	})
 	if runErr != nil {
 		return StomaResult{}, fmt.Errorf("run stoma command %q: %w", strings.Join(execution.Command, " "), runErr)
@@ -302,4 +350,67 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 		TimedOut: result.TimedOut,
 		Duration: result.Duration,
 	}, nil
+}
+
+func stomaBindMounts(execution StomaExecution) []terrarium.MountSpec {
+	mounts := []terrarium.MountSpec{
+		{Source: execution.Workspace, Target: "/app"},
+	}
+	if execution.SkipHostModuleCache {
+		return mounts
+	}
+	if modCache, ok := consultHostGoModCache(); ok {
+		mounts = append(mounts, terrarium.MountSpec{
+			Source: modCache, Target: "/go/pkg/mod", ReadOnly: true,
+		})
+	}
+	return mounts
+}
+
+func stomaCommandEnvironment(execution StomaExecution, populateCache bool) map[string]string {
+	flags := "-buildvcs=false"
+	switch {
+	case execution.GoVendorMode:
+		flags += " -mod=vendor"
+	case execution.SkipHostModuleCache:
+		flags += " -mod=readonly"
+	}
+	env := map[string]string{
+		"GOPATH":     "/go",
+		"GOMODCACHE": "/go/pkg/mod",
+		"GOCACHE":    "/tmp/gocache",
+		"GOFLAGS":    flags,
+		"GOPROXY":    "off",
+	}
+	if populateCache {
+		env["GOPROXY"] = seedGoProxyFileURL()
+		env["GOSUMDB"] = "off"
+		env["GOTOOLCHAIN"] = "local"
+		env["GO111MODULE"] = "on"
+		return env
+	}
+	if execution.SkipHostModuleCache || execution.GoVendorMode {
+		env["GOTOOLCHAIN"] = "local"
+		env["GOSUMDB"] = "off"
+	}
+	return env
+}
+
+func populateStomaGoModuleCache(ctx context.Context, instance terrarium.Terrarium, timeout time.Duration) error {
+	result, err := instance.Run(ctx, terrarium.CommandSpec{
+		Command:     []string{"go", "mod", "download"},
+		WorkingDir:  "/app",
+		Environment: stomaCommandEnvironment(StomaExecution{SkipHostModuleCache: true}, true),
+		Timeout:     timeout,
+	})
+	if err != nil {
+		return fmt.Errorf("populate Seed Go module cache: %w", err)
+	}
+	if result.TimedOut {
+		return fmt.Errorf("populate Seed Go module cache: command timed out")
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("populate Seed Go module cache: command exited %d", result.ExitCode)
+	}
+	return nil
 }
