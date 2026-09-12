@@ -1,7 +1,9 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -184,6 +186,156 @@ func TestRunStomaThreadsPayloadsAndTimeout(t *testing.T) {
 	if gotTimeout != 42*time.Second {
 		t.Fatalf("timeout = %v, want 42s", gotTimeout)
 	}
+}
+
+func TestFetchEgressPayloadsDeniesUngrantedRedirect(t *testing.T) {
+	var destHits atomic.Int64
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		destHits.Add(1)
+		_, _ = w.Write([]byte("secret"))
+	}))
+	defer dest.Close()
+
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/artifact", http.StatusFound)
+	}))
+	defer src.Close()
+
+	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{hostOf(t, src.URL)}), []StomaFetch{
+		{URL: src.URL + "/start", Path: "artifact.bin"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "egress denied") {
+		t.Fatalf("redirect error = %v, want an egress denial", err)
+	}
+	if destHits.Load() != 0 {
+		t.Fatal("a redirect to an ungranted host was followed")
+	}
+}
+
+func TestFetchEgressPayloadsAllowsIndependentlyGrantedRedirect(t *testing.T) {
+	dest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("redirected"))
+	}))
+	defer dest.Close()
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, dest.URL+"/artifact", http.StatusFound)
+	}))
+	defer src.Close()
+
+	payloads, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{
+		hostOf(t, src.URL),
+		hostOf(t, dest.URL),
+	}), []StomaFetch{
+		{URL: src.URL + "/start", Path: "artifact.bin"},
+	})
+	if err != nil {
+		t.Fatalf("granted redirect fetch: %v", err)
+	}
+	if len(payloads) != 1 || string(payloads[0].Content) != "redirected" {
+		t.Fatalf("payloads = %v, want the independently granted redirect body", payloads)
+	}
+}
+
+func TestFetchEgressPayloadsEnforcesPerObjectBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = writeSizedTestResponse(w, int64(stomaFetchResponseLimit+1))
+	}))
+	defer server.Close()
+
+	_, err := fetchEgressPayloads(context.Background(), NewEgressPolicy([]string{hostOf(t, server.URL)}), []StomaFetch{
+		{URL: server.URL + "/big", Path: "big.bin"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeds the") {
+		t.Fatalf("oversize object error = %v, want the per-object bound", err)
+	}
+}
+
+func TestRunStomaSeedGoPreparationAllowsLargerObject(t *testing.T) {
+	objectSize := int64(stomaFetchResponseLimit + 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = writeSizedTestResponse(w, objectSize)
+	}))
+	defer server.Close()
+
+	originalRun := runStomaCommandFn
+	var gotPayloads []terrarium.FilePayload
+	runStomaCommandFn = func(_ context.Context, _ StomaExecution, payloads []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
+		gotPayloads = payloads
+		return StomaResult{ExitCode: 0}, nil
+	}
+	defer func() { runStomaCommandFn = originalRun }()
+
+	_, err := RunStoma(context.Background(), StomaExecution{
+		Workspace:             t.TempDir(),
+		Command:               []string{"go", "test", "."},
+		Egress:                []string{hostOf(t, server.URL)},
+		PopulateGoModuleCache: true,
+		Fetches:               []StomaFetch{{URL: server.URL + "/module.zip", Path: "go-proxy/module.zip"}},
+	})
+	if err != nil {
+		t.Fatalf("Seed Go preparation rejected a %d-byte object within its limit: %v", objectSize, err)
+	}
+	if len(gotPayloads) != 1 {
+		t.Fatalf("payloads = %d, want one Seed Go object", len(gotPayloads))
+	}
+	if int64(len(gotPayloads[0].Content)) != objectSize {
+		t.Fatalf("payload size = %d, want %d", len(gotPayloads[0].Content), objectSize)
+	}
+}
+
+func TestFetchEgressPayloadsEnforcesAggregateBound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("0123456789"))
+	}))
+	defer server.Close()
+	host := hostOf(t, server.URL)
+	policy := NewEgressPolicy([]string{host})
+	fetches := []StomaFetch{
+		{URL: server.URL + "/a", Path: "a.bin"},
+		{URL: server.URL + "/b", Path: "b.bin"},
+	}
+	if _, err := fetchEgressPayloadsBounded(context.Background(), policy, fetches, stomaFetchResponseLimit, 15); err == nil || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("aggregate error = %v, want the aggregate bound", err)
+	}
+}
+
+func TestStomaFetchBoundsKeepSeedGoLimitScoped(t *testing.T) {
+	ordinaryObjectLimit, ordinaryAggregateLimit := stomaFetchBounds(false)
+	if ordinaryObjectLimit != stomaFetchResponseLimit || ordinaryAggregateLimit != 0 {
+		t.Fatalf("ordinary bounds = %d/%d, want %d/0", ordinaryObjectLimit, ordinaryAggregateLimit, stomaFetchResponseLimit)
+	}
+	seedGoObjectLimit, seedGoAggregateLimit := stomaFetchBounds(true)
+	if seedGoObjectLimit != seedGoModuleObjectLimit {
+		t.Fatalf("Seed Go object bound = %d, want configured Seed Go bound %d", seedGoObjectLimit, seedGoModuleObjectLimit)
+	}
+	if seedGoModuleObjectLimit != 64<<20 {
+		t.Fatalf("configured Seed Go object bound = %d, want 64 MiB", seedGoModuleObjectLimit)
+	}
+	if seedGoAggregateLimit != seedGoModuleAggregateLimit {
+		t.Fatalf("Seed Go aggregate bound = %d, want configured aggregate bound %d", seedGoAggregateLimit, seedGoModuleAggregateLimit)
+	}
+	if seedGoModuleAggregateLimit != 256<<20 {
+		t.Fatalf("configured Seed Go aggregate bound = %d, want 256 MiB", seedGoModuleAggregateLimit)
+	}
+}
+
+func writeSizedTestResponse(w io.Writer, size int64) error {
+	chunk := bytes.Repeat([]byte("a"), 32<<10)
+	for size > 0 {
+		writeSize := int64(len(chunk))
+		if size < writeSize {
+			writeSize = size
+		}
+		written, err := w.Write(chunk[:writeSize])
+		size -= int64(written)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 func hostOf(t *testing.T, rawURL string) string {

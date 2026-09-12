@@ -552,12 +552,31 @@ func runSeedVerify(ctx context.Context, sourcePath, candidateCommit string, veri
 		return seedVerifyReport{Err: fmt.Errorf("create verify worktree: %w", err)}
 	}
 
-	result, err := RunStoma(ctx, StomaExecution{
+	execution := StomaExecution{
 		Workspace: worktree,
 		Command:   verify,
 		Egress:    egress,
 		Timeout:   seedVerifyTimeout,
-	})
+	}
+	if err := configureSeedGoVerification(worktree, verify, &execution); err != nil {
+		cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
+		return seedVerifyReport{Err: errors.Join(err, cleanupErr)}
+	}
+
+	var metadata seedGoMetadataSnapshot
+	if execution.SkipHostModuleCache {
+		var metaErr error
+		metadata, metaErr = snapshotSeedGoMetadata(worktree)
+		if metaErr != nil {
+			cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
+			return seedVerifyReport{Err: errors.Join(metaErr, cleanupErr)}
+		}
+	}
+
+	result, err := RunStoma(ctx, execution)
+	if err == nil && execution.SkipHostModuleCache {
+		err = metadata.assertUnchanged(worktree)
+	}
 	cleanupErr := removeSeedVerificationWorktree(ctx, sourcePath, worktree)
 	if err != nil {
 		return seedVerifyReport{Err: errors.Join(err, cleanupErr)}
