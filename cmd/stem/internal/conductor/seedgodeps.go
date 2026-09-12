@@ -96,8 +96,19 @@ func configureSeedGoVerification(root string, command []string, execution *Stoma
 		return seedGoPrepErrorf("go.mod is not a regular file")
 	}
 
-	// Seed Go verification must not consult incidental host module caches.
+	hasWork, err := candidateHasGoWork(root)
+	if err != nil {
+		return err
+	}
+	if hasWork {
+		return seedGoPrepErrorf("go.work is unsupported for Seed Go verification")
+	}
+
+	// Seed Go verification must not consult incidental host module caches,
+	// and the candidate itself is mounted read-only for preparation and the
+	// predicate. Container-local module cache and GOCACHE stay writable.
 	execution.SkipHostModuleCache = true
+	execution.ReadOnlyWorkspace = true
 
 	validVendor, err := hasValidGoVendorTree(root)
 	if err != nil {
@@ -158,6 +169,17 @@ func (s seedGoMetadataSnapshot) assertUnchanged(root string) error {
 		return seedGoPrepErrorf("go.sum changed during verification")
 	}
 	return nil
+}
+
+func candidateHasGoWork(root string) (bool, error) {
+	_, err := os.Lstat(filepath.Join(root, "go.work"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, seedGoPrepErrorf("stat go.work: %w", err)
+	}
+	return true, nil
 }
 
 func hasValidGoVendorTree(root string) (bool, error) {

@@ -132,7 +132,7 @@ func TestVendoredGoCandidateRequiresNoExternalFetch(t *testing.T) {
 	if err := configureSeedGoVerification(root, []string{"go", "test", "."}, execution); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if !execution.SkipHostModuleCache || !execution.GoVendorMode || execution.PopulateGoModuleCache || len(execution.Fetches) != 0 {
+	if !execution.SkipHostModuleCache || !execution.ReadOnlyWorkspace || !execution.GoVendorMode || execution.PopulateGoModuleCache || len(execution.Fetches) != 0 {
 		t.Fatalf("vendored execution = %+v, want vendor mode with no fetches", execution)
 	}
 	if hits.Load() != 0 {
@@ -314,6 +314,7 @@ func TestGoModuleCachePopulationHappensBeforePredicate(t *testing.T) {
 		Workspace:             t.TempDir(),
 		Command:               []string{"go", "test", "."},
 		SkipHostModuleCache:   true,
+		ReadOnlyWorkspace:     true,
 		PopulateGoModuleCache: true,
 		Timeout:               time.Second,
 	}, nil, time.Second)
@@ -373,6 +374,7 @@ func TestGoModuleCachePopulationFailureIsInfrastructure(t *testing.T) {
 		Workspace:             t.TempDir(),
 		Command:               []string{"go", "test", "."},
 		SkipHostModuleCache:   true,
+		ReadOnlyWorkspace:     true,
 		PopulateGoModuleCache: true,
 		Timeout:               time.Second,
 	}, nil, time.Second)
@@ -458,7 +460,7 @@ func TestSeedGoPredicateFailureAfterSuccessfulPreparation(t *testing.T) {
 	origRun := runStomaCommandFn
 	t.Cleanup(func() { runStomaCommandFn = origRun })
 	runStomaCommandFn = func(_ context.Context, execution StomaExecution, payloads []terrarium.FilePayload, _ time.Duration) (StomaResult, error) {
-		if !execution.PopulateGoModuleCache || !execution.SkipHostModuleCache || len(payloads) != 3 {
+		if !execution.PopulateGoModuleCache || !execution.SkipHostModuleCache || !execution.ReadOnlyWorkspace || len(payloads) != 3 {
 			t.Fatalf("predicate ran without successful preparation: %+v payloads=%d", execution, len(payloads))
 		}
 		return StomaResult{ExitCode: 1, Stderr: "FAIL: TestLeaf"}, nil
@@ -548,7 +550,7 @@ func TestSeedGoVerificationDoesNotConsultHostModuleCache(t *testing.T) {
 	if err := configureSeedGoVerification(root, execution.Command, &execution); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if !execution.SkipHostModuleCache {
+	if !execution.SkipHostModuleCache || !execution.ReadOnlyWorkspace {
 		t.Fatal("Seed Go verification did not skip the host module cache")
 	}
 	for _, mount := range stomaBindMounts(execution) {
@@ -589,7 +591,7 @@ func TestNonGoSeedVerificationBehaviorUnchanged(t *testing.T) {
 	if err := configureSeedGoVerification(root, []string{"true"}, execution); err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	if execution.SkipHostModuleCache || execution.GoVendorMode || execution.PopulateGoModuleCache || len(execution.Fetches) != 0 {
+	if execution.SkipHostModuleCache || execution.ReadOnlyWorkspace || execution.GoVendorMode || execution.PopulateGoModuleCache || len(execution.Fetches) != 0 {
 		t.Fatalf("non-Go execution was rewritten: %+v", execution)
 	}
 
@@ -604,13 +606,16 @@ func TestNonGoSeedVerificationBehaviorUnchanged(t *testing.T) {
 	if !consulted.Load() {
 		t.Fatal("non-Go Stoma stopped consulting the host module cache")
 	}
-	found := false
+	foundCache := false
 	for _, mount := range mounts {
+		if mount.Target == "/app" && mount.ReadOnly {
+			t.Fatal("non-Go Stoma mounted /app read-only")
+		}
 		if mount.Target == "/go/pkg/mod" && mount.Source == "/host/modcache" && mount.ReadOnly {
-			found = true
+			foundCache = true
 		}
 	}
-	if !found {
+	if !foundCache {
 		t.Fatalf("non-Go mounts = %+v, want the host module cache", mounts)
 	}
 
@@ -633,6 +638,151 @@ func TestNonGoSeedVerificationBehaviorUnchanged(t *testing.T) {
 	report := runSeedVerify(ctx, repo, strings.TrimSpace(commit), []string{"true"}, nil)
 	if report.Err != nil || !report.Passed {
 		t.Fatalf("non-Go Seed verify = %+v", report)
+	}
+}
+
+func TestNonGoSeedVerifierDoesNotApplyGoMetadataContract(t *testing.T) {
+	stubLocalStoma(t)
+	repo := newSeedRepo(t)
+	originalMod := "module example.com/seed\n\ngo 1.25\n"
+	commit := commitFiles(t, repo, map[string]string{
+		"go.mod": originalMod,
+		"go.sum": string(bytes.Repeat([]byte("x"), seedGoMetadataFileLimit+1)),
+	})
+	execution := &StomaExecution{}
+	if err := configureSeedGoVerification(repo, []string{"sh", "-c", "true"}, execution); err != nil {
+		t.Fatalf("non-Go configure: %v", err)
+	}
+	if execution.SkipHostModuleCache || execution.ReadOnlyWorkspace {
+		t.Fatal("non-Go configure activated the Go Seed preparation path")
+	}
+
+	report := runSeedVerify(context.Background(), repo, commit, []string{"sh", "-c", "printf 'mutated\\n' > go.mod"}, nil)
+	if report.Err != nil || !report.Passed {
+		t.Fatalf("non-Go Seed verify with oversized go.sum and mutated go.mod = %+v", report)
+	}
+}
+
+func TestSeedGoVerificationMountsCandidateReadOnly(t *testing.T) {
+	restoreSeedGoProxy(t)
+	leaf := testLeafModule(t)
+	root := t.TempDir()
+	writeSeedGoFiles(t, root, map[string]string{
+		"go.mod": leaf.consumerMod,
+		"go.sum": leaf.goSum,
+	})
+	execution := StomaExecution{Workspace: root, Command: []string{"go", "test", "."}}
+	if err := configureSeedGoVerification(root, execution.Command, &execution); err != nil {
+		t.Fatalf("configure: %v", err)
+	}
+	if !execution.ReadOnlyWorkspace || !execution.PopulateGoModuleCache {
+		t.Fatalf("Go Seed path = %+v, want a read-only candidate plus cache population", execution)
+	}
+	app, ok := mountByTarget(stomaBindMounts(execution), "/app")
+	if !ok || !app.ReadOnly {
+		t.Fatalf("/app mount = %+v, want read-only", app)
+	}
+
+	origEnsure := ensureSproutImageFn
+	origProvider := terrariumNewProviderFn
+	t.Cleanup(func() {
+		ensureSproutImageFn = origEnsure
+		terrariumNewProviderFn = origProvider
+	})
+	ensureSproutImageFn = func(context.Context, string) error { return nil }
+	recorder := &recordingStomaTerrarium{}
+	var spec terrarium.TerrariumSpec
+	terrariumNewProviderFn = func(context.Context, string, ...terrarium.ActivationObserver) (terrarium.TerrariumProvider, error) {
+		return &stubProvider{createFn: func(created terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
+			spec = created
+			return recorder, nil
+		}}, nil
+	}
+	if _, err := runStomaCommand(context.Background(), execution, nil, time.Second); err != nil {
+		t.Fatalf("runStomaCommand: %v", err)
+	}
+	if len(recorder.commands) != 2 {
+		t.Fatalf("commands = %d, want populate then predicate on one Terrarium", len(recorder.commands))
+	}
+	app, ok = mountByTarget(spec.Mounts, "/app")
+	if !ok || !app.ReadOnly {
+		t.Fatalf("shared Terrarium /app mount = %+v, want read-only for populate and predicate", app)
+	}
+	if mount, found := mountByTarget(spec.Mounts, "/go/pkg/mod"); found {
+		t.Fatalf("unexpected host module-cache mount: %+v", mount)
+	}
+}
+
+func TestSeedGoWorkIsUnsupportedInfrastructure(t *testing.T) {
+	restoreSeeds(t)
+	restoreSeedGoProxy(t)
+	leaf := testLeafModule(t)
+	var hits atomic.Int64
+	server := startGoModuleProxy(t, leaf.objects, &hits)
+	defer server.Close()
+	seedGoModuleProxyBase = server.URL
+
+	root := t.TempDir()
+	writeSeedGoFiles(t, root, map[string]string{
+		"go.mod":  leaf.consumerMod,
+		"go.sum":  leaf.goSum,
+		"go.work": "go 1.25\n\nuse .\n",
+	})
+	execution := StomaExecution{Egress: []string{hostOf(t, server.URL)}}
+	err := configureSeedGoVerification(root, []string{"go", "test", "."}, &execution)
+	if err == nil || !strings.Contains(err.Error(), "go.work is unsupported") {
+		t.Fatalf("configure error = %v, want unsupported go.work", err)
+	}
+	if execution.PopulateGoModuleCache || len(execution.Fetches) != 0 {
+		t.Fatalf("go.work candidate planned fetches: %+v", execution)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("go.work detection fetched modules")
+	}
+
+	repo := newSeedRepo(t)
+	commit := commitFiles(t, repo, map[string]string{
+		"go.mod":  leaf.consumerMod,
+		"go.sum":  leaf.goSum,
+		"go.work": "go 1.25\n\nuse .\n",
+	})
+	origRun := runStomaCommandFn
+	t.Cleanup(func() { runStomaCommandFn = origRun })
+	runStomaCommandFn = func(context.Context, StomaExecution, []terrarium.FilePayload, time.Duration) (StomaResult, error) {
+		t.Fatal("predicate ran for an unsupported go.work candidate")
+		return StomaResult{}, nil
+	}
+	var builds int
+	seedBuildFn = func(context.Context, *DockerOrchestrator, string) (SproutRunReport, error) {
+		builds++
+		return SproutRunReport{Outcome: SproutOutcomeComplete, seedCandidateCommit: commit, RequestsMade: true}, nil
+	}
+	seedVerifyFn = runSeedVerify
+	res, err := RunSeed(context.Background(), SeedExecution{
+		Substrate:     repo,
+		Goal:          "keep tests green",
+		Verify:        []string{"go", "test", "."},
+		MaxIterations: 2,
+		Egress:        []string{hostOf(t, server.URL)},
+		SessionID:     "seed-go-work-unsupported",
+	})
+	if err != nil {
+		t.Fatalf("RunSeed: %v", err)
+	}
+	if builds != 1 {
+		t.Fatalf("Sprout builds = %d, want 1", builds)
+	}
+	if res.Status != SeedStatusWithered {
+		t.Fatalf("status = %q, want withered", res.Status)
+	}
+	if res.Branch != "" || res.Commit != "" {
+		t.Fatalf("Fruit identity = %q/%q, want none", res.Branch, res.Commit)
+	}
+	if len(res.VerificationDiagnostics) != 1 || res.VerificationDiagnostics[0].Outcome != core.SeedVerificationOutcomeInfrastructureFailed {
+		t.Fatalf("diagnostics = %+v, want infrastructure-failed", res.VerificationDiagnostics)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("go.work Seed still fetched modules")
 	}
 }
 
@@ -806,6 +956,15 @@ func writeReadonlyProxy(t *testing.T, payloads []terrarium.FilePayload) string {
 		}
 	}
 	return root
+}
+
+func mountByTarget(mounts []terrarium.MountSpec, target string) (terrarium.MountSpec, bool) {
+	for _, mount := range mounts {
+		if mount.Target == target {
+			return mount, true
+		}
+	}
+	return terrarium.MountSpec{}, false
 }
 
 func makeWritableForCleanup(t *testing.T, roots ...string) {

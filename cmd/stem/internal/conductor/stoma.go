@@ -82,6 +82,11 @@ type StomaExecution struct {
 	// GOMODCACHE. Seed Go verification uses this so the verdict cannot depend
 	// on incidental host toolchain state.
 	SkipHostModuleCache bool
+	// ReadOnlyWorkspace bind-mounts the candidate at /app read-only. Seed Go
+	// verification uses this so preparation and the predicate share the same
+	// immutable candidate; container-local scratch (/go/pkg/mod, GOCACHE)
+	// stays writable. Ordinary non-Go Stoma workspaces remain read-write.
+	ReadOnlyWorkspace bool
 	// GoVendorMode runs the command against the candidate vendor tree with
 	// GOPROXY=off and no Stem-mediated module fetches.
 	GoVendorMode bool
@@ -354,7 +359,7 @@ func runStomaCommand(ctx context.Context, execution StomaExecution, payloads []t
 
 func stomaBindMounts(execution StomaExecution) []terrarium.MountSpec {
 	mounts := []terrarium.MountSpec{
-		{Source: execution.Workspace, Target: "/app"},
+		{Source: execution.Workspace, Target: "/app", ReadOnly: execution.ReadOnlyWorkspace},
 	}
 	if execution.SkipHostModuleCache {
 		return mounts
