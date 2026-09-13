@@ -168,25 +168,6 @@ func runServeCmd(ctx context.Context, args []string) {
 		}
 	}
 
-	// Delegated-execution control plane: capability grants live in
-	// the Stem's own .tendril/grants.yaml — never inside a Substrate checkout,
-	// so repository content can never widen capability. With zero grants (the
-	// default) every delegated invocation is denied and all non-delegated
-	// behavior is untouched; a malformed grants file degrades the same way,
-	// never open.
-	delegationGrants, grantsErr := core.LoadDelegationGrants(tendrilDir)
-	if grantsErr != nil {
-		log.Printf("⚠️ Failed to load delegation grants: %v (delegation disabled — every delegated invocation is denied)", grantsErr)
-		delegationGrants = nil
-	}
-	// Issued credentials are what let a caller PROVE a Pollen rather than
-	// declare one. A malformed store is fatal rather than empty: degrading to
-	// "no credentials" would silently return every caller to the declared-Pollen
-	// path, which is the weaker tier.
-	pollinatorCredentials, credentialsErr := core.LoadPollinatorCredentials(tendrilDir)
-	if credentialsErr != nil {
-		log.Fatalf("❌ Pollinator credentials could not be read: %v", credentialsErr)
-	}
 	// The Stem's own signing key: what mints and verifies short-lived access
 	// tokens. A presented token is proven by this key's signature, not a store
 	// lookup, so verification needs no shared state. A read failure is fatal
@@ -197,23 +178,11 @@ func runServeCmd(ctx context.Context, args []string) {
 		log.Fatalf("❌ Stem signing key could not be read: %v", signerErr)
 	}
 	pendingStore := core.NewPendingConfirmationStore()
+	stemAuthority := core.NewAuthority(tendrilDir).WithPendingStore(pendingStore, time.Hour)
 	delegationGate := &receptors.DelegationGate{
-		Pollinators: pollinatorCredentials,
-		Signer:      stemSigner,
-		Authorizer:  core.NewDelegationAuthorizer(delegationGrants).WithPendingStore(pendingStore, time.Hour),
-		Bus:         bus,
-	}
-	if len(pollinatorCredentials) > 0 {
-		active := 0
-		for _, credential := range pollinatorCredentials {
-			if credential.Active() {
-				active++
-			}
-		}
-		fmt.Fprintf(os.Stderr, "🔏 %d Pollinator credential(s) loaded (%d active): a presented credential DERIVES its Pollen; the header claim is ignored for those callers\n", len(pollinatorCredentials), active)
-	}
-	if len(delegationGrants) > 0 {
-		log.Printf("Delegation enabled: %d grant(s) loaded from %s", len(delegationGrants), filepath.Join(tendrilDir, core.DelegationGrantsFilename))
+		Authority: stemAuthority,
+		Signer:    stemSigner,
+		Bus:       bus,
 	}
 
 	// Bind posture: loopback by default. An off-host bind is self-declaring —
@@ -253,20 +222,20 @@ func runServeCmd(ctx context.Context, args []string) {
 	}
 
 	deps := serveDependencies{
-		APIKey:                apiKey,
-		PollinatorCredentials: pollinatorCredentials,
-		StemSigner:            stemSigner,
-		Networked:             networked,
-		DelegationGate:        delegationGate,
-		EventBus:              bus,
-		Sessions:              sessions,
-		History:               history,
-		CoreService:           coreSvc,
-		HealthMonitor:         healthMonitor,
-		TendrilDir:            tendrilDir,
-		MeshServer:            meshServer,
-		PendingStore:          pendingStore,
-		AdminKey:              adminKey,
+		APIKey:         apiKey,
+		Authority:      stemAuthority,
+		StemSigner:     stemSigner,
+		Networked:      networked,
+		DelegationGate: delegationGate,
+		EventBus:       bus,
+		Sessions:       sessions,
+		History:        history,
+		CoreService:    coreSvc,
+		HealthMonitor:  healthMonitor,
+		TendrilDir:     tendrilDir,
+		MeshServer:     meshServer,
+		PendingStore:   pendingStore,
+		AdminKey:       adminKey,
 	}
 	mux := buildServeMux(deps)
 
@@ -311,7 +280,7 @@ func runServeCmd(ctx context.Context, args []string) {
 	gatewayAddr := net.JoinHostPort(listenHost, gatewayPort)
 	go func() {
 		gatewayMux := http.NewServeMux()
-		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, pollinatorCredentials, stemSigner, networked,
+		gatewayMux.HandleFunc("/ws", withWebSocketAuth(apiKey, stemAuthority, stemSigner, networked,
 			receptors.NewWatchAuthority(delegationGate, history).StreamMiddleware(gateway.HandleWebSocket(bus))))
 		gatewayServer := &http.Server{
 			Addr:    gatewayAddr,
@@ -563,9 +532,9 @@ func registerBotanistRoute(mux *http.ServeMux, deps serveDependencies, pattern s
 //
 // The credential or token is only accepted here; what it may then DO is decided
 // by the grant model downstream, which derives the Pollen from this same bearer.
-func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
+func withAPIKeyOrPollinatorAuth(apiKey string, authority *core.Authority, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, credentials, verifier, networked); !ok {
+		if reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, authority, verifier, networked); !ok {
 			http.Error(w, reason, http.StatusUnauthorized)
 			return
 		}
@@ -581,7 +550,7 @@ func withAPIKeyOrPollinatorAuth(apiKey string, credentials receptors.PollinatorC
 //
 // It reports only whether the caller is admitted. WHICH Pollen it is, and what
 // that Pollen may then do, is decided downstream from the same header.
-func resolveAuthorization(authorization, apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool) (reason string, ok bool) {
+func resolveAuthorization(authorization, apiKey string, authority *core.Authority, verifier receptors.AccessTokenVerifier, networked bool) (reason string, ok bool) {
 	presented := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(authorization), "Bearer "))
 
 	if core.LooksLikeAccessToken(presented) {
@@ -609,7 +578,15 @@ func resolveAuthorization(authorization, apiKey string, credentials receptors.Po
 		// A credential-shaped bearer is resolved or refused. It never falls
 		// back to the Botanist key comparison, so a revoked credential
 		// cannot be retried as anything else.
-		if core.ResolvePollenFromCredential(credentials, presented) == "" {
+		if authority == nil {
+			return "Unauthorized", false
+		}
+		pollen, err := authority.ResolvePollinatorCredential(presented)
+		if err != nil {
+			log.Printf("Pollinator credential state could not be loaded for request authentication: %v", err)
+			return "Unauthorized", false
+		}
+		if pollen == "" {
 			return "Unauthorized", false
 		}
 		return "", true
@@ -636,9 +613,9 @@ func resolveAuthorization(authorization, apiKey string, credentials receptors.Po
 // query string would let it authenticate the connection and then be invisible
 // to the gate that decides what the connection may see — authenticated as a
 // Pollinator, treated as the operator.
-func withWebSocketAuth(apiKey string, credentials receptors.PollinatorCredentials, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
+func withWebSocketAuth(apiKey string, authority *core.Authority, verifier receptors.AccessTokenVerifier, networked bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, credentials, verifier, networked)
+		reason, ok := resolveAuthorization(r.Header.Get("Authorization"), apiKey, authority, verifier, networked)
 		if ok {
 			next(w, r)
 			return
@@ -646,7 +623,7 @@ func withWebSocketAuth(apiKey string, credentials receptors.PollinatorCredential
 
 		if key := strings.TrimSpace(r.URL.Query().Get("key")); key != "" {
 			authorization := "Bearer " + key
-			if queryReason, queryOK := resolveAuthorization(authorization, apiKey, credentials, verifier, networked); queryOK {
+			if queryReason, queryOK := resolveAuthorization(authorization, apiKey, authority, verifier, networked); queryOK {
 				r = r.Clone(r.Context())
 				r.Header.Set("Authorization", authorization)
 				next(w, r)
@@ -1012,20 +989,20 @@ func buildServeCore(sessions *session.Manager, tendrilDir string, history *histo
 }
 
 type serveDependencies struct {
-	APIKey                string
-	PollinatorCredentials []core.PollinatorCredential
-	StemSigner            *core.StemSigner
-	Networked             bool
-	DelegationGate        *receptors.DelegationGate
-	EventBus              *eventbus.Bus
-	Sessions              *session.Manager
-	History               *historydb.Store
-	CoreService           *core.Service
-	HealthMonitor         *healthmon.Monitor
-	TendrilDir            string
-	MeshServer            *mesh.Server
-	PendingStore          *core.PendingConfirmationStore
-	AdminKey              string
+	APIKey         string
+	Authority      *core.Authority
+	StemSigner     *core.StemSigner
+	Networked      bool
+	DelegationGate *receptors.DelegationGate
+	EventBus       *eventbus.Bus
+	Sessions       *session.Manager
+	History        *historydb.Store
+	CoreService    *core.Service
+	HealthMonitor  *healthmon.Monitor
+	TendrilDir     string
+	MeshServer     *mesh.Server
+	PendingStore   *core.PendingConfirmationStore
+	AdminKey       string
 }
 
 func buildServeMux(deps serveDependencies) *http.ServeMux {
@@ -1036,28 +1013,28 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// the delegation authorizer per-invocation, so every other surface refuses
 	// a delegated invocation rather than silently running it as plain traffic.
 	guardedAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, deps.DelegationGate.Middleware(next))
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, deps.DelegationGate.Middleware(next))
 	}
 
 	// Access-token mint: a durable Pollinator credential (the refresh root) is
 	// exchanged here for a short-lived signed token. Self-authenticating on the
 	// presented credential, so it takes no outer bearer wrapper; a token cannot
 	// mint another token, and a plain bearer key cannot mint for a named identity.
-	receptors.NewPollinatorTokenHandler(deps.StemSigner, deps.PollinatorCredentials).Register(mux)
+	receptors.NewPollinatorTokenHandler(deps.StemSigner, deps.Authority).Register(mux)
 
 	// observeAuth authenticates without the blanket delegated-request denial:
 	// the surfaces it carries reach a decision about the phytomer the caller
 	// named, which is a decision guardedAuth's default cannot make because it
 	// runs before any phytomer is in hand.
 	observeAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, next)
 	}
 
 	// Who may observe a phytomer: one authority, shared by the stored views and
 	// the live stream, so the two cannot answer the same question differently.
 	watch := receptors.NewWatchAuthority(deps.DelegationGate, deps.History)
 
-	mux.HandleFunc("/ws", withWebSocketAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked,
+	mux.HandleFunc("/ws", withWebSocketAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked,
 		watch.StreamMiddleware(gateway.HandleWebSocket(deps.EventBus))))
 
 	mux.HandleFunc("/v1/chat/completions", guardedAuth(handleChatCompletions(deps.EventBus, deps.Sessions, deps.History)))
@@ -1104,7 +1081,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// blanket delegated-request denial.
 	sproutHandler := receptors.NewSproutHandler(deps.CoreService, deps.History, deps.EventBus).WithDelegation(deps.DelegationGate)
 	sproutHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, next)
 	})
 
 	// Stoma REST API (adapter): one bounded command in a
@@ -1114,7 +1091,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	stomaHandler := receptors.NewStomaHandler(deps.CoreService).WithDelegation(deps.DelegationGate)
 	stomaHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, next)
 	})
 
 	// Git REST API (adapter): commit a substrate's workspace under its
@@ -1128,12 +1105,12 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 	// bearer auth rather than guardedAuth's blanket delegated-request denial.
 	seedHandler := receptors.NewSeedHandler(deps.CoreService).WithDelegation(deps.DelegationGate).WithHistory(deps.History)
 	seedHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, next)
 	})
 
 	gitHandler := receptors.NewGitHandler(deps.CoreService).WithDelegation(deps.DelegationGate)
 	gitHandler.Register(mux, func(next http.HandlerFunc) http.HandlerFunc {
-		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, next)
+		return withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, next)
 	})
 
 	// Phase 4: Configuration API
@@ -1151,7 +1128,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 			return
 		}
 		if r.Method == http.MethodPost {
-			withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, configHandler.UploadGenotype)(w, r)
+			withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, configHandler.UploadGenotype)(w, r)
 			return
 		}
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1166,7 +1143,7 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 		WithCore(deps.CoreService).
 		WithDelegation(deps.DelegationGate, "").
 		WithWatch(watch)
-	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.PollinatorCredentials, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
+	mux.HandleFunc("/v1", withAPIKeyOrPollinatorAuth(deps.APIKey, deps.Authority, deps.StemSigner, deps.Networked, mcpHandler.HandleMCP))
 
 	// Phase 6: Mesh Grafting API
 	registerBotanistRoute(mux, deps, "/v1/mesh/admin/issue-token", deps.MeshServer.HandleAdminIssueToken)

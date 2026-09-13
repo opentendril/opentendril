@@ -64,20 +64,20 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 	}
 
 	deps := serveDependencies{
-		APIKey:                apiKey,
-		PollinatorCredentials: creds,
-		StemSigner:            stemSigner,
-		Networked:             false, // Loopback so credentials are valid everywhere on Pollinator lane
-		DelegationGate:        delegationGate,
-		EventBus:              bus,
-		Sessions:              manager,
-		History:               nil,
-		CoreService:           core.NewService(manager),
-		HealthMonitor:         newDefaultHealthMonitor(bus, time.Hour),
-		TendrilDir:            dir,
-		MeshServer:            mesh.NewServer(dir),
-		PendingStore:          pendingStore,
-		AdminKey:              adminKey,
+		APIKey:         apiKey,
+		Authority:      core.NewAuthority(dir),
+		StemSigner:     stemSigner,
+		Networked:      false, // Loopback so credentials are valid everywhere on Pollinator lane
+		DelegationGate: delegationGate,
+		EventBus:       bus,
+		Sessions:       manager,
+		History:        nil,
+		CoreService:    core.NewService(manager),
+		HealthMonitor:  newDefaultHealthMonitor(bus, time.Hour),
+		TendrilDir:     dir,
+		MeshServer:     mesh.NewServer(dir),
+		PendingStore:   pendingStore,
+		AdminKey:       adminKey,
 	}
 
 	// -------------------------------------------------------------------------
@@ -259,20 +259,20 @@ func TestRegisterBotanistRoute(t *testing.T) {
 	}
 
 	deps := serveDependencies{
-		APIKey:                apiKey,
-		PollinatorCredentials: creds,
-		StemSigner:            stemSigner,
-		Networked:             false,
-		DelegationGate:        delegationGate,
-		EventBus:              bus,
-		Sessions:              manager,
-		History:               nil,
-		CoreService:           core.NewService(manager),
-		HealthMonitor:         newDefaultHealthMonitor(bus, time.Hour),
-		TendrilDir:            dir,
-		MeshServer:            mesh.NewServer(dir),
-		PendingStore:          pendingStore,
-		AdminKey:              adminKey,
+		APIKey:         apiKey,
+		Authority:      core.NewAuthority(dir),
+		StemSigner:     stemSigner,
+		Networked:      false,
+		DelegationGate: delegationGate,
+		EventBus:       bus,
+		Sessions:       manager,
+		History:        nil,
+		CoreService:    core.NewService(manager),
+		HealthMonitor:  newDefaultHealthMonitor(bus, time.Hour),
+		TendrilDir:     dir,
+		MeshServer:     mesh.NewServer(dir),
+		PendingStore:   pendingStore,
+		AdminKey:       adminKey,
 	}
 
 	mux := http.NewServeMux()

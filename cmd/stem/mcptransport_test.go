@@ -81,12 +81,12 @@ func setupTestMCPTransport(t *testing.T) (*httptest.Server, string, string, *cor
 		})
 
 	deps := serveDependencies{
-		APIKey:                botanistKey,
-		PollinatorCredentials: creds,
-		DelegationGate:        delegationGate,
-		EventBus:              bus,
-		Sessions:              sessions,
-		CoreService:           coreSvc,
+		APIKey:         botanistKey,
+		Authority:      core.NewAuthority(dir),
+		DelegationGate: delegationGate,
+		EventBus:       bus,
+		Sessions:       sessions,
+		CoreService:    coreSvc,
 	}
 	mux := buildServeMux(deps)
 
@@ -274,8 +274,8 @@ func setupTestMCPWatchTransport(t *testing.T, grants []core.DelegationGrant) (*h
 	}
 	coreSvc := core.NewService(sessions).WithPhytomerObservationSource(phytomerObservationSource(store))
 	deps := serveDependencies{
-		APIKey:                "botanist-key",
-		PollinatorCredentials: creds,
+		APIKey:    "botanist-key",
+		Authority: core.NewAuthority(dir),
 		DelegationGate: &receptors.DelegationGate{
 			Authorizer:  core.NewDelegationAuthorizer(grants),
 			Bus:         bus,

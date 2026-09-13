@@ -105,7 +105,7 @@ func newStreamFixtureWithRuns(t *testing.T, runs []historydb.SproutRun, withToke
 	}
 	watch := receptors.NewWatchAuthority(gate, store)
 
-	handler := withWebSocketAuth(wsAPIKey, credentials, signer, false,
+	handler := withWebSocketAuth(wsAPIKey, core.NewAuthority(dir), signer, false,
 		watch.StreamMiddleware(gateway.HandleWebSocket(bus)))
 	server := httptest.NewServer(http.HandlerFunc(handler))
 	t.Cleanup(server.Close)

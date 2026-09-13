@@ -15,10 +15,108 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
+	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/triggers"
 )
+
+func TestServeMuxUsesLivePollinatorAuthority(t *testing.T) {
+	dir := t.TempDir()
+	secret, _, err := core.IssuePollinatorCredential(dir, "claude", "")
+	if err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+	grantsPath := filepath.Join(dir, core.DelegationGrantsFilename)
+	if err := os.WriteFile(grantsPath, []byte("grants:\n  claude:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n"), 0o600); err != nil {
+		t.Fatalf("write grants: %v", err)
+	}
+	signer, err := core.LoadOrCreateStemSigner(dir)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	authority := core.NewAuthority(dir)
+	bus := eventbus.New()
+	t.Cleanup(bus.Shutdown)
+	delegationGate := &receptors.DelegationGate{Authority: authority, Signer: signer, Bus: bus}
+	var executions int
+	coreService := core.NewService(nil).WithSprout(core.SproutOperations{
+		Run: func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			executions++
+			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
+		},
+	})
+	mux := buildServeMux(serveDependencies{
+		APIKey:         "botanist-key",
+		Authority:      authority,
+		StemSigner:     signer,
+		DelegationGate: delegationGate,
+		EventBus:       bus,
+		CoreService:    coreService,
+	})
+
+	mintRequest := httptest.NewRequest(http.MethodPost, "/v1/pollinator/token", nil)
+	mintRequest.Header.Set("Authorization", "Bearer "+secret)
+	mintResponse := httptest.NewRecorder()
+	mux.ServeHTTP(mintResponse, mintRequest)
+	if mintResponse.Code != http.StatusOK {
+		t.Fatalf("initial token mint: status = %d, want 200 (%s)", mintResponse.Code, mintResponse.Body.String())
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(mintResponse.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+
+	if revoked, err := core.RevokePollinatorCredentials(dir, "claude"); err != nil || revoked != 1 {
+		t.Fatalf("revoke root = %d, %v; want 1, nil", revoked, err)
+	}
+	if claims, ok := signer.VerifyAccessToken(minted.Token); !ok || claims.Pollen != "claude" {
+		t.Fatalf("root revocation invalidated the existing token: ok=%v pollen=%q", ok, claims.Pollen)
+	}
+	mintRequest = httptest.NewRequest(http.MethodPost, "/v1/pollinator/token", nil)
+	mintRequest.Header.Set("Authorization", "Bearer "+secret)
+	mintResponse = httptest.NewRecorder()
+	mux.ServeHTTP(mintResponse, mintRequest)
+	if mintResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("mint after revocation: status = %d, want 401 (%s)", mintResponse.Code, mintResponse.Body.String())
+	}
+	rootRequest := httptest.NewRequest(http.MethodPost, "/v1/sprouts/grow", strings.NewReader(`{"transcript":"grow","substrate":"core"}`))
+	rootRequest.Header.Set("Authorization", "Bearer "+secret)
+	rootResponse := httptest.NewRecorder()
+	mux.ServeHTTP(rootResponse, rootRequest)
+	if rootResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("data admission with revoked root: status = %d, want 401 (%s)", rootResponse.Code, rootResponse.Body.String())
+	}
+	if executions != 0 {
+		t.Fatalf("revoked root executed a governed request before the token case; executions = %d, want 0", executions)
+	}
+
+	invoke := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/sprouts/grow", strings.NewReader(`{"transcript":"grow","substrate":"core"}`))
+		request.Header.Set("Authorization", "Bearer "+minted.Token)
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		return response
+	}
+	if response := invoke(); response.Code != http.StatusOK {
+		t.Fatalf("admission with current grant: status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if executions != 1 {
+		t.Fatalf("executions = %d, want 1", executions)
+	}
+
+	if err := os.WriteFile(grantsPath, []byte("grants: {}\n"), 0o600); err != nil {
+		t.Fatalf("remove grant: %v", err)
+	}
+	if response := invoke(); response.Code != http.StatusForbidden {
+		t.Fatalf("admission after grant removal: status = %d, want 403 (%s)", response.Code, response.Body.String())
+	}
+	if executions != 1 {
+		t.Fatalf("removed grant admitted more work; executions = %d, want 1", executions)
+	}
+}
 
 // Issue finding 1: the Stem must never serve its API unauthenticated.
 func TestWithAPIKeyAuthNeverFailsOpen(t *testing.T) {
@@ -88,13 +186,10 @@ func TestSupersededCredentialPrefixIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	credentials, err := core.LoadPollinatorCredentials(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	authority := core.NewAuthority(dir)
 
 	reached := false
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, nil, false, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", authority, nil, false, func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})

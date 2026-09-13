@@ -95,9 +95,19 @@ func DelegatedPollen(r *http.Request, credentials PollinatorCredentials, verifie
 func (g *DelegationGate) PollenFor(r *http.Request) (pollen string, ok bool) {
 	var credentials PollinatorCredentials
 	var verifier AccessTokenVerifier
+	var authority *core.Authority
 	if g != nil {
 		credentials = g.Pollinators
 		verifier = g.Signer
+		authority = g.Authority
+	}
+	presented := bearerToken(r)
+	if authority != nil && core.LooksLikePollinatorCredential(presented) {
+		resolved, err := authority.ResolvePollinatorCredential(presented)
+		if err != nil || resolved == "" {
+			return "", false
+		}
+		return resolved, true
 	}
 	resolved, proven := DelegatedPollen(r, credentials, verifier)
 	if proven && resolved == "" {
@@ -113,6 +123,9 @@ func (g *DelegationGate) PollenFor(r *http.Request) (pollen string, ok bool) {
 // delegated invocation: with no delegation configured, delegation is
 // impossible while non-delegated traffic is untouched.
 type DelegationGate struct {
+	// Authority resolves durable roots and current grants from the Stem-owned
+	// control-plane directory. When configured, it supersedes snapshot fields.
+	Authority *core.Authority
 	// Pollinators is the set of issued credentials this surface resolves
 	// presented bearers against. Empty means none were issued, so no caller can
 	// authenticate as a Pollen by credential.
@@ -129,7 +142,15 @@ type DelegationGate struct {
 // audits the outcome.
 func (g *DelegationGate) Authorize(request core.DelegationRequest) core.DelegationDecision {
 	var decision core.DelegationDecision
-	if g == nil || g.Authorizer == nil {
+	if g == nil {
+		decision = core.DelegationDecision{Reason: "delegation is not configured"}
+	} else if g.Authority != nil {
+		current, err := g.Authority.AuthorizeDelegation(request)
+		decision = current
+		if err != nil {
+			log.Printf("delegation authority could not load current grants: %v", err)
+		}
+	} else if g.Authorizer == nil {
 		decision = core.DelegationDecision{Reason: "delegation is not configured"}
 	} else {
 		decision = g.Authorizer.Authorize(request)

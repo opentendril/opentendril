@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,7 +15,7 @@ import (
 )
 
 // mintFixture stands up a signer and one issued root credential in a temp dir.
-func mintFixture(t *testing.T) (*core.StemSigner, PollinatorCredentials, string) {
+func mintFixture(t *testing.T) (*core.StemSigner, *core.Authority, string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	signer, err := core.LoadOrCreateStemSigner(dir)
@@ -24,11 +26,7 @@ func mintFixture(t *testing.T) (*core.StemSigner, PollinatorCredentials, string)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	credentials, err := core.LoadPollinatorCredentials(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	return signer, credentials, secret
+	return signer, core.NewAuthority(dir), secret, dir
 }
 
 func mint(t *testing.T, h *PollinatorTokenHandler, bearer, body string) *httptest.ResponseRecorder {
@@ -45,8 +43,8 @@ func mint(t *testing.T, h *PollinatorTokenHandler, bearer, body string) *httptes
 // TestMintFromValidRootReturnsAVerifiableToken is the happy path: a root
 // credential is exchanged for a token that verifies to its Pollen.
 func TestMintFromValidRootReturnsAVerifiableToken(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	rec := mint(t, h, secret, "")
 	if rec.Code != http.StatusOK {
@@ -79,8 +77,8 @@ func TestMintFromValidRootReturnsAVerifiableToken(t *testing.T) {
 
 // TestMintHonoursShorterTTL: a custom under-cap ttl is signed into the token.
 func TestMintHonoursShorterTTL(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	before := time.Now().UTC()
 	rec := mint(t, h, secret, `{"ttlSeconds":60}`)
@@ -107,8 +105,8 @@ func TestMintHonoursShorterTTL(t *testing.T) {
 
 // TestMintRejectsNegativeTTL: a negative ttl is a client error, not the default.
 func TestMintRejectsNegativeTTL(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	rec := mint(t, h, secret, `{"ttlSeconds":-300}`)
 	if rec.Code != http.StatusBadRequest {
@@ -119,8 +117,8 @@ func TestMintRejectsNegativeTTL(t *testing.T) {
 // TestMintRejectsNonCredentialBearers: a token cannot mint another token, and an
 // absent/plain bearer cannot mint at all.
 func TestMintRejectsNonCredentialBearers(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	// A previously minted access token must not be usable to mint again.
 	first := mint(t, h, secret, "")
@@ -145,34 +143,80 @@ func TestMintRejectsNonCredentialBearers(t *testing.T) {
 
 // TestMintRejectsRevokedRoot: revoking the root ends minting.
 func TestMintRejectsRevokedRoot(t *testing.T) {
-	dir := t.TempDir()
-	signer, err := core.LoadOrCreateStemSigner(dir)
-	if err != nil {
-		t.Fatalf("signer: %v", err)
+	signer, authority, secret, dir := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
+
+	first := mint(t, h, secret, "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial mint: status = %d, want 200 (%s)", first.Code, first.Body.String())
 	}
-	secret, _, err := core.IssuePollinatorCredential(dir, "claude", "")
-	if err != nil {
-		t.Fatalf("issue: %v", err)
+	var minted mintTokenResponse
+	if err := json.Unmarshal(first.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode initial mint: %v", err)
 	}
+	if _, ok := signer.VerifyAccessToken(minted.Token); !ok {
+		t.Fatal("initially minted token did not verify")
+	}
+
 	if _, err := core.RevokePollinatorCredentials(dir, "claude"); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	credentials, err := core.LoadPollinatorCredentials(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
+	if claims, ok := signer.VerifyAccessToken(minted.Token); !ok || claims.Pollen != "claude" {
+		t.Fatalf("root revocation invalidated an unexpired token: ok=%v pollen=%q", ok, claims.Pollen)
 	}
-	h := NewPollinatorTokenHandler(signer, credentials)
 
 	if rec := mint(t, h, secret, ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("minting with a revoked root: status = %d, want 401", rec.Code)
 	}
 }
 
+func TestMintFailsClosedWhenCredentialStoreCannotBeRead(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		breakFile func(t *testing.T, path string)
+	}{
+		{
+			name: "malformed",
+			breakFile: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+					t.Fatalf("malform credential store: %v", err)
+				}
+			},
+		},
+		{
+			name: "unreadable",
+			breakFile: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("remove credential store: %v", err)
+				}
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatalf("replace credential store with directory: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			signer, authority, secret, dir := mintFixture(t)
+			h := NewPollinatorTokenHandler(signer, authority)
+			if rec := mint(t, h, secret, ""); rec.Code != http.StatusOK {
+				t.Fatalf("initial mint: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+			}
+
+			tc.breakFile(t, filepath.Join(dir, core.PollinatorCredentialsFilename))
+			if rec := mint(t, h, secret, ""); rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("mint with %s credential store: status = %d, want %d (%s)", tc.name, rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+			}
+		})
+	}
+}
+
 // TestMintRejectsTTLOverCap: a lifetime request above the cap is a bad request,
 // not a silent clamp.
 func TestMintRejectsTTLOverCap(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	over := int(core.MaxAccessTokenTTL.Seconds()) + 60
 	rec := mint(t, h, secret, `{"ttlSeconds":`+strconv.Itoa(over)+`}`)
@@ -186,8 +230,8 @@ func TestMintRejectsTTLOverCap(t *testing.T) {
 
 // TestMintRejectsNonPost: the mint route is POST-only.
 func TestMintRejectsNonPost(t *testing.T) {
-	signer, credentials, secret := mintFixture(t)
-	h := NewPollinatorTokenHandler(signer, credentials)
+	signer, authority, secret, _ := mintFixture(t)
+	h := NewPollinatorTokenHandler(signer, authority)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/pollinator/token", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
@@ -202,7 +246,7 @@ func TestMintRejectsNonPost(t *testing.T) {
 // a valid token resolves to its Pollen; an expired or forged one denies without
 // falling back to the header claim.
 func TestPollenForResolvesAndDeniesTokens(t *testing.T) {
-	signer, _, _ := mintFixture(t)
+	signer, _, _, _ := mintFixture(t)
 	gate := &DelegationGate{Signer: signer}
 
 	good, err := signer.MintAccessToken("claude", 0, core.AccessTokenScope{})
