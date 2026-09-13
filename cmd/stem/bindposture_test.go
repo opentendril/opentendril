@@ -77,10 +77,7 @@ func TestOffHostBindRefusesRootCredentialOnDataRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	credentials, err := core.LoadPollinatorCredentials(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	authority := core.NewAuthority(dir)
 	signer, err := core.LoadOrCreateStemSigner(dir)
 	if err != nil {
 		t.Fatalf("signer: %v", err)
@@ -91,7 +88,7 @@ func TestOffHostBindRefusesRootCredentialOnDataRoutes(t *testing.T) {
 	}
 
 	// Networked gate: root refused, token and api-key accepted.
-	networkedHandler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, signer, true, func(w http.ResponseWriter, r *http.Request) {
+	networkedHandler := withAPIKeyOrPollinatorAuth("botanist-key", authority, signer, true, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -131,12 +128,9 @@ func TestLoopbackBindStillAcceptsRootCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	credentials, err := core.LoadPollinatorCredentials(dir)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
+	authority := core.NewAuthority(dir)
 
-	handler := withAPIKeyOrPollinatorAuth("botanist-key", credentials, nil, false, func(w http.ResponseWriter, r *http.Request) {
+	handler := withAPIKeyOrPollinatorAuth("botanist-key", authority, nil, false, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 

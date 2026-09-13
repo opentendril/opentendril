@@ -2,8 +2,11 @@ package receptors
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -174,6 +177,151 @@ func TestDelegatedAsyncRunPermittedByMatchingGrant(t *testing.T) {
 	}
 	if event.Type != eventbus.EventDelegationAuthorized {
 		t.Fatalf("audit event type = %s, want %s", event.Type, eventbus.EventDelegationAuthorized)
+	}
+}
+
+func TestDelegationGrantRemovalAppliesToNextAdmission(t *testing.T) {
+	dir := t.TempDir()
+	grantsPath := filepath.Join(dir, core.DelegationGrantsFilename)
+	initialGrants := []byte("grants:\n  local-pollinator:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n")
+	if err := os.WriteFile(grantsPath, initialGrants, 0o600); err != nil {
+		t.Fatalf("write initial grants: %v", err)
+	}
+
+	gate := &DelegationGate{Authority: core.NewAuthority(dir), Bus: eventbus.New()}
+	request := core.DelegationRequest{
+		Pollen:         "local-pollinator",
+		OperationClass: core.CapSproutGrow,
+		Substrate:      "core",
+	}
+	if decision := gate.Authorize(request); !decision.Authorized {
+		t.Fatalf("initial grant did not authorize: %+v", decision)
+	}
+
+	if err := os.WriteFile(grantsPath, []byte("grants:\n  local-pollinator:\n    operationClasses: [sprout.watch]\n    substrates: [core]\n"), 0o600); err != nil {
+		t.Fatalf("narrow grant: %v", err)
+	}
+	if decision := gate.Authorize(request); decision.Authorized {
+		t.Fatalf("narrowed grant authorized a later admission: %+v", decision)
+	}
+}
+
+func TestPreviouslyMintedTokenUsesCurrentGrantForNextAdmission(t *testing.T) {
+	dir := t.TempDir()
+	secret, _, err := core.IssuePollinatorCredential(dir, "local-pollinator", "")
+	if err != nil {
+		t.Fatalf("issue credential: %v", err)
+	}
+	grantsPath := filepath.Join(dir, core.DelegationGrantsFilename)
+	if err := os.WriteFile(grantsPath, []byte("grants:\n  local-pollinator:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n"), 0o600); err != nil {
+		t.Fatalf("write grants: %v", err)
+	}
+
+	signer, err := core.LoadOrCreateStemSigner(dir)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	authority := core.NewAuthority(dir)
+	tokenHandler := NewPollinatorTokenHandler(signer, authority)
+	mintResponse := mint(t, tokenHandler, secret, "")
+	if mintResponse.Code != http.StatusOK {
+		t.Fatalf("initial mint: status = %d, want 200 (%s)", mintResponse.Code, mintResponse.Body.String())
+	}
+	var minted mintTokenResponse
+	if err := json.Unmarshal(mintResponse.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode minted token: %v", err)
+	}
+
+	if _, err := core.RevokePollinatorCredentials(dir, "local-pollinator"); err != nil {
+		t.Fatalf("revoke root: %v", err)
+	}
+	if claims, ok := signer.VerifyAccessToken(minted.Token); !ok || claims.Pollen != "local-pollinator" {
+		t.Fatalf("root revocation invalidated an unexpired token: ok=%v pollen=%q", ok, claims.Pollen)
+	}
+
+	var executed atomic.Int64
+	coreSvc := core.NewService(nil).WithSprout(core.SproutOperations{
+		Run: func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			executed.Add(1)
+			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
+		},
+	})
+	bus := eventbus.New()
+	t.Cleanup(bus.Shutdown)
+	gate := &DelegationGate{Authority: authority, Signer: signer, Bus: bus}
+	mux := http.NewServeMux()
+	NewSproutHandler(coreSvc, nil, bus).WithDelegation(gate).Register(mux, nil)
+
+	invoke := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/v1/sprouts/grow", strings.NewReader(sproutRunBody))
+		req.Header.Set("Authorization", "Bearer "+minted.Token)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := invoke(); rec.Code != http.StatusOK {
+		t.Fatalf("admission with current grant: status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("executions = %d, want 1", executed.Load())
+	}
+
+	if err := os.WriteFile(grantsPath, []byte("grants: {}\n"), 0o600); err != nil {
+		t.Fatalf("remove grant: %v", err)
+	}
+	if rec := invoke(); rec.Code != http.StatusForbidden {
+		t.Fatalf("admission after grant removal: status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+	if executed.Load() != 1 {
+		t.Fatalf("removed grant admitted more work; executions = %d, want 1", executed.Load())
+	}
+}
+
+func TestUnreadableGrantStateDeniesNextAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		breakFile func(t *testing.T, path string)
+	}{
+		{
+			name: "malformed",
+			breakFile: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("grants: [not-a-mapping"), 0o600); err != nil {
+					t.Fatalf("malform grants: %v", err)
+				}
+			},
+		},
+		{
+			name: "unreadable",
+			breakFile: func(t *testing.T, path string) {
+				t.Helper()
+				if err := os.Remove(path); err != nil {
+					t.Fatalf("remove grants: %v", err)
+				}
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatalf("replace grants with directory: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			grantsPath := filepath.Join(dir, core.DelegationGrantsFilename)
+			initial := []byte("grants:\n  local-pollinator:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n")
+			if err := os.WriteFile(grantsPath, initial, 0o600); err != nil {
+				t.Fatalf("write initial grants: %v", err)
+			}
+			gate := &DelegationGate{Authority: core.NewAuthority(dir)}
+			request := core.DelegationRequest{Pollen: "local-pollinator", OperationClass: core.CapSproutGrow, Substrate: "core"}
+			if decision := gate.Authorize(request); !decision.Authorized {
+				t.Fatalf("initial grant did not authorize: %+v", decision)
+			}
+
+			tc.breakFile(t, grantsPath)
+			if decision := gate.Authorize(request); decision.Authorized {
+				t.Fatalf("%s current grants used stale authority: %+v", tc.name, decision)
+			}
+		})
 	}
 }
 

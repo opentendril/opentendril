@@ -16,14 +16,14 @@ import (
 // minted token is what every other surface then accepts per request. This route
 // is the single seam where a durable secret is exchanged for a short-lived one.
 type PollinatorTokenHandler struct {
-	Signer      *core.StemSigner
-	Credentials PollinatorCredentials
+	Signer    *core.StemSigner
+	Authority *core.Authority
 }
 
-// NewPollinatorTokenHandler builds the mint handler over a signer and the set of
-// issued credentials it authenticates roots against.
-func NewPollinatorTokenHandler(signer *core.StemSigner, credentials PollinatorCredentials) *PollinatorTokenHandler {
-	return &PollinatorTokenHandler{Signer: signer, Credentials: credentials}
+// NewPollinatorTokenHandler builds the mint handler over the Stem signer and
+// Core authority source used to resolve current durable roots.
+func NewPollinatorTokenHandler(signer *core.StemSigner, authority *core.Authority) *PollinatorTokenHandler {
+	return &PollinatorTokenHandler{Signer: signer, Authority: authority}
 }
 
 // mintTokenRequest is the optional body: a shorter lifetime may be requested,
@@ -53,7 +53,7 @@ func (h *PollinatorTokenHandler) HandleMint(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h == nil || h.Signer == nil {
+	if h == nil || h.Signer == nil || h.Authority == nil {
 		http.Error(w, "access-token minting is not configured", http.StatusServiceUnavailable)
 		return
 	}
@@ -63,7 +63,12 @@ func (h *PollinatorTokenHandler) HandleMint(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "a Pollinator credential is required to mint an access token", http.StatusUnauthorized)
 		return
 	}
-	pollen := core.ResolvePollenFromCredential(h.Credentials, presented)
+	pollen, err := h.Authority.ResolvePollinatorCredential(presented)
+	if err != nil {
+		log.Printf("Pollinator credential state could not be loaded for token minting: %v", err)
+		http.Error(w, "Pollinator credential state is unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if pollen == "" {
 		http.Error(w, "unknown or revoked Pollinator credential", http.StatusUnauthorized)
 		return
