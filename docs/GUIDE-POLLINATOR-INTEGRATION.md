@@ -25,7 +25,7 @@ Pollinator
     -> durable Pollinator root
     -> short-lived access token
     -> governed Stem
-    -> seedGrow(detached)
+    -> seedGrow(detached, idempotencyKey)
     -> phytomerContinue
     -> sproutWatch
 ```

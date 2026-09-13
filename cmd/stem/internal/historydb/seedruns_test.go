@@ -187,6 +187,93 @@ func TestSeedRunIdempotencyUniquenessLookupAndPollenScope(t *testing.T) {
 	}
 }
 
+func TestPruneOlderThanRetainsOnlyDetachedSeedRetryIdentity(t *testing.T) {
+	t.Setenv(EnvEncryptAtRest, "off")
+	store := openTestStore(t)
+	ctx := context.Background()
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour)
+	cutoff := time.Now().UTC().Add(-50 * 24 * time.Hour)
+
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "seed-retained", Pollen: "pollen-a", PhytomerID: "tendril-retained",
+		Substrate: "core", Goal: "private goal", Status: "running",
+		IdempotencyKey: "retained-key", RequestDigest: "sha256-retained", StartedAt: old,
+	}); err != nil {
+		t.Fatalf("record detached opening: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "seed-legacy", Pollen: "pollen-a", PhytomerID: "tendril-legacy",
+		Substrate: "legacy-substrate", Goal: "legacy goal", Status: "satisfied", StartedAt: old,
+	}); err != nil {
+		t.Fatalf("record legacy synchronous Seed: %v", err)
+	}
+
+	pruned, err := store.PruneOlderThan(ctx, cutoff)
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("PruneOlderThan deleted %d rows, want only the legacy synchronous row", pruned)
+	}
+
+	retained, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "pollen-a", "retained-key")
+	if err != nil || !found {
+		t.Fatalf("get retained detached identity: found=%v err=%v", found, err)
+	}
+	if retained.Handle != "seed-retained" || retained.PhytomerID != "tendril-retained" || retained.Pollen != "pollen-a" || retained.Substrate != "core" ||
+		retained.IdempotencyKey != "retained-key" || retained.RequestDigest != "sha256-retained" || retained.Status != "running" {
+		t.Fatalf("retained identity/status = %+v", retained)
+	}
+	if retained.Goal != "" || retained.Diff != "" || retained.Logs != "" || retained.Error != "" ||
+		retained.Iterations != 0 || retained.Branch != "" || retained.Commit != "" || retained.PublicationDiagnostic != nil || len(retained.VerificationDiagnostics) != 0 {
+		t.Fatalf("history payload survived retry-identity retention: %+v", retained)
+	}
+	if _, found, err := store.GetSeedRun(ctx, "seed-legacy"); err != nil || found {
+		t.Fatalf("legacy synchronous history retained: found=%v err=%v", found, err)
+	}
+
+	finished := old.Add(time.Hour)
+	target := SeedTarget{Handle: "seed-retained", PhytomerID: "tendril-retained", Pollen: "pollen-a", Substrate: "core"}
+	fenced, err := store.AcquireSeedSettlementFence(ctx, target)
+	if err != nil || !fenced {
+		t.Fatalf("acquire detached Seed settlement fence: fenced=%v err=%v", fenced, err)
+	}
+	settlement := SeedRun{
+		Handle: "seed-retained", Pollen: "pollen-a", PhytomerID: "tendril-retained",
+		Substrate: "core", Goal: "private goal", Status: "satisfied", Iterations: 4,
+		Branch: "tendril/private", Commit: "deadbeef", Diff: "private diff", Logs: "private logs", Error: "private error",
+		PublicationDiagnostic:   &SeedPublicationDiagnostic{FailureCategory: "private diagnostic"},
+		VerificationDiagnostics: []SeedVerificationDiagnostic{{Iteration: 1, Outcome: "failed", Message: "private verification"}},
+		StartedAt:               old, FinishedAt: finished,
+	}
+	if err := store.CompleteSeedSettlement(ctx, target, settlement); err != nil {
+		t.Fatalf("complete compacted detached Seed settlement: %v", err)
+	}
+	if err := store.RecordSeedRun(ctx, settlement); err != nil {
+		t.Fatalf("upsert compacted detached Seed settlement: %v", err)
+	}
+	settled, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "pollen-a", "retained-key")
+	if err != nil || !found {
+		t.Fatalf("get settled retry identity: found=%v err=%v", found, err)
+	}
+	if settled.Handle != "seed-retained" || settled.PhytomerID != "tendril-retained" || settled.Substrate != "core" || settled.RequestDigest != "sha256-retained" || settled.Status != "satisfied" || !settled.FinishedAt.Equal(finished) {
+		t.Fatalf("settled retry identity/status = %+v", settled)
+	}
+	if settled.Goal != "" || settled.Diff != "" || settled.Logs != "" || settled.Error != "" ||
+		settled.Iterations != 0 || settled.Branch != "" || settled.Commit != "" || settled.PublicationDiagnostic != nil || len(settled.VerificationDiagnostics) != 0 {
+		t.Fatalf("late settlement repopulated expired Seed payload: %+v", settled)
+	}
+
+	otherPollen := SeedRun{
+		Handle: "seed-other-pollen", Pollen: "pollen-b", PhytomerID: "tendril-other-pollen",
+		Substrate: "core", Goal: "other request", Status: "running", IdempotencyKey: "retained-key",
+		RequestDigest: "sha256-other", StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSeedOpening(ctx, otherPollen); err != nil {
+		t.Fatalf("same key under another Pollen: %v", err)
+	}
+}
+
 func TestSeedRunPhytomerIsImmutableOnSettle(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

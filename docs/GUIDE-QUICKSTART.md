@@ -289,8 +289,11 @@ TOKEN=$(cat ~/.tendril-token)
 curl -s -X POST localhost:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true}'
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true,"idempotencyKey":"seed-open-1"}'
 ```
+
+Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reuse it
+only when retrying the same semantic request; a changed request needs a new key.
 
 Canonical `seed.grow` owns detached lifecycle. The Stem returns active identity
 immediately:
@@ -359,7 +362,7 @@ An MCP-speaking Pollinator uses the same authority through `tendril-mcp`. The
 tool sequence is:
 
 ```text
-seedGrow         detached:true
+seedGrow         detached:true + idempotencyKey
 sproutWatch      sessionId
 phytomerContinue sessionId + intent + idempotencyKey
 sproutWatch      sessionId
@@ -545,7 +548,7 @@ The terminal does not communicate directly with Sprouts or Terraria.
 An external Pollinator uses the same lifecycle through the transport surface:
 
 ```text
-seedGrow         detached:true
+seedGrow         detached:true + idempotencyKey
 sproutWatch      sessionId
 phytomerContinue sessionId + intent + idempotencyKey
 ```

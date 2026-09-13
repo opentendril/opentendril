@@ -370,11 +370,17 @@ func TestSchemaVersion7UpgradesSeedRunsWithoutInventingRetryIdentity(t *testing.
 	}); err != nil {
 		t.Fatalf("seed legacy v7 row: %v", err)
 	}
-	// Rewind only the schema-8 delta from a normally initialized complete
-	// HistoryDB. This leaves the real v7 table set and every pre-existing row
-	// intact without maintaining a second hand-copied schema fixture here.
+	// Rewind the schema-8 retry-identity delta and current retention indexes
+	// from a normally initialized complete HistoryDB. This leaves the real v7
+	// table set and every pre-existing row intact without maintaining a second
+	// hand-copied schema fixture here.
 	if _, err := store.db.ExecContext(ctx, `DROP INDEX seedrunsByPollenIdempotencyKey`); err != nil {
 		t.Fatalf("remove schema-8 unique index: %v", err)
+	}
+	for _, index := range []string{"seedrunsDetachedRetention", "seedrunsLegacyRetention"} {
+		if _, err := store.db.ExecContext(ctx, `DROP INDEX `+index); err != nil {
+			t.Fatalf("remove retention index %s: %v", index, err)
+		}
 	}
 	if _, err := store.db.ExecContext(ctx, `ALTER TABLE seedruns DROP COLUMN "request-digest"`); err != nil {
 		t.Fatalf("rewind request-digest column: %v", err)

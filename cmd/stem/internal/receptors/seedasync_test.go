@@ -2,6 +2,7 @@ package receptors
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -462,6 +463,14 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 	}
 	defer store.Close()
 
+	persistence := testSeedPersistence(store)
+	var openingWrites atomic.Int32
+	recordOpening := persistence.RecordOpening
+	persistence.RecordOpening = func(ctx context.Context, opening core.SeedOpening) error {
+		openingWrites.Add(1)
+		return recordOpening(ctx, opening)
+	}
+
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
@@ -484,7 +493,7 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 			close(finished)
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, PhytomerID: spec.PhytomerID}, nil
 		},
-	}).WithSeedPersistence(testSeedPersistence(store)).WithContinuationPersistence(testContinuationPersistence(store))
+	}).WithSeedPersistence(persistence).WithContinuationPersistence(testContinuationPersistence(store))
 
 	ctx := core.WithPollen(context.Background(), "restart-pollen")
 	input := core.SeedGrowInput{
@@ -501,6 +510,28 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 		t.Fatal("first background execution did not start")
 	}
 
+	// Age the accepted durable row and run the same pruning entrypoint used by
+	// history retention, while the detached Seed is still running.
+	oldStartedAt := time.Now().UTC().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+	seedRows, err := sql.Open("sqlite", store.Path())
+	if err != nil {
+		t.Fatalf("open HistoryDB for retention fixture: %v", err)
+	}
+	if _, err := seedRows.ExecContext(ctx, `UPDATE seedruns SET startedAt = ? WHERE handle = ?`, oldStartedAt, first.Handle); err != nil {
+		seedRows.Close()
+		t.Fatalf("age detached Seed row: %v", err)
+	}
+	if err := seedRows.Close(); err != nil {
+		t.Fatalf("close HistoryDB retention fixture: %v", err)
+	}
+	pruned, err := store.PruneOlderThan(ctx, time.Now().UTC().Add(-50*24*time.Hour))
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if pruned != 0 {
+		t.Fatalf("PruneOlderThan deleted %d rows, want the detached retry identity retained", pruned)
+	}
+
 	// Reconstruct Core and its SessionManager while retaining only durable
 	// HistoryDB state. A replay must be resolved from that durable opening.
 	var secondRuns atomic.Int32
@@ -515,13 +546,21 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 			secondStarted <- struct{}{}
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, PhytomerID: spec.PhytomerID}, nil
 		},
-	}).WithSeedPersistence(testSeedPersistence(store)).WithContinuationPersistence(testContinuationPersistence(store))
+	}).WithSeedPersistence(persistence).WithContinuationPersistence(testContinuationPersistence(store))
+	secondSessionsBefore, err := secondManager.List(ctx)
+	if err != nil || len(secondSessionsBefore) != 0 {
+		t.Fatalf("second manager sessions before replay = %d, err=%v; want none", len(secondSessionsBefore), err)
+	}
 	second, err := secondCore.SeedGrow(ctx, input)
 	if err != nil {
 		t.Fatalf("reconstructed Core replay: %v", err)
 	}
-	if second.Handle != first.Handle || second.PhytomerID != first.PhytomerID {
+	if second.Handle != first.Handle || second.PhytomerID != first.PhytomerID || second.Status != core.SeedStatusRunning {
 		t.Fatalf("restart replay changed identity: first=%+v second=%+v", first, second)
+	}
+	secondSessionsAfter, err := secondManager.List(ctx)
+	if err != nil || len(secondSessionsAfter) != 0 {
+		t.Fatalf("second manager sessions after replay = %d, err=%v; want none", len(secondSessionsAfter), err)
 	}
 	changed := input
 	changed.Goal = "different semantic request"
@@ -533,11 +572,11 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 		t.Fatal("reconstructed Core started a background execution during replay")
 	case <-time.After(50 * time.Millisecond):
 	}
-	if secondRuns.Load() != 0 || firstRuns.Load() != 1 {
+	if secondRuns.Load() != 0 || firstRuns.Load() != 1 || openingWrites.Load() != 1 {
 		t.Fatalf("background runs = first %d second %d, want 1 and 0", firstRuns.Load(), secondRuns.Load())
 	}
 	run, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
-	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Status != core.SeedStatusRunning {
+	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Substrate != "core" || run.Goal != "" || run.Status != core.SeedStatusRunning || run.IdempotencyKey != input.IdempotencyKey || run.RequestDigest == "" {
 		t.Fatalf("durable retry row = found %v run %+v err %v", found, run, err)
 	}
 	close(release)
@@ -546,6 +585,40 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 	case <-finished:
 	case <-time.After(2 * time.Second):
 		t.Fatal("original detached execution did not finish")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		run, found, err = store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
+		if err != nil || !found {
+			t.Fatalf("read settled retry row: found=%v err=%v", found, err)
+		}
+		if run.Status == core.SeedStatusSatisfied {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("durable Seed did not settle after its execution finished: %+v", run)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	terminalReplay, err := secondCore.SeedGrow(ctx, input)
+	if err != nil {
+		t.Fatalf("terminal replay after retention: %v", err)
+	}
+	if terminalReplay.Handle != first.Handle || terminalReplay.PhytomerID != first.PhytomerID || terminalReplay.Status != core.SeedStatusSatisfied {
+		t.Fatalf("terminal replay changed retained identity/status: first=%+v replay=%+v", first, terminalReplay)
+	}
+	if secondRuns.Load() != 0 || firstRuns.Load() != 1 || openingWrites.Load() != 1 {
+		t.Fatalf("post-prune replay counts = first runs %d, second runs %d, opening writes %d", firstRuns.Load(), secondRuns.Load(), openingWrites.Load())
+	}
+	settledSessions, err := secondManager.List(ctx)
+	if err != nil || len(settledSessions) != 0 {
+		t.Fatalf("second manager sessions after terminal replay = %d, err=%v; want none", len(settledSessions), err)
+	}
+	run, found, err = store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
+	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Status != core.SeedStatusSatisfied ||
+		run.Substrate != "core" || run.Goal != "" || run.Diff != "" || run.Logs != "" || run.Error != "" || run.Iterations != 0 || run.Branch != "" || run.Commit != "" {
+		t.Fatalf("settled retained row = found %v run %+v err %v", found, run, err)
 	}
 }
 

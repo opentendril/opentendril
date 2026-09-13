@@ -680,16 +680,20 @@ func (s *Store) updateSeedRunResultTx(ctx context.Context, tx *sql.Tx, run SeedR
 	}
 	result, err := tx.ExecContext(ctx, `
 UPDATE seedruns SET
-	goal = ?,
+	goal = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN goal ELSE ? END,
 	status = ?,
-	iterations = ?,
-	branch = ?,
-	fruitCommit = ?,
-	diff = ?,
-	logs = ?,
-	error = ?,
+	iterations = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN iterations ELSE ? END,
+	branch = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN branch ELSE ? END,
+	fruitCommit = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitCommit ELSE ? END,
+	diff = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN diff ELSE ? END,
+	logs = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN logs ELSE ? END,
+	error = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN error ELSE ? END,
 	finishedAt = ?,
-	observation = CASE WHEN ? = '' THEN observation ELSE ? END
+	observation = CASE
+		WHEN "idempotency-key" <> '' AND goal = '' THEN observation
+		WHEN ? = '' THEN observation
+		ELSE ?
+	END
 WHERE handle = ? AND phytomerId = ? AND pollen = ? AND substrate = ? AND status = ?`,
 		goal,
 		run.Status,

@@ -546,6 +546,15 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS seedrunsByPollenIdempotencyKey ON seedruns(pollen, "idempotency-key") WHERE "idempotency-key" <> ''`); err != nil {
 		return fmt.Errorf("index seed runs by pollen and idempotency key: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `DROP INDEX IF EXISTS seedrunsByStartedAt`); err != nil {
+		return fmt.Errorf("remove broad seed run retention index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsDetachedRetention ON seedruns(startedAt) WHERE "idempotency-key" <> '' AND goal <> ''`); err != nil {
+		return fmt.Errorf("index detached seed runs awaiting retention compaction: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsLegacyRetention ON seedruns(startedAt) WHERE "idempotency-key" = ''`); err != nil {
+		return fmt.Errorf("index legacy seed runs awaiting retention deletion: %w", err)
+	}
 
 	const stamp = `INSERT INTO schemaMeta (id, version) VALUES (1, ?)
 ON CONFLICT(id) DO UPDATE SET version = excluded.version`
@@ -1342,14 +1351,16 @@ INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, itera
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
-	iterations = excluded.iterations,
-	branch = excluded.branch,
-	fruitCommit = excluded.fruitCommit,
-	diff = excluded.diff,
-	logs = excluded.logs,
-	error = excluded.error,
+	substrate = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.substrate ELSE excluded.substrate END,
+	goal = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.goal ELSE excluded.goal END,
+	iterations = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.iterations ELSE excluded.iterations END,
+	branch = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.branch ELSE excluded.branch END,
+	fruitCommit = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitCommit ELSE excluded.fruitCommit END,
+	diff = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.diff ELSE excluded.diff END,
+	logs = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.logs ELSE excluded.logs END,
+	error = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.error ELSE excluded.error END,
 	finishedAt = excluded.finishedAt,
-	observation = COALESCE(NULLIF(excluded.observation, ''), seedruns.observation),
+	observation = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.observation ELSE COALESCE(NULLIF(excluded.observation, ''), seedruns.observation) END,
 	phytomerId = CASE WHEN seedruns.phytomerId = '' THEN excluded.phytomerId ELSE seedruns.phytomerId END`
 
 	_, err = s.db.ExecContext(ctx, statement,
@@ -1516,11 +1527,13 @@ func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt, observationRa
 }
 
 // PruneOlderThan deletes rows from messages, events, sproutruns, and
-// seedruns whose timestamp column is older than cutoff, then VACUUMs if
-// anything was actually deleted (skipped on a no-op sweep to avoid the cost
-// of rewriting the whole file for nothing). Never touches sessions — session
+// synchronous or legacy seedruns whose timestamp column is older than cutoff.
+// Detached seedruns keep only their retry and lifecycle identity: the tuple
+// needed for replay, canonical handle/Phytomer, and current status/timestamps.
+// Their request and Fruit payload is cleared. VACUUM runs whenever rows are
+// deleted or detached rows are compacted. Never touches sessions — session
 // lifecycle is session.Manager's own Prune/DeleteSession path, not this
-// package's. Returns the total row count deleted across all four tables.
+// package's. Returns the total row count deleted across the tables.
 func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	if s == nil {
 		return 0, nil
@@ -1535,7 +1548,6 @@ func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, er
 		{"messages", "createdAt"},
 		{"events", "createdAt"},
 		{"sproutruns", "startedAt"},
-		{"seedruns", "startedAt"},
 	} {
 		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s < ?", q.table, q.column), cutoffStr)
 		if err != nil {
@@ -1548,7 +1560,34 @@ func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, er
 		total += n
 	}
 
-	if total > 0 {
+	// A Seed's substrate remains necessary to resolve its lifecycle owner for
+	// continuation. Clearing its required non-empty goal with the other
+	// request/result payload marks this row as identity-only, without adding a
+	// marker column or another registry. RecordSeedRun recognizes this compact
+	// form and updates only lifecycle status/timestamps if it settles later.
+	compacted, err := s.db.ExecContext(ctx, `
+UPDATE seedruns
+SET goal = '', iterations = 0, branch = '', fruitCommit = '', diff = '', logs = '', error = '', observation = ''
+WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
+	if err != nil {
+		return total, fmt.Errorf("compact detached seed runs older than %s: %w", cutoffStr, err)
+	}
+	compactedCount, err := compacted.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("count compacted detached seed runs: %w", err)
+	}
+
+	deletedLegacySeeds, err := s.db.ExecContext(ctx, `DELETE FROM seedruns WHERE startedAt < ? AND "idempotency-key" = ''`, cutoffStr)
+	if err != nil {
+		return total, fmt.Errorf("prune synchronous or legacy seed runs older than %s: %w", cutoffStr, err)
+	}
+	legacyCount, err := deletedLegacySeeds.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("count pruned synchronous or legacy seed runs: %w", err)
+	}
+	total += legacyCount
+
+	if total > 0 || compactedCount > 0 {
 		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
 			return total, fmt.Errorf("vacuum after pruning %d row(s): %w", total, err)
 		}

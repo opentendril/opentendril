@@ -1028,8 +1028,11 @@ TOKEN=$(cat ~/.tendril-token)
 curl -s -X POST localhost:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true}'
+  -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true,"idempotencyKey":"seed-open-1"}'
 ```
+
+Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reuse it
+only when retrying the same semantic request; a changed request needs a new key.
 
 Canonical `seed.grow` owns detached lifecycle and returns active identity
 immediately:
@@ -1099,7 +1102,7 @@ Fruit. Detached `seed.grow` is the ordinary first-use path.
 An MCP-speaking Pollinator uses the same authority through `tendril-mcp`:
 
 ```text
-seedGrow         detached:true
+seedGrow         detached:true + idempotencyKey
 sproutWatch      sessionId
 phytomerContinue sessionId + intent + idempotencyKey
 sproutWatch      sessionId
