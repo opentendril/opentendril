@@ -13,99 +13,57 @@ exists to make possible.
 
 ## Current
 
-**A developer unfamiliar with OpenTendril can use it directly as a lightweight
-interactive coding runtime, or delegate to it from an existing Pollinator, give
-it real coding work, observe and continue the same Stem-mediated interaction,
-and receive Git-reviewable Fruit without granting the model ambient host
-authority.**
-
-The governed installation and first-Fruit path are now qualified. The next
-constraint is the developer interaction once OpenTendril is available.
-
-The visible experience should be deliberately small: connect a model, identify a
-Substrate, state a coding task, observe useful progress, provide further intent
-when required, and review the resulting Fruit. A developer should not need to
-understand Seeds, Sprout lifecycle internals, private APIs, persistence layout or
-OpenTendril implementation structure merely to perform normal coding work.
-
-OpenTendril should support this experience in two forms. It can be used directly
-as the lightweight coding interface, without requiring another development
-harness, or an existing development tool, IDE or automation system can act as the
-Pollinator and delegate work to OpenTendril. Changing Pollinators must not create
-another execution architecture or move governed business logic out of the Stem
-Core.
-
-Local evaluation may run the Stem under the developer's existing OS principal.
-That posture does not claim the full governed deployment boundary or principal
-separation. It should nevertheless use the same Stem-owned interaction,
-execution and Git-result contracts so that moving to the separate-principal
-governed posture does not require learning or implementing another developer
-interaction model.
-
-Basic model/tool execution and safe observation substantially exist. The
-principal missing interaction is continued intent within an active Phytomer. A
-Pollinator must not gain a direct channel into a Sprout or Terrarium to provide
-that experience. Additional intent must remain Stem-mediated, authorized,
-attributable to the Pollen, persisted against the Phytomer and delivered to the
-Mycorrhizae through an explicit lifecycle contract.
-
-The interaction state therefore belongs behind the Stem boundary, not in a
-terminal interface or transport adapter. This keeps the same contract usable by
-a local terminal, an external development tool and, later, a remote Pollinator
-without making remote deployment part of this objective.
+**An authorised Pollinator on another machine can connect to a governed
+OpenTendril Stem, delegate and continue real coding work on a granted Substrate,
+safely observe the same Phytomer, and receive Git-reviewable Fruit without
+receiving Stem, host, Substrate, Sprout, Terrarium, or infrastructure
+credentials.**
 
 ## Done when
 
-Recorded exercises against real Substrates demonstrate all of the following:
+Recorded exercises with a real Pollinator on another machine and a granted
+Substrate demonstrate all of the following:
 
-- **The direct experience is small.** From a documented local/evaluation setup, a
-  developer can connect a model, select a Substrate, state a real coding task,
-  observe it and receive Fruit through a lightweight terminal experience without
-  operating another development harness.
-- **An existing development tool can use Tendril as its execution target.** At least one
-  external development tool can act as a Pollinator through a supported Tendril
-  transport, delegate the same class of real coding work and receive the result
-  without vendor-specific execution logic in the Stem.
-- **Changing Pollinators does not create another implementation.** A second
-  suitable Pollinator can exercise the same Stem-owned capability through
-  configuration or transport integration rather than a new execution path.
-- **The interaction continues inside one governed context.** Additional
-  developer intent can be supplied after work has begun without abandoning and
-  manually reconstructing the execution context. The continued interaction is
-  associated with the same intended Phytomer and remains attributable to the
-  exercising Pollen.
-- **Steering remains Stem-mediated.** A Pollinator cannot communicate directly
-  with a Sprout or Terrarium. Continued intent is authorized and persisted by
-  the Stem and reaches the Mycorrhizae only through the implemented interaction
-  lifecycle.
-- **Useful progress is observable.** The developer can see identity, Substrate,
-  lifecycle, meaningful activity, failures, iteration state and Fruit without
-  exposure of raw model reasoning or credentials.
-- **The model has no ambient host authority.** Normal coding work occurs through
-  declared capabilities and isolated execution rather than giving the model an
-  unrestricted host shell, host filesystem, privileged credentials or ambient
-  network authority.
+- **Authentication is explicit, bounded and attributable.** Access uses an
+  explicit grant with defined authority and limits, is attributable to a Pollen,
+  and revocation fails closed: revoked or otherwise invalid Pollinator authority
+  is denied on subsequent governed operations. A Pollinator cannot create or
+  widen its own grant.
+- **Substrate authority stays Stem-side.** The Stem retains target Substrate
+  authority and credentials. The remote Pollinator receives no Stem-host shell,
+  filesystem, service-management, Docker, Git, provider, or infrastructure
+  credentials, nor credentials for the Stem, target Substrate, Sprout, or
+  Terrarium.
+- **Interaction remains Stem-owned.** Seed growth, safe observation, and
+  continuation follow the existing Stem-owned interaction model. The Pollinator
+  can delegate real coding work and continue it within the same Phytomer without
+  a Pollinator-to-Sprout or Pollinator-to-Terrarium channel.
+- **Observation is safe.** The Pollinator can inspect useful identity,
+  Substrate, lifecycle, activity, failures, iteration state, and Fruit, but
+  cannot observe raw model reasoning or credentials.
+- **Terrarium isolation is unchanged.** Remote delegation neither bypasses nor
+  weakens the existing Terrarium isolation boundary.
+- **Interruption is safe and resumable.** Transport interruption and reconnect
+  continue the same Seed and Phytomer; they do not create replacement Seeds or
+  deliver continuation more than once.
 - **The result remains Fruit.** Successful work produces independently
-  identifiable Git branch and commit state, leaves the protected/default branch
-  unchanged, and gives the developer enough information to review and accept or
-  reject the result.
-- **The lightweight interface does not become an authority layer.** Durable
-  interaction and execution state is owned behind the Stem boundary. CLI, MCP,
-  REST or terminal presentation remains transport/presentation rather than a
-  second implementation of governed capability semantics.
-- **The measurement records product friction.** Setup steps, Tendril-specific
-  concepts exposed to the developer, manual interventions, interaction
-  round-trips, token/context overhead and failures are recorded rather than
-  hidden. The first exercise establishes a baseline; no arbitrary elapsed-time
-  or token threshold is required.
+  reviewable Git branch and commit state, leaves protected/default state
+  unchanged, and provides enough information for the Botanist to review and
+  accept or reject it.
+- **Operational friction is recorded.** Setup steps, manual interventions,
+  reconnect and revocation behavior, and failures are recorded rather than
+  hidden.
 
-The objective does not require secure remote deployment, GitHub-native workers,
-multi-instance workload routing, a particular terminal UI framework or support
-for every external development tool. Those are follow-on capabilities.
+This objective does not require:
 
-The test is whether one lightweight Stem-owned interaction model works directly
-for a developer and through another Pollinator while preserving OpenTendril's
-authority, isolation, observation and Git-review boundaries.
+- GitHub-specific workers;
+- GitHub Actions identity;
+- multi-instance routing or Stem federation;
+- shared enterprise scheduling;
+- Greenhouse implementation;
+- arbitrary public Internet exposure;
+- auto-merge; or
+- weakening Terrarium isolation.
 
 ---
 
