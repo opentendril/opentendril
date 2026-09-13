@@ -26,8 +26,9 @@ Substrate demonstrate all of the following:
 
 - **Authentication is explicit, bounded and attributable.** Access uses an
   explicit grant with defined authority and limits, is attributable to a Pollen,
-  and revocation fails closed: a revoked or expired grant is denied on every
-  subsequent request. A Pollinator cannot create or widen its own grant.
+  and revocation fails closed: revoked or otherwise invalid Pollinator authority
+  is denied on subsequent governed operations. A Pollinator cannot create or
+  widen its own grant.
 - **Substrate authority stays Stem-side.** The Stem retains target Substrate
   authority and credentials. The remote Pollinator receives no Stem-host shell,
   filesystem, service-management, Docker, Git, provider, or infrastructure
