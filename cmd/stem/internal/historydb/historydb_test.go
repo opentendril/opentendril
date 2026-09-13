@@ -354,6 +354,65 @@ func TestSchemaVersionStampedOnFreshDatabase(t *testing.T) {
 	}
 }
 
+func TestSchemaVersion7UpgradesSeedRunsWithoutInventingRetryIdentity(t *testing.T) {
+	t.Setenv(EnvEncryptAtRest, "off")
+	dbDir := t.TempDir()
+	path := filepath.Join(dbDir, "history.db")
+	ctx := context.Background()
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open full history database: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "legacy-seed", Pollen: "pollen-old", PhytomerID: "tendril-old",
+		Substrate: "core", Goal: "legacy goal", Status: "satisfied",
+		StartedAt: time.Date(2026, time.September, 14, 0, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("seed legacy v7 row: %v", err)
+	}
+	// Rewind only the schema-8 delta from a normally initialized complete
+	// HistoryDB. This leaves the real v7 table set and every pre-existing row
+	// intact without maintaining a second hand-copied schema fixture here.
+	if _, err := store.db.ExecContext(ctx, `DROP INDEX seedrunsByPollenIdempotencyKey`); err != nil {
+		t.Fatalf("remove schema-8 unique index: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE seedruns DROP COLUMN "request-digest"`); err != nil {
+		t.Fatalf("rewind request-digest column: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE seedruns DROP COLUMN "idempotency-key"`); err != nil {
+		t.Fatalf("rewind idempotency-key column: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE schemaMeta SET version = 7 WHERE id = 1`); err != nil {
+		t.Fatalf("mark full database as version 7: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close version-7 database: %v", err)
+	}
+
+	store, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open and migrate version-7 database: %v", err)
+	}
+	defer store.Close()
+	run, found, err := store.GetSeedRun(ctx, "legacy-seed")
+	if err != nil || !found {
+		t.Fatalf("read migrated Seed: found=%v err=%v", found, err)
+	}
+	if run.Pollen != "pollen-old" || run.PhytomerID != "tendril-old" || run.Goal != "legacy goal" || run.Status != "satisfied" {
+		t.Fatalf("migrated legacy Seed changed: %+v", run)
+	}
+	if run.IdempotencyKey != "" || run.RequestDigest != "" {
+		t.Fatalf("migration invented retry identity: key=%q digest=%q", run.IdempotencyKey, run.RequestDigest)
+	}
+	var version int
+	if err := store.db.QueryRowContext(ctx, `SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != 8 {
+		t.Fatalf("migrated schema version = %d, want 8", version)
+	}
+}
+
 func TestSchemaVersionBackstampsPreVersioningDatabase(t *testing.T) {
 	dbDir := t.TempDir()
 	path := filepath.Join(dbDir, "history.db")

@@ -109,18 +109,40 @@ func buildSeedCore(ctx context.Context) (core.Core, error) {
 
 func seedPersistence(history *historydb.Store) core.SeedPersistence {
 	return core.SeedPersistence{
+		FindOpening: func(ctx context.Context, pollen, idempotencyKey string) (core.SeedOpening, bool, error) {
+			if history == nil {
+				return core.SeedOpening{}, false, core.ErrSeedHistoryUnavailable
+			}
+			run, found, err := history.GetSeedRunByPollenIdempotencyKey(ctx, pollen, idempotencyKey)
+			if err != nil || !found {
+				return core.SeedOpening{}, found, err
+			}
+			return core.SeedOpening{
+				Handle:         run.Handle,
+				PhytomerID:     run.PhytomerID,
+				Pollen:         run.Pollen,
+				Substrate:      run.Substrate,
+				Goal:           run.Goal,
+				IdempotencyKey: run.IdempotencyKey,
+				RequestDigest:  run.RequestDigest,
+				Status:         run.Status,
+				StartedAt:      run.StartedAt,
+			}, true, nil
+		},
 		RecordOpening: func(ctx context.Context, opening core.SeedOpening) error {
 			if history == nil {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return history.RecordSeedOpening(ctx, historydb.SeedRun{
-				Handle:     opening.Handle,
-				Pollen:     opening.Pollen,
-				PhytomerID: opening.PhytomerID,
-				Substrate:  opening.Substrate,
-				Goal:       opening.Goal,
-				Status:     opening.Status,
-				StartedAt:  opening.StartedAt,
+				Handle:         opening.Handle,
+				Pollen:         opening.Pollen,
+				PhytomerID:     opening.PhytomerID,
+				Substrate:      opening.Substrate,
+				Goal:           opening.Goal,
+				IdempotencyKey: opening.IdempotencyKey,
+				RequestDigest:  opening.RequestDigest,
+				Status:         opening.Status,
+				StartedAt:      opening.StartedAt,
 			})
 		},
 		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
@@ -370,6 +392,8 @@ func parseSeedArgs(capName string, args []string) (map[string]any, error) {
 			err = intFlag(&i, "timeoutSeconds", "seconds")
 		case "--origin":
 			err = stringFlag(&i, "origin")
+		case "--idempotency-key":
+			err = stringFlag(&i, "idempotencyKey")
 		default:
 			if strings.HasPrefix(args[i], "--") {
 				return nil, fmt.Errorf("unknown argument %q for seed %s (use `--` before the verify command's own flags)", args[i], strings.TrimPrefix(capName, "seed."))
@@ -424,6 +448,13 @@ func extractSeedAsyncFlag(args []string) ([]string, bool) {
 // POST /v1/seeds/grow with detached:true and prints the durable handle the
 // operator collects the Fruit by later.
 func submitSeedAsync(ctx context.Context, input map[string]any) {
+	idempotencyKey, err := ensureSeedOpenIdempotencyKey(input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Invalid detached Seed retry identity: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stdout, "Idempotency key: %s\n", idempotencyKey)
+
 	client := newLocalStemClient()
 	accepted, err := client.DispatchSeed(ctx, input)
 	if err != nil {
@@ -443,6 +474,30 @@ func submitSeedAsync(ctx context.Context, input map[string]any) {
 		fmt.Fprintf(os.Stdout, "   Phytomer: %s\n", accepted.PhytomerID)
 	}
 	fmt.Fprintf(os.Stdout, "   Collect:  tendril seed collect %s\n", accepted.Handle)
+}
+
+var seedOpenIdempotencyKeySource = newContinuationKey
+
+func ensureSeedOpenIdempotencyKey(input map[string]any) (string, error) {
+	if input == nil {
+		return "", fmt.Errorf("Seed request is missing")
+	}
+	if value, exists := input["idempotencyKey"]; exists {
+		key, ok := value.(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			return "", fmt.Errorf("idempotencyKey must be a non-empty string")
+		}
+		return key, nil
+	}
+	key, err := seedOpenIdempotencyKeySource()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("generated idempotencyKey is empty")
+	}
+	input["idempotencyKey"] = key
+	return key, nil
 }
 
 // runSeedCollect fetches the reviewable Fruit for a dispatched growth by handle.
@@ -505,6 +560,7 @@ func printSeedUsage() {
 	fmt.Println("  --max-iterations N   Maximum build/verify passes (default 3, maximum 10)")
 	fmt.Println("  --timeout N          Whole-growth wall-clock bound in seconds (default 900, maximum 3600)")
 	fmt.Println("  --async              Dispatch to the running daemon and return a handle instead of blocking; collect the Fruit later with `tendril seed collect <handle>`")
+	fmt.Println("  --idempotency-key K  Caller retry identity for detached Seed dispatch; reuse K to recover an accepted Seed")
 	fmt.Println("  --json '{...}'       Full JSON input (the generic escape hatch)")
 	fmt.Println()
 	fmt.Println("Grows a Seed: builds toward the goal and iterates until the verify command")

@@ -96,7 +96,10 @@ func historyRetentionDaysFromEnv() int {
 // Version 7 records bounded Seed verification diagnostics in the same
 // seedruns.observation envelope. Legacy rows keep an empty verification list;
 // no historical verification facts are invented.
-const currentSchemaVersion = 7
+//
+// Version 8 records caller idempotency keys and semantic request digests for
+// detached Seed openings. Historical and synchronous rows retain empty values.
+const currentSchemaVersion = 8
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -186,6 +189,10 @@ type SproutRunUsage struct {
 type SeedRun struct {
 	Handle string `json:"handle"`
 	Pollen string `json:"pollen,omitempty"`
+	// IdempotencyKey and RequestDigest are durable Core opening identity. They
+	// are not part of the collected Fruit projection.
+	IdempotencyKey string `json:"-"`
+	RequestDigest  string `json:"-"`
 	// PhytomerID is the Stem-created execution/observation identity for this
 	// Seed growth. Empty on historical rows that never had a truthful relation.
 	PhytomerID              string                       `json:"phytomerId,omitempty"`
@@ -446,7 +453,9 @@ CREATE TABLE IF NOT EXISTS seedruns (
 	error TEXT NOT NULL DEFAULT '',
 	startedAt TEXT NOT NULL,
 	finishedAt TEXT NOT NULL DEFAULT '',
-	observation TEXT NOT NULL DEFAULT ''
+	observation TEXT NOT NULL DEFAULT '',
+	"idempotency-key" TEXT NOT NULL DEFAULT '',
+	"request-digest" TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS seedrunsByPollen ON seedruns(pollen, startedAt);
 
@@ -525,8 +534,17 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "seedruns", "observation", `ALTER TABLE seedruns ADD COLUMN observation TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	if err := s.ensureColumn(ctx, "seedruns", "idempotency-key", `ALTER TABLE seedruns ADD COLUMN "idempotency-key" TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
+	if err := s.ensureColumn(ctx, "seedruns", "request-digest", `ALTER TABLE seedruns ADD COLUMN "request-digest" TEXT NOT NULL DEFAULT ''`); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS seedrunsByPhytomer ON seedruns(phytomerId, startedAt)`); err != nil {
 		return fmt.Errorf("index seed runs by phytomer: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS seedrunsByPollenIdempotencyKey ON seedruns(pollen, "idempotency-key") WHERE "idempotency-key" <> ''`); err != nil {
+		return fmt.Errorf("index seed runs by pollen and idempotency key: %w", err)
 	}
 
 	const stamp = `INSERT INTO schemaMeta (id, version) VALUES (1, ?)
@@ -1191,21 +1209,23 @@ ORDER BY pollen, substrate`
 }
 
 type encodedSeedRun struct {
-	handle      string
-	pollen      string
-	phytomerID  string
-	substrate   string
-	goal        string
-	status      string
-	iterations  int
-	branch      string
-	commit      string
-	diff        string
-	logs        string
-	runError    string
-	startedAt   string
-	finishedAt  string
-	observation string
+	handle         string
+	pollen         string
+	phytomerID     string
+	idempotencyKey string
+	requestDigest  string
+	substrate      string
+	goal           string
+	status         string
+	iterations     int
+	branch         string
+	commit         string
+	diff           string
+	logs           string
+	runError       string
+	startedAt      string
+	finishedAt     string
+	observation    string
 }
 
 func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
@@ -1242,21 +1262,23 @@ func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 		return encodedSeedRun{}, fmt.Errorf("encode seed run observation: %w", err)
 	}
 	return encodedSeedRun{
-		handle:      run.Handle,
-		pollen:      run.Pollen,
-		phytomerID:  run.PhytomerID,
-		substrate:   run.Substrate,
-		goal:        goal,
-		status:      run.Status,
-		iterations:  run.Iterations,
-		branch:      run.Branch,
-		commit:      run.Commit,
-		diff:        diff,
-		logs:        logs,
-		runError:    runError,
-		startedAt:   run.StartedAt.UTC().Format(time.RFC3339Nano),
-		finishedAt:  finishedAt,
-		observation: observation,
+		handle:         run.Handle,
+		pollen:         run.Pollen,
+		phytomerID:     run.PhytomerID,
+		idempotencyKey: run.IdempotencyKey,
+		requestDigest:  run.RequestDigest,
+		substrate:      run.Substrate,
+		goal:           goal,
+		status:         run.Status,
+		iterations:     run.Iterations,
+		branch:         run.Branch,
+		commit:         run.Commit,
+		diff:           diff,
+		logs:           logs,
+		runError:       runError,
+		startedAt:      run.StartedAt.UTC().Format(time.RFC3339Nano),
+		finishedAt:     finishedAt,
+		observation:    observation,
 	}, nil
 }
 
@@ -1277,8 +1299,8 @@ func (s *Store) RecordSeedOpening(ctx context.Context, run SeedRun) error {
 		return err
 	}
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = s.db.ExecContext(ctx, statement,
 		encoded.handle,
 		encoded.pollen,
@@ -1295,6 +1317,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		encoded.startedAt,
 		encoded.finishedAt,
 		encoded.observation,
+		encoded.idempotencyKey,
+		encoded.requestDigest,
 	)
 	if err != nil {
 		if sqliteConstraintFailed(err) {
@@ -1314,8 +1338,8 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	}
 
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
 	iterations = excluded.iterations,
@@ -1344,11 +1368,34 @@ ON CONFLICT(handle) DO UPDATE SET
 		encoded.startedAt,
 		encoded.finishedAt,
 		encoded.observation,
+		encoded.idempotencyKey,
+		encoded.requestDigest,
 	)
 	if err != nil {
 		return fmt.Errorf("record seed run: %w", err)
 	}
 	return nil
+}
+
+const seedRunSelectColumns = `handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest"`
+
+type seedRunScanner interface {
+	Scan(dest ...any) error
+}
+
+func (s *Store) scanSeedRun(row seedRunScanner) (SeedRun, error) {
+	var run SeedRun
+	var startedAt, finishedAt, observation string
+	if err := row.Scan(
+		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
+		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation,
+		&run.IdempotencyKey, &run.RequestDigest); err != nil {
+		return SeedRun{}, err
+	}
+	if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
+		return SeedRun{}, err
+	}
+	return run, nil
 }
 
 // GetSeedRun returns one seed.grow execution by handle. The boolean reports
@@ -1360,23 +1407,38 @@ func (s *Store) GetSeedRun(ctx context.Context, handle string) (SeedRun, bool, e
 	}
 
 	const query = `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
+SELECT ` + seedRunSelectColumns + `
 FROM seedruns
 WHERE handle = ?`
 
-	var run SeedRun
-	var startedAt, finishedAt, observation string
-	err := s.db.QueryRowContext(ctx, query, handle).Scan(
-		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation)
+	run, err := s.scanSeedRun(s.db.QueryRowContext(ctx, query, handle))
 	if err == sql.ErrNoRows {
 		return SeedRun{}, false, nil
 	}
 	if err != nil {
 		return SeedRun{}, false, fmt.Errorf("get seed run: %w", err)
 	}
-	if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
-		return SeedRun{}, false, err
+	return run, true, nil
+}
+
+// GetSeedRunByPollenIdempotencyKey returns the durable detached opening scoped
+// to one authenticated Pollen and caller retry key. Empty legacy keys are not
+// addressable through this method.
+func (s *Store) GetSeedRunByPollenIdempotencyKey(ctx context.Context, pollen, idempotencyKey string) (SeedRun, bool, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" {
+		return SeedRun{}, false, fmt.Errorf("idempotencyKey is required")
+	}
+	const query = `
+SELECT ` + seedRunSelectColumns + `
+FROM seedruns
+WHERE pollen = ? AND "idempotency-key" = ?`
+	run, err := s.scanSeedRun(s.db.QueryRowContext(ctx, query, pollen, idempotencyKey))
+	if err == sql.ErrNoRows {
+		return SeedRun{}, false, nil
+	}
+	if err != nil {
+		return SeedRun{}, false, fmt.Errorf("get seed run by pollen and idempotency key: %w", err)
 	}
 	return run, true, nil
 }
@@ -1392,7 +1454,7 @@ func (s *Store) GetSeedRunByPhytomer(ctx context.Context, phytomerID string) (Se
 	}
 
 	const query = `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
+SELECT ` + seedRunSelectColumns + `
 FROM seedruns
 WHERE phytomerId = ?`
 
@@ -1404,15 +1466,9 @@ WHERE phytomerId = ?`
 
 	var found []SeedRun
 	for rows.Next() {
-		var run SeedRun
-		var startedAt, finishedAt, observation string
-		if err := rows.Scan(
-			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation); err != nil {
+		run, err := s.scanSeedRun(rows)
+		if err != nil {
 			return SeedRun{}, false, fmt.Errorf("scan seed run by phytomer: %w", err)
-		}
-		if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
-			return SeedRun{}, false, err
 		}
 		found = append(found, run)
 	}

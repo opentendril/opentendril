@@ -118,7 +118,8 @@ func TestRecordSeedOpeningThenRecordSeedRunSettles(t *testing.T) {
 	ctx := context.Background()
 	if err := store.RecordSeedOpening(ctx, SeedRun{
 		Handle: "seed-open-1", Pollen: "claude", PhytomerID: "tendril-1", Substrate: "core",
-		Goal: "make it pass", Status: "running", StartedAt: time.Now().UTC(),
+		Goal: "make it pass", IdempotencyKey: "retry-seed-1", RequestDigest: "digest-1",
+		Status: "running", StartedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("opening: %v", err)
 	}
@@ -135,6 +136,54 @@ func TestRecordSeedOpeningThenRecordSeedRunSettles(t *testing.T) {
 	}
 	if got.Status != "satisfied" || got.Commit != "abc" || got.PhytomerID != "tendril-1" {
 		t.Fatalf("settled = %+v", got)
+	}
+	if got.IdempotencyKey != "retry-seed-1" || got.RequestDigest != "digest-1" {
+		t.Fatalf("settlement erased opening retry identity: key=%q digest=%q", got.IdempotencyKey, got.RequestDigest)
+	}
+}
+
+func TestSeedRunIdempotencyUniquenessLookupAndPollenScope(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	started := time.Now().UTC()
+	first := SeedRun{
+		Handle: "seed-idem-1", Pollen: "pollen-a", PhytomerID: "tendril-idem-1", Substrate: "core",
+		Goal: "first", Status: "running", IdempotencyKey: "shared-key", RequestDigest: "sha256-a", StartedAt: started,
+	}
+	if err := store.RecordSeedOpening(ctx, first); err != nil {
+		t.Fatalf("record first opening: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, SeedRun{
+		Handle: "seed-idem-duplicate", Pollen: "pollen-a", PhytomerID: "tendril-idem-duplicate", Substrate: "core",
+		Goal: "duplicate", Status: "running", IdempotencyKey: "shared-key", RequestDigest: "sha256-b", StartedAt: started,
+	}); !errors.Is(err, ErrSeedHandleExists) {
+		t.Fatalf("duplicate Pollen/key = %v, want unique constraint", err)
+	}
+	otherPollen := first
+	otherPollen.Handle = "seed-idem-2"
+	otherPollen.Pollen = "pollen-b"
+	otherPollen.PhytomerID = "tendril-idem-2"
+	if err := store.RecordSeedOpening(ctx, otherPollen); err != nil {
+		t.Fatalf("same key for another Pollen: %v", err)
+	}
+	legacyA := SeedRun{Handle: "seed-empty-key-1", Pollen: "pollen-a", Status: "running", StartedAt: started}
+	legacyB := SeedRun{Handle: "seed-empty-key-2", Pollen: "pollen-a", Status: "running", StartedAt: started}
+	if err := store.RecordSeedOpening(ctx, legacyA); err != nil {
+		t.Fatalf("empty key opening 1: %v", err)
+	}
+	if err := store.RecordSeedOpening(ctx, legacyB); err != nil {
+		t.Fatalf("empty key opening 2: %v", err)
+	}
+
+	got, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "pollen-a", "shared-key")
+	if err != nil || !found {
+		t.Fatalf("lookup = found %v err %v", found, err)
+	}
+	if got.Handle != first.Handle || got.PhytomerID != first.PhytomerID || got.Status != first.Status || got.RequestDigest != first.RequestDigest {
+		t.Fatalf("lookup returned wrong durable identity: %+v", got)
+	}
+	if _, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "pollen-c", "shared-key"); err != nil || found {
+		t.Fatalf("unowned lookup = found %v err %v, want false/nil", found, err)
 	}
 }
 

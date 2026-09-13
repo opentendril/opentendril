@@ -51,10 +51,12 @@ func TestWriteCoreErr_ContinuationFailures(t *testing.T) {
 		want int
 	}{
 		{core.ErrContinuationInvalid, http.StatusBadRequest},
+		{core.ErrSeedIdempotencyKeyRequired, http.StatusBadRequest},
 		{core.ErrContinuationTargetNotFound, http.StatusNotFound},
 		{core.ErrContinuationPollenMismatch, http.StatusForbidden},
 		{core.ErrContinuationNotEligible, http.StatusConflict},
 		{core.ErrContinuationIdempotencyConflict, http.StatusConflict},
+		{core.ErrSeedIdempotencyConflict, http.StatusConflict},
 		{core.ErrContinuationTargetChanged, http.StatusConflict},
 		{core.ErrContinuationHistoryUnavailable, http.StatusServiceUnavailable},
 		{core.ErrContinuationNotWired, http.StatusServiceUnavailable},

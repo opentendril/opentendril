@@ -43,7 +43,7 @@ func newSeedTestHandler(t *testing.T, grants []core.DelegationGrant) (*http.Serv
 	return mux, bus, executed, lastSpec
 }
 
-const seedGrowBody = `{"substrate":"core","goal":"make the tests pass","verify":["go","test","./..."]}`
+const seedGrowBody = `{"substrate":"core","goal":"make the tests pass","verify":["go","test","./..."],"idempotencyKey":"rest-test-key"}`
 
 // TestSeedUnchangedWithoutDelegationMarker is the security-first regression: a
 // request without the delegation marker follows the plain path — it executes,

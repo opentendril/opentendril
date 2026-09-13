@@ -628,7 +628,7 @@ func (s *Store) listSeedRunsByStatusTx(ctx context.Context, tx *sql.Tx, statuses
 		args[i] = status
 	}
 	query := `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
+SELECT ` + seedRunSelectColumns + `
 FROM seedruns
 WHERE status IN (` + strings.Join(placeholders, ", ") + `)`
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -638,15 +638,9 @@ WHERE status IN (` + strings.Join(placeholders, ", ") + `)`
 	defer rows.Close()
 	out := make([]SeedRun, 0)
 	for rows.Next() {
-		var run SeedRun
-		var startedAt, finishedAt, observation string
-		if err := rows.Scan(
-			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation); err != nil {
+		run, err := s.scanSeedRun(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan seed run by status: %w", err)
-		}
-		if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
-			return nil, err
 		}
 		out = append(out, run)
 	}

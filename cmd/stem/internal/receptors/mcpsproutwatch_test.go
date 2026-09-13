@@ -391,10 +391,11 @@ func startDetachedMCPSeed(t *testing.T, env *sproutWatchEnv) core.SeedGrowResult
 	done := make(chan callResult, 1)
 	go func() {
 		text, isError := mcpCallTool(t, env.handler, "seedGrow", map[string]any{
-			"substrate": "core",
-			"goal":      "make the tests pass",
-			"verify":    []string{"true"},
-			"detached":  true,
+			"substrate":      "core",
+			"goal":           "make the tests pass",
+			"verify":         []string{"true"},
+			"detached":       true,
+			"idempotencyKey": "mcp-sproutwatch-key",
 		})
 		done <- callResult{text: text, isError: isError}
 	}()

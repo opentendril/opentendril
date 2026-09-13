@@ -196,9 +196,11 @@ type directChatSession struct {
 	maxIter    int
 	timeout    int
 
-	state      atomic.Int32 // chatState constants; use loadState/storeState
-	handle     string
-	phytomerID string
+	state                     atomic.Int32 // chatState constants; use loadState/storeState
+	handle                    string
+	phytomerID                string
+	pendingSeedGoal           string
+	pendingSeedIdempotencyKey string
 }
 
 // loadState returns the current chatState with acquire semantics.
@@ -209,11 +211,23 @@ func (s *directChatSession) storeState(st chatState) { s.state.Store(st) }
 
 // dispatchSeed posts the first developer goal as a canonical Seed.
 func (s *directChatSession) dispatchSeed(ctx context.Context, goal string) (SeedDispatchResult, error) {
+	if s.pendingSeedIdempotencyKey != "" && s.pendingSeedGoal != goal {
+		return SeedDispatchResult{}, fmt.Errorf("the previous Seed dispatch is unresolved; retry the same goal before starting another")
+	}
+	if s.pendingSeedIdempotencyKey == "" {
+		key, err := seedOpenIdempotencyKeySource()
+		if err != nil {
+			return SeedDispatchResult{}, fmt.Errorf("generate detached Seed idempotency key: %w", err)
+		}
+		s.pendingSeedGoal = goal
+		s.pendingSeedIdempotencyKey = key
+	}
 	input := map[string]any{
-		"substrate": s.substrate,
-		"goal":      goal,
-		"verify":    toAnySlice(s.verifyArgv),
-		"origin":    "cli",
+		"substrate":      s.substrate,
+		"goal":           goal,
+		"verify":         toAnySlice(s.verifyArgv),
+		"origin":         "cli",
+		"idempotencyKey": s.pendingSeedIdempotencyKey,
 	}
 	if s.maxIter > 0 {
 		input["maxIterations"] = s.maxIter
@@ -221,7 +235,12 @@ func (s *directChatSession) dispatchSeed(ctx context.Context, goal string) (Seed
 	if s.timeout > 0 {
 		input["timeoutSeconds"] = s.timeout
 	}
-	return s.client.DispatchSeed(ctx, input)
+	result, err := s.client.DispatchSeed(ctx, input)
+	if err == nil {
+		s.pendingSeedGoal = ""
+		s.pendingSeedIdempotencyKey = ""
+	}
+	return result, err
 }
 
 // ---------------------------------------------------------------------------

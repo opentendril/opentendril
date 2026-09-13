@@ -215,6 +215,7 @@ type Service struct {
 	observation   PhytomerObservationSource
 	continuation  ContinuationPersistence
 	seedMu        sync.Mutex
+	seedOpenMu    sync.Mutex
 	preparedSeeds map[string]*preparedSeed
 	// newPreparedSeedToken, when set, replaces crypto/rand token minting.
 	// Tests inject a failing seam; production leaves it nil.

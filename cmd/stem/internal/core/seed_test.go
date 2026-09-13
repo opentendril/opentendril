@@ -33,7 +33,7 @@ func newSeedService(t *testing.T) (*Service, *SeedSpec) {
 }
 
 func validSeedInput() SeedGrowInput {
-	return SeedGrowInput{Substrate: "core", Goal: "make the tests pass", Verify: []string{"go", "test", "./..."}}
+	return SeedGrowInput{Substrate: "core", Goal: "make the tests pass", Verify: []string{"go", "test", "./..."}, IdempotencyKey: "test-seed-open"}
 }
 
 func TestSeedGrowValidatesInput(t *testing.T) {

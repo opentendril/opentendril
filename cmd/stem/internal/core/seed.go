@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -101,6 +103,9 @@ type SeedGrowInput struct {
 	// after durable opening, and to grow in the background. Omitted or false
 	// keeps the synchronous terminal SeedGrow behavior.
 	Detached bool `json:"detached,omitempty"`
+	// IdempotencyKey identifies one detached Seed open across caller retries.
+	// It is optional for synchronous growth and required when Detached is true.
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
 	// Egress is the authorized delegation grant's egress allow-list. It has no
 	// JSON surface on purpose: only the Stem's own call sites populate it,
 	// after the delegation authorizer has matched a grant, so no transport
@@ -128,6 +133,14 @@ type SeedSpec struct {
 // recorded because no persistence port is wired.
 var ErrSeedHistoryUnavailable = errors.New("seed run history is not available")
 
+// ErrSeedIdempotencyKeyRequired is returned when a detached Seed open has no
+// caller-provided retry identity.
+var ErrSeedIdempotencyKeyRequired = errors.New("detached seed.grow requires an idempotencyKey")
+
+// ErrSeedIdempotencyConflict is returned when a Pollen reuses a detached Seed
+// idempotency key for a different semantic request.
+var ErrSeedIdempotencyConflict = errors.New("seed idempotency key was already used for a different request")
+
 // ErrSeedGrowthInvalid is returned when a caller presents a SeedGrowth that
 // the Stem did not issue, or one whose bound identity was substituted.
 var ErrSeedGrowthInvalid = errors.New("seed growth is not a prepared Stem lifecycle")
@@ -142,6 +155,10 @@ var ErrSeedAccountingIncomplete = errors.New("seed terminal accounting did not c
 // accounting.
 const SeedLifecycleAccountingIncomplete = "seed-accounting-incomplete"
 
+// SeedLifecyclePreparationCleanupFailed reports that durable retry identity
+// resolution succeeded but a losing, unaccepted Phytomer could not be pruned.
+const SeedLifecyclePreparationCleanupFailed = "seed-preparation-cleanup-failed"
+
 // SeedLifecycleReport is a transport-free, intent-free notice that a Seed
 // lifecycle event occurred. Adapters may log identity; they must not add
 // continued-intent plaintext.
@@ -155,10 +172,12 @@ type SeedLifecycleReport struct {
 // Only PrepareSeed can issue a valid envelope. GrowPreparedSeed and
 // OpenPreparedSeed refuse construction, mutation, or substitution.
 type SeedGrowth struct {
-	token      string
-	phytomerID string
-	pollen     string
-	spec       SeedSpec
+	token          string
+	phytomerID     string
+	pollen         string
+	idempotencyKey string
+	requestDigest  string
+	spec           SeedSpec
 }
 
 // PhytomerID is the Stem-created execution/observation identity bound to this
@@ -177,13 +196,15 @@ func (g SeedGrowth) Goal() string { return g.spec.Goal }
 
 // preparedSeed is the Stem-side record of one issued SeedGrowth.
 type preparedSeed struct {
-	phytomerID string
-	pollen     string
-	spec       SeedSpec
-	handle     string
-	startedAt  time.Time
-	opened     bool
-	opening    bool
+	phytomerID     string
+	pollen         string
+	idempotencyKey string
+	requestDigest  string
+	spec           SeedSpec
+	handle         string
+	startedAt      time.Time
+	opened         bool
+	opening        bool
 }
 
 // SeedDispatch is the Stem-composed async accept contract: the durable handle
@@ -198,13 +219,15 @@ type SeedDispatch struct {
 // SeedOpening is the transport-free opening ownership record the Stem persists
 // before an async dispatch is accepted.
 type SeedOpening struct {
-	Handle     string
-	PhytomerID string
-	Pollen     string
-	Substrate  string
-	Goal       string
-	Status     string
-	StartedAt  time.Time
+	Handle         string
+	PhytomerID     string
+	Pollen         string
+	Substrate      string
+	Goal           string
+	IdempotencyKey string
+	RequestDigest  string
+	Status         string
+	StartedAt      time.Time
 }
 
 // SeedSettlement is the transport-free terminal Seed record.
@@ -255,6 +278,7 @@ type SeedVerificationDiagnostic struct {
 // Seed/Phytomer/Pollen/Substrate relation; the port only records it. Core
 // never imports historydb.
 type SeedPersistence struct {
+	FindOpening      func(ctx context.Context, pollen, idempotencyKey string) (SeedOpening, bool, error)
 	RecordOpening    func(ctx context.Context, opening SeedOpening) error
 	RecordSettlement func(ctx context.Context, settled SeedSettlement) error
 }
@@ -341,6 +365,10 @@ func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth
 	if err != nil {
 		return SeedGrowth{}, err
 	}
+	return s.prepareResolvedSeed(ctx, spec, strings.TrimSpace(in.IdempotencyKey), seedRequestDigest(spec))
+}
+
+func (s *Service) prepareResolvedSeed(ctx context.Context, spec SeedSpec, idempotencyKey, requestDigest string) (SeedGrowth, error) {
 	// Mint before Phytomer creation so a crypto/rand failure cannot leave an
 	// orphan session. An unused token after a later Initiate failure is never stored.
 	token, err := s.mintPreparedSeedToken()
@@ -353,19 +381,23 @@ func (s *Service) PrepareSeed(ctx context.Context, in SeedGrowInput) (SeedGrowth
 	}
 	pollen := PollenFromContext(ctx)
 	growth := SeedGrowth{
-		token:      token,
-		phytomerID: spec.PhytomerID,
-		pollen:     pollen,
-		spec:       spec,
+		token:          token,
+		phytomerID:     spec.PhytomerID,
+		pollen:         pollen,
+		idempotencyKey: idempotencyKey,
+		requestDigest:  requestDigest,
+		spec:           spec,
 	}
 	s.seedMu.Lock()
 	if s.preparedSeeds == nil {
 		s.preparedSeeds = make(map[string]*preparedSeed)
 	}
 	s.preparedSeeds[token] = &preparedSeed{
-		phytomerID: spec.PhytomerID,
-		pollen:     pollen,
-		spec:       spec,
+		phytomerID:     spec.PhytomerID,
+		pollen:         pollen,
+		idempotencyKey: idempotencyKey,
+		requestDigest:  requestDigest,
+		spec:           spec,
 	}
 	s.seedMu.Unlock()
 	return growth, nil
@@ -488,6 +520,15 @@ func seedFinalizationContext(ctx context.Context) (context.Context, context.Canc
 // before detached dispatch is accepted. Core always mints the handle;
 // Phytomer, Pollen, and Substrate come only from the envelope.
 func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (SeedDispatch, error) {
+	if strings.TrimSpace(growth.idempotencyKey) == "" {
+		return SeedDispatch{}, ErrSeedIdempotencyKeyRequired
+	}
+	if strings.TrimSpace(growth.requestDigest) == "" {
+		return SeedDispatch{}, fmt.Errorf("%w: request digest is missing", ErrSeedGrowthInvalid)
+	}
+	if s.seedPersist.RecordOpening == nil {
+		return SeedDispatch{}, ErrSeedHistoryUnavailable
+	}
 	handle, err := s.mintSeedHandle()
 	if err != nil {
 		return SeedDispatch{}, err
@@ -495,10 +536,6 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 	if err := s.openedContinuationLifecycleWired(); err != nil {
 		return SeedDispatch{}, err
 	}
-	if s.seedPersist.RecordOpening == nil {
-		return SeedDispatch{}, ErrSeedHistoryUnavailable
-	}
-
 	s.seedMu.Lock()
 	rec, err := s.lookupPreparedSeedLocked(growth)
 	if err != nil {
@@ -512,13 +549,15 @@ func (s *Service) OpenPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 	rec.opening = true
 	phytomerID := rec.phytomerID
 	opening := SeedOpening{
-		Handle:     handle,
-		PhytomerID: rec.phytomerID,
-		Pollen:     rec.pollen,
-		Substrate:  rec.spec.Substrate,
-		Goal:       rec.spec.Goal,
-		Status:     SeedStatusRunning,
-		StartedAt:  time.Now().UTC(),
+		Handle:         handle,
+		PhytomerID:     rec.phytomerID,
+		Pollen:         rec.pollen,
+		Substrate:      rec.spec.Substrate,
+		Goal:           rec.spec.Goal,
+		IdempotencyKey: rec.idempotencyKey,
+		RequestDigest:  rec.requestDigest,
+		Status:         SeedStatusRunning,
+		StartedAt:      time.Now().UTC(),
 	}
 	s.seedMu.Unlock()
 
@@ -549,14 +588,176 @@ func (s *Service) SeedGrow(ctx context.Context, in SeedGrowInput) (SeedGrowResul
 	if s.seed.Run == nil {
 		return SeedGrowResult{}, fmt.Errorf("seed.grow is not wired: construct the Core with WithSeed(SeedOperations{Run: …})")
 	}
+	if in.Detached {
+		return s.growDetachedSeed(ctx, in)
+	}
 	growth, err := s.PrepareSeed(ctx, in)
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
-	if !in.Detached {
-		return s.GrowPreparedSeed(ctx, growth)
+	return s.GrowPreparedSeed(ctx, growth)
+}
+
+// growDetachedSeed serializes detached opens in this Service and checks the
+// durable identity before it creates a Phytomer. HistoryDB's unique index is
+// still the cross-process backstop; an insert loser resolves the winning row
+// and never starts its own execution.
+func (s *Service) growDetachedSeed(ctx context.Context, in SeedGrowInput) (SeedGrowResult, error) {
+	s.seedOpenMu.Lock()
+	defer s.seedOpenMu.Unlock()
+
+	idempotencyKey := strings.TrimSpace(in.IdempotencyKey)
+	if idempotencyKey == "" {
+		return SeedGrowResult{}, ErrSeedIdempotencyKeyRequired
 	}
-	return s.startDetachedSeed(ctx, growth)
+	if err := s.openedContinuationLifecycleWired(); err != nil {
+		return SeedGrowResult{}, err
+	}
+	if s.seedPersist.FindOpening == nil || s.seedPersist.RecordOpening == nil {
+		return SeedGrowResult{}, ErrSeedHistoryUnavailable
+	}
+
+	spec, err := resolveSeedSpec(in)
+	if err != nil {
+		return SeedGrowResult{}, err
+	}
+	pollen := PollenFromContext(ctx)
+	digest := seedRequestDigest(spec)
+	opening, found, err := s.seedPersist.FindOpening(ctx, pollen, idempotencyKey)
+	if err != nil {
+		return SeedGrowResult{}, fmt.Errorf("find detached Seed opening: %w", err)
+	}
+	if found {
+		return replaySeedOpening(opening, digest)
+	}
+
+	growth, err := s.prepareResolvedSeed(ctx, spec, idempotencyKey, digest)
+	if err != nil {
+		return SeedGrowResult{}, err
+	}
+	result, err := s.startDetachedSeed(ctx, growth)
+	if err == nil {
+		return result, nil
+	}
+
+	// A unique-key failure can race with another Stem process. Re-read durable
+	// state after any failed insert: only a matching winner is a successful
+	// replay; other persistence failures remain failures.
+	recoveryCtx, cancelRecovery := seedFinalizationContext(ctx)
+	winner, found, lookupErr := s.seedPersist.FindOpening(recoveryCtx, pollen, idempotencyKey)
+	cancelRecovery()
+	if lookupErr != nil {
+		return SeedGrowResult{}, errors.Join(err, fmt.Errorf("resolve detached Seed opening race: %w", lookupErr))
+	}
+	if found {
+		result, replayErr := replaySeedOpening(winner, digest)
+		if replayErr != nil {
+			if winner.PhytomerID != growth.phytomerID {
+				if cleanupErr := s.discardPreparedSeed(growth); cleanupErr != nil {
+					s.reportSeedLifecycle(SeedLifecycleReport{
+						PhytomerID: growth.phytomerID,
+						Kind:       SeedLifecyclePreparationCleanupFailed,
+					})
+				}
+			}
+			return SeedGrowResult{}, replayErr
+		}
+		if winner.PhytomerID == growth.phytomerID {
+			if err := s.adoptDurableSeedOpening(growth, winner); err != nil {
+				return SeedGrowResult{}, fmt.Errorf("adopt durably accepted detached Seed opening: %w", err)
+			}
+			return s.launchDetachedSeed(ctx, growth, winner), nil
+		}
+		if winner.PhytomerID != growth.phytomerID {
+			if cleanupErr := s.discardPreparedSeed(growth); cleanupErr != nil {
+				s.reportSeedLifecycle(SeedLifecycleReport{
+					PhytomerID: growth.phytomerID,
+					Kind:       SeedLifecyclePreparationCleanupFailed,
+				})
+			}
+		}
+		return result, nil
+	}
+	if cleanupErr := s.discardPreparedSeed(growth); cleanupErr != nil {
+		return SeedGrowResult{}, errors.Join(err, fmt.Errorf("discard failed detached Seed preparation: %w", cleanupErr))
+	}
+	return SeedGrowResult{}, err
+}
+
+func (s *Service) reportSeedLifecycle(report SeedLifecycleReport) {
+	if s == nil {
+		return
+	}
+	s.seedMu.Lock()
+	reporter := s.seedLifecycleReport
+	s.seedMu.Unlock()
+	if reporter != nil {
+		reporter(report)
+	}
+}
+
+// adoptDurableSeedOpening completes the local envelope after a persistence
+// port reports an ambiguous error but a lookup proves this exact prepared
+// Phytomer was durably accepted. A competing opening has a different
+// PhytomerID and is never adopted or launched by this request.
+func (s *Service) adoptDurableSeedOpening(growth SeedGrowth, opening SeedOpening) error {
+	s.seedMu.Lock()
+	defer s.seedMu.Unlock()
+	rec, err := s.lookupPreparedSeedLocked(growth)
+	if err != nil {
+		return err
+	}
+	if rec.opened || rec.opening {
+		return fmt.Errorf("%w: durable opening cannot be adopted in its current state", ErrSeedGrowthInvalid)
+	}
+	if opening.PhytomerID != rec.phytomerID || opening.Pollen != rec.pollen ||
+		opening.IdempotencyKey != rec.idempotencyKey || opening.RequestDigest != rec.requestDigest {
+		return fmt.Errorf("%w: durable opening identity does not match the prepared Seed", ErrSeedGrowthInvalid)
+	}
+	rec.handle = opening.Handle
+	rec.startedAt = opening.StartedAt
+	rec.opened = true
+	return nil
+}
+
+// discardPreparedSeed removes the losing request's unaccepted envelope and
+// Phytomer after a failed durable open. It must not be used when durable state
+// points at that same Phytomer: an ambiguous storage error may have committed
+// this request's opening despite returning an error.
+func (s *Service) discardPreparedSeed(growth SeedGrowth) error {
+	if s == nil {
+		return nil
+	}
+	s.seedMu.Lock()
+	rec, ok := s.preparedSeeds[growth.token]
+	if !ok || rec == nil || rec.phytomerID != growth.phytomerID {
+		s.seedMu.Unlock()
+		return nil
+	}
+	if rec.opened {
+		s.seedMu.Unlock()
+		return nil
+	}
+	delete(s.preparedSeeds, growth.token)
+	phytomerID := rec.phytomerID
+	s.seedMu.Unlock()
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), seedFinalizationTimeout)
+	defer cancel()
+	if err := s.sessions.Prune(cleanupCtx, phytomerID); err != nil {
+		return err
+	}
+	return nil
+}
+
+func replaySeedOpening(opening SeedOpening, requestDigest string) (SeedGrowResult, error) {
+	if opening.RequestDigest != requestDigest {
+		return SeedGrowResult{}, ErrSeedIdempotencyConflict
+	}
+	if strings.TrimSpace(opening.Handle) == "" || strings.TrimSpace(opening.PhytomerID) == "" || strings.TrimSpace(opening.Status) == "" {
+		return SeedGrowResult{}, fmt.Errorf("durable detached Seed opening is incomplete")
+	}
+	return SeedGrowResult{Handle: opening.Handle, PhytomerID: opening.PhytomerID, Status: opening.Status}, nil
 }
 
 // startDetachedSeed durably opens a prepared growth, launches bounded
@@ -568,6 +769,12 @@ func (s *Service) startDetachedSeed(ctx context.Context, growth SeedGrowth) (See
 	if err != nil {
 		return SeedGrowResult{}, err
 	}
+	return s.launchDetachedSeed(ctx, growth, SeedOpening{
+		Handle: dispatch.Handle, PhytomerID: dispatch.PhytomerID, Status: dispatch.Status,
+	}), nil
+}
+
+func (s *Service) launchDetachedSeed(ctx context.Context, growth SeedGrowth, opening SeedOpening) SeedGrowResult {
 	bgCtx := context.Background()
 	if ctx != nil {
 		bgCtx = context.WithoutCancel(ctx)
@@ -579,10 +786,10 @@ func (s *Service) startDetachedSeed(ctx context.Context, growth SeedGrowth) (See
 		}
 	}()
 	return SeedGrowResult{
-		Handle:     dispatch.Handle,
-		PhytomerID: dispatch.PhytomerID,
-		Status:     SeedStatusRunning,
-	}, nil
+		Handle:     opening.Handle,
+		PhytomerID: opening.PhytomerID,
+		Status:     opening.Status,
+	}
 }
 
 func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
@@ -615,7 +822,12 @@ func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
 
 	timeout := seedDefaultTimeout
 	if in.TimeoutSeconds > 0 {
-		timeout = time.Duration(in.TimeoutSeconds) * time.Second
+		maxSeconds := int(seedMaximumTimeout / time.Second)
+		if in.TimeoutSeconds >= maxSeconds {
+			timeout = seedMaximumTimeout
+		} else {
+			timeout = time.Duration(in.TimeoutSeconds) * time.Second
+		}
 	}
 	if timeout > seedMaximumTimeout {
 		timeout = seedMaximumTimeout
@@ -630,6 +842,31 @@ func resolveSeedSpec(in SeedGrowInput) (SeedSpec, error) {
 		Origin:        in.Origin,
 		Egress:        append([]string(nil), in.Egress...),
 	}, nil
+}
+
+func seedRequestDigest(spec SeedSpec) string {
+	h := sha256.New()
+	writeDigestString(h, "opentendril/seed.grow/semantic-request/v1")
+	writeDigestString(h, spec.Substrate)
+	writeDigestString(h, spec.Goal)
+	writeDigestUint64(h, uint64(len(spec.Verify)))
+	for _, arg := range spec.Verify {
+		writeDigestString(h, arg)
+	}
+	writeDigestUint64(h, uint64(int64(spec.MaxIterations)))
+	writeDigestUint64(h, uint64(int64(spec.Timeout)))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeDigestString(dst interface{ Write([]byte) (int, error) }, value string) {
+	writeDigestUint64(dst, uint64(len(value)))
+	_, _ = dst.Write([]byte(value))
+}
+
+func writeDigestUint64(dst interface{ Write([]byte) (int, error) }, value uint64) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	_, _ = dst.Write(encoded[:])
 }
 
 func (s *Service) bindSeedPhytomer(ctx context.Context, spec SeedSpec) (SeedSpec, error) {
@@ -764,6 +1001,9 @@ func preparedSeedMatches(growth SeedGrowth, rec *preparedSeed) error {
 	if growth.pollen != rec.pollen {
 		return fmt.Errorf("%w: pollen substitution is refused", ErrSeedGrowthInvalid)
 	}
+	if growth.idempotencyKey != rec.idempotencyKey || growth.requestDigest != rec.requestDigest {
+		return fmt.Errorf("%w: retry identity substitution is refused", ErrSeedGrowthInvalid)
+	}
 	if !seedSpecsEqual(growth.spec, rec.spec) {
 		return fmt.Errorf("%w: seed substitution is refused", ErrSeedGrowthInvalid)
 	}
@@ -831,7 +1071,8 @@ func (s *Service) seedCapabilities() []Capability {
 				"maxIterations":  map[string]any{"type": "integer", "description": "Maximum build/verify passes (default 3, maximum 10)."},
 				"timeoutSeconds": map[string]any{"type": "integer", "description": "Whole-growth wall-clock bound in seconds (default 900, maximum 3600)."},
 				"origin":         stringProp("Interaction origin recorded on the run (cli, mcp, rest)."),
-				"detached":       map[string]any{"type": "boolean", "description": "When true, return the active handle and Phytomer identity after durable opening and grow in the background. Default false: block until the Seed is terminal."},
+				"detached":       map[string]any{"type": "boolean", "description": "When true, return the active handle and Phytomer identity after durable opening and grow in the background. Requires idempotencyKey. Default false: block until the Seed is terminal."},
+				"idempotencyKey": stringProp("Caller retry identity for detached Seed opens. Required when detached is true; reuse the same key to recover the accepted handle and Phytomer."),
 			}, []string{"substrate", "goal", "verify"}),
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
 				var in SeedGrowInput

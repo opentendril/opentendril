@@ -135,7 +135,7 @@ type SeedCollectResult struct {
 // A non-202 status is returned as an error with the status code included.
 func (c *localStemClient) DispatchSeed(ctx context.Context, input map[string]any) (SeedDispatchResult, error) {
 	body := map[string]any{}
-	for _, key := range []string{"substrate", "goal", "verify", "maxIterations", "timeoutSeconds", "origin"} {
+	for _, key := range []string{"substrate", "goal", "verify", "maxIterations", "timeoutSeconds", "origin", "idempotencyKey"} {
 		if v, ok := input[key]; ok {
 			body[key] = v
 		}

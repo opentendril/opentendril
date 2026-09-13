@@ -64,10 +64,11 @@ func TestNewInProcessMCPHandlerReconcilesOrphansBeforeServing(t *testing.T) {
 	}
 
 	denied, isError := mcpProcessTool(t, handler, "seedGrow", map[string]any{
-		"substrate": "core",
-		"goal":      "should be denied without pollen",
-		"verify":    []string{"true"},
-		"detached":  true,
+		"substrate":      "core",
+		"goal":           "should be denied without pollen",
+		"verify":         []string{"true"},
+		"detached":       true,
+		"idempotencyKey": "known-key-without-pollen",
 	})
 	if !isError || !strings.Contains(denied, "delegation denied") {
 		t.Fatalf("unbound pollen seedGrow: isError=%v text=%q", isError, denied)

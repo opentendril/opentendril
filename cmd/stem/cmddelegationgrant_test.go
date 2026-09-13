@@ -152,8 +152,8 @@ func TestFirstUseDelegationGrantHandoff(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	growBody := `{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}`
-	wrongSubstrateBody := `{"substrate":"otherrepo","goal":"make the failing tests pass","verify":["go","test","./..."]}`
+	growBody := `{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"idempotencyKey":"delegation-grant-test-key"}`
+	wrongSubstrateBody := `{"substrate":"otherrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"idempotencyKey":"wrong-substrate-test-key"}`
 
 	started := make(chan struct{})
 	release := make(chan struct{})

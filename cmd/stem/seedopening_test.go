@@ -60,10 +60,11 @@ func TestDetachedSeedGrowCollisionDoesNotMutateExistingRow(t *testing.T) {
 		WithSeedHandleMint(func() (string, error) { return "seed-collision", nil })
 
 	result, err := svc.SeedGrow(core.WithPollen(ctx, "claude"), core.SeedGrowInput{
-		Substrate: "core",
-		Goal:      "make the tests pass",
-		Verify:    []string{"true"},
-		Detached:  true,
+		Substrate:      "core",
+		Goal:           "make the tests pass",
+		Verify:         []string{"true"},
+		Detached:       true,
+		IdempotencyKey: "handle-collision-key",
 	})
 	if err == nil {
 		t.Fatalf("colliding detached grow returned %+v", result)

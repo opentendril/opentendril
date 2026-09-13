@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,8 @@ type blockingSeedEnv struct {
 	store   *historydb.Store
 	gate    *DelegationGate
 }
+
+var blockingSeedOpenKey atomic.Int64
 
 func newBlockingSeedEnv(t *testing.T, grants []core.DelegationGrant) *blockingSeedEnv {
 	t.Helper()
@@ -72,11 +75,12 @@ func (env *blockingSeedEnv) startRunningSeed(t *testing.T, pollen, substrate str
 		ctx = core.WithPollen(ctx, pollen)
 	}
 	result, err := env.core.SeedGrow(ctx, core.SeedGrowInput{
-		Substrate: substrate,
-		Goal:      "make the tests pass",
-		Verify:    []string{"true"},
-		Detached:  true,
-		Origin:    session.OriginMCP,
+		Substrate:      substrate,
+		Goal:           "make the tests pass",
+		Verify:         []string{"true"},
+		Detached:       true,
+		IdempotencyKey: "mcp-test-" + strconv.FormatInt(blockingSeedOpenKey.Add(1), 10),
+		Origin:         session.OriginMCP,
 	})
 	if err != nil {
 		t.Fatalf("detached seed: %v", err)
@@ -237,11 +241,12 @@ func TestMCPSeedGrowDetachedReturnsBeforeTerminal(t *testing.T) {
 	done := make(chan callResult, 1)
 	go func() {
 		text, isError := mcpCallTool(t, handler, "seedGrow", map[string]any{
-			"substrate": "core",
-			"goal":      "make the tests pass",
-			"verify":    []string{"true"},
-			"detached":  true,
-			"egress":    []string{"attacker.example"},
+			"substrate":      "core",
+			"goal":           "make the tests pass",
+			"verify":         []string{"true"},
+			"detached":       true,
+			"idempotencyKey": "mcp-detached-key",
+			"egress":         []string{"attacker.example"},
 		})
 		done <- callResult{text: text, isError: isError}
 	}()
@@ -274,6 +279,10 @@ func TestMCPSeedGrowDetachedReturnsBeforeTerminal(t *testing.T) {
 	if opening.Status != core.SeedStatusRunning {
 		t.Fatalf("opening status = %q", opening.Status)
 	}
+	byKey, found, err := env.store.GetSeedRunByPollenIdempotencyKey(context.Background(), "codex", "mcp-detached-key")
+	if err != nil || !found || byKey.Handle != opening.Handle || byKey.IdempotencyKey != "mcp-detached-key" {
+		t.Fatalf("MCP retry key projection = found %v run %+v err %v", found, byKey, err)
+	}
 }
 
 func TestMCPDetachedSeedInjectsGrantEgress(t *testing.T) {
@@ -284,11 +293,12 @@ func TestMCPDetachedSeedInjectsGrantEgress(t *testing.T) {
 	done := make(chan string, 1)
 	go func() {
 		text, isError := mcpCallTool(t, handler, "seedGrow", map[string]any{
-			"substrate": "core",
-			"goal":      "make the tests pass",
-			"verify":    []string{"true"},
-			"detached":  true,
-			"egress":    []string{"attacker.example"},
+			"substrate":      "core",
+			"goal":           "make the tests pass",
+			"verify":         []string{"true"},
+			"detached":       true,
+			"idempotencyKey": "mcp-egress-key",
+			"egress":         []string{"attacker.example"},
 		})
 		if isError {
 			done <- "error:" + text
@@ -401,7 +411,7 @@ func TestRESTDetachedSeedGrowAndAsyncCompatibility(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux, nil)
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(`{"substrate":"core","goal":"make the tests pass","verify":["true"],"detached":true,"egress":["attacker.example"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(`{"substrate":"core","goal":"make the tests pass","verify":["true"],"detached":true,"idempotencyKey":"rest-mcp-test-key","egress":["attacker.example"]}`))
 	req.Header.Set(PollenHeader, "codex")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -426,7 +436,7 @@ func TestRESTDetachedSeedGrowAndAsyncCompatibility(t *testing.T) {
 	handler2 := NewSeedHandler(env2.core).WithDelegation(env2.gate).WithHistory(env2.store)
 	mux2 := http.NewServeMux()
 	handler2.Register(mux2, nil)
-	async := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(`{"substrate":"core","goal":"make the tests pass","verify":["true"]}`))
+	async := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(`{"substrate":"core","goal":"make the tests pass","verify":["true"],"idempotencyKey":"rest-compat-key"}`))
 	async.Header.Set(PollenHeader, "codex")
 	asyncRec := httptest.NewRecorder()
 	mux2.ServeHTTP(asyncRec, async)
