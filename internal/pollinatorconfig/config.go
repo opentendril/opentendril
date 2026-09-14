@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	configDirectoryName = "tendril"
-	configFileName      = "connections.yaml"
-	credentialDirectory = "pollinators"
-	schemaVersion       = 1
+	configDirectoryName  = "tendril"
+	configFileName       = "connections.yaml"
+	credentialDirectory  = "pollinators"
+	trustAnchorDirectory = "trust-anchors"
+	schemaVersion        = 1
 )
 
 var simpleNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -37,8 +38,9 @@ const (
 
 // Connection is one Pollinator-to-Stem connection profile.
 type Connection struct {
-	Endpoint   string `yaml:"endpoint"`
-	Credential string `yaml:"credential"`
+	Endpoint    string `yaml:"endpoint"`
+	Credential  string `yaml:"credential"`
+	TrustAnchor string `yaml:"trustAnchor,omitempty"`
 }
 
 // Config is the versioned Pollinator connection configuration.
@@ -79,6 +81,12 @@ func CredentialDir() string {
 	return filepath.Join(ConfigRoot(), configDirectoryName, credentialDirectory)
 }
 
+// TrustAnchorDir returns the canonical directory for public Pollinator-side
+// CA material. Trust anchors are not Pollinator credentials.
+func TrustAnchorDir() string {
+	return filepath.Join(ConfigRoot(), configDirectoryName, trustAnchorDirectory)
+}
+
 // ValidateName validates a profile or credential reference name. Names are
 // intentionally narrower than paths so they cannot escape their directory.
 func ValidateName(name string) error {
@@ -97,45 +105,63 @@ func ValidateCredentialReference(reference string) error {
 	return nil
 }
 
+// ValidateTrustAnchorReference validates a named public trust-anchor
+// reference without treating it as an arbitrary filesystem path.
+func ValidateTrustAnchorReference(reference string) error {
+	if err := ValidateName(reference); err != nil {
+		return fmt.Errorf("invalid trust-anchor reference: %w", err)
+	}
+	return nil
+}
+
 // ResolveCredentialReference resolves a validated reference below the
 // canonical Pollinator credential directory.
 func ResolveCredentialReference(reference string) (string, error) {
-	if err := ValidateCredentialReference(reference); err != nil {
+	return resolveNamedReference(CredentialDir(), reference, "credential", ValidateCredentialReference)
+}
+
+// ResolveTrustAnchorReference resolves a named public CA beneath the
+// canonical Pollinator trust-anchor directory and rejects symlink components.
+func ResolveTrustAnchorReference(reference string) (string, error) {
+	return resolveNamedReference(TrustAnchorDir(), reference, "trust-anchor", ValidateTrustAnchorReference)
+}
+
+func resolveNamedReference(root, reference, label string, validate func(string) error) (string, error) {
+	if err := validate(reference); err != nil {
 		return "", err
 	}
-	root := CredentialDir()
 	if root == "" {
-		return "", errors.New("cannot resolve Pollinator credential directory: user home is unavailable")
+		return "", fmt.Errorf("cannot resolve Pollinator %s directory: user home is unavailable", label)
 	}
 	path := filepath.Join(root, reference)
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("credential reference %q escapes the canonical Pollinator credential directory", reference)
+		return "", fmt.Errorf("%s reference %q escapes the canonical Pollinator directory", label, reference)
 	}
-	if err := rejectSymlinkComponents(root, path); err != nil {
+	if err := rejectSymlinkComponents(root, path, label); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-func rejectSymlinkComponents(root, path string) error {
+func rejectSymlinkComponents(root, path, label string) error {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	for current := path; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
 		if err == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("credential reference path %s must not contain symbolic links", path)
+				return fmt.Errorf("%s reference path %s must not contain symbolic links", label, path)
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("inspect credential reference path %s: %w", path, err)
+			return fmt.Errorf("inspect %s reference path %s: %w", label, path, err)
 		}
 		if current == root {
 			return nil
 		}
 		next := filepath.Dir(current)
 		if next == current {
-			return fmt.Errorf("credential reference path %s is outside the canonical Pollinator credential directory", path)
+			return fmt.Errorf("%s reference path %s is outside the canonical Pollinator directory", label, path)
 		}
 	}
 }
@@ -207,6 +233,11 @@ func (c Config) Validate() error {
 		}
 		if err := ValidateCredentialReference(connection.Credential); err != nil {
 			return fmt.Errorf("connection %q: %w", name, err)
+		}
+		if connection.TrustAnchor != "" {
+			if err := ValidateTrustAnchorReference(connection.TrustAnchor); err != nil {
+				return fmt.Errorf("connection %q: %w", name, err)
+			}
 		}
 		connection.Endpoint = endpoint
 		c.Connections[name] = connection

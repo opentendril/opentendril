@@ -3,8 +3,8 @@ package mcpclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
-	"time"
 )
 
 // OwnerProbe is what the unauthenticated health surface reports about who
@@ -21,6 +21,8 @@ type OwnerProbe struct {
 	Reached bool
 	// Owner is the published owner, nil when none was published.
 	Owner *int
+	// Err is populated when readiness could not be authenticated or decoded.
+	Err error
 }
 
 // ProbeOwner asks the resolved address who owns the Stem there.
@@ -40,27 +42,42 @@ func ProbeOwner(ctx context.Context) OwnerProbe {
 // ProbeOwnerAt asks the supplied URL origin who owns the Stem there. It never
 // consults host or port environment variables.
 func ProbeOwnerAt(ctx context.Context, endpoint string) OwnerProbe {
+	clients := NewHTTPClients(http.DefaultTransport)
+	return ProbeOwnerAtWithClient(ctx, endpoint, clients.Probe)
+}
+
+// ProbeOwnerAtWithClient probes readiness through the caller-selected client,
+// allowing HTTPS readiness to use the same configured transport as mint and
+// forwarding requests.
+func ProbeOwnerAtWithClient(ctx context.Context, endpoint string, client *http.Client) OwnerProbe {
 	endpoint = NormalizeEndpoint(endpoint)
 	probe := OwnerProbe{Address: endpoint}
-
-	client := &http.Client{
-		Timeout: 2 * time.Second, // probe carries its own 2-second bound
+	if client == nil {
+		probe.Err = fmt.Errorf("readiness HTTP client is not configured")
+		return probe
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probe.Address+"/health", nil)
 	if err != nil {
+		probe.Err = err
 		return probe
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
+		probe.Err = err
 		return probe
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		probe.Err = fmt.Errorf("health endpoint returned %s", resp.Status)
+		return probe
+	}
 
 	var report struct {
 		Owner *int `json:"owner,omitempty"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		probe.Err = err
 		return probe
 	}
 

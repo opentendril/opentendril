@@ -67,7 +67,7 @@ func printUsage(out io.Writer) {
 	fmt.Fprintln(out, "  tendril-mcp [--connection <name> | -c <name>]")
 	fmt.Fprintln(out, "  tendril-mcp connection list")
 	fmt.Fprintln(out, "  tendril-mcp connection show <name>")
-	fmt.Fprintln(out, "  tendril-mcp connection set <name> --endpoint <url> --credential <credential>")
+	fmt.Fprintln(out, "  tendril-mcp connection set <name> --endpoint <url> --credential <credential> [--trust-anchor <name>]")
 	fmt.Fprintln(out, "  tendril-mcp connection use <name>")
 	fmt.Fprintln(out, "  tendril-mcp connection remove <name>")
 	fmt.Fprintln(out, "  tendril-mcp diagnose [--connection <name> | -c <name>]")
@@ -138,14 +138,70 @@ func resolveSelectedCredential(selection pollinatorconfig.Selection) (string, er
 	return credentialPath, nil
 }
 
+type configuredConnectionTransport struct {
+	posture mcpclient.TransportPosture
+	clients mcpclient.HTTPClients
+}
+
+// configureConnectionTransport resolves public trust material before endpoint
+// posture, then creates the one verified transport used by readiness, mint,
+// and forwarding.
+func configureConnectionTransport(selection pollinatorconfig.Selection) (configuredConnectionTransport, string, error) {
+	var trustAnchorPEM []byte
+	if selection.Connection.TrustAnchor != "" {
+		path, err := pollinatorconfig.ResolveTrustAnchorReference(selection.Connection.TrustAnchor)
+		if err != nil {
+			return configuredConnectionTransport{}, "TLS trust", err
+		}
+		trustAnchorPEM, err = mcpclient.ReadTrustAnchorPEM(path)
+		if err != nil {
+			return configuredConnectionTransport{}, "TLS trust", err
+		}
+	}
+	posture, err := mcpclient.ValidateGovernedEndpoint(selection.Connection.Endpoint)
+	if err != nil {
+		return configuredConnectionTransport{}, "transport posture", err
+	}
+	transport, err := mcpclient.NewHTTPTransport(posture, trustAnchorPEM)
+	if err != nil {
+		return configuredConnectionTransport{}, "TLS transport", err
+	}
+	return configuredConnectionTransport{posture: posture, clients: mcpclient.NewHTTPClients(transport)}, "", nil
+}
+
+func validateConnectionReadiness(endpoint string, posture mcpclient.TransportPosture, probe mcpclient.OwnerProbe) error {
+	if !probe.Reached {
+		if probe.Err != nil {
+			return fmt.Errorf("Stem readiness at %s failed: %w", endpoint, probe.Err)
+		}
+		return fmt.Errorf("no Stem is answering at %s", endpoint)
+	}
+	if posture != mcpclient.PostureLocalLoopbackHTTP {
+		return nil
+	}
+	if probe.Owner == nil {
+		return fmt.Errorf("Stem at %s answered but ownership was not established", endpoint)
+	}
+	if *probe.Owner == os.Getuid() {
+		return fmt.Errorf("this executable is only for a separately owned governed Stem; the Stem at %s reports this process's uid", endpoint)
+	}
+	return nil
+}
+
 func runBridge(ctx context.Context, options bridgeOptions, in io.Reader, out, errOut io.Writer) error {
 	selection, err := loadSelectedConnection(options)
 	if err != nil {
 		return err
 	}
-	if err := mcpclient.ValidateLocalGovernedEndpoint(selection.Connection.Endpoint); err != nil {
-		return fmt.Errorf("connection %q: %w", selection.Name, err)
+	configured, stage, err := configureConnectionTransport(selection)
+	if err != nil {
+		return fmt.Errorf("connection %q %s: %w", selection.Name, stage, err)
 	}
+	probe := mcpclient.ProbeOwnerAtWithClient(ctx, selection.Connection.Endpoint, configured.clients.Probe)
+	if err := validateConnectionReadiness(selection.Connection.Endpoint, configured.posture, probe); err != nil {
+		return err
+	}
+
 	credentialPath, err := resolveSelectedCredential(selection)
 	if err != nil {
 		return err
@@ -154,18 +210,7 @@ func runBridge(ctx context.Context, options bridgeOptions, in io.Reader, out, er
 	if err != nil {
 		return fmt.Errorf("connection %q credential: %w", selection.Name, err)
 	}
-	probe := mcpclient.ProbeOwnerAt(ctx, selection.Connection.Endpoint)
-	if !probe.Reached {
-		return fmt.Errorf("no Stem is answering at %s", selection.Connection.Endpoint)
-	}
-	if probe.Owner == nil {
-		return fmt.Errorf("Stem at %s answered but ownership was not established", selection.Connection.Endpoint)
-	}
-	if *probe.Owner == os.Getuid() {
-		return fmt.Errorf("this executable is only for a separately owned governed Stem; the Stem at %s reports this process's uid", selection.Connection.Endpoint)
-	}
-
-	forwarder := mcpclient.NewForwarderAt(selection.Connection.Endpoint, root)
+	forwarder := mcpclient.NewForwarderAtWithClients(selection.Connection.Endpoint, root, configured.clients.Mint, configured.clients.Forward)
 	if err := forwarder.Preflight(); err != nil {
 		return err
 	}
@@ -210,53 +255,85 @@ func runDiagnose(ctx context.Context, options bridgeOptions, out io.Writer) erro
 	fmt.Fprintf(out, "selection source: %s\n", selection.Source)
 	fmt.Fprintf(out, "endpoint: %s\n", selection.Connection.Endpoint)
 	fmt.Fprintf(out, "credential reference: %s\n", selection.Connection.Credential)
-	if err := mcpclient.ValidateLocalGovernedEndpoint(selection.Connection.Endpoint); err != nil {
-		fmt.Fprintf(out, "transport posture: unsupported (%v)\n", err)
-		fmt.Fprintln(out, "authentication: refused (transport posture is not supported by the current local-governed path)")
-		return errors.New("diagnose preflight failed")
-	}
-	fmt.Fprintln(out, "transport posture: accepted")
-	credentialPath, err := resolveSelectedCredential(selection)
-	if err != nil {
-		fmt.Fprintf(out, "preflight: refused (%v)\n", err)
-		return errors.New("diagnose preflight failed")
-	}
-	fmt.Fprintf(out, "credential path: %s\n", credentialPath)
-
-	root, credentialErr := mcpclient.LoadCredentialFile(credentialPath)
-	if credentialErr != nil {
-		fmt.Fprintf(out, "credential permission/readability: refused (%v)\n", credentialErr)
+	if selection.Connection.TrustAnchor == "" {
+		fmt.Fprintln(out, "trust anchor: operating system roots (default for HTTPS)")
 	} else {
-		fmt.Fprintln(out, "credential permission/readability: accepted")
+		fmt.Fprintf(out, "trust anchor reference: %s\n", selection.Connection.TrustAnchor)
 	}
-
-	probe := mcpclient.ProbeOwnerAt(ctx, selection.Connection.Endpoint)
+	configured, stage, err := configureConnectionTransport(selection)
+	if err != nil {
+		if stage == "transport posture" {
+			fmt.Fprintf(out, "transport posture: unsupported (%v)\n", err)
+		} else {
+			fmt.Fprintf(out, "transport setup: refused (%s: %v)\n", stage, err)
+		}
+		fmt.Fprintln(out, "authentication: refused (connection transport is not ready)")
+		return errors.New("diagnose preflight failed")
+	}
+	if configured.posture == mcpclient.PostureLocalLoopbackHTTP {
+		fmt.Fprintln(out, "transport posture: local governed HTTP (literal loopback)")
+		fmt.Fprintln(out, "TLS trust: not applicable")
+	} else {
+		fmt.Fprintln(out, "transport posture: remote HTTPS")
+		if selection.Connection.TrustAnchor == "" {
+			fmt.Fprintln(out, "TLS trust: operating system certificate roots")
+		} else {
+			fmt.Fprintf(out, "TLS trust: operating system roots plus named trust anchor %q\n", selection.Connection.TrustAnchor)
+		}
+	}
+	probe := mcpclient.ProbeOwnerAtWithClient(ctx, selection.Connection.Endpoint, configured.clients.Probe)
 	if !probe.Reached {
 		fmt.Fprintln(out, "Stem reachable: no")
 		fmt.Fprintln(out, "reported Stem owner: unavailable")
-		fmt.Fprintln(out, "same-principal refusal: not applicable")
-		fmt.Fprintln(out, "authentication: refused (Stem unreachable)")
+		if configured.posture == mcpclient.PostureLocalLoopbackHTTP {
+			fmt.Fprintln(out, "same-principal refusal: not applicable")
+		} else {
+			fmt.Fprintf(out, "TLS identity/readiness: failed (%v)\n", probe.Err)
+			fmt.Fprintln(out, "same-principal refusal: not applicable (HTTPS identity replaces Unix identity)")
+		}
+		fmt.Fprintln(out, "authentication: refused (Stem readiness failed)")
 		return errors.New("diagnose preflight failed")
 	}
 	fmt.Fprintln(out, "Stem reachable: yes")
-	if probe.Owner == nil {
-		fmt.Fprintln(out, "reported Stem owner: unavailable")
-		fmt.Fprintln(out, "same-principal refusal: not applicable")
-		fmt.Fprintln(out, "authentication: refused (Stem ownership not established)")
+	if configured.posture == mcpclient.PostureRemoteHTTPS {
+		fmt.Fprintln(out, "TLS identity/readiness: verified")
+		if probe.Owner == nil {
+			fmt.Fprintln(out, "reported Stem owner: unavailable (not used for HTTPS identity)")
+		} else {
+			fmt.Fprintf(out, "reported Stem owner: uid %d (informational; not used for HTTPS identity)\n", *probe.Owner)
+		}
+		fmt.Fprintln(out, "same-principal refusal: not applicable (HTTPS identity replaces Unix identity)")
+	} else {
+		if probe.Owner == nil {
+			fmt.Fprintln(out, "reported Stem owner: unavailable")
+			fmt.Fprintln(out, "same-principal refusal: not applicable")
+			fmt.Fprintln(out, "authentication: refused (Stem ownership not established)")
+			return errors.New("diagnose preflight failed")
+		}
+		fmt.Fprintf(out, "reported Stem owner: uid %d\n", *probe.Owner)
+		if *probe.Owner == os.Getuid() {
+			fmt.Fprintln(out, "same-principal refusal: yes")
+			fmt.Fprintln(out, "authentication: refused (Stem has this process's uid)")
+			return errors.New("diagnose preflight failed")
+		}
+		fmt.Fprintln(out, "same-principal refusal: no")
+	}
+
+	credentialPath, err := resolveSelectedCredential(selection)
+	if err != nil {
+		fmt.Fprintf(out, "credential permission/readability: refused (%v)\n", err)
+		fmt.Fprintln(out, "authentication: refused (credential reference unavailable)")
 		return errors.New("diagnose preflight failed")
 	}
-	fmt.Fprintf(out, "reported Stem owner: uid %d\n", *probe.Owner)
-	if *probe.Owner == os.Getuid() {
-		fmt.Fprintln(out, "same-principal refusal: yes")
-		fmt.Fprintln(out, "authentication: refused (Stem has this process's uid)")
-		return errors.New("diagnose preflight failed")
-	}
-	fmt.Fprintln(out, "same-principal refusal: no")
+	fmt.Fprintf(out, "credential path: %s\n", credentialPath)
+	root, credentialErr := mcpclient.LoadCredentialFile(credentialPath)
 	if credentialErr != nil {
+		fmt.Fprintf(out, "credential permission/readability: refused (%v)\n", credentialErr)
 		fmt.Fprintln(out, "authentication: refused (credential unavailable)")
 		return errors.New("diagnose preflight failed")
 	}
-	forwarder := mcpclient.NewForwarderAt(selection.Connection.Endpoint, root)
+	fmt.Fprintln(out, "credential permission/readability: accepted")
+	forwarder := mcpclient.NewForwarderAtWithClients(selection.Connection.Endpoint, root, configured.clients.Mint, configured.clients.Forward)
 	if err := forwarder.Preflight(); err != nil {
 		fmt.Fprintf(out, "authentication: refused (%v)\n", err)
 		return errors.New("diagnose preflight failed")
@@ -360,6 +437,16 @@ func showConnection(name string, out io.Writer) error {
 	fmt.Fprintf(out, "endpoint: %s\n", connection.Endpoint)
 	fmt.Fprintf(out, "credential reference: %s\n", connection.Credential)
 	fmt.Fprintf(out, "resolved credential path: %s\n", path)
+	if connection.TrustAnchor == "" {
+		fmt.Fprintln(out, "trust anchor: operating system roots (default for HTTPS)")
+	} else {
+		trustPath, err := pollinatorconfig.ResolveTrustAnchorReference(connection.TrustAnchor)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "trust anchor reference: %s\n", connection.TrustAnchor)
+		fmt.Fprintf(out, "resolved trust anchor path: %s\n", trustPath)
+	}
 	return nil
 }
 
@@ -371,7 +458,7 @@ func setConnection(args []string, out io.Writer) error {
 	if err := pollinatorconfig.ValidateName(name); err != nil {
 		return fmt.Errorf("invalid connection name: %w", err)
 	}
-	var endpoint, credential string
+	var endpoint, credential, trustAnchor string
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--endpoint":
@@ -386,6 +473,12 @@ func setConnection(args []string, out io.Writer) error {
 			}
 			credential = args[i+1]
 			i++
+		case "--trust-anchor":
+			if i+1 >= len(args) {
+				return errors.New("--trust-anchor requires a reference name")
+			}
+			trustAnchor = args[i+1]
+			i++
 		default:
 			return fmt.Errorf("unknown connection set argument %q", args[i])
 		}
@@ -397,11 +490,16 @@ func setConnection(args []string, out io.Writer) error {
 	if err := pollinatorconfig.ValidateCredentialReference(credential); err != nil {
 		return err
 	}
+	if trustAnchor != "" {
+		if err := pollinatorconfig.ValidateTrustAnchorReference(trustAnchor); err != nil {
+			return err
+		}
+	}
 	cfg, err := readConfigForMutation()
 	if err != nil {
 		return err
 	}
-	cfg.Connections[name] = pollinatorconfig.Connection{Endpoint: normalizedEndpoint, Credential: credential}
+	cfg.Connections[name] = pollinatorconfig.Connection{Endpoint: normalizedEndpoint, Credential: credential, TrustAnchor: trustAnchor}
 	if err := pollinatorconfig.Save(cfg); err != nil {
 		return err
 	}

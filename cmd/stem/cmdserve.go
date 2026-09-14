@@ -71,6 +71,11 @@ func runServeCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
+	remoteTLS, err := loadRemoteTLSConfig(os.Getenv)
+	if err != nil {
+		log.Fatalf("❌ Remote Stem HTTPS ingress configuration is invalid: %v", err)
+	}
+
 	tendrilDir := "./.tendril"
 
 	// Ensure hormonal triggers directory exists (Slice 1 requirement)
@@ -238,6 +243,15 @@ func runServeCmd(ctx context.Context, args []string) {
 		AdminKey:       adminKey,
 	}
 	mux := buildServeMux(deps)
+	var remoteListener net.Listener
+	var remoteServer *http.Server
+	if remoteTLS != nil {
+		remoteMux := buildRemoteServeMux(deps)
+		remoteListener, remoteServer, err = prepareRemoteTLSListener(remoteTLS, remoteMux)
+		if err != nil {
+			log.Fatalf("❌ Remote Stem HTTPS ingress could not be established: %v", err)
+		}
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -258,6 +272,11 @@ func runServeCmd(ctx context.Context, args []string) {
 		<-ctx.Done()
 		log.Println("Shutting down API server...")
 		server.Shutdown(context.Background())
+		if remoteServer != nil {
+			if err := remoteServer.Shutdown(context.Background()); err != nil {
+				log.Printf("⚠️ Failed to shut down remote Stem HTTPS listener: %v", err)
+			}
+		}
 		if err := localSock.Close(); err != nil {
 			log.Printf("⚠️ Failed to close local Stem socket: %v", err)
 		}
@@ -269,6 +288,14 @@ func runServeCmd(ctx context.Context, args []string) {
 			}
 		}
 	}()
+	if remoteServer != nil {
+		log.Printf("Starting Stem HTTPS remote ingress on %s (TLS 1.2 minimum; remote Pollinator roots are mint-only)...", remoteServer.Addr)
+		go func() {
+			if err := serveRemoteTLSServer(remoteServer, remoteListener); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("❌ Configured remote Stem HTTPS ingress failed on %s: %v", remoteServer.Addr, err)
+			}
+		}()
+	}
 
 	// Start the standalone Gateway server. The same /ws surface is also
 	// mounted on the main API mux, so a bind failure here (e.g. another Stem
@@ -1003,6 +1030,14 @@ type serveDependencies struct {
 	MeshServer     *mesh.Server
 	PendingStore   *core.PendingConfirmationStore
 	AdminKey       string
+}
+
+// buildRemoteServeMux uses the canonical authenticated route construction and
+// the exact same Core, signer, authority, delegation gate, and lifecycle state
+// as the local mux. Remote provenance is established by this listener role.
+func buildRemoteServeMux(deps serveDependencies) *http.ServeMux {
+	deps.Networked = true
+	return buildServeMux(deps)
 }
 
 func buildServeMux(deps serveDependencies) *http.ServeMux {

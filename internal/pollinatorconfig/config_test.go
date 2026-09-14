@@ -18,6 +18,9 @@ func TestPathsUseXDGConfigHome(t *testing.T) {
 	if got, want := CredentialDir(), filepath.Join(xdg, "tendril", "pollinators"); got != want {
 		t.Fatalf("CredentialDir() = %q, want %q", got, want)
 	}
+	if got, want := TrustAnchorDir(), filepath.Join(xdg, "tendril", "trust-anchors"); got != want {
+		t.Fatalf("TrustAnchorDir() = %q, want %q", got, want)
+	}
 }
 
 func TestPathsFallBackToHomeConfig(t *testing.T) {
@@ -44,6 +47,7 @@ func TestLoadRejectsMalformedAndInvalidConfigs(t *testing.T) {
 		{name: "missing endpoint", yaml: "version: 1\nconnections:\n  local:\n    credential: codex\n", want: "endpoint"},
 		{name: "bad endpoint", yaml: "version: 1\nconnections:\n  local:\n    endpoint: http://user:pass@example.test\n    credential: codex\n", want: "credentials"},
 		{name: "bad credential reference", yaml: "version: 1\nconnections:\n  local:\n    endpoint: http://127.0.0.1:8080\n    credential: ../secret\n", want: "credential"},
+		{name: "bad trust anchor reference", yaml: "version: 1\nconnections:\n  local:\n    endpoint: https://stem.example\n    credential: codex\n    trustAnchor: ../outside\n", want: "trust-anchor"},
 	}
 
 	for _, tt := range tests {
@@ -104,6 +108,55 @@ func TestEndpointAndCredentialValidation(t *testing.T) {
 		if err := ValidateCredentialReference(name); err == nil {
 			t.Errorf("ValidateCredentialReference(%q) succeeded; want rejection", name)
 		}
+	}
+}
+
+func TestVersionOneProfilesWithoutTrustAnchorStillLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "connections.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nconnections:\n  local:\n    endpoint: http://127.0.0.1:8080\n    credential: codex\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile legacy profile: %v", err)
+	}
+	if got := cfg.Connections["local"].TrustAnchor; got != "" {
+		t.Fatalf("legacy trust anchor = %q, want empty", got)
+	}
+}
+
+func TestResolveTrustAnchorReferenceIsNamedAndContained(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	if got, want := TrustAnchorDir(), filepath.Join(xdg, "tendril", "trust-anchors"); got != want {
+		t.Fatalf("TrustAnchorDir() = %q, want %q", got, want)
+	}
+	if got, err := ResolveTrustAnchorReference("private-ca"); err != nil || got != filepath.Join(TrustAnchorDir(), "private-ca") {
+		t.Fatalf("ResolveTrustAnchorReference = %q, %v", got, err)
+	}
+	for _, invalid := range []string{"", ".", "..", "../outside", "nested/ca", "/tmp/ca", `nested\\ca`} {
+		if _, err := ResolveTrustAnchorReference(invalid); err == nil {
+			t.Errorf("ResolveTrustAnchorReference(%q) succeeded; want refusal", invalid)
+		}
+	}
+}
+
+func TestResolveTrustAnchorReferenceRejectsSymlinkEscape(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	anchorDir := TrustAnchorDir()
+	if err := os.MkdirAll(anchorDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "external-ca.pem")
+	if err := os.WriteFile(outside, []byte("public CA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(anchorDir, "external")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveTrustAnchorReference("external"); err == nil {
+		t.Fatal("ResolveTrustAnchorReference accepted a symlink escape")
 	}
 }
 

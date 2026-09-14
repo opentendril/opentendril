@@ -16,18 +16,49 @@ func NormalizeEndpoint(endpoint string) string {
 	return strings.TrimRight(strings.TrimSpace(endpoint), "/")
 }
 
-// ValidateLocalGovernedEndpoint checks the transport posture currently
-// qualified for restricted Pollinator credential forwarding. URL origins stay
-// location-neutral in configuration so future deployment shapes can be
-// represented, but this bridge only presents a durable root to a same-host
-// literal loopback Stem over HTTP.
-func ValidateLocalGovernedEndpoint(endpoint string) error {
+// TransportPosture is the identity contract established by a selected Stem
+// endpoint. Callers must use this result rather than reinterpreting schemes or
+// hostnames independently.
+type TransportPosture string
+
+const (
+	PostureLocalLoopbackHTTP TransportPosture = "local-loopback-http"
+	PostureRemoteHTTPS       TransportPosture = "remote-https"
+)
+
+// ValidateGovernedEndpoint classifies a Stem endpoint's supported Pollinator
+// transport posture. Plain HTTP is limited to literal loopback; HTTPS always
+// uses normal TLS identity validation, even for a loopback IP.
+func ValidateGovernedEndpoint(endpoint string) (TransportPosture, error) {
 	u, err := url.Parse(NormalizeEndpoint(endpoint))
 	if err != nil {
-		return fmt.Errorf("transport is not supported by the current local-governed posture: invalid endpoint: %w", err)
+		return "", fmt.Errorf("transport is not supported: invalid endpoint: %w", err)
 	}
-	if !strings.EqualFold(u.Scheme, "http") || !isLiteralLoopbackHost(u.Hostname()) {
-		return fmt.Errorf("transport is not supported by the current local-governed posture: durable Pollinator credentials are only forwarded over http to a literal loopback address (127.0.0.0/8 or ::1)")
+	if u.Host == "" || u.Hostname() == "" || u.User != nil || u.Opaque != "" {
+		return "", fmt.Errorf("transport is not supported: endpoint must have a host and contain no credentials")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		if !isLiteralLoopbackHost(u.Hostname()) {
+			return "", fmt.Errorf("transport is not supported: plaintext HTTP requires a literal loopback address (127.0.0.0/8 or ::1)")
+		}
+		return PostureLocalLoopbackHTTP, nil
+	case "https":
+		return PostureRemoteHTTPS, nil
+	default:
+		return "", fmt.Errorf("transport is not supported: use HTTP to literal loopback or HTTPS")
+	}
+}
+
+// ValidateLocalGovernedEndpoint retains the narrow legacy check for callers
+// that explicitly require the local literal-loopback posture.
+func ValidateLocalGovernedEndpoint(endpoint string) error {
+	posture, err := ValidateGovernedEndpoint(endpoint)
+	if err != nil {
+		return err
+	}
+	if posture != PostureLocalLoopbackHTTP {
+		return fmt.Errorf("transport is not supported by the local-governed posture: HTTPS has a remote TLS identity contract")
 	}
 	return nil
 }
