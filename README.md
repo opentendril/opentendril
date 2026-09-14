@@ -177,6 +177,14 @@ tendril-mcp connection use local
 The credential file is the Pollinator-owned
 `~/.config/tendril/pollinators/codex` with mode `0600`.
 
+For a Pollinator on a different machine, configure a remote HTTPS connection to
+the Stem. The Pollinator verifies the Stem certificate before presenting its
+durable root for token minting; governed requests then use a short-lived access
+token. Plain HTTP is limited to literal loopback with the local Unix-owner
+separation check. See
+[docs/GUIDE-POLLINATOR-INTEGRATION.md](docs/GUIDE-POLLINATOR-INTEGRATION.md)
+for the TLS and named `trustAnchor` profile.
+
 **Claude Code (CLI):**
 ```bash
 claude mcp add opentendril -- tendril-mcp
@@ -233,7 +241,7 @@ Command-line coding assistants can use Tendril as their backend LLM provider, be
 
 Make sure `tendril serve` is running, then launch Aider:
 ```bash
-aider --openai-api-base http://localhost:8080/v1 --model openai/tendril
+aider --openai-api-base http://127.0.0.1:8080/v1 --model openai/tendril
 ```
 
 ### 3. The Greenhouse (Command Center UI)
@@ -258,7 +266,7 @@ For UI development, run the Vite dev server instead:
 ```bash
 cd ui
 npm install
-STEM_TARGET=http://localhost:8080 npm run dev   # http://localhost:5173
+STEM_TARGET=http://127.0.0.1:8080 npm run dev   # http://localhost:5173
 ```
 
 Operators enter their Stem address and API key in an onboarding screen (no

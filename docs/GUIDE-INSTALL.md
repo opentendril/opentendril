@@ -695,27 +695,25 @@ recognisable in a log or a configuration file. That secret is the **durable
 refresh root** for this Pollinator. Give it to that Pollinator; do not give the
 Pollinator the Botanist key.
 
-On a **loopback** bind (the default), the Pollinator may present the durable root
-as a bearer token on data routes for local convenience. On an **off-host** bind,
-data routes refuse the root — mint a short-lived access token first
-(`tendril pollinator token --pollen claude`, or `POST /v1/pollinator/token` with
-the root). The Stem **derives** the Pollen from a verified credential or token; a
-header claim is ignored for such callers, and an unknown, revoked, expired, or
-forged bearer is refused rather than treated as ordinary traffic.
+The durable Pollinator root is used to mint short-lived access tokens at
+`POST /v1/pollinator/token`; remote data and MCP routes accept the access token,
+not the root. The Stem derives Pollen from the verified root or signed token; a
+caller-supplied Pollen header cannot replace that identity. An unknown, revoked,
+expired, or forged bearer is refused rather than treated as ordinary traffic.
+The restricted `tendril-mcp` client uses access tokens for both loopback and
+remote profiles. Its HTTP posture is limited to literal loopback and retains the
+local Unix-owner separation check.
 
-Revocation is at the root and takes effect on the next start: revoke the
-credential, minting stops, and outstanding access tokens age out within their
-cap (≤15 minutes):
+Root revocation takes effect on the next mint without restarting the Stem.
+Already-issued access tokens remain cryptographically valid until expiry, with
+a hard maximum lifetime of 15 minutes. Current grants are checked on each
+governed admission, so removing or narrowing a grant takes effect on the next
+admission without restarting the Stem:
 
 ```bash
 tendril pollinator revoke --pollen claude
 tendril pollinator list
 ```
-
-> [!IMPORTANT]
-> **Credentials and grants are read at startup.** A credential issued while the
-> Stem is running is rejected with `401` until it restarts. Issue everything
-> first, then start (or restart) the service once.
 
 ---
 
@@ -810,12 +808,52 @@ browser talks only to the Greenhouse origin (`http://127.0.0.1:4173` by
 default). The Stem stays on loopback TCP when `TERROIR_HOST` is unset. See
 [GREENHOUSE.md](./GREENHOUSE.md).
 
-To expose the REST surface off-host, set `TERROIR_HOST=0.0.0.0` (or a specific
-interface) in the unit's environment — and once off-host, Pollinator data routes
-require short-lived access tokens (see Stage 6). Off-host classification follows
-the TCP bind only; the local socket does not change it.
+### Remote Pollinator HTTPS listener
 
-**Check:** `curl -s localhost:8080/health` returns a health report.
+The supported remote Pollinator ingress is a separate HTTPS listener terminated
+by the Stem. Configure all three variables in a Stem service drop-in, using a
+certificate whose DNS or IP SAN matches the Pollinator endpoint:
+
+```ini
+# /etc/systemd/system/tendril.service.d/remote.conf
+[Service]
+Environment="TENDRIL_REMOTE_LISTEN_ADDR=0.0.0.0:8443"
+Environment="TENDRIL_REMOTE_TLS_CERT=/etc/tendril/remote-fullchain.pem"
+Environment="TENDRIL_REMOTE_TLS_KEY=/etc/tendril/remote-key.pem"
+```
+
+After saving the drop-in, run `systemctl daemon-reload` and restart the Stem.
+
+The certificate and private key are Stem-owned files; restrict the private key
+to the Stem principal. The TLS key is separate from the Stem access-token
+signing material. TLS terminates at the Stem and requires TLS 1.2 or later. With
+all three variables absent the listener is disabled; partial or invalid
+configuration, an unusable certificate/key pair, or a bind failure stops Stem
+startup rather than degrading to plaintext.
+
+The listener uses the same authenticated Stem routes and Core authority. It
+does not change `TERROIR_HOST`, the primary local listener, or the standalone
+Gateway's bind address or `GATEWAY_PORT`. Keep `TERROIR_HOST` at its local
+loopback default unless the primary listener is separately required. The
+restricted Pollinator client refuses non-loopback plaintext HTTP before it
+reads or presents a credential; a remote Pollinator connects to the HTTPS
+listener without SSH, VPN, or a tunnel.
+
+Remote HTTPS uses normal certificate-chain and hostname/IP SAN verification with
+the Pollinator's operating-system certificate roots. For a private CA, install
+only its public CA PEM file on the Pollinator as
+`~/.config/tendril/trust-anchors/<name>` and name it in that client's connection
+profile. The public CA is added to system roots; it does not bypass verification.
+No client certificate is used to identify the Pollinator. See
+[GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) for the
+Pollinator connection profile.
+
+`TERROIR_HOST` controls only the primary HTTP listener; a non-loopback bind is
+not the supported remote Pollinator path. Plain HTTP remains acceptable to the
+restricted client only for a literal loopback IP with the local Unix-owner
+separation check.
+
+**Check:** `curl -s 127.0.0.1:8080/health` returns a health report.
 
 If the service fails at `203/EXEC` — *"Unable to locate executable"* — a
 sandboxing directive is hiding the path rather than the path being wrong. Check
@@ -886,16 +924,16 @@ command -v tendril-mcp
 > `tendril-mcp`.
 
 `tendril-mcp` is a stdio MCP bridge. An MCP-speaking Pollinator launches it; it
-loads that Pollinator's durable root, mints a short-lived access token with the
-governed Stem, and forwards MCP frames only after that preflight succeeds.
-Authorization and Pollen derivation stay at the Stem. The client cannot
-construct a Stem and has no in-process mode.
+verifies the configured Stem transport and readiness before reading the
+Pollinator's durable root, uses that root only to mint a short-lived access
+token, then forwards MCP frames with the token. Authorization and Pollen
+derivation stay at the Stem. The client cannot construct a Stem and has no
+in-process mode.
 
 Configure a named connection independently through the restricted client:
 
 ```bash
 tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
-tendril-mcp connection use local
 ```
 
 This stores the connection metadata in
@@ -906,10 +944,35 @@ fallback and does not use `TERROIR_HOST`, `PORT`, `TENDRIL_POLLEN`,
 `TENDRIL_POLLINATOR_CREDENTIAL`, or `TENDRIL_MCP_CREDENTIAL` for connection
 selection.
 
+For a Pollinator on a different machine, configure the Stem's HTTPS endpoint
+and, only when needed, a named public CA trust anchor:
+
+```bash
+tendril-mcp connection set remote \
+  --endpoint https://stem.example.net:8443 \
+  --credential codex \
+  --trust-anchor stem-ca
+tendril-mcp diagnose --connection remote
+```
+
+Omit `--trust-anchor` when the certificate chains to an operating-system root.
+When a private CA is used, the named reference `stem-ca` resolves to the public
+CA PEM file `~/.config/tendril/trust-anchors/stem-ca`. The Pollinator does not
+receive the TLS private key, Botanist key, Stem/host credentials, Substrate
+credentials, Sprout/Terrarium credentials, provider credentials, or GitHub App
+credentials. The remote listener is configured by the Stem with
+`TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+`TENDRIL_REMOTE_TLS_KEY`; it uses TLS 1.2 or later and is independent of the
+access-token signing material.
+
 Startup fails closed when there is no credential, the credential file is unsafe,
-no Stem answers, ownership is not established, the answering Stem has the
-caller's UID, or the Stem refuses the root. Only after all of those checks pass
-does MCP forwarding begin.
+the Stem is unavailable, TLS trust or hostname/IP SAN verification fails, a
+loopback HTTP owner cannot be established, a loopback Stem has the caller's UID,
+or the Stem refuses the root. HTTPS uses TLS identity instead of Unix UID
+identity. The client refuses non-loopback plaintext HTTP before it reads or
+presents the root. Only after transport/readiness verification and successful
+minting does MCP forwarding begin. Diagnostics do not print the root or access
+token.
 
 Place the durable root issued in Stage 6 where that lookup will find it, mode
 `0600`, owned by the ordinary account. Then point an MCP-speaking Pollinator at
@@ -920,30 +983,25 @@ the client:
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "args": ["--connection", "local"]
+      "args": ["--connection", "remote"]
     }
   }
 }
 ```
 
-Use `tendril-mcp diagnose --connection local` to check the non-secret
+Use `tendril-mcp diagnose --connection remote` to check the non-secret
 connection and authentication preflight without invoking MCP capabilities.
 
-A credential-bearing Pollinator can also reach the Stem over the
-Representational State Transfer surface. It is admitted only on routes that
-consult the delegation authorizer per invocation, with the Substrate in hand;
-every other route — including the Model Context Protocol endpoint at `POST /v1`
-— refuses a direct credential-bearing caller by default rather than running the
-request as ordinary traffic. On a loopback bind the bearer may be the durable
-root (`tendril_refresh_…`); off-host binds require a minted access token.
+A Pollinator may also use the Stem's REST surface. A remote HTTPS client first
+verifies the Stem's certificate chain and hostname/IP SAN, then presents its
+durable root to `POST /v1/pollinator/token`. Governed data routes, including the
+MCP forwarding route at `POST /v1`, use the resulting short-lived access token.
+Presenting the durable root to a remote data route is refused with `401`.
+Authorization is checked per governed admission against the current grant. The
+standalone Gateway listener is not the supported remote Pollinator ingress.
 
-```console
-$ curl -X POST localhost:8080/v1 -H "Authorization: Bearer <pollinator-credential>" …
-HTTP/1.1 403 Forbidden
-delegation denied: this endpoint exposes no delegable operation-class
-```
-
-The routes a Pollinator may use, each gated by the matching operation-class:
+The routes a remote Pollinator may use, each gated by the matching
+operation-class:
 
 | Route | Operation-class |
 |---|---|
@@ -974,7 +1032,7 @@ released whole or not at all. The Botanist key still opens the unfiltered feed
 and is not given to the Pollinator.
 
 ```bash
-curl -X POST http://localhost:8080/v1/git/status \
+curl -X POST http://127.0.0.1:8080/v1/git/status \
   -H "Authorization: Bearer <pollinator-credential>" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo"}'
@@ -984,7 +1042,7 @@ curl -X POST http://localhost:8080/v1/git/status \
 the reason:
 
 ```console
-$ curl -X POST localhost:8080/v1/git/prune -H "Authorization: Bearer <pollinator-credential>" …
+$ curl -X POST 127.0.0.1:8080/v1/git/prune -H "Authorization: Bearer <pollinator-credential>" …
 HTTP/1.1 403 Forbidden
 delegation denied: no active grant covers Pollen "claude",
 operation-class "git.prune", substrate "myrepo"
@@ -993,9 +1051,9 @@ operation-class "git.prune", substrate "myrepo"
 The Pollen in that message was derived from the credential, not claimed by the
 caller. That is the boundary working.
 
-Direct `POST /v1` remains refused for a credential-bearing caller. The
-per-Pollinator MCP path is `tendril-mcp`, which authenticates to the governed
-Stem and forwards only after the Stem accepts the root.
+`POST /v1` requires the short-lived access token for a remote Pollinator. The
+per-Pollinator MCP path is `tendril-mcp`, which verifies the Stem transport,
+mints with the durable root, and forwards only after the Stem accepts the root.
 
 ### Handing off a bounded Seed
 
@@ -1025,14 +1083,16 @@ TOKEN=$(cat ~/.tendril-token)
 
 ```bash
 # Dispatch a bounded Seed. Substrate must be myrepo — the name granted above.
-curl -s -X POST localhost:8080/v1/seeds/grow \
+curl -s -X POST 127.0.0.1:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true,"idempotencyKey":"seed-open-1"}'
 ```
 
-Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reuse it
-only when retrying the same semantic request; a changed request needs a new key.
+Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reusing the
+same key for the same semantic request returns the existing Seed handle and
+Phytomer without replacement work. Reusing it for a changed semantic request is
+refused; use a new key for a distinct detached Seed.
 
 Canonical `seed.grow` owns detached lifecycle and returns active identity
 immediately:
@@ -1054,14 +1114,14 @@ it does not collect Fruit and does not grant `seed.grow`.
 
 ```bash
 curl -N \
-  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  127.0.0.1:8080/v1/phytomers/<phytomerId>/watch \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 The stream is Server-Sent Events. After authenticating it emits the current safe
 observation immediately, then follows durable state until the Seed is
-`satisfied`, `exhausted`, or `withered`, then closes. Connecting after a
-terminal Seed returns that terminal current state and closes.
+`satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`, then closes.
+Connecting after a terminal Seed returns that terminal current state and closes.
 
 The observation names Pollen, Substrate, handle, `phytomerId`, and Seed status.
 When continuations exist, it also includes `continuationId`, `sequence`, and
@@ -1072,7 +1132,7 @@ continued intent is never in this view. `main` is not modified.
 After the active `phytomerId` is returned, continue that owned Phytomer:
 
 ```bash
-curl -s -X POST localhost:8080/v1/phytomers/<phytomerId>/continue \
+curl -s -X POST 127.0.0.1:8080/v1/phytomers/<phytomerId>/continue \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"intent":"keep going on the remaining tests","idempotencyKey":"continue-1"}'
@@ -1087,7 +1147,7 @@ from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
 that dispatched it:
 
 ```bash
-curl -s localhost:8080/v1/seeds/runs/<handle> \
+curl -s 127.0.0.1:8080/v1/seeds/runs/<handle> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1326,7 +1386,7 @@ After a successful upgrade, confirm the Stem with the existing health and
 hardiness checks if it is running:
 
 ```bash
-curl -s localhost:8080/health
+curl -s 127.0.0.1:8080/health
 sudo -u tendril -i tendril hardiness
 ```
 
@@ -1571,17 +1631,16 @@ material in `$HOME` still surfaces: from there, run `tendril hardiness`.
 
 * **It does not stop the Botanist.** Whoever administers the machine can become
   the Stem's user. The boundary is against the accounts that host Pollinators.
-* **It does not replace network perimeter controls when you opt into exposure.**
-  The Representational State Transfer surface binds **loopback by default**
-  (`TERROIR_HOST` unset → `127.0.0.1`). An optional Unix-domain socket
-  (`TENDRIL_LOCAL_SOCKET`) is local transport for the same authenticated mux;
-  it is not a trust boundary and does not change that default. Setting
-  `TERROIR_HOST=0.0.0.0` (or another non-loopback address) makes the daemon
-  reachable off-host; at that point durable Pollinator credentials are refused
-  on data routes and callers must present short-lived access tokens, but you
-  should still put a network-facing Ramet behind something that terminates TLS
-  and restricts who can reach the mint and data ports. Per-Pollinator roots
-  already make revocation per-caller rather than a shared-secret rotation.
+* **It does not replace network perimeter controls.** The primary REST listener
+  binds loopback by default (`TERROIR_HOST` unset → `127.0.0.1`). The optional
+  `TENDRIL_LOCAL_SOCKET` is local transport for the same authenticated mux; it
+  is not a trust boundary. Remote Pollinator traffic uses the Stem-terminated
+  HTTPS listener configured by `TENDRIL_REMOTE_LISTEN_ADDR`,
+  `TENDRIL_REMOTE_TLS_CERT`, and `TENDRIL_REMOTE_TLS_KEY`. That listener does
+  not change the standalone Gateway's bind or `GATEWAY_PORT`. Use ordinary
+  network controls to restrict reachability of the HTTPS listener. Remote
+  Pollinator roots are mint-only; governed data requests use access tokens and
+  current Stem-owned grants.
 
 ---
 

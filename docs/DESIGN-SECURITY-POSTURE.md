@@ -185,40 +185,60 @@ The `confirmAbove` bound on a delegation grant ensures that high-impact operatio
 - **Live-grant re-validation.** A pending approval is validated against the live grant at consumption time, not a stale snapshot. Revoking or narrowing a grant while a confirmation is outstanding takes effect immediately.
 - **Single-use and TTL.** An approved confirmation authorizes exactly one matching retry and expires after an hour (1-hour TTL) if unresolved.
 
-## Credential model — two-tier Pollinator access
+## Pollinator credentials and remote HTTPS ingress
 
-Pollinator REST access is **two-tier**:
+Pollinator access has two credential forms:
 
-1. **Durable refresh root** — a Pollinator credential (`tendril_refresh_…`) issued by
-   `tendril pollinator issue`. Digest-stored, revocable by Pollen, no inherent
-   lifetime. Presented **only to mint** (CLI `tendril pollinator token`, or
-   `POST /v1/pollinator/token`).
-2. **Short-lived access token** — a Stem-signed bearer (`tendril_access_…`) carrying
-   a Pollen and an expiry, hard-capped at **≤15 minutes**. Surfaces accept it
-   per request. Verification is **stateless** (signature against the Stem public
-   key); there is no per-token store or denylist.
+1. **Durable Pollinator root** — a credential (`tendril_refresh_…`) issued by
+   `tendril pollinator issue`, stored by the Stem as a digest, and revocable by
+   the Botanist for its Pollen. A remote Pollinator presents it only to
+   `POST /v1/pollinator/token`.
+2. **Short-lived access token** — a Stem-signed bearer (`tendril_access_…`)
+   carrying a Pollen and expiry, hard-capped at 15 minutes. Governed data and
+   MCP requests use this token. Verification is stateless; there is no
+   per-token store or denylist.
 
-**Revocation is at the root:** revoke the credential → minting stops → outstanding
-tokens age out within the cap. Tokens are not individually revocable.
+Revoking a root prevents the next mint without a Stem restart. Already-minted
+tokens remain valid cryptographic assertions until their expiry, no later than
+15 minutes. The Stem reads current grants for every governed admission, so an
+issued token cannot preserve or widen a removed or narrowed grant.
+
+The remote HTTPS listener is disabled when all three settings are absent:
+
+| Setting | Meaning |
+| --- | --- |
+| `TENDRIL_REMOTE_LISTEN_ADDR` | Stem HTTPS bind address (`host:port`). |
+| `TENDRIL_REMOTE_TLS_CERT` | Stem TLS certificate chain file. |
+| `TENDRIL_REMOTE_TLS_KEY` | Separate Stem TLS private-key file. |
+
+All three must be present and valid; incomplete or invalid configuration fails
+Stem startup closed. TLS terminates at the Stem and requires TLS 1.2 or later.
+The TLS private key is not the Stem access-token signing material.
+
+Remote clients verify the normal certificate chain and hostname/IP SAN using
+system certificate roots by default. A Pollinator may configure a named public
+`trustAnchor` from its canonical trust-anchor directory; that CA is appended to
+system roots and does not disable chain or SAN checks. The client does not use
+insecure-skip-verify, TOFU, arbitrary certificate acceptance, an SSH/VPN/tunnel,
+or mTLS Pollinator identity.
+
+Plain HTTP is supported by the restricted Pollinator client only for a literal
+loopback IP and retains local Unix-owner separation. HTTPS uses the verified
+Stem TLS identity and does not use Unix UID identity. Caller `Forwarded` and
+`X-Forwarded-*` metadata cannot change the remote ingress posture.
+
+When `TENDRIL_LOCAL_SOCKET` is set to an absolute path, the same authenticated
+mux is also served on that Unix-domain socket. The local socket is transport
+only; reaching it is not authorization. The standalone Gateway remains a
+separate listener and is not the supported remote Pollinator ingress.
+
+The remote HTTPS listener reaches the same Stem Core capability registry and
+the same Seed, Sprout, Terrarium, and Fruit boundaries. Fruit remains
+Git-reviewable; the default branch remains under Botanist control.
 
 **Botanist key** (`BOTANIST_KEY`, or the generated `.tendril/api-key`) remains the
 Stem's own unscoped bearer for operator/CLI/Greenhouse use. It is not a
 Pollinator credential and is not exchanged for access tokens.
-
-### Bind posture (self-declaring exposure)
-
-| Bind | Env | Data routes |
-| --- | --- | --- |
-| **Loopback (default)** | `TERROIR_HOST` unset → `127.0.0.1` | Durable root credentials still accepted (local personal setups unchanged). |
-| **Off-host** | e.g. `TERROIR_HOST=0.0.0.0` | Durable roots **refused** on data routes (401 → mint); access tokens and `BOTANIST_KEY` unchanged. Mint endpoint still accepts the root. |
-
-Exposure is self-declaring: there is no separate “require tokens” flag. Narrowing
-the bind is the only opt-out of the hardened posture.
-
-When `TENDRIL_LOCAL_SOCKET` is set to an absolute path, the same authenticated
-mux is also served on that Unix-domain socket. The local listener is transport
-only: it does not change `TERROIR_HOST` semantics or the loopback/off-host
-classification above, and reaching the socket is not authorization.
 
 ### The three surfaces, and which of them is a boundary
 
@@ -229,8 +249,9 @@ section exists to prevent.
 
 | Surface | How a Pollen is established | Trust level |
 | --- | --- | --- |
-| **REST** | issued credential or Stem-signed access token | **proven** — signature or digest verified per request |
-| **Model Context Protocol**, forwarding | credential presented to the governed Stem, which derives the Pollen | **proven** — it is the REST path underneath |
+| **REST, remote HTTPS** | root only at the mint route; Stem-signed access token on governed data routes | **proven** — digest or signature verified per request |
+| **REST, literal-loopback HTTP** | local root or access-token posture; the restricted client verifies a separate Stem Unix owner | **proven** — digest or signature verified per request |
+| **Model Context Protocol**, forwarding | `tendril-mcp` verifies the Stem TLS peer, then uses the Pollinator root only to mint; forwarded frames carry the access token | **proven** — it is the REST path underneath |
 | **Model Context Protocol**, in-process | `TENDRIL_POLLEN` | **declared** |
 | **Command line** | `TENDRIL_POLLEN` | **declared** |
 
@@ -279,7 +300,12 @@ by simply declining to involve the Stem being measured.
 
 ### MCP
 
-MCP has no networked ingress. Scoped access tokens are a **REST** surface.
+MCP is a stdio-facing client protocol, not a separate network listener.
+`tendril-mcp` forwards frames to the governed Stem over the configured HTTP
+transport. For HTTPS it completes certificate-chain and hostname/IP SAN
+verification before it reads or presents the durable root. It then uses the
+verified transport for readiness, token minting, and governed frames. A remote
+connection uses TLS identity rather than Unix UID identity.
 
 The stdio surface (`tendril mcp`) selects its control plane at startup, because
 **personal-stdio is only sound where one principal owns the host.** Where a Stem
@@ -296,12 +322,12 @@ unaffected.
 | **Governed Stem, credential configured** | the governed Stem's, reached over loopback | derived there from the presented credential |
 | **Governed Stem, no credential** | refuses, naming the command that issues one | — |
 
-The credential is a durable root, read from the location defined by
-`TENDRIL_POLLINATOR_CREDENTIAL`, `TENDRIL_MCP_CREDENTIAL`, or the default
-`~/.config/tendril/pollinators/<pollen>`; access tokens are minted from it on demand because
-their ≤15-minute cap is shorter than a working session. `TENDRIL_POLLEN` binds a
-Pollen on the in-process path only — where the surface forwards, the presented
-credential derives the Pollen and the variable has no effect.
+The restricted bridge resolves its named credential reference below
+`~/.config/tendril/pollinators/`. Connection metadata may name a `trustAnchor`
+under `~/.config/tendril/trust-anchors/`; absent that, HTTPS uses system roots.
+`TENDRIL_POLLEN` binds a Pollen on the in-process path only — where the surface
+forwards, the presented credential derives the Pollen and the variable has no
+effect.
 
 ## References
 
