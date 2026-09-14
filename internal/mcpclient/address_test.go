@@ -60,3 +60,36 @@ func TestValidateLocalGovernedEndpoint(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateGovernedEndpointReturnsTransportPosture(t *testing.T) {
+	local := []string{
+		"http://127.0.0.1:8080",
+		"http://127.255.255.255:8080",
+		"http://[::1]:8080",
+	}
+	for _, endpoint := range local {
+		if got, err := ValidateGovernedEndpoint(endpoint); err != nil || got != PostureLocalLoopbackHTTP {
+			t.Errorf("ValidateGovernedEndpoint(%q) = %q, %v; want local HTTP", endpoint, got, err)
+		}
+	}
+	for _, endpoint := range []string{
+		"https://stem.example:8443",
+		"https://192.0.2.10:8443",
+		"https://127.0.0.1:8443",
+		"https://[::1]:8443",
+	} {
+		if got, err := ValidateGovernedEndpoint(endpoint); err != nil || got != PostureRemoteHTTPS {
+			t.Errorf("ValidateGovernedEndpoint(%q) = %q, %v; want remote HTTPS", endpoint, got, err)
+		}
+	}
+	for _, endpoint := range []string{
+		"http://localhost:8080",
+		"http://192.0.2.10:8080",
+		"http://example.test:8080",
+		"ftp://127.0.0.1:8080",
+	} {
+		if got, err := ValidateGovernedEndpoint(endpoint); err == nil || got != "" {
+			t.Errorf("ValidateGovernedEndpoint(%q) = %q, %v; want refusal", endpoint, got, err)
+		}
+	}
+}

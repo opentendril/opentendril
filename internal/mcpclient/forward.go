@@ -19,9 +19,10 @@ type minimalMCPRequest struct {
 // and forwards raw MCP frames to the Stem. It owns transport only: no
 // capability, grant, or Stem-construction logic.
 type Forwarder struct {
-	BaseURL    string
-	RootCred   string
-	HTTPClient *http.Client
+	BaseURL        string
+	RootCred       string
+	MintHTTPClient *http.Client
+	HTTPClient     *http.Client
 
 	mu        sync.Mutex
 	token     string
@@ -42,10 +43,18 @@ func NewForwarder(rootCred string) *Forwarder {
 // NewForwarderAt builds a client pointed at the supplied URL origin. It never
 // consults host or port environment variables.
 func NewForwarderAt(endpoint, rootCred string) *Forwarder {
+	clients := NewHTTPClients(http.DefaultTransport)
+	return NewForwarderAtWithClients(endpoint, rootCred, clients.Mint, clients.Forward)
+}
+
+// NewForwarderAtWithClients builds a forwarder whose mint and data requests
+// share the selected connection's configured underlying transport.
+func NewForwarderAtWithClients(endpoint, rootCred string, mintClient, forwardClient *http.Client) *Forwarder {
 	return &Forwarder{
-		BaseURL:    NormalizeEndpoint(endpoint),
-		RootCred:   rootCred,
-		HTTPClient: &http.Client{Timeout: forwardingTimeout},
+		BaseURL:        NormalizeEndpoint(endpoint),
+		RootCred:       rootCred,
+		MintHTTPClient: mintClient,
+		HTTPClient:     forwardClient,
 	}
 }
 
@@ -56,8 +65,10 @@ func (f *Forwarder) mintToken() (string, time.Time, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+f.RootCred)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	if f.MintHTTPClient == nil {
+		return "", time.Time{}, fmt.Errorf("token mint HTTP client is not configured")
+	}
+	resp, err := f.MintHTTPClient.Do(req)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("no Stem is answering: %w", err)
 	}
