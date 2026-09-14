@@ -599,7 +599,7 @@ func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("durable Seed did not settle after its execution finished: %+v", run)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond) // poll: wait for durable settlement before replay
 	}
 	terminalReplay, err := secondCore.SeedGrow(ctx, input)
 	if err != nil {
