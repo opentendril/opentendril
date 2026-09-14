@@ -277,7 +277,7 @@ func TestProductionAdapterEmptyPollenOpenedSeedLifecycle(t *testing.T) {
 		WithSeedPersistence(seedPersistence(store)).
 		WithContinuationPersistence(continuationPersistence(store))
 
-	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}})
+	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}, IdempotencyKey: "local-open-1"})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestProductionPreProviderFailureFailsContinuationNotDelivered(t *testing.T)
 		WithSeedPersistence(seedPersistence(store)).
 		WithContinuationPersistence(continuationPersistence(store))
 
-	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}})
+	growth, err := svc.PrepareSeed(ctx, core.SeedGrowInput{Substrate: "myrepo", Goal: "make it pass", Verify: []string{"true"}, IdempotencyKey: "local-open-2"})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}

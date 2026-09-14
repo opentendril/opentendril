@@ -420,7 +420,7 @@ WHERE phytomerId = ? AND pollen = ? AND idempotencyKey = ?`
 
 func (s *Store) getSeedRunByPhytomerTx(ctx context.Context, tx *sql.Tx, phytomerID string) (SeedRun, bool, error) {
 	const query = `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
+SELECT ` + seedRunSelectColumns + `
 FROM seedruns
 WHERE phytomerId = ?`
 
@@ -432,15 +432,9 @@ WHERE phytomerId = ?`
 
 	var found []SeedRun
 	for rows.Next() {
-		var run SeedRun
-		var startedAt, finishedAt, observation string
-		if err := rows.Scan(
-			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation); err != nil {
+		run, err := s.scanSeedRun(rows)
+		if err != nil {
 			return SeedRun{}, false, fmt.Errorf("scan seed run by phytomer: %w", err)
-		}
-		if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
-			return SeedRun{}, false, err
 		}
 		found = append(found, run)
 	}

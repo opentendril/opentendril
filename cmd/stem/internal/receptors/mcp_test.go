@@ -298,6 +298,33 @@ func TestMCPToolsListPublishesPrimaryProjection(t *testing.T) {
 	}
 }
 
+func TestMCPSeedGrowSchemaProjectsIdempotencyKey(t *testing.T) {
+	handler := NewMCPHandler().WithCore(core.NewService(nil))
+	resp := handler.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	var parsed struct {
+		Result struct {
+			Tools []struct {
+				Name        string         `json:"name"`
+				InputSchema map[string]any `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(resp, &parsed); err != nil {
+		t.Fatalf("parse tools/list: %v", err)
+	}
+	for _, tool := range parsed.Result.Tools {
+		if tool.Name != "seedGrow" {
+			continue
+		}
+		properties, _ := tool.InputSchema["properties"].(map[string]any)
+		if _, ok := properties["idempotencyKey"]; !ok {
+			t.Fatalf("seedGrow schema omits idempotencyKey: %#v", tool.InputSchema)
+		}
+		return
+	}
+	t.Fatal("tools/list omitted seedGrow")
+}
+
 func writeJSONFile(t *testing.T, path string, payload map[string]any) {
 	t.Helper()
 

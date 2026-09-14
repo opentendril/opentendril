@@ -115,12 +115,15 @@ func writeCoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, "session not found", http.StatusNotFound)
 	case errors.Is(err, core.ErrContinuationInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, core.ErrSeedIdempotencyKeyRequired):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, core.ErrContinuationTargetNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, core.ErrContinuationPollenMismatch):
 		http.Error(w, err.Error(), http.StatusForbidden)
 	case errors.Is(err, core.ErrContinuationNotEligible),
 		errors.Is(err, core.ErrContinuationIdempotencyConflict),
+		errors.Is(err, core.ErrSeedIdempotencyConflict),
 		errors.Is(err, core.ErrContinuationTargetChanged):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, core.ErrContinuationHistoryUnavailable),

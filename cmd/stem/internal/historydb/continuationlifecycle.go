@@ -628,7 +628,7 @@ func (s *Store) listSeedRunsByStatusTx(ctx context.Context, tx *sql.Tx, statuses
 		args[i] = status
 	}
 	query := `
-SELECT handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation
+SELECT ` + seedRunSelectColumns + `
 FROM seedruns
 WHERE status IN (` + strings.Join(placeholders, ", ") + `)`
 	rows, err := tx.QueryContext(ctx, query, args...)
@@ -638,15 +638,9 @@ WHERE status IN (` + strings.Join(placeholders, ", ") + `)`
 	defer rows.Close()
 	out := make([]SeedRun, 0)
 	for rows.Next() {
-		var run SeedRun
-		var startedAt, finishedAt, observation string
-		if err := rows.Scan(
-			&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-			&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation); err != nil {
+		run, err := s.scanSeedRun(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan seed run by status: %w", err)
-		}
-		if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
-			return nil, err
 		}
 		out = append(out, run)
 	}
@@ -686,16 +680,20 @@ func (s *Store) updateSeedRunResultTx(ctx context.Context, tx *sql.Tx, run SeedR
 	}
 	result, err := tx.ExecContext(ctx, `
 UPDATE seedruns SET
-	goal = ?,
+	goal = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN goal ELSE ? END,
 	status = ?,
-	iterations = ?,
-	branch = ?,
-	fruitCommit = ?,
-	diff = ?,
-	logs = ?,
-	error = ?,
+	iterations = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN iterations ELSE ? END,
+	branch = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN branch ELSE ? END,
+	fruitCommit = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN fruitCommit ELSE ? END,
+	diff = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN diff ELSE ? END,
+	logs = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN logs ELSE ? END,
+	error = CASE WHEN "idempotency-key" <> '' AND goal = '' THEN error ELSE ? END,
 	finishedAt = ?,
-	observation = CASE WHEN ? = '' THEN observation ELSE ? END
+	observation = CASE
+		WHEN "idempotency-key" <> '' AND goal = '' THEN observation
+		WHEN ? = '' THEN observation
+		ELSE ?
+	END
 WHERE handle = ? AND phytomerId = ? AND pollen = ? AND substrate = ? AND status = ?`,
 		goal,
 		run.Status,

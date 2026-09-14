@@ -298,6 +298,44 @@ func TestFirstTaskBodyContainsDetachedTrue(t *testing.T) {
 	}
 }
 
+func TestDirectChatSeedRetryReusesIdempotencyKey(t *testing.T) {
+	previous := seedOpenIdempotencyKeySource
+	seedOpenIdempotencyKeySource = func() (string, error) { return "direct-chat-retry-key", nil }
+	t.Cleanup(func() { seedOpenIdempotencyKeySource = previous })
+
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode Seed request: %v", err)
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			http.Error(w, "temporary response failure", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"handle":"seed-one","phytomerId":"tendril-one","status":"running"}`))
+	}))
+	defer server.Close()
+	u, _ := url.Parse(server.URL)
+	sess := &directChatSession{
+		client:     &localStemClient{port: u.Port()},
+		substrate:  "myrepo",
+		verifyArgv: []string{"go", "test"},
+	}
+	if _, err := sess.dispatchSeed(context.Background(), "fix the bug"); err == nil {
+		t.Fatal("first failed response unexpectedly succeeded")
+	}
+	if _, err := sess.dispatchSeed(context.Background(), "fix the bug"); err != nil {
+		t.Fatalf("retry same goal: %v", err)
+	}
+	if len(bodies) != 2 || bodies[0]["idempotencyKey"] != "direct-chat-retry-key" || bodies[1]["idempotencyKey"] != bodies[0]["idempotencyKey"] {
+		t.Fatalf("retry keys are not stable: %#v", bodies)
+	}
+}
+
 func TestFirstTaskBodyContainsOriginCLI(t *testing.T) {
 	server, capture, _ := newSeedAcceptServer(t)
 	defer server.Close()

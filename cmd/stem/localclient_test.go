@@ -167,10 +167,13 @@ func TestDispatchSeedBodyContainsDetachedTrue(t *testing.T) {
 
 	c := &localStemClient{port: u.Port(), bearer: ""}
 	_, _ = c.DispatchSeed(context.Background(), map[string]any{
-		"substrate": "myrepo", "goal": "fix things", "verify": []any{"go", "test"},
+		"substrate": "myrepo", "goal": "fix things", "verify": []any{"go", "test"}, "idempotencyKey": "  caller-key  ",
 	})
 	if v, ok := gotBody["detached"]; !ok || v != true {
 		t.Fatalf("body detached = %v (%T), want true", v, v)
+	}
+	if gotBody["idempotencyKey"] != "  caller-key  " {
+		t.Fatalf("body idempotencyKey = %#v, want exact caller key", gotBody["idempotencyKey"])
 	}
 }
 

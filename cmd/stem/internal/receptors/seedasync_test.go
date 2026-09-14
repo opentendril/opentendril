@@ -2,6 +2,7 @@ package receptors
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -53,18 +55,40 @@ func newSeedAsyncHandler(t *testing.T, grants []core.DelegationGrant) (*http.Ser
 
 func testSeedPersistence(store *historydb.Store) core.SeedPersistence {
 	return core.SeedPersistence{
+		FindOpening: func(ctx context.Context, pollen, idempotencyKey string) (core.SeedOpening, bool, error) {
+			if store == nil {
+				return core.SeedOpening{}, false, core.ErrSeedHistoryUnavailable
+			}
+			run, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, pollen, idempotencyKey)
+			if err != nil || !found {
+				return core.SeedOpening{}, found, err
+			}
+			return core.SeedOpening{
+				Handle:         run.Handle,
+				PhytomerID:     run.PhytomerID,
+				Pollen:         run.Pollen,
+				Substrate:      run.Substrate,
+				Goal:           run.Goal,
+				IdempotencyKey: run.IdempotencyKey,
+				RequestDigest:  run.RequestDigest,
+				Status:         run.Status,
+				StartedAt:      run.StartedAt,
+			}, true, nil
+		},
 		RecordOpening: func(ctx context.Context, opening core.SeedOpening) error {
 			if store == nil {
 				return core.ErrSeedHistoryUnavailable
 			}
 			return store.RecordSeedOpening(ctx, historydb.SeedRun{
-				Handle:     opening.Handle,
-				Pollen:     opening.Pollen,
-				PhytomerID: opening.PhytomerID,
-				Substrate:  opening.Substrate,
-				Goal:       opening.Goal,
-				Status:     opening.Status,
-				StartedAt:  opening.StartedAt,
+				Handle:         opening.Handle,
+				Pollen:         opening.Pollen,
+				PhytomerID:     opening.PhytomerID,
+				Substrate:      opening.Substrate,
+				Goal:           opening.Goal,
+				IdempotencyKey: opening.IdempotencyKey,
+				RequestDigest:  opening.RequestDigest,
+				Status:         opening.Status,
+				StartedAt:      opening.StartedAt,
 			})
 		},
 		RecordSettlement: func(ctx context.Context, settled core.SeedSettlement) error {
@@ -340,6 +364,264 @@ func TestSeedAsyncDispatchAndCollect(t *testing.T) {
 	}
 }
 
+func TestRESTDetachedSeedIdempotencyAndConflict(t *testing.T) {
+	mux, store := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
+	post := func(path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req.Header.Set(PollenHeader, "local-pollinator")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	missing := post("/v1/seeds/grow", `{"substrate":"core","goal":"make the tests pass","verify":["true"],"detached":true}`)
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("detached REST without key = %d, want 400: %s", missing.Code, missing.Body.String())
+	}
+
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["true"],"detached":true,"idempotencyKey":"rest-retry-key"}`
+	first := post("/v1/seeds/grow", body)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first REST open = %d, want 202: %s", first.Code, first.Body.String())
+	}
+	var accepted core.SeedGrowResult
+	if err := json.Unmarshal(first.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode first open: %v", err)
+	}
+	second := post("/v1/seeds/grow", body)
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("REST replay = %d, want 202: %s", second.Code, second.Body.String())
+	}
+	var replay core.SeedGrowResult
+	if err := json.Unmarshal(second.Body.Bytes(), &replay); err != nil {
+		t.Fatalf("decode replay: %v", err)
+	}
+	if replay.Handle != accepted.Handle || replay.PhytomerID != accepted.PhytomerID {
+		t.Fatalf("REST replay identity = %+v, first = %+v", replay, accepted)
+	}
+	run, found, err := store.GetSeedRunByPollenIdempotencyKey(context.Background(), "local-pollinator", "rest-retry-key")
+	if err != nil || !found || run.Handle != accepted.Handle || run.PhytomerID != accepted.PhytomerID {
+		t.Fatalf("durable REST opening = found %v run %+v err %v", found, run, err)
+	}
+
+	conflict := post("/v1/seeds/grow", `{"substrate":"core","goal":"different goal","verify":["true"],"detached":true,"idempotencyKey":"rest-retry-key"}`)
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("semantic conflict = %d, want 409: %s", conflict.Code, conflict.Body.String())
+	}
+
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("revoked session manager: %v", err)
+	}
+	revokedCore := core.NewService(manager).WithSeed(core.SeedOperations{
+		Run: func(context.Context, core.SeedSpec, *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			t.Fatal("revoked Pollinator reached Seed execution")
+			return core.SeedGrowResult{}, nil
+		},
+	}).WithSeedPersistence(testSeedPersistence(store)).WithContinuationPersistence(testContinuationPersistence(store))
+	revoked := NewSeedHandler(revokedCore).WithDelegation(&DelegationGate{Authorizer: core.NewDelegationAuthorizer(nil), Bus: eventbus.New()})
+	revokedMux := http.NewServeMux()
+	revoked.Register(revokedMux, nil)
+	revokedRequest := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow", strings.NewReader(body))
+	revokedRequest.Header.Set(PollenHeader, "local-pollinator")
+	revokedResponse := httptest.NewRecorder()
+	revokedMux.ServeHTTP(revokedResponse, revokedRequest)
+	if revokedResponse.Code != http.StatusForbidden {
+		t.Fatalf("revoked retry status = %d, want 403: %s", revokedResponse.Code, revokedResponse.Body.String())
+	}
+}
+
+func TestRESTAsyncCompatibilityRouteUsesDetachedIdempotency(t *testing.T) {
+	mux, _ := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["true"],"idempotencyKey":"async-compat-key"}`
+	dispatch := func() core.SeedDispatch {
+		req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(body))
+		req.Header.Set(PollenHeader, "local-pollinator")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("async compatibility status = %d: %s", rec.Code, rec.Body.String())
+		}
+		var result core.SeedDispatch
+		if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+			t.Fatalf("decode async compatibility response: %v", err)
+		}
+		return result
+	}
+	first := dispatch()
+	second := dispatch()
+	if first.Handle != second.Handle || first.PhytomerID != second.PhytomerID {
+		t.Fatalf("compatibility route replay changed identity: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestDetachedSeedIdempotencySurvivesCoreReconstruction(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open HistoryDB: %v", err)
+	}
+	defer store.Close()
+
+	persistence := testSeedPersistence(store)
+	var openingWrites atomic.Int32
+	recordOpening := persistence.RecordOpening
+	persistence.RecordOpening = func(ctx context.Context, opening core.SeedOpening) error {
+		openingWrites.Add(1)
+		return recordOpening(ctx, opening)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+	var firstRuns atomic.Int32
+	firstManager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("first session manager: %v", err)
+	}
+	firstCore := core.NewService(firstManager).WithSeed(core.SeedOperations{
+		Run: func(_ context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			firstRuns.Add(1)
+			close(started)
+			<-release
+			close(finished)
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, PhytomerID: spec.PhytomerID}, nil
+		},
+	}).WithSeedPersistence(persistence).WithContinuationPersistence(testContinuationPersistence(store))
+
+	ctx := core.WithPollen(context.Background(), "restart-pollen")
+	input := core.SeedGrowInput{
+		Substrate: "core", Goal: "recover the accepted Seed", Verify: []string{"true"},
+		Detached: true, IdempotencyKey: "restart-retry-key",
+	}
+	first, err := firstCore.SeedGrow(ctx, input)
+	if err != nil {
+		t.Fatalf("first detached open: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first background execution did not start")
+	}
+
+	// Age the accepted durable row and run the same pruning entrypoint used by
+	// history retention, while the detached Seed is still running.
+	oldStartedAt := time.Now().UTC().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+	seedRows, err := sql.Open("sqlite", store.Path())
+	if err != nil {
+		t.Fatalf("open HistoryDB for retention fixture: %v", err)
+	}
+	if _, err := seedRows.ExecContext(ctx, `UPDATE seedruns SET startedAt = ? WHERE handle = ?`, oldStartedAt, first.Handle); err != nil {
+		seedRows.Close()
+		t.Fatalf("age detached Seed row: %v", err)
+	}
+	if err := seedRows.Close(); err != nil {
+		t.Fatalf("close HistoryDB retention fixture: %v", err)
+	}
+	pruned, err := store.PruneOlderThan(ctx, time.Now().UTC().Add(-50*24*time.Hour))
+	if err != nil {
+		t.Fatalf("PruneOlderThan: %v", err)
+	}
+	if pruned != 0 {
+		t.Fatalf("PruneOlderThan deleted %d rows, want the detached retry identity retained", pruned)
+	}
+
+	// Reconstruct Core and its SessionManager while retaining only durable
+	// HistoryDB state. A replay must be resolved from that durable opening.
+	var secondRuns atomic.Int32
+	secondStarted := make(chan struct{}, 1)
+	secondManager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("second session manager: %v", err)
+	}
+	secondCore := core.NewService(secondManager).WithSeed(core.SeedOperations{
+		Run: func(_ context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			secondRuns.Add(1)
+			secondStarted <- struct{}{}
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, PhytomerID: spec.PhytomerID}, nil
+		},
+	}).WithSeedPersistence(persistence).WithContinuationPersistence(testContinuationPersistence(store))
+	secondSessionsBefore, err := secondManager.List(ctx)
+	if err != nil || len(secondSessionsBefore) != 0 {
+		t.Fatalf("second manager sessions before replay = %d, err=%v; want none", len(secondSessionsBefore), err)
+	}
+	second, err := secondCore.SeedGrow(ctx, input)
+	if err != nil {
+		t.Fatalf("reconstructed Core replay: %v", err)
+	}
+	if second.Handle != first.Handle || second.PhytomerID != first.PhytomerID || second.Status != core.SeedStatusRunning {
+		t.Fatalf("restart replay changed identity: first=%+v second=%+v", first, second)
+	}
+	secondSessionsAfter, err := secondManager.List(ctx)
+	if err != nil || len(secondSessionsAfter) != 0 {
+		t.Fatalf("second manager sessions after replay = %d, err=%v; want none", len(secondSessionsAfter), err)
+	}
+	changed := input
+	changed.Goal = "different semantic request"
+	if _, err := secondCore.SeedGrow(ctx, changed); !errors.Is(err, core.ErrSeedIdempotencyConflict) {
+		t.Fatalf("changed request after restart = %v, want idempotency conflict", err)
+	}
+	select {
+	case <-secondStarted:
+		t.Fatal("reconstructed Core started a background execution during replay")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if secondRuns.Load() != 0 || firstRuns.Load() != 1 || openingWrites.Load() != 1 {
+		t.Fatalf("background runs = first %d second %d, want 1 and 0", firstRuns.Load(), secondRuns.Load())
+	}
+	run, found, err := store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
+	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Substrate != "core" || run.Goal != "" || run.Status != core.SeedStatusRunning || run.IdempotencyKey != input.IdempotencyKey || run.RequestDigest == "" {
+		t.Fatalf("durable retry row = found %v run %+v err %v", found, run, err)
+	}
+	close(release)
+	released = true
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("original detached execution did not finish")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		run, found, err = store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
+		if err != nil || !found {
+			t.Fatalf("read settled retry row: found=%v err=%v", found, err)
+		}
+		if run.Status == core.SeedStatusSatisfied {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("durable Seed did not settle after its execution finished: %+v", run)
+		}
+		time.Sleep(10 * time.Millisecond) // poll: wait for durable settlement before replay
+	}
+	terminalReplay, err := secondCore.SeedGrow(ctx, input)
+	if err != nil {
+		t.Fatalf("terminal replay after retention: %v", err)
+	}
+	if terminalReplay.Handle != first.Handle || terminalReplay.PhytomerID != first.PhytomerID || terminalReplay.Status != core.SeedStatusSatisfied {
+		t.Fatalf("terminal replay changed retained identity/status: first=%+v replay=%+v", first, terminalReplay)
+	}
+	if secondRuns.Load() != 0 || firstRuns.Load() != 1 || openingWrites.Load() != 1 {
+		t.Fatalf("post-prune replay counts = first runs %d, second runs %d, opening writes %d", firstRuns.Load(), secondRuns.Load(), openingWrites.Load())
+	}
+	settledSessions, err := secondManager.List(ctx)
+	if err != nil || len(settledSessions) != 0 {
+		t.Fatalf("second manager sessions after terminal replay = %d, err=%v; want none", len(settledSessions), err)
+	}
+	run, found, err = store.GetSeedRunByPollenIdempotencyKey(ctx, "restart-pollen", "restart-retry-key")
+	if err != nil || !found || run.Handle != first.Handle || run.PhytomerID != first.PhytomerID || run.Status != core.SeedStatusSatisfied ||
+		run.Substrate != "core" || run.Goal != "" || run.Diff != "" || run.Logs != "" || run.Error != "" || run.Iterations != 0 || run.Branch != "" || run.Commit != "" {
+		t.Fatalf("settled retained row = found %v run %+v err %v", found, run, err)
+	}
+}
+
 func TestSeedAsyncCollectionPreservesFruitPublicationFailureDiagnostic(t *testing.T) {
 	manager, err := session.NewManager(context.Background(), nil)
 	if err != nil {
@@ -482,7 +764,7 @@ func TestSeedAsyncPersistFailureDoesNotAccept(t *testing.T) {
 
 func TestSeedAsyncCallerCannotSupplyOwnership(t *testing.T) {
 	mux, store := newSeedAsyncHandler(t, []core.DelegationGrant{seedGrantFor("local-pollinator")})
-	body := `{"substrate":"core","goal":"make the tests pass","verify":["go","test","./..."],"pollen":"attacker","phytomerId":"tendril-forged"}`
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["go","test","./..."],"idempotencyKey":"ownership-test-key","pollen":"attacker","phytomerId":"tendril-forged"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(body))
 	req.Header.Set(PollenHeader, "local-pollinator")
 	rec := httptest.NewRecorder()
@@ -544,6 +826,9 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
 		},
 	}).WithSeedPersistence(core.SeedPersistence{
+		FindOpening: func(context.Context, string, string) (core.SeedOpening, bool, error) {
+			return core.SeedOpening{}, false, nil
+		},
 		RecordOpening: func(_ context.Context, opening core.SeedOpening) error {
 			openings = append(openings, opening)
 			return nil
@@ -555,7 +840,7 @@ func TestRESTCannotManufactureSeedLifecycleRelation(t *testing.T) {
 	mux := http.NewServeMux()
 	handler.Register(mux, nil)
 
-	body := `{"substrate":"core","goal":"make the tests pass","verify":["true"],"pollen":"attacker","phytomerId":"tendril-forged","handle":"seed-forged"}`
+	body := `{"substrate":"core","goal":"make the tests pass","verify":["true"],"idempotencyKey":"relation-test-key","pollen":"attacker","phytomerId":"tendril-forged","handle":"seed-forged"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/seeds/grow/async", strings.NewReader(body))
 	req.Header.Set(PollenHeader, "local-pollinator")
 	rec := httptest.NewRecorder()

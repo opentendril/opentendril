@@ -2560,11 +2560,12 @@ func TestBehavioralParity_SeedGrow(t *testing.T) {
 
 func TestBehavioralParity_DetachedSeedGrow(t *testing.T) {
 	want := core.SeedGrowInput{
-		Substrate: "core",
-		Goal:      "fix test",
-		Verify:    []string{"go", "test", "./..."},
-		Origin:    "parity-origin",
-		Detached:  true,
+		Substrate:      "core",
+		Goal:           "fix test",
+		Verify:         []string{"go", "test", "./..."},
+		Origin:         "parity-origin",
+		Detached:       true,
+		IdempotencyKey: "parity-detached-key",
 	}
 	mock, mux, mcp := newMockParityFixture(t)
 	server := httptest.NewServer(mux)
@@ -2586,7 +2587,7 @@ func TestBehavioralParity_DetachedSeedGrow(t *testing.T) {
 
 	mock.reset()
 	resp, err := http.Post(server.URL+"/v1/seeds/grow", "application/json",
-		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true}`))
+		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true,"idempotencyKey":"parity-detached-key"}`))
 	if err != nil {
 		t.Fatalf("REST detached seed.grow: %v", err)
 	}
@@ -2599,7 +2600,7 @@ func TestBehavioralParity_DetachedSeedGrow(t *testing.T) {
 
 	mock.reset()
 	resp, err = http.Post(server.URL+"/v1/seeds/grow/async", "application/json",
-		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin"}`))
+		bytes.NewBufferString(`{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","idempotencyKey":"parity-detached-key"}`))
 	if err != nil {
 		t.Fatalf("REST async seed.grow: %v", err)
 	}
@@ -2611,7 +2612,7 @@ func TestBehavioralParity_DetachedSeedGrow(t *testing.T) {
 	assertDetachedGrow(t, "REST async")
 
 	mock.reset()
-	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seedGrow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true}}}`))
+	mcpResp := mcp.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"seedGrow","arguments":{"substrate":"core","goal":"fix test","verify":["go","test","./..."],"origin":"parity-origin","detached":true,"idempotencyKey":"parity-detached-key"}}}`))
 	var parsed struct {
 		Result struct {
 			IsError bool `json:"isError"`
