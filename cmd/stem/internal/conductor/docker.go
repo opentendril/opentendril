@@ -588,13 +588,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			teardownErr = errors.Join(teardownErr, restoreErr)
 		}
 	})
-	extraEnv := make([]string, 0, 2)
-	if plan.readOnly || d.Investigation {
-		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
-	}
-	if plan.credential.ExposeToken && strings.TrimSpace(plan.credential.TokenValue) != "" {
-		extraEnv = append(extraEnv, gitHubTokenEnv+"="+plan.credential.TokenValue, gitHubPATLegacyEnv+"="+plan.credential.TokenValue)
-	}
+	extraEnv := buildTerrariumExecutionEnvironment(plan.readOnly || d.Investigation, plan.credential)
 	allocateManagedWorkspace := func() error {
 		var startCommit string
 		var err error
@@ -1856,22 +1850,6 @@ func (s *terrariumToolSession) ProcessListing(ctx context.Context) (string, erro
 func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 	values := make(map[string]string)
 
-	for _, key := range []string{
-		"OPENAI_API_KEY",
-		"ANTHROPIC_API_KEY",
-		"GOOGLE_API_KEY",
-		"GROK_API_KEY",
-		"OPENROUTER_API_KEY",
-		"NVIDIA_API_KEY",
-		"DEFAULT_LLM_PROVIDER",
-		"LOCAL_INFERENCE_URL",
-		"LOCAL_MODEL_NAME",
-	} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
-			values[key] = value
-		}
-	}
-
 	for _, entry := range extraEnv {
 		key, value, ok := strings.Cut(strings.TrimSpace(entry), "=")
 		if !ok || strings.TrimSpace(key) == "" {
@@ -1881,6 +1859,17 @@ func buildTerrariumEnvironment(extraEnv ...string) map[string]string {
 	}
 
 	return values
+}
+
+func buildTerrariumExecutionEnvironment(readOnly bool, credential ResolvedCredential) []string {
+	extraEnv := make([]string, 0, 3)
+	if readOnly {
+		extraEnv = append(extraEnv, "TENDRIL_READONLY=true")
+	}
+	if credential.ExposeToken && strings.TrimSpace(credential.TokenValue) != "" {
+		extraEnv = append(extraEnv, gitHubTokenEnv+"="+credential.TokenValue, gitHubPATLegacyEnv+"="+credential.TokenValue)
+	}
+	return extraEnv
 }
 
 func decodeToolDefinitions(output any) ([]ToolDefinition, error) {

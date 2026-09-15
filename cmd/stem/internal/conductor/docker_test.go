@@ -564,6 +564,111 @@ func TestBuildTerrariumEnvironmentTokenExposure(t *testing.T) {
 	})
 }
 
+func TestBuildTerrariumEnvironmentIncludesOnlyExplicitExecutionInput(t *testing.T) {
+	decoys := map[string]string{
+		"BOTANIST_KEY":                    "botanist-decoy",
+		"TENDRIL_POLLEN":                  "pollen-decoy",
+		"TENDRIL_POLLINATOR_CREDENTIAL":   "pollinator-decoy",
+		"TENDRIL_MCP_CREDENTIAL":          "mcp-decoy",
+		"TENDRIL_REMOTE_TLS_CERT":         "/tmp/decoy-cert.pem",
+		"TENDRIL_REMOTE_TLS_KEY":          "/tmp/decoy-key.pem",
+		"TENDRIL_LIVE_APP_ID":             "app-id-decoy",
+		"TENDRIL_LIVE_APP_KEY":            "app-key-decoy",
+		"TENDRIL_LIVE_APP_REPO":           "owner/repository",
+		"GIT_AUTHOR_NAME":                 "ambient-author",
+		"GIT_AUTHOR_EMAIL":                "ambient-author@example.invalid",
+		"GIT_COMMITTER_NAME":              "ambient-committer",
+		"GIT_COMMITTER_EMAIL":             "ambient-committer@example.invalid",
+		"GIT_CONFIG_GLOBAL":               "/tmp/ambient-gitconfig",
+		"GIT_CONFIG_SYSTEM":               "/tmp/ambient-system-gitconfig",
+		"GITHUB_TOKEN":                    "ambient-botanist-token",
+		"GITHUB_PERSONAL_ACCESS_TOKEN":    "ambient-legacy-token",
+		"TENDRIL_GIT_TOKEN":               "ambient-git-token",
+		"TENDRIL_GITHUB_PAT":              "ambient-github-pat",
+		"GITHUB_TOKEN_WORK":               "ambient-substrate-token",
+		"OPENAI_API_KEY":                  "openai-decoy",
+		"ANTHROPIC_API_KEY":               "anthropic-decoy",
+		"GOOGLE_API_KEY":                  "google-decoy",
+		"GROK_API_KEY":                    "grok-decoy",
+		"OPENROUTER_API_KEY":              "openrouter-decoy",
+		"NVIDIA_API_KEY":                  "nvidia-decoy",
+		"DEFAULT_LLM_PROVIDER":            "ambient-provider",
+		"COORDINATOR_LLM_PROVIDER":        "ambient-coordinator-provider",
+		"DEFAULT_MODEL_NAME":              "ambient-default-model",
+		"COORDINATOR_MODEL_NAME":          "ambient-coordinator-model",
+		"OPENAI_MODEL_NAME":               "ambient-model",
+		"LOCAL_INFERENCE_URL":             "http://127.0.0.1:11434",
+		"LOCAL_MODEL_NAME":                "ambient-local-model",
+		"COORDINATOR_LOCAL_INFERENCE_URL": "http://127.0.0.1:11435",
+		"OPENAI_BASE_URL":                 "http://127.0.0.1:11436",
+		"DOCKER_HOST":                     "unix:///tmp/ambient-docker.sock",
+		"TENDRIL_ENV_FILE":                "/tmp/ambient.env",
+		"TENDRIL_MANAGED_CHECKOUT_ROOT":   "/tmp/ambient-checkout-root",
+		"TENDRIL_GRAFT_TOKEN":             "ambient-graft-token",
+		"TENDRIL_REMOTE_LISTEN_ADDR":      "127.0.0.1:9443",
+		"TENDRIL_TERRARIUM_PROVIDER":      "ambient-provider-choice",
+		"TENDRIL_ALLOW_HOST_WORKSPACE":    "true",
+		"TENDRIL_ALLOW_HOST_EXECUTION":    "true",
+	}
+	for key, value := range decoys {
+		t.Setenv(key, value)
+	}
+
+	env := buildTerrariumEnvironment("TENDRIL_READONLY=true")
+	if len(env) != 1 || env["TENDRIL_READONLY"] != "true" {
+		t.Fatalf("Terrarium environment = %#v, want only explicit TENDRIL_READONLY=true", env)
+	}
+	for key := range decoys {
+		if _, ok := env[key]; ok {
+			t.Errorf("ambient Stem variable %s entered the Terrarium environment", key)
+		}
+	}
+}
+
+func TestBuildTerrariumExecutionEnvironmentHonorsSubstrateTokenExposure(t *testing.T) {
+	const substrateToken = "resolved-substrate-token"
+	t.Setenv("GITHUB_TOKEN_WORK", substrateToken)
+	t.Setenv(gitHubTokenEnv, "ambient-stem-token")
+	t.Setenv(gitHubPATLegacyEnv, "ambient-legacy-stem-token")
+
+	tests := []struct {
+		name       string
+		expose     bool
+		wantGitPAT bool
+	}{
+		{name: "expose resolved Substrate credential", expose: true, wantGitPAT: true},
+		{name: "do not expose when disabled", expose: false},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			credential, err := resolveSubstrateCredential(SubstrateSpec{
+				Auth: AuthSpec{Method: "pat", Env: "GITHUB_TOKEN_WORK", ExposeToken: testCase.expose},
+			}, nil)
+			if err != nil {
+				t.Fatalf("resolveSubstrateCredential: %v", err)
+			}
+			if credential.TokenValue != substrateToken {
+				t.Fatalf("resolved Substrate credential = %q, want %q", credential.TokenValue, substrateToken)
+			}
+
+			env := buildTerrariumEnvironment(buildTerrariumExecutionEnvironment(true, credential)...)
+			if got := env["TENDRIL_READONLY"]; got != "true" {
+				t.Fatalf("TENDRIL_READONLY = %q, want true", got)
+			}
+			for _, key := range []string{gitHubTokenEnv, gitHubPATLegacyEnv} {
+				got, ok := env[key]
+				if testCase.wantGitPAT {
+					if !ok || got != substrateToken {
+						t.Errorf("%s = %q, present=%t; want resolved Substrate credential", key, got, ok)
+					}
+				} else if ok {
+					t.Errorf("%s = %q, present in Terrarium with exposeToken disabled", key, got)
+				}
+			}
+		})
+	}
+}
+
 func TestAllowHostWorkspace(t *testing.T) {
 	tests := []struct {
 		envVal string
