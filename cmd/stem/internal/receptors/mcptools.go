@@ -32,11 +32,20 @@ func (h *MCPHandler) CoreCapabilityNames() []string {
 // The listed name is the adapter's primary Pollinator-visible identifier
 // (MCPToolName), not the canonical Core capability name.
 func (h *MCPHandler) coreToolDefs() []map[string]interface{} {
+	return h.projectCoreToolDefs(nil)
+}
+
+func (h *MCPHandler) projectCoreToolDefs(allowed map[string]struct{}) []map[string]interface{} {
 	if h.core == nil {
 		return nil
 	}
 	defs := make([]map[string]interface{}, 0, len(h.core.Capabilities()))
 	for _, capability := range h.core.Capabilities() {
+		if allowed != nil {
+			if _, ok := allowed[capability.Name]; !ok {
+				continue
+			}
+		}
 		defs = append(defs, map[string]interface{}{
 			"name":        MCPToolName(capability.Name),
 			"description": capability.Description,
@@ -44,6 +53,21 @@ func (h *MCPHandler) coreToolDefs() []map[string]interface{} {
 		})
 	}
 	return defs
+}
+
+// pollinatorCoreToolDefs projects only actual Core capabilities whose
+// canonical operation-class is delegated. It deliberately does not list the
+// compatibility aliases; those remain callable only when their resolver maps
+// them to one of these allowed canonical classes.
+func (h *MCPHandler) pollinatorCoreToolDefs() []map[string]interface{} {
+	if h.core == nil {
+		return nil
+	}
+	delegated := make(map[string]struct{})
+	for _, name := range core.DelegatedCapabilityNames() {
+		delegated[name] = struct{}{}
+	}
+	return h.projectCoreToolDefs(delegated)
 }
 
 // isCoreCapability reports whether a tool name is a governed Core capability.
@@ -232,6 +256,12 @@ func summarizeSequenceResult(result core.SequenceRunResult) string {
 }
 
 func (h *MCPHandler) handleToolsList(id interface{}) []byte {
+	if h.pollinatorProjection {
+		tools := h.pollinatorCoreToolDefs()
+		tools = append(tools, h.mcpViewToolDefs()...)
+		return h.formatResult(id, map[string]interface{}{"tools": tools})
+	}
+
 	tools := []map[string]interface{}{
 		{
 			"name":        "runSequence",
@@ -457,6 +487,9 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 
 	canonical, ok := ResolveMCPToolName(params.Name)
 	if !ok {
+		return h.formatError(id, -32601, "Tool not found", nil)
+	}
+	if h.pollinatorProjection && !core.IsDelegatedCapability(canonical) {
 		return h.formatError(id, -32601, "Tool not found", nil)
 	}
 
@@ -733,6 +766,9 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 
 	if params.Name == "createGenotype" {
 		// Deprecated alias of the governed genotype.create capability.
+		if params.Arguments == nil {
+			return h.formatError(id, -32602, "Invalid params", "The 'arguments' object is required.")
+		}
 		if _, ok := params.Arguments["substrate"]; !ok {
 			// Inject fallback substrate for legacy clients
 			params.Arguments["substrate"] = "core"
@@ -830,11 +866,14 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 	// canonical tool — no alias path may reach a delegated capability
 	// ungoverned.
 	sproutCtx := core.WithPollen(context.Background(), h.pollen)
-	if decision, _, err := h.authorizeDelegatedTool(sproutCtx, core.CapSproutGrow, params.Arguments); err != nil {
+	decision, request, err := h.authorizeDelegatedTool(sproutCtx, core.CapSproutGrow, params.Arguments)
+	if err != nil {
 		return h.formatCapabilityResult(id, nil, err)
-	} else if !decision.Authorized {
+	}
+	if !decision.Authorized {
 		return h.formatDelegationDenied(id, decision)
 	}
+	sproutCtx = core.WithAuthorizedDelegationRequest(sproutCtx, request)
 
 	stepID, _ := params.Arguments["stepId"].(string)
 	sessionID, _ := params.Arguments["sessionId"].(string)
@@ -847,7 +886,7 @@ func (h *MCPHandler) handleToolsCall(id interface{}, rawParams json.RawMessage) 
 		sessionID = h.defaultSessionID
 	}
 
-	result, err := h.core.SproutRun(context.Background(), core.SproutRunInput{
+	result, err := h.core.SproutRun(sproutCtx, core.SproutRunInput{
 		Transcript:      transcript,
 		Substrate:       substrate,
 		StepID:          stepID,

@@ -569,6 +569,23 @@ func withAPIKeyOrPollinatorAuth(apiKey string, authority *core.Authority, verifi
 	}
 }
 
+// withPollinatorAccessTokenAuth is the public ingress credential boundary.
+// Unlike the local Botanist surface, it accepts only a verified short-lived
+// access token from Authorization; durable roots and Botanist keys have no
+// fallback path here. The Pollen is copied from the verified claims into the
+// trusted Core context, while downstream adapters retain their existing live
+// grant checks.
+func withPollinatorAccessTokenAuth(verifier receptors.AccessTokenVerifier, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		pollen, proven := receptors.DelegatedPollen(r, nil, verifier)
+		if !proven || strings.TrimSpace(pollen) == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r.WithContext(core.WithPollen(r.Context(), pollen)))
+	}
+}
+
 // resolveAuthorization decides whether one presented Authorization header
 // authenticates, as the Botanist or as a Pollinator. It is the single answer to
 // "who may come in", shared by every surface, so no surface can develop its own
@@ -1032,12 +1049,43 @@ type serveDependencies struct {
 	AdminKey       string
 }
 
-// buildRemoteServeMux uses the canonical authenticated route construction and
-// the exact same Core, signer, authority, delegation gate, and lifecycle state
-// as the local mux. Remote provenance is established by this listener role.
+// buildRemoteServeMux projects only the Pollinator-facing public routes. It
+// shares the local Stem's Core, signer, authority, grants, WatchAuthority, and
+// lifecycle state, but neither its route set nor its Botanist credential lane.
 func buildRemoteServeMux(deps serveDependencies) *http.ServeMux {
-	deps.Networked = true
-	return buildServeMux(deps)
+	mux := http.NewServeMux()
+
+	// The durable root is accepted only at this self-authenticating mint route.
+	receptors.NewPollinatorTokenHandler(deps.StemSigner, deps.Authority).Register(mux)
+
+	// The public data/MCP surfaces prove the short-lived token here, then keep
+	// their existing per-invocation grant and ownership checks downstream.
+	pollinatorAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return withPollinatorAccessTokenAuth(deps.StemSigner, next)
+	}
+	watch := receptors.NewWatchAuthority(deps.DelegationGate, deps.History)
+
+	seedHandler := receptors.NewSeedHandler(deps.CoreService).
+		WithDelegation(deps.DelegationGate).
+		WithHistory(deps.History)
+	seedHandler.Register(mux, pollinatorAuth)
+
+	sessionsHandler := receptors.NewSessionsHandler(deps.CoreService, deps.Sessions, deps.History, deps.EventBus).
+		WithWatch(watch).
+		WithDelegation(deps.DelegationGate)
+	sessionsHandler.RegisterPollinatorRoutes(mux, pollinatorAuth)
+
+	mcpHandler := receptors.NewMCPHandler().
+		WithSessions(deps.Sessions, deps.History).
+		WithCore(deps.CoreService).
+		WithDelegation(deps.DelegationGate, "").
+		WithWatch(watch).
+		WithPollinatorProjection()
+	mux.HandleFunc("POST /v1", pollinatorAuth(mcpHandler.HandleMCP))
+
+	mux.HandleFunc("GET /health", handleHealth(deps.HealthMonitor, true))
+
+	return mux
 }
 
 func buildServeMux(deps serveDependencies) *http.ServeMux {

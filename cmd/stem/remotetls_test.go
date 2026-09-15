@@ -16,12 +16,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
-	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 )
 
@@ -251,43 +249,20 @@ func TestRemoteListenerSetupBindsOnlyItsConfiguredAddress(t *testing.T) {
 }
 
 func TestRemoteMuxSharesCoreAuthorityAndIgnoresForwardingHeaders(t *testing.T) {
-	dir := t.TempDir()
-	root, _, err := core.IssuePollinatorCredential(dir, "claude", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	grantsPath := filepath.Join(dir, core.DelegationGrantsFilename)
-	if err := os.WriteFile(grantsPath, []byte("grants:\n  claude:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	authority := core.NewAuthority(dir)
-	signer, err := core.LoadOrCreateStemSigner(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bus := eventbus.New()
-	t.Cleanup(bus.Shutdown)
-	gate := &receptors.DelegationGate{Authority: authority, Signer: signer, Bus: bus}
 	var executions int
+	var invokedPollen string
 	coreSvc := core.NewService(nil).WithSprout(core.SproutOperations{
-		Run: func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		Run: func(ctx context.Context, _ core.SproutSpec) (core.SproutRunReport, error) {
 			executions++
+			invokedPollen = core.PollenFromContext(ctx)
 			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
 		},
 	})
-	deps := serveDependencies{
-		APIKey:         "botanist-key",
-		Authority:      authority,
-		StemSigner:     signer,
-		DelegationGate: gate,
-		EventBus:       bus,
-		CoreService:    coreSvc,
-	}
-	localMux := buildServeMux(deps)
-	remoteMux := buildRemoteServeMux(deps)
-	if deps.Networked {
-		t.Fatal("buildRemoteServeMux mutated the local listener's posture")
-	}
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n", coreSvc)
+	root := fixture.root
+	signer := fixture.signer
+	remoteMux := fixture.mux
+	localMux := fixture.localMux()
 
 	mint := httptest.NewRecorder()
 	mintRequest := httptest.NewRequest(http.MethodPost, "/v1/pollinator/token", nil)
@@ -306,26 +281,29 @@ func TestRemoteMuxSharesCoreAuthorityAndIgnoresForwardingHeaders(t *testing.T) {
 		t.Fatalf("minted token claims = %+v, valid=%v", claims, ok)
 	}
 
-	request := func(mux http.Handler, path, bearer string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"transcript":"grow","substrate":"core"}`))
-		req.Header.Set("Authorization", "Bearer "+bearer)
-		req.Header.Set("Forwarded", "for=127.0.0.1;host=localhost;proto=http")
-		req.Header.Set("X-Forwarded-For", "127.0.0.1")
-		req.Header.Set("X-Forwarded-Host", "localhost")
-		req.Header.Set("X-Forwarded-Proto", "http")
-		response := httptest.NewRecorder()
-		mux.ServeHTTP(response, req)
-		return response
+	request := func(mux http.Handler, path, bearer, body string) *httptest.ResponseRecorder {
+		return serveMuxRequest(mux, http.MethodPost, path, body, map[string]string{
+			"Authorization":        "Bearer " + bearer,
+			"Forwarded":            "for=127.0.0.1;host=localhost;proto=http",
+			"X-Forwarded-For":      "127.0.0.1",
+			"X-Forwarded-Host":     "localhost",
+			"X-Forwarded-Proto":    "http",
+			receptors.PollenHeader: "attacker-pollen",
+		})
 	}
-	for _, path := range []string{"/v1/sprouts/grow", "/v1"} {
-		if got := request(remoteMux, path, root).Code; got != http.StatusUnauthorized {
+	mcpGrow := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sproutGrow","arguments":{"transcript":"grow","substrate":"core"}}}`
+	for _, path := range []string{"/v1"} {
+		if got := request(remoteMux, path, root, mcpGrow).Code; got != http.StatusUnauthorized {
 			t.Errorf("remote durable root on %s with forwarded headers = %d, want 401", path, got)
 		}
 	}
-	if got := request(remoteMux, "/v1/sprouts/grow", response.Token).Code; got != http.StatusOK {
+	if got := request(remoteMux, "/v1", response.Token, mcpGrow).Code; got != http.StatusOK {
 		t.Fatalf("remote access-token governed route = %d, want 200", got)
 	}
-	if got := request(localMux, "/v1/sprouts/grow", root).Code; got != http.StatusOK {
+	if invokedPollen != "claude" {
+		t.Fatalf("public Core Pollen = %q, want token-derived claude", invokedPollen)
+	}
+	if got := request(localMux, "/v1/sprouts/grow", root, `{"transcript":"grow","substrate":"core"}`).Code; got != http.StatusOK {
 		t.Fatalf("existing local root-on-data route = %d, want 200", got)
 	}
 	if executions != 2 {
