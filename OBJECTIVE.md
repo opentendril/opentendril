@@ -13,56 +13,70 @@ exists to make possible.
 
 ## Current
 
-**An authorised Pollinator on another machine can connect to a governed
-OpenTendril Stem, delegate and continue real coding work on a granted Substrate,
-safely observe the same Phytomer, and receive Git-reviewable Fruit without
-receiving Stem, host, Substrate, Sprout, Terrarium, or infrastructure
-credentials.**
+**An authorised Pollinator on the public Internet can reach a governed
+OpenTendril Stem through a deliberately exposed Pollinator ingress, exercise the
+existing bounded Seed/Phytomer interaction contract, and receive Git-reviewable
+Fruit without gaining Botanist, Stem-host, Substrate, Sprout, Terrarium,
+provider, repository, or infrastructure authority.**
 
 ## Done when
 
-Recorded exercises with a real Pollinator on another machine and a granted
-Substrate demonstrate all of the following:
+Externally demonstrable exercises with an authorised Pollinator, a governed
+Stem, and a granted Substrate establish all of the following:
 
-- **Authentication is explicit, bounded and attributable.** Access uses an
-  explicit grant with defined authority and limits, is attributable to a Pollen,
-  and revocation fails closed: revoked or otherwise invalid Pollinator authority
-  is denied on subsequent governed operations. A Pollinator cannot create or
-  widen its own grant.
-- **Substrate authority stays Stem-side.** The Stem retains target Substrate
-  authority and credentials. The remote Pollinator receives no Stem-host shell,
-  filesystem, service-management, Docker, Git, provider, or infrastructure
-  credentials, nor credentials for the Stem, target Substrate, Sprout, or
-  Terrarium.
-- **Interaction remains Stem-owned.** Seed growth, safe observation, and
-  continuation follow the existing Stem-owned interaction model. The Pollinator
-  can delegate real coding work and continue it within the same Phytomer without
-  a Pollinator-to-Sprout or Pollinator-to-Terrarium channel.
-- **Observation is safe.** The Pollinator can inspect useful identity,
-  Substrate, lifecycle, activity, failures, iteration state, and Fruit, but
-  cannot observe raw model reasoning or credentials.
-- **Terrarium isolation is unchanged.** Remote delegation neither bypasses nor
-  weakens the existing Terrarium isolation boundary.
-- **Interruption is safe and resumable.** Transport interruption and reconnect
-  continue the same Seed and Phytomer; they do not create replacement Seeds or
-  deliver continuation more than once.
-- **The result remains Fruit.** Successful work produces independently
-  reviewable Git branch and commit state, leaves protected/default state
-  unchanged, and provides enough information for the Botanist to review and
-  accept or reject it.
-- **Operational friction is recorded.** Setup steps, manual interventions,
-  reconnect and revocation behavior, and failures are recorded rather than
-  hidden.
+- **Internet-remote qualification.** The Pollinator reaches the Stem from a
+  genuinely Internet-remote network location, not a shared LAN, local bridge,
+  local tunnel, or private same-network host.
+- **Supported public exposure.** The ingress uses an explicit, supported public
+  Pollinator exposure arrangement; qualification does not depend on
+  undocumented port forwarding.
+- **TLS before credentials.** The Pollinator completes normal TLS certificate-
+  chain and hostname/SAN verification before presenting any Pollinator
+  credential.
+- **Location is not authority.** Being on the public Internet or reaching the
+  ingress grants no capability authority. Governed access still requires
+  authenticated Pollen and a matching live DelegationGrant.
+- **Roots are not data-route authority.** A durable Pollinator root does not
+  become long-lived normal data-route authority over the public Internet;
+  access-token expiry is enforced and bounded.
+- **Management-plane boundary.** The public Pollinator ingress does not expose
+  Botanist or other control-plane authority. The management-plane boundary is
+  explicit and remains distinct from Pollinator ingress.
+- **Existing governed lifecycle.** Requests reuse the existing Stem Core
+  capability authority and bounded Seed/Phytomer interaction lifecycle,
+  including safe observation and continuation of the same work.
+- **Live revocation.** Root revocation prevents subsequent access-token minting,
+  and grant removal or narrowing blocks governed admissions under the live
+  grant, without relying on a Stem restart.
+- **Safe interruption.** Internet interruption and reconnect preserve safe,
+  idempotent Seed/Phytomer interaction; retries do not create replacement work
+  or deliver continuation more than once.
+- **Unchanged execution boundary.** The existing Sprout/Terrarium isolation is
+  unchanged, and there is no Pollinator-to-Sprout or Pollinator-to-Terrarium
+  channel. Normal sealed Terrariums receive no implicit Stem environment file
+  or ambient Stem credential material; any execution environment is explicitly
+  declared by the governed Terrarium/Sprout contract.
+- **Fail-closed requests.** Malformed, unauthenticated, wrong-Pollen,
+  absent-grant, invalid-TLS, and forwarding-metadata spoof attempts fail closed
+  without exercising governed authority.
+- **Bounded resource use.** Unauthenticated or minimally authenticated traffic
+  cannot cause unbounded resource exhaustion; bounded protection and failure
+  behavior are demonstrable.
+- **Reviewable Fruit.** Successful work yields Git-reviewable Fruit while
+  protected/default state remains unchanged. Fruit is not accepted or merged
+  automatically; the Botanist retains that decision.
+- **Operational friction is recorded.** The qualification records DNS,
+  certificate lifecycle, firewall/NAT or equivalent exposure requirements,
+  provisioning, revocation, reconnect, and failure recovery.
 
 This objective does not require:
 
-- GitHub-specific workers;
+- GitHub-native workers;
 - GitHub Actions identity;
-- multi-instance routing or Stem federation;
-- shared enterprise scheduling;
-- Greenhouse implementation;
-- arbitrary public Internet exposure;
-- auto-merge; or
+- Greenhouse public deployment;
+- Stem federation or multi-instance routing;
+- general enterprise IAM;
+- automatic Fruit acceptance or merge; or
 - weakening Terrarium isolation.
 
 ---
