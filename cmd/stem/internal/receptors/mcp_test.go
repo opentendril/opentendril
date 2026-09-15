@@ -2,6 +2,7 @@ package receptors
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -295,6 +296,150 @@ func TestMCPToolsListPublishesPrimaryProjection(t *testing.T) {
 		if listed[rejected] != 0 {
 			t.Errorf("tools/list published unapproved name %q", rejected)
 		}
+	}
+}
+
+func TestMCPPollinatorProjectionExposesOnlyDelegatedPrimaryTools(t *testing.T) {
+	handler := NewMCPHandler().WithCore(core.NewService(nil)).WithPollinatorProjection()
+
+	var initialized struct {
+		Result struct {
+			Capabilities map[string]json.RawMessage `json:"capabilities"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(handler.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)), &initialized); err != nil {
+		t.Fatalf("decode initialize: %v", err)
+	}
+	if _, exposed := initialized.Result.Capabilities["resources"]; exposed {
+		t.Fatal("public initialize advertised repository-backed resources")
+	}
+	if response := handler.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)); len(response) != 0 {
+		t.Fatalf("initialized notification response = %s, want no response", response)
+	}
+
+	var listed struct {
+		Result struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(handler.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)), &listed); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	actual := make(map[string]int, len(listed.Result.Tools))
+	for _, tool := range listed.Result.Tools {
+		actual[tool.Name]++
+	}
+	expected := make(map[string]bool)
+	for _, capability := range core.DelegatedCapabilityNames() {
+		expected[MCPToolName(capability)] = true
+	}
+	expected[MCPViewSproutWatch] = true
+	for name := range expected {
+		if actual[name] != 1 {
+			t.Errorf("public tool %q appears %d times, want once", name, actual[name])
+		}
+	}
+	for _, capability := range core.CapabilityNames() {
+		name := MCPToolName(capability)
+		if !core.IsDelegatedCapability(capability) && actual[name] != 0 {
+			t.Errorf("public tools/list exposed non-delegated capability %q as %q", capability, name)
+		}
+	}
+	for _, alias := range []string{"runSequence", "sproutTendril", "createGenotype", "viewGenome", "reduceGenome", "injectPlasmid", "graftSubstrate", "promotePR"} {
+		if actual[alias] != 0 {
+			t.Errorf("public tools/list exposed compatibility alias %q", alias)
+		}
+	}
+	if len(actual) != len(expected) {
+		t.Errorf("public tools/list exposed %d tools, want exactly %d", len(actual), len(expected))
+	}
+
+	for _, method := range []string{"resources/list", "resources/read"} {
+		payload, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 3, "method": method})
+		var response struct {
+			Error *mcpError `json:"error"`
+		}
+		if err := json.Unmarshal(handler.ProcessMCPMessage(payload), &response); err != nil {
+			t.Fatalf("decode %s response: %v", method, err)
+		}
+		if response.Error == nil || response.Error.Code != -32601 {
+			t.Errorf("%s error = %+v, want method-not-found", method, response.Error)
+		}
+	}
+}
+
+func TestMCPPollinatorProjectionRejectsNonDelegatedCallsBeforeCore(t *testing.T) {
+	var sequenceCalls int
+	service := core.NewService(nil).WithSequence(core.SequenceOperations{
+		Run: func(context.Context, core.SequenceRunInput) (core.SequenceRunResult, error) {
+			sequenceCalls++
+			return core.SequenceRunResult{Name: "unexpected"}, nil
+		},
+	})
+	handler := NewMCPHandler().WithCore(service).WithPollinatorProjection()
+	for _, name := range []string{"sequenceGrow", "runSequence"} {
+		payload, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params":  map[string]any{"name": name, "arguments": map[string]any{"pathOrName": "sequence.yaml"}},
+		})
+		if err != nil {
+			t.Fatalf("marshal %s call: %v", name, err)
+		}
+		var response struct {
+			Error *mcpError `json:"error"`
+		}
+		if err := json.Unmarshal(handler.ProcessMCPMessage(payload), &response); err != nil {
+			t.Fatalf("decode %s response: %v", name, err)
+		}
+		if response.Error == nil || response.Error.Code != -32601 {
+			t.Errorf("non-delegated %s error = %+v, want tool-not-found", name, response.Error)
+		}
+	}
+	if sequenceCalls != 0 {
+		t.Fatalf("non-delegated Core invocation count = %d, want 0", sequenceCalls)
+	}
+}
+
+func TestMCPPollinatorProjectionAllowsDelegatedCallAndAlias(t *testing.T) {
+	handler, bus, executed, _ := newMCPDelegationTestHandler(t)
+	t.Cleanup(bus.Shutdown)
+	gate := &DelegationGate{
+		Authorizer: core.NewDelegationAuthorizer([]core.DelegationGrant{{
+			Pollen:           "mcp-Pollinator",
+			OperationClasses: []string{core.CapGitStatus, core.CapSproutGrow},
+			Substrates:       []string{"core"},
+		}}),
+		Bus: bus,
+	}
+	handler.WithDelegation(gate, "mcp-Pollinator").WithPollinatorProjection()
+	if _, isError := mcpCallTool(t, handler, "gitStatus", map[string]any{"substrate": "core"}); isError {
+		t.Fatal("public primary delegated tool gitStatus was rejected")
+	}
+	if _, isError := mcpCallTool(t, handler, "sproutTendril", map[string]any{
+		"transcript": "grow",
+		"substrate":  "core",
+	}); isError {
+		t.Fatal("public alias resolving to delegated sprout.grow was rejected")
+	}
+	if got := executed.Load(); got != 2 {
+		t.Fatalf("delegated Core execution count = %d, want 2", got)
+	}
+}
+
+func TestMCPPollinatorProjectionKeepsSproutWatchAuthority(t *testing.T) {
+	env := newSproutWatchEnv(t, "codex", []core.DelegationGrant{
+		watchGrant("codex", "core", core.CapSeedGrow),
+	})
+	defer env.finish()
+	env.handler.WithPollinatorProjection()
+	seed := startDetachedMCPSeed(t, env)
+	text, isError := mcpCallTool(t, env.handler, MCPViewSproutWatch, map[string]any{"sessionId": seed.PhytomerID})
+	if !isError || !strings.Contains(text, "delegation denied") {
+		t.Fatalf("public sproutWatch without its independent grant: isError=%v text=%q", isError, text)
 	}
 }
 

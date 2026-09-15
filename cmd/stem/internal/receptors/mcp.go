@@ -25,8 +25,9 @@ type MCPHandler struct {
 	// delegation gates delegated-class capability invocations (see
 	// core.DelegatedCapabilityNames) against the active grants. A nil gate
 	// denies every delegated-class invocation: with no delegation configured,
-	// delegated capabilities are unreachable over MCP while every
-	// non-delegated capability dispatches untouched.
+	// delegated capabilities are unreachable over MCP. The private MCP surface
+	// keeps its existing non-delegated behavior; the public projection rejects
+	// non-delegated capabilities before Core invocation.
 	delegation *DelegationGate
 	// pollen is the Pollen bound to this MCP
 	// connection at bind-time. The pollen is a property of the trusted
@@ -37,6 +38,10 @@ type MCPHandler struct {
 	// watch is the shared sprout.watch ownership/grant authority used by the
 	// MCP current-state view. REST uses the same type.
 	watch *WatchAuthority
+	// pollinatorProjection narrows this adapter to the public transport method
+	// set and Core-delegated capabilities. The local MCP adapter keeps its full
+	// existing tool and repository-resource surface.
+	pollinatorProjection bool
 }
 
 func NewMCPHandler() *MCPHandler {
@@ -105,6 +110,14 @@ func (h *MCPHandler) WithWatch(watch *WatchAuthority) *MCPHandler {
 	return h
 }
 
+// WithPollinatorProjection restricts this MCP adapter instance to the public
+// Pollinator protocol and capability projection. Capability membership is
+// derived from canonical Core operation classification at list and call time.
+func (h *MCPHandler) WithPollinatorProjection() *MCPHandler {
+	h.pollinatorProjection = true
+	return h
+}
+
 func (h *MCPHandler) SetupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/v1", h.HandleMCP)
 }
@@ -168,19 +181,29 @@ func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
 	if err := json.Unmarshal(reqBytes, &req); err != nil {
 		return h.formatError(nil, -32700, "Parse error", err.Error())
 	}
+	if h.pollinatorProjection {
+		switch req.Method {
+		case "initialize", "notifications/initialized", "tools/list", "tools/call":
+		default:
+			return h.formatError(req.ID, -32601, "Method not found", nil)
+		}
+	}
 
 	switch req.Method {
 	case "initialize":
+		capabilities := map[string]interface{}{
+			"tools": map[string]interface{}{},
+		}
+		if !h.pollinatorProjection {
+			capabilities["resources"] = map[string]interface{}{}
+		}
 		return h.formatResult(req.ID, map[string]interface{}{
 			"protocolVersion": "2024-11-05",
 			"serverInfo": map[string]string{
 				"name":    "opentendril",
 				"version": "0.1.0",
 			},
-			"capabilities": map[string]interface{}{
-				"tools":     map[string]interface{}{},
-				"resources": map[string]interface{}{},
-			},
+			"capabilities": capabilities,
 		})
 
 	case "notifications/initialized":

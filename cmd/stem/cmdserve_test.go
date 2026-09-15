@@ -15,6 +15,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
@@ -116,6 +117,435 @@ func TestServeMuxUsesLivePollinatorAuthority(t *testing.T) {
 	if executions != 1 {
 		t.Fatalf("removed grant admitted more work; executions = %d, want 1", executions)
 	}
+}
+
+func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "", nil)
+
+	approved := []struct {
+		method  string
+		path    string
+		pattern string
+	}{
+		{http.MethodGet, "/health", "GET /health"},
+		{http.MethodPost, "/v1/pollinator/token", "POST /v1/pollinator/token"},
+		{http.MethodPost, "/v1", "POST /v1"},
+		{http.MethodPost, "/v1/seeds/grow", "POST /v1/seeds/grow"},
+		{http.MethodPost, "/v1/seeds/grow/async", "POST /v1/seeds/grow/async"},
+		{http.MethodGet, "/v1/seeds/runs/seed-1", "GET /v1/seeds/runs/{handle}"},
+		{http.MethodPost, "/v1/phytomers/phytomer-1/continue", "POST /v1/phytomers/{sessionId}/continue"},
+		{http.MethodGet, "/v1/phytomers/phytomer-1/watch", "GET /v1/phytomers/{sessionId}/watch"},
+	}
+	for _, route := range approved {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			request := httptest.NewRequest(route.method, route.path, nil)
+			_, pattern := fixture.mux.Handler(request)
+			if pattern != route.pattern {
+				t.Fatalf("route pattern = %q, want %q", pattern, route.pattern)
+			}
+		})
+	}
+
+	private := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/config/triggers"},
+		{http.MethodGet, "/v1/config/substrates"},
+		{http.MethodPost, "/v1/mesh/admin/issue-token"},
+		{http.MethodPost, "/v1/mesh/graft"},
+		{http.MethodGet, "/v1/delegation/pending"},
+		{http.MethodPost, "/v1/chat/completions"},
+		{http.MethodGet, "/ws"},
+		{http.MethodPost, "/v1/phytomers"},
+		{http.MethodGet, "/v1/phytomers/phytomer-1"},
+		{http.MethodPost, "/v1/sessions/phytomer-1/continue"},
+	}
+	for _, route := range private {
+		t.Run("private "+route.method+" "+route.path, func(t *testing.T) {
+			response := serveMuxRequest(fixture.mux, route.method, route.path, "", nil)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want 404 (%s)", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestRemoteMuxAcceptsOnlyShortLivedAccessTokensOnDataAndMCP(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "", nil)
+	validToken, err := fixture.signer.MintAccessToken("claude", time.Minute, core.AccessTokenScope{})
+	if err != nil {
+		t.Fatalf("mint access token: %v", err)
+	}
+
+	otherSigner, err := core.LoadOrCreateStemSigner(filepath.Join(fixture.dir, "other-stem"))
+	if err != nil {
+		t.Fatalf("other signer: %v", err)
+	}
+	forgedToken, err := otherSigner.MintAccessToken("claude", time.Minute, core.AccessTokenScope{})
+	if err != nil {
+		t.Fatalf("mint forged token: %v", err)
+	}
+	expiredToken, err := fixture.signer.MintAccessToken("claude", time.Nanosecond, core.AccessTokenScope{})
+	if err != nil {
+		t.Fatalf("mint expiring token: %v", err)
+	}
+	// dwell: allow the intentionally 1ns access token to expire before verification.
+	time.Sleep(time.Millisecond)
+
+	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize"}`
+	for _, route := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, "/v1", initBody},
+		{http.MethodPost, "/v1/seeds/grow", ""},
+	} {
+		for _, credential := range []string{"botanist-key", fixture.root} {
+			response := serveMuxRequest(fixture.mux, route.method, route.path, route.body, map[string]string{
+				"Authorization": "Bearer " + credential,
+			})
+			if response.Code != http.StatusUnauthorized {
+				t.Errorf("%s with non-access credential: status = %d, want 401 (%s)", route.path, response.Code, response.Body.String())
+			}
+		}
+	}
+
+	for _, token := range []string{forgedToken, expiredToken} {
+		response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", initBody, map[string]string{
+			"Authorization": "Bearer " + token,
+		})
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("invalid access token: status = %d, want 401 (%s)", response.Code, response.Body.String())
+		}
+	}
+
+	for _, target := range []string{
+		"/v1?token=" + validToken,
+		"/v1?key=botanist-key",
+	} {
+		response := serveMuxRequest(fixture.mux, http.MethodPost, target, initBody, nil)
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("query credential %q authenticated: status = %d, want 401", target, response.Code)
+		}
+	}
+	response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", initBody, map[string]string{
+		receptors.PollenHeader: "claude",
+	})
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("Pollen claim without Authorization authenticated: status = %d, want 401", response.Code)
+	}
+	response = serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token?token="+fixture.root, "", nil)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("mint query credential authenticated: status = %d, want 401", response.Code)
+	}
+
+	response = serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token", "", map[string]string{
+		"Authorization": "Bearer " + fixture.root,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("durable root mint: status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode minted token: %v", err)
+	}
+	if !core.LooksLikeAccessToken(minted.Token) {
+		t.Fatalf("mint returned a non-access token %q", minted.Token)
+	}
+
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":4,"method":"initialize"}`,
+		`{"jsonrpc":"2.0","id":5,"method":"tools/list"}`,
+	} {
+		response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+			"Authorization": "Bearer " + minted.Token,
+		})
+		if response.Code != http.StatusOK {
+			t.Errorf("public MCP request %s: status = %d, want 200 (%s)", body, response.Code, response.Body.String())
+		}
+	}
+	for _, method := range []string{"resources/list", "resources/read"} {
+		body := `{"jsonrpc":"2.0","id":6,"method":"` + method + `"}`
+		response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+			"Authorization": "Bearer " + minted.Token,
+		})
+		var rpcResponse struct {
+			Error *struct {
+				Code int `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &rpcResponse); err != nil {
+			t.Fatalf("decode public %s response: %v", method, err)
+		}
+		if response.Code != http.StatusOK || rpcResponse.Error == nil || rpcResponse.Error.Code != -32601 {
+			t.Errorf("public %s status/error = %d/%+v, want 200/method-not-found", method, response.Code, rpcResponse.Error)
+		}
+	}
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"createGenotype"}}`,
+		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"createGenotype","arguments":null}}`,
+	} {
+		response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+			"Authorization": "Bearer " + minted.Token,
+		})
+		var rpcResponse struct {
+			Error *struct {
+				Code int `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &rpcResponse); err != nil {
+			t.Fatalf("decode malformed public alias response: %v", err)
+		}
+		if response.Code != http.StatusOK || rpcResponse.Error == nil || rpcResponse.Error.Code != -32602 {
+			t.Errorf("malformed public alias status/error = %d/%+v, want 200/invalid-params", response.Code, rpcResponse.Error)
+		}
+	}
+}
+
+func TestRemoteMuxDerivesGrantPollenFromAccessTokenOnly(t *testing.T) {
+	var calls int
+	var invokedPollen string
+	var seedRuns int
+	var seedPollen string
+	var sproutRuns int
+	var sproutPollen string
+	var sproutDelegation core.DelegationRequest
+	var sproutHasDelegation bool
+	manager, err := session.NewManager(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	service := core.NewService(manager).WithGit(core.GitOperations{
+		Status: func(ctx context.Context, _ core.GitStatusSpec) (core.GitStatusResult, error) {
+			calls++
+			invokedPollen = core.PollenFromContext(ctx)
+			return core.GitStatusResult{Branch: "topic", Clean: true, CommitAllowed: true}, nil
+		},
+	}).WithSeed(core.SeedOperations{
+		Run: func(ctx context.Context, spec core.SeedSpec, _ *core.SeedContinuationLifecycle) (core.SeedGrowResult, error) {
+			seedRuns++
+			seedPollen = core.PollenFromContext(ctx)
+			return core.SeedGrowResult{Status: core.SeedStatusSatisfied, Iterations: 1, PhytomerID: spec.PhytomerID}, nil
+		},
+	}).WithSprout(core.SproutOperations{
+		Run: func(ctx context.Context, _ core.SproutSpec) (core.SproutRunReport, error) {
+			sproutRuns++
+			sproutPollen = core.PollenFromContext(ctx)
+			sproutDelegation, sproutHasDelegation = core.AuthorizedDelegationRequestFromContext(ctx)
+			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
+		},
+	})
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [git.status, seed.grow, sprout.grow]\n    substrates: [core]\n", service)
+	mintResponse := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token", "", map[string]string{
+		"Authorization": "Bearer " + fixture.root,
+	})
+	if mintResponse.Code != http.StatusOK {
+		t.Fatalf("mint access token: status = %d (%s)", mintResponse.Code, mintResponse.Body.String())
+	}
+	var minted struct {
+		Token  string `json:"token"`
+		Pollen string `json:"pollen"`
+	}
+	if err := json.Unmarshal(mintResponse.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode minted access token: %v", err)
+	}
+	if minted.Pollen != "claude" {
+		t.Fatalf("minted token Pollen = %q, want claude", minted.Pollen)
+	}
+	token := minted.Token
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"gitStatus","arguments":{"substrate":"core"}}}`
+	response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+		"Authorization":           "Bearer " + token,
+		receptors.PollenHeader:    "attacker-pollen",
+		"Forwarded":               "for=127.0.0.1;host=botanist.example;proto=http",
+		"X-Forwarded-For":         "127.0.0.1",
+		"X-Forwarded-Host":        "botanist.example",
+		"X-Forwarded-Proto":       "http",
+		"X-Forwarded-Port":        "8080",
+		"X-Forwarded-Client-Cert": "operator",
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("delegated MCP call: status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if calls != 1 || invokedPollen != "claude" {
+		t.Fatalf("Core calls = %d, Pollen = %q; want one call as token Pollen claude", calls, invokedPollen)
+	}
+	seedResponse := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/seeds/grow", `{"substrate":"core","goal":"prove public Seed projection","verify":["true"]}`, map[string]string{
+		"Authorization":        "Bearer " + token,
+		receptors.PollenHeader: "attacker-pollen",
+		"Forwarded":            "for=127.0.0.1;host=botanist.example;proto=http",
+		"X-Forwarded-For":      "127.0.0.1",
+	})
+	if seedResponse.Code != http.StatusOK {
+		t.Fatalf("delegated public Seed request: status = %d, want 200 (%s)", seedResponse.Code, seedResponse.Body.String())
+	}
+	if seedRuns != 1 || seedPollen != "claude" {
+		t.Fatalf("Seed runs = %d, Pollen = %q; want one run as token Pollen claude", seedRuns, seedPollen)
+	}
+	aliasBody := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sproutTendril","arguments":{"transcript":"grow","substrate":"core"}}}`
+	response = serveMuxRequest(fixture.mux, http.MethodPost, "/v1", aliasBody, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("delegated public MCP Sprout alias: status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if sproutRuns != 1 || sproutPollen != "claude" || !sproutHasDelegation {
+		t.Fatalf("Sprout runs = %d, Pollen = %q, has authorized delegation = %t; want one run as token Pollen claude with grant context", sproutRuns, sproutPollen, sproutHasDelegation)
+	}
+	if sproutDelegation.Pollen != "claude" || sproutDelegation.OperationClass != core.CapSproutGrow || sproutDelegation.Substrate != "core" {
+		t.Fatalf("Sprout delegation request = %+v; want access-token Pollen claude, class %s, substrate core", sproutDelegation, core.CapSproutGrow)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.dir, core.DelegationGrantsFilename), []byte("grants: {}\n"), 0o600); err != nil {
+		t.Fatalf("remove live grant: %v", err)
+	}
+	response = serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+		"Authorization": "Bearer " + token,
+	})
+	var denied struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &denied) != nil || !denied.Result.IsError || calls != 1 {
+		t.Fatalf("public call after live grant removal: status=%d response=%s calls=%d; want denied without invocation", response.Code, response.Body.String(), calls)
+	}
+
+	response = serveMuxRequest(fixture.mux, http.MethodPost, "/v1", `{"jsonrpc":"2.0","id":2,"method":"initialize"}`, map[string]string{
+		"Authorization":   "Bearer " + fixture.root,
+		"Forwarded":       "for=127.0.0.1;proto=http",
+		"X-Forwarded-For": "127.0.0.1",
+	})
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("forwarded durable root status = %d, want 401 (%s)", response.Code, response.Body.String())
+	}
+}
+
+func TestRemoteMuxSproutWatchUsesWatchAuthority(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [seed.grow]\n    substrates: [core]\n", core.NewService(nil))
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-watch-handle", Pollen: "claude", PhytomerID: "phytomer-watch-id",
+		Substrate: "core", Status: "satisfied", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed ownership: %v", err)
+	}
+	fixture.deps.History = store
+	fixture.mux = buildRemoteServeMux(fixture.deps)
+
+	mint := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token", "", map[string]string{
+		"Authorization": "Bearer " + fixture.root,
+	})
+	if mint.Code != http.StatusOK {
+		t.Fatalf("mint access token: status = %d (%s)", mint.Code, mint.Body.String())
+	}
+	var minted struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(mint.Body.Bytes(), &minted); err != nil {
+		t.Fatalf("decode minted token: %v", err)
+	}
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sproutWatch","arguments":{"sessionId":"phytomer-watch-id"}}}`
+	response := serveMuxRequest(fixture.mux, http.MethodPost, "/v1", body, map[string]string{
+		"Authorization": "Bearer " + minted.Token,
+	})
+	var rpcResponse struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &rpcResponse); err != nil {
+		t.Fatalf("decode public sproutWatch response: %v", err)
+	}
+	if response.Code != http.StatusOK || !rpcResponse.Result.IsError || len(rpcResponse.Result.Content) == 0 || !strings.Contains(rpcResponse.Result.Content[0].Text, "delegation denied") {
+		t.Fatalf("public sproutWatch response = %d %s; want WatchAuthority delegation denial", response.Code, response.Body.String())
+	}
+}
+
+func TestBuildServeMuxRetainsLocalBotanistMCPAndManagementSurface(t *testing.T) {
+	mux := buildServeMux(serveDependencies{
+		APIKey:      "botanist-key",
+		CoreService: core.NewService(nil),
+	})
+	_, pattern := mux.Handler(httptest.NewRequest(http.MethodGet, "/v1/config/triggers", nil))
+	if pattern != "/v1/config/triggers" {
+		t.Fatalf("local management route pattern = %q, want /v1/config/triggers", pattern)
+	}
+
+	requestBody := `{"jsonrpc":"2.0","id":1,"method":"resources/list"}`
+	response := serveMuxRequest(mux, http.MethodPost, "/v1", requestBody, map[string]string{
+		"Authorization": "Bearer botanist-key",
+	})
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"resources"`) {
+		t.Fatalf("local Botanist MCP resources/list: status = %d body = %s", response.Code, response.Body.String())
+	}
+}
+
+type remoteMuxTestFixture struct {
+	mux    *http.ServeMux
+	dir    string
+	root   string
+	signer *core.StemSigner
+	deps   serveDependencies
+}
+
+func (f *remoteMuxTestFixture) localMux() *http.ServeMux {
+	return buildServeMux(f.deps)
+}
+
+func newRemoteMuxTestFixture(t *testing.T, grants string, service *core.Service) *remoteMuxTestFixture {
+	t.Helper()
+	controlDir := filepath.Join(t.TempDir(), ".tendril")
+	if err := os.MkdirAll(controlDir, 0o700); err != nil {
+		t.Fatalf("create control directory: %v", err)
+	}
+	root, _, err := core.IssuePollinatorCredential(controlDir, "claude", "test")
+	if err != nil {
+		t.Fatalf("issue Pollinator root: %v", err)
+	}
+	signer, err := core.LoadOrCreateStemSigner(controlDir)
+	if err != nil {
+		t.Fatalf("load Stem signer: %v", err)
+	}
+	if grants != "" {
+		if err := os.WriteFile(filepath.Join(controlDir, core.DelegationGrantsFilename), []byte(grants), 0o600); err != nil {
+			t.Fatalf("write grants: %v", err)
+		}
+	}
+	bus := eventbus.New()
+	t.Cleanup(bus.Shutdown)
+	authority := core.NewAuthority(controlDir)
+	gate := &receptors.DelegationGate{Authority: authority, Signer: signer, Bus: bus}
+	deps := serveDependencies{
+		APIKey:         "botanist-key",
+		Authority:      authority,
+		StemSigner:     signer,
+		DelegationGate: gate,
+		EventBus:       bus,
+		CoreService:    service,
+	}
+	mux := buildRemoteServeMux(deps)
+	return &remoteMuxTestFixture{mux: mux, dir: controlDir, root: root, signer: signer, deps: deps}
+}
+
+func serveMuxRequest(mux http.Handler, method, target, body string, headers map[string]string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, request)
+	return response
 }
 
 // Issue finding 1: the Stem must never serve its API unauthenticated.

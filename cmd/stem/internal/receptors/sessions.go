@@ -74,6 +74,8 @@ type governedRoute struct {
 	handler    http.HandlerFunc
 }
 
+const phytomerWatchPattern = "GET /v1/phytomers/{sessionId}/watch"
+
 // governedRoutes is the single table of session-capability routes this adapter
 // wires. Register mounts exactly these and records their capabilities, so the
 // advertised set in Capabilities() reflects what is *actually registered* —
@@ -192,7 +194,7 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 	for pattern, handler := range map[string]http.HandlerFunc{
 		"GET /v1/phytomers/{sessionId}/events":      h.events,
 		"GET /v1/phytomers/{sessionId}/sprout-runs": h.sproutRuns,
-		"GET /v1/phytomers/{sessionId}/watch":       h.phytomerWatch,
+		phytomerWatchPattern:                        h.phytomerWatch,
 	} {
 		mux.HandleFunc(pattern, observeAuth(handler))
 		mux.HandleFunc(sessionAlias(pattern), observeAuth(handler))
@@ -206,6 +208,20 @@ func (h *SessionsHandler) Register(mux *http.ServeMux, auth, observeAuth func(ht
 		mux.HandleFunc(pattern, auth(h.runSequenceAsync))
 		mux.HandleFunc(sessionAlias(pattern), auth(h.runSequenceAsync))
 	}
+}
+
+// RegisterPollinatorRoutes mounts only the delegated continuation command and
+// the existing Phytomer observation view on the public Pollinator projection.
+// The local Register method intentionally keeps its complete canonical and
+// legacy route surface unchanged.
+func (h *SessionsHandler) RegisterPollinatorRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http.HandlerFunc) {
+	if auth == nil {
+		auth = func(next http.HandlerFunc) http.HandlerFunc { return next }
+	}
+	for _, route := range h.delegatedGovernedRoutes() {
+		mux.HandleFunc(route.pattern, auth(route.handler))
+	}
+	mux.HandleFunc(phytomerWatchPattern, auth(h.phytomerWatch))
 }
 
 // sessionAlias maps a canonical "/v1/phytomers…" route pattern to its legacy
