@@ -190,6 +190,7 @@ func TestRemoteMuxAcceptsOnlyShortLivedAccessTokensOnDataAndMCP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mint expiring token: %v", err)
 	}
+	// dwell: allow the intentionally 1ns access token to expire before verification.
 	time.Sleep(time.Millisecond)
 
 	initBody := `{"jsonrpc":"2.0","id":1,"method":"initialize"}`
