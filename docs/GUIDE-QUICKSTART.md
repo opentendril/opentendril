@@ -81,7 +81,7 @@ transport surface, holding a credential it issued you.
 
 ```bash
 systemctl status tendril
-curl -s localhost:8080/health
+curl -s 127.0.0.1:8080/health
 ```
 
 A healthy Stem answers with a report naming each check:
@@ -91,16 +91,20 @@ A healthy Stem answers with a report naming each check:
  "docker-daemon":{"healthy":true},"workspace":{"healthy":true,"message":".tendril workspace is writable"}}}
 ```
 
-The startup log states the bind and what it means for credentials:
+The startup log states the primary HTTP bind posture:
 
 ```
 Starting Go Stem API on 127.0.0.1:8080 (loopback: durable Pollinator credentials
 still accepted on data routes)...
 ```
 
-Loopback is the default. To reach the Stem from another host, set
-`TERROIR_HOST=0.0.0.0`; data routes then refuse durable credentials and require a
-short-lived access token, which is what step 3 mints anyway.
+Loopback is the default. For a Pollinator on another machine, configure the
+Stem's separate HTTPS listener with `TENDRIL_REMOTE_LISTEN_ADDR`,
+`TENDRIL_REMOTE_TLS_CERT`, and `TENDRIL_REMOTE_TLS_KEY`. Do not use a
+non-loopback plaintext HTTP endpoint for Pollinator traffic. See
+[GUIDE-INSTALL.md](./GUIDE-INSTALL.md#remote-pollinator-https-listener) and
+[GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) for the
+Stem and Pollinator setup.
 
 ## 2. Read what the installation actually is
 
@@ -175,11 +179,6 @@ The secret prints **once** and is never stored; only its digest is kept. It begi
 `tendril_refresh_` and is the **durable refresh root** for that Pollinator. Give
 it to that Pollinator; do not give the Pollinator the Botanist key.
 
-> [!IMPORTANT]
-> **Credentials and grants are read at startup.** One issued while the Stem is
-> running is refused with `401` until it restarts. Issue everything first, then
-> restart once.
-
 Then mint a short-lived access token to actually use:
 
 ```bash
@@ -187,10 +186,11 @@ sudo -u tendril -i tendril pollinator token --pollen claude > ~/.tendril-token
 chmod 600 ~/.tendril-token
 ```
 
-Minting is the right habit for two reasons: it works on both loopback and
-off-host binds, and it does not require still holding a root that printed once.
-Tokens last at most 15 minutes; mint another when one expires. Revoking the root
-stops further minting, and outstanding tokens age out.
+Minting gives the Pollinator a short-lived bearer to use on governed requests.
+Tokens last at most 15 minutes; mint another when one expires. Root revocation
+blocks the next mint without restarting the Stem, and outstanding tokens remain
+bounded by their existing expiry. The Stem reads current grants on each
+governed admission.
 
 The redirect keeps the secret out of your terminal history and off your screen.
 Use it without printing it:
@@ -224,8 +224,8 @@ sudo -u tendril -i tendril delegation grant \
   --operation sprout.watch
 ```
 
-If the Stem is already running, restart it so the new grant is read. Then
-inspect again:
+Grant changes take effect on the next governed admission without restarting the
+Stem. Inspect the active grant:
 
 ```text
 pollen: claude
@@ -253,7 +253,7 @@ authentication and that Git base without mutating the repository.
 
 ```bash
 TOKEN=$(cat ~/.tendril-token)
-curl -s -X POST localhost:8080/v1/git/status \
+curl -s -X POST 127.0.0.1:8080/v1/git/status \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"substrate":"myrepo"}'
@@ -286,14 +286,16 @@ and not the Botanist key.
 
 ```bash
 TOKEN=$(cat ~/.tendril-token)
-curl -s -X POST localhost:8080/v1/seeds/grow \
+curl -s -X POST 127.0.0.1:8080/v1/seeds/grow \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true,"idempotencyKey":"seed-open-1"}'
 ```
 
-Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reuse it
-only when retrying the same semantic request; a changed request needs a new key.
+Detached opens require a non-empty, Pollen-scoped `idempotencyKey`. Reusing the
+same key for the same semantic request returns the existing Seed handle and
+Phytomer without replacement work. Reusing it for a different semantic request
+is refused; use a new key for a distinct detached Seed.
 
 Canonical `seed.grow` owns detached lifecycle. The Stem returns active identity
 immediately:
@@ -315,7 +317,7 @@ it does not collect Fruit and does not grant `seed.grow`.
 
 ```bash
 curl -N \
-  localhost:8080/v1/phytomers/<phytomerId>/watch \
+  127.0.0.1:8080/v1/phytomers/<phytomerId>/watch \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -335,7 +337,7 @@ continued intent is never in this view. `main` is not modified.
 After the active `phytomerId` is returned, continue that owned Phytomer:
 
 ```bash
-curl -s -X POST localhost:8080/v1/phytomers/<phytomerId>/continue \
+curl -s -X POST 127.0.0.1:8080/v1/phytomers/<phytomerId>/continue \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"intent":"keep going on the remaining tests","idempotencyKey":"continue-1"}'
@@ -351,7 +353,7 @@ from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
 that dispatched it:
 
 ```bash
-curl -s localhost:8080/v1/seeds/runs/<handle> \
+curl -s 127.0.0.1:8080/v1/seeds/runs/<handle> \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -401,7 +403,7 @@ A frequent confusion, worth stating plainly:
 | | Held by | Used for |
 |---|---|---|
 | **`BOTANIST_KEY`** | the operator | the gate, and management routes such as delegation approvals |
-| **Pollinator credential** (`tendril_refresh_…`) | each caller | delegated data routes, constrained by that caller's grant |
+| **Pollinator credential** (`tendril_refresh_…`) | each caller | token minting; the remote root is not used on governed data routes |
 
 They are separate on purpose. It is why a Pollinator cannot approve its own
 pending confirmation.
@@ -581,8 +583,34 @@ Configure a named connection before starting the MCP host:
 
 ```bash
 tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
-tendril-mcp connection use local
 ```
+
+For a Pollinator on another machine, use the Stem's HTTPS DNS name or IP. The
+certificate must chain to system roots or a named public trust anchor; ordinary
+chain and hostname/IP SAN checks remain enabled:
+
+```bash
+tendril-mcp connection set remote \
+  --endpoint https://stem.example.net:8443 \
+  --credential codex \
+  --trust-anchor stem-ca
+tendril-mcp diagnose --connection remote
+```
+
+The `stem-ca` reference resolves to
+`~/.config/tendril/trust-anchors/stem-ca`; it contains only the public CA
+certificate. Omit the option for system roots. Remote HTTPS uses TLS identity,
+not Unix UID identity. Plain HTTP is accepted only for a literal loopback IP
+with the local Unix-owner separation check. Non-loopback plaintext HTTP is
+refused before the root is read or sent.
+
+The remote listener is configured on the Stem using
+`TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+`TENDRIL_REMOTE_TLS_KEY`. All three must be present together; all absent
+disables it and incomplete or invalid configuration fails startup closed. TLS
+terminates at the Stem with TLS 1.2 minimum. The TLS private key is separate from
+Stem access-token signing material. The standalone Gateway is not the supported
+remote Pollinator ingress.
 
 The credential reference resolves to
 `~/.config/tendril/pollinators/codex`, which must be mode `0600` and owned by
@@ -594,18 +622,20 @@ Startup fails closed when:
 - no credential is configured;
 - the credential file is unsafe;
 - the Stem is unavailable;
-- ownership is not established;
-- the answering Stem has the caller's UID;
+- a literal-loopback HTTP owner is not established or matches the caller's UID;
+- HTTPS certificate trust or hostname/IP SAN verification fails;
 - the Stem refuses the root.
 
-Only after all of those checks pass does MCP forwarding begin.
+For HTTPS, TLS identity replaces Unix UID identity. Only after transport and
+readiness checks pass does the client read/present the root; only after minting
+does MCP forwarding begin. Diagnostics do not print root or access-token values.
 
 ```json
 {
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "args": ["--connection", "local"]
+      "args": ["--connection", "remote"]
     }
   }
 }

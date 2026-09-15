@@ -214,14 +214,40 @@ A `DelegationGrant` (`cmd/stem/internal/core/delegation.go`) carries:
 - **Grant matching is exact and bounded.** Pollen, operation-class, and
   Substrate must each match a value in the grant. No prefix matching, no
   wildcards.
+- **Authority state is live.** The Stem resolves the current durable Pollinator
+  roots when minting and reads current grants for each governed admission. Root
+  revocation affects the next mint; grant removal or narrowing affects the next
+  admission without restarting the Stem. An already-minted access token does
+  not bypass current grant checks.
+- **Grant data is isolated per admission.** Each authorizer deep-copies the
+  grants it loads; later changes to the loaded slice cannot widen or narrow that
+  admission's policy decision.
 - **Empty egress means deny-all.** An empty `Egress` list means no network
   egress is permitted for delegated execution under that grant. The list is
   carried on the grant so an authorized decision is complete for downstream
   Terrarium enforcement.
 - **Expiry is checked at authorization time.** A grant past its `Expires`
   timestamp is silently skipped.
-- **Grants are deep-copied at construction.** Later mutation of the caller's
-  slice cannot widen (or narrow) what the authorizer permits.
+
+### Remote Pollinator transport
+
+The Stem's optional remote listener uses HTTPS terminated at the Stem. It is
+disabled when `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+`TENDRIL_REMOTE_TLS_KEY` are all absent; incomplete or invalid configuration
+fails closed. The client authenticates the Stem using system certificate roots
+and normal chain plus hostname/IP SAN checks, with an optional named public
+`trustAnchor` appended from the canonical Pollinator trust-anchor directory.
+The minimum TLS version is 1.2. There is no insecure verification, TOFU,
+arbitrary certificate acceptance, tunnel dependency, or mTLS Pollinator
+identity.
+
+Remote clients present their durable Pollinator root only to mint an access
+token. Governed data and MCP requests use that short-lived token, capped at 15
+minutes. Plain HTTP remains supported by the restricted client only for a
+literal loopback IP and the existing Unix-owner separation check; HTTPS uses
+the TLS identity and does not use Unix UID identity. Forwarded headers do not
+change the remote ingress posture. The standalone Gateway remains separate and
+is not the supported remote Pollinator ingress.
 
 ### Impact confirmation
 
@@ -339,6 +365,13 @@ distinct: dispatch and collection use the handle (`seed.grow`); observation of
 that growth uses the Phytomer ID under `sprout.watch`. Observation does not
 execute the Seed and does not accept Fruit. `seed.grow`, `phytomer.continue`,
 and `sprout.watch` remain separately grantable.
+
+Detached `seed.grow` requires a non-empty caller `idempotencyKey`. The key is
+scoped by Pollen and paired with the normalized semantic request. A retry with
+the same Pollen, key, and semantic request returns the original Seed handle and
+Phytomer without creating a replacement opening or work lifecycle. Reusing the
+key for a different semantic request conflicts. Synchronous Seed growth does
+not require this key.
 
 #### Direct interactive coding — `tendril chat`
 

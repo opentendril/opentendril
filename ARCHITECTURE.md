@@ -35,6 +35,40 @@ All external requests enter through a transport adapter (CLI, REST, or Model Con
 
 No business logic resides in the adapters. The adapters dispatch to the **Stem Core** (`cmd/stem/internal/core`), which holds the canonical governed capability registry. MCP transport identifiers are adapter projections of those canonical Core names. Interface parity is mechanically enforced across all adapters via tests. The Core executes the capability and enforces policy. Views and control-plane operations are distinct and not Pollinator-facing governed command capabilities.
 
+### Remote Pollinator ingress
+
+The Stem can serve a separate, explicitly configured HTTPS listener for remote
+Pollinators. `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+`TENDRIL_REMOTE_TLS_KEY` must be configured together; with all three absent the
+listener is disabled, and partial or invalid configuration fails Stem startup
+closed. TLS terminates at the Stem with TLS 1.2 or later. The TLS private key is
+separate from the Stem access-token signing material.
+
+Remote Pollinator clients use the operating system certificate roots by
+default. A client may append one named public `trustAnchor` from its canonical
+Pollinator trust-anchor directory. Both system and configured roots retain
+normal certificate-chain and hostname/IP SAN verification. The client does not
+skip verification, trust on first use, accept arbitrary certificates, require
+an SSH/VPN/tunnel, or use mTLS to identify a Pollinator.
+
+The supported Pollinator transport is HTTPS for remote endpoints. Plain HTTP is
+accepted by the restricted Pollinator client only for a literal loopback IP and
+retains the local Unix-owner separation check. HTTPS proves the Stem TLS
+identity and does not use a Unix UID as identity. The remote durable Pollinator
+root is presented only to mint a short-lived access token; governed REST and MCP
+requests use that token, whose lifetime is capped at 15 minutes. Root revocation
+affects the next mint, and grant removal or narrowing affects the next governed
+admission, without restarting the Stem. Each admission reads current Stem-owned
+authority state.
+
+Detached `seed.grow` requires a caller-supplied `idempotencyKey`. For the same
+Pollen, key, and semantic request, a retry returns the existing Seed handle and
+Phytomer instead of creating replacement work. The remote listener reaches the
+same Stem Core capability registry, authorization, Seed lifecycle, and
+Sprout/Terrarium execution boundaries as the other Stem transports. It does not
+change the standalone Gateway's listener or exposure. Fruit remains
+Git-reviewable, and the default branch remains under human control.
+
 ### Direct local coding path
 
 `tendril chat` is an L1 Pollinator-facing presentation adapter. It does not own a separate coding lifecycle.
@@ -98,7 +132,7 @@ When merge-back is enabled, the Terrarium commit is internally merged back into 
 
 The host workspace is not unconditionally failed-closed when dirty. The current `RunSprout` path stashes active, uncommitted Git changes (`git stash save -u`) prior to isolated execution, and teardown restores the stash.
 
-Protected kernel paths enforce a floor of safety, refusing automated merges that modify the Stem's own kernel or governance files. The Botanist always retains the final Gate C merge decision.
+Protected kernel paths enforce a floor of safety, refusing automated merges that modify the Stem's own kernel or governance files. The Botanist always retains the final merge decision.
 
 **Managed App+API Substrates.** When a managed Substrate is configured with `commit: api`, the Stem creates the commit server-side via the GitHub GraphQL/REST API using the GitHub App credential. This eliminates the need for a local signing key; GitHub supplies the commit identity and the `Verified` badge. The `commit: api` mode is only valid with GitHub App authentication (`auth.method: app`). Any other auth method is refused at setup-verify time and fails before a Seed grows.
 

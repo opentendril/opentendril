@@ -1,14 +1,14 @@
 # Pollinator Integration Guide
 
-OpenTendril is a governed git path and isolation boundary for **Pollinators** —
-external requesters, human or Mycorrhizal, that reach in and ask the organism
-for work. A Pollinator never receives a raw git token. It talks to this Ramet
-over the Model Context Protocol. The Stem resolves the Substrate, authenticates
-with the credential it holds, and runs the work inside an isolated Sprout
-within a Terrarium. The Substrate entry names the target repository and the
-environment variable holding the Personal Access Token value. The Stem clones,
-runs and pushes on its own side, while the Sprout doing the work stays sealed
-inside its Terrarium.
+OpenTendril is a governed Git path and isolation boundary for **Pollinators** —
+external requesters, human or Mycorrhizal, that request work from the Stem. A
+Pollinator never receives a raw Git token. It talks to the Stem through a
+transport adapter, commonly `tendril-mcp` over Model Context Protocol. The Stem
+resolves the Substrate, uses credentials it holds, and runs work inside an
+isolated Sprout within a Terrarium. The Substrate entry names the target
+repository and the environment variable holding a Git credential. The Stem
+clones, runs, and publishes from its side while the Sprout stays sealed inside
+its Terrarium.
 
 ## Architecture
 
@@ -21,9 +21,10 @@ executables.
 Pollinator
     -> tendril-mcp
     -> named connection profile
+    -> authenticated Stem HTTPS identity
     -> profile credential reference
-    -> durable Pollinator root
-    -> short-lived access token
+    -> durable Pollinator root used only for minting
+    -> short-lived access token for governed frames
     -> governed Stem
     -> seedGrow(detached, idempotencyKey)
     -> phytomerContinue
@@ -36,31 +37,68 @@ Pollen comes from the governed credential. Continuation Substrate comes from
 Stem-owned Phytomer state; the caller cannot self-declare it. `sproutWatch` is a
 view, not a governed command.
 
-`tendril-mcp` is the Pollinator-side client. It holds that Pollinator's durable
-root, mints short-lived access tokens, and forwards MCP frames to the separately
-owned Stem. Authorization and Pollen derivation stay at the Stem. The client
-cannot construct a Stem and has no in-process mode. Do not launch the protected
+`tendril-mcp` is the Pollinator-side client. It authenticates the Stem TLS peer
+before it reads or presents the Pollinator's durable root. It uses the root
+only at the mint endpoint, then forwards MCP frames with the short-lived access
+token. Authorization and Pollen derivation stay at the Stem. The client cannot
+construct a Stem and has no in-process mode. Do not launch the protected
 `tendril` binary from a governed Pollinator account.
 
-Configure the Pollinator-owned connection separately from the MCP host:
+For a Pollinator on the Stem host, configure literal-loopback HTTP:
 
 ```bash
 tendril-mcp connection set local --endpoint http://127.0.0.1:8080 --credential codex
-tendril-mcp connection use local
 ```
 
-This writes `~/.config/tendril/connections.yaml`. The credential referenced by
-`codex` must already be present at
-`~/.config/tendril/pollinators/codex`, mode `0600`, and owned by the Pollinator
-account. Use `tendril-mcp diagnose --connection local` to inspect connection
-preflight without invoking MCP capabilities.
+For a remote Pollinator, use the Stem's HTTPS name covered by its certificate:
 
-The connection profile can represent a URL origin, but the current restricted
-bridge forwards a durable Pollinator root only over HTTP to a literal same-host
-loopback address (`127.0.0.0/8` or `::1`). HTTPS and non-loopback endpoints are
-not currently supported for credential forwarding; `diagnose` refuses them
-before reading or presenting the credential. This does not claim secure remote
-support.
+```bash
+tendril-mcp connection set remote \
+  --endpoint https://stem.example.net:8443 \
+  --credential codex \
+  --trust-anchor stem-ca
+tendril-mcp diagnose --connection remote
+```
+
+Omit `--trust-anchor` when the Stem certificate chains to an operating-system
+root. When a private CA is used, install only its public PEM certificate as
+`~/.config/tendril/trust-anchors/stem-ca`, owned by the Pollinator account and
+readable by that account. The profile accepts a named reference, not an
+arbitrary file path. The named CA is appended to system roots; regular chain and
+hostname/IP SAN verification still applies. The server certificate's DNS name
+or IP SAN must match the endpoint. No Pollinator client certificate is used.
+
+The remote listener is configured on the Stem with
+`TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+`TENDRIL_REMOTE_TLS_KEY`. All three are required together; all absent disables
+the listener and incomplete or invalid settings fail Stem startup. TLS
+terminates at the Stem with TLS 1.2 minimum. Its private key is separate from
+the access-token signing material.
+
+The remote root is sent only to `POST /v1/pollinator/token`. Governed data and
+MCP requests use the returned access token, capped at 15 minutes. Root
+revocation stops the next mint without a Stem restart; current grant removal or
+narrowing blocks the next governed admission without a restart. Already-issued
+tokens do not override current grants.
+
+Plain HTTP is supported by the restricted client only for a literal loopback IP
+and requires the existing separate Unix-owner check. HTTPS uses TLS identity
+and does not treat Unix UID as Stem identity. The client refuses non-loopback
+plaintext HTTP before reading or sending the root. Forwarded headers cannot
+downgrade the remote posture. No SSH, VPN, or tunnel is required. The standalone
+Gateway is not the remote Pollinator ingress; requests still reach the same
+Stem Core registry and Sprout/Terrarium execution boundaries.
+
+The profile and credential must be owned by the Pollinator account. The
+credential reference `codex` resolves to
+`~/.config/tendril/pollinators/codex`, mode `0600`. Use
+`tendril-mcp diagnose --connection remote` to verify connection posture and
+minting without invoking governed MCP capabilities. Diagnostics do not print
+root or access-token values.
+
+The user-level connection metadata is stored in
+`~/.config/tendril/connections.yaml`; it contains endpoint and named references,
+not secret material.
 
 **Single-user installation**
 
@@ -79,10 +117,19 @@ canonical operation-classes `sprout.grow` and `sequence.grow`.
 
 **Independent REST client**
 
-An independent REST client reads its own Pollinator credential, then presents
-it to `POST /v1/pollinator/token`. The endpoint returns a short-lived access
-token, which the client uses on data routes. This credential flow is separate
-from both MCP executables.
+An independent REST client first verifies the Stem HTTPS certificate and
+hostname/IP SAN using system roots and, when configured, its named public trust
+anchor. Only then does it read and present its Pollinator root to
+`POST /v1/pollinator/token`. It sends the resulting short-lived access token on
+governed data routes. Remote requests use the same Stem Core authority and
+authorization as MCP. The root is never sent on governed data routes.
+
+Detached Seed calls require a caller-provided `idempotencyKey`. Reuse the same
+key only with the same Pollen and semantic request; a replay returns the
+original Seed handle and Phytomer without replacement work. A changed semantic
+request with the same Pollen and key is refused. Continue and observe that same
+Phytomer under their separately granted operation classes. The resulting Fruit
+is Git-reviewable, and the default branch remains human-controlled.
 
 ## Bootstrap the config
 
@@ -163,7 +210,7 @@ already minted from it age out within their 15-minute cap.
   "mcpServers": {
     "opentendril": {
       "command": "tendril-mcp",
-      "args": ["--connection", "local"]
+      "args": ["--connection", "remote"]
     }
   }
 }
