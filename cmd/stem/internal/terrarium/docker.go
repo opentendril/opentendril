@@ -118,10 +118,6 @@ func createDockerTerrarium(ctx context.Context, provider TerrariumProvider, spec
 		args = append(args, "-v", mountArg)
 	}
 
-	if envFile := resolveDockerEnvFile(); envFile != "" {
-		args = append(args, "--env-file", envFile)
-	}
-
 	args = append(args, environmentFlags(spec.Environment)...)
 
 	if workingDir := strings.TrimSpace(spec.WorkingDir); workingDir != "" {
@@ -773,18 +769,6 @@ func runDockerCommand(ctx context.Context, args ...string) (string, string, erro
 	}
 
 	return stdout.String(), stderr.String(), nil
-}
-
-func resolveDockerEnvFile() string {
-	if envFile := strings.TrimSpace(os.Getenv("TENDRIL_ENV_FILE")); envFile != "" {
-		if _, err := os.Stat(envFile); err == nil {
-			return envFile
-		}
-	}
-	if _, err := os.Stat(".env"); err == nil {
-		return ".env"
-	}
-	return ""
 }
 
 func sortedKeys(values map[string]string) []string {

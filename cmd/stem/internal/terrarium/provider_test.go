@@ -81,7 +81,6 @@ func TestDockerProviderCreateHonorsTerrariumSpec(t *testing.T) {
 		"--user 1000:1000",
 		"-v /tmp/workspace:/app",
 		"-v /tmp/cache:/cache:ro",
-		"--env-file " + envFile,
 		"-e FIRST",
 		"-e SECOND",
 		"-w /app",
@@ -90,6 +89,12 @@ func TestDockerProviderCreateHonorsTerrariumSpec(t *testing.T) {
 		if !strings.Contains(logOutput, needle) {
 			t.Fatalf("docker run args missing %q in log %q", needle, logOutput)
 		}
+	}
+	if strings.Contains(logOutput, "--env-file") {
+		t.Fatalf("valid TENDRIL_ENV_FILE was implicitly passed to Docker: %q", logOutput)
+	}
+	if strings.Contains(logOutput, "-e EXAMPLE") {
+		t.Fatalf("TENDRIL_ENV_FILE contents entered the Terrarium environment: %q", logOutput)
 	}
 
 	// The values must never appear among the arguments. Process arguments are
@@ -100,6 +105,78 @@ func TestDockerProviderCreateHonorsTerrariumSpec(t *testing.T) {
 	for _, forbidden := range []string{"FIRST=1", "SECOND=2"} {
 		if strings.Contains(logOutput, forbidden) {
 			t.Fatalf("environment VALUE %q reached the docker command line: %q", forbidden, logOutput)
+		}
+	}
+}
+
+func TestDockerProviderDoesNotLoadWorkingDirectoryDotEnv(t *testing.T) {
+	fake := installFakeDocker(t)
+	t.Setenv("PATH", fake.binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TENDRIL_ENV_FILE", "")
+
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte("WORKING_DOTENV_DECOY=loaded\n"), 0o600); err != nil {
+		t.Fatalf("write working-directory .env: %v", err)
+	}
+	t.Chdir(workDir)
+
+	terrariumInstance, err := NewDockerProvider().Create(context.Background(), TerrariumSpec{
+		Image:      "opentendril-go:latest",
+		WorkingDir: "/app",
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = terrariumInstance.Stop(context.Background()) })
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i --name opentendril-terrarium-")
+	if strings.Contains(logOutput, "--env-file") {
+		t.Fatalf("working-directory .env was implicitly passed to Docker: %q", logOutput)
+	}
+	if strings.Contains(logOutput, "-e WORKING_DOTENV_DECOY") {
+		t.Fatalf("working-directory .env contents entered the Terrarium environment: %q", logOutput)
+	}
+}
+
+func TestDockerProviderKeepsDockerClientEnvironmentOutOfContainerFlags(t *testing.T) {
+	fake := installFakeDocker(t)
+	pathValue := fake.binDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	homeValue := filepath.Join(t.TempDir(), "docker-client-home")
+	dockerHostValue := "unix:///tmp/docker-client.sock"
+	environmentLog := filepath.Join(t.TempDir(), "docker.env.log")
+	t.Setenv("PATH", pathValue)
+	t.Setenv("HOME", homeValue)
+	t.Setenv("DOCKER_HOST", dockerHostValue)
+	t.Setenv("FAKE_DOCKER_ENV_LOG", environmentLog)
+	t.Setenv("TENDRIL_ENV_FILE", "")
+
+	terrariumInstance, err := NewDockerProvider().Create(context.Background(), TerrariumSpec{
+		Image:       "opentendril-go:latest",
+		Environment: map[string]string{"TENDRIL_READONLY": "true"},
+	})
+	if err != nil {
+		t.Fatalf("provider.Create returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = terrariumInstance.Stop(context.Background()) })
+
+	logOutput := waitForLogContent(t, fake.logPath, "run -i --name opentendril-terrarium-")
+	if !strings.Contains(logOutput, "-e TENDRIL_READONLY") {
+		t.Fatalf("explicit container environment flag missing from Docker args: %q", logOutput)
+	}
+	for _, key := range []string{"DOCKER_HOST", "PATH", "HOME"} {
+		if strings.Contains(logOutput, "-e "+key) {
+			t.Fatalf("host Docker client variable %s became a container flag: %q", key, logOutput)
+		}
+	}
+
+	envLog := waitForLogContent(t, environmentLog, "DOCKER_HOST=")
+	for _, expected := range []string{
+		"DOCKER_HOST=" + dockerHostValue,
+		"PATH=" + pathValue,
+		"HOME=" + homeValue,
+	} {
+		if !strings.Contains(envLog, expected) {
+			t.Fatalf("Docker client environment missing %q: %q", expected, envLog)
 		}
 	}
 }
@@ -838,7 +915,6 @@ func testProviderCreateHonorsTerrariumSpec(t *testing.T, provider TerrariumProvi
 		"--user 1000:1000",
 		"-v /tmp/workspace:/app",
 		"-v /tmp/cache:/cache:ro",
-		"--env-file " + envFile,
 		"-e FIRST",
 		"-e SECOND",
 		"-w /app",
@@ -847,6 +923,12 @@ func testProviderCreateHonorsTerrariumSpec(t *testing.T, provider TerrariumProvi
 		if !strings.Contains(logOutput, needle) {
 			t.Fatalf("docker run args missing %q in log %q", needle, logOutput)
 		}
+	}
+	if strings.Contains(logOutput, "--env-file") {
+		t.Fatalf("valid TENDRIL_ENV_FILE was implicitly passed to Docker: %q", logOutput)
+	}
+	if strings.Contains(logOutput, "-e EXAMPLE") {
+		t.Fatalf("TENDRIL_ENV_FILE contents entered the Terrarium environment: %q", logOutput)
 	}
 
 	// Applies to every provider routed through this helper: a value on the
