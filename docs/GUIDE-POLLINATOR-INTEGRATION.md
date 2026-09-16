@@ -75,6 +75,83 @@ the listener and incomplete or invalid settings fail Stem startup. TLS
 terminates at the Stem with TLS 1.2 minimum. Its private key is separate from
 the access-token signing material.
 
+### Public HTTPS projection
+
+The remote listener is a deliberately narrow Pollinator-only projection within
+the same Stem process and shared Core authority. It is not the Botanist
+management interface, the Greenhouse interface, the full local/private Stem
+mux, a second Stem, or a reverse proxy trust boundary. The public routes are
+exactly:
+
+| Route | Credential |
+|---|---|
+| `GET /health` | None |
+| `POST /v1/pollinator/token` | Durable Pollinator root |
+| `POST /v1` | Short-lived Stem-signed access token |
+| `POST /v1/seeds/grow` | Short-lived Stem-signed access token |
+| `POST /v1/seeds/grow/async` | Short-lived Stem-signed access token |
+| `GET /v1/seeds/runs/{handle}` | Short-lived Stem-signed access token |
+| `POST /v1/phytomers/{sessionId}/continue` | Short-lived Stem-signed access token |
+| `GET /v1/phytomers/{sessionId}/watch` | Short-lived Stem-signed access token |
+
+Legacy `/v1/sessions/...` aliases are not public. Botanist configuration, mesh
+management, pending-confirmation management, chat, WebSocket, Greenhouse,
+ordinary Phytomer CRUD, and other local/private routes are not projected on
+this listener. No tunnel is required: the supported public trust topology
+terminates Pollinator TLS directly at the Stem.
+
+The durable root is accepted only at `POST /v1/pollinator/token`. Use the
+returned short-lived access token for public data and MCP requests. The
+Botanist bearer is invalid on the public Pollinator surface, and the durable
+root is invalid on ordinary public data and MCP routes. Send the credential in
+the `Authorization` header; query-string bearer material has no public
+authentication effect. `Forwarded` and `X-Forwarded-*` metadata do not affect
+Pollen, authority, listener provenance, limits, or rate identity. Each
+governed admission reads the live grant state; already-minted access tokens
+still age out cryptographically within their 15-minute cap.
+
+Public MCP accepts protocol initialization, `tools/list`, and `tools/call`. It
+does not expose repository-backed `resources/list` or `resources/read`.
+`tools/list` contains the primary MCP identifiers for canonical Core
+capabilities in `DelegatedCapabilityNames()` plus the `sproutWatch` view. It
+does not list compatibility aliases; an alias can resolve only to an already
+allowed delegated Core capability. The public MCP projection is not the full
+ordinary local MCP/parity surface and does not create a second capability
+authority model.
+
+Public `GET /health` is passive in-memory readiness. It does not run active
+`healthmon` checks, publish health events, inspect repositories, contact
+providers, invoke Docker, create Sprouts or Terrariums, or expose the local
+owner UID. The local/private `/health` remains the active operator-health
+behavior.
+
+The current public transport defaults are:
+
+| Boundary | Default |
+|---|---:|
+| Simultaneous accepted TCP connections | `128` |
+| `ReadHeaderTimeout` | `5s` |
+| `IdleTimeout` | `60s` |
+| `MaxHeaderBytes` | `32 KiB` |
+| Global `ReadTimeout` | unset |
+| Global `WriteTimeout` | unset |
+| Ordinary public request body maximum | `4 MiB` |
+| Token-mint request body maximum | `16 KiB` |
+| Simultaneous public request handling | `64` |
+| Simultaneous authenticated admissions | `32` |
+| Simultaneous long-lived REST observations | `16` |
+| Simultaneous token-mint requests | `8` |
+| Global token-mint rate | `4 requests/second` |
+| Token-mint burst | `8` |
+
+These are public-boundary defaults. Clients may receive `413` when a request
+body exceeds its limit, `429` when the global token-mint bucket is exhausted,
+or `503` when a public concurrency bound is unavailable. The mint bucket is
+global and has no IP-derived or forwarding-header-derived identity; there is
+no generic system-wide rate limiter or global HTTP read/write deadline.
+Excess TCP connections beyond the 128-connection cap are closed before TLS and
+HTTP handling begins, so that cap does not produce an HTTP `503` response.
+
 The remote root is sent only to `POST /v1/pollinator/token`. Governed data and
 MCP requests use the returned access token, capped at 15 minutes. Root
 revocation stops the next mint without a Stem restart; current grant removal or
@@ -85,9 +162,10 @@ Plain HTTP is supported by the restricted client only for a literal loopback IP
 and requires the existing separate Unix-owner check. HTTPS uses TLS identity
 and does not treat Unix UID as Stem identity. The client refuses non-loopback
 plaintext HTTP before reading or sending the root. Forwarded headers cannot
-downgrade the remote posture. No SSH, VPN, or tunnel is required. The standalone
-Gateway is not the remote Pollinator ingress; requests still reach the same
-Stem Core registry and Sprout/Terrarium execution boundaries.
+change Pollen, authority, listener provenance, or limits. No SSH, VPN, or tunnel
+is required. The standalone Gateway is not the remote Pollinator ingress;
+allowed requests still reach the same Stem Core authority and
+Sprout/Terrarium execution boundaries.
 
 The profile and credential must be owned by the Pollinator account. The
 credential reference `codex` resolves to
@@ -122,7 +200,8 @@ hostname/IP SAN using system roots and, when configured, its named public trust
 anchor. Only then does it read and present its Pollinator root to
 `POST /v1/pollinator/token`. It sends the resulting short-lived access token on
 governed data routes. Remote requests use the same Stem Core authority and
-authorization as MCP. The root is never sent on governed data routes.
+authorization as MCP within the public route projection above. The root is
+never sent on governed data routes.
 
 Detached Seed calls require a caller-provided `idempotencyKey`. Reuse the same
 key only with the same Pollen and semantic request; a replay returns the
@@ -259,8 +338,10 @@ setup path is `~/.gemini/config/mcp_config.json`.
 
 ## Using the tools
 
-Once connected, send work to the `default-workspace` Substrate using the
-primary MCP identifiers. Grants remain dotted canonical operation-classes.
+The full canonical MCP examples below are for the single-user/local MCP
+surface (`tendril mcp`). Send work there to the generated `default-workspace`
+Substrate using the primary MCP identifiers. Grants remain dotted canonical
+operation-classes.
 
 | Grant / Core | Primary MCP tool |
 |---|---|
@@ -286,11 +367,23 @@ Example `sequenceGrow` call:
 }
 ```
 
-The eight compatibility aliases (`runSequence`, `sproutTendril`,
-`createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`,
+`sequence.grow` / `sequenceGrow` is not part of the public Pollinator MCP
+projection. Public MCP projects `DelegatedCapabilityNames()` plus the
+`sproutWatch` view, and `sequence.grow` is not in that delegated set. Adding a
+`sequence.grow` grant does not make it public.
+
+For governed `tendril-mcp` users, follow the earlier public Pollinator workflow
+and its restricted tool projection instead of these single-user/local
+examples. That projection exposes only primary MCP identifiers for
+`DelegatedCapabilityNames()` plus `sproutWatch`.
+
+On the local/private MCP surface, the eight compatibility aliases (`runSequence`,
+`sproutTendril`, `createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`,
 `graftSubstrate`, `promotePR`) remain callable. They are deprecated
 compatibility behavior, not the recommended interface, and they carry no
-independent authority.
+independent authority. The public Pollinator projection does not list those
+aliases; a public alias can resolve only to an already-allowed delegated Core
+capability.
 
 The Substrate entry keeps the credential with the Stem and lets the Ramet manage
 the clone, the Terrarium and the push, without ever exposing the secret to the

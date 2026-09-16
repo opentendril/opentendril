@@ -33,41 +33,74 @@ OpenTendril is built on a strict synthetic biological architecture:
 
 All external requests enter through a transport adapter (CLI, REST, or Model Context Protocol). These adapters strictly translate the transport protocol into internal Go structs.
 
-No business logic resides in the adapters. The adapters dispatch to the **Stem Core** (`cmd/stem/internal/core`), which holds the canonical governed capability registry. MCP transport identifiers are adapter projections of those canonical Core names. Interface parity is mechanically enforced across all adapters via tests. The Core executes the capability and enforces policy. Views and control-plane operations are distinct and not Pollinator-facing governed command capabilities.
+No business logic resides in the adapters. The adapters dispatch to the **Stem Core** (`cmd/stem/internal/core`), which holds the canonical governed capability registry. MCP transport identifiers are adapter projections of those canonical Core names. Interface parity is mechanically enforced across the canonical local adapters by tests; the public Pollinator listener is a deliberately narrower projection. The Core executes the capability and enforces policy. Views and control-plane operations are distinct and not Pollinator-facing governed command capabilities.
 
 ### Remote Pollinator ingress
 
-The Stem can serve a separate, explicitly configured HTTPS listener for remote
-Pollinators. `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+The remote HTTPS listener is a separate Pollinator-only public projection in the
+same Stem process and under the same Core authority:
+
+```text
+Internet/reachable Pollinator
+        |
+        | verified HTTPS + Pollinator credentials
+        v
+separate Pollinator-only public mux
+        |
+        v
+same Stem process / same Core authority
+        |
+        +-> governed Seed / Phytomer / Sprout lifecycle
+        |
+        +-> Terrarium
+        |
+        +-> Git-reviewable Fruit
+```
+
+The public projection is not the Botanist management interface, the Greenhouse
+interface, the full local/private Stem mux, a second Stem, or a reverse proxy
+trust boundary. Botanist configuration, mesh management,
+pending-confirmation management, chat, WebSocket, ordinary Phytomer CRUD, and
+other local/private surfaces remain private and are not projected publicly.
+
+The public route set is exactly `GET /health`, `POST /v1/pollinator/token`,
+`POST /v1`, `POST /v1/seeds/grow`, `POST /v1/seeds/grow/async`,
+`GET /v1/seeds/runs/{handle}`,
+`POST /v1/phytomers/{sessionId}/continue`, and
+`GET /v1/phytomers/{sessionId}/watch`. Legacy `/v1/sessions/...` aliases are
+not public. Public MCP accepts initialization, `tools/list`, and `tools/call`
+only; repository-backed `resources/list` and `resources/read` are not public.
+Its tool list contains primary identifiers for `DelegatedCapabilityNames()`
+and the `sproutWatch` view. Compatibility aliases can resolve only to an
+already-allowed delegated Core capability.
+
+`TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
 `TENDRIL_REMOTE_TLS_KEY` must be configured together; with all three absent the
 listener is disabled, and partial or invalid configuration fails Stem startup
-closed. TLS terminates at the Stem with TLS 1.2 or later. The TLS private key is
-separate from the Stem access-token signing material.
+closed. TLS terminates directly at the Stem with TLS 1.2 or later. The TLS
+private key is separate from the Stem access-token signing material. Remote
+clients use normal certificate-chain and hostname/IP SAN verification with
+system roots, optionally augmented by one named public `trustAnchor`. There is
+no insecure verification, TOFU, arbitrary certificate acceptance, mTLS
+Pollinator identity, SSH/VPN, or tunnel requirement.
 
-Remote Pollinator clients use the operating system certificate roots by
-default. A client may append one named public `trustAnchor` from its canonical
-Pollinator trust-anchor directory. Both system and configured roots retain
-normal certificate-chain and hostname/IP SAN verification. The client does not
-skip verification, trust on first use, accept arbitrary certificates, require
-an SSH/VPN/tunnel, or use mTLS to identify a Pollinator.
+The durable Pollinator root is accepted only at the mint route. Public data and
+MCP requests use the short-lived Stem-signed access token in the
+`Authorization` header; the Botanist bearer is invalid publicly, the durable
+root is invalid on ordinary public data/MCP routes, query-string bearer
+material has no public authentication effect, and forwarding headers do not
+affect Pollen, authority, listener provenance, or limits. Root revocation
+affects the next mint, grant removal or narrowing affects the next governed
+admission, and already-minted
+tokens age out cryptographically within their 15-minute cap.
 
-The supported Pollinator transport is HTTPS for remote endpoints. Plain HTTP is
-accepted by the restricted Pollinator client only for a literal loopback IP and
-retains the local Unix-owner separation check. HTTPS proves the Stem TLS
-identity and does not use a Unix UID as identity. The remote durable Pollinator
-root is presented only to mint a short-lived access token; governed REST and MCP
-requests use that token, whose lifetime is capped at 15 minutes. Root revocation
-affects the next mint, and grant removal or narrowing affects the next governed
-admission, without restarting the Stem. Each admission reads current Stem-owned
-authority state.
-
-Detached `seed.grow` requires a caller-supplied `idempotencyKey`. For the same
-Pollen, key, and semantic request, a retry returns the existing Seed handle and
-Phytomer instead of creating replacement work. The remote listener reaches the
-same Stem Core capability registry, authorization, Seed lifecycle, and
-Sprout/Terrarium execution boundaries as the other Stem transports. It does not
-change the standalone Gateway's listener or exposure. Fruit remains
-Git-reviewable, and the default branch remains under human control.
+Public `GET /health` is passive in-memory readiness. It does not run active
+health checks, publish health events, inspect repositories, contact providers,
+invoke Docker, create Sprouts or Terrariums, or expose the local owner UID.
+Local/private `/health` remains active operator health. The public transport
+uses the current documented connection, timeout, body, concurrency, and global
+token-mint bounds; it has no IP-derived or forwarding-header-derived rate
+identity and no global HTTP read/write deadline.
 
 ### Direct local coding path
 
@@ -104,6 +137,26 @@ The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning 
 Normal **Sprout** execution is bounded by a **Terrarium**. Implemented isolated providers include Docker, gVisor, and Firecracker. Docker and gVisor use container isolation, while Firecracker uses a microVM. The Host provider is an explicit escape that bypasses Terrarium isolation and requires `TENDRIL_ALLOW_HOST_EXECUTION=true`.
 
 The Stem communicates with execution through the Terrarium provider/Stoma boundary; the concrete transport is provider-specific (e.g., stdin/stdout for some containers, vsock JSON for Firecracker). By default, isolated Terraria fail closed: they cannot reach the host network or the host workspace. Egress is mediated strictly by the Stem via an allow-listed fetch mechanism.
+
+Docker Terraria retain the current containment flags `--network none`,
+`--cap-drop=ALL`, `--security-opt=no-new-privileges:true`, and a bounded
+`--pids-limit` (default `512`, spec-overridable).
+
+Normal Terrarium environment is explicit-only. It does not implicitly inherit a
+repository or working-directory `.env`, `TENDRIL_ENV_FILE`, provider API keys,
+provider-selection or local-inference variables, Botanist or Pollinator
+credentials, TLS or signing material, unrelated Git credentials, or unrelated
+infrastructure environment. A requested read-only execution may receive
+`TENDRIL_READONLY=true`; a Substrate's resolved Git credential is supplied only
+when that Substrate explicitly sets `exposeToken: true`, while
+`exposeToken: false` remains credential-free. Host-side Docker settings such as
+`DOCKER_HOST` and `PATH` allow the Stem to reach Docker but do not become
+container environment. Provider interaction remains Stem-side.
+
+Anything deliberately supplied to a Sprout can be copied into files, logs,
+commits, diffs, or other Git-reviewable Fruit. Fruit is an information channel
+out of the execution boundary, not trusted secret storage or an isolation
+boundary; `--network none` does not make unrelated Stem-secret injection safe.
 
 The Host Terrarium provider is a separate, explicit isolation escape. It requires `TENDRIL_ALLOW_HOST_EXECUTION=true`, runs with full host-user permissions, bypasses Terrarium isolation entirely, and emits a loud audit warning upon activation.
 
@@ -158,7 +211,7 @@ Every `seed.grow` establishes exactly one canonical Phytomer for that Seed growt
 
 A long-lived Stem that can accept detached Seeds reconciles orphaned running/settling Seed and unresolved continuation state from a previous process before it accepts Pollinator traffic. Persistence disabled leaves continuation unavailable and is not a memory-only fallback.
 
-`GET /v1/phytomers/{phytomerId}/watch` is the headless Server-Sent Events view of that current state. MCP `sproutWatch({ sessionId })` is the headless snapshot of the same Core projection; a Pollinator may call it again to refresh. Both are authorized by `sprout.watch` using the same ownership rule as the Phytomer's events and live stream. After authenticating, REST emits the current safe observation immediately, then follows durable state changes until the associated Seed reaches `satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`, then closes. Connecting after a terminal Seed returns that terminal current state and closes. The Stem Core owns the safe current-state projection. REST authenticates, authorizes, and frames Server-Sent Events. MCP authenticates, authorizes, and returns one snapshot. The projection fails closed if any Sprout's or continuation's Pollen or Substrate disagrees with the Seed; it does not release a mixed-ownership current state. The projection reports Pollen, Substrate, Seed handle, Phytomer ID, Seed status, iteration progress, actual Sprout lifecycle, provider/model, `providerRequestAttempted`, `toolInvocations`, structured `failureCategory`, a safe `providerDiagnostic`, a safe Seed Fruit-publication diagnostic when present, bounded Seed verification diagnostics when present, safe continuation summaries (`continuationId`, `sequence`, `deliveryState`) when they exist, and real Fruit branch and commit when those facts exist. It does not invent Fruit, expose raw Seed error text, raw continued intent, intent digest, idempotency key, raw model reasoning, or credentials, accept Fruit, or grant execution. Seed collection remains `seed.grow`. `seed.grow` does not imply `sprout.watch`, `phytomer.continue` does not imply `sprout.watch`, and `sprout.watch` does not imply either execution grant.
+`GET /v1/phytomers/{sessionId}/watch` is the headless Server-Sent Events view of that current state. MCP `sproutWatch({ sessionId })` is the headless snapshot of the same Core projection; a Pollinator may call it again to refresh. Both are authorized by `sprout.watch` using the same ownership rule as the Phytomer's events and live stream. After authenticating, REST emits the current safe observation immediately, then follows durable state changes until the associated Seed reaches `satisfied`, `exhausted`, `withered`, or `fruit-publication-failed`, then closes. Connecting after a terminal Seed returns that terminal current state and closes. The Stem Core owns the safe current-state projection. REST authenticates, authorizes, and frames Server-Sent Events. MCP authenticates, authorizes, and returns one snapshot. The projection fails closed if any Sprout's or continuation's Pollen or Substrate disagrees with the Seed; it does not release a mixed-ownership current state. The projection reports Pollen, Substrate, Seed handle, Phytomer ID, Seed status, iteration progress, actual Sprout lifecycle, provider/model, `providerRequestAttempted`, `toolInvocations`, structured `failureCategory`, a safe `providerDiagnostic`, a safe Seed Fruit-publication diagnostic when present, bounded Seed verification diagnostics when present, safe continuation summaries (`continuationId`, `sequence`, `deliveryState`) when they exist, and real Fruit branch and commit when those facts exist. It does not invent Fruit, expose raw Seed error text, raw continued intent, intent digest, idempotency key, raw model reasoning, or credentials, accept Fruit, or grant execution. Seed collection remains `seed.grow`. `seed.grow` does not imply `sprout.watch`, `phytomer.continue` does not imply `sprout.watch`, and `sprout.watch` does not imply either execution grant.
 
 For reviewable successful Fruit with a diff, an Epigenetic Chronicler consumes the Sprout transcript, diff, and session logs to distill durable learnings, appending them to epigenetic genome material.
 
@@ -167,5 +220,5 @@ Hardiness reports deployment/Terroir posture—whether conditions permit the del
 ## Trust boundaries
 
 - **Stem (host)**: Trusted capability authority. Holds the backend credentials and control-plane authority required for governed operations; normal sealed Sprouts do not receive those credentials.
-- **Greenhouse**: Delegated authority. The optional observation UI deployed as an nginx container holds no backend credential itself; the browser presents the Botanist bearer key and the proxy forwards it. The Stem remains the capability authority.
-- **Terrarium / Sprout**: Zero authority by default. Normal sealed Sprouts do not receive Stem credentials. Git/network operations requiring Stem authority are normally mediated by the Stem. A Substrate may explicitly inject its resolved GitHub credential into the Sprout by configuring `exposeToken: true`. The Host Terrarium provider is a separate, explicit escape that bypasses isolation.
+- **Greenhouse**: Delegated Botanist/operator surface. The optional observation UI deployed as an nginx container holds no backend credential itself; the browser presents the Botanist bearer key and the proxy forwards it. It is not the public Pollinator ingress. The Stem remains the capability authority.
+- **Terrarium / Sprout**: Zero authority by default. Normal sealed Sprouts receive only explicit execution environment. Git/network operations requiring Stem authority are normally mediated by the Stem. A Substrate may explicitly inject its resolved GitHub credential into the Sprout by configuring `exposeToken: true`; anything supplied can leave through Git-reviewable Fruit. The Host Terrarium provider is a separate, explicit escape that bypasses isolation.
