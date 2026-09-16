@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,11 +16,13 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/gateway"
+	"github.com/opentendril/opentendril/cmd/stem/internal/healthmon"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/receptors"
 	"github.com/opentendril/opentendril/cmd/stem/internal/scheduler"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
 	"github.com/opentendril/opentendril/cmd/stem/internal/triggers"
+	"github.com/opentendril/opentendril/internal/mcpclient"
 )
 
 func TestServeMuxUsesLivePollinatorAuthority(t *testing.T) {
@@ -469,6 +472,126 @@ func TestRemoteMuxSproutWatchUsesWatchAuthority(t *testing.T) {
 	}
 	if response.Code != http.StatusOK || !rpcResponse.Result.IsError || len(rpcResponse.Result.Content) == 0 || !strings.Contains(rpcResponse.Result.Content[0].Text, "delegation denied") {
 		t.Fatalf("public sproutWatch response = %d %s; want WatchAuthority delegation denial", response.Code, response.Body.String())
+	}
+}
+
+func TestRemotePhytomerWatchStillUsesWatchAuthority(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [seed.grow]\n    substrates: [core]\n", core.NewService(nil))
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-watch-handle", Pollen: "claude", PhytomerID: "phytomer-watch-id",
+		Substrate: "core", Status: "satisfied", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record Seed ownership: %v", err)
+	}
+	fixture.deps.History = store
+	fixture.mux = buildRemoteServeMux(fixture.deps)
+
+	minted := serveMuxRequest(fixture.mux, http.MethodPost, "/v1/pollinator/token", "", map[string]string{
+		"Authorization": "Bearer " + fixture.root,
+	})
+	if minted.Code != http.StatusOK {
+		t.Fatalf("mint access token: status = %d (%s)", minted.Code, minted.Body.String())
+	}
+	var tokenResponse struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(minted.Body.Bytes(), &tokenResponse); err != nil {
+		t.Fatalf("decode access token: %v", err)
+	}
+	response := serveMuxRequest(fixture.mux, http.MethodGet, "/v1/phytomers/phytomer-watch-id/watch", "", map[string]string{
+		"Authorization": "Bearer " + tokenResponse.Token,
+	})
+	if response.Code != http.StatusForbidden || !strings.Contains(response.Body.String(), "delegation denied") {
+		t.Fatalf("public REST watch status/body = %d/%q, want existing WatchAuthority denial", response.Code, response.Body.String())
+	}
+}
+
+func TestPublicIngressBodyLimitsOnExistingMintAndMCPRoutes(t *testing.T) {
+	var sproutCalls int
+	service := core.NewService(nil).WithSprout(core.SproutOperations{
+		Run: func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			sproutCalls++
+			return core.SproutRunReport{Output: "grown", Outcome: "complete"}, nil
+		},
+	})
+	fixture := newRemoteMuxTestFixture(t, "grants:\n  claude:\n    operationClasses: [sprout.grow]\n    substrates: [core]\n", service)
+	handler := buildRemoteServeHandler(fixture.deps)
+	limits := defaultPublicIngressLimits()
+
+	mintRequest := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, publicPollinatorTokenPath, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+fixture.root)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := mintRequest(strings.Repeat(" ", int(limits.mintBodyBytes))); response.Code != http.StatusOK {
+		t.Fatalf("mint body at 16 KiB status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if response := mintRequest(strings.Repeat(" ", int(limits.mintBodyBytes)+1)); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("mint body over 16 KiB status = %d, want 413", response.Code)
+	}
+	chunkedMintBody := "{}" + strings.Repeat(" ", int(limits.mintBodyBytes)+1-len("{}"))
+	chunkedMintRequest := httptest.NewRequest(http.MethodPost, publicPollinatorTokenPath, strings.NewReader(chunkedMintBody))
+	chunkedMintRequest.ContentLength = -1
+	chunkedMintRequest.Header.Set("Authorization", "Bearer "+fixture.root)
+	chunkedMintResponse := httptest.NewRecorder()
+	handler.ServeHTTP(chunkedMintResponse, chunkedMintRequest)
+	if chunkedMintResponse.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked mint body over 16 KiB status = %d, want 413", chunkedMintResponse.Code)
+	}
+
+	accessToken, err := fixture.signer.MintAccessToken("claude", time.Minute, core.AccessTokenScope{})
+	if err != nil {
+		t.Fatalf("mint MCP test token: %v", err)
+	}
+	mcpBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sproutGrow","arguments":{"transcript":"bounded","substrate":"core"}}}`
+	ordinaryRequest := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	withinLimit := mcpBody + strings.Repeat(" ", int(limits.ordinaryBodyBytes)-len(mcpBody))
+	if response := ordinaryRequest(withinLimit); response.Code != http.StatusOK {
+		t.Fatalf("ordinary MCP body at 4 MiB status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if sproutCalls != 1 {
+		t.Fatalf("MCP Core Sprout calls at body limit = %d, want 1", sproutCalls)
+	}
+	overLimit := mcpBody + strings.Repeat(" ", int(limits.ordinaryBodyBytes)+1-len(mcpBody))
+	if response := ordinaryRequest(overLimit); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("authenticated ordinary body over 4 MiB status = %d, want 413", response.Code)
+	}
+	if sproutCalls != 1 {
+		t.Fatalf("oversized authenticated body invoked Core; Sprout calls = %d, want 1", sproutCalls)
+	}
+	chunkedOrdinaryRequest := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1", strings.NewReader(body))
+		request.ContentLength = -1
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	if response := chunkedOrdinaryRequest(mcpBody); response.Code != http.StatusOK {
+		t.Fatalf("chunked ordinary body below 4 MiB status = %d, want 200 (%s)", response.Code, response.Body.String())
+	}
+	if sproutCalls != 2 {
+		t.Fatalf("chunked ordinary body below limit Sprout calls = %d, want 2", sproutCalls)
+	}
+	chunkedOverLimit := mcpBody + strings.Repeat(" ", int(limits.ordinaryBodyBytes)+1-len(mcpBody))
+	if response := chunkedOrdinaryRequest(chunkedOverLimit); response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("chunked authenticated ordinary body over 4 MiB status = %d, want 413", response.Code)
+	}
+	if sproutCalls != 2 {
+		t.Fatalf("oversized chunked authenticated body invoked Core; Sprout calls = %d, want 2", sproutCalls)
 	}
 }
 
@@ -1065,6 +1188,94 @@ func TestHandleHealthOwnerPublication(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPublicReadinessIsPassiveAndLocalHealthRemainsActive(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "", nil)
+	var checks atomic.Int32
+	monitor := healthmon.New(fixture.deps.EventBus, time.Hour)
+	monitor.RegisterCheck(publicReadinessTestCheck{calls: &checks})
+	fixture.deps.HealthMonitor = monitor
+
+	healthEvents := make(chan eventbus.Event, 4)
+	fixture.deps.EventBus.Subscribe(eventbus.EventHealthCheck, func(event eventbus.Event) {
+		healthEvents <- event
+	})
+	publicHandler := buildRemoteServeHandler(fixture.deps)
+
+	publicResponse := httptest.NewRecorder()
+	publicHandler.ServeHTTP(publicResponse, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if publicResponse.Code != http.StatusOK {
+		t.Fatalf("public readiness status = %d, want 200", publicResponse.Code)
+	}
+	var publicBody map[string]any
+	if err := json.Unmarshal(publicResponse.Body.Bytes(), &publicBody); err != nil {
+		t.Fatalf("public readiness response is not valid JSON: %v", err)
+	}
+	if ready, ok := publicBody["ready"].(bool); !ok || !ready {
+		t.Fatalf("public readiness payload = %v, want ready=true", publicBody)
+	}
+	if _, ok := publicBody["owner"]; ok {
+		t.Fatalf("public readiness disclosed local owner: %v", publicBody["owner"])
+	}
+	if checks.Load() != 0 {
+		t.Fatalf("public readiness executed %d health checks, want 0", checks.Load())
+	}
+	select {
+	case event := <-healthEvents:
+		t.Fatalf("public readiness published health event %q", event.Type)
+	default:
+	}
+
+	probeServer := httptest.NewServer(publicHandler)
+	t.Cleanup(probeServer.Close)
+	probe := mcpclient.ProbeOwnerAtWithClient(context.Background(), probeServer.URL, probeServer.Client())
+	if !probe.Reached || probe.Owner != nil || probe.Err != nil {
+		t.Fatalf("restricted Pollinator readiness probe = reached %t owner %v err %v; want reached with no owner", probe.Reached, probe.Owner, probe.Err)
+	}
+	if checks.Load() != 0 {
+		t.Fatalf("public probe executed %d health checks, want 0", checks.Load())
+	}
+	select {
+	case event := <-healthEvents:
+		t.Fatalf("public probe published health event %q", event.Type)
+	default:
+	}
+
+	localResponse := httptest.NewRecorder()
+	fixture.localMux().ServeHTTP(localResponse, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if localResponse.Code != http.StatusOK {
+		t.Fatalf("local active health status = %d, want 200", localResponse.Code)
+	}
+	if checks.Load() != 1 {
+		t.Fatalf("local health executed %d checks, want exactly 1", checks.Load())
+	}
+	var localBody map[string]any
+	if err := json.Unmarshal(localResponse.Body.Bytes(), &localBody); err != nil {
+		t.Fatalf("local health response is not valid JSON: %v", err)
+	}
+	if _, ok := localBody["owner"]; !ok {
+		t.Fatal("local loopback health response omitted owner")
+	}
+	select {
+	case event := <-healthEvents:
+		if event.Type != eventbus.EventHealthCheck {
+			t.Fatalf("local health event = %q, want %q", event.Type, eventbus.EventHealthCheck)
+		}
+	default:
+		t.Fatal("local active health did not publish EventHealthCheck")
+	}
+}
+
+type publicReadinessTestCheck struct {
+	calls *atomic.Int32
+}
+
+func (check publicReadinessTestCheck) Name() string { return "readiness-test" }
+
+func (check publicReadinessTestCheck) Check(context.Context) healthmon.CheckResult {
+	check.calls.Add(1)
+	return healthmon.CheckResult{Healthy: true, Message: "healthy"}
 }
 
 func TestScheduledRunFirerPublishesTriggerBlockedEvent(t *testing.T) {

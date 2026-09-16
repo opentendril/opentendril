@@ -74,6 +74,10 @@ func validateRemoteListenAddr(address string) error {
 // listener is announced. Bind failure is returned to startup rather than
 // silently degrading the Stem to local-only service.
 func prepareRemoteTLSListener(config *remoteTLSConfig, handler http.Handler) (net.Listener, *http.Server, error) {
+	return prepareRemoteTLSListenerWithConnectionLimit(config, handler, defaultPublicIngressLimits().maxTCPConnections)
+}
+
+func prepareRemoteTLSListenerWithConnectionLimit(config *remoteTLSConfig, handler http.Handler, maxConnections int) (net.Listener, *http.Server, error) {
 	if config == nil {
 		return nil, nil, nil
 	}
@@ -84,11 +88,59 @@ func prepareRemoteTLSListener(config *remoteTLSConfig, handler http.Handler) (ne
 	if err != nil {
 		return nil, nil, fmt.Errorf("bind remote Stem TLS listener at %s: %w", config.listenAddr, err)
 	}
-	return listener, &http.Server{
-		Addr:      config.listenAddr,
-		Handler:   handler,
-		TLSConfig: config.tlsConfig.Clone(),
+	limits := defaultPublicIngressLimits()
+	return newConnectionLimitedListener(listener, maxConnections), &http.Server{
+		Addr:              config.listenAddr,
+		Handler:           handler,
+		TLSConfig:         config.tlsConfig.Clone(),
+		ReadHeaderTimeout: limits.readHeaderTimeout,
+		IdleTimeout:       limits.idleTimeout,
+		MaxHeaderBytes:    limits.maxHeaderBytes,
+		ReadTimeout:       0,
+		WriteTimeout:      0,
 	}, nil
+}
+
+func newConnectionLimitedListener(listener net.Listener, maxConnections int) net.Listener {
+	return &connectionLimitedListener{
+		Listener: listener,
+		active:   newIngressSlots(maxConnections),
+	}
+}
+
+type connectionLimitedListener struct {
+	net.Listener
+	active ingressSlots
+}
+
+func (l *connectionLimitedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		release, ok := l.active.tryAcquire()
+		if ok {
+			return &connectionLimitedConn{
+				Conn:    conn,
+				release: release,
+			}, nil
+		}
+		// Refuse excess raw TCP connections before net/http can begin TLS
+		// negotiation or allocate per-connection request state.
+		_ = conn.Close()
+	}
+}
+
+type connectionLimitedConn struct {
+	net.Conn
+	release func()
+}
+
+func (c *connectionLimitedConn) Close() error {
+	err := c.Conn.Close()
+	c.release()
+	return err
 }
 
 func serveRemoteTLSServer(server *http.Server, listener net.Listener) error {
