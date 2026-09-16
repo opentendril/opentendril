@@ -2,11 +2,14 @@
 
 ## Principle
 
-**Greenhouse** is the optional, potentially multi-user,
-network-facing surface, so it must be the **thinnest trusted layer**. It
-**delegates and proxies; it does not accumulate** authority or long-lived secrets.
-"Less attack surface" is a design rule to enforce, not an aspiration — this
-document records what is enforced (with tests).
+The configured remote HTTPS listener is a separate **Pollinator-only public
+projection** inside the same Stem process and under the same Core authority.
+It is deliberately narrower than the local/private Stem mux: it is not the
+Botanist management interface, the Greenhouse interface, or a second Stem.
+TLS terminates at the Stem, so the supported trust boundary does not depend on
+a reverse proxy. The Greenhouse remains a separate Botanist/operator surface.
+This document records the implemented boundary and its regression-tested
+properties.
 
 ## Trust zones
 
@@ -20,21 +23,32 @@ bearer key (`BOTANIST_KEY`, or the auto-generated `.tendril/api-key`), the mesh
 is the only zone that can mint mesh grafting tokens, grow Terrariums, or make LLM
 provider calls. Every other zone reaches capability only by asking the Stem.
 
-### 2. Greenhouse (optional, network-facing) — delegated authority
+### 2. Greenhouse (optional, operator-facing) — delegated authority
 
-An opt-in, containerised reverse proxy + static SPA (see `docs/GREENHOUSE.md`).
-It holds **no secrets of its own** — the proxy adds no credentials and bypasses
-nothing (`ui/nginx/default.conf.template`). The only credential in play is the
-operator's bearer key, entered once during onboarding and stored in the browser's
-`localStorage`; the container process itself is stateless. It reaches exactly
-`/health`, `/v1*`, and `/ws` on the Stem — nothing else on the host is reachable
-through it.
+An opt-in, containerised reverse proxy + static SPA (see `docs/GREENHOUSE.md`)
+for Botanist observation and management. It holds **no secrets of its own** —
+the proxy adds no credentials and bypasses nothing
+(`ui/nginx/default.conf.template`). The only credential in play is the
+operator's bearer key, entered once during onboarding and stored in the
+browser's `localStorage`; the container process itself is stateless. It is not
+the public Pollinator ingress and is not a public Greenhouse.
 
 ### 3. Terrarium Sprouts — zero authority
 
-Ephemeral Terrariums (backed by isolated providers: Docker, gVisor, or Firecracker) execute a single Sprout run and then die. (The Host provider exists separately as an explicit escape that bypasses Terrarium isolation.) Normal sealed Sprouts receive no Stem credentials by default; a Substrate may explicitly inject its resolved GitHub credential with `exposeToken: true` to expose its own resolved token to in-container tooling (see
-[Conductor fail-closed](#conductor-fail-closed--identity--isolation) below). LLM calls and mesh operations happen on the Stem,
-never inside a Terrarium.
+Ephemeral Terrariums (backed by isolated providers: Docker, gVisor, or
+Firecracker) execute a single Sprout run and then die. (The Host provider
+exists separately as an explicit escape that bypasses Terrarium isolation.)
+Normal sealed Sprouts receive only explicit execution environment. They do not
+implicitly receive the repository or working-directory `.env`,
+`TENDRIL_ENV_FILE`, provider API keys, provider-selection or local-inference
+variables, Botanist or Pollinator credentials, TLS or signing material,
+unrelated Git credentials, or unrelated infrastructure environment. A
+requested read-only execution may receive `TENDRIL_READONLY=true`. A
+Substrate may explicitly inject its own resolved Git credential only when it
+sets `exposeToken: true`; `exposeToken: false` remains credential-free (see
+[Conductor fail-closed](#conductor-fail-closed--identity--isolation) below).
+Provider interaction, LLM calls, and mesh operations happen on the Stem, never
+inside a Terrarium.
 
 For the Docker provider, isolation is enforced at the container level
 (`cmd/stem/internal/terrarium/docker.go`):
@@ -51,16 +65,25 @@ These flags are asserted by `cmd/stem/internal/terrarium/provider_test.go`
 (`TestDockerProviderCreate*`, `Test*ProviderCreateDefaultsToPidsLimit`), so a
 regression fails CI.
 
+The host-side Docker process may retain host settings such as `DOCKER_HOST` and
+`PATH` so the Stem can reach Docker. Those settings are not thereby passed as
+container environment. Environment values deliberately supplied to a Sprout
+can be copied into files, logs, commits, diffs, or other Git-reviewable Fruit.
+Fruit is therefore an information channel out of the execution boundary, not
+trusted secret storage or an isolation boundary. `--network none` does not make
+it safe to inject unrelated Stem secrets into a Terrarium.
+
 ## Enforcement
 
 Two properties of this posture are mechanically enforced, not merely documented:
 
-- **No command capability beyond the CLI.** The interface-parity test
-  (`TestInterfaceParityCoverage`, `cmd/stem/parity_test.go`) diffs the CLI, REST,
-  and MCP capability sets against the canonical `core.CapabilityNames()` registry
-  and fails on drift. The Greenhouse (REST) surface is constrained to the same
-  governed capability set as the CLI — an attacker who fully compromises Greenhouse
-  reaches no command the CLI did not already expose.
+- **Canonical interface parity.** The interface-parity test
+  (`TestInterfaceParityCoverage`, `cmd/stem/parity_test.go`) checks the local
+  canonical CLI, REST, and MCP adapters against the Core
+  `core.CapabilityNames()` registry and fails on drift. The public Pollinator
+  listener is a deliberate route and delegated-capability projection of that
+  authority; it is not a second registry and does not expose every local
+  command, view, or control-plane operation.
 - **Terrarium isolation is regression-tested.** The flags in
   [Terrarium Sprouts](#3-terrarium-sprouts--zero-authority) above are covered by the
   provider tests noted there, so a weakening of container isolation breaks the
@@ -187,6 +210,11 @@ The `confirmAbove` bound on a delegation grant ensures that high-impact operatio
 
 ## Pollinator credentials and remote HTTPS ingress
 
+The configured remote HTTPS listener is a separate Pollinator-only public route
+projection within the same Stem process and shared Core authority. It is not
+the Botanist management interface, the Greenhouse interface, the full
+local/private Stem mux, a second Stem, or a reverse proxy trust boundary.
+
 Pollinator access has two credential forms:
 
 1. **Durable Pollinator root** — a credential (`tendril_refresh_…`) issued by
@@ -194,14 +222,76 @@ Pollinator access has two credential forms:
    the Botanist for its Pollen. A remote Pollinator presents it only to
    `POST /v1/pollinator/token`.
 2. **Short-lived access token** — a Stem-signed bearer (`tendril_access_…`)
-   carrying a Pollen and expiry, hard-capped at 15 minutes. Governed data and
-   MCP requests use this token. Verification is stateless; there is no
-   per-token store or denylist.
+   carrying a Pollen and expiry, hard-capped at 15 minutes. Governed public
+   data and MCP requests use this token. Verification is stateless; there is
+   no per-token store or denylist.
 
-Revoking a root prevents the next mint without a Stem restart. Already-minted
+The public route projection is exactly:
+
+| Route | Public use | Credential |
+| --- | --- | --- |
+| `GET /health` | Passive in-memory readiness | None |
+| `POST /v1/pollinator/token` | Mint a short-lived access token | Durable Pollinator root |
+| `POST /v1` | Restricted public MCP | Short-lived access token |
+| `POST /v1/seeds/grow` | Synchronous or detached `seed.grow` | Short-lived access token |
+| `POST /v1/seeds/grow/async` | Compatibility presentation of detached `seed.grow` | Short-lived access token |
+| `GET /v1/seeds/runs/{handle}` | Collect a Seed result | Short-lived access token |
+| `POST /v1/phytomers/{sessionId}/continue` | Continue a Seed-owned Phytomer | Short-lived access token |
+| `GET /v1/phytomers/{sessionId}/watch` | Observe a Seed-owned Phytomer | Short-lived access token |
+
+Legacy `/v1/sessions/...` aliases are not public. Botanist configuration,
+mesh management, pending-confirmation management, chat, WebSocket, Greenhouse,
+ordinary Phytomer CRUD, and other local/private surfaces are not projected to
+the public listener.
+
+The durable root is invalid on ordinary public data and MCP routes. The
+Botanist bearer (`BOTANIST_KEY`, or the generated `.tendril/api-key`) is the
+Stem's operator credential for local/private control surfaces and is invalid on
+the public Pollinator surface. Public authentication uses the `Authorization`
+header. Bearer material in a query string has no public authentication effect.
+Pollen, authority, listener provenance, limits, and rate identity do not come
+from `Forwarded` or `X-Forwarded-*` metadata. The Stem reads current grants for
+each governed admission. Revoking a root prevents the next mint; already-minted
 tokens remain valid cryptographic assertions until their expiry, no later than
-15 minutes. The Stem reads current grants for every governed admission, so an
-issued token cannot preserve or widen a removed or narrowed grant.
+15 minutes, while current grant removal or narrowing applies to subsequent
+admissions.
+
+Public MCP supports protocol initialization plus `tools/list` and `tools/call`.
+It does not expose repository-backed `resources/list` or `resources/read`.
+`tools/list` exposes the primary MCP identifiers for canonical Core capabilities
+in `DelegatedCapabilityNames()` and the existing `sproutWatch` view. Compatibility
+aliases are not an independent authority: they may resolve only to an already
+allowed delegated Core capability. This public projection does not expose every
+capability covered by ordinary local interface parity.
+
+Public `GET /health` is passive in-memory readiness. It does not run `healthmon`
+checks, publish health events, inspect repositories, contact providers, invoke
+Docker, create Sprouts or Terrariums, or expose the local owner UID. The
+local/private `/health` remains the existing active operator-health behavior.
+
+The public transport boundary currently implements these defaults:
+
+| Boundary | Default |
+| --- | ---: |
+| Simultaneous accepted TCP connections | `128` |
+| `ReadHeaderTimeout` | `5s` |
+| `IdleTimeout` | `60s` |
+| `MaxHeaderBytes` | `32 KiB` |
+| Global `ReadTimeout` | unset |
+| Global `WriteTimeout` | unset |
+| Ordinary public request body maximum | `4 MiB` |
+| Token-mint request body maximum | `16 KiB` |
+| Simultaneous public request handling | `64` |
+| Simultaneous authenticated admissions | `32` |
+| Simultaneous long-lived REST observations | `16` |
+| Simultaneous token-mint requests | `8` |
+| Global token-mint rate | `4 requests/second` |
+| Token-mint burst | `8` |
+
+These are public-boundary defaults, not a generic system-wide rate limiter.
+Token minting uses one global bucket; it has no IP-derived or forwarding-header-
+derived identity. The public listener does not set global HTTP read or write
+deadlines.
 
 The remote HTTPS listener is disabled when all three settings are absent:
 
@@ -220,32 +310,30 @@ system certificate roots by default. A Pollinator may configure a named public
 `trustAnchor` from its canonical trust-anchor directory; that CA is appended to
 system roots and does not disable chain or SAN checks. The client does not use
 insecure-skip-verify, TOFU, arbitrary certificate acceptance, an SSH/VPN/tunnel,
-or mTLS Pollinator identity.
+or mTLS Pollinator identity. The supported public trust topology terminates
+Pollinator TLS directly at the Stem; ordinary networking infrastructure outside
+OpenTendril is not part of that trust boundary.
 
 Plain HTTP is supported by the restricted Pollinator client only for a literal
 loopback IP and retains local Unix-owner separation. HTTPS uses the verified
-Stem TLS identity and does not use Unix UID identity. Caller `Forwarded` and
-`X-Forwarded-*` metadata cannot change the remote ingress posture.
+Stem TLS identity and does not use Unix UID identity.
 
 When `TENDRIL_LOCAL_SOCKET` is set to an absolute path, the same authenticated
 mux is also served on that Unix-domain socket. The local socket is transport
 only; reaching it is not authorization. The standalone Gateway remains a
 separate listener and is not the supported remote Pollinator ingress.
 
-The remote HTTPS listener reaches the same Stem Core capability registry and
-the same Seed, Sprout, Terrarium, and Fruit boundaries. Fruit remains
-Git-reviewable; the default branch remains under Botanist control.
-
-**Botanist key** (`BOTANIST_KEY`, or the generated `.tendril/api-key`) remains the
-Stem's own unscoped bearer for operator/CLI/Greenhouse use. It is not a
-Pollinator credential and is not exchanged for access tokens.
+The public projection shares the Stem Core authority and Seed, Sprout,
+Terrarium, and Fruit boundaries. Fruit remains Git-reviewable; it is not secret
+storage, and the default branch remains under Botanist control.
 
 ### The three surfaces, and which of them is a boundary
 
-Capability parity means the command line, REST and the Model Context Protocol
-expose the same operations (`cmd/stem/parity_test.go`). **It does not mean they
-establish identity the same way**, and conflating the two is the mistake this
-section exists to prevent.
+Canonical interface parity means the local command line, REST, and Model Context
+Protocol adapters expose the same governed operations
+(`cmd/stem/parity_test.go`). **It does not mean they establish identity the same
+way**, and the public Pollinator projection is deliberately narrower than those
+local/canonical surfaces.
 
 | Surface | How a Pollen is established | Trust level |
 | --- | --- | --- |

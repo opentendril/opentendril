@@ -87,6 +87,8 @@ and is not.
 Protocol surface all resolve the control plane as `./.tendril` — relative to the
 **current directory of the process**, not to anyone's home. The environment file
 is read the same way: `./.env` and nothing else.
+This is Stem process configuration; it is not ambient environment passed to
+normal Terraria.
 
 Two consequences to hold on to:
 
@@ -585,7 +587,7 @@ pollen: claude
 `seed.grow` is the bounded task hand-off. `phytomer.continue` accepts additional
 intent for the active owned Phytomer. `sprout.watch` is the read side: it lets
 this Pollen observe the Phytomer the Stem created for that Seed — REST
-`GET /v1/phytomers/{phytomerId}/watch` and MCP `sproutWatch` — and also the
+`GET /v1/phytomers/{sessionId}/watch` and MCP `sproutWatch` — and also the
 stored run records, persisted events, and live stream — and nothing anyone else
 dispatched. Each grant is independent. `sprout.grow` is not part of this
 first-use grant.
@@ -831,13 +833,15 @@ all three variables absent the listener is disabled; partial or invalid
 configuration, an unusable certificate/key pair, or a bind failure stops Stem
 startup rather than degrading to plaintext.
 
-The listener uses the same authenticated Stem routes and Core authority. It
-does not change `TERROIR_HOST`, the primary local listener, or the standalone
-Gateway's bind address or `GATEWAY_PORT`. Keep `TERROIR_HOST` at its local
-loopback default unless the primary listener is separately required. The
-restricted Pollinator client refuses non-loopback plaintext HTTP before it
-reads or presents a credential; a remote Pollinator connects to the HTTPS
-listener without SSH, VPN, or a tunnel.
+The listener is a separate Pollinator-only public projection in the same Stem
+process and under the same Core authority. It is not the Botanist management
+interface, the Greenhouse interface, the full local/private Stem mux, a second
+Stem, or a reverse proxy trust boundary. It does not change `TERROIR_HOST`, the
+primary local listener, or the standalone Gateway's bind address or
+`GATEWAY_PORT`. Keep `TERROIR_HOST` at its local loopback default unless the
+primary listener is separately required. The restricted Pollinator client
+refuses non-loopback plaintext HTTP before it reads or presents a credential; a
+remote Pollinator connects to the HTTPS listener without SSH, VPN, or a tunnel.
 
 Remote HTTPS uses normal certificate-chain and hostname/IP SAN verification with
 the Pollinator's operating-system certificate roots. For a private CA, install
@@ -853,7 +857,11 @@ not the supported remote Pollinator path. Plain HTTP remains acceptable to the
 restricted client only for a literal loopback IP with the local Unix-owner
 separation check.
 
-**Check:** `curl -s 127.0.0.1:8080/health` returns a health report.
+**Check:** `curl -s 127.0.0.1:8080/health` returns the local active operator-health
+report. The public listener's `GET /health` is a separate passive in-memory
+readiness response; it does not run health checks, publish events, inspect
+repositories, contact providers, invoke Docker, create Sprouts or Terrariums,
+or expose the local owner UID.
 
 If the service fails at `203/EXEC` — *"Unable to locate executable"* — a
 sandboxing directive is hiding the path rather than the path being wrong. Check
@@ -992,64 +1000,64 @@ the client:
 Use `tendril-mcp diagnose --connection remote` to check the non-secret
 connection and authentication preflight without invoking MCP capabilities.
 
-A Pollinator may also use the Stem's REST surface. A remote HTTPS client first
-verifies the Stem's certificate chain and hostname/IP SAN, then presents its
-durable root to `POST /v1/pollinator/token`. Governed data routes, including the
-MCP forwarding route at `POST /v1`, use the resulting short-lived access token.
-Presenting the durable root to a remote data route is refused with `401`.
+A Pollinator may also use the Stem's public REST projection. A remote HTTPS
+client first verifies the Stem's certificate chain and hostname/IP SAN, then
+presents its durable root only to `POST /v1/pollinator/token`. The resulting
+short-lived Stem-signed access token is sent in the `Authorization` header on
+public data and MCP routes. Presenting the durable root to an ordinary public
+data or MCP route is refused with `401`; the Botanist bearer is invalid on the
+public Pollinator surface. Query-string bearer material has no public
+authentication effect, and `Forwarded` or `X-Forwarded-*` metadata does not
+affect Pollen, authority, listener provenance, limits, or rate identity.
 Authorization is checked per governed admission against the current grant. The
 standalone Gateway listener is not the supported remote Pollinator ingress.
 
-The routes a remote Pollinator may use, each gated by the matching
-operation-class:
+The public routes are exactly:
 
-| Route | Operation-class |
+| Route | Public use |
 |---|---|
-| `POST /v1/git/status` | `git.status` |
-| `POST /v1/git/branches` | `git.branch.list` |
-| `POST /v1/git/branch` | `git.branch` |
-| `POST /v1/git/commit` | `git.commit` |
-| `POST /v1/git/push` | `git.push` |
-| `POST /v1/git/pr` | `git.pr` |
-| `POST /v1/git/prune` | `git.prune` |
-| `POST /v1/stoma/pass` | `stoma.pass` |
-| `POST /v1/seeds/grow` | `seed.grow` |
-| `POST /v1/seeds/grow/async` | `seed.grow` |
-| `GET /v1/seeds/runs/{handle}` | `seed.grow` |
-| `POST /v1/phytomers/{phytomerId}/continue` | `phytomer.continue` |
-| `POST /v1/sprouts/grow` | `sprout.grow` |
-| `GET /v1/phytomers/{phytomerId}/watch` | `sprout.watch` |
-| `GET /v1/phytomers/{phytomerId}/sprout-runs` | `sprout.watch` |
-| `GET /v1/phytomers/{phytomerId}/events` | `sprout.watch` |
-| `GET /ws?sessionId={phytomerId}` | `sprout.watch` |
+| `GET /health` | Passive in-memory readiness |
+| `POST /v1/pollinator/token` | Mint a short-lived access token from the durable root |
+| `POST /v1` | Restricted public MCP |
+| `POST /v1/seeds/grow` | Synchronous or detached `seed.grow` |
+| `POST /v1/seeds/grow/async` | Compatibility presentation of detached `seed.grow` |
+| `GET /v1/seeds/runs/{handle}` | Collect a Seed result |
+| `POST /v1/phytomers/{sessionId}/continue` | Continue a Seed-owned Phytomer |
+| `GET /v1/phytomers/{sessionId}/watch` | Observe a Seed-owned Phytomer |
 
-A `sprout.watch` grant releases only what this Pollen dispatched, and only for
-the Substrate that grant covers. `GET /v1/phytomers/{phytomerId}/watch` is the
-headless current-state stream for the Seed-owned Phytomer named in the path.
-`sprout-runs` narrows to the caller's own records. A phytomer's events and its
-live stream are session-wide and name no owner individually, so they are
-released whole or not at all. The Botanist key still opens the unfiltered feed
-and is not given to the Pollinator.
+Legacy `/v1/sessions/...` aliases are not public. Botanist configuration, mesh
+management, pending-confirmation management, chat, WebSocket, Greenhouse,
+ordinary Phytomer CRUD, and other local/private routes remain private. Public
+MCP accepts initialization, `tools/list`, and `tools/call` only; it does not
+expose repository-backed `resources/list` or `resources/read`. Its tool list
+contains the primary identifiers for `DelegatedCapabilityNames()` plus
+`sproutWatch`; compatibility aliases are not listed and may resolve only to an
+already-allowed delegated Core capability.
+
+The public transport defaults are 128 simultaneous accepted TCP connections,
+`ReadHeaderTimeout=5s`, `IdleTimeout=60s`, `MaxHeaderBytes=32 KiB`, unset global
+read/write timeouts, 4 MiB ordinary request bodies, 16 KiB token-mint request
+bodies, 64 simultaneous public requests, 32 simultaneous authenticated
+admissions, 16 simultaneous long-lived REST observations, 8 simultaneous
+token-mint requests, and a global token-mint rate of 4 requests/second with a
+burst of 8. These are public-boundary defaults, not a generic system-wide rate
+limiter; pressure can produce `413`, `429`, or `503` responses.
+Excess TCP connections beyond the 128-connection cap are closed before TLS and
+HTTP handling begins, so that cap does not produce an HTTP `503` response.
+
+For a remote readiness check, use the public endpoint directly:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/v1/git/status \
-  -H "Authorization: Bearer <pollinator-credential>" \
-  -H "Content-Type: application/json" \
-  -d '{"substrate":"myrepo"}'
+curl -sS https://stem.example.net:8443/health
+# {"ready":true}
 ```
 
-**Check:** call a route your grant does not cover and confirm the refusal names
-the reason:
-
-```console
-$ curl -X POST 127.0.0.1:8080/v1/git/prune -H "Authorization: Bearer <pollinator-credential>" …
-HTTP/1.1 403 Forbidden
-delegation denied: no active grant covers Pollen "claude",
-operation-class "git.prune", substrate "myrepo"
-```
-
-The Pollen in that message was derived from the credential, not claimed by the
-caller. That is the boundary working.
+That response is passive in-memory readiness, not the local active
+operator-health report. A request to a route outside the public list is not a
+public route. To check delegation, call a listed governed route with a valid
+access token but without its matching grant and confirm the `403` refusal. The
+Pollen in the refusal is derived from the verified access token, not claimed by
+the caller.
 
 `POST /v1` requires the short-lived access token for a remote Pollinator. The
 per-Pollinator MCP path is `tendril-mcp`, which verifies the Stem transport,
@@ -1070,20 +1078,21 @@ The first real task uses the Pollinator credential and the same Substrate name
 granted above. It does **not** use the Botanist/operator `tendril seed grow`
 command, and it does not use the Botanist key.
 
-Mint a short-lived access token, then dispatch with that Pollinator credential.
-The redirect writes the token to the invoking account, not into the Stem's
-control plane:
+Mint a short-lived access token at the public mint route, then dispatch with
+that token. The response contains the token; keep it in the Pollinator's own
+process or protected storage, not in the Stem's control plane:
 
 ```bash
-# from the ordinary account — mint a short-lived access token (≤15 minutes)
-sudo -u tendril -i tendril pollinator token --pollen claude > ~/.tendril-token
-chmod 600 ~/.tendril-token
-TOKEN=$(cat ~/.tendril-token)
+# from the Pollinator account — the durable root is sent only to this route
+STEM=https://stem.example.net:8443
+curl -sS -X POST "$STEM/v1/pollinator/token" \
+  -H "Authorization: Bearer <durable-pollinator-root>"
+# Set TOKEN to the returned JSON `token` value; it expires within 15 minutes.
 ```
 
 ```bash
 # Dispatch a bounded Seed. Substrate must be myrepo — the name granted above.
-curl -s -X POST 127.0.0.1:8080/v1/seeds/grow \
+curl -s -X POST "$STEM/v1/seeds/grow" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"substrate":"myrepo","goal":"make the failing tests pass","verify":["go","test","./..."],"detached":true,"idempotencyKey":"seed-open-1"}'
@@ -1114,7 +1123,7 @@ it does not collect Fruit and does not grant `seed.grow`.
 
 ```bash
 curl -N \
-  127.0.0.1:8080/v1/phytomers/<phytomerId>/watch \
+  "$STEM/v1/phytomers/<phytomerId>/watch" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1132,7 +1141,7 @@ continued intent is never in this view. `main` is not modified.
 After the active `phytomerId` is returned, continue that owned Phytomer:
 
 ```bash
-curl -s -X POST 127.0.0.1:8080/v1/phytomers/<phytomerId>/continue \
+curl -s -X POST "$STEM/v1/phytomers/<phytomerId>/continue" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"intent":"keep going on the remaining tests","idempotencyKey":"continue-1"}'
@@ -1147,7 +1156,7 @@ from the dispatch response. Collection is `seed.grow`, scoped to the Pollen
 that dispatched it:
 
 ```bash
-curl -s 127.0.0.1:8080/v1/seeds/runs/<handle> \
+curl -s "$STEM/v1/seeds/runs/<handle>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

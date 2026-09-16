@@ -226,8 +226,11 @@ claude mcp add opentendril -- tendril mcp
 ```
 
 Once connected, the client can drive the Stem's governed capabilities directly.
-Governed commands declared by `core.CapabilityNames()` are projected across
-CLI, REST, and MCP and mechanically parity-checked. MCP publishes
+On local/canonical interfaces, governed commands declared by
+`core.CapabilityNames()` are projected across CLI, REST, and MCP and mechanically
+parity-checked. The remote HTTPS listener is a narrower Pollinator-only
+projection: its public MCP exposes only delegated Core capabilities plus
+`sproutWatch`. MCP publishes
 lower-camelCase transport identifiers (`gitStatus`) that map one-to-one back
 to those canonical names (`git.status`).
 

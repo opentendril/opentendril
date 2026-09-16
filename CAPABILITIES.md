@@ -56,7 +56,7 @@ categories:
 Capabilities returned by `core.CapabilityNames()`. Every governed command:
 
 - is declared once in the Core registry,
-- is projected onto all three transport surfaces (REST, MCP, CLI),
+- is projected onto the canonical local transport surfaces (REST, MCP, CLI),
 - is subject to interface-parity enforcement (§3).
 
 ### Views
@@ -77,7 +77,7 @@ Current view:
   view, not a governed command and not a compatibility alias. Both current
   projections reuse the same ownership/grant rule:
 
-  - REST/SSE: `GET /v1/phytomers/{phytomerId}/watch`
+  - REST/SSE: `GET /v1/phytomers/{sessionId}/watch`
   - MCP: `sproutWatch({ sessionId })` — one current-state snapshot per call
 
   A delegated caller must hold a `sprout.watch` grant covering every Substrate
@@ -182,6 +182,45 @@ canonical capabilities and carry no independent authority. Locked MCP views
 are listed by `tools/list` and resolved through a view-name map separate from
 `ResolveMCPToolName`.
 
+### Public Pollinator projection
+
+Ordinary interface parity describes the canonical local REST, MCP, and CLI
+governed command architecture. The public Pollinator HTTPS listener is a
+deliberately narrower projection of the same Stem Core authority; it is not a
+second capability registry and does not expose every capability covered by
+local parity.
+
+Its route set is exactly:
+
+| Route | Projection |
+|---|---|
+| `GET /health` | Passive in-memory readiness |
+| `POST /v1/pollinator/token` | Durable root to short-lived access-token minting |
+| `POST /v1` | Public MCP projection |
+| `POST /v1/seeds/grow` | `seed.grow` |
+| `POST /v1/seeds/grow/async` | Compatibility presentation of detached `seed.grow` |
+| `GET /v1/seeds/runs/{handle}` | Seed collection under `seed.grow` |
+| `POST /v1/phytomers/{sessionId}/continue` | `phytomer.continue` |
+| `GET /v1/phytomers/{sessionId}/watch` | `sprout.watch` view |
+
+The durable Pollinator root is accepted only by the mint route. Governed public
+data and MCP routes accept the short-lived Stem-signed access token in the
+`Authorization` header; a Botanist bearer is invalid there, and the durable
+root is invalid on ordinary public data and MCP routes. Query-string bearer
+material has no public authentication effect. `Forwarded` and
+`X-Forwarded-*` metadata do not affect Pollen, authority, listener provenance,
+limits, or rate identity. Current grants remain authoritative for each
+governed admission, even while an already-minted token ages out
+cryptographically within its 15-minute cap.
+
+The public MCP adapter supports initialization, `tools/list`, and `tools/call`.
+It does not expose repository-backed `resources/list` or `resources/read`.
+`tools/list` contains primary MCP identifiers for the canonical capabilities in
+`DelegatedCapabilityNames()` plus the `sproutWatch` view. Compatibility aliases
+are not listed and may resolve publicly only to an already-allowed delegated
+Core capability. The public projection is an adapter over the existing Core
+authority, not a separate public capability model.
+
 ---
 
 ## 4. Delegation Model
@@ -231,8 +270,9 @@ A `DelegationGrant` (`cmd/stem/internal/core/delegation.go`) carries:
 
 ### Remote Pollinator transport
 
-The Stem's optional remote listener uses HTTPS terminated at the Stem. It is
-disabled when `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
+The Stem's optional remote listener uses HTTPS terminated directly at the Stem
+for the public Pollinator projection in §3. It is disabled when
+`TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
 `TENDRIL_REMOTE_TLS_KEY` are all absent; incomplete or invalid configuration
 fails closed. The client authenticates the Stem using system certificate roots
 and normal chain plus hostname/IP SAN checks, with an optional named public
@@ -242,12 +282,15 @@ arbitrary certificate acceptance, tunnel dependency, or mTLS Pollinator
 identity.
 
 Remote clients present their durable Pollinator root only to mint an access
-token. Governed data and MCP requests use that short-lived token, capped at 15
-minutes. Plain HTTP remains supported by the restricted client only for a
+token. Public data and MCP requests use that short-lived token, capped at 15
+minutes, in the `Authorization` header. The Botanist bearer is invalid on the
+public surface, the durable root is invalid on ordinary public data/MCP routes,
+and query-string bearer material has no public authentication effect. Forwarded
+headers do not change Pollen, authority, listener provenance, limits, or rate
+identity. Plain HTTP remains supported by the restricted client only for a
 literal loopback IP and the existing Unix-owner separation check; HTTPS uses
-the TLS identity and does not use Unix UID identity. Forwarded headers do not
-change the remote ingress posture. The standalone Gateway remains separate and
-is not the supported remote Pollinator ingress.
+the TLS identity and does not use Unix UID identity. The standalone Gateway
+remains separate and is not the supported remote Pollinator ingress.
 
 ### Impact confirmation
 
@@ -495,6 +538,22 @@ The Stem remains outside the Sprout/Terrarium distinction. It mediates governed
 operations, holds credentials, and performs Git and network operations that a
 sealed Sprout cannot. The Terrarium's Stoma (the single controlled aperture in
 the isolation wall) is where commands enter and results leave.
+
+Normal Terrarium environment is explicit-only. It does not implicitly inherit a
+repository or working-directory `.env`, `TENDRIL_ENV_FILE`, provider API keys,
+provider-selection or local-inference variables, Botanist or Pollinator
+credentials, TLS or signing material, unrelated Git credentials, or unrelated
+infrastructure environment. A requested read-only execution may receive
+`TENDRIL_READONLY=true`; a Substrate's resolved Git credential is supplied only
+when that Substrate explicitly sets `exposeToken: true`, while
+`exposeToken: false` remains credential-free. Host-side Docker settings such as
+`DOCKER_HOST` and `PATH` allow the Stem to reach Docker but do not become
+container environment.
+
+Anything deliberately supplied to a Sprout can be copied into files, logs,
+commits, diffs, or other Git-reviewable Fruit. Fruit is an information channel
+out of the execution boundary, not trusted secret storage or an isolation
+boundary; `--network none` does not make unrelated Stem-secret injection safe.
 
 Authorization decides *whether* an operation proceeds. The Terrarium decides
 *where* it executes and *what it can reach*. The grant's egress allow-list
