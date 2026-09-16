@@ -338,8 +338,10 @@ setup path is `~/.gemini/config/mcp_config.json`.
 
 ## Using the tools
 
-Once connected, send work to the `default-workspace` Substrate using the
-primary MCP identifiers. Grants remain dotted canonical operation-classes.
+The full canonical MCP examples below are for the single-user/local MCP
+surface (`tendril mcp`). Send work there to the generated `default-workspace`
+Substrate using the primary MCP identifiers. Grants remain dotted canonical
+operation-classes.
 
 | Grant / Core | Primary MCP tool |
 |---|---|
@@ -364,6 +366,16 @@ Example `sequenceGrow` call:
   "substrate": "default-workspace"
 }
 ```
+
+`sequence.grow` / `sequenceGrow` is not part of the public Pollinator MCP
+projection. Public MCP projects `DelegatedCapabilityNames()` plus the
+`sproutWatch` view, and `sequence.grow` is not in that delegated set. Adding a
+`sequence.grow` grant does not make it public.
+
+For governed `tendril-mcp` users, follow the earlier public Pollinator workflow
+and its restricted tool projection instead of these single-user/local
+examples. That projection exposes only primary MCP identifiers for
+`DelegatedCapabilityNames()` plus `sproutWatch`.
 
 On the local/private MCP surface, the eight compatibility aliases (`runSequence`,
 `sproutTendril`, `createGenotype`, `viewGenome`, `reduceGenome`, `injectPlasmid`,
