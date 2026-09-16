@@ -246,8 +246,8 @@ func runServeCmd(ctx context.Context, args []string) {
 	var remoteListener net.Listener
 	var remoteServer *http.Server
 	if remoteTLS != nil {
-		remoteMux := buildRemoteServeMux(deps)
-		remoteListener, remoteServer, err = prepareRemoteTLSListener(remoteTLS, remoteMux)
+		remoteHandler := buildRemoteServeHandler(deps)
+		remoteListener, remoteServer, err = prepareRemoteTLSListener(remoteTLS, remoteHandler)
 		if err != nil {
 			log.Fatalf("❌ Remote Stem HTTPS ingress could not be established: %v", err)
 		}
@@ -706,6 +706,16 @@ func handleHealth(monitor *healthmon.Monitor, networked bool) http.HandlerFunc {
 	}
 }
 
+// handlePublicReadiness is deliberately passive. A request can reach this
+// handler only after Stem startup has constructed the public listener; it does
+// not run operator health checks or disclose local identity.
+func handlePublicReadiness(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(struct {
+		Ready bool `json:"ready"`
+	}{Ready: true})
+}
+
 func handleChatCompletions(bus *eventbus.Bus, sessions *session.Manager, history *historydb.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ChatCompletionRequest
@@ -1053,6 +1063,22 @@ type serveDependencies struct {
 // shares the local Stem's Core, signer, authority, grants, WatchAuthority, and
 // lifecycle state, but neither its route set nor its Botanist credential lane.
 func buildRemoteServeMux(deps serveDependencies) *http.ServeMux {
+	return buildRemoteServeMuxWithIngress(deps, newPublicIngress(defaultPublicIngressLimits(), nil))
+}
+
+func buildRemoteServeHandler(deps serveDependencies) http.Handler {
+	return buildRemoteServeHandlerWithLimits(deps, defaultPublicIngressLimits(), nil)
+}
+
+func buildRemoteServeHandlerWithLimits(deps serveDependencies, limits publicIngressLimits, now func() time.Time) http.Handler {
+	ingress := newPublicIngress(limits, now)
+	return ingress.wrap(buildRemoteServeMuxWithIngress(deps, ingress))
+}
+
+func buildRemoteServeMuxWithIngress(deps serveDependencies, ingress *publicIngress) *http.ServeMux {
+	if ingress == nil {
+		ingress = newPublicIngress(defaultPublicIngressLimits(), nil)
+	}
 	mux := http.NewServeMux()
 
 	// The durable root is accepted only at this self-authenticating mint route.
@@ -1061,7 +1087,7 @@ func buildRemoteServeMux(deps serveDependencies) *http.ServeMux {
 	// The public data/MCP surfaces prove the short-lived token here, then keep
 	// their existing per-invocation grant and ownership checks downstream.
 	pollinatorAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return withPollinatorAccessTokenAuth(deps.StemSigner, next)
+		return ingress.authenticate(deps.StemSigner, next)
 	}
 	watch := receptors.NewWatchAuthority(deps.DelegationGate, deps.History)
 
@@ -1083,7 +1109,7 @@ func buildRemoteServeMux(deps serveDependencies) *http.ServeMux {
 		WithPollinatorProjection()
 	mux.HandleFunc("POST /v1", pollinatorAuth(mcpHandler.HandleMCP))
 
-	mux.HandleFunc("GET /health", handleHealth(deps.HealthMonitor, true))
+	mux.HandleFunc("GET /health", handlePublicReadiness)
 
 	return mux
 }
