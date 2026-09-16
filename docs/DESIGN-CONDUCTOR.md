@@ -78,7 +78,10 @@ Regarding generic `RunSprout` compatibility: only Docker and gVisor satisfy its 
 
 Git operations are normally Stem-side. Sealed Sprouts do not receive the Substrate Git token by default. 
 - `exposeToken: true` explicitly exposes the resolved Substrate token.
-- Provider/model inference credentials may be passed into Terrarium execution as required by the current LLM execution path.
+- Normal Terrarium environments are explicit-only. Provider/model inference credentials remain Stem-side and are not implicitly injected into a normal Terrarium.
+- Repository or working-directory `.env` files and `TENDRIL_ENV_FILE` are not implicitly inherited by a normal Terrarium.
+- `TENDRIL_READONLY=true` may be explicitly supplied for requested read-only execution.
+- A Substrate's resolved Git credential is supplied only when that Substrate explicitly configures `exposeToken: true`; `exposeToken: false` remains credential-free.
 
 ## Fruit and State Externalization
 
