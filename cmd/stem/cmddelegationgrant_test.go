@@ -71,11 +71,6 @@ func TestDelegationUsageNamesCreateAndRemove(t *testing.T) {
 }
 
 func TestDelegationCreateRemoveCLI(t *testing.T) {
-	if os.Getenv("TEST_DELEGATION_CREATE_REMOVE_CLI") == "1" {
-		runDelegationCmd(context.Background(), strings.Fields(os.Getenv("TEST_DELEGATION_CREATE_REMOVE_ARGS")))
-		os.Exit(0)
-	}
-
 	tests := []struct {
 		name           string
 		args           []string
@@ -86,39 +81,39 @@ func TestDelegationCreateRemoveCLI(t *testing.T) {
 	}{
 		{
 			name:       "create success",
-			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
 			wantOutput: "Created delegation grant",
 		},
 		{
 			name:       "remove success",
-			args:       []string{"remove", "--pollen", "botanist-cli"},
+			args:       []string{"delegation", "remove", "--pollen", "botanist-cli"},
 			wantExit:   0,
 			wantOutput: "Removed delegation grant",
 			seedGrant:  true,
 		},
 		{
 			name:           "create refuses declared Pollen",
-			args:           []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			args:           []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
 			declaredPollen: "claude",
 			wantExit:       1,
 			wantOutput:     "not available under a declared Pollen",
 		},
 		{
 			name:           "remove refuses declared Pollen",
-			args:           []string{"remove", "--pollen", "botanist-cli"},
+			args:           []string{"delegation", "remove", "--pollen", "botanist-cli"},
 			declaredPollen: "claude",
 			wantExit:       1,
 			wantOutput:     "not available under a declared Pollen",
 		},
 		{
 			name:       "create surfaces Core validation",
-			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", "seed.*"},
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", "seed.*"},
 			wantExit:   1,
 			wantOutput: "wildcard",
 		},
 		{
 			name:       "create surfaces duplicate Pollen",
-			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
 			wantExit:   1,
 			wantOutput: "already has a grant",
 			seedGrant:  true,
@@ -138,10 +133,8 @@ func TestDelegationCreateRemoveCLI(t *testing.T) {
 				}
 			}
 
-			cmd := exec.Command(os.Args[0], "-test.run=TestDelegationCreateRemoveCLI")
+			cmd := exec.Command(binaryPath, tt.args...)
 			cmd.Env = append(os.Environ(),
-				"TEST_DELEGATION_CREATE_REMOVE_CLI=1",
-				"TEST_DELEGATION_CREATE_REMOVE_ARGS="+strings.Join(tt.args, " "),
 				"HOME="+home,
 				"TENDRIL_POLLEN="+tt.declaredPollen,
 			)
