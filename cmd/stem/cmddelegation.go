@@ -499,7 +499,7 @@ func runDelegationGrantCmd(args []string) {
 	}
 	fmt.Printf("✅ Granted %s to pollen %q on substrate %q\n", strings.Join(uniquePreserveStrings(flags.operations), ", "), strings.TrimSpace(flags.pollen), strings.TrimSpace(flags.substrate))
 	printMatchingGrants(tendrilDir, flags.pollen, flags.substrate)
-	fmt.Fprintf(os.Stderr, "The running Stem reads grants at startup; restart it before the new authority takes effect.\n")
+	fmt.Fprintln(os.Stderr, "Subsequent governed admissions use the updated authority; already-admitted work is unchanged.")
 }
 
 func runDelegationRevokeCmd(args []string) {
@@ -532,7 +532,7 @@ func runDelegationRevokeCmd(args []string) {
 	}
 	fmt.Printf("✅ Revoked %s from pollen %q on substrate %q\n", strings.Join(uniquePreserveStrings(flags.operations), ", "), strings.TrimSpace(flags.pollen), strings.TrimSpace(flags.substrate))
 	printMatchingGrants(tendrilDir, flags.pollen, flags.substrate)
-	fmt.Fprintf(os.Stderr, "The running Stem reads grants at startup; restart it before the new authority takes effect.\n")
+	fmt.Fprintln(os.Stderr, "Subsequent governed admissions use the updated authority; already-admitted work is unchanged.")
 }
 
 func runDelegationGrantsCmd(args []string) {
