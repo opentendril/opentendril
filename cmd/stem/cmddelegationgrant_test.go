@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -52,6 +54,356 @@ func TestParseDelegationGrantFlags(t *testing.T) {
 
 	if _, err := parseDelegationGrantFlags([]string{"--dir", "checkout"}); err == nil || !strings.Contains(err.Error(), "does not accept a grants file path") {
 		t.Fatalf("--dir error = %v, want control-plane diagnostic", err)
+	}
+}
+
+func TestDelegationUsageNamesCreateAndRemove(t *testing.T) {
+	stdout, _ := captureVerifyOutput(t, printDelegationUsage)
+	for _, want := range []string{
+		"<pending|approve|deny|create|grant|grants|revoke|remove>",
+		"create",
+		"remove",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("delegation usage = %q, want %q", stdout, want)
+		}
+	}
+}
+
+func TestDelegationCreateRemoveCLI(t *testing.T) {
+	tests := []struct {
+		name           string
+		args           []string
+		declaredPollen string
+		wantExit       int
+		wantOutput     string
+		seedGrant      bool
+	}{
+		{
+			name:       "create success",
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			wantOutput: "Created delegation grant",
+		},
+		{
+			name:       "remove success",
+			args:       []string{"delegation", "remove", "--pollen", "botanist-cli"},
+			wantExit:   0,
+			wantOutput: "Removed delegation grant",
+			seedGrant:  true,
+		},
+		{
+			name:           "create refuses declared Pollen",
+			args:           []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			declaredPollen: "claude",
+			wantExit:       1,
+			wantOutput:     "not available under a declared Pollen",
+		},
+		{
+			name:           "remove refuses declared Pollen",
+			args:           []string{"delegation", "remove", "--pollen", "botanist-cli"},
+			declaredPollen: "claude",
+			wantExit:       1,
+			wantOutput:     "not available under a declared Pollen",
+		},
+		{
+			name:       "create surfaces Core validation",
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", "seed.*"},
+			wantExit:   1,
+			wantOutput: "wildcard",
+		},
+		{
+			name:       "create surfaces duplicate Pollen",
+			args:       []string{"delegation", "create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			wantExit:   1,
+			wantOutput: "already has a grant",
+			seedGrant:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			controlDir := filepath.Join(home, grantsDirName)
+			if err := os.MkdirAll(controlDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.seedGrant {
+				if err := core.CreateDelegationGrant(controlDir, "botanist-cli", []string{"myrepo"}, []string{core.CapSeedGrow}); err != nil {
+					t.Fatalf("seed grant: %v", err)
+				}
+			}
+
+			cmd := exec.Command(binaryPath, tt.args...)
+			cmd.Env = append(os.Environ(),
+				"HOME="+home,
+				"TENDRIL_POLLEN="+tt.declaredPollen,
+			)
+			output, err := cmd.CombinedOutput()
+			exitCode := 0
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					exitCode = exitErr.ExitCode()
+				} else {
+					t.Fatalf("unexpected subprocess error: %v", err)
+				}
+			}
+			if exitCode != tt.wantExit {
+				t.Fatalf("exit code = %d, want %d (output: %s)", exitCode, tt.wantExit, output)
+			}
+			if !strings.Contains(string(output), tt.wantOutput) {
+				t.Fatalf("output = %q, want %q", output, tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestParseDelegationCreateFlagsAcceptsRepeatedSubstratesAndOperations(t *testing.T) {
+	flags, err := parseDelegationCreateFlags([]string{
+		"--pollen", "claude",
+		"--substrate", "myrepo",
+		"--substrate", "otherrepo",
+		"--operation", core.CapGitStatus,
+		"--operation", core.CapSeedGrow,
+	})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if flags.pollen != "claude" {
+		t.Fatalf("pollen = %q, want claude", flags.pollen)
+	}
+	if !slices.Equal(flags.substrates, []string{"myrepo", "otherrepo"}) {
+		t.Fatalf("substrates = %v", flags.substrates)
+	}
+	if !slices.Equal(flags.operations, []string{core.CapGitStatus, core.CapSeedGrow}) {
+		t.Fatalf("operations = %v", flags.operations)
+	}
+}
+
+func TestRequireDelegationCreateFlags(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags delegationCreateFlags
+		want  string
+	}{
+		{name: "missing pollen", flags: delegationCreateFlags{substrates: []string{"myrepo"}, operations: []string{core.CapSeedGrow}}, want: "missing --pollen"},
+		{name: "missing substrate", flags: delegationCreateFlags{pollen: "claude", operations: []string{core.CapSeedGrow}}, want: "missing --substrate"},
+		{name: "missing operation", flags: delegationCreateFlags{pollen: "claude", substrates: []string{"myrepo"}}, want: "missing --operation"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := requireDelegationCreateFlags(tt.flags); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseDelegationCreateFlagsRejectsCallerSelectedGrantPaths(t *testing.T) {
+	for _, name := range []string{"--dir", "--grants", "--grants-file", "--grants-path"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseDelegationCreateFlags([]string{name, "/tmp/checkout"}); err == nil || !strings.Contains(err.Error(), "does not accept a grants file path") {
+				t.Fatalf("error = %v, want control-plane diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestParseDelegationCreateFlagsRequiresExactlyOnePollen(t *testing.T) {
+	if _, err := parseDelegationCreateFlags([]string{"--pollen", "claude", "--pollen", "other", "--substrate", "myrepo", "--operation", core.CapSeedGrow}); err == nil || !strings.Contains(err.Error(), "exactly one --pollen") {
+		t.Fatalf("duplicate Pollen error = %v", err)
+	}
+	flags, err := parseDelegationCreateFlags([]string{"--pollen", "   ", "--substrate", "myrepo", "--operation", core.CapSeedGrow})
+	if err != nil {
+		t.Fatalf("blank Pollen parse: %v", err)
+	}
+	if err := requireDelegationCreateFlags(flags); err == nil || !strings.Contains(err.Error(), "missing --pollen") {
+		t.Fatalf("blank Pollen validation error = %v", err)
+	}
+}
+
+func TestParseDelegationRemoveFlagsRejectsUnsupportedArguments(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "substrate", args: []string{"--pollen", "claude", "--substrate", "myrepo"}, want: "does not accept --substrate"},
+		{name: "operation", args: []string{"--pollen", "claude", "--operation", core.CapSeedGrow}, want: "does not accept --operation"},
+		{name: "dir", args: []string{"--dir", "/tmp/checkout"}, want: "does not accept a grants file path"},
+		{name: "grants", args: []string{"--grants", "/tmp/grants.yaml"}, want: "does not accept a grants file path"},
+		{name: "grants-file", args: []string{"--grants-file", "/tmp/grants.yaml"}, want: "does not accept a grants file path"},
+		{name: "grants-path", args: []string{"--grants-path", "/tmp/grants.yaml"}, want: "does not accept a grants file path"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseDelegationRemoveFlags(tt.args); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequireDelegationRemoveFlagsRequiresPollen(t *testing.T) {
+	for _, pollen := range []string{"", "   "} {
+		if err := requireDelegationRemoveFlags(delegationRemoveFlags{pollen: pollen}); err == nil || !strings.Contains(err.Error(), "missing --pollen") {
+			t.Fatalf("Pollen %q error = %v, want missing Pollen", pollen, err)
+		}
+	}
+}
+
+func TestDelegationCreateRefusesDeclaredPollen(t *testing.T) {
+	t.Setenv(envPollenCLI, "claude")
+	if err := refuseDeclaredPollenGrantMutation(); err == nil {
+		t.Fatal("declared Pollen was allowed to create a grant")
+	}
+}
+
+func TestDelegationRemoveRefusesDeclaredPollen(t *testing.T) {
+	t.Setenv(envPollenCLI, "claude")
+	if err := refuseDeclaredPollenGrantMutation(); err == nil {
+		t.Fatal("declared Pollen was allowed to remove a grant")
+	}
+}
+
+func TestDelegationCreateUsesCoreLifecycleAndShowsCompleteGrant(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	controlDir := filepath.Join(home, grantsDirName)
+	if err := os.MkdirAll(controlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		runDelegationCmd(context.Background(), []string{"create",
+			"--pollen", "claude",
+			"--substrate", "myrepo",
+			"--substrate", "otherrepo",
+			"--operation", core.CapGitStatus,
+			"--operation", core.CapSeedGrow,
+			"--operation", core.CapSproutWatch,
+		})
+	})
+	if strings.Contains(strings.ToLower(stdout+stderr), "restart") {
+		t.Fatalf("create output implied a restart:\nstdout=%s\nstderr=%s", stdout, stderr)
+	}
+	for _, want := range []string{"pollen: claude", "substrates: [myrepo, otherrepo]", "git.status", "seed.grow", "sprout.watch"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("create output = %q, want %q", stdout, want)
+		}
+	}
+
+	grants, err := core.LoadDelegationGrants(controlDir)
+	if err != nil {
+		t.Fatalf("LoadDelegationGrants: %v", err)
+	}
+	if len(grants) != 1 || !slices.Equal(grants[0].Substrates, []string{"myrepo", "otherrepo"}) || !slices.Equal(grants[0].OperationClasses, []string{core.CapGitStatus, core.CapSeedGrow, core.CapSproutWatch}) {
+		t.Fatalf("created grants = %+v", grants)
+	}
+}
+
+func TestDelegationCreateSurfacesCoreValidationAndDuplicateFailure(t *testing.T) {
+	dir := t.TempDir()
+	for _, tt := range []struct {
+		name       string
+		operations []string
+		want       string
+	}{
+		{name: "wildcard", operations: []string{"seed.*"}, want: "wildcard"},
+		{name: "unknown", operations: []string{"made.up"}, want: "unknown operation class"},
+		{name: "non-delegable", operations: []string{core.CapGenomeView}, want: "not delegable"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := core.CreateDelegationGrant(dir, "claude", []string{"myrepo"}, tt.operations)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want Core validation containing %q", err, tt.want)
+			}
+		})
+	}
+	if err := core.CreateDelegationGrant(dir, "claude", []string{"myrepo"}, []string{core.CapSeedGrow}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if err := core.CreateDelegationGrant(dir, "claude", []string{"myrepo"}, []string{core.CapSeedGrow}); err == nil || !strings.Contains(err.Error(), "already has a grant") {
+		t.Fatalf("duplicate error = %v, want Core duplicate diagnostic", err)
+	}
+}
+
+func TestDelegationCreateAndRemoveUseStemControlPlane(t *testing.T) {
+	home := t.TempDir()
+	checkout := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Chdir(checkout)
+	controlDir := filepath.Join(home, grantsDirName)
+	if err := os.MkdirAll(controlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostileDir := filepath.Join(checkout, grantsDirName)
+	if err := os.MkdirAll(hostileDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostilePath := filepath.Join(hostileDir, core.DelegationGrantsFilename)
+	hostile := renderGrantsYAML(gitSetupOptions{substrate: "myrepo", grantPollen: "claude"})
+	if err := os.WriteFile(hostilePath, []byte(hostile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _ = captureVerifyOutput(t, func() {
+		runDelegationCmd(context.Background(), []string{"create", "--pollen", "claude", "--substrate", "myrepo", "--operation", core.CapSeedGrow})
+	})
+	controlGrants, err := core.LoadDelegationGrants(controlDir)
+	if err != nil {
+		t.Fatalf("load control grants after create: %v", err)
+	}
+	if len(controlGrants) != 1 || controlGrants[0].Pollen != "claude" {
+		t.Fatalf("control grants after create = %+v", controlGrants)
+	}
+	unchanged, err := os.ReadFile(hostilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != hostile {
+		t.Fatalf("create changed checkout-local grants: %s", unchanged)
+	}
+
+	_, _ = captureVerifyOutput(t, func() {
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
+	})
+	controlGrants, err = core.LoadDelegationGrants(controlDir)
+	if err != nil {
+		t.Fatalf("load control grants after remove: %v", err)
+	}
+	if len(controlGrants) != 0 {
+		t.Fatalf("control grants after remove = %+v, want empty", controlGrants)
+	}
+	unchanged, err = os.ReadFile(hostilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(unchanged) != hostile {
+		t.Fatalf("remove changed checkout-local grants: %s", unchanged)
+	}
+}
+
+func TestDelegationRemoveReportsCoreBooleanDirectly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	controlDir := filepath.Join(home, grantsDirName)
+	if err := os.MkdirAll(controlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.CreateDelegationGrant(controlDir, "claude", []string{"myrepo"}, []string{core.CapSeedGrow}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
+	})
+	if !strings.Contains(strings.ToLower(stdout), "removed") || strings.Contains(strings.ToLower(stdout+stderr), "restart") {
+		t.Fatalf("removed output = %q / %q", stdout, stderr)
+	}
+	stdout, stderr = captureVerifyOutput(t, func() {
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
+	})
+	if !strings.Contains(stdout, "already absent") || strings.Contains(strings.ToLower(stdout+stderr), "restart") {
+		t.Fatalf("already-absent output = %q / %q", stdout, stderr)
 	}
 }
 

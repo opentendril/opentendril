@@ -102,6 +102,14 @@ while others are exposed through dedicated Botanist-authenticated REST routes
 `POST /v1/delegation/pending/{id}/approve`,
 `POST /v1/delegation/pending/{id}/deny`).
 
+The current Botanist delegation management surface is local CLI control-plane
+operation: `tendril delegation create` creates one complete bounded grant,
+`grant` and `revoke` adjust operation classes on an existing grant, `grants`
+inspects the projection, and `remove` removes one complete Pollen grant.
+`pending`, `approve`, and `deny` manage pending confirmations. `create` and
+`remove` are not governed capabilities and are not projected through REST or
+MCP; they resolve the Stem control plane and consume the Core grant lifecycle.
+
 The parity test `TestControlPlaneCapabilitiesExcluded` asserts that no
 capability name in `CapabilityNames()` carries a control-plane prefix. The
 current deny-list prefixes are:
@@ -112,7 +120,7 @@ current deny-list prefixes are:
 | `init.` | Workspace initialization |
 | `serve.` | Starting the Stem server |
 | `pollinator.` | Pollinator credential management (create, list, revoke) |
-| `delegation.` | Grant management (grant, revoke, list) |
+| `delegation.` | Grant management (create, grant, grants, revoke, remove) |
 | `hardiness.` | Deployment posture reporting |
 | `git.setup.` | Git credential configuration |
 | `mcp.` | MCP tool management (install, list, remove) |

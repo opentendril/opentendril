@@ -520,7 +520,7 @@ not expose the PEM to the Pollinator-hosting account. A shared location like
 prints `ok`, while `cat /home/tendril/.tendril/app.pem` as your own account is
 denied.
 
-Then write the connection and the grant together. Set `APP_ID` and `REPO` to
+Then write the connection. Set `APP_ID` and `REPO` to
 the real App ID and `owner/repo` from Path B before running the command. The
 shell substitutions refuse to run while either is unset, so the example
 identity cannot be executed by accident:
@@ -534,45 +534,33 @@ tendril git setup \
   --repo "$REPO" \
   --posture app \
   --app-id "$APP_ID" \
-  --key /home/tendril/.tendril/app.pem \
-  --grant-pollen claude
+  --key /home/tendril/.tendril/app.pem
 ```
 
 `--checkout managed` is the default and the only mode that works under a separate
 principal: the Stem cannot read your clone, so `mode: path` pointing at it will
 fail. Managed mode gives the Stem its own clone under its own home.
 
-This writes `/home/tendril/substrates.yaml` and a **Git-only** grant at
-`/home/tendril/.tendril/grants.yaml`. `git setup --grant-pollen` authorises the
-delegated Git loop and nothing else — no `seed.grow`, no `sprout.watch`, no
-`sprout.grow`. No grant means every delegated invocation is denied, which is the
-secure default.
+This writes `/home/tendril/substrates.yaml` without creating delegation
+authority. The legacy `--grant-pollen` option remains available for
+compatibility, but ordinary first use creates one explicit bounded grant
+through the delegation control plane below. No grant means every delegated
+invocation is denied, which is the secure default.
 
-Inspect it through the control-plane command; do not edit `.tendril/grants.yaml`
-by hand for ordinary first use:
-
-```bash
-# as tendril, in /home/tendril
-tendril delegation grants --pollen claude --substrate myrepo
-```
-
-```text
-pollen: claude
-  substrates: [myrepo]
-  operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]
-```
-
-`git.prune` is deliberately absent: it deletes branches, and every other Git
-operation is recoverable.
-
-Then grant the bounded Seed hand-off, continuation, and observation explicitly,
-using the same Pollen and Substrate names:
+Create the first grant through the control-plane command; do not edit
+`.tendril/grants.yaml` by hand for ordinary first use. Name every operation
+class explicitly; there is no hidden or wildcard authority:
 
 ```bash
-# as tendril, in /home/tendril
-tendril delegation grant \
+tendril delegation create \
   --pollen claude \
   --substrate myrepo \
+  --operation git.status \
+  --operation git.branch.list \
+  --operation git.branch \
+  --operation git.commit \
+  --operation git.push \
+  --operation git.pr \
   --operation seed.grow \
   --operation phytomer.continue \
   --operation sprout.watch
@@ -582,6 +570,12 @@ tendril delegation grant \
 pollen: claude
   substrates: [myrepo]
   operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr, seed.grow, phytomer.continue, sprout.watch]
+```
+
+Inspect it through the same control-plane projection:
+
+```bash
+tendril delegation grants --pollen claude
 ```
 
 `seed.grow` is the bounded task hand-off. `phytomer.continue` accepts additional
