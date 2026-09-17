@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -66,6 +67,100 @@ func TestDelegationUsageNamesCreateAndRemove(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("delegation usage = %q, want %q", stdout, want)
 		}
+	}
+}
+
+func TestDelegationCreateRemoveCLI(t *testing.T) {
+	if os.Getenv("TEST_DELEGATION_CREATE_REMOVE_CLI") == "1" {
+		runDelegationCmd(context.Background(), strings.Fields(os.Getenv("TEST_DELEGATION_CREATE_REMOVE_ARGS")))
+		os.Exit(0)
+	}
+
+	tests := []struct {
+		name           string
+		args           []string
+		declaredPollen string
+		wantExit       int
+		wantOutput     string
+		seedGrant      bool
+	}{
+		{
+			name:       "create success",
+			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			wantOutput: "Created delegation grant",
+		},
+		{
+			name:       "remove success",
+			args:       []string{"remove", "--pollen", "botanist-cli"},
+			wantExit:   0,
+			wantOutput: "Removed delegation grant",
+			seedGrant:  true,
+		},
+		{
+			name:           "create refuses declared Pollen",
+			args:           []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			declaredPollen: "claude",
+			wantExit:       1,
+			wantOutput:     "not available under a declared Pollen",
+		},
+		{
+			name:           "remove refuses declared Pollen",
+			args:           []string{"remove", "--pollen", "botanist-cli"},
+			declaredPollen: "claude",
+			wantExit:       1,
+			wantOutput:     "not available under a declared Pollen",
+		},
+		{
+			name:       "create surfaces Core validation",
+			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", "seed.*"},
+			wantExit:   1,
+			wantOutput: "wildcard",
+		},
+		{
+			name:       "create surfaces duplicate Pollen",
+			args:       []string{"create", "--pollen", "botanist-cli", "--substrate", "myrepo", "--operation", core.CapSeedGrow},
+			wantExit:   1,
+			wantOutput: "already has a grant",
+			seedGrant:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			controlDir := filepath.Join(home, grantsDirName)
+			if err := os.MkdirAll(controlDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if tt.seedGrant {
+				if err := core.CreateDelegationGrant(controlDir, "botanist-cli", []string{"myrepo"}, []string{core.CapSeedGrow}); err != nil {
+					t.Fatalf("seed grant: %v", err)
+				}
+			}
+
+			cmd := exec.Command(os.Args[0], "-test.run=TestDelegationCreateRemoveCLI")
+			cmd.Env = append(os.Environ(),
+				"TEST_DELEGATION_CREATE_REMOVE_CLI=1",
+				"TEST_DELEGATION_CREATE_REMOVE_ARGS="+strings.Join(tt.args, " "),
+				"HOME="+home,
+				"TENDRIL_POLLEN="+tt.declaredPollen,
+			)
+			output, err := cmd.CombinedOutput()
+			exitCode := 0
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					exitCode = exitErr.ExitCode()
+				} else {
+					t.Fatalf("unexpected subprocess error: %v", err)
+				}
+			}
+			if exitCode != tt.wantExit {
+				t.Fatalf("exit code = %d, want %d (output: %s)", exitCode, tt.wantExit, output)
+			}
+			if !strings.Contains(string(output), tt.wantOutput) {
+				t.Fatalf("output = %q, want %q", output, tt.wantOutput)
+			}
+		})
 	}
 }
 
@@ -185,7 +280,7 @@ func TestDelegationCreateUsesCoreLifecycleAndShowsCompleteGrant(t *testing.T) {
 	}
 
 	stdout, stderr := captureVerifyOutput(t, func() {
-		runDelegationCreateCmd([]string{
+		runDelegationCmd(context.Background(), []string{"create",
 			"--pollen", "claude",
 			"--substrate", "myrepo",
 			"--substrate", "otherrepo",
@@ -258,7 +353,7 @@ func TestDelegationCreateAndRemoveUseStemControlPlane(t *testing.T) {
 	}
 
 	_, _ = captureVerifyOutput(t, func() {
-		runDelegationCreateCmd([]string{"--pollen", "claude", "--substrate", "myrepo", "--operation", core.CapSeedGrow})
+		runDelegationCmd(context.Background(), []string{"create", "--pollen", "claude", "--substrate", "myrepo", "--operation", core.CapSeedGrow})
 	})
 	controlGrants, err := core.LoadDelegationGrants(controlDir)
 	if err != nil {
@@ -276,7 +371,7 @@ func TestDelegationCreateAndRemoveUseStemControlPlane(t *testing.T) {
 	}
 
 	_, _ = captureVerifyOutput(t, func() {
-		runDelegationRemoveCmd([]string{"--pollen", "claude"})
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
 	})
 	controlGrants, err = core.LoadDelegationGrants(controlDir)
 	if err != nil {
@@ -306,13 +401,13 @@ func TestDelegationRemoveReportsCoreBooleanDirectly(t *testing.T) {
 	}
 
 	stdout, stderr := captureVerifyOutput(t, func() {
-		runDelegationRemoveCmd([]string{"--pollen", "claude"})
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
 	})
 	if !strings.Contains(strings.ToLower(stdout), "removed") || strings.Contains(strings.ToLower(stdout+stderr), "restart") {
 		t.Fatalf("removed output = %q / %q", stdout, stderr)
 	}
 	stdout, stderr = captureVerifyOutput(t, func() {
-		runDelegationRemoveCmd([]string{"--pollen", "claude"})
+		runDelegationCmd(context.Background(), []string{"remove", "--pollen", "claude"})
 	})
 	if !strings.Contains(stdout, "already absent") || strings.Contains(strings.ToLower(stdout+stderr), "restart") {
 		t.Fatalf("already-absent output = %q / %q", stdout, stderr)
