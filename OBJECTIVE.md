@@ -13,71 +13,62 @@ exists to make possible.
 
 ## Current
 
-**An authorised Pollinator on the public Internet can reach a governed
-OpenTendril Stem through a deliberately exposed Pollinator ingress, exercise the
-existing bounded Seed/Phytomer interaction contract, and receive Git-reviewable
-Fruit without gaining Botanist, Stem-host, Substrate, Sprout, Terrarium,
-provider, repository, or infrastructure authority.**
+**A Botanist can establish and manage a named Substrate through deterministic
+Stem control-plane operations from any working directory, and use that
+declaration to produce Git-reviewable Fruit without hand-editing OpenTendril
+configuration or allowing a Substrate checkout to control credentials or
+delegation authority.**
 
 ## Done when
 
-Externally demonstrable exercises with an authorised Pollinator, a governed
-Stem, and a granted Substrate establish all of the following:
+Recorded exercises establish all of the following:
 
-- **Internet-remote qualification.** The Pollinator reaches the Stem from a
-  genuinely Internet-remote network location, not a shared LAN, local bridge,
-  local tunnel, or private same-network host.
-- **Supported public exposure.** The ingress uses an explicit, supported public
-  Pollinator exposure arrangement; qualification does not depend on
-  undocumented port forwarding.
-- **TLS before credentials.** The Pollinator completes normal TLS certificate-
-  chain and hostname/SAN verification before presenting any Pollinator
-  credential.
-- **Location is not authority.** Being on the public Internet or reaching the
-  ingress grants no capability authority. Governed access still requires
-  authenticated Pollen and a matching live DelegationGrant.
-- **Roots are not data-route authority.** A durable Pollinator root does not
-  become long-lived normal data-route authority over the public Internet;
-  access-token expiry is enforced and bounded.
-- **Management-plane boundary.** The public Pollinator ingress does not expose
-  Botanist or other control-plane authority. The management-plane boundary is
-  explicit and remains distinct from Pollinator ingress.
-- **Existing governed lifecycle.** Requests reuse the existing Stem Core
-  capability authority and bounded Seed/Phytomer interaction lifecycle,
-  including safe observation and continuation of the same work.
-- **Live revocation.** Root revocation prevents subsequent access-token minting,
-  and grant removal or narrowing blocks governed admissions under the live
-  grant, without relying on a Stem restart.
-- **Safe interruption.** Internet interruption and reconnect preserve safe,
-  idempotent Seed/Phytomer interaction; retries do not create replacement work
-  or deliver continuation more than once.
-- **Unchanged execution boundary.** The existing Sprout/Terrarium isolation is
-  unchanged, and there is no Pollinator-to-Sprout or Pollinator-to-Terrarium
-  channel. Normal sealed Terrariums receive no implicit Stem environment file
-  or ambient Stem credential material; any execution environment is explicitly
-  declared by the governed Terrarium/Sprout contract.
-- **Fail-closed requests.** Malformed, unauthenticated, wrong-Pollen,
-  absent-grant, invalid-TLS, and forwarding-metadata spoof attempts fail closed
-  without exercising governed authority.
-- **Bounded resource use.** Unauthenticated or minimally authenticated traffic
-  cannot cause unbounded resource exhaustion; bounded protection and failure
-  behavior are demonstrable.
-- **Reviewable Fruit.** Successful work yields Git-reviewable Fruit while
-  protected/default state remains unchanged. Fruit is not accepted or merged
-  automatically; the Botanist retains that decision.
-- **Operational friction is recorded.** The qualification records DNS,
-  certificate lifecycle, firewall/NAT or equivalent exposure requirements,
-  provisioning, revocation, reconnect, and failure recovery.
+- **Deterministic source of truth.** Ordinary Botanist Substrate administration
+  resolves one canonical mutable registry independently of the process working
+  directory.
+- **No incidental checkout authority.** Merely launching OpenTendril inside a
+  repository cannot silently replace the operator-managed Substrate registry.
+- **Supported creation.** A Botanist can add a named Substrate using the
+  existing supported connection and checkout postures without hand-editing
+  YAML.
+- **Safe inspection.** Named Substrates can be listed and inspected without
+  exposing PAT values, PEM contents, private signing material, Botanist
+  credentials, Pollinator credentials, or other secret values.
+- **Patch-safe updates.** A Botanist can change explicitly selected Substrate
+  fields without replacing unspecified fields or unrelated Substrates and
+  credential profiles.
+- **Canonical verification.** A named Substrate can be verified using the
+  existing deterministic readiness policy rather than a second lifecycle-
+  specific policy.
+- **Dependency-safe removal.** A Substrate with active delegation references
+  cannot be removed. Removing an unreferenced Substrate does not corrupt
+  shared credential profiles or delete external secret material, Fruit,
+  managed Git history, or remote repository state.
+- **Management remains Botanist authority.** Pollinators cannot create, update,
+  remove, or otherwise administer persistent Substrate configuration.
+- **Delegation remains separate.** Substrate lifecycle operations do not
+  silently create, widen, narrow, or remove DelegationGrants.
+- **Working-directory independence.** The same ordinary configuration is
+  observed when the Botanist invokes the lifecycle from their home directory,
+  a Substrate checkout, or another unrelated directory.
+- **First-use path reaches Fruit.** Starting without a configured Substrate, a
+  Botanist can establish and verify one through supported commands, establish
+  explicit delegation authority through the existing grant lifecycle, run
+  governed work, and receive Git-reviewable Fruit without manually editing
+  OpenTendril YAML.
+- **Protected state remains protected.** Configuration lifecycle operations do
+  not merge Fruit, mutate the protected/default branch, or perform unintended
+  remote Git operations.
 
 This objective does not require:
 
-- GitHub-native workers;
-- GitHub Actions identity;
-- Greenhouse public deployment;
-- Stem federation or multi-instance routing;
-- general enterprise IAM;
-- automatic Fruit acceptance or merge; or
-- weakening Terrarium isolation.
+- redesigning DelegationGrants;
+- per-task repository credentials;
+- arbitrary repository selection by Pollinators;
+- changing Seed, Phytomer, Sprout, Terrarium, or Fruit semantics;
+- Greenhouse configuration editing;
+- public Pollinator ingress changes; or
+- automatic Fruit acceptance or merge.
 
 ---
 
