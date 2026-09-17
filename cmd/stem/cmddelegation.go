@@ -32,12 +32,16 @@ func runDelegationCmd(ctx context.Context, args []string) {
 		runDelegationApproveCmd(ctx, args[1:])
 	case "deny":
 		runDelegationDenyCmd(ctx, args[1:])
+	case "create":
+		runDelegationCreateCmd(args[1:])
 	case "grant":
 		runDelegationGrantCmd(args[1:])
 	case "grants":
 		runDelegationGrantsCmd(args[1:])
 	case "revoke":
 		runDelegationRevokeCmd(args[1:])
+	case "remove":
+		runDelegationRemoveCmd(args[1:])
 	case "-h", "--help", "help":
 		printDelegationUsage()
 	default:
@@ -48,17 +52,21 @@ func runDelegationCmd(ctx context.Context, args []string) {
 }
 
 func printDelegationUsage() {
-	fmt.Println("Usage: tendril delegation <pending|approve|deny|grant|grants|revoke> [args]")
+	fmt.Println("Usage: tendril delegation <pending|approve|deny|create|grant|grants|revoke|remove> [args]")
 	fmt.Println("  pending         List pending delegation confirmations")
 	fmt.Println("  approve <id>    Approve a pending confirmation")
 	fmt.Println("  deny <id>       Deny a pending confirmation")
+	fmt.Println("  create          Create a complete bounded Pollen grant")
 	fmt.Println("  grant           Add named operation classes to an existing Pollen/Substrate grant")
 	fmt.Println("  grants          Show current control-plane grants")
 	fmt.Println("  revoke          Remove named operation classes from an existing grant")
+	fmt.Println("  remove          Remove a complete Pollen grant")
 	fmt.Println()
+	fmt.Println("  create --pollen <pollen> --substrate <name> [--substrate <name> ...] --operation <class> [--operation <class> ...]")
 	fmt.Println("  grant  --pollen <pollen> --substrate <name> --operation <class> [--operation <class> ...]")
 	fmt.Println("  grants [--pollen <pollen>] [--substrate <name>]")
 	fmt.Println("  revoke --pollen <pollen> --substrate <name> --operation <class> [--operation <class> ...]")
+	fmt.Println("  remove --pollen <pollen>")
 }
 
 func newDelegationRequest(ctx context.Context, method, path string) (*http.Request, error) {
@@ -205,6 +213,20 @@ type delegationGrantFlags struct {
 	help       bool
 }
 
+type delegationCreateFlags struct {
+	pollen     string
+	substrates []string
+	operations []string
+	help       bool
+	pollenSet  bool
+}
+
+type delegationRemoveFlags struct {
+	pollen    string
+	help      bool
+	pollenSet bool
+}
+
 func parseDelegationGrantFlags(args []string) (delegationGrantFlags, error) {
 	var flags delegationGrantFlags
 	need := func(i *int, name string) (string, error) {
@@ -259,6 +281,108 @@ func requireDelegationMutationFlags(flags delegationGrantFlags) error {
 	return nil
 }
 
+func parseDelegationCreateFlags(args []string) (delegationCreateFlags, error) {
+	var flags delegationCreateFlags
+	need := func(i *int, name string) (string, error) {
+		if *i+1 >= len(args) {
+			return "", fmt.Errorf("flag %s requires a value", name)
+		}
+		*i++
+		return args[*i], nil
+	}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help", "help":
+			flags.help = true
+			return flags, nil
+		case "--pollen":
+			if flags.pollenSet {
+				return flags, fmt.Errorf("delegation create accepts exactly one --pollen")
+			}
+			value, err := need(&i, "--pollen")
+			if err != nil {
+				return flags, err
+			}
+			flags.pollen = value
+			flags.pollenSet = true
+		case "--substrate":
+			value, err := need(&i, "--substrate")
+			if err != nil {
+				return flags, err
+			}
+			flags.substrates = append(flags.substrates, value)
+		case "--operation":
+			value, err := need(&i, "--operation")
+			if err != nil {
+				return flags, err
+			}
+			flags.operations = append(flags.operations, value)
+		case "--dir", "--grants", "--grants-file", "--grants-path":
+			return flags, fmt.Errorf("delegation create does not accept a grants file path; grants are read only from the Stem control plane")
+		default:
+			return flags, fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	return flags, nil
+}
+
+func requireDelegationCreateFlags(flags delegationCreateFlags) error {
+	if strings.TrimSpace(flags.pollen) == "" {
+		return fmt.Errorf("missing --pollen")
+	}
+	if len(flags.substrates) == 0 {
+		return fmt.Errorf("missing --substrate")
+	}
+	if len(flags.operations) == 0 {
+		return fmt.Errorf("missing --operation")
+	}
+	return nil
+}
+
+func parseDelegationRemoveFlags(args []string) (delegationRemoveFlags, error) {
+	var flags delegationRemoveFlags
+	need := func(i *int, name string) (string, error) {
+		if *i+1 >= len(args) {
+			return "", fmt.Errorf("flag %s requires a value", name)
+		}
+		*i++
+		return args[*i], nil
+	}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help", "help":
+			flags.help = true
+			return flags, nil
+		case "--pollen":
+			if flags.pollenSet {
+				return flags, fmt.Errorf("delegation remove accepts exactly one --pollen")
+			}
+			value, err := need(&i, "--pollen")
+			if err != nil {
+				return flags, err
+			}
+			flags.pollen = value
+			flags.pollenSet = true
+		case "--substrate":
+			return flags, fmt.Errorf("delegation remove does not accept --substrate")
+		case "--operation":
+			return flags, fmt.Errorf("delegation remove does not accept --operation")
+		case "--dir", "--grants", "--grants-file", "--grants-path":
+			return flags, fmt.Errorf("delegation remove does not accept a grants file path; grants are read only from the Stem control plane")
+		default:
+			return flags, fmt.Errorf("unknown argument %q", args[i])
+		}
+	}
+	return flags, nil
+}
+
+func requireDelegationRemoveFlags(flags delegationRemoveFlags) error {
+	if strings.TrimSpace(flags.pollen) == "" {
+		return fmt.Errorf("missing --pollen")
+	}
+	return nil
+}
+
 func resolveDelegationControlPlane() (string, error) {
 	tendrilDir, err := resolveGrantsDir()
 	if err != nil {
@@ -273,6 +397,74 @@ func refuseDeclaredPollenGrantMutation() error {
 		return fmt.Errorf("grant mutation is a Botanist control-plane action and is not available under a declared Pollen (%s=%s)", envPollenCLI, pollen)
 	}
 	return nil
+}
+
+func runDelegationCreateCmd(args []string) {
+	flags, err := parseDelegationCreateFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		printDelegationUsage()
+		os.Exit(1)
+	}
+	if flags.help {
+		printDelegationUsage()
+		return
+	}
+	if err := requireDelegationCreateFlags(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v. Usage: tendril delegation create --pollen <pollen> --substrate <name> [--substrate <name> ...] --operation <class> [--operation <class> ...]\n", err)
+		os.Exit(1)
+	}
+	if err := refuseDeclaredPollenGrantMutation(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	tendrilDir, err := resolveDelegationControlPlane()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	if err := core.CreateDelegationGrant(tendrilDir, flags.pollen, flags.substrates, flags.operations); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Created delegation grant for pollen %q\n", strings.TrimSpace(flags.pollen))
+	printMatchingGrants(tendrilDir, flags.pollen, "")
+}
+
+func runDelegationRemoveCmd(args []string) {
+	flags, err := parseDelegationRemoveFlags(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		printDelegationUsage()
+		os.Exit(1)
+	}
+	if flags.help {
+		printDelegationUsage()
+		return
+	}
+	if err := requireDelegationRemoveFlags(flags); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v. Usage: tendril delegation remove --pollen <pollen>\n", err)
+		os.Exit(1)
+	}
+	if err := refuseDeclaredPollenGrantMutation(); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	tendrilDir, err := resolveDelegationControlPlane()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	removed, err := core.RemoveDelegationGrant(tendrilDir, flags.pollen)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+	if removed {
+		fmt.Printf("✅ Removed delegation grant for pollen %q; subsequent governed admissions use the updated authority.\n", strings.TrimSpace(flags.pollen))
+		return
+	}
+	fmt.Printf("ℹ️ Delegation grant for pollen %q was already absent; subsequent governed admissions remain unchanged.\n", strings.TrimSpace(flags.pollen))
 }
 
 func runDelegationGrantCmd(args []string) {

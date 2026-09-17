@@ -169,6 +169,13 @@ POLLEN  STATUS  ISSUED      DIGEST         NOTE
 claude  active  2026-07-22  38c3089267f7…  laptop
 ```
 
+Before creating the first grant, verify the Substrate Git connection. This is a
+read-only check and does not create delegation authority:
+
+```bash
+sudo -u tendril -i tendril git setup --verify --substrate myrepo
+```
+
 If yours is not listed, issue one — as the Stem, in its own home:
 
 ```bash
@@ -204,28 +211,32 @@ Use it without printing it:
 A credential proves *who* you are. A grant decides *what* you may do. No grant
 means every delegated invocation is denied — the secure default.
 
-Inspect the Stem control-plane grant. Do not edit `.tendril/grants.yaml` by hand
-for ordinary first use:
+Create the first grant explicitly through the Stem control plane. Do not edit
+`.tendril/grants.yaml` by hand for ordinary first use. Name every operation
+class explicitly; there is no hidden or wildcard authority:
 
 ```bash
-sudo -u tendril -i tendril delegation grants --pollen claude --substrate myrepo
-```
-
-After Git setup the grant is Git-only. The Botanist then grants `seed.grow`,
-`phytomer.continue`, and `sprout.watch` explicitly, using the same Pollen and
-Substrate names:
-
-```bash
-sudo -u tendril -i tendril delegation grant \
+sudo -u tendril -i tendril delegation create \
   --pollen claude \
   --substrate myrepo \
+  --operation git.status \
+  --operation git.branch.list \
+  --operation git.branch \
+  --operation git.commit \
+  --operation git.push \
+  --operation git.pr \
   --operation seed.grow \
   --operation phytomer.continue \
   --operation sprout.watch
 ```
 
 Grant changes take effect on the next governed admission without restarting the
-Stem. Inspect the active grant:
+Stem. Inspect the complete active grant without narrowing the projection to a
+single Substrate:
+
+```bash
+sudo -u tendril -i tendril delegation grants --pollen claude
+```
 
 ```text
 pollen: claude
