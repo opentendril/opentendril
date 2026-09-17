@@ -428,7 +428,9 @@ func runDelegationCreateCmd(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ Created delegation grant for pollen %q\n", strings.TrimSpace(flags.pollen))
-	printMatchingGrants(tendrilDir, flags.pollen, "")
+	if err := printMatchingGrantsProjection(tendrilDir, flags.pollen, ""); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ Delegation grant was created, but the resulting grant could not be inspected: %v\n", err)
+	}
 }
 
 func runDelegationRemoveCmd(args []string) {
@@ -557,10 +559,16 @@ func runDelegationGrantsCmd(args []string) {
 }
 
 func printMatchingGrants(tendrilDir, pollen, substrate string) {
+	if err := printMatchingGrantsProjection(tendrilDir, pollen, substrate); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func printMatchingGrantsProjection(tendrilDir, pollen, substrate string) error {
 	grants, err := core.LoadDelegationGrants(tendrilDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Delegation grants could not be loaded from %s: %v\n", filepath.Join(tendrilDir, core.DelegationGrantsFilename), err)
-		os.Exit(1)
+		return fmt.Errorf("delegation grants could not be loaded from %s: %w", filepath.Join(tendrilDir, core.DelegationGrantsFilename), err)
 	}
 	pollen = strings.TrimSpace(pollen)
 	substrate = strings.TrimSpace(substrate)
@@ -577,10 +585,10 @@ func printMatchingGrants(tendrilDir, pollen, substrate string) {
 	if len(matched) == 0 {
 		if len(grants) == 0 {
 			fmt.Println("No delegation grants configured (secure default: every delegated invocation is denied).")
-			return
+			return nil
 		}
 		fmt.Println("No grants match the requested Pollen/Substrate filter.")
-		return
+		return nil
 	}
 
 	fmt.Printf("Control plane: %s\n", filepath.Join(tendrilDir, core.DelegationGrantsFilename))
@@ -598,6 +606,7 @@ func printMatchingGrants(tendrilDir, pollen, substrate string) {
 			fmt.Printf("  confirmAbove: %s\n", grant.ConfirmAboveImpact)
 		}
 	}
+	return nil
 }
 
 func formatGrantExpiry(expires time.Time) string {
