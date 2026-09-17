@@ -641,8 +641,12 @@ func TestGrantLifecycleDoesNotRewriteMalformedExistingState(t *testing.T) {
 			if err := core.CreateDelegationGrant(dir, "new-pollen", []string{"myrepo"}, []string{core.CapSeedGrow}); err == nil {
 				t.Fatal("creation accepted malformed grants")
 			}
-			if err := core.RemoveDelegationGrant(dir, "claude"); err == nil {
+			removed, err := core.RemoveDelegationGrant(dir, "claude")
+			if err == nil {
 				t.Fatal("removal accepted malformed grants")
+			}
+			if removed {
+				t.Fatal("malformed grants reported a removal")
 			}
 
 			after, err := os.ReadFile(path)
@@ -670,8 +674,12 @@ func TestRemoveDelegationGrantRemovesOnlyExactPollen(t *testing.T) {
     substrates: [thirdrepo]
 `)
 
-	if err := core.RemoveDelegationGrant(dir, " claude "); err != nil {
+	removed, err := core.RemoveDelegationGrant(dir, " claude ")
+	if err != nil {
 		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	if !removed {
+		t.Fatal("existing exact Pollen removal reported no removal")
 	}
 	grants, err := core.LoadDelegationGrants(dir)
 	if err != nil {
@@ -684,8 +692,12 @@ func TestRemoveDelegationGrantRemovesOnlyExactPollen(t *testing.T) {
 
 func TestRemoveDelegationGrantMissingFileIsNoop(t *testing.T) {
 	dir := t.TempDir()
-	if err := core.RemoveDelegationGrant(dir, "claude"); err != nil {
+	removed, err := core.RemoveDelegationGrant(dir, "claude")
+	if err != nil {
 		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	if removed {
+		t.Fatal("missing-file removal reported a removal")
 	}
 	if _, err := os.Stat(filepath.Join(dir, core.DelegationGrantsFilename)); !os.IsNotExist(err) {
 		t.Fatal("missing-file removal created a grants file")
@@ -695,8 +707,12 @@ func TestRemoveDelegationGrantMissingFileIsNoop(t *testing.T) {
 func TestRemoveDelegationGrantEmptyFileIsNoop(t *testing.T) {
 	dir := t.TempDir()
 	writeGrantsFile(t, dir, "")
-	if err := core.RemoveDelegationGrant(dir, "claude"); err != nil {
+	removed, err := core.RemoveDelegationGrant(dir, "claude")
+	if err != nil {
 		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	if removed {
+		t.Fatal("empty-file removal reported a removal")
 	}
 }
 
@@ -712,8 +728,12 @@ func TestRemoveDelegationGrantMissingPollenIsNoop(t *testing.T) {
 		t.Fatalf("read initial grants: %v", err)
 	}
 
-	if err := core.RemoveDelegationGrant(dir, "missing"); err != nil {
+	removed, err := core.RemoveDelegationGrant(dir, "missing")
+	if err != nil {
 		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	if removed {
+		t.Fatal("missing-Pollen removal reported a removal")
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {

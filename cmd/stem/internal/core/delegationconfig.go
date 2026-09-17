@@ -336,49 +336,50 @@ func CreateDelegationGrant(tendrilDir, pollen string, substrates, operations []s
 
 // RemoveDelegationGrant removes the complete grant for pollen from the Stem's
 // control-plane grants file. Missing files and missing Pollens are idempotent
-// no-ops; malformed existing state is always left untouched and reported.
-func RemoveDelegationGrant(tendrilDir, pollen string) error {
+// no-ops; malformed existing state is always left untouched and reported. It
+// returns true only when the grant existed and was successfully removed.
+func RemoveDelegationGrant(tendrilDir, pollen string) (bool, error) {
 	delegationGrantsMutationMu.Lock()
 	defer delegationGrantsMutationMu.Unlock()
 
 	pollen = strings.TrimSpace(pollen)
 	if pollen == "" {
-		return fmt.Errorf("pollen is empty")
+		return false, fmt.Errorf("pollen is empty")
 	}
 
 	path := filepath.Join(strings.TrimSpace(tendrilDir), DelegationGrantsFilename)
 	content, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("read delegation grants %s: %w", path, err)
+		return false, fmt.Errorf("read delegation grants %s: %w", path, err)
 	}
 	if _, err := validateDelegationGrantsDocument(content, path); err != nil {
-		return err
+		return false, err
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return fmt.Errorf("decode delegation grants %s: %w", path, err)
+		return false, fmt.Errorf("decode delegation grants %s: %w", path, err)
 	}
 	if len(doc.Content) == 0 {
-		return nil
+		return false, nil
 	}
 	root := yamlDocumentMapping(&doc)
 	if root == nil {
-		return fmt.Errorf("decode delegation grants %s: expected a top-level mapping", path)
+		return false, fmt.Errorf("decode delegation grants %s: expected a top-level mapping", path)
 	}
 	grantsNode := yamlMapValue(root, "grants")
 	if grantsNode == nil {
-		return nil
+		return false, nil
 	}
 	if grantsNode.Kind != yaml.MappingNode {
-		return fmt.Errorf("decode delegation grants %s: grants is not a mapping", path)
+		return false, fmt.Errorf("decode delegation grants %s: grants is not a mapping", path)
 	}
 	_, index := grantNodeForPollen(grantsNode, pollen)
 	if index < 0 {
-		return nil
+		return false, nil
 	}
 	grantsNode.Content = append(grantsNode.Content[:index], grantsNode.Content[index+2:]...)
 
@@ -386,7 +387,10 @@ func RemoveDelegationGrant(tendrilDir, pollen string) error {
 	if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() != 0 {
 		perm = info.Mode().Perm()
 	}
-	return persistValidatedDelegationGrants(path, &doc, perm)
+	if err := persistValidatedDelegationGrants(path, &doc, perm); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 type grantMutationKind int
