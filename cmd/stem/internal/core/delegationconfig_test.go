@@ -3,6 +3,7 @@ package core_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -485,5 +486,240 @@ func TestGrantAuthorizationHandoff(t *testing.T) {
 	}
 	if decision := afterRevoke.Authorize(gitReq); !decision.Authorized {
 		t.Fatalf("git.status lost after revoking seed.grow: %s", decision.Reason)
+	}
+}
+
+func TestCreateDelegationGrantCreatesFirstGrant(t *testing.T) {
+	tendrilDir := t.TempDir()
+
+	if err := core.CreateDelegationGrant(
+		tendrilDir,
+		" claude ",
+		[]string{" myrepo ", "otherrepo", "myrepo"},
+		[]string{core.CapSeedGrow, core.CapSproutWatch, core.CapSeedGrow},
+	); err != nil {
+		t.Fatalf("CreateDelegationGrant: %v", err)
+	}
+
+	path := filepath.Join(tendrilDir, core.DelegationGrantsFilename)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat grants: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("new grants mode = %o, want 0600", got)
+	}
+
+	grants, err := core.LoadDelegationGrants(tendrilDir)
+	if err != nil {
+		t.Fatalf("LoadDelegationGrants: %v", err)
+	}
+	want := core.DelegationGrant{
+		Pollen:           "claude",
+		OperationClasses: []string{core.CapSeedGrow, core.CapSproutWatch},
+		Substrates:       []string{"myrepo", "otherrepo"},
+	}
+	if len(grants) != 1 || grants[0].Pollen != want.Pollen ||
+		!slices.Equal(grants[0].OperationClasses, want.OperationClasses) ||
+		!slices.Equal(grants[0].Substrates, want.Substrates) {
+		t.Fatalf("loaded grants = %+v, want [%+v]", grants, want)
+	}
+}
+
+func TestCreateDelegationGrantRejectsInvalidInput(t *testing.T) {
+	cases := []struct {
+		name       string
+		pollen     string
+		substrates []string
+		operations []string
+		want       string
+	}{
+		{name: "empty pollen", pollen: "  ", substrates: []string{"myrepo"}, operations: []string{core.CapSeedGrow}, want: "pollen is empty"},
+		{name: "no substrates", pollen: "claude", operations: []string{core.CapSeedGrow}, want: "at least one substrate is required"},
+		{name: "no operations", pollen: "claude", substrates: []string{"myrepo"}, want: "at least one operation class is required"},
+		{name: "wildcard operation", pollen: "claude", substrates: []string{"myrepo"}, operations: []string{"seed.*"}, want: "wildcard"},
+		{name: "unknown operation", pollen: "claude", substrates: []string{"myrepo"}, operations: []string{"made.up"}, want: "unknown operation class"},
+		{name: "non-delegable capability", pollen: "claude", substrates: []string{"myrepo"}, operations: []string{core.CapGenomeView}, want: "not delegable"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			err := core.CreateDelegationGrant(dir, tt.pollen, tt.substrates, tt.operations)
+			if err == nil {
+				t.Fatal("CreateDelegationGrant succeeded")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want it to contain %q", err, tt.want)
+			}
+			if _, statErr := os.Stat(filepath.Join(dir, core.DelegationGrantsFilename)); !os.IsNotExist(statErr) {
+				t.Fatal("rejected creation wrote a grants file")
+			}
+		})
+	}
+}
+
+func TestCreateDelegationGrantPreservesUnrelatedPollens(t *testing.T) {
+	dir := t.TempDir()
+	path := writeGrantsFile(t, dir, `grants:
+  other:
+    operationClasses: [git.status]
+    substrates: [otherrepo]
+    note: keep-me
+`)
+
+	if err := core.CreateDelegationGrant(dir, "claude", []string{"myrepo"}, []string{core.CapSeedGrow}); err != nil {
+		t.Fatalf("CreateDelegationGrant: %v", err)
+	}
+
+	other := loadGrant(t, dir, "other")
+	if !slices.Equal(other.OperationClasses, []string{core.CapGitStatus}) || !slices.Equal(other.Substrates, []string{"otherrepo"}) {
+		t.Fatalf("unrelated grant changed: %+v", other)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read grants: %v", err)
+	}
+	if !strings.Contains(string(raw), "note: keep-me") {
+		t.Fatalf("unrelated grant field was discarded:\n%s", raw)
+	}
+}
+
+func TestCreateDelegationGrantRefusesDuplicatePollenWithoutChangingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := writeGrantsFile(t, dir, `grants:
+  claude:
+    operationClasses: [git.status]
+    substrates: [myrepo]
+  other:
+    operationClasses: [git.commit]
+    substrates: [otherrepo]
+`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read initial grants: %v", err)
+	}
+
+	err = core.CreateDelegationGrant(dir, " claude ", []string{"newrepo"}, []string{core.CapSeedGrow})
+	if err == nil {
+		t.Fatal("duplicate Pollen creation succeeded")
+	}
+	if !strings.Contains(err.Error(), "already has a grant") {
+		t.Fatalf("error = %q, want duplicate Pollen diagnostic", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read unchanged grants: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("duplicate creation changed grants file:\n%s", after)
+	}
+}
+
+func TestGrantLifecycleDoesNotRewriteMalformedExistingState(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+	}{
+		{name: "invalid yaml", content: "{ not yaml"},
+		{name: "grants is a sequence", content: "grants: [not a mapping]\n"},
+		{name: "missing operationClasses", content: "grants:\n  claude:\n    substrates: [myrepo]\n"},
+		{name: "multiple yaml documents", content: "grants:\n  claude:\n    operationClasses: [git.status]\n    substrates: [myrepo]\n---\ngrants: {}\n"},
+		{name: "duplicate normalized pollen", content: "grants:\n  claude:\n    operationClasses: [git.status]\n    substrates: [myrepo]\n  ' claude ':\n    operationClasses: [git.commit]\n    substrates: [otherrepo]\n"},
+		{name: "wildcard operation", content: "grants:\n  claude:\n    operationClasses: [git.*]\n    substrates: [myrepo]\n"},
+		{name: "unknown operation", content: "grants:\n  claude:\n    operationClasses: [made.up]\n    substrates: [myrepo]\n"},
+		{name: "non-delegable operation", content: "grants:\n  claude:\n    operationClasses: [" + core.CapGenomeView + "]\n    substrates: [myrepo]\n"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeGrantsFile(t, dir, tt.content)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read malformed grants: %v", err)
+			}
+
+			if err := core.CreateDelegationGrant(dir, "new-pollen", []string{"myrepo"}, []string{core.CapSeedGrow}); err == nil {
+				t.Fatal("creation accepted malformed grants")
+			}
+			if err := core.RemoveDelegationGrant(dir, "claude"); err == nil {
+				t.Fatal("removal accepted malformed grants")
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read malformed grants after rejection: %v", err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("malformed grants were rewritten:\n%s", after)
+			}
+		})
+	}
+}
+
+func TestRemoveDelegationGrantRemovesOnlyExactPollen(t *testing.T) {
+	dir := t.TempDir()
+	writeGrantsFile(t, dir, `grants:
+  claude:
+    operationClasses: [seed.grow]
+    substrates: [myrepo]
+  claude-other:
+    operationClasses: [git.status]
+    substrates: [otherrepo]
+  other:
+    operationClasses: [git.commit]
+    substrates: [thirdrepo]
+`)
+
+	if err := core.RemoveDelegationGrant(dir, " claude "); err != nil {
+		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	grants, err := core.LoadDelegationGrants(dir)
+	if err != nil {
+		t.Fatalf("LoadDelegationGrants: %v", err)
+	}
+	if len(grants) != 2 || grants[0].Pollen != "claude-other" || grants[1].Pollen != "other" {
+		t.Fatalf("remaining grants = %+v, want claude-other and other", grants)
+	}
+}
+
+func TestRemoveDelegationGrantMissingFileIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	if err := core.RemoveDelegationGrant(dir, "claude"); err != nil {
+		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, core.DelegationGrantsFilename)); !os.IsNotExist(err) {
+		t.Fatal("missing-file removal created a grants file")
+	}
+}
+
+func TestRemoveDelegationGrantEmptyFileIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	writeGrantsFile(t, dir, "")
+	if err := core.RemoveDelegationGrant(dir, "claude"); err != nil {
+		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+}
+
+func TestRemoveDelegationGrantMissingPollenIsNoop(t *testing.T) {
+	dir := t.TempDir()
+	path := writeGrantsFile(t, dir, `grants:
+  other:
+    operationClasses: [git.status]
+    substrates: [otherrepo]
+`)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read initial grants: %v", err)
+	}
+
+	if err := core.RemoveDelegationGrant(dir, "missing"); err != nil {
+		t.Fatalf("RemoveDelegationGrant: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read unchanged grants: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("missing-Pollen removal changed grants file:\n%s", after)
 	}
 }
