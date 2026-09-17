@@ -407,6 +407,84 @@ func TestDelegationRemoveReportsCoreBooleanDirectly(t *testing.T) {
 	}
 }
 
+func TestDelegationGrantAndRevokeReportUpdatedAuthority(t *testing.T) {
+	tests := []struct {
+		name           string
+		command        string
+		seedOperations []string
+		wantOperations []string
+		notWant        []string
+	}{
+		{
+			name:           "grant",
+			command:        "grant",
+			seedOperations: []string{core.CapSeedGrow},
+			wantOperations: []string{core.CapSeedGrow, core.CapSproutWatch},
+		},
+		{
+			name:           "revoke",
+			command:        "revoke",
+			seedOperations: []string{core.CapSeedGrow, core.CapSproutWatch},
+			wantOperations: []string{core.CapSeedGrow},
+			notWant:        []string{core.CapSproutWatch},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			controlDir := filepath.Join(home, grantsDirName)
+			if err := os.MkdirAll(controlDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := core.CreateDelegationGrant(controlDir, "claude", []string{"myrepo"}, tt.seedOperations); err != nil {
+				t.Fatalf("seed grant: %v", err)
+			}
+
+			stdout, stderr := captureVerifyOutput(t, func() {
+				runDelegationCmd(context.Background(), []string{
+					tt.command,
+					"--pollen", "claude",
+					"--substrate", "myrepo",
+					"--operation", core.CapSproutWatch,
+				})
+			})
+			output := strings.ToLower(stdout + stderr)
+			if strings.Contains(output, "restart") {
+				t.Fatalf("%s output instructed a restart: %q", tt.command, stdout+stderr)
+			}
+			if !strings.Contains(output, "subsequent governed admissions use the updated authority") {
+				t.Fatalf("%s output omitted updated-authority guidance: %q", tt.command, stdout+stderr)
+			}
+			if !strings.Contains(output, "already-admitted work is unchanged") {
+				t.Fatalf("%s output omitted already-admitted-work guidance: %q", tt.command, stdout+stderr)
+			}
+			if strings.Contains(output, "cancel") {
+				t.Fatalf("%s output implied cancellation: %q", tt.command, stdout+stderr)
+			}
+
+			grants, err := core.LoadDelegationGrants(controlDir)
+			if err != nil {
+				t.Fatalf("load grants after %s: %v", tt.command, err)
+			}
+			if len(grants) != 1 {
+				t.Fatalf("grants after %s = %+v, want one grant", tt.command, grants)
+			}
+			for _, want := range tt.wantOperations {
+				if !slices.Contains(grants[0].OperationClasses, want) {
+					t.Errorf("operations after %s = %v, want %s", tt.command, grants[0].OperationClasses, want)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if slices.Contains(grants[0].OperationClasses, notWant) {
+					t.Errorf("operations after %s = %v, must not contain %s", tt.command, grants[0].OperationClasses, notWant)
+				}
+			}
+		})
+	}
+}
+
 func TestRequireDelegationMutationFlags(t *testing.T) {
 	cases := []delegationGrantFlags{
 		{substrate: "myrepo", operations: []string{core.CapSeedGrow}},
