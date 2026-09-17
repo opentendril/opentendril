@@ -3,10 +3,12 @@ package core
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -171,6 +173,8 @@ func trimNonEmpty(values []string) []string {
 
 const defaultDelegationGrantsFileMode os.FileMode = 0o600
 
+var delegationGrantsMutationMu sync.Mutex
+
 // ValidateGrantableOperation reports whether name may appear on a control-plane
 // grant. Grantable classes are the delegated capability set plus the
 // sprout.watch view. Unknown names and canonical but non-delegable commands
@@ -221,6 +225,22 @@ func normalizeGrantableOperations(operations []string) ([]string, error) {
 	return normalized, nil
 }
 
+func normalizeGrantSubstrates(substrates []string) ([]string, error) {
+	if len(substrates) == 0 {
+		return nil, fmt.Errorf("at least one substrate is required")
+	}
+
+	normalized := make([]string, 0, len(substrates))
+	for _, raw := range substrates {
+		substrate := strings.TrimSpace(raw)
+		if substrate == "" {
+			return nil, fmt.Errorf("substrate is empty")
+		}
+		normalized = append(normalized, substrate)
+	}
+	return uniquePreserveOrder(normalized), nil
+}
+
 func validateGrantIdentity(pollen, substrate string) error {
 	if strings.TrimSpace(pollen) == "" {
 		return fmt.Errorf("pollen is empty")
@@ -250,6 +270,129 @@ func RevokeGrantOperationClasses(tendrilDir, pollen, substrate string, operation
 	return mutateGrantOperationClasses(tendrilDir, pollen, substrate, operations, grantMutationRevoke)
 }
 
+// CreateDelegationGrant creates one complete grant for pollen in the Stem's
+// control-plane grants file. The Pollen, operation classes, and Substrates are
+// exact, explicit authority: duplicates are normalized in input order, and a
+// Pollen that already has a grant is never merged or overwritten.
+func CreateDelegationGrant(tendrilDir, pollen string, substrates, operations []string) error {
+	delegationGrantsMutationMu.Lock()
+	defer delegationGrantsMutationMu.Unlock()
+
+	pollen = strings.TrimSpace(pollen)
+	if pollen == "" {
+		return fmt.Errorf("pollen is empty")
+	}
+	normalizedSubstrates, err := normalizeGrantSubstrates(substrates)
+	if err != nil {
+		return err
+	}
+	normalizedOperations, err := normalizeGrantableOperations(operations)
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(strings.TrimSpace(tendrilDir), DelegationGrantsFilename)
+	content, err := os.ReadFile(path)
+	perm := defaultDelegationGrantsFileMode
+	var doc yaml.Node
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read delegation grants %s: %w", path, err)
+		}
+		doc = emptyDelegationGrantsDocument()
+	} else {
+		if _, err := validateDelegationGrantsDocument(content, path); err != nil {
+			return err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() != 0 {
+			perm = info.Mode().Perm()
+		}
+		if err := yaml.Unmarshal(content, &doc); err != nil {
+			return fmt.Errorf("decode delegation grants %s: %w", path, err)
+		}
+		if len(doc.Content) == 0 {
+			doc = emptyDelegationGrantsDocument()
+		}
+	}
+
+	root := yamlDocumentMapping(&doc)
+	if root == nil {
+		return fmt.Errorf("decode delegation grants %s: expected a top-level mapping", path)
+	}
+	grantsNode := yamlMapValue(root, "grants")
+	if grantsNode == nil {
+		grantsNode = &yaml.Node{Kind: yaml.MappingNode}
+		root.Content = append(root.Content, yamlScalarNode("grants"), grantsNode)
+	} else if grantsNode.Kind != yaml.MappingNode {
+		return fmt.Errorf("decode delegation grants %s: grants is not a mapping", path)
+	}
+	if existing, _ := grantNodeForPollen(grantsNode, pollen); existing != nil {
+		return fmt.Errorf("delegation grant for pollen %q already has a grant", pollen)
+	}
+	appendGrantNode(grantsNode, pollen, normalizedOperations, normalizedSubstrates)
+
+	return persistValidatedDelegationGrants(path, &doc, perm)
+}
+
+// RemoveDelegationGrant removes the complete grant for pollen from the Stem's
+// control-plane grants file. Missing files and missing Pollens are idempotent
+// no-ops; malformed existing state is always left untouched and reported. It
+// returns true only when the grant existed and was successfully removed.
+func RemoveDelegationGrant(tendrilDir, pollen string) (bool, error) {
+	delegationGrantsMutationMu.Lock()
+	defer delegationGrantsMutationMu.Unlock()
+
+	pollen = strings.TrimSpace(pollen)
+	if pollen == "" {
+		return false, fmt.Errorf("pollen is empty")
+	}
+
+	path := filepath.Join(strings.TrimSpace(tendrilDir), DelegationGrantsFilename)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read delegation grants %s: %w", path, err)
+	}
+	if _, err := validateDelegationGrantsDocument(content, path); err != nil {
+		return false, err
+	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return false, fmt.Errorf("decode delegation grants %s: %w", path, err)
+	}
+	if len(doc.Content) == 0 {
+		return false, nil
+	}
+	root := yamlDocumentMapping(&doc)
+	if root == nil {
+		return false, fmt.Errorf("decode delegation grants %s: expected a top-level mapping", path)
+	}
+	grantsNode := yamlMapValue(root, "grants")
+	if grantsNode == nil {
+		return false, nil
+	}
+	if grantsNode.Kind != yaml.MappingNode {
+		return false, fmt.Errorf("decode delegation grants %s: grants is not a mapping", path)
+	}
+	_, index := grantNodeForPollen(grantsNode, pollen)
+	if index < 0 {
+		return false, nil
+	}
+	grantsNode.Content = append(grantsNode.Content[:index], grantsNode.Content[index+2:]...)
+
+	perm := defaultDelegationGrantsFileMode
+	if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() != 0 {
+		perm = info.Mode().Perm()
+	}
+	if err := persistValidatedDelegationGrants(path, &doc, perm); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 type grantMutationKind int
 
 const (
@@ -258,6 +401,9 @@ const (
 )
 
 func mutateGrantOperationClasses(tendrilDir, pollen, substrate string, operations []string, kind grantMutationKind) error {
+	delegationGrantsMutationMu.Lock()
+	defer delegationGrantsMutationMu.Unlock()
+
 	if err := validateGrantIdentity(pollen, substrate); err != nil {
 		return err
 	}
@@ -317,11 +463,62 @@ func mutateGrantOperationClasses(tendrilDir, pollen, substrate string, operation
 		deleteYAMLMapKey(grantsNode, pollen)
 	}
 
-	encoded, err := encodeYAMLMappingDocument(&doc)
+	return persistDelegationGrants(path, &doc, perm)
+}
+
+func emptyDelegationGrantsDocument() yaml.Node {
+	return yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{{
+			Kind: yaml.MappingNode,
+		}},
+	}
+}
+
+func grantNodeForPollen(grantsNode *yaml.Node, pollen string) (*yaml.Node, int) {
+	if grantsNode == nil || grantsNode.Kind != yaml.MappingNode {
+		return nil, -1
+	}
+	for i := 0; i+1 < len(grantsNode.Content); i += 2 {
+		if strings.TrimSpace(grantsNode.Content[i].Value) == pollen {
+			return grantsNode.Content[i+1], i
+		}
+	}
+	return nil, -1
+}
+
+func appendGrantNode(grantsNode *yaml.Node, pollen string, operations, substrates []string) {
+	operationNode := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+	for _, operation := range operations {
+		operationNode.Content = append(operationNode.Content, yamlScalarNode(operation))
+	}
+	substrateNode := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
+	for _, substrate := range substrates {
+		substrateNode.Content = append(substrateNode.Content, yamlScalarNode(substrate))
+	}
+	grantNode := &yaml.Node{Kind: yaml.MappingNode}
+	grantNode.Content = append(
+		grantNode.Content,
+		yamlScalarNode("operationClasses"), operationNode,
+		yamlScalarNode("substrates"), substrateNode,
+	)
+	grantsNode.Content = append(grantsNode.Content, yamlScalarNode(pollen), grantNode)
+}
+
+func persistDelegationGrants(path string, doc *yaml.Node, perm os.FileMode) error {
+	return persistDelegationGrantsWithValidation(path, doc, perm, decodeDelegationGrants)
+}
+
+func persistValidatedDelegationGrants(path string, doc *yaml.Node, perm os.FileMode) error {
+	return persistDelegationGrantsWithValidation(path, doc, perm, validateDelegationGrantsDocument)
+}
+
+func persistDelegationGrantsWithValidation(path string, doc *yaml.Node, perm os.FileMode, validate func([]byte, string) (*delegationGrantsFile, error)) error {
+	encoded, err := encodeYAMLMappingDocument(doc)
 	if err != nil {
 		return fmt.Errorf("encode delegation grants %s: %w", path, err)
 	}
-	if _, err := decodeDelegationGrants(encoded, path); err != nil {
+	if _, err := validate(encoded, path); err != nil {
 		return fmt.Errorf("refusing to write invalid delegation grants %s: %w", path, err)
 	}
 	if err := writeFileAtomically(path, encoded, perm); err != nil {
@@ -341,6 +538,46 @@ func decodeDelegationGrants(content []byte, path string) (*delegationGrantsFile,
 		}
 	}
 	return &file, nil
+}
+
+func validateDelegationGrantsDocument(content []byte, path string) (*delegationGrantsFile, error) {
+	var file delegationGrantsFile
+	decoder := yaml.NewDecoder(bytes.NewReader(content))
+	if err := decoder.Decode(&file); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("decode delegation grants %s: %w", path, err)
+	}
+	if err := ensureSingleYAMLDocument(decoder, path); err != nil {
+		return nil, err
+	}
+	seenPollens := make(map[string]struct{}, len(file.Grants))
+	for pollen, spec := range file.Grants {
+		grant, err := grantFromSpec(pollen, spec)
+		if err != nil {
+			return nil, fmt.Errorf("delegation grants %s: %w", path, err)
+		}
+		if _, exists := seenPollens[grant.Pollen]; exists {
+			return nil, fmt.Errorf("delegation grants %s: duplicate normalized pollen %q", path, grant.Pollen)
+		}
+		seenPollens[grant.Pollen] = struct{}{}
+		for _, operation := range grant.OperationClasses {
+			if err := ValidateGrantableOperation(operation); err != nil {
+				return nil, fmt.Errorf("delegation grants %s: grant for pollen %q: %w", path, grant.Pollen, err)
+			}
+		}
+	}
+	return &file, nil
+}
+
+func ensureSingleYAMLDocument(decoder *yaml.Decoder, path string) error {
+	var extra yaml.Node
+	err := decoder.Decode(&extra)
+	if err == io.EOF {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("decode delegation grants %s: %w", path, err)
+	}
+	return fmt.Errorf("decode delegation grants %s: multiple YAML documents are not supported", path)
 }
 
 func locateGrantNodes(doc *yaml.Node, path, pollen string, kind grantMutationKind) (grantsNode, pollenNode *yaml.Node, err error) {
