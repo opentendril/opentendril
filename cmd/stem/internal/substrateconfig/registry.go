@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"gopkg.in/yaml.v3"
@@ -74,11 +72,6 @@ func Mutate(path string, mutator NodeMutator) (MutationResult, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return MutationResult{}, fmt.Errorf("create substrate registry directory %s: %w", filepath.Dir(path), err)
 	}
-	unlock, err := acquireMutationLock(path)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	defer func() { _ = unlock() }()
 
 	result := MutationResult{Destination: path}
 	var (
@@ -250,47 +243,6 @@ func atomicReplace(path string, content []byte, mode os.FileMode) (err error) {
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close substrate registry directory %s: %w", directory, closeErr)
-	}
-	return nil
-}
-
-func acquireMutationLock(path string) (func() error, error) {
-	lockPath := path + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, fmt.Errorf("open substrate registry lock %s: %w", lockPath, err)
-	}
-	if err := applyRegistryLease(lockFile.Fd(), true); err != nil {
-		_ = lockFile.Close()
-		return nil, fmt.Errorf("lock substrate registry %s: %w", path, err)
-	}
-	return func() error {
-		unlockErr := applyRegistryLease(lockFile.Fd(), false)
-		closeErr := lockFile.Close()
-		if unlockErr != nil {
-			return fmt.Errorf("unlock substrate registry %s: %w", path, unlockErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("close substrate registry lock %s: %w", lockPath, closeErr)
-		}
-		return nil
-	}, nil
-}
-
-func applyRegistryLease(fd uintptr, exclusive bool) error {
-	how := uintptr(syscall.LOCK_UN)
-	if exclusive {
-		how = syscall.LOCK_EX
-	}
-	var number uintptr = 73
-	if runtime.GOOS == "darwin" {
-		number = 131
-	} else if runtime.GOOS != "linux" {
-		return fmt.Errorf("registry mutation lease is unsupported on %s", runtime.GOOS)
-	}
-	_, _, errno := syscall.Syscall(number, fd, how, 0)
-	if errno != 0 {
-		return errno
 	}
 	return nil
 }

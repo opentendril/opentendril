@@ -90,6 +90,48 @@ func TestGitSetupOmittedDirTargetsCanonicalRegistryFromUnrelatedCwd(t *testing.T
 	}
 }
 
+func TestExecuteGitSetupRefusesDeclaredPollenBeforeRegistryMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(envPollenCLI, "worker")
+
+	err := executeGitSetup(context.Background(), gitSetupOptions{
+		posture: "app", substrate: "garden", repo: "acme/garden", appID: "1", keyPath: "/k.pem", yes: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
+		t.Fatalf("error = %v, want Botanist-only refusal", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".tendril", "substrates.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("declared Pollen git setup created canonical registry: %v", statErr)
+	}
+}
+
+func TestExecuteGitSetupVerifyRefusesDeclaredPollenBeforeRegistryRead(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(envPollenCLI, "worker")
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("not: a valid substrate registry\n")
+	if err := os.WriteFile(canonical, original, 0o600); err != nil {
+		t.Fatalf("write canonical registry: %v", err)
+	}
+
+	err := executeGitSetup(context.Background(), gitSetupOptions{substrate: "garden", verify: true})
+	if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
+		t.Fatalf("error = %v, want Botanist-only refusal", err)
+	}
+	unchanged, readErr := os.ReadFile(canonical)
+	if readErr != nil {
+		t.Fatalf("read canonical registry after refusal: %v", readErr)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("declared Pollen git setup --verify changed canonical registry: %q", unchanged)
+	}
+}
+
 func TestGitSetupGrantPollenRejectedBeforeAnyWrite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

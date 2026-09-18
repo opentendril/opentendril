@@ -56,29 +56,40 @@ func runGitSetup(ctx context.Context, args []string) {
 		printGitSetupUsage()
 		return
 	}
+	if err := executeGitSetup(ctx, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// executeGitSetup performs the Botanist-only setup operation after argument
+// parsing. The Pollen gate is deliberately first so setup and verification do
+// not read or mutate the Substrate registry for a delegated invocation.
+func executeGitSetup(ctx context.Context, opts gitSetupOptions) error {
+	if pollen := strings.TrimSpace(os.Getenv(envPollenCLI)); pollen != "" {
+		return fmt.Errorf("git setup is Botanist-only and refuses declared Pollen %q before Substrate configuration access", pollen)
+	}
 	if opts.verify {
 		if !runGitSetupVerify(ctx, opts) {
-			os.Exit(1)
+			return fmt.Errorf("git setup verification failed")
 		}
-		return
+		return nil
 	}
 
 	if !confirmGitSetupTarget(opts) {
-		fmt.Fprintln(os.Stderr, "Nothing written.")
-		os.Exit(1)
+		return fmt.Errorf("nothing written")
 	}
 
 	substratesPath, err := gitSetupSubstratePath(opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if err := upsertSubstrates(substratesPath, opts); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	printGitSetupNextSteps(opts)
+	return nil
 }
 
 // parseGitSetupArgs turns CLI flags into validated options, applying the secure

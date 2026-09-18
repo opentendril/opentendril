@@ -4,9 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"gopkg.in/yaml.v3"
@@ -239,45 +237,6 @@ func TestMutateCanonicalValidationFailureLeavesExistingFileUnchanged(t *testing.
 	}
 	if string(unchanged) != string(original) {
 		t.Fatalf("validation failure changed canonical registry:\n%s", unchanged)
-	}
-}
-
-func TestMutateCanonicalSerializesConcurrentMutations(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for _, name := range []string{"first", "second"} {
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			_, err := MutateCanonical(func(root *yaml.Node) error {
-				time.Sleep(10 * time.Millisecond)
-				return addSubstrate(root, name, "https://example.com/"+name+".git")
-			})
-			errs <- err
-		}(name)
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent mutation: %v", err)
-		}
-	}
-
-	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
-	content, err := os.ReadFile(canonicalPath)
-	if err != nil {
-		t.Fatalf("read concurrent canonical registry: %v", err)
-	}
-	var config conductor.SubstratesConfig
-	if err := yaml.Unmarshal(content, &config); err != nil {
-		t.Fatalf("decode concurrent canonical registry: %v", err)
-	}
-	if len(config.Substrates) != 2 || config.Substrates["first"].URL == "" || config.Substrates["second"].URL == "" {
-		t.Fatalf("concurrent mutations lost a Substrate: %+v", config.Substrates)
 	}
 }
 

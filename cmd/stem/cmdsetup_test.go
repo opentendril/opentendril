@@ -173,6 +173,25 @@ func TestSetupSubstrateCompletionGuidance(t *testing.T) {
 	}
 }
 
+func TestExecuteSetupSubstrateRefusesDeclaredPollenBeforePromptOrMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(envPollenCLI, "worker")
+
+	_, stderr := captureVerifyOutput(t, func() {
+		err := executeSetupSubstrate()
+		if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
+			t.Fatalf("error = %v, want Botanist-only refusal", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("declared Pollen setup substrate prompted or wrote output before refusal: %q", stderr)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".tendril", "substrates.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("declared Pollen setup substrate created canonical registry: %v", statErr)
+	}
+}
+
 func TestCompatibilitySetupMutationPreservesUnrelatedEntriesAndRefusesOverwrite(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

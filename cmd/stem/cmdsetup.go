@@ -30,6 +30,20 @@ func runSetupCmd(args []string) {
 }
 
 func runSetupSubstrateCmd() {
+	if err := executeSetupSubstrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+// executeSetupSubstrate performs the compatibility setup after the command
+// adapter has selected the substrate subcommand. The Pollen gate is first so
+// delegated invocations cannot reach prompts or Substrate registry mutation.
+func executeSetupSubstrate() error {
+	if pollen := strings.TrimSpace(os.Getenv(envPollenCLI)); pollen != "" {
+		return fmt.Errorf("setup substrate is Botanist-only and refuses declared Pollen %q before prompts or Substrate configuration access", pollen)
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Fprintln(os.Stderr, "OpenTendril Substrate bootstrap")
@@ -39,14 +53,12 @@ func runSetupSubstrateCmd() {
 	var err error
 	choices.remoteURL, err = promptSetupValue(reader, "Target Git remote URL", "https://github.com/opentendril/opentendril.git")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read remote URL: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to read remote URL: %v", err)
 	}
 
 	authMethod, err := promptSetupValue(reader, "Auth method (pat/ssh/none/app)", "pat")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read auth method: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to read auth method: %v", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(authMethod)) {
 	case "ssh":
@@ -88,8 +100,7 @@ func runSetupSubstrateCmd() {
 		return addCompatibilitySubstrate(root, choices)
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to update Substrate registry: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to update Substrate registry: %v", err)
 	}
 
 	if result.ImportedLegacy {
@@ -105,8 +116,7 @@ func runSetupSubstrateCmd() {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(snippet); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to encode MCP configuration snippet: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to encode MCP configuration snippet: %v", err)
 	}
 
 	fmt.Fprintln(os.Stderr, `Substrate "default-workspace" is ready.
@@ -123,6 +133,7 @@ With exactly one Substrate configured, --substrate may be omitted:
 Enter the coding goal at the prompt. Further input while a Seed is active
 continues the same Phytomer. The terminal reports the Seed handle, Phytomer
 identity, safe progress, and Fruit branch/commit on settlement.`)
+	return nil
 }
 
 func addCompatibilitySubstrate(root *yaml.Node, choices substrateChoices) error {
