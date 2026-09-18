@@ -16,6 +16,7 @@
 //   tendril stoma - Run one bounded command in a network-sealed terrarium
 //   tendril seed  - Grow a Seed: build toward a goal until a verify command passes
 //   tendril git   - Commit a substrate's workspace under its configured identity
+//   tendril substrate - Manage the Botanist's persistent Substrate registry
 //   tendril terrarium - Manage execution terrarium environments
 //   tendril health - Run infrastructure health diagnostics
 //   tendril llm   - Inspect and test the configured local LLM provider
@@ -108,6 +109,8 @@ func main() {
 		runSeedCmd(ctx, os.Args[2:])
 	case "git":
 		runGitCmd(ctx, os.Args[2:])
+	case "substrate":
+		runSubstrateCmd(ctx, os.Args[2:])
 	case "pollinator":
 		runPollinatorCmd(ctx, os.Args[2:])
 	case "hardiness":
@@ -169,6 +172,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "stoma", "Pass one bounded command through a Terrarium's controlled aperture")
 	fmt.Printf("  %-11s  %s\n", "seed", "Grow a Seed: build toward a goal until a verify command passes")
 	fmt.Printf("  %-11s  %s\n", "git", "Commit a substrate's workspace under its configured commit identity")
+	fmt.Printf("  %-11s  %s\n", "substrate", "List, inspect, add, update, or verify Substrate configuration")
 	fmt.Printf("  %-11s  %s\n", "terrarium", "Manage execution terrarium environments")
 	fmt.Printf("  %-11s  %s\n", "health", "Run infrastructure health diagnostics")
 	fmt.Printf("  %-11s  %s\n", "llm", "List or test the configured local LLM provider")

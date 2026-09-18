@@ -3,6 +3,7 @@ package substrateconfig
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -270,4 +271,258 @@ func addSubstrate(root *yaml.Node, name, url string) error {
 		}},
 	)
 	return nil
+}
+
+func TestAddCanonicalRejectsDuplicateSubstrateWithoutRewrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("# keep\nsubstrates:\n  garden:\n    url: https://github.com/acme/garden\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write original registry: %v", err)
+	}
+
+	_, err := AddCanonical(AddRequest{
+		Name: "garden", Repo: "acme/other", Posture: "app", AppID: "1", KeyPath: "/key.pem", Checkout: "managed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error = %v, want duplicate refusal", err)
+	}
+	unchanged, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read registry after duplicate refusal: %v", readErr)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("duplicate refusal changed registry:\n%s", unchanged)
+	}
+}
+
+func TestAddCanonicalRejectsMalformedRegistryWithoutRewrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("substrates: null\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write malformed registry: %v", err)
+	}
+	_, err := AddCanonical(AddRequest{Name: "garden", Repo: "acme/garden", Posture: "app", AppID: "1", KeyPath: "/key.pem", Checkout: "managed"})
+	if err == nil {
+		t.Fatal("malformed registry was accepted")
+	}
+	unchanged, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read malformed registry: %v", readErr)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("malformed registry changed:\n%s", unchanged)
+	}
+}
+
+func TestAddCanonicalRejectsExplicitEmptyPostureAndCheckout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for name, request := range map[string]AddRequest{
+		"posture":  {Name: "posture", Repo: "acme/posture", PostureSet: true, Checkout: "managed", AppID: "1", KeyPath: "/key.pem"},
+		"checkout": {Name: "checkout", Repo: "acme/checkout", Posture: "app", CheckoutSet: true, AppID: "1", KeyPath: "/key.pem"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := AddCanonical(request); err == nil {
+				t.Fatal("explicit empty flag value was accepted")
+			}
+		})
+	}
+}
+
+func TestAddCanonicalRejectsDuplicateProfileWithoutRewrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("credentials:\n  garden-connection:\n    auth: { method: app, appId: \"1\", privateKeyPath: /key.pem }\nsubstrates: {}\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write original registry: %v", err)
+	}
+
+	_, err := AddCanonical(AddRequest{
+		Name: "garden", Repo: "acme/garden", Posture: "app", AppID: "2", KeyPath: "/other.pem", Checkout: "managed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "credential profile") {
+		t.Fatalf("error = %v, want duplicate profile refusal", err)
+	}
+	unchanged, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("read registry after duplicate profile refusal: %v", readErr)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("duplicate profile refusal changed registry:\n%s", unchanged)
+	}
+}
+
+func TestUpdateCanonicalPreservesUnrelatedStateAndProfile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte(`# keep this comment
+credentials:
+  target-connection:
+    auth: { method: pat, env: TARGET_ENV }
+    sign: { method: gpg, key: TARGET_GPG }
+    identity: { name: Target, email: target@example.com }
+    commit: local
+  unrelated-connection:
+    auth: { method: app, appId: "7", privateKeyPath: /other.pem }
+substrates:
+  target:
+    url: https://github.com/acme/old
+    branch: old
+    profile: target-connection
+    checkout:
+      mode: path
+      path: /old/path
+    commit: local
+    readonly: true
+  unrelated:
+    url: https://github.com/acme/unrelated
+    profile: unrelated-connection
+    checkout: { mode: ephemeral }
+`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write original registry: %v", err)
+	}
+
+	before, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load before update: %v", err)
+	}
+	profileBefore := before.Config.Credentials["target-connection"]
+	otherBefore := before.Config.Substrates["unrelated"]
+	_, err = UpdateCanonical(UpdateRequest{Name: "target", Repo: "acme/new", RepoSet: true})
+	if err != nil {
+		t.Fatalf("repo-only update: %v", err)
+	}
+	after, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load after update: %v", err)
+	}
+	target := after.Config.Substrates["target"]
+	if target.URL != "https://github.com/acme/new" || target.Branch != "old" || target.Checkout.Mode != "path" || target.Checkout.Path != "/old/path" || !target.ReadOnly {
+		t.Fatalf("repo-only target = %+v, want unrelated target fields preserved", target)
+	}
+	if got := after.Config.Credentials["target-connection"]; got != profileBefore {
+		t.Fatalf("target credential profile changed: before=%+v after=%+v", profileBefore, got)
+	}
+	if got := after.Config.Substrates["unrelated"]; !reflect.DeepEqual(got, otherBefore) {
+		t.Fatalf("unrelated Substrate changed: before=%+v after=%+v", otherBefore, got)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read updated registry: %v", err)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "keep this comment") || strings.Index(text, "target-connection") > strings.Index(text, "unrelated-connection") {
+		t.Fatalf("comments or credential order did not survive:\n%s", text)
+	}
+}
+
+func TestUpdateCanonicalCheckoutPatchRules(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	content := []byte("substrates:\n  garden:\n    url: https://github.com/acme/garden\n    checkout:\n      mode: path\n      path: /old\n")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", CheckoutSet: true, Checkout: "path"}); err == nil {
+		t.Fatal("checkout path without --path was accepted")
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", CheckoutSet: true, Checkout: "managed", PathSet: true, CheckoutPath: "/new"}); err == nil {
+		t.Fatal("--path with managed checkout was accepted")
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", PathSet: true, CheckoutPath: "/new"}); err != nil {
+		t.Fatalf("path-only update: %v", err)
+	}
+	updated, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load path-only update: %v", err)
+	}
+	if updated.Config.Substrates["garden"].Checkout.Path != "/new" {
+		t.Fatalf("path-only checkout = %+v", updated.Config.Substrates["garden"].Checkout)
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", CheckoutSet: true, Checkout: "ephemeral"}); err != nil {
+		t.Fatalf("change away from path checkout: %v", err)
+	}
+	updated, err = LoadCanonical()
+	if err != nil {
+		t.Fatalf("load checkout mode update: %v", err)
+	}
+	checkout := updated.Config.Substrates["garden"].Checkout
+	if checkout.Mode != "ephemeral" || checkout.Path != "" {
+		t.Fatalf("checkout path survived mode change: %+v", checkout)
+	}
+}
+
+func TestUpdateCanonicalMalformedRegistryLeavesBytesUnchanged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("substrates: [")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write malformed registry: %v", err)
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", Repo: "acme/garden", RepoSet: true}); err == nil {
+		t.Fatal("malformed registry was accepted")
+	}
+	unchanged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read malformed registry: %v", err)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("malformed registry changed:\n%s", unchanged)
+	}
+}
+
+func TestUpdateCanonicalRejectsNoPatchAndMissingTarget(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("substrates:\n  garden:\n    url: https://github.com/acme/garden\n"), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden"}); err == nil {
+		t.Fatal("update without patch flags was accepted")
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "missing", Branch: "trunk", BranchSet: true}); err == nil {
+		t.Fatal("update of missing Substrate was accepted")
+	}
+	if _, err := UpdateCanonical(UpdateRequest{Name: "garden", Branch: "trunk", BranchSet: true}); err != nil {
+		t.Fatalf("branch-only update: %v", err)
+	}
+	config, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load branch-only update: %v", err)
+	}
+	if got := config.Config.Substrates["garden"].Branch; got != "trunk" {
+		t.Fatalf("branch = %q, want trunk", got)
+	}
 }
