@@ -46,12 +46,22 @@ OpenTendril is designed under a Zero-Trust architecture. We assume that the code
 ## 5. Genotype & Substrate Trust Boundaries
 
 
-OpenTendril's host execution capability introduces a specific threat: an autonomous Sprout operating inside a workspace Terrarium could potentially modify `.tendril/substrates.yaml` to inject `provider: host`, causing its next Sequence run to execute arbitrary commands directly on the host machine — completely bypassing Docker isolation.
+OpenTendril's host execution capability introduces a specific trust-boundary
+question: an autonomous Sprout operating inside a workspace Terrarium could
+modify a repository-resident `.tendril/substrates.yaml`, but that file cannot
+become the ordinary active configuration merely by being present in the
+checkout.
 
 This is defended by two properties. Neither is a rule about where a configuration file sits — trust here derives from **which principal owns a file**, and a path confers no privilege by being in one directory rather than another.
 
 * **Runtime environment gate:** host execution is refused unless `TENDRIL_ALLOW_HOST_EXECUTION=true` is set in the Stem's own process environment. Configuration alone can never enable it; the decision is made by an operator, outside any file a Sprout can reach.
-* **Configuration ownership:** the Stem resolves `substrates.yaml` relative to **its own working directory**, not to the workspace a Sprout is editing. A Sprout works in a managed checkout; the Stem reads its own control plane, which belongs to the Stem's principal. On a deployment where the Stem runs as its own user, no account hosting a Pollinator can write the file that would declare `provider: host`.
+* **Configuration ownership:** ordinary Substrate configuration resolves from
+  the Stem account's canonical `~/.tendril/substrates.yaml`, independent of the
+  current working directory. A managed Substrate checkout cannot become the
+  ordinary active configuration merely by containing its own `substrates.yaml`.
+  The canonical control plane belongs to the Stem's principal; on a deployment
+  where the Stem runs as its own user, no account hosting a Pollinator can write
+  the file that would declare `provider: host`.
 
 `tendril hardiness` measures the second property and reports when it does not hold — a weak finding when the configuration is writable by another principal and host execution is also indicated.
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/substrateconfig"
 )
 
@@ -79,6 +80,21 @@ func runSubstrateCmd(ctx context.Context, args []string) {
 			return
 		}
 		if err := executeSubstrateUpdate(opts.request); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+	case "remove":
+		opts, err := parseSubstrateNameArgs("remove", args[1:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			printSubstrateUsage()
+			os.Exit(1)
+		}
+		if opts.help {
+			printSubstrateUsage()
+			return
+		}
+		if err := executeSubstrateRemove(opts.name); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			os.Exit(1)
 		}
@@ -320,6 +336,34 @@ func executeSubstrateUpdate(request substrateconfig.UpdateRequest) error {
 	return nil
 }
 
+func executeSubstrateRemove(name string) error {
+	if err := requireBotanistSubstrate("remove"); err != nil {
+		return err
+	}
+	grantsDir, err := resolveGrantsDir()
+	if err != nil {
+		return fmt.Errorf("resolve delegation control plane: %w", err)
+	}
+	grants, err := core.LoadDelegationGrants(grantsDir)
+	if err != nil {
+		return fmt.Errorf("load delegation grants: %w", err)
+	}
+	result, err := substrateconfig.RemoveCanonical(name, grants)
+	if err != nil {
+		return err
+	}
+
+	name = strings.TrimSpace(name)
+	fmt.Printf("Removed Substrate %q from %s\n", name, result.Destination)
+	if result.CredentialProfileRemoved {
+		fmt.Printf("Removed unreferenced credential profile %q.\n", result.CredentialProfile)
+	} else if result.CredentialProfileRetained {
+		fmt.Printf("Retained credential profile %q because it is still shared.\n", result.CredentialProfile)
+	}
+	printMutationObservability(result.MutationResult)
+	return nil
+}
+
 func executeSubstrateVerify(ctx context.Context, name string) error {
 	if err := requireBotanistSubstrate("verify"); err != nil {
 		return err
@@ -415,11 +459,12 @@ func safeStoredURL(raw string) string {
 }
 
 func printSubstrateUsage() {
-	fmt.Println("Usage: tendril substrate <list|get|add|update|verify> [arguments]")
+	fmt.Println("Usage: tendril substrate <list|get|add|update|remove|verify> [arguments]")
 	fmt.Println()
 	fmt.Println("  tendril substrate list")
 	fmt.Println("  tendril substrate get <name>")
 	fmt.Println("  tendril substrate add <name> --repo owner/repo [flags]")
 	fmt.Println("  tendril substrate update <name> [--repo owner/repo] [--branch branch] [--checkout managed|path|ephemeral] [--path checkout-path]")
+	fmt.Println("  tendril substrate remove <name>")
 	fmt.Println("  tendril substrate verify <name>")
 }

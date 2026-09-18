@@ -562,7 +562,7 @@ func printGitUsage() {
 	fmt.Println("Usage: tendril git <setup|bootstrap|status|branches|branch|commit|push|pr|prune> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
-	fmt.Println("  Writes a git connection (substrates.yaml) + optional grant and prints the")
+	fmt.Println("  Writes a git connection (substrates.yaml) and prints the")
 	fmt.Println("  Model Context Protocol block for the Pollinator. Run `tendril git setup --help` for the full flag list.")
 	fmt.Println()
 	fmt.Println("bootstrap --substrate <name> [--branch <branch>] [--confirm]")

@@ -12,7 +12,8 @@ inherits it.
 
 This guide is deliberately linear: follow it top to bottom.
 
-For a managed checkout (the default of `tendril git setup`), an empty GitHub
+For a managed checkout (the default of `tendril substrate add` and
+`tendril git setup`), an empty GitHub
 repository is not ready until it has a Git base. `git setup` and
 `git setup --verify` remain configuration and read-only verification actions;
 for the supported managed GitHub App/API posture, a Botanist can create that
@@ -20,28 +21,43 @@ base with `tendril git bootstrap`.
 
 ---
 
-## Quick start — one command
+## Quick start — explicit lifecycle
 
-The fastest path is the built-in setup command. It writes the connection config
-and the grant, and prints the subject's Model Context Protocol block:
+The ordinary lifecycle is deliberately four separate steps:
+
+1. The Botanist creates/configures the Substrate connection.
+2. The Botanist verifies the connection.
+3. The Botanist separately creates a bounded DelegationGrant when Pollinator
+   access is wanted.
+4. The Pollinator uses the governed Git operations.
+
+For a GitHub App (recommended — commits signed by GitHub, no key material):
 
 ```bash
-# GitHub App (recommended — commits signed by GitHub, no key material):
-tendril git setup --substrate myrepo --repo owner/repo \
-  --app-id 123456 --key ~/.tendril/app.pem --grant-pollen claude
+tendril substrate add myrepo --repo owner/repo \
+  --posture app --app-id 123456 --key ~/.tendril/app.pem
 
 # Fine-grained token + dedicated GPG key:
-tendril git setup --posture pat --substrate myrepo --repo owner/repo \
+tendril substrate add myrepo --posture pat --repo owner/repo \
   --token-env TENDRIL_GITHUB_PAT --sign-key <gpg-key-id> \
-  --identity-name "Tendril Bot" --identity-email bot@your-domain \
-  --grant-pollen claude
+  --identity-name "Tendril Bot" --identity-email bot@your-domain
 
-# Check a connection. Managed checkouts also require a usable Git base (no mutation):
-tendril git setup --verify --substrate myrepo
+tendril substrate list
+tendril substrate get myrepo
+tendril substrate verify myrepo
 
 # If verify reports an empty managed App/API repository, create one empty root commit:
 tendril git bootstrap --substrate myrepo
+tendril substrate verify myrepo
+
+# Separately grant bounded Pollinator authority when wanted:
+tendril delegation create --pollen claude --substrate myrepo --operation git.status
 ```
+
+No setup operation implicitly grants Pollinator authority. `tendril git setup`
+remains a compatibility/advanced connection setup surface: omitted `--dir` uses
+the canonical registry, while explicit `--dir` is a deliberate alternate; it
+configures a connection only and does not write grants.
 
 Bootstrap displays the repository, target branch, fixed OpenTendril attribution,
 and the empty-tree setup mutation before asking for explicit Botanist
@@ -115,7 +131,9 @@ GPG key, so commits show **Verified**.
 
 ### 3. Write the connection
 
-`substrates.yaml` (repository root or `.tendril/`):
+For manual authoring, the ordinary registry is `~/.tendril/substrates.yaml`
+(`/home/tendril/.tendril/substrates.yaml` under the governed `tendril`
+account), independent of the current working directory:
 
 ```yaml
 credentials:                       # a credentials profile IS a Nodule
@@ -134,14 +152,11 @@ substrates:
 ### 4. Verify
 
 ```bash
-tendril git branch --substrate opentendril --branch chore/verify-connection
-tendril git commit --substrate opentendril --message "chore: verify connection"
-tendril git push   --substrate opentendril
-tendril git pr     --substrate opentendril --title "chore: verify connection"
+tendril substrate verify opentendril
 ```
 
-The commit is signed by your dedicated key and attributed to the configured
-identity — confirm with `git log --show-signature -1`.
+This is a read-only connection check. Once the Botanist has separately created
+a bounded DelegationGrant, the Pollinator can use the governed Git ladder.
 
 ---
 
@@ -193,8 +208,10 @@ have a *grant*. Missing either → denied.
 Grants are read from the control plane under the Stem's own home, whatever
 directory a command is run from. A `grants.yaml` inside a repository is ignored
 and named on stderr, so a cloned Substrate cannot widen what its own Pollen may
-do. This is the only control-plane file anchored that way: `substrates.yaml` is
-deliberately searched across locations.
+do. The ordinary `substrates.yaml` registry is likewise account-global at
+`~/.tendril/substrates.yaml`; it is independent of the current working
+directory. An explicit `--dir` on the compatibility `git setup` surface is a
+deliberate advanced alternate, not ordinary discovery.
 
 
 ```yaml
@@ -235,6 +252,20 @@ matching grant.
 - **REST / WebSocket:** set `BOTANIST_KEY`; callers must then send
   `Authorization: Bearer <token>`. Combined with grants this is the connect +
   authorise two-key gate.
+
+### Removing a Substrate
+
+Removal is a Botanist-only control-plane operation, not a governed Git
+operation. First narrow or revoke every live grant that names the Substrate,
+then run:
+
+```bash
+tendril substrate remove myrepo
+```
+
+The removal is dependency-safe: it refuses while a live grant still references
+the exact name, and it does not rewrite grants, delete key material, clean
+managed/path workspaces, remove Fruit, or mutate local or remote Git state.
 
 ---
 
