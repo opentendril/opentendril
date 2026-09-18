@@ -34,9 +34,11 @@ type MutationResult struct {
 // any credential material. Source is the file that was selected; Target is the
 // canonical destination used when no registry exists yet.
 type ReadResult struct {
-	Config *conductor.SubstratesConfig
-	Source string
-	Target string
+	Config        *conductor.SubstratesConfig
+	Source        string
+	Target        string
+	LegacyPath    string
+	LegacyIgnored bool
 }
 
 // AddRequest contains the Botanist-controlled values needed to add one
@@ -221,6 +223,16 @@ func LoadCanonical() (ReadResult, error) {
 		}
 		result.Config = config
 		result.Source = candidate
+		if index == 0 {
+			legacy, legacyErr := conductor.LegacySubstrateConfigPath()
+			if legacyErr != nil {
+				return result, legacyErr
+			}
+			if regularFileExists(legacy) {
+				result.LegacyPath = legacy
+				result.LegacyIgnored = true
+			}
+		}
 		return result, nil
 	}
 

@@ -149,6 +149,181 @@ substrates:
 	}
 }
 
+func TestSubstrateAddImportsLegacyAndReportsLifecycle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := []byte(`credentials:
+  existing-connection:
+    auth: { method: pat, env: LEGACY_TOKEN }
+substrates:
+  existing:
+    url: https://github.com/acme/existing
+    profile: existing-connection
+    checkout: { mode: managed }
+`)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	if err := os.WriteFile(legacyPath, legacy, 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateAdd(substrateconfig.AddRequest{
+			Name: "new", Repo: "acme/new", Posture: "app", AppID: "123", KeyPath: "/key.pem", Checkout: "managed",
+		}); err != nil {
+			t.Fatalf("executeSubstrateAdd: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("add stderr = %q", stderr)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, `Added Substrate "new" to `+canonicalPath) ||
+		!strings.Contains(stdout, "Imported legacy registry from "+legacyPath+" into "+canonicalPath) ||
+		!strings.Contains(stdout, "canonical registry is now active") {
+		t.Fatalf("add output = %q, want success and import lifecycle messages", stdout)
+	}
+	unchanged, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read legacy registry after add: %v", err)
+	}
+	if string(unchanged) != string(legacy) {
+		t.Fatalf("legacy registry changed during add:\n%s", unchanged)
+	}
+	result, err := substrateconfig.LoadCanonical()
+	if err != nil {
+		t.Fatalf("load imported registry after add: %v", err)
+	}
+	if _, ok := result.Config.Substrates["existing"]; !ok {
+		t.Fatal("add did not import existing legacy Substrate")
+	}
+	if _, ok := result.Config.Substrates["new"]; !ok {
+		t.Fatal("add did not persist new Substrate")
+	}
+}
+
+func TestSubstrateUpdateImportsLegacyAppliesPatchAndReportsLifecycle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := []byte(`credentials:
+  garden-connection:
+    auth: { method: pat, env: LEGACY_TOKEN }
+substrates:
+  garden:
+    url: https://github.com/acme/garden
+    branch: main
+    profile: garden-connection
+    checkout:
+      mode: path
+      path: /legacy/path
+`)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	if err := os.WriteFile(legacyPath, legacy, 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateUpdate(substrateconfig.UpdateRequest{Name: "garden", Branch: "feature", BranchSet: true}); err != nil {
+			t.Fatalf("executeSubstrateUpdate: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("update stderr = %q", stderr)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, `Updated Substrate "garden" in `+canonicalPath) ||
+		!strings.Contains(stdout, "Imported legacy registry from "+legacyPath+" into "+canonicalPath) ||
+		!strings.Contains(stdout, "canonical registry is now active") {
+		t.Fatalf("update output = %q, want success and import lifecycle messages", stdout)
+	}
+	unchanged, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read legacy registry after update: %v", err)
+	}
+	if string(unchanged) != string(legacy) {
+		t.Fatalf("legacy registry changed during update:\n%s", unchanged)
+	}
+	result, err := substrateconfig.LoadCanonical()
+	if err != nil {
+		t.Fatalf("load imported registry after update: %v", err)
+	}
+	garden := result.Config.Substrates["garden"]
+	if garden.URL != "https://github.com/acme/garden" || garden.Branch != "feature" || garden.Profile != "garden-connection" || garden.Checkout.Mode != "path" || garden.Checkout.Path != "/legacy/path" {
+		t.Fatalf("updated garden = %+v, want only branch patched", garden)
+	}
+}
+
+func TestSubstrateListReportsIgnoredLegacyWithoutDisplayingIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeCanonicalSubstrateTestConfig(t, `substrates:
+  canonical:
+    url: https://github.com/acme/canonical
+`)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	if err := os.WriteFile(legacyPath, []byte(`substrates:
+  legacy-only:
+    url: https://github.com/acme/legacy-only
+`), 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateList(); err != nil {
+			t.Fatalf("executeSubstrateList: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("list stderr = %q", stderr)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, "registry: "+canonicalPath) ||
+		!strings.Contains(stdout, "legacy registry ignored: "+legacyPath+" (canonical registry is active)") ||
+		!strings.Contains(stdout, `Substrate "canonical"`) {
+		t.Fatalf("list output = %q, want canonical and ignored-legacy observability", stdout)
+	}
+	for _, forbidden := range []string{"legacy-only", "https://github.com/acme/legacy-only"} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("list output displayed legacy content %q: %q", forbidden, stdout)
+		}
+	}
+}
+
+func TestSubstrateGetReportsIgnoredLegacyWithoutDisplayingIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeCanonicalSubstrateTestConfig(t, `substrates:
+  garden:
+    url: https://github.com/acme/garden
+`)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	if err := os.WriteFile(legacyPath, []byte(`substrates:
+  legacy-only:
+    url: https://github.com/acme/legacy-only
+`), 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateGet("garden"); err != nil {
+			t.Fatalf("executeSubstrateGet: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("get stderr = %q", stderr)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, "registry: "+canonicalPath) ||
+		!strings.Contains(stdout, "legacy registry ignored: "+legacyPath+" (canonical registry is active)") ||
+		!strings.Contains(stdout, `Substrate "garden"`) {
+		t.Fatalf("get output = %q, want canonical and ignored-legacy observability", stdout)
+	}
+	for _, forbidden := range []string{"legacy-only", "https://github.com/acme/legacy-only"} {
+		if strings.Contains(stdout, forbidden) {
+			t.Fatalf("get output displayed legacy content %q: %q", forbidden, stdout)
+		}
+	}
+}
+
 func TestSubstrateGetRendersStoredProfileWithoutResolvingSecrets(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

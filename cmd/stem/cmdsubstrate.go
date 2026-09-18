@@ -303,6 +303,7 @@ func executeSubstrateAdd(request substrateconfig.AddRequest) error {
 		return err
 	}
 	fmt.Printf("Added Substrate %q to %s\n", strings.TrimSpace(request.Name), result.Destination)
+	printMutationObservability(result)
 	return nil
 }
 
@@ -315,6 +316,7 @@ func executeSubstrateUpdate(request substrateconfig.UpdateRequest) error {
 		return err
 	}
 	fmt.Printf("Updated Substrate %q in %s\n", strings.TrimSpace(request.Name), result.Destination)
+	printMutationObservability(result)
 	return nil
 }
 
@@ -334,6 +336,18 @@ func printRegistrySource(result substrateconfig.ReadResult) {
 		source = result.Target
 	}
 	fmt.Printf("registry: %s\n", source)
+	if result.LegacyIgnored {
+		fmt.Printf("legacy registry ignored: %s (canonical registry is active)\n", result.LegacyPath)
+	}
+}
+
+func printMutationObservability(result substrateconfig.MutationResult) {
+	switch {
+	case result.ImportedLegacy:
+		fmt.Printf("Imported legacy registry from %s into %s; canonical registry is now active.\n", result.Source, result.Destination)
+	case result.LegacyIgnored:
+		fmt.Printf("Legacy registry %s ignored because the canonical registry is active.\n", result.LegacyPath)
+	}
 }
 
 func printStoredSubstrate(name string, spec conductor.SubstrateSpec) {
