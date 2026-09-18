@@ -630,6 +630,99 @@ substrates:
 	}
 }
 
+func TestRemoveCanonicalUsesDecodedProfilesForAliases(t *testing.T) {
+	t.Run("remaining alias retains shared profile", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte(`# keep this comment
+profile-anchor: &shared-profile shared
+credentials:
+  shared:
+    auth: { method: pat, env: SHARED_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: shared
+  remaining:
+    url: https://example.com/remaining
+    profile: *shared-profile
+`)
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write registry: %v", err)
+		}
+
+		result, err := RemoveCanonical("target", nil)
+		if err != nil {
+			t.Fatalf("remove target: %v", err)
+		}
+		if result.CredentialProfile != "shared" || !result.CredentialProfileRetained || result.CredentialProfileRemoved {
+			t.Fatalf("shared profile result = %+v, want retained shared profile", result)
+		}
+		updated, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read registry after removal: %v", err)
+		}
+		text := string(updated)
+		for _, want := range []string{"keep this comment", "profile-anchor: &shared-profile shared", "remaining:", "  shared:"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("registry after removal missing %q:\n%s", want, text)
+			}
+		}
+	})
+
+	t.Run("removed alias removes final profile and preserves anchor", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte(`# keep this comment
+profile-anchor: &removed-profile removed
+credentials:
+  removed:
+    auth: { method: pat, env: REMOVED_TOKEN }
+  unrelated:
+    auth: { method: pat, env: OTHER_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: *removed-profile
+  unrelated:
+    url: https://example.com/unrelated
+    profile: unrelated
+`)
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write registry: %v", err)
+		}
+
+		result, err := RemoveCanonical("target", nil)
+		if err != nil {
+			t.Fatalf("remove target: %v", err)
+		}
+		if result.CredentialProfile != "removed" || !result.CredentialProfileRemoved || result.CredentialProfileRetained {
+			t.Fatalf("removed profile result = %+v, want removed final profile", result)
+		}
+		updated, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read registry after removal: %v", err)
+		}
+		text := string(updated)
+		for _, want := range []string{"keep this comment", "profile-anchor: &removed-profile removed", "unrelated:"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("registry after removal missing %q:\n%s", want, text)
+			}
+		}
+		if strings.Contains(text, "  removed:\n") || strings.Contains(text, "  target:\n") {
+			t.Fatalf("removed target or credential profile remained:\n%s", text)
+		}
+	})
+}
+
 func TestRemoveCanonicalExpiredGrantAllowsExactRemoval(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

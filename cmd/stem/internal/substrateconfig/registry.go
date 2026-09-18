@@ -363,6 +363,27 @@ func RemoveCanonical(name string, grants []core.DelegationGrant) (RemoveResult, 
 
 	var removed RemoveResult
 	mutation, err := MutateCanonical(func(root *yaml.Node) error {
+		var config conductor.SubstratesConfig
+		if err := root.Decode(&config); err != nil {
+			return fmt.Errorf("decode substrate registry %s: %w", canonical, err)
+		}
+		if err := conductor.ValidateSubstratesConfig(canonical, &config); err != nil {
+			return err
+		}
+		target, ok := config.Substrates[name]
+		if !ok {
+			return fmt.Errorf("Substrate %q not found", name)
+		}
+		removed.CredentialProfile = target.Profile
+		if removed.CredentialProfile != "" {
+			for substrateName, spec := range config.Substrates {
+				if substrateName != name && spec.Profile == removed.CredentialProfile {
+					removed.CredentialProfileRetained = true
+					break
+				}
+			}
+		}
+
 		substrates, sectionErr := findSection(root, "substrates")
 		if sectionErr != nil {
 			return fmt.Errorf("Substrate %q not found", name)
@@ -375,14 +396,12 @@ func RemoveCanonical(name string, grants []core.DelegationGrant) (RemoveResult, 
 			return fmt.Errorf("Substrate %q is not a mapping", name)
 		}
 
-		removed.CredentialProfile = mappingStringValue(spec, "profile")
 		removeMappingKey(substrates, name)
 		if removed.CredentialProfile == "" {
 			return nil
 		}
 
-		if mappingReferencesProfile(substrates, removed.CredentialProfile) {
-			removed.CredentialProfileRetained = true
+		if removed.CredentialProfileRetained {
 			return nil
 		}
 
@@ -420,19 +439,6 @@ func liveRemovalBlockers(name string, grants []core.DelegationGrant, now time.Ti
 	}
 	sort.Strings(pollens)
 	return pollens
-}
-
-func mappingReferencesProfile(substrates *yaml.Node, profile string) bool {
-	if substrates == nil || substrates.Kind != yaml.MappingNode {
-		return false
-	}
-	for index := 0; index+1 < len(substrates.Content); index += 2 {
-		spec := substrates.Content[index+1]
-		if spec.Kind == yaml.MappingNode && mappingStringValue(spec, "profile") == profile {
-			return true
-		}
-	}
-	return false
 }
 
 func validateAddRequest(request *AddRequest) error {
