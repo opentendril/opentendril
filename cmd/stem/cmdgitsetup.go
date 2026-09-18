@@ -306,20 +306,43 @@ func envOrDefault(v, def string) string {
 // adapter reports the result; tests may replace this function.
 var verifySubstrateSetup = conductor.VerifySubstrateSetup
 
+type substrateVerificationOperation string
+
+const (
+	gitSetupVerificationOperation      substrateVerificationOperation = "git setup"
+	substrateVerificationOperationName substrateVerificationOperation = "substrate"
+)
+
 // runGitSetupVerify loads the written config, resolves the substrate's
 // credential, and asks the Conductor to verify the connection. The CLI does
 // not implement GitHub authentication, branch resolution, checkout-mode
 // routing, or readiness policy. The check does not clone, commit, push, or
 // open a pull request. Returns true when the connection is ready.
 func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
-	cfg, source, err := conductor.LoadSubstratesConfigWithSource(o.dir)
+	return verifySubstrateConnection(ctx, o.substrate, o.dir, gitSetupVerificationOperation)
+}
+
+// verifySubstrateConnection is the shared CLI rendering around the existing
+// Conductor credential-resolution and readiness policy. The operation label only
+// changes user-facing guidance; it does not change verification mechanics.
+func verifySubstrateConnection(ctx context.Context, substrate, dir string, operation substrateVerificationOperation) bool {
+	cfg, source, err := conductor.LoadSubstratesConfigWithSource(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ load substrates config: %v\n", err)
 		return false
 	}
-	spec, isName := conductor.ResolveSubstrate(o.substrate, cfg)
+	headerPrinted := false
+	if operation == substrateVerificationOperationName {
+		printVerificationHeader(substrate, source)
+		headerPrinted = true
+	}
+	spec, isName := conductor.ResolveSubstrate(substrate, cfg)
 	if !isName || spec == nil {
-		fmt.Fprintf(os.Stderr, "❌ substrate %q not found (run setup first, or pass --dir)\n", o.substrate)
+		if operation == gitSetupVerificationOperation {
+			fmt.Fprintf(os.Stderr, "❌ substrate %q not found (run setup first, or pass --dir)\n", substrate)
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ substrate %q not found (run tendril substrate add first)\n", substrate)
+		}
 		return false
 	}
 	cred, err := conductor.ResolveSubstrateCredential(*spec, cfg)
@@ -329,9 +352,8 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 	}
 
 	ready := true
-	fmt.Printf("Connection %q:\n", o.substrate)
-	if source != "" {
-		fmt.Printf("  registry:     %s\n", source)
+	if !headerPrinted {
+		printVerificationHeader(substrate, source)
 	}
 	fmt.Printf("  auth method:  %s\n", cred.Method)
 	fmt.Printf("  commit mode:  %s\n", cred.CommitMode)
@@ -358,9 +380,13 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 		if err != nil {
 			diagnostic := err.Error()
 			if strings.Contains(diagnostic, "has no Git base") {
+				verifyCommand := "tendril git setup --verify"
+				if operation != gitSetupVerificationOperation {
+					verifyCommand = "tendril substrate verify " + substrate
+				}
 				diagnostic = strings.Replace(diagnostic,
 					"Create an initial commit before using it as an OpenTendril Substrate, then rerun tendril git setup --verify",
-					fmt.Sprintf("use the supported `tendril git bootstrap --substrate %s` command to create the OpenTendril Substrate base, then rerun tendril git setup --verify", o.substrate),
+					fmt.Sprintf("use the supported `tendril git bootstrap --substrate %s` command to create the OpenTendril Substrate base, then rerun %s", substrate, verifyCommand),
 					1,
 				)
 			}
@@ -401,6 +427,13 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 		fmt.Println("⚠️  Connection configured, but it is not ready (see above).")
 	}
 	return ready
+}
+
+func printVerificationHeader(substrate, source string) {
+	fmt.Printf("Connection %q:\n", substrate)
+	if source != "" {
+		fmt.Printf("  registry:     %s\n", source)
+	}
 }
 
 // confirmGitSetupTarget shows where configuration will be written and who will
