@@ -169,12 +169,22 @@ POLLEN  STATUS  ISSUED      DIGEST         NOTE
 claude  active  2026-07-22  38c3089267f7…  laptop
 ```
 
-Before creating the first grant, verify the Substrate Git connection. This is a
-read-only check and does not create delegation authority:
+Before creating the first grant, use the ordinary Substrate lifecycle. These
+commands read and write the canonical account-global registry and do not create
+delegation authority:
 
 ```bash
-sudo -u tendril -i tendril git setup --verify --substrate myrepo
+sudo -u tendril -i tendril substrate add myrepo --repo owner/repo --posture app --app-id 123456 --key /home/tendril/.tendril/app.pem
+sudo -u tendril -i tendril substrate list
+sudo -u tendril -i tendril substrate get myrepo
+sudo -u tendril -i tendril substrate verify myrepo
 ```
+
+The supported first-use postures are GitHub App and fine-grained PAT plus GPG;
+managed checkout remains the governed default. If an empty managed App/API
+repository needs a Git base, the Botanist can run
+`sudo -u tendril -i tendril git bootstrap --substrate myrepo`, then repeat
+`sudo -u tendril -i tendril substrate verify myrepo`.
 
 If yours is not listed, issue one — as the Stem, in its own home:
 
@@ -248,6 +258,11 @@ Read it as a sentence: *the Pollen `claude` may run these operation classes, on
 this Substrate, and nothing else.* Note `git.prune` and `sprout.grow` are
 absent — deletion and raw Sprout dispatch are not part of the first-use grant.
 
+Removal is separate and dependency-safe. First narrow or revoke every live
+grant that names the Substrate, then run `sudo -u tendril -i tendril substrate remove myrepo` as
+the Botanist; the command does not rewrite grants or remove secrets, workspaces,
+Fruit, or Git state.
+
 Grants and Core identity stay dotted. The MCP tool name is the lower-camelCase
 projection of that identity:
 
@@ -259,7 +274,7 @@ MCP tool:      gitStatus
 ## 5. Make your first governed call
 
 The Substrate must already have a Git base — at least one commit on the
-required branch. `tendril git setup --verify --substrate myrepo` confirms
+required branch. `tendril substrate verify myrepo` confirms
 authentication and that Git base without mutating the repository.
 
 ```bash
@@ -458,12 +473,18 @@ PORT=18080 tendril chat -- go test ./...
 
 ## 3. Configure a Substrate
 
-If you have not yet configured a Substrate, run the setup wizard:
+For ordinary Substrate configuration, prefer the canonical lifecycle:
 
 ```bash
-tendril setup substrate
-tendril git setup --verify --substrate default-workspace
+tendril substrate add default-workspace --repo owner/repo --posture app --app-id <app-id> --key ~/.tendril/app.pem
+tendril substrate list
+tendril substrate get default-workspace
+tendril substrate verify default-workspace
 ```
+
+`tendril setup substrate` remains a compatibility bootstrap for installations
+that still use the wizard; it is not the preferred lifecycle. Delegation is a
+separate explicit `tendril delegation create` step.
 
 ## 4. Start direct coding — `tendril chat`
 

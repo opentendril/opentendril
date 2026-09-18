@@ -1,13 +1,16 @@
 package substrateconfig
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -524,5 +527,396 @@ func TestUpdateCanonicalRejectsNoPatchAndMissingTarget(t *testing.T) {
 	}
 	if got := config.Config.Substrates["garden"].Branch; got != "trunk" {
 		t.Fatalf("branch = %q, want trunk", got)
+	}
+}
+
+func TestRemoveCanonicalBlocksLiveReferencesAndManagesCredentialProfiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical directory: %v", err)
+	}
+	original := []byte(`# keep this comment
+credentials:
+  shared:
+    auth: { method: pat, env: SHARED_TOKEN }
+  final:
+    auth: { method: pat, env: FINAL_TOKEN }
+  unrelated:
+    auth: { method: pat, env: OTHER_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: shared
+    checkout: { mode: managed }
+  shared-other:
+    url: https://example.com/shared-other
+    profile: shared
+  final-target:
+    url: https://example.com/final
+    profile: final
+  unrelated:
+    url: https://example.com/unrelated
+    profile: unrelated
+`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	now := time.Now()
+	grants := []core.DelegationGrant{
+		{Pollen: "zeta", Substrates: []string{"target"}, Expires: now.Add(time.Hour)},
+		{Pollen: "alpha", Substrates: []string{"target"}, Expires: now.Add(time.Hour)},
+		{Pollen: "alpha", Substrates: []string{"target"}, Expires: now.Add(time.Hour)},
+		{Pollen: "expired", Substrates: []string{"target"}, Expires: now.Add(-time.Hour)},
+		{Pollen: "unrelated", Substrates: []string{"other"}, Expires: now.Add(time.Hour)},
+	}
+	if _, err := RemoveCanonical("target", grants); err == nil {
+		t.Fatal("live exact grant reference did not block removal")
+	} else {
+		var blocked *RemovalBlockedError
+		if !errors.As(err, &blocked) {
+			t.Fatalf("error = %v, want RemovalBlockedError", err)
+		}
+		if got, want := blocked.Pollens, []string{"alpha", "zeta"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("blocking Pollens = %v, want %v", got, want)
+		}
+		if !strings.Contains(err.Error(), "narrow or remove") {
+			t.Fatalf("blocking error = %v, want separate delegation guidance", err)
+		}
+	}
+	unchanged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read registry after blocked removal: %v", err)
+	}
+	if string(unchanged) != string(original) {
+		t.Fatalf("blocked removal changed registry:\n%s", unchanged)
+	}
+
+	result, err := RemoveCanonical("target", nil)
+	if err != nil {
+		t.Fatalf("remove target: %v", err)
+	}
+	if result.CredentialProfile != "shared" || !result.CredentialProfileRetained || result.CredentialProfileRemoved {
+		t.Fatalf("shared profile result = %+v, want retained shared profile", result)
+	}
+	updated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read registry after target removal: %v", err)
+	}
+	for _, want := range []string{"keep this comment", "shared-other", "final-target", "unrelated", "shared:"} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("registry after target removal missing %q:\n%s", want, updated)
+		}
+	}
+	if strings.Contains(string(updated), "  target:\n") {
+		t.Fatalf("target remained after removal:\n%s", updated)
+	}
+
+	result, err = RemoveCanonical("final-target", nil)
+	if err != nil {
+		t.Fatalf("remove final profile target: %v", err)
+	}
+	if result.CredentialProfile != "final" || !result.CredentialProfileRemoved || result.CredentialProfileRetained {
+		t.Fatalf("final profile result = %+v, want removed final profile", result)
+	}
+	updated, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read registry after final target removal: %v", err)
+	}
+	if strings.Contains(string(updated), "  final:\n") || !strings.Contains(string(updated), "  unrelated:\n") {
+		t.Fatalf("profile lifecycle mutation was too broad:\n%s", updated)
+	}
+}
+
+func TestRemoveCanonicalUsesDecodedProfilesForAliases(t *testing.T) {
+	t.Run("remaining alias retains shared profile", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte(`# keep this comment
+profile-anchor: &shared-profile shared
+credentials:
+  shared:
+    auth: { method: pat, env: SHARED_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: shared
+  remaining:
+    url: https://example.com/remaining
+    profile: *shared-profile
+`)
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write registry: %v", err)
+		}
+
+		result, err := RemoveCanonical("target", nil)
+		if err != nil {
+			t.Fatalf("remove target: %v", err)
+		}
+		if result.CredentialProfile != "shared" || !result.CredentialProfileRetained || result.CredentialProfileRemoved {
+			t.Fatalf("shared profile result = %+v, want retained shared profile", result)
+		}
+		updated, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read registry after removal: %v", err)
+		}
+		text := string(updated)
+		for _, want := range []string{"keep this comment", "profile-anchor: &shared-profile shared", "remaining:", "  shared:"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("registry after removal missing %q:\n%s", want, text)
+			}
+		}
+	})
+
+	t.Run("removed alias removes final profile and preserves anchor", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte(`# keep this comment
+profile-anchor: &removed-profile removed
+credentials:
+  removed:
+    auth: { method: pat, env: REMOVED_TOKEN }
+  unrelated:
+    auth: { method: pat, env: OTHER_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: *removed-profile
+  unrelated:
+    url: https://example.com/unrelated
+    profile: unrelated
+`)
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write registry: %v", err)
+		}
+
+		result, err := RemoveCanonical("target", nil)
+		if err != nil {
+			t.Fatalf("remove target: %v", err)
+		}
+		if result.CredentialProfile != "removed" || !result.CredentialProfileRemoved || result.CredentialProfileRetained {
+			t.Fatalf("removed profile result = %+v, want removed final profile", result)
+		}
+		updated, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read registry after removal: %v", err)
+		}
+		text := string(updated)
+		for _, want := range []string{"keep this comment", "profile-anchor: &removed-profile removed", "unrelated:"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("registry after removal missing %q:\n%s", want, text)
+			}
+		}
+		if strings.Contains(text, "  removed:\n") || strings.Contains(text, "  target:\n") {
+			t.Fatalf("removed target or credential profile remained:\n%s", text)
+		}
+	})
+}
+
+func TestRemoveCanonicalExpiredGrantAllowsExactRemoval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("substrates:\n  target:\n    url: https://example.com/target\n  target-copy:\n    url: https://example.com/target-copy\n"), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	grants := []core.DelegationGrant{
+		{Pollen: "expired", Substrates: []string{"target"}, Expires: time.Now().Add(-time.Minute)},
+		{Pollen: "substring", Substrates: []string{"target-copy"}, Expires: time.Now().Add(time.Hour)},
+	}
+	if _, err := RemoveCanonical("target", grants); err != nil {
+		t.Fatalf("expired or substring grant blocked removal: %v", err)
+	}
+	result, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load registry after expired-grant removal: %v", err)
+	}
+	if _, ok := result.Config.Substrates["target"]; ok {
+		t.Fatal("target remained after removal")
+	}
+	if _, ok := result.Config.Substrates["target-copy"]; !ok {
+		t.Fatal("unrelated target-copy was removed")
+	}
+}
+
+func TestRemoveCanonicalMissingAndMalformedStatesLeaveBytesUnchanged(t *testing.T) {
+	t.Run("missing target", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte("# keep\nsubstrates:\n  existing:\n    url: https://example.com/existing\n")
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write registry: %v", err)
+		}
+		if _, err := RemoveCanonical("missing", nil); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("error = %v, want explicit not-found", err)
+		}
+		unchanged, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read registry: %v", err)
+		}
+		if string(unchanged) != string(original) {
+			t.Fatalf("missing removal changed registry:\n%s", unchanged)
+		}
+	})
+
+	t.Run("malformed registry", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		path := filepath.Join(home, ".tendril", "substrates.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir canonical directory: %v", err)
+		}
+		original := []byte("substrates: [")
+		if err := os.WriteFile(path, original, 0o600); err != nil {
+			t.Fatalf("write malformed registry: %v", err)
+		}
+		if _, err := RemoveCanonical("target", nil); err == nil {
+			t.Fatal("malformed registry was accepted")
+		}
+		unchanged, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read malformed registry: %v", err)
+		}
+		if string(unchanged) != string(original) {
+			t.Fatalf("malformed removal changed registry: %q", unchanged)
+		}
+	})
+
+	t.Run("no registry", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		if _, err := RemoveCanonical("missing", nil); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("error = %v, want explicit not-found", err)
+		}
+		if _, err := os.Stat(filepath.Join(home, ".tendril", "substrates.yaml")); !os.IsNotExist(err) {
+			t.Fatalf("missing removal created canonical registry: %v", err)
+		}
+	})
+}
+
+func TestRemoveCanonicalImportsLegacyAndPreservesExternalState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	legacy := []byte(`# legacy comment
+credentials:
+  target-profile:
+    auth: { method: app, appId: "1", privateKeyPath: /keys/target.pem }
+  keep-profile:
+    auth: { method: pat, env: KEEP_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: target-profile
+  keep:
+    url: https://example.com/keep
+    profile: keep-profile
+`)
+	if err := os.WriteFile(legacyPath, legacy, 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+	secret := filepath.Join(home, "target.pem")
+	workspace := filepath.Join(home, ".tendril", "substrates", "target")
+	fruit := filepath.Join(home, ".tendril", "fruit-sentinel")
+	if err := os.MkdirAll(filepath.Dir(fruit), 0o700); err != nil {
+		t.Fatalf("mkdir external sentinel directory: %v", err)
+	}
+	for _, path := range []string{secret, fruit} {
+		if err := os.WriteFile(path, []byte("sentinel"), 0o600); err != nil {
+			t.Fatalf("write sentinel %s: %v", path, err)
+		}
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("mkdir workspace sentinel: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "keep.txt"), []byte("workspace"), 0o600); err != nil {
+		t.Fatalf("write workspace sentinel: %v", err)
+	}
+
+	result, err := RemoveCanonical("target", nil)
+	if err != nil {
+		t.Fatalf("remove legacy target: %v", err)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !result.ImportedLegacy || result.Source != legacyPath || result.Destination != canonicalPath {
+		t.Fatalf("remove result = %+v, want legacy import into canonical", result)
+	}
+	legacyAfter, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read legacy registry after removal: %v", err)
+	}
+	if string(legacyAfter) != string(legacy) {
+		t.Fatalf("legacy registry changed:\n%s", legacyAfter)
+	}
+	canonical, err := os.ReadFile(canonicalPath)
+	if err != nil {
+		t.Fatalf("read canonical registry after removal: %v", err)
+	}
+	if strings.Contains(string(canonical), "  target:\n") || strings.Contains(string(canonical), "target-profile") || !strings.Contains(string(canonical), "keep") {
+		t.Fatalf("canonical removal did not remove only target and its final profile:\n%s", canonical)
+	}
+	for _, path := range []string{secret, fruit, filepath.Join(workspace, "keep.txt")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("external sentinel %s was changed or removed: %v", path, err)
+		}
+	}
+}
+
+func TestRemoveCanonicalMissingProfileDoesNotTriggerBroadCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir canonical directory: %v", err)
+	}
+	content := []byte(`credentials:
+  unrelated:
+    auth: { method: pat, env: OTHER_TOKEN }
+substrates:
+  target:
+    url: https://example.com/target
+    profile: already-missing
+  unrelated:
+    url: https://example.com/unrelated
+    profile: unrelated
+`)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	result, err := RemoveCanonical("target", nil)
+	if err != nil {
+		t.Fatalf("remove target with missing profile: %v", err)
+	}
+	if result.CredentialProfile != "already-missing" || result.CredentialProfileRemoved || result.CredentialProfileRetained {
+		t.Fatalf("missing profile result = %+v, want no profile mutation", result)
+	}
+	updated, err := LoadCanonical()
+	if err != nil {
+		t.Fatalf("load registry after missing-profile removal: %v", err)
+	}
+	if _, ok := updated.Config.Credentials["unrelated"]; !ok {
+		t.Fatal("unrelated credential profile was removed")
+	}
+	if _, ok := updated.Config.Substrates["unrelated"]; !ok {
+		t.Fatal("unrelated Substrate was removed")
 	}
 }

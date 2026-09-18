@@ -9,9 +9,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"gopkg.in/yaml.v3"
 )
 
@@ -75,6 +79,30 @@ type UpdateRequest struct {
 	CheckoutSet  bool
 	CheckoutPath string
 	PathSet      bool
+}
+
+// RemoveResult describes the registry and credential-profile effects of one
+// dependency-safe Substrate removal.
+type RemoveResult struct {
+	MutationResult
+	CredentialProfile         string
+	CredentialProfileRemoved  bool
+	CredentialProfileRetained bool
+}
+
+// RemovalBlockedError reports the live DelegationGrant references that prevent
+// a Botanist from removing a Substrate.
+type RemovalBlockedError struct {
+	Substrate string
+	Pollens   []string
+}
+
+func (e *RemovalBlockedError) Error() string {
+	return fmt.Sprintf(
+		"cannot remove Substrate %q: live DelegationGrant references from Pollen %s block removal; narrow or remove those delegation grants separately before retrying",
+		e.Substrate,
+		strings.Join(e.Pollens, ", "),
+	)
 }
 
 // CanonicalPath returns the account-global mutable registry path.
@@ -303,6 +331,114 @@ func UpdateCanonical(request UpdateRequest) (MutationResult, error) {
 	return MutateCanonical(func(root *yaml.Node) error {
 		return updateNode(root, request)
 	})
+}
+
+// RemoveCanonical removes one named Substrate after checking the already-loaded
+// account-global delegation projection. It never creates a fresh canonical
+// registry for a missing target, and it never mutates grants or external
+// credential material.
+func RemoveCanonical(name string, grants []core.DelegationGrant) (RemoveResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return RemoveResult{}, fmt.Errorf("Substrate name is required")
+	}
+
+	if pollens := liveRemovalBlockers(name, grants, time.Now()); len(pollens) > 0 {
+		return RemoveResult{}, &RemovalBlockedError{Substrate: name, Pollens: pollens}
+	}
+
+	canonical, err := CanonicalPath()
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	legacy, err := conductor.LegacySubstrateConfigPath()
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	if _, statErr := os.Stat(canonical); os.IsNotExist(statErr) && !regularFileExists(legacy) {
+		return RemoveResult{}, fmt.Errorf("Substrate %q not found", name)
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		return RemoveResult{}, fmt.Errorf("stat substrate registry %s: %w", canonical, statErr)
+	}
+
+	var removed RemoveResult
+	mutation, err := MutateCanonical(func(root *yaml.Node) error {
+		var config conductor.SubstratesConfig
+		if err := root.Decode(&config); err != nil {
+			return fmt.Errorf("decode substrate registry %s: %w", canonical, err)
+		}
+		if err := conductor.ValidateSubstratesConfig(canonical, &config); err != nil {
+			return err
+		}
+		target, ok := config.Substrates[name]
+		if !ok {
+			return fmt.Errorf("Substrate %q not found", name)
+		}
+		removed.CredentialProfile = target.Profile
+		if removed.CredentialProfile != "" {
+			for substrateName, spec := range config.Substrates {
+				if substrateName != name && spec.Profile == removed.CredentialProfile {
+					removed.CredentialProfileRetained = true
+					break
+				}
+			}
+		}
+
+		substrates, sectionErr := findSection(root, "substrates")
+		if sectionErr != nil {
+			return fmt.Errorf("Substrate %q not found", name)
+		}
+		index, spec := mappingEntry(substrates, name)
+		if index < 0 || spec == nil {
+			return fmt.Errorf("Substrate %q not found", name)
+		}
+		if spec.Kind != yaml.MappingNode {
+			return fmt.Errorf("Substrate %q is not a mapping", name)
+		}
+
+		removeMappingKey(substrates, name)
+		if removed.CredentialProfile == "" {
+			return nil
+		}
+
+		if removed.CredentialProfileRetained {
+			return nil
+		}
+
+		credentials, credentialsErr := findSection(root, "credentials")
+		if credentialsErr != nil {
+			return nil
+		}
+		if hasMappingKey(credentials, removed.CredentialProfile) {
+			removeMappingKey(credentials, removed.CredentialProfile)
+			removed.CredentialProfileRemoved = true
+		}
+		return nil
+	})
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	removed.MutationResult = mutation
+	return removed, nil
+}
+
+func liveRemovalBlockers(name string, grants []core.DelegationGrant, now time.Time) []string {
+	seen := make(map[string]struct{})
+	for _, grant := range grants {
+		if !grant.Expires.IsZero() && !now.Before(grant.Expires) {
+			continue
+		}
+		if slices.Contains(grant.Substrates, name) {
+			seen[grant.Pollen] = struct{}{}
+		}
+	}
+
+	pollens := make([]string, 0, len(seen))
+	for pollen := range seen {
+		pollens = append(pollens, pollen)
+	}
+	sort.Strings(pollens)
+	return pollens
 }
 
 func validateAddRequest(request *AddRequest) error {
@@ -601,6 +737,14 @@ func scalarValue(mapping *yaml.Node, name string) string {
 		return ""
 	}
 	return strings.ToLower(strings.TrimSpace(value.Value))
+}
+
+func mappingStringValue(mapping *yaml.Node, name string) string {
+	_, value := mappingEntry(mapping, name)
+	if value == nil || value.Kind != yaml.ScalarNode {
+		return ""
+	}
+	return strings.TrimSpace(value.Value)
 }
 
 func hasMappingKey(mapping *yaml.Node, name string) bool {

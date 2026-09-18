@@ -1,6 +1,9 @@
 # OpenTendril substrate configuration.
 #
-# Place this file at ./substrates.yaml or ./.tendril/substrates.yaml.
+# The ordinary account-global registry is ~/.tendril/substrates.yaml
+# (under the governed `tendril` account: /home/tendril/.tendril/substrates.yaml),
+# independent of the current working directory. `tendril git setup --dir` is a
+# deliberate advanced alternate-root surface; it is not ordinary discovery.
 # Each key under `substrates` is a named repository target passed to
 # `sproutTendril` (or `tendril sprout run --substrate <name>`).
 

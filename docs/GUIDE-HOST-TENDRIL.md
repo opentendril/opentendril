@@ -18,7 +18,11 @@ For this, OpenTendril provides the `host` Terrarium provider.
 
 ## Configuring a Host Substrate
 
-To use the host provider, you must explicitly opt-in by configuring a substrate in your `.tendril/substrates.yaml` file (or globally in `~/.config/opentendril/substrates.yaml`).
+To use the host provider, you must explicitly opt-in by configuring a Substrate
+in the Stem account's canonical `~/.tendril/substrates.yaml` registry
+(`/home/tendril/.tendril/substrates.yaml` under the governed `tendril` account),
+independent of the current working directory. An explicit `--dir` on the
+compatibility `tendril git setup` surface is a deliberate advanced alternate.
 
 ```yaml
 # substrates.yaml
@@ -75,13 +79,14 @@ sits. A path confers no privilege by being in one directory rather than another.
 
 Two properties make the answer safe on a sound installation:
 
-* The Stem resolves `substrates.yaml` relative to **its own working directory**,
-  not to the workspace a Sprout is editing. A Sprout works in a managed checkout;
-  the Stem reads its own control plane. The two are different directories.
+* Ordinary Substrate configuration resolves from the Stem account's canonical
+  `~/.tendril/substrates.yaml`, independent of the current working directory. A
+  managed Substrate checkout cannot become the ordinary active configuration
+  merely by containing its own `substrates.yaml`.
 * That control plane belongs to the Stem's own principal, so no account hosting
-  a Pollinator can write it — which is exactly what
-  [GUIDE-INSTALL.md](./GUIDE-INSTALL.md) means by requiring that the Stem's working
-  directory is not a repository checkout.
+  a Pollinator can write it. This is the ownership and unreachability property
+  described by [GUIDE-INSTALL.md](./GUIDE-INSTALL.md), not a privilege conferred
+  by path location.
 
 `tendril hardiness` measures this. It reports when substrate configuration is
 writable by another principal, and escalates that to a weak finding when host

@@ -78,15 +78,16 @@ together, so a rootful daemon is not a supported variation.
 
 ---
 
-## Before you start: the control plane is a working directory
+## Before you start: separate process state from the Substrate registry
 
 This is the single fact that most often produces an installation that looks right
 and is not.
 
 `tendril serve`, `tendril pollinator`, `tendril hardiness` and the Model Context
-Protocol surface all resolve the control plane as `./.tendril` — relative to the
-**current directory of the process**, not to anyone's home. The environment file
-is read the same way: `./.env` and nothing else.
+Protocol surface use their Stem process state under `./.tendril` — relative to
+the **current directory of the process**. The environment file is read the same
+way: `./.env` and nothing else. This process state is distinct from the ordinary
+Substrate registry, which is account-global at `~/.tendril/substrates.yaml`.
 This is Stem process configuration; it is not ambient environment passed to
 normal Terraria.
 
@@ -529,8 +530,7 @@ identity cannot be executed by accident:
 # as tendril, in /home/tendril
 : "${APP_ID:?set APP_ID to the GitHub App ID from Path B}"
 : "${REPO:?set REPO to owner/repo the App is installed on}"
-tendril git setup \
-  --substrate myrepo \
+tendril substrate add myrepo \
   --repo "$REPO" \
   --posture app \
   --app-id "$APP_ID" \
@@ -541,10 +541,14 @@ tendril git setup \
 principal: the Stem cannot read your clone, so `mode: path` pointing at it will
 fail. Managed mode gives the Stem its own clone under its own home.
 
-This writes `/home/tendril/substrates.yaml` without creating delegation
-authority. The legacy `--grant-pollen` option remains available for
-compatibility, but ordinary first use creates one explicit bounded grant
-through the delegation control plane below. No grant means every delegated
+This writes the canonical account-global registry at
+`/home/tendril/.tendril/substrates.yaml` without creating delegation authority.
+Use `tendril substrate list`, `tendril substrate get myrepo`, and
+`tendril substrate verify myrepo` for ordinary inspection and verification.
+`tendril git setup` remains an existing compatibility/advanced connection setup
+surface: omitted `--dir` uses the canonical registry, while an explicit `--dir`
+is a deliberate alternate. It configures a connection only; no setup operation
+implicitly grants Pollinator authority. No grant means every delegated
 invocation is denied, which is the secure default.
 
 Create the first grant through the control-plane command; do not edit
@@ -595,7 +599,17 @@ tendril delegation revoke \
   --operation seed.grow
 ```
 
-**Check:** `tendril git setup --verify --substrate myrepo`
+To remove the connection later, use the dependency-safe Botanist operation:
+
+```bash
+tendril substrate remove myrepo
+```
+
+Live delegation references block removal. Narrow or revoke those grants
+separately, then retry; removal never rewrites grants or deletes secrets,
+workspaces, Fruit, or Git state.
+
+**Check:** `tendril substrate verify myrepo`
 reports the connection ready only after authenticating to the configured
 repository and confirming it has a usable Git base: the required branch
 resolves to a commit. The check does not clone, create a checkout, commit,
@@ -607,7 +621,7 @@ confirmation summary, and then rerun verification:
 
 ```bash
 tendril git bootstrap --substrate myrepo
-tendril git setup --verify --substrate myrepo
+tendril substrate verify myrepo
 ```
 
 Bootstrap creates exactly one empty-tree root commit on the resolved target
@@ -648,8 +662,8 @@ signing key and pass it at setup:
 
 ```bash
 # as tendril, in /home/tendril
-tendril git setup \
-  --substrate myrepo --repo myorg/myrepo \
+tendril substrate add myrepo \
+  --repo myorg/myrepo \
   --posture pat \
   --token-env TENDRIL_GITHUB_PAT \
   --sign-key <gpg-key-id> \

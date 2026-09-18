@@ -18,6 +18,31 @@ func TestPrintUsageListsSubstrateCommandFamily(t *testing.T) {
 	}
 }
 
+func TestSubstrateUsageListsRemove(t *testing.T) {
+	stdout, _ := captureVerifyOutput(t, printSubstrateUsage)
+	if !strings.Contains(stdout, "<list|get|add|update|remove|verify>") || !strings.Contains(stdout, "tendril substrate remove <name>") {
+		t.Fatalf("substrate usage = %q, want remove command", stdout)
+	}
+}
+
+func TestSubstrateRemoveNameArguments(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "missing", want: "requires <name>"},
+		{name: "too many", args: []string{"one", "two"}, want: "requires <name>"},
+		{name: "flag", args: []string{"--force"}, want: "requires <name>"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := parseSubstrateNameArgs("remove", test.args); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestSubstratePollenGatePrecedesEveryOperationalRegistryAccess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -29,6 +54,11 @@ func TestSubstratePollenGatePrecedesEveryOperationalRegistryAccess(t *testing.T)
 	original := []byte("substrates: [")
 	if err := os.WriteFile(canonical, original, 0o600); err != nil {
 		t.Fatalf("write malformed canonical registry: %v", err)
+	}
+	grantsPath := filepath.Join(home, ".tendril", "grants.yaml")
+	malformedGrants := []byte("grants: [")
+	if err := os.WriteFile(grantsPath, malformedGrants, 0o600); err != nil {
+		t.Fatalf("write malformed grants: %v", err)
 	}
 
 	cases := map[string]func() error{
@@ -43,6 +73,7 @@ func TestSubstratePollenGatePrecedesEveryOperationalRegistryAccess(t *testing.T)
 			return executeSubstrateUpdate(substrateconfig.UpdateRequest{Name: "garden", Repo: "acme/updated", RepoSet: true})
 		},
 		"verify": func() error { return executeSubstrateVerify(context.Background(), "garden") },
+		"remove": func() error { return executeSubstrateRemove("garden") },
 	}
 	for operation, run := range cases {
 		t.Run(operation, func(t *testing.T) {
@@ -57,7 +88,211 @@ func TestSubstratePollenGatePrecedesEveryOperationalRegistryAccess(t *testing.T)
 			if string(unchanged) != string(original) {
 				t.Fatalf("Pollen gate changed malformed canonical registry: %q", unchanged)
 			}
+			grants, readErr := os.ReadFile(grantsPath)
+			if readErr != nil {
+				t.Fatalf("read grants after refusal: %v", readErr)
+			}
+			if string(grants) != string(malformedGrants) {
+				t.Fatalf("Pollen gate changed malformed grants: %q", grants)
+			}
 		})
+	}
+}
+
+func TestSubstrateRemoveBlocksLiveGrantsBeforeRegistryMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registry := writeCanonicalSubstrateTestConfig(t, `substrates:
+  garden:
+    url: https://github.com/acme/garden
+`)
+	grantsPath := filepath.Join(home, ".tendril", "grants.yaml")
+	originalGrants := []byte(`grants:
+  zeta:
+    operationClasses: [git.status]
+    substrates: [garden]
+  alpha:
+    operationClasses: [git.status]
+    substrates: [garden]
+  expired:
+    operationClasses: [git.status]
+    substrates: [garden]
+    expires: 2000-01-01
+`)
+	if err := os.WriteFile(grantsPath, originalGrants, 0o600); err != nil {
+		t.Fatalf("write grants: %v", err)
+	}
+	beforeRegistry, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatalf("read registry before blocked removal: %v", err)
+	}
+
+	err = executeSubstrateRemove("garden")
+	if err == nil || !strings.Contains(err.Error(), `Substrate "garden"`) || !strings.Contains(err.Error(), "alpha, zeta") || !strings.Contains(err.Error(), "narrow or remove") {
+		t.Fatalf("error = %v, want deterministic actionable blocker", err)
+	}
+	afterRegistry, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatalf("read registry after blocked removal: %v", err)
+	}
+	if string(afterRegistry) != string(beforeRegistry) {
+		t.Fatalf("blocked removal changed registry:\n%s", afterRegistry)
+	}
+	afterGrants, err := os.ReadFile(grantsPath)
+	if err != nil {
+		t.Fatalf("read grants after blocked removal: %v", err)
+	}
+	if string(afterGrants) != string(originalGrants) {
+		t.Fatalf("blocked removal changed grants:\n%s", afterGrants)
+	}
+}
+
+func TestSubstrateRemovePermitsNoGrantAndPreservesGrantBytes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registry := writeCanonicalSubstrateTestConfig(t, `credentials:
+  garden-profile:
+    auth: { method: pat, env: GARDEN_TOKEN }
+substrates:
+  garden:
+    url: https://github.com/acme/garden
+    profile: garden-profile
+`)
+	grantsPath := filepath.Join(home, ".tendril", "grants.yaml")
+	originalGrants := []byte("# no grants\ngrants: {}\n")
+	if err := os.WriteFile(grantsPath, originalGrants, 0o600); err != nil {
+		t.Fatalf("write grants: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateRemove("garden"); err != nil {
+			t.Fatalf("executeSubstrateRemove: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("remove stderr = %q", stderr)
+	}
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, `Removed Substrate "garden" from `+canonical) || !strings.Contains(stdout, `Removed unreferenced credential profile "garden-profile"`) {
+		t.Fatalf("remove output = %q, want success and profile lifecycle", stdout)
+	}
+	if _, err := os.Stat(registry); err != nil {
+		t.Fatalf("registry was not retained after successful removal: %v", err)
+	}
+	afterGrants, err := os.ReadFile(grantsPath)
+	if err != nil {
+		t.Fatalf("read grants after successful removal: %v", err)
+	}
+	if string(afterGrants) != string(originalGrants) {
+		t.Fatalf("successful removal changed grants:\n%s", afterGrants)
+	}
+}
+
+func TestSubstrateRemoveRejectsMalformedGrantsBeforeRegistryWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registry := writeCanonicalSubstrateTestConfig(t, `substrates:
+  garden:
+    url: https://github.com/acme/garden
+`)
+	originalRegistry, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatalf("read registry before malformed grants test: %v", err)
+	}
+	grantsPath := filepath.Join(home, ".tendril", "grants.yaml")
+	malformed := []byte("grants: [")
+	if err := os.WriteFile(grantsPath, malformed, 0o600); err != nil {
+		t.Fatalf("write malformed grants: %v", err)
+	}
+
+	err = executeSubstrateRemove("garden")
+	if err == nil || !strings.Contains(err.Error(), "delegation grants") {
+		t.Fatalf("error = %v, want malformed grants failure", err)
+	}
+	unchanged, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatalf("read registry after malformed grants: %v", err)
+	}
+	if string(unchanged) != string(originalRegistry) {
+		t.Fatalf("malformed grants changed registry:\n%s", unchanged)
+	}
+}
+
+func TestSubstrateRemoveIgnoresCwdLocalGrants(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registry := writeCanonicalSubstrateTestConfig(t, `substrates:
+  garden:
+    url: https://github.com/acme/garden
+`)
+	decoy := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(decoy, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir cwd grants decoy: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(decoy, ".tendril", "grants.yaml"), []byte(`grants:
+  decoy-pollen:
+    operationClasses: [git.status]
+    substrates: [garden]
+`), 0o600); err != nil {
+		t.Fatalf("write cwd grants decoy: %v", err)
+	}
+	decoyRegistryPath := filepath.Join(decoy, ".tendril", "substrates.yaml")
+	decoyRegistry := []byte(`substrates:
+  garden:
+    url: https://github.com/decoy/garden
+`)
+	if err := os.WriteFile(decoyRegistryPath, decoyRegistry, 0o600); err != nil {
+		t.Fatalf("write cwd registry decoy: %v", err)
+	}
+	t.Chdir(decoy)
+
+	if err := executeSubstrateRemove("garden"); err != nil {
+		t.Fatalf("cwd-local grants blocked removal: %v", err)
+	}
+	if _, err := os.Stat(registry); err != nil {
+		t.Fatalf("canonical registry was not retained: %v", err)
+	}
+	unchangedDecoy, err := os.ReadFile(decoyRegistryPath)
+	if err != nil {
+		t.Fatalf("read cwd registry decoy: %v", err)
+	}
+	if string(unchangedDecoy) != string(decoyRegistry) {
+		t.Fatalf("cwd registry decoy changed during removal:\n%s", unchangedDecoy)
+	}
+}
+
+func TestSubstrateRemoveReportsLegacyLifecycle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacyPath := filepath.Join(home, "substrates.yaml")
+	legacy := []byte(`substrates:
+  garden:
+    url: https://github.com/acme/garden
+  keep:
+    url: https://github.com/acme/keep
+`)
+	if err := os.WriteFile(legacyPath, legacy, 0o640); err != nil {
+		t.Fatalf("write legacy registry: %v", err)
+	}
+
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if err := executeSubstrateRemove("garden"); err != nil {
+			t.Fatalf("executeSubstrateRemove: %v", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("remove stderr = %q", stderr)
+	}
+	canonicalPath := filepath.Join(home, ".tendril", "substrates.yaml")
+	if !strings.Contains(stdout, "Imported legacy registry from "+legacyPath+" into "+canonicalPath) || !strings.Contains(stdout, "canonical registry is now active") {
+		t.Fatalf("remove output = %q, want legacy import observability", stdout)
+	}
+	unchanged, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read legacy registry after removal: %v", err)
+	}
+	if string(unchanged) != string(legacy) {
+		t.Fatalf("legacy registry changed during removal:\n%s", unchanged)
 	}
 }
 
