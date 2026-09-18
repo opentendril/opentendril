@@ -277,6 +277,7 @@ func inCleanWorkingDir(t *testing.T, fn func(dir string)) {
 		t.Fatalf("getwd: %v", err)
 	}
 	dir := cleanTempRoot(t)
+	t.Setenv("HOME", dir)
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}

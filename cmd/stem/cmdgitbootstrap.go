@@ -39,7 +39,7 @@ func runGitBootstrap(ctx context.Context, args []string) {
 }
 
 func parseGitBootstrapArgs(args []string) (gitBootstrapOptions, error) {
-	opts := gitBootstrapOptions{dir: "."}
+	opts := gitBootstrapOptions{}
 	need := func(i *int) (string, error) {
 		if *i+1 >= len(args) {
 			return "", fmt.Errorf("flag %s requires a value", args[*i])
@@ -151,5 +151,5 @@ func printGitBootstrapUsage() {
 	fmt.Println("  --substrate <name>  Named configured Substrate (required)")
 	fmt.Println("  --branch <branch>   Botanist branch input, used only when config and GitHub provide none")
 	fmt.Println("  --confirm           Explicitly confirm the displayed one-commit mutation")
-	fmt.Println("  --dir <path>        Config directory (default: current directory)")
+	fmt.Println("  --dir <path>        Explicit alternate config directory (default: ~/.tendril)")
 }

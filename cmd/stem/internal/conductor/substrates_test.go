@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -16,84 +17,124 @@ import (
 )
 
 func TestLoadSubstratesConfigSearchOrder(t *testing.T) {
-	t.Run("current dir wins", func(t *testing.T) {
-		root, cwd := prepareSubstrateConfigRepo(t)
-		writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), `
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root, cwd := prepareSubstrateConfigRepo(t)
+
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	legacy := filepath.Join(home, "substrates.yaml")
+	writeSubstratesYAML(t, canonical, `
+substrates:
+  canonical:
+    url: https://example.com/canonical.git
+`)
+	writeSubstratesYAML(t, legacy, `
+substrates:
+  legacy:
+    url: https://example.com/legacy.git
+`)
+	writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), `
+substrates:
+  checkout-decoy:
+    url: https://example.com/checkout.git
+`)
+	writeSubstratesYAML(t, filepath.Join(cwd, ".tendril", "substrates.yaml"), `
+substrates:
+  checkout-tendril-decoy:
+    url: https://example.com/checkout-tendril.git
+`)
+	writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), `
+substrates:
+  repo-decoy:
+    url: https://example.com/repo.git
+`)
+
+	config, source, err := LoadSubstratesConfigWithSource("")
+	if err != nil {
+		t.Fatalf("LoadSubstratesConfigWithSource failed: %v", err)
+	}
+	if config == nil || source != canonical {
+		t.Fatalf("config/source = %#v/%q, want canonical source %q", config, source, canonical)
+	}
+	if len(config.Substrates) != 1 {
+		t.Fatalf("substrate count = %d, want 1", len(config.Substrates))
+	}
+	if _, ok := config.Substrates["canonical"]; !ok {
+		t.Fatalf("empty-root discovery selected a non-canonical file: %#v", config.Substrates)
+	}
+
+	wantCandidates := []string{canonical, legacy}
+	if got := SubstrateConfigCandidates(""); !reflect.DeepEqual(got, wantCandidates) {
+		t.Fatalf("empty-root candidates = %v, want %v", got, wantCandidates)
+	}
+}
+
+func TestEmptyRootSubstrateConfigFallsBackToLegacyOnlyWhenCanonicalAbsent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	legacy := filepath.Join(home, "substrates.yaml")
+	writeSubstratesYAML(t, legacy, `
+substrates:
+  legacy:
+    url: https://example.com/legacy.git
+`)
+
+	config, source, err := LoadSubstratesConfigWithSource("")
+	if err != nil {
+		t.Fatalf("legacy fallback failed: %v", err)
+	}
+	if config == nil || source != legacy {
+		t.Fatalf("config/source = %#v/%q, want legacy source %q", config, source, legacy)
+	}
+
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	writeSubstratesYAML(t, canonical, `
+substrates:
+  canonical:
+    url: https://example.com/canonical.git
+`)
+	config, source, err = LoadSubstratesConfigWithSource("")
+	if err != nil {
+		t.Fatalf("canonical discovery failed: %v", err)
+	}
+	if config == nil || source != canonical {
+		t.Fatalf("config/source = %#v/%q, want canonical source %q", config, source, canonical)
+	}
+}
+
+func TestSubstrateConfigCandidatesExplicitRootRetainsAlternateSemantics(t *testing.T) {
+	root, cwd := prepareSubstrateConfigRepo(t)
+	writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), `
 substrates:
   repo-root:
     url: https://example.com/repo-root.git
 `)
-		writeSubstratesYAML(t, filepath.Join(cwd, "substrates.yaml"), `
-substrates:
-  current-dir:
-    url: https://example.com/current-dir.git
-`)
-
-		config, err := LoadSubstratesConfig("")
-		if err != nil {
-			t.Fatalf("LoadSubstratesConfig failed: %v", err)
-		}
-		if config == nil {
-			t.Fatalf("expected config, got nil")
-		}
-		if len(config.Substrates) != 1 {
-			t.Fatalf("substrate count = %d, want 1", len(config.Substrates))
-		}
-		if _, ok := config.Substrates["current-dir"]; !ok {
-			t.Fatalf("expected current-dir substrate from cwd to win, got %#v", config.Substrates)
-		}
-	})
-
-	t.Run(".tendril wins over repo root", func(t *testing.T) {
-		root, cwd := prepareSubstrateConfigRepo(t)
-		writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), `
-substrates:
-  repo-root:
-    url: https://example.com/repo-root.git
-`)
-		writeSubstratesYAML(t, filepath.Join(cwd, ".tendril", "substrates.yaml"), `
+	writeSubstratesYAML(t, filepath.Join(cwd, ".tendril", "substrates.yaml"), `
 substrates:
   tendril-dir:
     url: https://example.com/tendril-dir.git
 `)
 
-		config, err := LoadSubstratesConfig("")
-		if err != nil {
-			t.Fatalf("LoadSubstratesConfig failed: %v", err)
-		}
-		if config == nil {
-			t.Fatalf("expected config, got nil")
-		}
-		if len(config.Substrates) != 1 {
-			t.Fatalf("substrate count = %d, want 1", len(config.Substrates))
-		}
-		if _, ok := config.Substrates["tendril-dir"]; !ok {
-			t.Fatalf("expected tendril-dir substrate from .tendril to win, got %#v", config.Substrates)
-		}
-	})
+	config, source, err := LoadSubstratesConfigWithSource(cwd)
+	if err != nil {
+		t.Fatalf("explicit-root discovery failed: %v", err)
+	}
+	want := filepath.Join(cwd, ".tendril", "substrates.yaml")
+	if config == nil || source != want {
+		t.Fatalf("config/source = %#v/%q, want explicit .tendril source %q", config, source, want)
+	}
+	if _, ok := config.Substrates["tendril-dir"]; !ok {
+		t.Fatalf("explicit-root discovery did not retain .tendril candidate: %#v", config.Substrates)
+	}
 
-	t.Run("repo root fallback", func(t *testing.T) {
-		root, _ := prepareSubstrateConfigRepo(t)
-		writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), `
-substrates:
-  repo-root:
-    url: https://example.com/repo-root.git
-`)
-
-		config, err := LoadSubstratesConfig("")
-		if err != nil {
-			t.Fatalf("LoadSubstratesConfig failed: %v", err)
-		}
-		if config == nil {
-			t.Fatalf("expected config, got nil")
-		}
-		if len(config.Substrates) != 1 {
-			t.Fatalf("substrate count = %d, want 1", len(config.Substrates))
-		}
-		if _, ok := config.Substrates["repo-root"]; !ok {
-			t.Fatalf("expected repo-root substrate from repo root to win, got %#v", config.Substrates)
-		}
-	})
+	wantCandidates := []string{
+		filepath.Join(cwd, "substrates.yaml"),
+		filepath.Join(cwd, ".tendril", "substrates.yaml"),
+		filepath.Join(root, "substrates.yaml"),
+	}
+	if got := SubstrateConfigCandidates(cwd); !reflect.DeepEqual(got, wantCandidates) {
+		t.Fatalf("explicit-root candidates = %v, want %v", got, wantCandidates)
+	}
 }
 
 func TestResolveSubstrateAndPlanOverrides(t *testing.T) {
@@ -900,6 +941,7 @@ func TestRunSproutReadOnlySkipsHostMutations(t *testing.T) {
 	if err := os.Chdir(root); err != nil {
 		t.Fatalf("chdir repo root: %v", err)
 	}
+	t.Setenv("HOME", root)
 
 	writeSubstratesYAML(t, filepath.Join(root, "substrates.yaml"), fmt.Sprintf(`
 substrates:
@@ -1084,6 +1126,7 @@ func chdirToTempDir(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

@@ -239,6 +239,7 @@ func chdirTempDir(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

@@ -10,36 +10,36 @@ import (
 	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/substrateconfig"
 )
 
 // `tendril git setup` — one command that stands up a git connection so neither
-// neither the Botanist nor a Pollinator hand-assembles config. It writes a `substrates.yaml`
-// credentials profile + substrate and (optionally) a `.tendril/grants.yaml`
-// grant, prints the per-Pollinator Model Context Protocol block, and can check the result with
-// --verify. It is flag-driven (no interactive-only path) so a Pollinator can
-// call
-// it too, and it writes only references — env-var names and key paths — never a
-// secret. Two postures mirror the connection tiers: `app` (GitHub App, commits
-// signed server-side via commit: api) and `pat` (fine-grained Personal Access
-// Token + a dedicated GPG signing key).
+// the Botanist nor a Pollinator hand-assembles config. It writes a
+// `substrates.yaml` credentials profile + substrate, prints the per-Pollinator
+// Model Context Protocol block, and can check the result with --verify. It is
+// flag-driven (no interactive-only path) and writes only references — env-var
+// names and key paths — never a secret. Two postures mirror the connection
+// tiers: `app` (GitHub App, commits signed server-side via commit: api) and
+// `pat` (fine-grained Personal Access Token + a dedicated GPG signing key).
 
 type gitSetupOptions struct {
-	posture       string // "app" (default) | "pat"
-	substrate     string
-	repo          string // owner/repo
-	appID         string
-	keyPath       string
-	tokenEnv      string
-	signKey       string
-	identityName  string
-	identityEmail string
-	grantPollen   string
-	checkout      string // managed (default) | path | ephemeral
-	dir           string // where config is written (default: cwd)
-	yes           bool
-	force         bool
-	verify        bool
-	help          bool
+	posture        string // "app" (default) | "pat"
+	substrate      string
+	repo           string // owner/repo
+	appID          string
+	keyPath        string
+	tokenEnv       string
+	signKey        string
+	identityName   string
+	identityEmail  string
+	grantPollen    string
+	grantPollenSet bool
+	checkout       string // managed (default) | path | ephemeral
+	dir            string // explicit alternate config root; empty selects canonical registry
+	yes            bool
+	force          bool
+	verify         bool
+	help           bool
 }
 
 // runGitSetup is the `tendril git setup` entry point, dispatched from
@@ -68,22 +68,14 @@ func runGitSetup(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	substratesPath := filepath.Join(opts.dir, "substrates.yaml")
-	if err := upsertSubstrates(substratesPath, opts); err != nil {
+	substratesPath, err := gitSetupSubstratePath(opts)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
-
-	if opts.grantPollen != "" {
-		grantsDir := filepath.Join(opts.dir, ".tendril")
-		if err := os.MkdirAll(grantsDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ create %s: %v\n", grantsDir, err)
-			os.Exit(1)
-		}
-		if err := upsertGrants(filepath.Join(grantsDir, "grants.yaml"), opts); err != nil {
-			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
-			os.Exit(1)
-		}
+	if err := upsertSubstrates(substratesPath, opts); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		os.Exit(1)
 	}
 
 	printGitSetupNextSteps(opts)
@@ -93,7 +85,7 @@ func runGitSetup(ctx context.Context, args []string) {
 // defaults (posture app, checkout managed) and enforcing the per-posture
 // requirements.
 func parseGitSetupArgs(args []string) (gitSetupOptions, error) {
-	opts := gitSetupOptions{posture: "app", checkout: "managed", dir: "."}
+	opts := gitSetupOptions{posture: "app", checkout: "managed"}
 	need := func(i *int) (string, error) {
 		if *i+1 >= len(args) {
 			return "", fmt.Errorf("flag %s requires a value", args[*i])
@@ -126,7 +118,11 @@ func parseGitSetupArgs(args []string) (gitSetupOptions, error) {
 		case "--identity-email":
 			opts.identityEmail, err = need(&i)
 		case "--grant-pollen":
+			opts.grantPollenSet = true
 			opts.grantPollen, err = need(&i)
+			if err != nil {
+				return opts, unsupportedGitSetupGrantPollenError()
+			}
 		case "--checkout":
 			opts.checkout, err = need(&i)
 		case "--dir":
@@ -143,6 +139,9 @@ func parseGitSetupArgs(args []string) (gitSetupOptions, error) {
 		if err != nil {
 			return opts, err
 		}
+	}
+	if opts.grantPollenSet {
+		return opts, unsupportedGitSetupGrantPollenError()
 	}
 
 	opts.posture = strings.ToLower(strings.TrimSpace(opts.posture))
@@ -187,6 +186,10 @@ func parseGitSetupArgs(args []string) (gitSetupOptions, error) {
 	return opts, nil
 }
 
+func unsupportedGitSetupGrantPollenError() error {
+	return fmt.Errorf("--grant-pollen is not supported by git setup; use tendril delegation create --pollen <pollen> --substrate <name> --operation <class> to grant authority")
+}
+
 // renderSubstratesYAML builds the connection config for the chosen posture.
 // Secrets are never emitted — only env-var names and key paths.
 func renderSubstratesYAML(o gitSetupOptions) string {
@@ -212,13 +215,12 @@ func renderSubstratesYAML(o gitSetupOptions) string {
 	return b.String()
 }
 
-// renderGrantsYAML builds the control-plane grant authorising one Pollen (a Pollinator's identity)
-// to run git operations on the new substrate.
+// renderGrantsYAML is retained as a fixture renderer for delegation tests. Git
+// setup no longer persists its output; delegation authority is created through
+// the dedicated delegation lifecycle.
 func renderGrantsYAML(o gitSetupOptions) string {
 	var b strings.Builder
-	b.WriteString("# Generated by `tendril git setup`. Control-plane grants: which\n")
-	b.WriteString("# (pollen) may run which git operation on which substrate. No grant = denied.\n")
-	b.WriteString("grants:\n")
+	b.WriteString("# Generated delegation fixture\ngrants:\n")
 	fmt.Fprintf(&b, "  %s:\n", o.grantPollen)
 	b.WriteString("    operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]\n")
 	fmt.Fprintf(&b, "    substrates: [%s]\n", o.substrate)
@@ -254,17 +256,15 @@ func renderSubstrateValueYAML(o gitSetupOptions) string {
 // printGitSetupNextSteps prints the per-Pollinator Model Context Protocol block and the follow-up
 // actions a human still has to take (uploading a signing key, verifying).
 func printGitSetupNextSteps(o gitSetupOptions) {
-	pollen := o.grantPollen
-	if pollen == "" {
-		pollen = "<subject-name>"
-	}
 	fmt.Println()
-	fmt.Println("Authorise a Pollinator — add this to its Model Context Protocol")
-	fmt.Println("configuration (one block per pollen,")
-	fmt.Println("each with its own subject; the Pollinator is bound here, never self-declared):")
+	fmt.Println("Substrate configuration does not create delegation authority.")
+	fmt.Println("To authorise a Pollinator, use the separate delegation lifecycle:")
+	fmt.Println("  tendril delegation create --pollen <pollen> --substrate <name> --operation <class>")
+	fmt.Println()
+	fmt.Println("Pollinator Model Context Protocol configuration:")
 	fmt.Println(`  { "mcpServers": { "opentendril": {`)
 	fmt.Println(`    "command": "tendril", "args": ["serve", "mcp", "stdio"],`)
-	fmt.Printf("    \"env\": { \"TENDRIL_POLLEN\": %q }\n", pollen)
+	fmt.Println(`    "env": { "TENDRIL_POLLEN": "<pollen>" }`)
 	fmt.Println(`  }}}`)
 	fmt.Println()
 	if o.posture == "pat" {
@@ -277,7 +277,11 @@ func printGitSetupNextSteps(o gitSetupOptions) {
 		fmt.Println("      and write, plus Pull requests: Read and write for the granted git.pr")
 		fmt.Println("      operation). Commits are then signed by GitHub and show Verified.")
 	}
-	fmt.Printf("Check it:  tendril git setup --verify --substrate %s --dir %s\n", o.substrate, o.dir)
+	fmt.Printf("Check it:  tendril git setup --verify --substrate %s", o.substrate)
+	if strings.TrimSpace(o.dir) != "" {
+		fmt.Printf(" --dir %s", o.dir)
+	}
+	fmt.Println()
 }
 
 func envOrDefault(v, def string) string {
@@ -297,7 +301,7 @@ var verifySubstrateSetup = conductor.VerifySubstrateSetup
 // routing, or readiness policy. The check does not clone, commit, push, or
 // open a pull request. Returns true when the connection is ready.
 func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
-	cfg, err := conductor.LoadSubstratesConfig(o.dir)
+	cfg, source, err := conductor.LoadSubstratesConfigWithSource(o.dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ load substrates config: %v\n", err)
 		return false
@@ -315,6 +319,9 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 
 	ready := true
 	fmt.Printf("Connection %q:\n", o.substrate)
+	if source != "" {
+		fmt.Printf("  registry:     %s\n", source)
+	}
 	fmt.Printf("  auth method:  %s\n", cred.Method)
 	fmt.Printf("  commit mode:  %s\n", cred.CommitMode)
 	switch cred.Method {
@@ -388,21 +395,22 @@ func runGitSetupVerify(ctx context.Context, o gitSetupOptions) bool {
 // confirmGitSetupTarget shows where configuration will be written and who will
 // be able to read the credential it references, then asks.
 //
-// This command writes into the current directory, which is easy to get wrong:
-// run from the wrong checkout it configures a Ramet that was never meant to
-// exist, and a key path the running user cannot read produces a connection that
-// reports success and can never work.
+// The canonical registry is account-global; an explicit --dir opts into an
+// alternate location. A key path the running user cannot read produces a
+// connection that reports success and can never work.
 func confirmGitSetupTarget(opts gitSetupOptions) bool {
-	absolute, err := filepath.Abs(opts.dir)
+	destination, err := gitSetupSubstratePath(opts)
 	if err != nil {
-		absolute = opts.dir
+		fmt.Fprintf(os.Stderr, "❌ resolve setup destination: %v\n", err)
+		return false
+	}
+	absolute, err := filepath.Abs(destination)
+	if err != nil {
+		absolute = destination
 	}
 
 	fmt.Println("About to write:")
-	fmt.Printf("  %s\n", filepath.Join(absolute, "substrates.yaml"))
-	if opts.grantPollen != "" {
-		fmt.Printf("  %s\n", filepath.Join(absolute, ".tendril", "grants.yaml"))
-	}
+	fmt.Printf("  %s\n", absolute)
 	fmt.Printf("Connection %q → %s\n", opts.substrate, opts.repo)
 
 	if key := strings.TrimSpace(opts.keyPath); key != "" {
@@ -450,20 +458,27 @@ var gitSetupIsTerminal = isTerminal
 func printGitSetupUsage() {
 	fmt.Println("Usage: tendril git setup --substrate <name> --repo <owner/repo> [flags]")
 	fmt.Println()
-	fmt.Println("Writes a git connection (substrates.yaml) and optional grant (.tendril/grants.yaml),")
-	fmt.Println("then prints the per-Pollinator Model Context Protocol configuration. Secrets are referenced, never stored.")
+	fmt.Println("Writes a git connection to the canonical Substrate registry and prints the")
+	fmt.Println("per-Pollinator Model Context Protocol configuration. Secrets are referenced, never stored.")
 	fmt.Println()
 	fmt.Println("  --posture app|pat     Connection posture (default app: GitHub App, server-signed)")
 	fmt.Println("  --substrate <name>    Name for this connection/repo (required)")
 	fmt.Println("  --repo <owner/repo>   The GitHub repository (required)")
 	fmt.Println("  --checkout <mode>     managed (default) | path | ephemeral")
-	fmt.Println("  --grant-pollen <s>   Also write a grant authorising Pollen <s>")
+	fmt.Println("  Delegation authority is separate; use tendril delegation create")
 	fmt.Println()
 	fmt.Println("  posture app:  --app-id <id>  --key <pem path>")
 	fmt.Println("  posture pat:  --token-env <ENV>  --sign-key <gpg id>  --identity-name <n>  --identity-email <e>")
 	fmt.Println()
-	fmt.Println("  --dir <path>          Where to write config (default: current directory)")
+	fmt.Println("  --dir <path>          Explicit alternate config directory (default: ~/.tendril)")
 	fmt.Println("  --yes                 Accept the destination without prompting; does not overwrite existing entries")
 	fmt.Println("  --force               Overwrite existing entries and skip confirmation")
 	fmt.Println("  --verify              Check the configured connection (managed checkouts include Git-base readiness; no mutation)")
+}
+
+func gitSetupSubstratePath(o gitSetupOptions) (string, error) {
+	if strings.TrimSpace(o.dir) == "" {
+		return substrateconfig.CanonicalPath()
+	}
+	return filepath.Join(o.dir, "substrates.yaml"), nil
 }

@@ -16,7 +16,6 @@ import (
 	"testing"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
-	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
 
 // TestParseGitSetupArgsDefaultsAndValidation covers the secure defaults and the
@@ -33,6 +32,9 @@ func TestParseGitSetupArgsDefaultsAndValidation(t *testing.T) {
 	if !opts.yes {
 		t.Fatal("--yes was not parsed")
 	}
+	if opts.dir != "" {
+		t.Fatalf("default dir = %q, want empty canonical-registry selector", opts.dir)
+	}
 
 	for name, args := range map[string][]string{
 		"missing substrate":    {"--repo", "o/r", "--app-id", "1", "--key", "/k"},
@@ -48,6 +50,81 @@ func TestParseGitSetupArgsDefaultsAndValidation(t *testing.T) {
 		if _, err := parseGitSetupArgs(args); err == nil {
 			t.Errorf("%s: expected an error, got none", name)
 		}
+	}
+}
+
+func TestGitSetupOmittedDirTargetsCanonicalRegistryFromUnrelatedCwd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	opts := gitSetupOptions{
+		posture: "app", substrate: "garden", repo: "acme/garden", appID: "1", keyPath: "/k.pem", checkout: "managed", yes: true,
+	}
+	destination, err := gitSetupSubstratePath(opts)
+	if err != nil {
+		t.Fatalf("gitSetupSubstratePath: %v", err)
+	}
+	want := filepath.Join(home, ".tendril", "substrates.yaml")
+	if destination != want {
+		t.Fatalf("destination = %q, want canonical %q", destination, want)
+	}
+	if err := upsertSubstrates(destination, opts); err != nil {
+		t.Fatalf("upsert canonical setup: %v", err)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("canonical setup file missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "substrates.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("omitted --dir wrote checkout-local config: %v", err)
+	}
+
+	stdout, _ := captureVerifyOutput(t, func() {
+		if !confirmGitSetupTarget(opts) {
+			t.Fatal("--yes did not confirm canonical destination")
+		}
+	})
+	if !strings.Contains(stdout, want) {
+		t.Fatalf("confirmation = %q, want exact canonical destination %q", stdout, want)
+	}
+}
+
+func TestGitSetupGrantPollenRejectedBeforeAnyWrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	args := []string{
+		"--substrate", "garden", "--repo", "acme/garden", "--app-id", "1", "--key", "/k.pem",
+		"--grant-pollen", "claude", "--yes",
+	}
+	if _, err := parseGitSetupArgs(args); err == nil || !strings.Contains(err.Error(), "tendril delegation create") || !strings.Contains(err.Error(), "--operation <class>") {
+		t.Fatalf("parse error = %v, want delegation create guidance", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".tendril", "substrates.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("rejected grant setup created canonical registry: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".tendril", "grants.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("rejected grant setup created grants: %v", err)
+	}
+}
+
+func TestGitSetupBlankGrantPollenIsRejected(t *testing.T) {
+	_, err := parseGitSetupArgs([]string{
+		"--substrate", "garden", "--repo", "acme/garden", "--app-id", "1", "--key", "/k.pem",
+		"--grant-pollen", "   ", "--yes",
+	})
+	if err == nil || !strings.Contains(err.Error(), "tendril delegation create") {
+		t.Fatalf("parse error = %v, want delegation create guidance", err)
+	}
+}
+
+func TestGitSetupMissingGrantPollenValueIsRejectedWithDelegationGuidance(t *testing.T) {
+	_, err := parseGitSetupArgs([]string{
+		"--substrate", "garden", "--repo", "acme/garden", "--app-id", "1", "--key", "/k.pem",
+		"--grant-pollen",
+	})
+	if err == nil || !strings.Contains(err.Error(), "tendril delegation create") {
+		t.Fatalf("parse error = %v, want delegation create guidance", err)
 	}
 }
 
@@ -138,63 +215,6 @@ func resolveGenerated(t *testing.T, opts gitSetupOptions) conductor.ResolvedCred
 	return cred
 }
 
-// TestRenderGrantsYAMLParses proves the generated grant is valid control-plane
-// YAML for the named Pollen and substrate.
-func TestRenderGrantsYAMLParses(t *testing.T) {
-	opts := gitSetupOptions{substrate: "r", grantPollen: "claude"}
-	out := renderGrantsYAML(opts)
-	for _, want := range []string{"grants:", "claude:", "operationClasses: [git.status, git.branch.list, git.branch, git.commit, git.push, git.pr]", "substrates: [r]"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("generated grants missing %q:\n%s", want, out)
-		}
-	}
-}
-
-// TestGitSetupGrantRemainsGitOnly is the first-use regression: git setup
-// --grant-pollen writes the delegated Git loop and nothing else. seed.grow,
-// sprout.watch, and sprout.grow stay absent until the Botanist grants them
-// explicitly.
-func TestGitSetupGrantRemainsGitOnly(t *testing.T) {
-	dir := t.TempDir()
-	tendrilDir := filepath.Join(dir, ".tendril")
-	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	opts := gitSetupOptions{substrate: "myrepo", grantPollen: "claude"}
-	if err := upsertGrants(filepath.Join(tendrilDir, "grants.yaml"), opts); err != nil {
-		t.Fatalf("upsertGrants: %v", err)
-	}
-
-	out := renderGrantsYAML(opts)
-	for _, banned := range []string{core.CapSeedGrow, core.CapSproutWatch, core.CapSproutGrow} {
-		if strings.Contains(out, banned) {
-			t.Errorf("generated git grant contains %s:\n%s", banned, out)
-		}
-	}
-
-	grants, err := core.LoadDelegationGrants(tendrilDir)
-	if err != nil {
-		t.Fatalf("load grants: %v", err)
-	}
-	if len(grants) != 1 {
-		t.Fatalf("grant count = %d, want 1", len(grants))
-	}
-	classes := grants[0].OperationClasses
-	if len(classes) != 6 {
-		t.Errorf("operation-classes = %v, want the six git classes", classes)
-	}
-	for _, banned := range []string{core.CapSeedGrow, core.CapSproutWatch, core.CapSproutGrow} {
-		if contains(classes, banned) {
-			t.Errorf("git setup grant includes %s: %v", banned, classes)
-		}
-	}
-	for _, want := range []string{core.CapGitStatus, core.CapGitBranchList, core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
-		if !contains(classes, want) {
-			t.Errorf("git setup grant missing %s: %v", want, classes)
-		}
-	}
-}
-
 // TestUpsertMergesMultipleConnections proves a second setup run for a different
 // repo is additive: both connections resolve from the one substrates.yaml, and
 // a pre-existing comment survives the node-level merge.
@@ -230,67 +250,6 @@ func TestUpsertMergesMultipleConnections(t *testing.T) {
 		if cred.Method != wantMethod {
 			t.Errorf("%q method = %q, want %q", name, cred.Method, wantMethod)
 		}
-	}
-}
-
-// TestUpsertGrantUnionsSubstrates proves granting an existing Pollinator access to a
-// second repo adds the substrate to its list rather than replacing it, and a
-// distinct pollen is kept separate.
-func TestUpsertGrantUnionsSubstrates(t *testing.T) {
-	dir := t.TempDir()
-	tendrilDir := filepath.Join(dir, ".tendril")
-	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(tendrilDir, "grants.yaml")
-
-	for _, o := range []gitSetupOptions{
-		{substrate: "repo1", grantPollen: "claude"},
-		{substrate: "repo2", grantPollen: "claude"},
-		{substrate: "repo1", grantPollen: "codex"},
-	} {
-		if err := upsertGrants(path, o); err != nil {
-			t.Fatalf("upsert grant %+v: %v", o, err)
-		}
-	}
-
-	grants, err := core.LoadDelegationGrants(tendrilDir)
-	if err != nil {
-		t.Fatalf("load grants: %v", err)
-	}
-	byPollen := map[string][]string{}
-	classesByPollen := map[string][]string{}
-	for _, g := range grants {
-		byPollen[g.Pollen] = g.Substrates
-		classesByPollen[g.Pollen] = g.OperationClasses
-	}
-
-	// Every setup run grants the full governed loop — commit, push, and the
-	// pull request that finishes it — so an authorised Pollinator never has to
-	// leave Tendril for the last mile. Unioning must not duplicate them.
-	for pollen, classes := range classesByPollen {
-		if len(classes) != 6 {
-			t.Errorf("%s operation-classes = %v, want exactly the six granted git classes unioned once", pollen, classes)
-		}
-		// git.prune is deliberately absent: every other operation on the
-		// ladder is recoverable, deletion is not, so the destructive class is
-		// opt-in rather than handed to every Pollinator by default.
-		for _, unwanted := range classes {
-			if unwanted == core.CapGitPrune {
-				t.Errorf("%s was granted %s by default — the destructive class must be opt-in", pollen, core.CapGitPrune)
-			}
-		}
-		for _, want := range []string{core.CapGitStatus, core.CapGitBranchList, core.CapGitBranch, core.CapGitCommit, core.CapGitPush, core.CapGitPR} {
-			if !contains(classes, want) {
-				t.Errorf("%s operation-classes = %v, want %s included", pollen, classes, want)
-			}
-		}
-	}
-	if got := byPollen["claude"]; len(got) != 2 || !contains(got, "repo1") || !contains(got, "repo2") {
-		t.Errorf("claude substrates = %v, want [repo1 repo2] unioned", got)
-	}
-	if got := byPollen["codex"]; len(got) != 1 || got[0] != "repo1" {
-		t.Errorf("codex substrates = %v, want [repo1]", got)
 	}
 }
 
@@ -434,6 +393,38 @@ func contains(s []string, v string) bool {
 		}
 	}
 	return false
+}
+
+func TestRunGitSetupVerifyOmittedDirFindsCanonicalRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fixtureDir := writeAppVerifyFixture(t, "772211", "acme/widget", genSetupKeyPEM(t))
+	raw, err := os.ReadFile(filepath.Join(fixtureDir, "substrates.yaml"))
+	if err != nil {
+		t.Fatalf("read verify fixture: %v", err)
+	}
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	if err := os.WriteFile(canonical, raw, 0o644); err != nil {
+		t.Fatalf("write canonical registry: %v", err)
+	}
+	t.Chdir(t.TempDir())
+
+	var calls []gitHubCall
+	startSetupVerifyFake(t, http.StatusOK, http.StatusOK, http.StatusOK, "", &calls)
+	stdout, stderr := captureVerifyOutput(t, func() {
+		if !runGitSetupVerify(context.Background(), gitSetupOptions{substrate: "garden", verify: true}) {
+			t.Error("canonical verify should succeed")
+		}
+	})
+	if !strings.Contains(stdout, canonical) {
+		t.Fatalf("verify output = %q, want canonical registry source %q", stdout, canonical)
+	}
+	if strings.Contains(stderr, "not found") {
+		t.Fatalf("verify read the wrong source: %q", stderr)
+	}
 }
 
 type gitHubCall struct {

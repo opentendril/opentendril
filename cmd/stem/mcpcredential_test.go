@@ -35,7 +35,29 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	testHome, err := os.MkdirTemp("", "tendril-mcp-test-home")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create test home: %v\n", err)
+		os.RemoveAll(tempDir)
+		os.Exit(1)
+	}
+	originalHome, hadHome := os.LookupEnv("HOME")
+	originalUserProfile, hadUserProfile := os.LookupEnv("USERPROFILE")
+	_ = os.Setenv("HOME", testHome)
+	_ = os.Setenv("USERPROFILE", testHome)
+
 	exitCode := m.Run()
+	if hadHome {
+		_ = os.Setenv("HOME", originalHome)
+	} else {
+		_ = os.Unsetenv("HOME")
+	}
+	if hadUserProfile {
+		_ = os.Setenv("USERPROFILE", originalUserProfile)
+	} else {
+		_ = os.Unsetenv("USERPROFILE")
+	}
+	os.RemoveAll(testHome)
 	os.RemoveAll(tempDir)
 	os.Exit(exitCode)
 }
