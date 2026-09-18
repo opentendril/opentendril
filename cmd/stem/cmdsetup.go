@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/substrateconfig"
+	"gopkg.in/yaml.v3"
 )
 
 func runSetupCmd(args []string) {
@@ -28,6 +30,20 @@ func runSetupCmd(args []string) {
 }
 
 func runSetupSubstrateCmd() {
+	if err := executeSetupSubstrate(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+// executeSetupSubstrate performs the compatibility setup after the command
+// adapter has selected the substrate subcommand. The Pollen gate is first so
+// delegated invocations cannot reach prompts or Substrate registry mutation.
+func executeSetupSubstrate() error {
+	if pollen := strings.TrimSpace(os.Getenv(envPollenCLI)); pollen != "" {
+		return fmt.Errorf("setup substrate is Botanist-only and refuses declared Pollen %q before prompts or Substrate configuration access", pollen)
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Fprintln(os.Stderr, "OpenTendril Substrate bootstrap")
@@ -37,14 +53,12 @@ func runSetupSubstrateCmd() {
 	var err error
 	choices.remoteURL, err = promptSetupValue(reader, "Target Git remote URL", "https://github.com/opentendril/opentendril.git")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read remote URL: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to read remote URL: %v", err)
 	}
 
 	authMethod, err := promptSetupValue(reader, "Auth method (pat/ssh/none/app)", "pat")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read auth method: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to read auth method: %v", err)
 	}
 	switch strings.ToLower(strings.TrimSpace(authMethod)) {
 	case "ssh":
@@ -82,33 +96,27 @@ func runSetupSubstrateCmd() {
 		choices.signKey, _ = promptSetupValue(reader, "GPG signing key id", "")
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(homeDir) == "" {
-		fmt.Fprintf(os.Stderr, "Failed to resolve home directory: %v\n", err)
-		os.Exit(1)
+	result, err := substrateconfig.MutateCanonical(func(root *yaml.Node) error {
+		return addCompatibilitySubstrate(root, choices)
+	})
+	if err != nil {
+		return fmt.Errorf("Failed to update Substrate registry: %v", err)
 	}
 
-	tendrilDir := filepath.Join(homeDir, ".tendril")
-	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create %s: %v\n", tendrilDir, err)
-		os.Exit(1)
+	if result.ImportedLegacy {
+		fmt.Fprintf(os.Stderr, "Imported legacy substrate registry from %s\n", result.Source)
 	}
-
-	substratesPath := filepath.Join(tendrilDir, "substrates.yaml")
-	if err := os.WriteFile(substratesPath, []byte(formatSubstratesYAML(choices)), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write %s: %v\n", substratesPath, err)
-		os.Exit(1)
+	if result.LegacyIgnored {
+		fmt.Fprintf(os.Stderr, "Ignored legacy substrate registry at %s; canonical registry is active\n", result.LegacyPath)
 	}
-
-	fmt.Fprintf(os.Stderr, "Wrote substrate config to %s\n", substratesPath)
+	fmt.Fprintf(os.Stderr, "Wrote substrate config to %s\n", result.Destination)
 	fmt.Fprintln(os.Stderr, "MCP configuration snippet:")
 
 	snippet := substrateMCPConfigSnippet()
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(snippet); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to encode MCP configuration snippet: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("Failed to encode MCP configuration snippet: %v", err)
 	}
 
 	fmt.Fprintln(os.Stderr, `Substrate "default-workspace" is ready.
@@ -125,6 +133,27 @@ With exactly one Substrate configured, --substrate may be omitted:
 Enter the coding goal at the prompt. Further input while a Seed is active
 continues the same Phytomer. The terminal reports the Seed handle, Phytomer
 identity, safe progress, and Fruit branch/commit on settlement.`)
+	return nil
+}
+
+func addCompatibilitySubstrate(root *yaml.Node, choices substrateChoices) error {
+	template, err := parseMappingFragment(formatSubstratesYAML(choices))
+	if err != nil {
+		return fmt.Errorf("parse compatibility Substrate: %w", err)
+	}
+	templateSubstrates, _ := mapValue(template, "substrates")
+	if templateSubstrates == nil {
+		return fmt.Errorf("compatibility Substrate template has no substrates")
+	}
+	defaultWorkspace, _ := mapValue(templateSubstrates, "default-workspace")
+	if defaultWorkspace == nil {
+		return fmt.Errorf("compatibility Substrate template has no default-workspace")
+	}
+	substrates, err := getOrCreateMapping(root, "substrates")
+	if err != nil {
+		return err
+	}
+	return setMapEntry(substrates, "default-workspace", defaultWorkspace, false)
 }
 
 func promptSetupValue(reader *bufio.Reader, label, defaultValue string) (string, error) {

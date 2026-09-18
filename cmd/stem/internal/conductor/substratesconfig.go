@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -237,44 +238,66 @@ type substrateExecutionPlan struct {
 }
 
 // LoadSubstratesConfig searches for the active substrates.yaml and parses it.
+// An empty root selects the account-global canonical registry, with the legacy
+// home-root file as a fallback. A non-empty root retains explicit alternate
+// discovery semantics.
 func LoadSubstratesConfig(root string) (*SubstratesConfig, error) {
-	searchRoot := strings.TrimSpace(root)
-	if searchRoot == "" {
-		searchRoot = mustGetwd()
-	}
+	config, _, err := LoadSubstratesConfigWithSource(root)
+	return config, err
+}
 
-	for _, candidate := range substrateConfigCandidates(searchRoot) {
+// LoadSubstratesConfigWithSource loads the active substrates configuration and
+// returns the exact file selected by the deterministic search. The source is
+// empty when no candidate exists. Callers that report configuration posture
+// should use this result instead of reimplementing candidate selection.
+func LoadSubstratesConfigWithSource(root string) (*SubstratesConfig, string, error) {
+	candidates, err := substrateConfigCandidatesWithError(root)
+	if err != nil {
+		return nil, "", err
+	}
+	emptyRoot := strings.TrimSpace(root) == ""
+
+	for index, candidate := range candidates {
 		info, err := os.Stat(candidate)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("stat substrates config %s: %w", candidate, err)
+			return nil, "", fmt.Errorf("stat substrates config %s: %w", candidate, err)
 		}
 		if info.IsDir() {
+			if emptyRoot && index == 0 {
+				return nil, "", fmt.Errorf("canonical substrates config %s is a directory", candidate)
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			if emptyRoot && index == 0 {
+				return nil, "", fmt.Errorf("canonical substrates config %s is not a regular file", candidate)
+			}
 			continue
 		}
 
 		content, err := os.ReadFile(candidate)
 		if err != nil {
-			return nil, fmt.Errorf("read substrates config %s: %w", candidate, err)
+			return nil, "", fmt.Errorf("read substrates config %s: %w", candidate, err)
 		}
 
 		var config SubstratesConfig
 		if err := yaml.Unmarshal(content, &config); err != nil {
-			return nil, fmt.Errorf("decode substrates config %s: %w", candidate, err)
+			return nil, "", fmt.Errorf("decode substrates config %s: %w", candidate, err)
 		}
 
 		normalizeSubstratesConfig(&config)
 		if err := validateSubstratePatience(candidate, &config); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		validateSubstratesConfig(candidate, &config)
 
-		return &config, nil
+		return &config, candidate, nil
 	}
 
-	return nil, nil
+	return nil, "", nil
 }
 
 // ResolveSubstrate resolves a named substrate or treats the input as a path.
@@ -433,28 +456,38 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 }
 
 // SubstrateConfigCandidates lists the paths the Stem searches for a substrates
-// configuration, in order. An empty root means the process's working directory.
+// configuration, in order. An empty root means the account-global canonical
+// registry followed by the legacy home-root fallback.
 //
 // Exported so the posture report measures the files the Stem actually reads
 // rather than re-deriving them.
 func SubstrateConfigCandidates(root string) []string {
-	searchRoot := strings.TrimSpace(root)
-	if searchRoot == "" {
-		searchRoot = mustGetwd()
+	candidates, err := substrateConfigCandidatesWithError(root)
+	if err != nil {
+		return nil
 	}
-	return substrateConfigCandidates(searchRoot)
+	return candidates
 }
 
-func substrateConfigCandidates(root string) []string {
-	base := strings.TrimSpace(root)
-	if base == "" {
-		base = mustGetwd()
-	}
-
-	candidates := []string{
-		filepath.Join(base, "substrates.yaml"),
-		filepath.Join(base, ".tendril", "substrates.yaml"),
-		filepath.Join(repoRoot(base), "substrates.yaml"),
+func substrateConfigCandidatesWithError(root string) ([]string, error) {
+	var candidates []string
+	if strings.TrimSpace(root) == "" {
+		canonical, err := CanonicalSubstrateConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		legacy, err := LegacySubstrateConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		candidates = []string{canonical, legacy}
+	} else {
+		base := strings.TrimSpace(root)
+		candidates = []string{
+			filepath.Join(base, "substrates.yaml"),
+			filepath.Join(base, ".tendril", "substrates.yaml"),
+			filepath.Join(repoRoot(base), "substrates.yaml"),
+		}
 	}
 
 	seen := make(map[string]struct{}, len(candidates))
@@ -468,7 +501,46 @@ func substrateConfigCandidates(root string) []string {
 		unique = append(unique, normalized)
 	}
 
-	return unique
+	return unique, nil
+}
+
+// CanonicalSubstrateConfigPath returns the account-global mutable Substrate
+// registry path.
+func CanonicalSubstrateConfigPath() (string, error) {
+	home, err := substrateConfigHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".tendril", "substrates.yaml"), nil
+}
+
+// LegacySubstrateConfigPath returns the pre-canonical account-home fallback
+// path. It is read only as a compatibility source when the canonical path is
+// absent.
+func LegacySubstrateConfigPath() (string, error) {
+	home, err := substrateConfigHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "substrates.yaml"), nil
+}
+
+func substrateConfigHomeDir() (string, error) {
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Clean(home), nil
+	}
+	if current, err := user.Current(); err == nil && strings.TrimSpace(current.HomeDir) != "" {
+		return filepath.Clean(current.HomeDir), nil
+	}
+	return "", fmt.Errorf("resolve home directory for the Substrate registry")
+}
+
+// ValidateSubstratesConfig validates the typed portions of a complete
+// Substrate registry document. Normalization is performed on the supplied
+// value before validation, matching LoadSubstratesConfig.
+func ValidateSubstratesConfig(sourcePath string, config *SubstratesConfig) error {
+	normalizeSubstratesConfig(config)
+	return validateSubstratePatience(sourcePath, config)
 }
 
 func normalizeSubstratesConfig(config *SubstratesConfig) {

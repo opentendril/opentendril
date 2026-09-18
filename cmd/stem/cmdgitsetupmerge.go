@@ -1,107 +1,47 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/substrateconfig"
 	"gopkg.in/yaml.v3"
 )
 
 // Merge/append mode for `tendril git setup`. A deployment has multiple
-// repositories and multiple Pollinators, so re-running setup must be
-// additive: upsert this run's entries into an existing substrates.yaml /
-// grants.yaml while preserving every other entry AND the user's comments and
-// formatting. The work is done on the YAML node tree (a surgical insert/update)
-// rather than by re-marshalling typed structs, so hand-edits survive intact.
+// repositories, so re-running setup must be additive: upsert this run's
+// entries into an existing substrates.yaml while preserving every other entry
+// AND the user's comments and formatting. The work is done on the YAML node
+// tree (a surgical insert/update) rather than by re-marshalling typed structs,
+// so hand-edits survive intact.
 //
 // Rules:
 //   - A new named entry (credential profile, substrate) is added freely.
 //   - An existing named entry is overwritten only with --force (otherwise a
 //     clear error) — a specific connection is never silently replaced.
-//   - A grant subject's operation-classes and substrates are UNIONED, so
-//     granting an existing Pollinator access to a new repository is additive and
-//     needs no --force.
 
-// fileExists reports whether path is an existing file.
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// upsertSubstrates writes a fresh substrates.yaml (with header comments) when
-// none exists, or merges this run's connection into an existing file.
+// upsertSubstrates applies this run's connection through the shared persistent
+// Substrate-registry mutation service. The service selects the canonical path's
+// legacy import behavior and performs validated atomic replacement.
 func upsertSubstrates(path string, o gitSetupOptions) error {
-	if !fileExists(path) {
-		if err := os.WriteFile(path, []byte(renderSubstratesYAML(o)), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "🌱 Wrote %s\n", path)
-		return nil
-	}
-	if err := mergeConnection(path, o); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "🌱 Updated %s (connection %q)\n", path, o.substrate)
-	return nil
-}
-
-// upsertGrants writes a fresh grants.yaml when none exists, or merges this run's
-// Pollen into an existing file (unioning its operation-classes and substrates).
-func upsertGrants(path string, o gitSetupOptions) error {
-	if !fileExists(path) {
-		if err := os.WriteFile(path, []byte(renderGrantsYAML(o)), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintf(os.Stderr, "🌱 Wrote %s\n", path)
-		return nil
-	}
-	if err := mergeGrant(path, o); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "🌱 Updated %s (pollen %q)\n", path, o.grantPollen)
-	return nil
-}
-
-// loadYAMLMapping reads path's top-level mapping node, or returns a fresh empty
-// mapping when the file does not exist. Comments on existing nodes are retained
-// (yaml.v3 records them on the node tree and re-emits them on marshal).
-func loadYAMLMapping(path string) (*yaml.Node, error) {
-	content, err := os.ReadFile(path)
+	result, err := substrateconfig.Mutate(path, func(root *yaml.Node) error {
+		return mergeConnectionNode(root, o)
+	})
 	if err != nil {
-		if os.IsNotExist(err) {
-			return &yaml.Node{Kind: yaml.MappingNode}, nil
-		}
-		return nil, err
-	}
-	var doc yaml.Node
-	if err := yaml.Unmarshal(content, &doc); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if len(doc.Content) == 0 {
-		return &yaml.Node{Kind: yaml.MappingNode}, nil
-	}
-	root := doc.Content[0]
-	if root.Kind != yaml.MappingNode {
-		return nil, fmt.Errorf("%s: expected a top-level mapping", path)
-	}
-	return root, nil
-}
-
-// writeYAMLMapping marshals root back to path at a 2-space indent, matching the
-// style of a freshly generated file.
-func writeYAMLMapping(path string, root *yaml.Node) error {
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	enc.SetIndent(2)
-	if err := enc.Encode(root); err != nil {
-		_ = enc.Close()
 		return err
 	}
-	if err := enc.Close(); err != nil {
-		return err
+	if result.ImportedLegacy {
+		fmt.Fprintf(os.Stderr, "🌱 Imported legacy registry %s into %s\n", result.Source, result.Destination)
 	}
-	return os.WriteFile(path, buf.Bytes(), 0o644)
+	if result.LegacyIgnored {
+		fmt.Fprintf(os.Stderr, "ℹ️  Ignored legacy registry %s; canonical registry is active\n", result.LegacyPath)
+	}
+	if result.Created {
+		fmt.Fprintf(os.Stderr, "🌱 Wrote %s\n", result.Destination)
+	} else {
+		fmt.Fprintf(os.Stderr, "🌱 Updated %s (connection %q)\n", result.Destination, o.substrate)
+	}
+	return nil
 }
 
 // mapValue returns the value node for key within mapping m and the value's
@@ -121,26 +61,19 @@ func scalarNode(value string) *yaml.Node {
 
 // getOrCreateMapping returns the mapping value for key under m, creating an
 // empty mapping (and its key) when absent.
-func getOrCreateMapping(m *yaml.Node, key string) *yaml.Node {
+func getOrCreateMapping(m *yaml.Node, key string) (*yaml.Node, error) {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("registry node for %q is not a mapping", key)
+	}
 	if v, _ := mapValue(m, key); v != nil {
-		return v
+		if v.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("registry entry %q is not a mapping", key)
+		}
+		return v, nil
 	}
 	v := &yaml.Node{Kind: yaml.MappingNode}
 	m.Content = append(m.Content, scalarNode(key), v)
-	return v
-}
-
-// getOrCreateSequence returns the sequence value for key under m, creating an
-// empty sequence (and its key) when absent.
-func getOrCreateSequence(m *yaml.Node, key string) *yaml.Node {
-	if v, _ := mapValue(m, key); v != nil {
-		return v
-	}
-	// Flow style ([a, b]) matches the compact sequences the fresh-file
-	// templates emit, so freshly created and preserved lists render alike.
-	v := &yaml.Node{Kind: yaml.SequenceNode, Style: yaml.FlowStyle}
-	m.Content = append(m.Content, scalarNode(key), v)
-	return v
+	return v, nil
 }
 
 // setMapEntry upserts key->value in m; an existing key is replaced only when
@@ -155,16 +88,6 @@ func setMapEntry(m *yaml.Node, key string, value *yaml.Node, force bool) error {
 	}
 	m.Content = append(m.Content, scalarNode(key), value)
 	return nil
-}
-
-// ensureSequenceContains appends value to seq when not already present (union).
-func ensureSequenceContains(seq *yaml.Node, value string) {
-	for _, e := range seq.Content {
-		if e.Value == value {
-			return
-		}
-	}
-	seq.Content = append(seq.Content, scalarNode(value))
 }
 
 // parseMappingFragment parses a YAML fragment into its top-level mapping node,
@@ -183,49 +106,38 @@ func parseMappingFragment(fragment string) (*yaml.Node, error) {
 // mergeConnection upserts the run's credential profile and substrate into an
 // existing substrates.yaml, preserving every other entry.
 func mergeConnection(path string, o gitSetupOptions) error {
-	root, err := loadYAMLMapping(path)
-	if err != nil {
-		return err
+	_, err := substrateconfig.Mutate(path, func(root *yaml.Node) error {
+		return mergeConnectionNode(root, o)
+	})
+	return err
+}
+
+func mergeConnectionNode(root *yaml.Node, o gitSetupOptions) error {
+	if len(root.Content) == 0 {
+		root.HeadComment = "Generated by `tendril git setup`. Secrets are referenced by env-var name\nor key path, never stored here. Edit freely; re-run setup to regenerate."
 	}
 	profile := o.substrate + "-connection"
 	profileNode, err := parseMappingFragment(renderProfileValueYAML(o))
 	if err != nil {
 		return err
 	}
-	if err := setMapEntry(getOrCreateMapping(root, "credentials"), profile, profileNode, o.force); err != nil {
+	credentials, err := getOrCreateMapping(root, "credentials")
+	if err != nil {
+		return err
+	}
+	if err := setMapEntry(credentials, profile, profileNode, o.force); err != nil {
 		return fmt.Errorf("credentials.%s: %w", profile, err)
 	}
 	substrateNode, err := parseMappingFragment(renderSubstrateValueYAML(o))
 	if err != nil {
 		return err
 	}
-	if err := setMapEntry(getOrCreateMapping(root, "substrates"), o.substrate, substrateNode, o.force); err != nil {
-		return fmt.Errorf("substrates.%s: %w", o.substrate, err)
-	}
-	return writeYAMLMapping(path, root)
-}
-
-// mergeGrant upserts the run's Pollen into an existing grants.yaml. When the
-// Pollen already exists, its operation-classes and substrates are unioned, so
-// authorising an existing Pollinator on a new repository is additive.
-func mergeGrant(path string, o gitSetupOptions) error {
-	root, err := loadYAMLMapping(path)
+	substrates, err := getOrCreateMapping(root, "substrates")
 	if err != nil {
 		return err
 	}
-	grants := getOrCreateMapping(root, "grants")
-	pollen, _ := mapValue(grants, o.grantPollen)
-	if pollen == nil {
-		pollen = &yaml.Node{Kind: yaml.MappingNode}
-		grants.Content = append(grants.Content, scalarNode(o.grantPollen), pollen)
+	if err := setMapEntry(substrates, o.substrate, substrateNode, o.force); err != nil {
+		return fmt.Errorf("substrates.%s: %w", o.substrate, err)
 	}
-	classes := getOrCreateSequence(pollen, "operationClasses")
-	ensureSequenceContains(classes, "git.status")
-	ensureSequenceContains(classes, "git.branch.list")
-	ensureSequenceContains(classes, "git.branch")
-	ensureSequenceContains(classes, "git.commit")
-	ensureSequenceContains(classes, "git.push")
-	ensureSequenceContains(classes, "git.pr")
-	ensureSequenceContains(getOrCreateSequence(pollen, "substrates"), o.substrate)
-	return writeYAMLMapping(path, root)
+	return nil
 }

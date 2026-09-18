@@ -1279,6 +1279,7 @@ func TestCheckoutPathStillUsesShadowWorktree(t *testing.T) {
 		}
 	}
 	managedRoot := os.Getenv("TENDRIL_MANAGED_CHECKOUT_ROOT")
+	t.Setenv("HOME", mustGetwd())
 	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"), "substrates:\n  local:\n    path: "+repository+"\n    checkout:\n      mode: path\n      path: "+repository+"\n")
 
 	originalPreflight := runSproutPreflightChecksFn

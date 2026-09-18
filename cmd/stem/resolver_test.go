@@ -20,6 +20,7 @@ import (
 func TestWorkspaceResolutionConsistency(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
 	originalWD, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
 		t.Fatalf("failed to chdir: %v", err)

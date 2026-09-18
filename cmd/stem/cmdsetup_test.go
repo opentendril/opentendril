@@ -4,8 +4,13 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
+	"github.com/opentendril/opentendril/cmd/stem/internal/substrateconfig"
+	"gopkg.in/yaml.v3"
 )
 
 func TestSubstrateMCPConfigSnippet(t *testing.T) {
@@ -145,5 +150,94 @@ func TestSetupSubstrateCompletionGuidance(t *testing.T) {
 		if strings.Contains(got, banned) {
 			t.Errorf("completion guidance contains stale reference %q\ngot:\n%s", banned, got)
 		}
+	}
+
+	canonical := filepath.Join(tmpHome, ".tendril", "substrates.yaml")
+	persisted, err := os.ReadFile(canonical)
+	if err != nil {
+		t.Fatalf("read compatibility registry: %v", err)
+	}
+	var config conductor.SubstratesConfig
+	if err := yaml.Unmarshal(persisted, &config); err != nil {
+		t.Fatalf("decode compatibility registry: %v", err)
+	}
+	spec, ok := config.Substrates["default-workspace"]
+	if !ok {
+		t.Fatalf("compatibility registry has no default-workspace: %s", persisted)
+	}
+	if spec.URL != "https://github.com/opentendril/opentendril.git" || spec.Provider != "docker" {
+		t.Fatalf("default-workspace = %+v, want default URL and docker provider", spec)
+	}
+	if _, err := os.Stat(filepath.Join(tmpHome, ".tendril", "grants.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("compatibility setup created delegation grants: %v", err)
+	}
+}
+
+func TestExecuteSetupSubstrateRefusesDeclaredPollenBeforePromptOrMutation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(envPollenCLI, "worker")
+
+	_, stderr := captureVerifyOutput(t, func() {
+		err := executeSetupSubstrate()
+		if err == nil || !strings.Contains(err.Error(), "Botanist-only") {
+			t.Fatalf("error = %v, want Botanist-only refusal", err)
+		}
+	})
+	if stderr != "" {
+		t.Fatalf("declared Pollen setup substrate prompted or wrote output before refusal: %q", stderr)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".tendril", "substrates.yaml")); !os.IsNotExist(statErr) {
+		t.Fatalf("declared Pollen setup substrate created canonical registry: %v", statErr)
+	}
+}
+
+func TestCompatibilitySetupMutationPreservesUnrelatedEntriesAndRefusesOverwrite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	canonical := filepath.Join(home, ".tendril", "substrates.yaml")
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatalf("mkdir canonical registry: %v", err)
+	}
+	original := []byte("# keep this comment\ncredentials:\n  unrelated:\n    auth: GITHUB_TOKEN\nsubstrates:\n  unrelated:\n    url: https://example.com/unrelated.git\n")
+	if err := os.WriteFile(canonical, original, 0o644); err != nil {
+		t.Fatalf("write canonical registry: %v", err)
+	}
+
+	choices := substrateChoices{remoteURL: "https://example.com/default.git", authMethod: "none", checkoutMode: "ephemeral"}
+	result, err := substrateconfig.MutateCanonical(func(root *yaml.Node) error {
+		return addCompatibilitySubstrate(root, choices)
+	})
+	if err != nil {
+		t.Fatalf("compatibility setup mutation: %v", err)
+	}
+	if result.Destination != canonical {
+		t.Fatalf("destination = %q, want %q", result.Destination, canonical)
+	}
+	updated, err := os.ReadFile(canonical)
+	if err != nil {
+		t.Fatalf("read updated canonical registry: %v", err)
+	}
+	for _, want := range []string{"keep this comment", "unrelated", "default-workspace"} {
+		if !strings.Contains(string(updated), want) {
+			t.Fatalf("updated registry missing %q:\n%s", want, updated)
+		}
+	}
+
+	beforeRefusal := append([]byte(nil), updated...)
+	if _, err := substrateconfig.MutateCanonical(func(root *yaml.Node) error {
+		return addCompatibilitySubstrate(root, choices)
+	}); err == nil {
+		t.Fatal("compatibility setup overwrote an existing default-workspace")
+	}
+	afterRefusal, err := os.ReadFile(canonical)
+	if err != nil {
+		t.Fatalf("read canonical registry after refusal: %v", err)
+	}
+	if string(afterRefusal) != string(beforeRefusal) {
+		t.Fatalf("refused compatibility setup changed canonical registry:\n%s", afterRefusal)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".tendril", "grants.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("compatibility setup created delegation grants: %v", err)
 	}
 }

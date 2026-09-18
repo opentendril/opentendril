@@ -150,6 +150,7 @@ func TestParseChatArgsWsDoesNotDispatch(t *testing.T) {
 func TestResolveDirectChatSubstrateZeroFails(t *testing.T) {
 	// Empty config → no substrates.
 	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
 	t.Chdir(tmp)
 
 	_, err := resolveDirectChatSubstrate("")
@@ -176,6 +177,7 @@ func TestResolveDirectChatSubstrateExactlyOneResolves(t *testing.T) {
 func TestResolveDirectChatSubstrateMultipleFails(t *testing.T) {
 	// Write a two-substrate config so LoadSubstratesConfig returns multiple.
 	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
 	t.Chdir(tmp)
 	if err := os.WriteFile("substrates.yaml", []byte("substrates:\n  alpha: {}\n  beta: {}\n"), 0o644); err != nil {
 		t.Fatalf("write substrates.yaml: %v", err)
