@@ -885,6 +885,13 @@ func TestRunSproutEmitsOneTaskContextEventPerGrowthIncludingZeroEvidence(t *test
 		received = append(received, event)
 	})
 	stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done"}, nil)
+	originalNewSprout := newSproutFn
+	var renderedContext string
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		renderedContext = taskContextFromContext(ctx)
+		return originalNewSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
+	}
+	t.Cleanup(func() { newSproutFn = originalNewSprout })
 	orch := &DockerOrchestrator{Substrate: root, StepID: "task-context-growth", SessionID: "phytomer-1", EventBus: bus, DisableMergeBack: true}
 	if _, err := orch.RunSprout(context.Background(), "no matching evidence"); err != nil {
 		t.Fatalf("RunSprout: %v", err)
@@ -894,5 +901,11 @@ func TestRunSproutEmitsOneTaskContextEventPerGrowthIncludingZeroEvidence(t *test
 	}
 	if received[0].SessionID != "phytomer-1" || received[0].Source != "task-context-growth" {
 		t.Fatalf("task-context event correlation = %+v", received[0])
+	}
+	if received[0].Data["admittedCount"] != 0 {
+		t.Fatalf("empty-context growth admitted evidence: %+v", received[0].Data)
+	}
+	if renderedContext != "" {
+		t.Fatalf("empty-context growth injected a raw context block: %q", renderedContext)
 	}
 }

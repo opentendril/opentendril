@@ -130,7 +130,9 @@ There is no direct Pollinator → Sprout/Terrarium channel. Accepted continued i
 
 The **Mycorrhizae** (LLM) is the cognitive engine, running entirely externally. The Stem interacts with the Mycorrhizae via the `roots/llm` package, which acts as the provider connectivity and model routing layer. 
 
-The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. The Mycorrhizae receives context via Plasmids (injected context or capability payloads) and repository maps (structural maps of the Substrate), and returns tool calls or text. Continued developer intent reaches the Mycorrhizae only as a delimited section of the next Sprout prompt, composed at a new cognitive boundary from the durable continuation ledger.
+The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. Before each Sprout growth, the Conductor deterministically assembles a bounded task-specific Plasmid from current Substrate evidence after resolving the execution workspace and refreshing the Rhizome index. Evidence may include explicit file anchors, Rhizome structural matches, current Git-state paths, deterministic associated tests and documentation, and source-local project memory. The selection is Stem execution preparation, not Stem reasoning.
+
+The task context is assembled against the actual execution workspace and is refreshed for later Seed iterations as their candidate revision changes. Task context and curated genome content share the existing bounded evidence envelope. Repository evidence is explicitly untrusted and does not widen execution authority. Raw selected evidence is not copied into the observable Sprout transcript; safe selection provenance is published through `task-context-assembled`. The Mycorrhizae receives these Plasmids and repository maps and returns tool calls or text. Continued developer intent reaches the Mycorrhizae only as a delimited section of the next Sprout prompt, composed at a new cognitive boundary from the durable continuation ledger.
 
 ## Execution/Containment
 
@@ -205,7 +207,7 @@ For `seed.grow` on a managed App/API Substrate, each writing iteration runs in a
 
 Runtime state is persisted by default when history logging is enabled. **Phytomers** (sessions) are recorded in `.tendril/history.db`. SQLite persistence is enabled by default (controlled via `TENDRIL_DB_LOGGING`). Heartwood provides application-level encryption for persisted payload values; encrypted writes are default when the cipher resolves and can be disabled with `TENDRIL_ENCRYPT_AT_REST`.
 
-The system publishes lifecycle events (e.g., `sprout-emerged`, `sprout-withered`) over an EventBus.
+The system publishes lifecycle and preparation events (e.g., `sprout-emerged`, `sprout-withered`, `task-context-assembled`) over an EventBus. The task-context event carries only safe bounded selection provenance; raw selected evidence and private reasoning are excluded. HistoryDB persists the sanitized event through the existing EventBus sink. Task context remains runtime preparation state, and Fruit plus protected/default-branch semantics are unchanged.
 
 Every `seed.grow` establishes exactly one canonical Phytomer for that Seed growth. Canonical `seed.grow` accepts `detached: true` and returns active `{ handle, phytomerId, status: "running" }`. Core owns handle mint, durable opening, background growth, same-process accounting-failure quarantine, and the safe accounting-failure report. REST `POST /v1/seeds/grow/async` is compatibility presentation of that same Core lifecycle. The Seed handle is the durable Fruit-collection identity; the Phytomer ID is the lifecycle/observation identity. Sprouts grown while satisfying that Seed are attributed to that Phytomer. Ownership (Pollen, Substrate, Phytomer) is recorded at dispatch so `sprout.watch` can authorize observation before the first Sprout exists.
 

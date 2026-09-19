@@ -2010,12 +2010,20 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 	restoreSeeds(t)
 	stubLocalStoma(t)
 	repo := preparePathBackedGitRepo(t)
+	bus := eventbus.New()
+	defer bus.Shutdown()
+	var contextEvents []eventbus.Event
+	bus.Subscribe(eventbus.EventTaskContextAssembled, func(event eventbus.Event) {
+		contextEvents = append(contextEvents, event)
+	})
 	var runners []*pathBackedSeedRunner
 	var startRevisions []string
+	var renderedContexts []string
 	iteration := 0
 	installPathBackedSeedSeams(t, nil)
-	newSproutFn = func(_ context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, _, _ string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, _, _ string) (sproutRunner, error) {
 		iteration++
+		renderedContexts = append(renderedContexts, taskContextFromContext(ctx))
 		runner := &pathBackedSeedRunner{workspace: workspace}
 		if iteration == 1 {
 			runner.file = "HELLO.md"
@@ -2039,6 +2047,7 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 		Verify:        round16HelloVerifyArgv(),
 		MaxIterations: 2,
 		SessionID:     "path-seed-two-iteration-inheritance",
+		EventBus:      bus,
 	})
 	if err != nil {
 		t.Fatalf("RunSeed: %v", err)
@@ -2046,8 +2055,8 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 	if result.Status != SeedStatusSatisfied || result.Iterations != 2 {
 		t.Fatalf("result = %+v, want satisfied after two iterations; logs:\n%s", result, result.Logs)
 	}
-	if len(runners) != 2 || len(startRevisions) != 2 {
-		t.Fatalf("iterations = runners %d starts %d, want 2", len(runners), len(startRevisions))
+	if len(runners) != 2 || len(startRevisions) != 2 || len(renderedContexts) != 2 {
+		t.Fatalf("iterations = runners %d starts %d contexts %d, want 2", len(runners), len(startRevisions), len(renderedContexts))
 	}
 	if runners[1].startHELLO != "Hello from OpenTendril." {
 		t.Fatalf("iteration 2 inherited HELLO.md = %q, want iteration 1's checkpointed partial write", runners[1].startHELLO)
@@ -2057,6 +2066,91 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 	}
 	if strings.TrimSpace(runners[1].startHEAD) != startRevisions[1] {
 		t.Fatalf("iteration 2 worktree HEAD = %q, want SeedStartRevision %q", runners[1].startHEAD, startRevisions[1])
+	}
+	if len(contextEvents) != 2 {
+		t.Fatalf("task-context events = %d, want one per Seed growth: %+v", len(contextEvents), contextEvents)
+	}
+	first, second := contextEvents[0], contextEvents[1]
+	if first.SessionID != "path-seed-two-iteration-inheritance" || second.SessionID != first.SessionID {
+		t.Fatalf("Seed task-context sessions = %q/%q, want the same Phytomer", first.SessionID, second.SessionID)
+	}
+	if first.Data["substrateRef"] != second.Data["substrateRef"] {
+		t.Fatalf("Seed substrate identity changed across iterations: %v -> %v", first.Data["substrateRef"], second.Data["substrateRef"])
+	}
+	if first.Data["workspaceRevisionRef"] == second.Data["workspaceRevisionRef"] {
+		t.Fatalf("iteration 2 reused iteration 1 workspace revision provenance: %v", first.Data["workspaceRevisionRef"])
+	}
+	if first.Data["workspaceRevisionRef"] != taskContextShortReference(startRevisions[0]) || second.Data["workspaceRevisionRef"] != taskContextShortReference(startRevisions[1]) {
+		t.Fatalf("Seed workspace revision provenance = %v/%v, want starts %v/%v", first.Data["workspaceRevisionRef"], second.Data["workspaceRevisionRef"], startRevisions[0], startRevisions[1])
+	}
+	if first.Data["admittedCount"] != 0 {
+		t.Fatalf("iteration 1 admitted evidence before HELLO.md existed: %+v", first.Data)
+	}
+	if renderedContexts[0] != "" {
+		t.Fatalf("iteration 1 rendered task context = %q, want empty context", renderedContexts[0])
+	}
+	if second.Data["admittedCount"] == 0 {
+		t.Fatalf("iteration 2 did not admit checkpoint evidence: %+v", second.Data)
+	}
+	if !strings.Contains(renderedContexts[1], "HELLO.md") {
+		t.Fatalf("iteration 2 rendered task context = %q, want current HELLO.md evidence", renderedContexts[1])
+	}
+	items, ok := second.Data["items"].([]map[string]interface{})
+	if !ok || len(items) == 0 || items[0]["sourceIdentity"] != "HELLO.md" {
+		t.Fatalf("iteration 2 context items = %#v, want current HELLO.md evidence", second.Data["items"])
+	}
+}
+
+func TestPathBackedSeedTaskContextFailureStopsBeforeCognition(t *testing.T) {
+	restoreSeeds(t)
+	repo := preparePathBackedGitRepo(t)
+	base, err := runGitCommand(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	base = strings.TrimSpace(base)
+	stepID := "path-seed-context-failure"
+	seedBranch := "tendril/seed-context-failure"
+	installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: &pathBackedSeedRunner{}})
+	bus := eventbus.New()
+	defer bus.Shutdown()
+	var cognitionBegun []eventbus.Event
+	bus.Subscribe(eventbus.EventMycorrhizalRequestBegun, func(event eventbus.Event) {
+		cognitionBegun = append(cognitionBegun, event)
+	})
+	t.Setenv(taskContextMaxBytesEnv, "0")
+
+	report, runErr := (&DockerOrchestrator{
+		Substrate:                 repo,
+		StepID:                    stepID,
+		SubstrateBranch:           seedBranch,
+		DisableMergeBack:          true,
+		SeedIntegrationCheckpoint: true,
+		SeedStartRevision:         base,
+		AwaitsRunEnding:           true,
+		EventBus:                  bus,
+	}).RunSprout(context.Background(), "create HELLO.md")
+	if runErr == nil || !strings.Contains(runErr.Error(), taskContextMaxBytesEnv) {
+		t.Fatalf("RunSprout error = %v, want invalid task-context configuration", runErr)
+	}
+	if report.RequestsMade {
+		t.Fatal("RunSprout reported a provider request after task-context preparation failed")
+	}
+	if report.FruitBranch != "" || report.FruitCommit != "" || report.seedCandidateCommit != "" {
+		t.Fatalf("context-preparation failure produced Fruit/candidate identity: %+v", report)
+	}
+	if len(cognitionBegun) != 0 {
+		t.Fatalf("cognition began after task-context preparation failed: %+v", cognitionBegun)
+	}
+	if localBranchExists(repo, seedBranch) {
+		t.Fatalf("context-preparation failure created protected Seed branch %q", seedBranch)
+	}
+	head, err := runGitCommand(context.Background(), repo, "rev-parse", "refs/heads/main")
+	if err != nil {
+		t.Fatalf("main after context failure: %v", err)
+	}
+	if strings.TrimSpace(head) != base {
+		t.Fatalf("default branch changed from %q to %q after context failure", base, strings.TrimSpace(head))
 	}
 }
 

@@ -41,6 +41,12 @@ For an ordinary local Git `RunSprout`, the exact ordering is:
 9. Teardown removes the shadow worktree and restores the host stash. 
    - Note: Stash-pop recovery handles the specific untracked-file collision case but does not suppress genuine tracked merge conflicts.
 
+### Task-context preparation
+
+After workspace resolution and the current Rhizome refresh, and before cognition, the Conductor assembles a bounded task-specific Plasmid against the execution workspace. Selection is deterministic and bounded across explicit anchors, refreshed Rhizome structural evidence, current Git-state paths, associated tests and documentation, and source-local project memory. Managed RunWorkspaces remain distinct from their backing source repositories: source identity is used for source-local memory, while each growth reads the workspace and revision it will execute.
+
+Each growth refreshes task context against its own workspace and starting revision. The generated context is runtime preparation state, not Sprout-attributed Fruit. The Conductor publishes safe bounded provenance through `task-context-assembled`, never raw evidence. Preparation does not change the Terrarium, provider, tool, credential, network/egress, Git publication, commit, or default/protected-branch authority.
+
 ### TENDRIL_ALLOW_HOST_WORKSPACE
 
 This applies when a local Git shadow worktree cannot be established:

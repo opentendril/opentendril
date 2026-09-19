@@ -14,7 +14,7 @@ It plays two roles at once through Go's dependency-inversion: it **implements** 
 - Apply durability pragmas on open: `journal_mode = WAL`, `synchronous = NORMAL`, `busy_timeout = 5000` (`initSchema`).
 - Persist and resume Tendril sessions with their preferences as upserts, keyed by `sessionId` (`SaveSession` / `LoadSessions` / `DeleteSession`).
 - Append and load the unified chat log, newest-N-in-order per session (`AppendMessage` / `LoadMessages`).
-- Act as the EventBus persistence sink: every published event is encoded and written to the `events` table (`Consume` / `RecordEvent` / `LoadEvents`).
+- Act as the EventBus persistence sink: every published event, including the sanitized `task-context-assembled` provenance event, is encoded and written to the `events` table (`Consume` / `RecordEvent` / `LoadEvents`).
 - Persist Sprout execution history as a lifecycle upsert — once when the Sprout emerges (`running`) and again when it matures or withers — recording the dispatching Pollen, the substrate the work targeted, the resolved provider, the usage envelope, and the structured observation envelope (outcome, failure category, safe provider diagnostic, whether a Mycorrhizal request was attempted, and tool invocation count) so a read can be scoped to the subject that owns it and a Botanist can explain the run without parsing free-text errors (`RecordSproutRun` / `LoadSproutRuns`).
 - Report the distinct subjects that dispatched the Sprout runs recorded against one phytomer, each paired with the substrate that run targeted, without loading or decrypting any run content (`SproutRunOwners`).
 - Persist `seed.grow` bounded-task runs keyed by the durable `handle` a Pollinator collects against, recording the dispatching Pollen so collection can be scoped, plus the reviewable Fruit — status, iterations, branch, diff, logs — and the structured observation envelope (safe Fruit-publication diagnostic and bounded verification diagnostics) (`RecordSeedRun` / `GetSeedRun`).
@@ -87,5 +87,4 @@ Beyond OpenTendril internals, the only import is the `modernc.org/sqlite` driver
 - **Lossy telemetry, silent by design.** `Consume` never returns an error; failures increment `eventErrors` and log only on every 100th failure. Combined with the bus dropping events on a full sink buffer, some telemetry can be lost without a hard signal.
 - **No exported sentinel errors.** Callers cannot match on typed errors; a missing `seed.grow` handle is disambiguated only by `GetSeedRun`'s `found` boolean.
 - **Store/Manager integration is thin on tests.** The package's own round-trip tests exercise each table directly, but the `session.Store`-through-`Manager` path is covered elsewhere only on the nil-store branch.
-
 
