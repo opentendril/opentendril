@@ -150,8 +150,247 @@ func SanitizeObservationEvent(event eventbus.Event) eventbus.Event {
 		if t, ok := safeData["transcript"].(string); ok {
 			safeData["transcript"] = SanitizeSproutTranscript(t)
 		}
+	case eventbus.EventTaskContextAssembled:
+		// This event is reconstructed from its allow-list because task context
+		// carries provenance about private source material. General redaction is
+		// optional and therefore cannot be the safety boundary for live
+		// subscribers or future producer changes.
+		if safeTaskContextObservationIdentifier(event.Source) {
+			event.Source = strings.TrimSpace(event.Source)
+		} else {
+			event.Source = ""
+		}
+		if safeTaskContextObservationIdentifier(event.SessionID) {
+			event.SessionID = strings.TrimSpace(event.SessionID)
+		} else {
+			event.SessionID = ""
+		}
+		event.Data = sanitizeTaskContextObservation(safeData)
+		return event
 	}
 
 	event.Data = safeData
 	return event
+}
+
+func sanitizeTaskContextObservation(data map[string]interface{}) map[string]interface{} {
+	safe := make(map[string]interface{})
+	if value, ok := data["stepId"].(string); ok && safeTaskContextObservationIdentifier(value) {
+		safe["stepId"] = strings.TrimSpace(value)
+	}
+	if value, ok := data["substrate"].(string); ok && safeTaskContextObservationSubstrate(value) {
+		safe["substrate"] = strings.TrimSpace(value)
+	}
+	for _, key := range []string{"substrateRef", "workspaceRevisionRef"} {
+		if value, ok := data[key].(string); ok && safeTaskContextObservationReference(value) {
+			safe[key] = strings.TrimSpace(value)
+		}
+	}
+	for _, key := range []string{
+		"effectiveMaxBytes",
+		"effectiveItemMaxBytes",
+		"effectiveMaxItems",
+		"candidateCount",
+		"admittedCount",
+		"admittedBytes",
+	} {
+		if value, ok := safeObservationInteger(data[key]); ok && value >= 0 && value <= 8192 {
+			safe[key] = value
+		}
+	}
+
+	if counts, ok := sanitizeTaskContextCounts(data["omissionCounts"]); ok {
+		safe["omissionCounts"] = counts
+	}
+	if items, ok := sanitizeTaskContextItems(data["items"]); ok {
+		safe["items"] = items
+	}
+	return safe
+}
+
+func sanitizeTaskContextCounts(value interface{}) (map[string]interface{}, bool) {
+	counts := make(map[string]interface{})
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		for reason, rawCount := range typed {
+			if !safeTaskContextObservationOmissionReason(reason) {
+				continue
+			}
+			count, ok := safeObservationInteger(rawCount)
+			if ok && count >= 0 && count <= 8192 {
+				counts[reason] = count
+			}
+		}
+	case map[string]int:
+		for reason, count := range typed {
+			if safeTaskContextObservationOmissionReason(reason) && count >= 0 && count <= 8192 {
+				counts[reason] = count
+			}
+		}
+	default:
+		return nil, false
+	}
+	return counts, true
+}
+
+func sanitizeTaskContextItems(value interface{}) ([]map[string]interface{}, bool) {
+	var rawItems []interface{}
+	switch typed := value.(type) {
+	case []interface{}:
+		rawItems = typed
+	case []map[string]interface{}:
+		rawItems = make([]interface{}, len(typed))
+		for i := range typed {
+			rawItems[i] = typed[i]
+		}
+	default:
+		return nil, false
+	}
+
+	items := make([]map[string]interface{}, 0, len(rawItems))
+	for _, rawItem := range rawItems {
+		item, ok := rawItem.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		sourceClass, sourceClassOK := item["sourceClass"].(string)
+		sourceIdentity, sourceIdentityOK := item["sourceIdentity"].(string)
+		reason, reasonOK := item["selectionReason"].(string)
+		contentRef, contentRefOK := item["contentRef"].(string)
+		admittedBytes, admittedBytesOK := safeObservationInteger(item["admittedBytes"])
+		truncated, truncatedOK := item["truncated"].(bool)
+		if !sourceClassOK || !sourceIdentityOK || !reasonOK || !contentRefOK || !admittedBytesOK || !truncatedOK ||
+			!safeTaskContextObservationSourceClass(sourceClass) || !safeTaskContextObservationIdentity(sourceIdentity) ||
+			!safeTaskContextObservationSelectionReason(reason) || !safeTaskContextObservationReference(contentRef) || admittedBytes < 0 || admittedBytes > 8192 {
+			continue
+		}
+		items = append(items, map[string]interface{}{
+			"sourceClass":     sourceClass,
+			"sourceIdentity":  sourceIdentity,
+			"selectionReason": reason,
+			"contentRef":      contentRef,
+			"admittedBytes":   admittedBytes,
+			"truncated":       truncated,
+		})
+	}
+	return items, true
+}
+
+func safeObservationInteger(value interface{}) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int8:
+		return int(typed), true
+	case int16:
+		return int(typed), true
+	case int32:
+		return int(typed), true
+	case int64:
+		return int(typed), int64(int(typed)) == typed
+	case uint:
+		return int(typed), uint(int(typed)) == typed
+	case uint8:
+		return int(typed), true
+	case uint16:
+		return int(typed), true
+	case uint32:
+		return int(typed), uint32(int(typed)) == typed
+	case uint64:
+		return int(typed), uint64(int(typed)) == typed
+	case float64:
+		integer := int(typed)
+		return integer, float64(integer) == typed
+	default:
+		return 0, false
+	}
+}
+
+func safeTaskContextObservationString(value string, max int) bool {
+	value = strings.TrimSpace(value)
+	return value != "" && len(value) <= max && !strings.ContainsAny(value, "\r\n\x00") && !strings.Contains(value, "<thought>") && !strings.Contains(value, "</thought>")
+}
+
+func safeTaskContextObservationSubstrate(value string) bool {
+	value = strings.TrimSpace(value)
+	if !safeTaskContextObservationString(value, 128) || strings.HasPrefix(value, "/") || strings.ContainsAny(value, "\\:\x00") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func safeTaskContextObservationToken(value string, max int) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > max {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func safeTaskContextObservationIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	return safeTaskContextObservationString(value, 128) && !strings.ContainsAny(value, "/\\:")
+}
+
+func safeTaskContextObservationSourceClass(value string) bool {
+	switch value {
+	case "file-anchor", "rhizome-symbol", "git-state-path", "associated-test", "associated-documentation", "project-memory":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeTaskContextObservationSelectionReason(value string) bool {
+	switch value {
+	case "explicit-file-anchor", "exact-symbol-anchor", "lexical-symbol-anchor", "git-state-path", "associated-test", "associated-documentation", "source-local-memory":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeTaskContextObservationOmissionReason(value string) bool {
+	switch value {
+	case "budget-bytes", "budget-items", "stale-evidence", "path-security", "unreadable", "not-found", "memory-missing", "memory-unavailable", "memory-unbound":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeTaskContextObservationIdentity(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 256 || strings.HasPrefix(value, "/") || strings.ContainsAny(value, "\\:\x00\r\n") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func safeTaskContextObservationReference(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 12 {
+		return false
+	}
+	for _, character := range value {
+		if (character < 'a' || character > 'f') && (character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }

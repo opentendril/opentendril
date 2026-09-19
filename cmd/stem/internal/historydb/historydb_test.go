@@ -3,6 +3,7 @@ package historydb
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
+	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 )
 
 func openTestStore(t *testing.T) *Store {
@@ -148,6 +150,71 @@ func TestEventPersistenceViaBusSink(t *testing.T) {
 	if records[0].Type != string(eventbus.EventSproutEmerged) || records[0].Data["branch"] != "shadow-1" {
 		t.Fatalf("event did not round-trip: %+v", records[0])
 	}
+}
+
+func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
+	t.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	store := openTestStore(t)
+	bus := eventbus.New()
+	bus.AttachSink(store, 0, "historydb")
+
+	event := eventbus.Event{
+		Type:      eventbus.EventTaskContextAssembled,
+		Source:    "step-context",
+		SessionID: "phytomer-context",
+		Data: map[string]interface{}{
+			"stepId":                "step-context",
+			"substrate":             "fixture",
+			"substrateRef":          "0123456789ab",
+			"workspaceRevisionRef":  "abcdefabcdef",
+			"effectiveMaxBytes":     4096,
+			"effectiveItemMaxBytes": 1024,
+			"effectiveMaxItems":     8,
+			"candidateCount":        1,
+			"admittedCount":         1,
+			"admittedBytes":         32,
+			"omissionCounts":        map[string]interface{}{},
+			"items": []map[string]interface{}{{
+				"sourceClass":     "file-anchor",
+				"sourceIdentity":  "foo.go",
+				"selectionReason": "explicit-file-anchor",
+				"contentRef":      "0123456789ab",
+				"admittedBytes":   32,
+				"truncated":       false,
+			}},
+			"content":    "raw selected evidence",
+			"transcript": "raw Transcript text",
+		},
+	}
+	bus.Publish(telemetry.SanitizeObservationEvent(event))
+	bus.Shutdown()
+
+	records, err := store.LoadEvents(context.Background(), "phytomer-context", 10)
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	if len(records) != 1 || records[0].Type != string(eventbus.EventTaskContextAssembled) || records[0].SessionID != "phytomer-context" {
+		t.Fatalf("task-context event did not reload under its Phytomer: %+v", records)
+	}
+	encoded := stringifyEventData(records[0].Data)
+	if strings.Contains(encoded, "raw selected evidence") || strings.Contains(encoded, "raw Transcript text") || strings.Contains(encoded, "content=") || strings.Contains(encoded, "transcript=") {
+		t.Fatalf("unsafe provenance recovered from HistoryDB: %s", encoded)
+	}
+	if records[0].Data["substrateRef"] != "0123456789ab" {
+		t.Fatalf("safe provenance did not survive round trip: %+v", records[0].Data)
+	}
+}
+
+func stringifyEventData(data map[string]interface{}) string {
+	parts := make([]string, 0, len(data))
+	for key, value := range data {
+		parts = append(parts, key+"="+formatEventValue(value))
+	}
+	return strings.Join(parts, " ")
+}
+
+func formatEventValue(value interface{}) string {
+	return fmt.Sprintf("%v", value)
 }
 
 func TestSproutRunUpsert(t *testing.T) {

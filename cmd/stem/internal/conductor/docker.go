@@ -19,7 +19,10 @@ import (
 
 	opentendril "github.com/opentendril/opentendril"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
+	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
+	"github.com/opentendril/opentendril/cmd/stem/internal/telemetry"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 	"github.com/opentendril/opentendril/roots/llm"
 )
@@ -128,12 +131,61 @@ var (
 	pushTerrariumCommitFn          = pushTerrariumCommit
 	runContainerFitnessTestFn      = runContainerFitnessTest
 	generateRepoMapFn              = GenerateRepoMap
-	generateMemoryMapFn            = GenerateMemoryMap
+	generateMemoryMapFn            = generateSourceLocalMemoryMap
 	openRhizomeIndexFn             = openRhizomeIndex
 	runSproutPreflightChecksFn     = runSproutPreflightChecks
 	runVerifierCommandFn           = runVerifierCommand
 	materializeSproutBuildInputsFn = materializeSproutBuildInputs
 )
+
+func openTaskContextSourceMemory(ctx context.Context, sourceRepository string) (taskContextMemoryIndex, string, string, func()) {
+	index, repositoryName, err := openSourceLocalRhizomeIndex(ctx, sourceRepository)
+	if err != nil {
+		availability := taskContextSourceLocalMemoryAvailability(sourceRepository)
+		if availability == "" {
+			availability = taskContextOmissionMemoryUnavailable
+		}
+		return nil, "", availability, nil
+	}
+	return index, repositoryName, "", func() { _ = index.Close() }
+}
+
+func openSourceLocalRhizomeIndex(ctx context.Context, sourceRepository string) (*rhizome.SQLiteIndexStore, string, error) {
+	canonical, databasePath, keyPath, availability := taskContextSourceLocalMemoryPaths(sourceRepository)
+	if availability != "" {
+		return nil, "", errors.New(availability)
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("read source-local Rhizome key: %w", err)
+	}
+	cipher, err := heartwood.NewCipher(heartwood.Material{Key: key, Source: heartwood.KeySourceFile})
+	if err != nil {
+		return nil, "", fmt.Errorf("initialize source-local Rhizome cipher: %w", err)
+	}
+	index, err := rhizome.OpenSQLiteIndexStore(ctx, databasePath, cipher)
+	if err != nil {
+		return nil, "", fmt.Errorf("open source-local Rhizome index: %w", err)
+	}
+	repositoryName := filepath.Base(canonical)
+	if repositoryName == "." || repositoryName == "" {
+		repositoryName = "workspace"
+	}
+	return index, repositoryName, nil
+}
+
+func generateSourceLocalMemoryMap(ctx context.Context, sourceRepository string) (string, error) {
+	index, repositoryName, err := openSourceLocalRhizomeIndex(ctx, sourceRepository)
+	if err != nil {
+		return "", err
+	}
+	defer index.Close()
+	memoryMap, err := rhizome.GenerateMemoryMap(ctx, index, repositoryName, "*", 2000)
+	if err != nil {
+		return "", err
+	}
+	return memoryMap, nil
+}
 
 func (d *DockerOrchestrator) resolveLLMClient() *llm.Client {
 	var spec llm.ProviderSpec
@@ -887,10 +939,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		return report, fmt.Errorf("write repo map plasmid: %w", err)
 	}
 
-	memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, mountPath)
-	if memErr == nil && memoryMapMarkdown != "" {
-		memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", memoryMapFile)
-		_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
+	localMemoryAvailability := taskContextSourceLocalMemoryAvailability(sourcePath)
+	if localMemoryAvailability == "" {
+		memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, sourcePath)
+		if memErr == nil && memoryMapMarkdown != "" {
+			memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", memoryMapFile)
+			_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
+		}
 	}
 
 	startingRevision := strings.TrimSpace(d.SeedStartRevision)
@@ -902,6 +957,10 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var taskContextIndex taskContextRhizomeIndex
 	var taskContextRepositoryName string
 	var closeTaskContextIndex func()
+	var taskContextMemory taskContextMemoryIndex
+	var taskContextMemoryRepositoryName string
+	var taskContextMemoryOmissionReason string
+	var closeTaskContextMemory func()
 	rhizomeDatabasePath := filepath.Join(mountPath, tendrilStateDirectory, rhizomeIndexDatabase)
 	if databaseInfo, statErr := os.Stat(rhizomeDatabasePath); statErr == nil && databaseInfo.Mode().IsRegular() {
 		index, repositoryName, openErr := openRhizomeIndexFn(ctx, mountPath)
@@ -915,14 +974,36 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		taskContextRepositoryName = repositoryName
 		closeTaskContextIndex = func() { _ = index.Close() }
 	}
+	if localMemoryAvailability != "" {
+		taskContextMemoryOmissionReason = localMemoryAvailability
+	} else if sameFilePath(sourcePath, mountPath) && taskContextIndex != nil {
+		if memoryIndex, ok := taskContextIndex.(taskContextMemoryIndex); ok {
+			taskContextMemory = memoryIndex
+			taskContextMemoryRepositoryName = taskContextRepositoryName
+		} else {
+			taskContextMemoryOmissionReason = taskContextOmissionMemoryUnavailable
+		}
+	} else if localMemoryAvailability == "" {
+		memoryIndex, repositoryName, omissionReason, closeMemory := openTaskContextSourceMemory(ctx, sourcePath)
+		taskContextMemory = memoryIndex
+		taskContextMemoryRepositoryName = repositoryName
+		taskContextMemoryOmissionReason = omissionReason
+		closeTaskContextMemory = closeMemory
+	}
 	taskContext, taskContextErr := assembleTaskContext(ctx, taskContextAssemblyInput{
 		TaskPrompt:              taskPrompt,
 		ConfiguredSubstrateName: plan.name,
 		SourceRepository:        sourcePath,
 		ExecutionWorkspace:      mountPath,
 		StartingRevision:        startingRevision,
+		MemoryIndex:             taskContextMemory,
+		MemoryRepositoryName:    taskContextMemoryRepositoryName,
+		MemoryOmissionReason:    taskContextMemoryOmissionReason,
 	}, taskContextIndex, taskContextRepositoryName)
 	if taskContextErr != nil {
+		if closeTaskContextMemory != nil {
+			closeTaskContextMemory()
+		}
 		if closeTaskContextIndex != nil {
 			closeTaskContextIndex()
 		}
@@ -933,6 +1014,13 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	if closeTaskContextIndex != nil {
 		closeTaskContextIndex()
+	}
+	if closeTaskContextMemory != nil {
+		closeTaskContextMemory()
+	}
+	if d.EventBus != nil {
+		event := taskContextObservationEvent(stepID, d.SessionID, plan.name, taskContext.Manifest)
+		d.EventBus.Publish(telemetry.SanitizeObservationEvent(event))
 	}
 	if generatedState != nil {
 		if err := generatedState.captureInitialAfter(); err != nil {
