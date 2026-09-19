@@ -164,6 +164,49 @@ type taskContextCandidate struct {
 	memory          *rhizome.Memory
 }
 
+type taskContextCandidateQueue struct {
+	pending []taskContextCandidate
+}
+
+func newTaskContextCandidateQueue(candidates map[string]taskContextCandidate) taskContextCandidateQueue {
+	pending := make([]taskContextCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		pending = append(pending, candidate)
+	}
+	sort.Slice(pending, func(i, j int) bool {
+		return taskContextCandidateLess(pending[i], pending[j])
+	})
+	return taskContextCandidateQueue{pending: pending}
+}
+
+func (queue *taskContextCandidateQueue) push(candidate taskContextCandidate) {
+	insertAt := sort.Search(len(queue.pending), func(index int) bool {
+		return taskContextCandidateLess(candidate, queue.pending[index])
+	})
+	queue.pending = append(queue.pending, taskContextCandidate{})
+	copy(queue.pending[insertAt+1:], queue.pending[insertAt:])
+	queue.pending[insertAt] = candidate
+}
+
+func (queue *taskContextCandidateQueue) pop() (taskContextCandidate, bool) {
+	if len(queue.pending) == 0 {
+		return taskContextCandidate{}, false
+	}
+	candidate := queue.pending[0]
+	queue.pending = queue.pending[1:]
+	return candidate, true
+}
+
+func taskContextCandidateLess(left, right taskContextCandidate) bool {
+	if left.priority != right.priority {
+		return left.priority < right.priority
+	}
+	if left.path != right.path {
+		return left.path < right.path
+	}
+	return left.kind < right.kind
+}
+
 func taskContextSettingsFromEnvironment() (taskContextSettings, error) {
 	settings := taskContextSettings{
 		maxBytes:     taskContextDefaultMaxBytes,
@@ -351,26 +394,16 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		}
 	}
 
-	ordered := make([]taskContextCandidate, 0, len(candidates))
-	for _, candidate := range candidates {
-		ordered = append(ordered, candidate)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].priority != ordered[j].priority {
-			return ordered[i].priority < ordered[j].priority
-		}
-		if ordered[i].path != ordered[j].path {
-			return ordered[i].path < ordered[j].path
-		}
-		return ordered[i].kind < ordered[j].kind
-	})
-
-	manifest.CandidateCount = len(ordered)
+	queue := newTaskContextCandidateQueue(candidates)
+	manifest.CandidateCount = len(candidates)
 	usedBytes := 0
-	for candidateIndex := 0; candidateIndex < len(ordered); candidateIndex++ {
-		candidate := ordered[candidateIndex]
+	for {
+		candidate, ok := queue.pop()
+		if !ok {
+			break
+		}
 		if len(manifest.Items) >= settings.maxItems {
-			taskContextAddOmission(&manifest, taskContextOmissionBudgetItems, len(ordered)-candidateIndex)
+			taskContextAddOmission(&manifest, taskContextOmissionBudgetItems, len(queue.pending)+1)
 			break
 		}
 
@@ -379,7 +412,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			remaining -= 2
 		}
 		if remaining <= 0 {
-			taskContextAddOmission(&manifest, taskContextOmissionBudgetBytes, len(ordered)-candidateIndex)
+			taskContextAddOmission(&manifest, taskContextOmissionBudgetBytes, len(queue.pending)+1)
 			break
 		}
 		itemBudget := settings.itemMaxBytes
@@ -473,7 +506,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 					continue
 				}
 				candidates[associated.dedupeKey] = associated
-				ordered = append(ordered, associated)
+				queue.push(associated)
 			}
 		}
 	}

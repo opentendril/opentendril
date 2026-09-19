@@ -473,6 +473,55 @@ func TestTaskContextAssociatedEvidenceRespectsExistingBudgets(t *testing.T) {
 	}
 }
 
+func TestTaskContextAssociatedEvidencePrecedesProjectMemoryWithinItemBudget(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo_test.go", "package fixture\n\nfunc TestFoo() {}\n")
+	memory := &taskContextTestMemoryIndex{memories: []rhizome.Memory{{
+		RepositoryName: "fixture",
+		Category:       "design",
+		Title:          "architecture",
+		Content:        "project memory",
+	}}}
+	t.Setenv(taskContextMaxItemsEnv, "2")
+
+	assemble := func() taskContextAssembly {
+		t.Helper()
+		assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+			TaskPrompt:           "inspect foo.go",
+			SourceRepository:     root,
+			ExecutionWorkspace:   root,
+			MemoryIndex:          memory,
+			MemoryRepositoryName: "fixture",
+			StartingRevision:     "revision-1",
+		}, nil, "fixture")
+		if err != nil {
+			t.Fatalf("assemble task context: %v", err)
+		}
+		return assembly
+	}
+
+	first := assemble()
+	second := assemble()
+	wantPaths := []string{"foo.go", "foo_test.go"}
+	for _, assembly := range []taskContextAssembly{first, second} {
+		if len(assembly.Manifest.Items) != len(wantPaths) {
+			t.Fatalf("item budget admitted unexpected evidence: %+v", assembly.Manifest.Items)
+		}
+		for index, wantPath := range wantPaths {
+			if assembly.Manifest.Items[index].Path != wantPath {
+				t.Fatalf("evidence ordering = %+v, want %v", assembly.Manifest.Items, wantPaths)
+			}
+		}
+		if strings.Contains(assembly.Rendered, "project memory") {
+			t.Fatalf("project memory exceeded item budget: %q", assembly.Rendered)
+		}
+	}
+	if first.Rendered != second.Rendered {
+		t.Fatalf("identical assemblies produced different ordering:\nfirst=%q\nsecond=%q", first.Rendered, second.Rendered)
+	}
+}
+
 func TestTaskContextLocalMemoryAdmissionAndNoRemoteFallback(t *testing.T) {
 	root := t.TempDir()
 	memory := &taskContextTestMemoryIndex{memories: []rhizome.Memory{{
