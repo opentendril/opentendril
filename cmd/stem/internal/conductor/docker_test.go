@@ -202,6 +202,53 @@ func TestCollectStageableFilesKeepsFullPathOfUnstagedModification(t *testing.T) 
 	}
 }
 
+func TestCollectStageableFilesExcludesTaskContextRuntimeState(t *testing.T) {
+	repo := t.TempDir()
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.name", "Runtime State Test"},
+		{"config", "user.email", "runtime-state@example.invalid"},
+	} {
+		if _, err := runGitCommand(context.Background(), repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "add", "README.md"); err != nil {
+		t.Fatalf("stage README.md: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "commit", "-q", "-m", "base"); err != nil {
+		t.Fatalf("commit README.md: %v", err)
+	}
+
+	generated := []string{
+		filepath.Join(".tendril", "genome", repositoryMapFile),
+		filepath.Join(".tendril", "genome", memoryMapFile),
+		filepath.Join(".tendril", rhizomeIndexDatabase),
+		filepath.Join(".tendril", rhizomeIndexDatabase+"-wal"),
+		filepath.Join(".tendril", rhizomeIndexDatabase+"-shm"),
+		filepath.Join(".tendril", rhizomeIndexKeyFile),
+		filepath.Join(".tendril", "genome", genomicEpigeneticsFilename),
+		filepath.Join(".tendril", "genome", genomicFitnessFilename),
+	}
+	for _, path := range generated {
+		writeTaskContextFile(t, repo, path, "generated runtime state\n")
+	}
+	if err := os.WriteFile(filepath.Join(repo, "fruit.txt"), []byte("Sprout work\n"), 0o644); err != nil {
+		t.Fatalf("write Fruit: %v", err)
+	}
+
+	files, err := collectStageableFiles(context.Background(), repo)
+	if err != nil {
+		t.Fatalf("collectStageableFiles: %v", err)
+	}
+	if len(files) != 1 || files[0] != "fruit.txt" {
+		t.Fatalf("stageable files = %v, want only Fruit", files)
+	}
+}
+
 func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 	repo := t.TempDir()
 

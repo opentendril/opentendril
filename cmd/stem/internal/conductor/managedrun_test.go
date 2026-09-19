@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 	"github.com/opentendril/opentendril/roots/llm"
 )
@@ -74,6 +75,12 @@ type managedWritingRunner struct {
 	started          chan struct{}
 	release          chan struct{}
 	releaseOn        sync.Once
+}
+
+type taskContextTerrarium struct{ stubTerrarium }
+
+func (s *taskContextTerrarium) Run(context.Context, terrarium.CommandSpec) (terrarium.CommandResult, error) {
+	return terrarium.CommandResult{Stdout: `{"status":"success","output":{"tools":[{"name":"readFile"}]}}`}, nil
 }
 
 func newManagedWritingRunner(file string) *managedWritingRunner {
@@ -796,6 +803,252 @@ func TestRunSproutManagedRunUsesIndependentWorkspaceAndBackingSource(t *testing.
 	if _, err := runGitCommand(context.Background(), repository, "show", "sprout/task-"+stepID+":sprout.txt"); err != nil {
 		t.Fatalf("run Fruit branch does not contain Sprout file: %v", err)
 	}
+}
+
+func TestRunSproutManagedRunAttributesTaskContextToBackingSubstrate(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	stateExclude := filepath.Join(repository, ".git", "info", "exclude")
+	if err := os.WriteFile(stateExclude, []byte(".tendril/\n"), 0o644); err != nil {
+		t.Fatalf("ignore source-local Rhizome state: %v", err)
+	}
+	sourceIndex, sourceName, err := openRhizomeIndex(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("open backing source Rhizome index: %v", err)
+	}
+	if err := sourceIndex.StoreMemory(context.Background(), rhizome.Memory{
+		RepositoryName: sourceName,
+		Category:       "design",
+		Title:          "architecture",
+		Content:        "backing source memory",
+	}); err != nil {
+		_ = sourceIndex.Close()
+		t.Fatalf("store backing source memory: %v", err)
+	}
+	if err := sourceIndex.Close(); err != nil {
+		t.Fatalf("close backing source Rhizome index: %v", err)
+	}
+
+	stepID := "managed-task-context"
+	runner := newManagedWritingRunner("sprout.txt")
+	runner.releaseRun()
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{stepID: runner})
+
+	var contextPayload string
+	var availableTools []ToolDefinition
+	workspaceOnlyFile := "workspace-only.txt"
+	var workspaceRevision string
+	originalCreateWorkspace := createRunWorkspaceFn
+	createRunWorkspaceFn = func(ctx context.Context, sourcePath, gotStepID, startRevision string) (RunWorkspace, error) {
+		workspace, createErr := originalCreateWorkspace(ctx, sourcePath, gotStepID, startRevision)
+		if createErr != nil {
+			return RunWorkspace{}, createErr
+		}
+		workspaceRevision = strings.TrimSpace(startRevision)
+		writeTaskContextFile(t, workspace.Path, workspaceOnlyFile, "run workspace evidence")
+		for _, path := range []string{
+			filepath.Join(tendrilStateDirectory, "genome", repositoryMapFile),
+			filepath.Join(tendrilStateDirectory, "genome", memoryMapFile),
+			filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase+"-wal"),
+			filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase+"-shm"),
+			filepath.Join(tendrilStateDirectory, "genome", genomicEpigeneticsFilename),
+			filepath.Join(tendrilStateDirectory, "genome", genomicFitnessFilename),
+		} {
+			writeTaskContextFile(t, workspace.Path, path, "generated runtime state")
+		}
+		workspaceIndex, workspaceName, indexErr := openRhizomeIndex(context.Background(), workspace.Path)
+		if indexErr != nil {
+			t.Fatalf("open workspace-local Rhizome index: %v", indexErr)
+		}
+		if memoryErr := workspaceIndex.StoreMemory(context.Background(), rhizome.Memory{
+			RepositoryName: workspaceName,
+			Category:       "design",
+			Title:          "workspace-only",
+			Content:        "workspace-local memory",
+		}); memoryErr != nil {
+			_ = workspaceIndex.Close()
+			t.Fatalf("store workspace-local memory: %v", memoryErr)
+		}
+		if closeErr := workspaceIndex.Close(); closeErr != nil {
+			t.Fatalf("close workspace-local Rhizome index: %v", closeErr)
+		}
+		return workspace, nil
+	}
+	t.Cleanup(func() { createRunWorkspaceFn = originalCreateWorkspace })
+
+	originalNewSprout := newSproutFn
+	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, gotStepID, sessionID string) (sproutRunner, error) {
+		contextPayload = taskContextFromContext(ctx)
+		var toolsErr error
+		availableTools, toolsErr = session.ListAvailableTools(ctx)
+		if toolsErr != nil {
+			t.Fatalf("list Terrarium tools: %v", toolsErr)
+		}
+		created, createErr := originalNewSprout(ctx, workspace, sourcePath, genotypeName, client, session, bus, gotStepID, sessionID)
+		if createErr == nil {
+			if removeErr := os.Remove(filepath.Join(workspace, workspaceOnlyFile)); removeErr != nil {
+				t.Fatalf("remove context-only workspace evidence before Sprout execution: %v", removeErr)
+			}
+		}
+		return created, createErr
+	}
+	t.Cleanup(func() { newSproutFn = originalNewSprout })
+
+	var terrariumProvider string
+	var terrariumReadOnly bool
+	var terrariumCommand []string
+	var terrariumEnvironment []string
+	var terrariumSpec terrarium.TerrariumSpec
+	originalProvider := terrariumNewProviderFn
+	terrariumNewProviderFn = func(ctx context.Context, provider string, observers ...terrarium.ActivationObserver) (terrarium.TerrariumProvider, error) {
+		return &stubProvider{createFn: func(spec terrarium.TerrariumSpec) (terrarium.Terrarium, error) {
+			terrariumSpec = spec
+			return &taskContextTerrarium{}, nil
+		}}, nil
+	}
+	t.Cleanup(func() { terrariumNewProviderFn = originalProvider })
+	originalStartSession := startTerrariumSessionFn
+	startTerrariumSessionFn = func(ctx context.Context, provider, image, mount string, readOnly bool, command, environment []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
+		terrariumProvider = provider
+		terrariumReadOnly = readOnly
+		terrariumCommand = append([]string(nil), command...)
+		terrariumEnvironment = append([]string(nil), environment...)
+		return startTerrariumSession(ctx, provider, image, mount, readOnly, command, environment, timeout, observers...)
+	}
+	t.Cleanup(func() { startTerrariumSessionFn = originalStartSession })
+	collectStageableFilesFn = collectStageableFiles
+
+	originalCommit := commitTerrariumExecutionFn
+	var commitCredential ResolvedCredential
+	var commitCalled bool
+	commitTerrariumExecutionFn = func(ctx context.Context, mountPath, sourcePath, statusPath string, executionStatus sproutExecutionStatus, taskPrompt string, credential ResolvedCredential, seedIntegrationCheckpoint bool) (string, error) {
+		commitCalled = true
+		commitCredential = credential
+		return originalCommit(ctx, mountPath, sourcePath, statusPath, executionStatus, taskPrompt, credential, seedIntegrationCheckpoint)
+	}
+	t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+	mergeCalls := 0
+	originalMerge := mergeTerrariumCommitFn
+	mergeTerrariumCommitFn = func(ctx context.Context, sourcePath, commitHash string) error {
+		mergeCalls++
+		return originalMerge(ctx, sourcePath, commitHash)
+	}
+	t.Cleanup(func() { mergeTerrariumCommitFn = originalMerge })
+	pushCalls := 0
+	originalPush := pushTerrariumCommitFn
+	pushTerrariumCommitFn = func(context.Context, string, string, ResolvedCredential, bool, string) error {
+		pushCalls++
+		return nil
+	}
+	t.Cleanup(func() { pushTerrariumCommitFn = originalPush })
+
+	bus := eventbus.New()
+	defer bus.Shutdown()
+	var contextEvents []eventbus.Event
+	bus.Subscribe(eventbus.EventTaskContextAssembled, func(event eventbus.Event) {
+		contextEvents = append(contextEvents, event)
+	})
+	if _, runErr := (&DockerOrchestrator{
+		Substrate: repository,
+		StepID:    stepID,
+		SessionID: "managed-task-context-phytomer",
+		EventBus:  bus,
+	}).RunSprout(context.Background(), "read workspace-only.txt and architecture memory"); runErr != nil {
+		t.Fatalf("managed RunSprout: %v", runErr)
+	}
+	if len(contextEvents) != 1 {
+		t.Fatalf("task-context event count = %d, want one: %+v", len(contextEvents), contextEvents)
+	}
+	event := contextEvents[0]
+	if event.SessionID != "managed-task-context-phytomer" || event.Source != stepID {
+		t.Fatalf("managed task-context correlation = %+v", event)
+	}
+	if event.Data["substrateRef"] != taskContextShortReference(repository) {
+		t.Fatalf("managed provenance substrateRef = %v, want backing source reference", event.Data["substrateRef"])
+	}
+	if event.Data["workspaceRevisionRef"] != taskContextShortReference(workspaceRevision) {
+		t.Fatalf("managed provenance workspaceRevisionRef = %v, want RunWorkspace revision %q", event.Data["workspaceRevisionRef"], workspaceRevision)
+	}
+	if strings.Contains(fmt.Sprint(event.Data), repository) || strings.Contains(fmt.Sprint(event.Data), capture.mounts[stepID]) {
+		t.Fatalf("managed provenance exposed an absolute source/workspace path: %+v", event.Data)
+	}
+	if strings.Contains(fmt.Sprint(event.Data), "run workspace evidence") || strings.Contains(fmt.Sprint(event.Data), "backing source memory") {
+		t.Fatalf("managed provenance exposed raw task evidence: %+v", event.Data)
+	}
+	if !strings.Contains(contextPayload, "run workspace evidence") {
+		t.Fatalf("task context did not read the actual RunWorkspace: %q", contextPayload)
+	}
+	if !strings.Contains(contextPayload, "backing source memory") {
+		t.Fatalf("task context did not use source-local project memory: %q", contextPayload)
+	}
+	if len(availableTools) != 1 || availableTools[0].Name != "readFile" {
+		t.Fatalf("task-context preparation changed the Terrarium tool catalog: %+v", availableTools)
+	}
+	if strings.Contains(contextPayload, "workspace-local") {
+		t.Fatalf("task context used unrelated workspace-local memory: %q", contextPayload)
+	}
+	if terrariumReadOnly {
+		t.Fatal("task-context preparation changed the managed Sprout to read-only")
+	}
+	if terrariumProvider != "docker" {
+		t.Fatalf("managed RunSprout changed the configured Terrarium provider: %q", terrariumProvider)
+	}
+	if len(terrariumEnvironment) != 0 {
+		t.Fatalf("task-context preparation changed the exact Terrarium environment: %v", terrariumEnvironment)
+	}
+	if commitCredential.Method != CredentialUnspecified || commitCredential.CommitMode != "" ||
+		commitCredential.TokenEnv != "" || commitCredential.TokenValue != "" || commitCredential.ExposeToken ||
+		commitCredential.SSHKeyPath != "" || commitCredential.App != (AppCredential{}) ||
+		commitCredential.Sign != (ResolvedSigning{}) || commitCredential.Identity != (ResolvedIdentity{}) ||
+		commitCredential.Checkout != (CheckoutSpec{}) {
+		t.Fatalf("task-context preparation changed the resolved default/no-credential commit posture: %v", commitCredential)
+	}
+	if terrariumSpec.NetworkMode != terrarium.NetworkModeNone {
+		t.Fatalf("managed Terrarium network mode = %q, want network-isolated mode", terrariumSpec.NetworkMode)
+	}
+	if len(terrariumSpec.Mounts) != 1 || terrariumSpec.Mounts[0].Source != capture.mounts[stepID] || terrariumSpec.Mounts[0].Target != "/app" || terrariumSpec.Mounts[0].ReadOnly {
+		t.Fatalf("managed Terrarium mount authority changed: %+v", terrariumSpec.Mounts)
+	}
+	if strings.Contains(strings.Join(terrariumCommand, "\x00"), "run workspace evidence") || strings.Contains(strings.Join(terrariumSpec.Command, "\x00"), "run workspace evidence") {
+		t.Fatalf("task-context evidence widened the Terrarium command: %v", terrariumCommand)
+	}
+	if strings.Contains(fmt.Sprint(terrariumSpec.Environment), "run workspace evidence") || strings.Contains(fmt.Sprint(terrariumSpec.Environment), "backing source memory") {
+		t.Fatalf("task-context evidence widened Terrarium credentials/environment: %+v", terrariumSpec.Environment)
+	}
+	for _, value := range terrariumEnvironment {
+		if strings.HasPrefix(value, "GITHUB_TOKEN=") || strings.HasPrefix(value, "OPENAI_API_KEY=") || strings.HasPrefix(value, "TENDRIL_TASK_CONTEXT") {
+			t.Fatalf("task-context preparation widened Terrarium environment with %q", value)
+		}
+	}
+	if !commitCalled || commitCredential.TokenValue != "" || commitCredential.ExposeToken {
+		t.Fatalf("task-context preparation changed Git credential authority: called=%t credential=%v", commitCalled, commitCredential)
+	}
+	if mergeCalls != 0 || pushCalls != 0 {
+		t.Fatalf("task-context preparation widened Git publication authority: merges=%d pushes=%d", mergeCalls, pushCalls)
+	}
+	fruitFiles, err := runGitCommand(context.Background(), repository, "ls-tree", "-r", "--name-only", "sprout/task-"+stepID)
+	if err != nil {
+		t.Fatalf("list managed Fruit: %v", err)
+	}
+	for _, forbidden := range []string{
+		workspaceOnlyFile,
+		filepath.ToSlash(filepath.Join(".tendril", "genome", repositoryMapFile)),
+		filepath.ToSlash(filepath.Join(".tendril", "genome", memoryMapFile)),
+		filepath.ToSlash(filepath.Join(".tendril", rhizomeIndexDatabase)),
+		filepath.ToSlash(filepath.Join(".tendril", rhizomeIndexDatabase+"-wal")),
+		filepath.ToSlash(filepath.Join(".tendril", rhizomeIndexDatabase+"-shm")),
+		filepath.ToSlash(filepath.Join(".tendril", rhizomeIndexKeyFile)),
+		filepath.ToSlash(filepath.Join(".tendril", "genome", genomicEpigeneticsFilename)),
+		filepath.ToSlash(filepath.Join(".tendril", "genome", genomicFitnessFilename)),
+	} {
+		if strings.Contains(fruitFiles, forbidden) {
+			t.Fatalf("managed Fruit contains runtime task-context state %q:\n%s", forbidden, fruitFiles)
+		}
+	}
+	if !strings.Contains(fruitFiles, "sprout.txt") {
+		t.Fatalf("managed Fruit omitted the actual Sprout work:\n%s", fruitFiles)
+	}
+	assertManagedBaseClean(t, repository)
 }
 
 func TestCopyMycorrhizalCacheCopiesAbsentDestination(t *testing.T) {
