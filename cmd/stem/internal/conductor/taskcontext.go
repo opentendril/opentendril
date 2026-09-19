@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
@@ -32,7 +34,34 @@ const (
 	taskContextEvidenceAnchor = "file-anchor"
 	taskContextEvidenceSymbol = "rhizome-symbol"
 	taskContextEvidenceGit    = "git-state-path"
+	taskContextEvidenceTest   = "associated-test"
+	taskContextEvidenceDoc    = "associated-documentation"
+	taskContextEvidenceMemory = "project-memory"
 )
+
+const (
+	taskContextSelectionReasonExplicitFile            = "explicit-file-anchor"
+	taskContextSelectionReasonExactSymbol             = "exact-symbol-anchor"
+	taskContextSelectionReasonLexicalSymbol           = "lexical-symbol-anchor"
+	taskContextSelectionReasonGitState                = "git-state-path"
+	taskContextSelectionReasonAssociatedTest          = "associated-test"
+	taskContextSelectionReasonAssociatedDocumentation = "associated-documentation"
+	taskContextSelectionReasonLocalMemory             = "source-local-memory"
+)
+
+const (
+	taskContextOmissionBudgetBytes       = "budget-bytes"
+	taskContextOmissionBudgetItems       = "budget-items"
+	taskContextOmissionStaleEvidence     = "stale-evidence"
+	taskContextOmissionPathSecurity      = "path-security"
+	taskContextOmissionUnreadable        = "unreadable"
+	taskContextOmissionNotFound          = "not-found"
+	taskContextOmissionMemoryMissing     = "memory-missing"
+	taskContextOmissionMemoryUnavailable = "memory-unavailable"
+	taskContextOmissionMemoryUnbound     = "memory-unbound"
+)
+
+var errTaskContextPathSecurity = errors.New("task-context path security rejection")
 
 var taskContextLexicalTermPattern = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]{0,63}`)
 
@@ -48,14 +77,23 @@ type taskContextAssemblyInput struct {
 	SourceRepository        string
 	ExecutionWorkspace      string
 	StartingRevision        string
+	MemoryIndex             taskContextMemoryIndex
+	MemoryRepositoryName    string
+	MemoryOmissionReason    string
 }
 
 type taskContextManifestItem struct {
-	Kind            string
-	Path            string
-	Symbols         []string
-	ContentIdentity string
-	Bytes           int
+	Kind             string
+	SourceClass      string
+	Path             string
+	SourceIdentity   string
+	SelectionReason  string
+	Symbols          []string
+	ContentIdentity  string
+	ContentReference string
+	Bytes            int
+	AdmittedBytes    int
+	Truncated        bool
 }
 
 // taskContextSelectionManifest is deliberately in-memory in Slice 1. Its
@@ -67,6 +105,13 @@ type taskContextSelectionManifest struct {
 	SourceRepository        string
 	ExecutionWorkspace      string
 	StartingRevision        string
+	EffectiveMaxBytes       int
+	EffectiveItemMaxBytes   int
+	EffectiveMaxItems       int
+	CandidateCount          int
+	AdmittedCount           int
+	AdmittedBytes           int
+	OmissionCounts          map[string]int
 	Items                   []taskContextManifestItem
 }
 
@@ -99,16 +144,24 @@ type taskContextRhizomeIndex interface {
 	SearchSymbols(ctx context.Context, repositoryName string, query string, limit int) ([]rhizome.Symbol, error)
 }
 
+type taskContextMemoryIndex interface {
+	SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]rhizome.Memory, error)
+}
+
 type taskContextSourceFile struct {
-	content []byte
-	hash    string
+	content   []byte
+	hash      string
+	truncated bool
 }
 
 type taskContextCandidate struct {
-	kind     string
-	path     string
-	priority int
-	symbols  []rhizome.Symbol
+	kind            string
+	path            string
+	dedupeKey       string
+	priority        int
+	selectionReason string
+	symbols         []rhizome.Symbol
+	memory          *rhizome.Memory
 }
 
 func taskContextSettingsFromEnvironment() (taskContextSettings, error) {
@@ -182,13 +235,24 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		SourceRepository:        sourceRepository,
 		ExecutionWorkspace:      workspaceRoot,
 		StartingRevision:        strings.TrimSpace(input.StartingRevision),
+		EffectiveMaxBytes:       settings.maxBytes,
+		EffectiveItemMaxBytes:   settings.itemMaxBytes,
+		EffectiveMaxItems:       settings.maxItems,
+		OmissionCounts:          make(map[string]int),
 		Items:                   []taskContextManifestItem{},
 	}
 	assembly := taskContextAssembly{Manifest: manifest}
 
 	candidates := make(map[string]taskContextCandidate)
+	taskContextAddOmission(&manifest, taskContextOmissionPathSecurity, taskContextInvalidFileAnchorCount(input.TaskPrompt))
 	for _, path := range extractTaskContextFileAnchors(input.TaskPrompt) {
-		candidates[path] = taskContextCandidate{kind: taskContextEvidenceAnchor, path: path, priority: 0}
+		candidates[path] = taskContextCandidate{
+			kind:            taskContextEvidenceAnchor,
+			path:            path,
+			dedupeKey:       path,
+			priority:        0,
+			selectionReason: taskContextSelectionReasonExplicitFile,
+		}
 	}
 
 	if index != nil && strings.TrimSpace(repositoryName) != "" {
@@ -242,7 +306,18 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 				}
 				return symbols[i].Name < symbols[j].Name
 			})
-			candidates[path] = taskContextCandidate{kind: taskContextEvidenceSymbol, path: path, priority: priority, symbols: uniqueTaskContextSymbols(symbols)}
+			reason := taskContextSelectionReasonLexicalSymbol
+			if priority == 1 {
+				reason = taskContextSelectionReasonExactSymbol
+			}
+			candidates[path] = taskContextCandidate{
+				kind:            taskContextEvidenceSymbol,
+				path:            path,
+				dedupeKey:       path,
+				priority:        priority,
+				selectionReason: reason,
+				symbols:         uniqueTaskContextSymbols(symbols),
+			}
 		}
 	}
 
@@ -250,7 +325,30 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		if _, alreadySelected := candidates[path]; alreadySelected {
 			continue
 		}
-		candidates[path] = taskContextCandidate{kind: taskContextEvidenceGit, path: path, priority: 3}
+		candidates[path] = taskContextCandidate{
+			kind:            taskContextEvidenceGit,
+			path:            path,
+			dedupeKey:       path,
+			priority:        3,
+			selectionReason: taskContextSelectionReasonGitState,
+		}
+	}
+
+	if input.MemoryOmissionReason != "" {
+		taskContextAddOmission(&manifest, input.MemoryOmissionReason, 1)
+	}
+	if input.MemoryIndex != nil && strings.TrimSpace(input.MemoryRepositoryName) != "" {
+		memoryCandidates, unbound, memoryErr := taskContextMemoryCandidates(ctx, input.MemoryIndex, input.MemoryRepositoryName, input.TaskPrompt)
+		if memoryErr != nil {
+			taskContextAddOmission(&manifest, taskContextOmissionMemoryUnavailable, 1)
+		} else {
+			if unbound > 0 {
+				taskContextAddOmission(&manifest, taskContextOmissionMemoryUnbound, unbound)
+			}
+			for _, candidate := range memoryCandidates {
+				candidates[candidate.dedupeKey] = candidate
+			}
+		}
 	}
 
 	ordered := make([]taskContextCandidate, 0, len(candidates))
@@ -267,9 +365,12 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		return ordered[i].kind < ordered[j].kind
 	})
 
+	manifest.CandidateCount = len(ordered)
 	usedBytes := 0
-	for _, candidate := range ordered {
+	for candidateIndex := 0; candidateIndex < len(ordered); candidateIndex++ {
+		candidate := ordered[candidateIndex]
 		if len(manifest.Items) >= settings.maxItems {
+			taskContextAddOmission(&manifest, taskContextOmissionBudgetItems, len(ordered)-candidateIndex)
 			break
 		}
 
@@ -278,6 +379,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			remaining -= 2
 		}
 		if remaining <= 0 {
+			taskContextAddOmission(&manifest, taskContextOmissionBudgetBytes, len(ordered)-candidateIndex)
 			break
 		}
 		itemBudget := settings.itemMaxBytes
@@ -286,8 +388,14 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		}
 
 		var source taskContextSourceFile
-		if candidate.kind == taskContextEvidenceSymbol {
+		if candidate.memory != nil {
+			source = taskContextSourceFile{
+				content: []byte(candidate.memory.Content),
+				hash:    taskContextContentIdentity([]byte(candidate.memory.Content)),
+			}
+		} else if candidate.kind == taskContextEvidenceSymbol {
 			if index == nil || strings.TrimSpace(repositoryName) == "" {
+				taskContextAddOmission(&manifest, taskContextOmissionStaleEvidence, 1)
 				continue
 			}
 			indexed, found, getErr := index.GetFile(ctx, repositoryName, candidate.path)
@@ -295,24 +403,43 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 				return assembly, fmt.Errorf("retrieve Rhizome file record for %s: %w", candidate.path, getErr)
 			}
 			if !found {
+				taskContextAddOmission(&manifest, taskContextOmissionStaleEvidence, 1)
 				continue
 			}
 			source, err = readTaskContextSourceFile(workspace, candidate.path, itemBudget, candidate.symbols)
-			if err != nil || !strings.EqualFold(indexed.Hash, source.hash) {
+			if err != nil {
+				if errors.Is(err, errTaskContextPathSecurity) {
+					taskContextAddOmission(&manifest, taskContextOmissionPathSecurity, 1)
+				} else {
+					taskContextAddOmission(&manifest, taskContextOmissionUnreadable, 1)
+				}
+				continue
+			}
+			if !strings.EqualFold(indexed.Hash, source.hash) {
 				// A stale symbol stub is never evidence. A path that disappeared or
 				// escaped the workspace is treated the same way: omit the candidate.
+				taskContextAddOmission(&manifest, taskContextOmissionStaleEvidence, 1)
 				continue
 			}
 		} else {
 			source, err = readTaskContextSourceFile(workspace, candidate.path, itemBudget, nil)
 			if err != nil {
+				if errors.Is(err, errTaskContextPathSecurity) {
+					taskContextAddOmission(&manifest, taskContextOmissionPathSecurity, 1)
+				} else if errors.Is(err, os.ErrNotExist) {
+					taskContextAddOmission(&manifest, taskContextOmissionNotFound, 1)
+				} else {
+					taskContextAddOmission(&manifest, taskContextOmissionUnreadable, 1)
+				}
 				continue
 			}
 		}
 
 		rendered := renderTaskContextCandidate(candidate, source)
-		rendered = truncateTaskContextEvidence(rendered, itemBudget)
+		var renderedTruncated bool
+		rendered, renderedTruncated = truncateTaskContextEvidenceWithStatus(rendered, itemBudget)
 		if rendered == "" {
+			taskContextAddOmission(&manifest, taskContextOmissionUnreadable, 1)
 			continue
 		}
 		if usedBytes > 0 {
@@ -322,19 +449,367 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		assembly.Rendered += rendered
 		usedBytes += len(rendered)
 		manifestItem := taskContextManifestItem{
-			Kind:            candidate.kind,
-			Path:            candidate.path,
-			ContentIdentity: source.hash,
-			Bytes:           len(rendered),
+			Kind:             candidate.kind,
+			SourceClass:      candidate.kind,
+			Path:             candidate.path,
+			SourceIdentity:   candidate.path,
+			SelectionReason:  candidate.selectionReason,
+			ContentIdentity:  source.hash,
+			ContentReference: taskContextShortContentReference(source.hash),
+			Bytes:            len(rendered),
+			AdmittedBytes:    len(rendered),
+			Truncated:        source.truncated || renderedTruncated,
 		}
 		for _, symbol := range candidate.symbols {
 			manifestItem.Symbols = append(manifestItem.Symbols, symbol.Name)
 		}
 		manifest.Items = append(manifest.Items, manifestItem)
+		if candidate.memory == nil && candidate.kind != taskContextEvidenceTest && candidate.kind != taskContextEvidenceDoc {
+			for _, associated := range taskContextAssociatedCandidates(candidate.path) {
+				if !taskContextAssociatedCandidateExists(workspace, associated.path) {
+					continue
+				}
+				if _, exists := candidates[associated.dedupeKey]; exists {
+					continue
+				}
+				candidates[associated.dedupeKey] = associated
+				ordered = append(ordered, associated)
+			}
+		}
 	}
 
+	manifest.CandidateCount = len(candidates)
+	manifest.AdmittedCount = len(manifest.Items)
+	manifest.AdmittedBytes = usedBytes
 	assembly.Manifest = manifest
 	return assembly, nil
+}
+
+func taskContextAddOmission(manifest *taskContextSelectionManifest, reason string, count int) {
+	if manifest == nil || count <= 0 || strings.TrimSpace(reason) == "" {
+		return
+	}
+	if manifest.OmissionCounts == nil {
+		manifest.OmissionCounts = make(map[string]int)
+	}
+	manifest.OmissionCounts[reason] += count
+}
+
+func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryIndex, repositoryName, prompt string) ([]taskContextCandidate, int, error) {
+	terms := extractTaskContextLexicalTerms(prompt)
+	if len(terms) == 0 {
+		terms = []string{"*"}
+	}
+
+	memoriesByKey := make(map[string]rhizome.Memory)
+	unbound := 0
+	for _, term := range terms {
+		query := term
+		if term != "*" {
+			query = safeTaskContextFTSQuery(term)
+			if query == "" {
+				continue
+			}
+		}
+		memories, err := index.SearchMemories(ctx, repositoryName, query, "", 32)
+		if err != nil {
+			return nil, 0, err
+		}
+		sort.Slice(memories, func(i, j int) bool {
+			left := strings.Join([]string{memories[i].RepositoryName, memories[i].Category, memories[i].Title, memories[i].Content}, "\x00")
+			right := strings.Join([]string{memories[j].RepositoryName, memories[j].Category, memories[j].Title, memories[j].Content}, "\x00")
+			return left < right
+		})
+		for _, memory := range memories {
+			if memory.RepositoryName != repositoryName {
+				unbound++
+				continue
+			}
+			key := strings.Join([]string{memory.RepositoryName, memory.Category, memory.Title}, "\x00")
+			if _, exists := memoriesByKey[key]; !exists {
+				memoriesByKey[key] = memory
+			}
+		}
+	}
+
+	keys := make([]string, 0, len(memoriesByKey))
+	for key := range memoriesByKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	candidates := make([]taskContextCandidate, 0, len(keys))
+	for _, key := range keys {
+		memory := memoriesByKey[key]
+		identity := taskContextShortReference(key)
+		candidates = append(candidates, taskContextCandidate{
+			kind:            taskContextEvidenceMemory,
+			path:            "memory/" + identity,
+			dedupeKey:       "memory:" + key,
+			priority:        5,
+			selectionReason: taskContextSelectionReasonLocalMemory,
+			memory:          &memory,
+		})
+	}
+	return candidates, unbound, nil
+}
+
+func taskContextAssociatedCandidates(sourcePath string) []taskContextCandidate {
+	cleaned, err := cleanTaskContextRepositoryPath(sourcePath)
+	if err != nil || taskContextIsAssociatedTestPath(cleaned) {
+		return nil
+	}
+
+	extension := strings.ToLower(filepath.Ext(cleaned))
+	base := strings.TrimSuffix(filepath.Base(cleaned), filepath.Ext(cleaned))
+	directory := filepath.ToSlash(filepath.Dir(cleaned))
+	if directory == "." {
+		directory = ""
+	}
+
+	paths := make(map[string]string)
+	add := func(path, kind string) {
+		cleanedPath, cleanErr := cleanTaskContextRepositoryPath(path)
+		if cleanErr != nil || cleanedPath == cleaned {
+			return
+		}
+		paths[cleanedPath] = kind
+	}
+
+	switch extension {
+	case ".go":
+		add(filepath.Join(directory, base+"_test.go"), taskContextEvidenceTest)
+	case ".py":
+		add(filepath.Join(directory, "test_"+base+".py"), taskContextEvidenceTest)
+		add(filepath.Join(directory, base+"_test.py"), taskContextEvidenceTest)
+	case ".ts", ".tsx":
+		add(filepath.Join(directory, base+".test"+extension), taskContextEvidenceTest)
+		add(filepath.Join(directory, base+".spec"+extension), taskContextEvidenceTest)
+	case ".js", ".jsx", ".mjs", ".cjs":
+		add(filepath.Join(directory, base+".test"+extension), taskContextEvidenceTest)
+		add(filepath.Join(directory, base+".spec"+extension), taskContextEvidenceTest)
+	default:
+		return nil
+	}
+
+	add(filepath.Join(directory, base+".md"), taskContextEvidenceDoc)
+	add(filepath.Join(directory, base+".mdx"), taskContextEvidenceDoc)
+	if directory != "" {
+		add("README.md", taskContextEvidenceDoc)
+		add(filepath.Join("docs", base+".md"), taskContextEvidenceDoc)
+		add(filepath.Join("docs", base+".mdx"), taskContextEvidenceDoc)
+	} else {
+		add("README.md", taskContextEvidenceDoc)
+		add("CONTRIBUTING.md", taskContextEvidenceDoc)
+	}
+
+	pathsList := make([]string, 0, len(paths))
+	for path := range paths {
+		pathsList = append(pathsList, path)
+	}
+	sort.Strings(pathsList)
+	candidates := make([]taskContextCandidate, 0, len(pathsList))
+	for _, path := range pathsList {
+		kind := paths[path]
+		reason := taskContextSelectionReasonAssociatedDocumentation
+		if kind == taskContextEvidenceTest {
+			reason = taskContextSelectionReasonAssociatedTest
+		}
+		candidates = append(candidates, taskContextCandidate{
+			kind:            kind,
+			path:            path,
+			dedupeKey:       path,
+			priority:        4,
+			selectionReason: reason,
+		})
+	}
+	return candidates
+}
+
+func taskContextAssociatedCandidateExists(workspace *os.Root, path string) bool {
+	if workspace == nil {
+		return false
+	}
+	if err := taskContextRejectRootSymlinks(workspace, path); err != nil {
+		return true
+	}
+	info, err := workspace.Stat(filepath.FromSlash(path))
+	if err != nil {
+		// Preserve candidates whose path exists but cannot be safely inspected so
+		// the admission path records a stable security omission. Missing
+		// conventional names are not candidates and do not inflate provenance.
+		return !os.IsNotExist(err)
+	}
+	return info.Mode().IsRegular()
+}
+
+func taskContextRejectRootSymlinks(workspace *os.Root, relativePath string) error {
+	cleaned, err := cleanTaskContextRepositoryPath(relativePath)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errTaskContextPathSecurity, err)
+	}
+	partial := ""
+	for _, segment := range strings.Split(cleaned, "/") {
+		if partial == "" {
+			partial = segment
+		} else {
+			partial += "/" + segment
+		}
+		info, statErr := workspace.Lstat(filepath.FromSlash(partial))
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil
+			}
+			return fmt.Errorf("%w: lstat %s: %v", errTaskContextPathSecurity, partial, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: symlink %s", errTaskContextPathSecurity, partial)
+		}
+	}
+	return nil
+}
+
+func taskContextIsAssociatedTestPath(path string) bool {
+	base := strings.ToLower(filepath.Base(path))
+	return strings.HasPrefix(base, "test_") || strings.Contains(base, ".test.") || strings.Contains(base, ".spec.") || strings.HasSuffix(base, "_test.go") || strings.HasSuffix(base, "_test.py")
+}
+
+func taskContextInvalidFileAnchorCount(prompt string) int {
+	count := 0
+	for _, token := range strings.FieldsFunc(prompt, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune("`'\"()[]{}<>,;:!?=", r)
+	}) {
+		if token == "" || !taskContextLooksLikePathToken(token) {
+			continue
+		}
+		if _, err := cleanTaskContextRepositoryPath(strings.TrimRight(token, ".")); err != nil {
+			count++
+		}
+	}
+	return count
+}
+
+func taskContextLooksLikePathToken(token string) bool {
+	return strings.Contains(token, "/") || strings.Contains(token, "\\") || strings.HasPrefix(token, ".") || filepath.Ext(token) != "" || taskContextForbiddenPath(token)
+}
+
+func taskContextShortReference(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func taskContextShortContentReference(identity string) string {
+	identity = strings.TrimSpace(identity)
+	if len(identity) >= 12 {
+		return identity[:12]
+	}
+	return taskContextShortReference(identity)
+}
+
+func taskContextSourceLocalMemoryAvailability(sourceRepository string) string {
+	_, _, _, availability := taskContextSourceLocalMemoryPaths(sourceRepository)
+	return availability
+}
+
+func taskContextSourceLocalMemoryPaths(sourceRepository string) (string, string, string, string) {
+	canonical, err := taskContextCanonicalDirectory(sourceRepository, "source repository")
+	if err != nil {
+		return "", "", "", taskContextOmissionMemoryUnavailable
+	}
+	statePath := filepath.Join(canonical, tendrilStateDirectory)
+	stateInfo, err := os.Lstat(statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return canonical, "", "", taskContextOmissionMemoryMissing
+		}
+		return canonical, "", "", taskContextOmissionMemoryUnavailable
+	}
+	if stateInfo.Mode()&os.ModeSymlink != 0 || !stateInfo.IsDir() {
+		return canonical, "", "", taskContextOmissionMemoryUnavailable
+	}
+	databasePath := filepath.Join(statePath, rhizomeIndexDatabase)
+	databaseInfo, err := os.Lstat(databasePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return canonical, databasePath, "", taskContextOmissionMemoryMissing
+		}
+		return canonical, databasePath, "", taskContextOmissionMemoryUnavailable
+	}
+	if databaseInfo.Mode()&os.ModeSymlink != 0 || !databaseInfo.Mode().IsRegular() {
+		return canonical, databasePath, "", taskContextOmissionMemoryUnavailable
+	}
+	keyPath := filepath.Join(statePath, rhizomeIndexKeyFile)
+	keyInfo, err := os.Lstat(keyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return canonical, databasePath, keyPath, taskContextOmissionMemoryUnavailable
+		}
+		return canonical, databasePath, keyPath, taskContextOmissionMemoryUnavailable
+	}
+	if keyInfo.Mode()&os.ModeSymlink != 0 || !keyInfo.Mode().IsRegular() {
+		return canonical, databasePath, keyPath, taskContextOmissionMemoryUnavailable
+	}
+	key, err := os.ReadFile(keyPath)
+	if err != nil || len(key) != 32 {
+		return canonical, databasePath, keyPath, taskContextOmissionMemoryUnavailable
+	}
+	return canonical, databasePath, keyPath, ""
+}
+
+func taskContextObservationEvent(stepID, sessionID, substrate string, manifest taskContextSelectionManifest) eventbus.Event {
+	safeStepID := taskContextSafeCorrelationID(stepID)
+	safeSessionID := taskContextSafeCorrelationID(sessionID)
+	items := make([]map[string]interface{}, 0, len(manifest.Items))
+	for _, item := range manifest.Items {
+		items = append(items, map[string]interface{}{
+			"sourceClass":     item.SourceClass,
+			"sourceIdentity":  item.SourceIdentity,
+			"selectionReason": item.SelectionReason,
+			"contentRef":      item.ContentReference,
+			"admittedBytes":   item.AdmittedBytes,
+			"truncated":       item.Truncated,
+		})
+	}
+	omissions := make(map[string]interface{}, len(manifest.OmissionCounts))
+	for reason, count := range manifest.OmissionCounts {
+		omissions[reason] = count
+	}
+	data := map[string]interface{}{
+		"stepId":                safeStepID,
+		"substrateRef":          taskContextShortReference(manifest.SourceRepository),
+		"workspaceRevisionRef":  taskContextShortReference(manifest.StartingRevision),
+		"effectiveMaxBytes":     manifest.EffectiveMaxBytes,
+		"effectiveItemMaxBytes": manifest.EffectiveItemMaxBytes,
+		"effectiveMaxItems":     manifest.EffectiveMaxItems,
+		"candidateCount":        manifest.CandidateCount,
+		"admittedCount":         manifest.AdmittedCount,
+		"admittedBytes":         manifest.AdmittedBytes,
+		"omissionCounts":        omissions,
+		"items":                 items,
+	}
+	if strings.TrimSpace(substrate) != "" {
+		data["substrate"] = strings.TrimSpace(substrate)
+	}
+	return eventbus.Event{
+		Type:      eventbus.EventTaskContextAssembled,
+		Source:    safeStepID,
+		SessionID: safeSessionID,
+		Data:      data,
+	}
+}
+
+func taskContextSafeCorrelationID(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 128 && !strings.ContainsAny(value, "/\\:\r\n\x00") {
+		return value
+	}
+	return "ref-" + taskContextShortReference(value)
 }
 
 func taskContextWorkspaceRoot(workspace string) (string, error) {
@@ -411,22 +886,37 @@ func taskContextForbiddenPath(path string) bool {
 func readTaskContextSourceFile(workspaceRoot *os.Root, relativePath string, evidenceLimit int, symbols []rhizome.Symbol) (taskContextSourceFile, error) {
 	cleaned, err := cleanTaskContextRepositoryPath(relativePath)
 	if err != nil {
-		return taskContextSourceFile{}, err
+		return taskContextSourceFile{}, fmt.Errorf("%w: %v", errTaskContextPathSecurity, err)
 	}
 	if workspaceRoot == nil {
 		return taskContextSourceFile{}, fmt.Errorf("execution workspace root is unavailable")
 	}
+	if err := taskContextRejectRootSymlinks(workspaceRoot, cleaned); err != nil {
+		return taskContextSourceFile{}, err
+	}
 	info, err := workspaceRoot.Stat(filepath.FromSlash(cleaned))
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		if os.IsNotExist(err) {
+			return taskContextSourceFile{}, fmt.Errorf("path is not a regular file: %w", os.ErrNotExist)
+		}
+		return taskContextSourceFile{}, fmt.Errorf("%w: stat %s: %v", errTaskContextPathSecurity, cleaned, err)
+	}
+	if !info.Mode().IsRegular() {
 		return taskContextSourceFile{}, fmt.Errorf("path is not a regular file")
 	}
 	file, err := workspaceRoot.Open(filepath.FromSlash(cleaned))
 	if err != nil {
-		return taskContextSourceFile{}, fmt.Errorf("open %s: %w", cleaned, err)
+		if os.IsNotExist(err) {
+			return taskContextSourceFile{}, fmt.Errorf("open %s: %w", cleaned, os.ErrNotExist)
+		}
+		return taskContextSourceFile{}, fmt.Errorf("%w: open %s: %v", errTaskContextPathSecurity, cleaned, err)
 	}
 	defer file.Close()
 	info, err = file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		return taskContextSourceFile{}, fmt.Errorf("%w: stat opened %s: %v", errTaskContextPathSecurity, cleaned, err)
+	}
+	if !info.Mode().IsRegular() {
 		return taskContextSourceFile{}, fmt.Errorf("path is not a regular file")
 	}
 
@@ -446,7 +936,7 @@ func readTaskContextSourceFile(workspaceRoot *os.Root, relativePath string, evid
 			return taskContextSourceFile{}, fmt.Errorf("read %s: %w", cleaned, readErr)
 		}
 	}
-	return taskContextSourceFile{content: evidence.Bytes(), hash: hex.EncodeToString(hash.Sum(nil))}, nil
+	return taskContextSourceFile{content: evidence.Bytes(), hash: hex.EncodeToString(hash.Sum(nil)), truncated: evidence.Truncated()}, nil
 }
 
 func taskContextContentIdentity(content []byte) string {
@@ -462,6 +952,7 @@ type taskContextEvidenceCollector struct {
 	symbolOnly bool
 	byLineOnly bool
 	content    []byte
+	truncated  bool
 }
 
 func newTaskContextEvidenceCollector(limit int, symbols []rhizome.Symbol) *taskContextEvidenceCollector {
@@ -477,7 +968,11 @@ func newTaskContextEvidenceCollector(limit int, symbols []rhizome.Symbol) *taskC
 }
 
 func (c *taskContextEvidenceCollector) Write(chunk []byte) {
-	if c.limit <= len(c.content) || len(chunk) == 0 {
+	if len(chunk) == 0 {
+		return
+	}
+	if c.limit <= len(c.content) {
+		c.truncated = true
 		return
 	}
 	if c.symbolOnly && !c.byLineOnly {
@@ -508,9 +1003,13 @@ func (c *taskContextEvidenceCollector) Write(chunk []byte) {
 func (c *taskContextEvidenceCollector) appendBounded(content []byte) {
 	remaining := c.limit - len(c.content)
 	if remaining <= 0 {
+		if len(content) > 0 {
+			c.truncated = true
+		}
 		return
 	}
 	if len(content) > remaining {
+		c.truncated = true
 		content = content[:remaining]
 	}
 	c.content = append(c.content, content...)
@@ -518,6 +1017,10 @@ func (c *taskContextEvidenceCollector) appendBounded(content []byte) {
 
 func (c *taskContextEvidenceCollector) Bytes() []byte {
 	return c.content
+}
+
+func (c *taskContextEvidenceCollector) Truncated() bool {
+	return c.truncated
 }
 
 func taskContextSymbolLineRange(symbols []rhizome.Symbol) (int, int) {
@@ -660,10 +1163,28 @@ func renderTaskContextCandidate(candidate taskContextCandidate, source taskConte
 		builder.WriteString("Rhizome symbol evidence: ")
 	case taskContextEvidenceGit:
 		builder.WriteString("Current Git-state path: ")
+	case taskContextEvidenceTest:
+		builder.WriteString("Associated test evidence: ")
+	case taskContextEvidenceDoc:
+		builder.WriteString("Associated documentation evidence: ")
+	case taskContextEvidenceMemory:
+		builder.WriteString("Source-local project memory evidence: ")
 	}
 	builder.WriteString("`")
 	builder.WriteString(candidate.path)
 	builder.WriteString("`\n")
+	if candidate.memory != nil {
+		if strings.TrimSpace(candidate.memory.Category) != "" {
+			builder.WriteString("Category: ")
+			builder.WriteString(strings.TrimSpace(candidate.memory.Category))
+			builder.WriteString("\n")
+		}
+		if strings.TrimSpace(candidate.memory.Title) != "" {
+			builder.WriteString("Title: ")
+			builder.WriteString(strings.TrimSpace(candidate.memory.Title))
+			builder.WriteString("\n")
+		}
+	}
 	if len(candidate.symbols) > 0 {
 		builder.WriteString("Symbols: ")
 		names := make([]string, 0, len(candidate.symbols))
@@ -678,20 +1199,25 @@ func renderTaskContextCandidate(candidate taskContextCandidate, source taskConte
 }
 
 func truncateTaskContextEvidence(content string, limit int) string {
+	truncated, _ := truncateTaskContextEvidenceWithStatus(content, limit)
+	return truncated
+}
+
+func truncateTaskContextEvidenceWithStatus(content string, limit int) (string, bool) {
 	if limit <= 0 {
-		return ""
+		return "", true
 	}
 	if len(content) <= limit {
-		return content
+		return content, false
 	}
 	marker := "\n[truncated]"
 	if limit <= len(marker) {
-		return marker[:limit]
+		return marker[:limit], true
 	}
 	cutLimit := limit - len(marker)
 	cut := content[:cutLimit]
 	if index := strings.LastIndexByte(cut, '\n'); index > 0 {
 		cut = cut[:index]
 	}
-	return cut + marker
+	return cut + marker, true
 }

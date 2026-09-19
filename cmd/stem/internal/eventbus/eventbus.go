@@ -96,6 +96,9 @@ const (
 	// the observability counterpart to EventDelegationDenied. It does not change
 	// enforcement; the gate already blocked the run before this fires.
 	EventTriggerBlocked EventType = "hormonal-trigger-blocked"
+	// EventTaskContextAssembled records the bounded, safe provenance manifest
+	// produced immediately before a Sprout receives its first task turn.
+	EventTaskContextAssembled EventType = "task-context-assembled"
 )
 
 // AllEventTypes returns every registered event type for broad telemetry subscriptions.
@@ -126,6 +129,7 @@ func AllEventTypes() []EventType {
 		EventDelegationAuthorized,
 		EventDelegationDenied,
 		EventTriggerBlocked,
+		EventTaskContextAssembled,
 	}
 }
 

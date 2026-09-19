@@ -2,11 +2,15 @@ package conductor
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
+	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
 )
 
@@ -14,6 +18,20 @@ type taskContextTestIndex struct {
 	symbols []rhizome.Symbol
 	files   map[string]rhizome.FileRecord
 	queries []string
+}
+
+type taskContextTestMemoryIndex struct {
+	memories []rhizome.Memory
+	queries  []string
+	err      error
+}
+
+func (f *taskContextTestMemoryIndex) SearchMemories(_ context.Context, repositoryName, query, _ string, _ int) ([]rhizome.Memory, error) {
+	f.queries = append(f.queries, repositoryName+"\x00"+query)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]rhizome.Memory(nil), f.memories...), nil
 }
 
 func (f *taskContextTestIndex) GetFile(_ context.Context, _ string, path string) (rhizome.FileRecord, bool, error) {
@@ -394,5 +412,438 @@ func TestTaskContextGitRenameUsesCurrentDestinationPath(t *testing.T) {
 	assembly := assembleTaskContextForTest(t, root, "show current changes", nil)
 	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Path != "new.go" {
 		t.Fatalf("Git rename selected the wrong path: %+v", assembly.Manifest.Items)
+	}
+}
+
+func TestTaskContextAdmitsDeterministicAssociatedTest(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo_test.go", "package fixture\n\nfunc TestFoo() {}\n")
+
+	assembly := assembleTaskContextForTest(t, root, "inspect foo.go", nil)
+	if len(assembly.Manifest.Items) != 2 {
+		t.Fatalf("expected source plus associated test, got %+v", assembly.Manifest.Items)
+	}
+	if assembly.Manifest.Items[1].Path != "foo_test.go" || assembly.Manifest.Items[1].SelectionReason != taskContextSelectionReasonAssociatedTest {
+		t.Fatalf("associated test was not deterministic: %+v", assembly.Manifest.Items)
+	}
+}
+
+func TestTaskContextAdmitsDeterministicAssociatedDocumentation(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo.md", "Foo design notes\n")
+
+	assembly := assembleTaskContextForTest(t, root, "inspect foo.go", nil)
+	if len(assembly.Manifest.Items) != 2 {
+		t.Fatalf("expected source plus associated documentation, got %+v", assembly.Manifest.Items)
+	}
+	if assembly.Manifest.Items[1].Path != "foo.md" || assembly.Manifest.Items[1].SelectionReason != taskContextSelectionReasonAssociatedDocumentation {
+		t.Fatalf("associated documentation was not deterministic: %+v", assembly.Manifest.Items)
+	}
+}
+
+func TestTaskContextAssociatedDiscoveryIsBounded(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo_test.go", "package fixture\n\nfunc TestFoo() {}\n")
+	writeTaskContextFile(t, root, "foo.md", "Foo design notes\n")
+	for i := 0; i < 100; i++ {
+		writeTaskContextFile(t, root, filepath.Join("deep", "nested", "docs", "unrelated", string(rune('a'+i%26))+".md"), "unrelated\n")
+	}
+
+	assembly := assembleTaskContextForTest(t, root, "foo.go", nil)
+	if assembly.Manifest.CandidateCount != 3 {
+		t.Fatalf("associated discovery traversed beyond fixed candidates: candidate count %d, manifest %+v", assembly.Manifest.CandidateCount, assembly.Manifest)
+	}
+}
+
+func TestTaskContextAssociatedEvidenceRespectsExistingBudgets(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo_test.go", "package fixture\n\nfunc TestFoo() {}\n")
+	t.Setenv(taskContextMaxItemsEnv, "1")
+
+	assembly := assembleTaskContextForTest(t, root, "foo.go", nil)
+	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Path != "foo.go" {
+		t.Fatalf("associated evidence exceeded item budget: %+v", assembly.Manifest.Items)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionBudgetItems] == 0 {
+		t.Fatalf("budget omission was not recorded: %+v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+func TestTaskContextLocalMemoryAdmissionAndNoRemoteFallback(t *testing.T) {
+	root := t.TempDir()
+	memory := &taskContextTestMemoryIndex{memories: []rhizome.Memory{{
+		RepositoryName: "fixture",
+		Category:       "design",
+		Title:          "architecture",
+		Content:        "local project memory",
+	}}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "use architecture memory",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memory,
+		MemoryRepositoryName: "fixture",
+		MemoryOmissionReason: "",
+		StartingRevision:     "revision-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble local memory: %v", err)
+	}
+	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Kind != taskContextEvidenceMemory {
+		t.Fatalf("local memory was not admitted: %+v", assembly.Manifest.Items)
+	}
+	if !strings.Contains(assembly.Rendered, "local project memory") {
+		t.Fatalf("local memory content missing from evidence: %q", assembly.Rendered)
+	}
+
+	t.Setenv("TENDRIL_MEMORY_BACKEND", "pinecone")
+	t.Setenv("TENDRIL_MEMORY_SQLITE_PATH", filepath.Join(t.TempDir(), "shared.db"))
+	withoutLocal, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "use architecture memory",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryOmissionReason: taskContextOmissionMemoryMissing,
+		StartingRevision:     "revision-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble without local memory: %v", err)
+	}
+	if len(withoutLocal.Manifest.Items) != 0 || withoutLocal.Manifest.OmissionCounts[taskContextOmissionMemoryMissing] == 0 {
+		t.Fatalf("configured remote/shared memory became automatic context: %+v", withoutLocal.Manifest)
+	}
+}
+
+func TestTaskContextMemoryOmissionIsFailClosed(t *testing.T) {
+	root := t.TempDir()
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "use memory",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          &taskContextTestMemoryIndex{err: errors.New("decrypt memory content")},
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "revision-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("malformed optional memory should not fail assembly: %v", err)
+	}
+	if len(assembly.Manifest.Items) != 0 || assembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnavailable] == 0 {
+		t.Fatalf("malformed memory was not omitted as unavailable: %+v", assembly.Manifest)
+	}
+}
+
+func TestTaskContextSameBasenameMemoryIsolation(t *testing.T) {
+	left := filepath.Join(t.TempDir(), "repo")
+	right := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(left, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(right, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	assemble := func(root, content string) taskContextAssembly {
+		t.Helper()
+		assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+			TaskPrompt:           "use architecture memory",
+			SourceRepository:     root,
+			ExecutionWorkspace:   root,
+			MemoryIndex:          &taskContextTestMemoryIndex{memories: []rhizome.Memory{{RepositoryName: "repo", Title: "architecture", Content: content}}},
+			MemoryRepositoryName: "repo",
+			StartingRevision:     "revision-1",
+		}, nil, "repo")
+		if err != nil {
+			t.Fatalf("assemble %s memory: %v", root, err)
+		}
+		return assembly
+	}
+
+	leftAssembly := assemble(left, "left memory")
+	rightAssembly := assemble(right, "right memory")
+	if !strings.Contains(leftAssembly.Rendered, "left memory") || strings.Contains(leftAssembly.Rendered, "right memory") {
+		t.Fatalf("left same-basename repository crossed memory boundary: %q", leftAssembly.Rendered)
+	}
+	if !strings.Contains(rightAssembly.Rendered, "right memory") || strings.Contains(rightAssembly.Rendered, "left memory") {
+		t.Fatalf("right same-basename repository crossed memory boundary: %q", rightAssembly.Rendered)
+	}
+}
+
+func TestTaskContextSourceLocalMemorySameBasenameIsolation(t *testing.T) {
+	makeRepository := func(content string) string {
+		t.Helper()
+		root := filepath.Join(t.TempDir(), "repo")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir source repository: %v", err)
+		}
+		index, repositoryName, err := openRhizomeIndex(context.Background(), root)
+		if err != nil {
+			t.Fatalf("open source-local Rhizome index: %v", err)
+		}
+		if err := index.StoreMemory(context.Background(), rhizome.Memory{
+			RepositoryName: repositoryName,
+			Category:       "design",
+			Title:          "architecture",
+			Content:        content,
+		}); err != nil {
+			_ = index.Close()
+			t.Fatalf("store source-local memory: %v", err)
+		}
+		if err := index.Close(); err != nil {
+			t.Fatalf("close source-local Rhizome index: %v", err)
+		}
+		return root
+	}
+
+	leftRoot := makeRepository("left source memory")
+	rightRoot := makeRepository("right source memory")
+	leftIndex, leftName, leftOmission, closeLeft := openTaskContextSourceMemory(context.Background(), leftRoot)
+	if leftOmission != "" || leftIndex == nil || closeLeft == nil {
+		t.Fatalf("left source-local memory binding unavailable: index=%v omission=%q", leftIndex != nil, leftOmission)
+	}
+	defer closeLeft()
+	rightIndex, rightName, rightOmission, closeRight := openTaskContextSourceMemory(context.Background(), rightRoot)
+	if rightOmission != "" || rightIndex == nil || closeRight == nil {
+		t.Fatalf("right source-local memory binding unavailable: index=%v omission=%q", rightIndex != nil, rightOmission)
+	}
+	defer closeRight()
+
+	assemble := func(root, repositoryName string, index taskContextMemoryIndex) taskContextAssembly {
+		t.Helper()
+		assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+			TaskPrompt:           "use architecture memory",
+			SourceRepository:     root,
+			ExecutionWorkspace:   root,
+			MemoryIndex:          index,
+			MemoryRepositoryName: repositoryName,
+			StartingRevision:     "revision-1",
+		}, nil, repositoryName)
+		if err != nil {
+			t.Fatalf("assemble source-local memory: %v", err)
+		}
+		return assembly
+	}
+
+	leftAssembly := assemble(leftRoot, leftName, leftIndex)
+	rightAssembly := assemble(rightRoot, rightName, rightIndex)
+	if !strings.Contains(leftAssembly.Rendered, "left source memory") || strings.Contains(leftAssembly.Rendered, "right source memory") {
+		t.Fatalf("left automatic memory crossed same-basename source boundary: %q", leftAssembly.Rendered)
+	}
+	if !strings.Contains(rightAssembly.Rendered, "right source memory") || strings.Contains(rightAssembly.Rendered, "left source memory") {
+		t.Fatalf("right automatic memory crossed same-basename source boundary: %q", rightAssembly.Rendered)
+	}
+}
+
+func TestTaskContextSourceLocalMemoryMissingAndMalformedAreOmitted(t *testing.T) {
+	missing := t.TempDir()
+	index, repositoryName, omission, closeIndex := openTaskContextSourceMemory(context.Background(), missing)
+	if index != nil || repositoryName != "" || closeIndex != nil || omission != taskContextOmissionMemoryMissing {
+		t.Fatalf("missing source-local memory binding = index %v repository %q omission %q close %v", index != nil, repositoryName, omission, closeIndex != nil)
+	}
+
+	malformed := t.TempDir()
+	tendril := filepath.Join(malformed, tendrilStateDirectory)
+	if err := os.MkdirAll(tendril, 0o755); err != nil {
+		t.Fatalf("mkdir malformed memory state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tendril, rhizomeIndexDatabase), []byte("not a real database"), 0o600); err != nil {
+		t.Fatalf("write malformed database: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tendril, rhizomeIndexKeyFile), []byte("bad-key"), 0o600); err != nil {
+		t.Fatalf("write malformed key: %v", err)
+	}
+	index, repositoryName, omission, closeIndex = openTaskContextSourceMemory(context.Background(), malformed)
+	if index != nil || repositoryName != "" || closeIndex != nil || omission != taskContextOmissionMemoryUnavailable {
+		t.Fatalf("malformed source-local memory binding = index %v repository %q omission %q close %v", index != nil, repositoryName, omission, closeIndex != nil)
+	}
+}
+
+func TestTaskContextSourceLocalMemoryRejectsSymlinkedState(t *testing.T) {
+	root := t.TempDir()
+	state := filepath.Join(root, tendrilStateDirectory)
+	if err := os.MkdirAll(state, 0o755); err != nil {
+		t.Fatalf("mkdir source-local state: %v", err)
+	}
+	external := t.TempDir()
+	if err := os.WriteFile(filepath.Join(external, rhizomeIndexDatabase), []byte("database"), 0o600); err != nil {
+		t.Fatalf("write external database: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(external, rhizomeIndexKeyFile), make([]byte, 32), 0o600); err != nil {
+		t.Fatalf("write external key: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(external, rhizomeIndexDatabase), filepath.Join(state, rhizomeIndexDatabase)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(external, rhizomeIndexKeyFile), filepath.Join(state, rhizomeIndexKeyFile)); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	index, repositoryName, omission, closeIndex := openTaskContextSourceMemory(context.Background(), root)
+	if index != nil || repositoryName != "" || closeIndex != nil || omission != taskContextOmissionMemoryUnavailable {
+		t.Fatalf("symlinked source-local memory binding = index %v repository %q omission %q close %v", index != nil, repositoryName, omission, closeIndex != nil)
+	}
+}
+
+func TestTaskContextSourceLocalMemoryUsesMatchingLocalKey(t *testing.T) {
+	t.Setenv(heartwood.KeyEnvVar, "")
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir source repository: %v", err)
+	}
+	index, repositoryName, err := openRhizomeIndex(context.Background(), root)
+	if err != nil {
+		t.Fatalf("open source-local Rhizome index: %v", err)
+	}
+	if err := index.StoreMemory(context.Background(), rhizome.Memory{RepositoryName: repositoryName, Title: "local", Content: "local key memory"}); err != nil {
+		_ = index.Close()
+		t.Fatalf("store source-local memory: %v", err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatalf("close source-local memory: %v", err)
+	}
+	t.Setenv(heartwood.KeyEnvVar, "a different environment key")
+
+	memoryIndex, gotRepositoryName, omission, closeMemory := openTaskContextSourceMemory(context.Background(), root)
+	if omission != "" || memoryIndex == nil || gotRepositoryName != repositoryName || closeMemory == nil {
+		t.Fatalf("source-local key binding = index %v repository %q omission %q close %v", memoryIndex != nil, gotRepositoryName, omission, closeMemory != nil)
+	}
+	defer closeMemory()
+	memories, err := memoryIndex.SearchMemories(context.Background(), repositoryName, "*", "", 10)
+	if err != nil || len(memories) != 1 || memories[0].Content != "local key memory" {
+		t.Fatalf("source-local memory search = memories=%+v err=%v", memories, err)
+	}
+}
+
+func TestTaskContextAssociatedSymlinkToPrivateMaterialIsOmitted(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, ".env", "PRIVATE=must not enter context\n")
+	if err := os.Symlink(".env", filepath.Join(root, "foo_test.go")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	assembly := assembleTaskContextForTest(t, root, "foo.go", nil)
+	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Path != "foo.go" {
+		t.Fatalf("private associated symlink was admitted: %+v", assembly.Manifest.Items)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionPathSecurity] == 0 {
+		t.Fatalf("private associated symlink omission was not classified: %+v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+func TestTaskContextManifestRecordsSafeAggregateAndItemFacts(t *testing.T) {
+	root := t.TempDir()
+	content := "package fixture\n\nfunc Foo() {}\n"
+	writeTaskContextFile(t, root, "foo.go", content)
+	t.Setenv(taskContextMaxBytesEnv, "64")
+	t.Setenv(taskContextItemMaxBytesEnv, "32")
+
+	assembly := assembleTaskContextForTest(t, root, "foo.go", nil)
+	manifest := assembly.Manifest
+	if manifest.EffectiveMaxBytes != 64 || manifest.EffectiveItemMaxBytes != 32 || manifest.EffectiveMaxItems != taskContextDefaultMaxItems {
+		t.Fatalf("manifest limits = %+v", manifest)
+	}
+	if manifest.CandidateCount == 0 || manifest.AdmittedCount != 1 || manifest.AdmittedBytes != manifest.Items[0].Bytes {
+		t.Fatalf("manifest aggregate facts = %+v", manifest)
+	}
+	item := manifest.Items[0]
+	if item.SourceClass == "" || item.SourceIdentity != "foo.go" || item.SelectionReason != taskContextSelectionReasonExplicitFile || item.ContentReference == "" || item.ContentReference == item.ContentIdentity {
+		t.Fatalf("manifest item lacks safe provenance facts: %+v", item)
+	}
+}
+
+func TestTaskContextTruncatedAndOmittedManifestReasons(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\n"+strings.Repeat("x", 256)+"\n")
+	writeTaskContextFile(t, root, "foo_test.go", "package fixture\n\nfunc TestFoo() {}\n")
+	t.Setenv(taskContextMaxBytesEnv, "64")
+	t.Setenv(taskContextItemMaxBytesEnv, "32")
+	t.Setenv(taskContextMaxItemsEnv, "1")
+
+	assembly := assembleTaskContextForTest(t, root, "foo.go", nil)
+	if len(assembly.Manifest.Items) != 1 || !assembly.Manifest.Items[0].Truncated {
+		t.Fatalf("truncation was not recorded: %+v", assembly.Manifest)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionBudgetBytes] == 0 && assembly.Manifest.OmissionCounts[taskContextOmissionBudgetItems] == 0 {
+		t.Fatalf("budget omission was not recorded: %+v", assembly.Manifest)
+	}
+}
+
+func TestTaskContextStaleAndPathSecurityReasonsAreStable(t *testing.T) {
+	root := t.TempDir()
+	content := "package fixture\n\nfunc Current() {}\n"
+	writeTaskContextFile(t, root, "current.go", content)
+	index := &taskContextTestIndex{
+		symbols: []rhizome.Symbol{{Name: "Current", Type: "function", FilePath: "current.go", LineStart: 3, LineEnd: 3}},
+		files:   map[string]rhizome.FileRecord{"current.go": {Hash: "stale-hash"}},
+	}
+	assembly := assembleTaskContextForTest(t, root, "../escape.go Current", index)
+	if assembly.Manifest.OmissionCounts[taskContextOmissionStaleEvidence] == 0 || assembly.Manifest.OmissionCounts[taskContextOmissionPathSecurity] == 0 {
+		t.Fatalf("unstable omission reasons: %+v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+func TestTaskContextProvenanceContainsNoTranscriptSearchTermsOrHostPaths(t *testing.T) {
+	root := t.TempDir()
+	writeTaskContextFile(t, root, "foo.go", "secret evidence that must not enter provenance\n")
+	assembly := assembleTaskContextForTest(t, root, "inspect foo.go with secret-search-term", nil)
+	event := taskContextObservationEvent("step-1", "phytomer-1", "fixture", assembly.Manifest)
+	payload, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal provenance event: %v", err)
+	}
+	encoded := string(payload)
+	for _, forbidden := range []string{root, "secret evidence", "secret-search-term", "Transcript"} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("provenance event leaked %q: %s", forbidden, encoded)
+		}
+	}
+	if !strings.Contains(encoded, "selectionReason") || !strings.Contains(encoded, "contentRef") {
+		t.Fatalf("safe provenance fields missing: %s", encoded)
+	}
+}
+
+func TestTaskContextManagedBackingSourceReferenceOmitsWorkspacePath(t *testing.T) {
+	source := t.TempDir()
+	workspace := t.TempDir()
+	writeTaskContextFile(t, workspace, "foo.go", "workspace evidence\n")
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:         "foo.go",
+		SourceRepository:   source,
+		ExecutionWorkspace: workspace,
+		StartingRevision:   "revision-1",
+	}, nil, "")
+	if err != nil {
+		t.Fatalf("assemble managed backing source: %v", err)
+	}
+	event := taskContextObservationEvent("step-1", "phytomer-1", "fixture", assembly.Manifest)
+	encoded, _ := json.Marshal(event)
+	if strings.Contains(string(encoded), source) || strings.Contains(string(encoded), workspace) {
+		t.Fatalf("managed source/workspace path leaked from event: %s", encoded)
+	}
+	if event.Data["substrateRef"] != taskContextShortReference(assembly.Manifest.SourceRepository) {
+		t.Fatalf("event did not bind provenance to backing source: %+v", event.Data)
+	}
+}
+
+func TestRunSproutEmitsOneTaskContextEventPerGrowthIncludingZeroEvidence(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	bus := eventbus.New()
+	var received []eventbus.Event
+	bus.Subscribe(eventbus.EventTaskContextAssembled, func(event eventbus.Event) {
+		received = append(received, event)
+	})
+	stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done"}, nil)
+	orch := &DockerOrchestrator{Substrate: root, StepID: "task-context-growth", SessionID: "phytomer-1", EventBus: bus, DisableMergeBack: true}
+	if _, err := orch.RunSprout(context.Background(), "no matching evidence"); err != nil {
+		t.Fatalf("RunSprout: %v", err)
+	}
+	if len(received) != 1 {
+		t.Fatalf("task-context event count = %d, want exactly one: %+v", len(received), received)
+	}
+	if received[0].SessionID != "phytomer-1" || received[0].Source != "task-context-growth" {
+		t.Fatalf("task-context event correlation = %+v", received[0])
 	}
 }

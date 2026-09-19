@@ -43,6 +43,19 @@ func TestSinkReceivesAllEventTypes(t *testing.T) {
 	}
 }
 
+func TestTaskContextAssembledIsRegisteredForNormalObservation(t *testing.T) {
+	found := false
+	for _, eventType := range AllEventTypes() {
+		if eventType == EventTaskContextAssembled {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("%q is not part of the registered EventBus vocabulary", EventTaskContextAssembled)
+	}
+}
+
 func TestPublishAfterShutdownDoesNotPanic(t *testing.T) {
 	bus := New()
 	bus.AttachSink(&collectingSink{}, 0, "test-collecting")
