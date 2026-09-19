@@ -1,10 +1,12 @@
 package conductor
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -160,29 +162,39 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		ctx = context.Background()
 	}
 
+	sourceRepository, err := taskContextCanonicalDirectory(input.SourceRepository, "source repository")
+	if err != nil {
+		return taskContextAssembly{}, err
+	}
+	workspaceRoot, err := taskContextWorkspaceRoot(input.ExecutionWorkspace)
+	if err != nil {
+		return taskContextAssembly{}, err
+	}
+	workspace, err := os.OpenRoot(workspaceRoot)
+	if err != nil {
+		return taskContextAssembly{}, fmt.Errorf("open task-context execution workspace: %w", err)
+	}
+	defer workspace.Close()
+
 	manifest := taskContextSelectionManifest{
 		TaskPromptIdentity:      taskContextContentIdentity([]byte(input.TaskPrompt)),
 		ConfiguredSubstrateName: strings.TrimSpace(input.ConfiguredSubstrateName),
-		SourceRepository:        strings.TrimSpace(input.SourceRepository),
-		ExecutionWorkspace:      strings.TrimSpace(input.ExecutionWorkspace),
+		SourceRepository:        sourceRepository,
+		ExecutionWorkspace:      workspaceRoot,
 		StartingRevision:        strings.TrimSpace(input.StartingRevision),
 		Items:                   []taskContextManifestItem{},
 	}
 	assembly := taskContextAssembly{Manifest: manifest}
 
-	workspaceRoot, err := taskContextWorkspaceRoot(input.ExecutionWorkspace)
-	if err != nil {
-		return assembly, err
-	}
-
 	candidates := make(map[string]taskContextCandidate)
-	for _, path := range extractTaskContextFileAnchors(input.TaskPrompt, workspaceRoot) {
+	for _, path := range extractTaskContextFileAnchors(input.TaskPrompt) {
 		candidates[path] = taskContextCandidate{kind: taskContextEvidenceAnchor, path: path, priority: 0}
 	}
 
 	if index != nil && strings.TrimSpace(repositoryName) != "" {
 		terms := extractTaskContextLexicalTerms(input.TaskPrompt)
 		symbolsByPath := make(map[string][]rhizome.Symbol)
+		exactSymbolByPath := make(map[string]bool)
 		for _, term := range terms {
 			query := safeTaskContextFTSQuery(term)
 			if query == "" {
@@ -198,6 +210,9 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 					continue
 				}
 				symbolsByPath[path] = append(symbolsByPath[path], symbol)
+				if taskContextSymbolNameMatches(symbol.Name, term) {
+					exactSymbolByPath[path] = true
+				}
 			}
 		}
 
@@ -211,21 +226,31 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 				continue
 			}
 			symbols := symbolsByPath[path]
+			priority := 2
+			if exactSymbolByPath[path] {
+				priority = 1
+			}
 			sort.Slice(symbols, func(i, j int) bool {
 				if symbols[i].Name == symbols[j].Name {
-					return symbols[i].LineStart < symbols[j].LineStart
+					if symbols[i].LineStart != symbols[j].LineStart {
+						return symbols[i].LineStart < symbols[j].LineStart
+					}
+					if symbols[i].LineEnd != symbols[j].LineEnd {
+						return symbols[i].LineEnd < symbols[j].LineEnd
+					}
+					return symbols[i].Type < symbols[j].Type
 				}
 				return symbols[i].Name < symbols[j].Name
 			})
-			candidates[path] = taskContextCandidate{kind: taskContextEvidenceSymbol, path: path, priority: 1, symbols: uniqueTaskContextSymbols(symbols)}
+			candidates[path] = taskContextCandidate{kind: taskContextEvidenceSymbol, path: path, priority: priority, symbols: uniqueTaskContextSymbols(symbols)}
 		}
 	}
 
-	for _, path := range taskContextGitStatePaths(ctx, input.ExecutionWorkspace) {
+	for _, path := range taskContextGitStatePaths(ctx, workspaceRoot) {
 		if _, alreadySelected := candidates[path]; alreadySelected {
 			continue
 		}
-		candidates[path] = taskContextCandidate{kind: taskContextEvidenceGit, path: path, priority: 2}
+		candidates[path] = taskContextCandidate{kind: taskContextEvidenceGit, path: path, priority: 3}
 	}
 
 	ordered := make([]taskContextCandidate, 0, len(candidates))
@@ -248,6 +273,18 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			break
 		}
 
+		remaining := settings.maxBytes - usedBytes
+		if usedBytes > 0 {
+			remaining -= 2
+		}
+		if remaining <= 0 {
+			break
+		}
+		itemBudget := settings.itemMaxBytes
+		if itemBudget > remaining {
+			itemBudget = remaining
+		}
+
 		var source taskContextSourceFile
 		if candidate.kind == taskContextEvidenceSymbol {
 			if index == nil || strings.TrimSpace(repositoryName) == "" {
@@ -260,31 +297,20 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			if !found {
 				continue
 			}
-			source, err = readTaskContextSourceFile(workspaceRoot, candidate.path)
+			source, err = readTaskContextSourceFile(workspace, candidate.path, itemBudget, candidate.symbols)
 			if err != nil || !strings.EqualFold(indexed.Hash, source.hash) {
 				// A stale symbol stub is never evidence. A path that disappeared or
 				// escaped the workspace is treated the same way: omit the candidate.
 				continue
 			}
 		} else {
-			source, err = readTaskContextSourceFile(workspaceRoot, candidate.path)
+			source, err = readTaskContextSourceFile(workspace, candidate.path, itemBudget, nil)
 			if err != nil {
 				continue
 			}
 		}
 
 		rendered := renderTaskContextCandidate(candidate, source)
-		remaining := settings.maxBytes - usedBytes
-		if usedBytes > 0 {
-			remaining -= 2
-		}
-		if remaining <= 0 {
-			break
-		}
-		itemBudget := settings.itemMaxBytes
-		if itemBudget > remaining {
-			itemBudget = remaining
-		}
 		rendered = truncateTaskContextEvidence(rendered, itemBudget)
 		if rendered == "" {
 			continue
@@ -312,24 +338,28 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 }
 
 func taskContextWorkspaceRoot(workspace string) (string, error) {
-	workspace = strings.TrimSpace(workspace)
-	if workspace == "" {
-		return "", fmt.Errorf("task-context execution workspace is empty")
+	return taskContextCanonicalDirectory(workspace, "execution workspace")
+}
+
+func taskContextCanonicalDirectory(path, label string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("task-context %s is empty", label)
 	}
-	absolute, err := filepath.Abs(workspace)
+	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolve task-context execution workspace: %w", err)
+		return "", fmt.Errorf("resolve task-context %s: %w", label, err)
 	}
 	canonical, err := filepath.EvalSymlinks(absolute)
 	if err != nil {
-		return "", fmt.Errorf("resolve task-context execution workspace symlinks: %w", err)
+		return "", fmt.Errorf("resolve task-context %s symlinks: %w", label, err)
 	}
 	info, err := os.Stat(canonical)
 	if err != nil {
-		return "", fmt.Errorf("stat task-context execution workspace: %w", err)
+		return "", fmt.Errorf("stat task-context %s: %w", label, err)
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("task-context execution workspace is not a directory")
+		return "", fmt.Errorf("task-context %s is not a directory", label)
 	}
 	return canonical, nil
 }
@@ -378,33 +408,45 @@ func taskContextForbiddenPath(path string) bool {
 	return false
 }
 
-func taskContextPathWithin(root, target string) bool {
-	relative, err := filepath.Rel(root, target)
-	if err != nil || relative == ".." {
-		return false
-	}
-	return relative != "" && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func readTaskContextSourceFile(workspaceRoot, relativePath string) (taskContextSourceFile, error) {
+func readTaskContextSourceFile(workspaceRoot *os.Root, relativePath string, evidenceLimit int, symbols []rhizome.Symbol) (taskContextSourceFile, error) {
 	cleaned, err := cleanTaskContextRepositoryPath(relativePath)
 	if err != nil {
 		return taskContextSourceFile{}, err
 	}
-	candidate := filepath.Join(workspaceRoot, filepath.FromSlash(cleaned))
-	canonical, err := filepath.EvalSymlinks(candidate)
-	if err != nil || !taskContextPathWithin(workspaceRoot, canonical) {
-		return taskContextSourceFile{}, fmt.Errorf("path does not resolve inside execution workspace")
+	if workspaceRoot == nil {
+		return taskContextSourceFile{}, fmt.Errorf("execution workspace root is unavailable")
 	}
-	info, err := os.Stat(canonical)
+	info, err := workspaceRoot.Stat(filepath.FromSlash(cleaned))
 	if err != nil || !info.Mode().IsRegular() {
 		return taskContextSourceFile{}, fmt.Errorf("path is not a regular file")
 	}
-	content, err := os.ReadFile(canonical)
+	file, err := workspaceRoot.Open(filepath.FromSlash(cleaned))
 	if err != nil {
-		return taskContextSourceFile{}, fmt.Errorf("read %s: %w", cleaned, err)
+		return taskContextSourceFile{}, fmt.Errorf("open %s: %w", cleaned, err)
 	}
-	return taskContextSourceFile{content: content, hash: taskContextContentIdentity(content)}, nil
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return taskContextSourceFile{}, fmt.Errorf("path is not a regular file")
+	}
+
+	hash := sha256.New()
+	evidence := newTaskContextEvidenceCollector(evidenceLimit, symbols)
+	buffer := make([]byte, 32*1024)
+	for {
+		readBytes, readErr := file.Read(buffer)
+		if readBytes > 0 {
+			_, _ = hash.Write(buffer[:readBytes])
+			evidence.Write(buffer[:readBytes])
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return taskContextSourceFile{}, fmt.Errorf("read %s: %w", cleaned, readErr)
+		}
+	}
+	return taskContextSourceFile{content: evidence.Bytes(), hash: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
 func taskContextContentIdentity(content []byte) string {
@@ -412,7 +454,89 @@ func taskContextContentIdentity(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func extractTaskContextFileAnchors(prompt, workspaceRoot string) []string {
+type taskContextEvidenceCollector struct {
+	limit      int
+	line       int
+	lineStart  int
+	lineEnd    int
+	symbolOnly bool
+	byLineOnly bool
+	content    []byte
+}
+
+func newTaskContextEvidenceCollector(limit int, symbols []rhizome.Symbol) *taskContextEvidenceCollector {
+	lineStart, lineEnd := taskContextSymbolLineRange(symbols)
+	return &taskContextEvidenceCollector{
+		limit:      limit,
+		line:       1,
+		lineStart:  lineStart,
+		lineEnd:    lineEnd,
+		symbolOnly: len(symbols) > 0,
+		byLineOnly: lineStart > 0 && lineEnd >= lineStart,
+	}
+}
+
+func (c *taskContextEvidenceCollector) Write(chunk []byte) {
+	if c.limit <= len(c.content) || len(chunk) == 0 {
+		return
+	}
+	if c.symbolOnly && !c.byLineOnly {
+		return
+	}
+	if !c.byLineOnly {
+		c.appendBounded(chunk)
+		return
+	}
+
+	for len(chunk) > 0 && len(c.content) < c.limit {
+		newline := bytes.IndexByte(chunk, '\n')
+		if newline < 0 {
+			if c.line >= c.lineStart && c.line <= c.lineEnd {
+				c.appendBounded(chunk)
+			}
+			return
+		}
+		lineBytes := chunk[:newline+1]
+		if c.line >= c.lineStart && c.line <= c.lineEnd {
+			c.appendBounded(lineBytes)
+		}
+		c.line++
+		chunk = chunk[newline+1:]
+	}
+}
+
+func (c *taskContextEvidenceCollector) appendBounded(content []byte) {
+	remaining := c.limit - len(c.content)
+	if remaining <= 0 {
+		return
+	}
+	if len(content) > remaining {
+		content = content[:remaining]
+	}
+	c.content = append(c.content, content...)
+}
+
+func (c *taskContextEvidenceCollector) Bytes() []byte {
+	return c.content
+}
+
+func taskContextSymbolLineRange(symbols []rhizome.Symbol) (int, int) {
+	start, end := 0, 0
+	for _, symbol := range symbols {
+		if symbol.LineStart <= 0 || symbol.LineEnd < symbol.LineStart {
+			continue
+		}
+		if start == 0 || symbol.LineStart < start {
+			start = symbol.LineStart
+		}
+		if symbol.LineEnd > end {
+			end = symbol.LineEnd
+		}
+	}
+	return start, end
+}
+
+func extractTaskContextFileAnchors(prompt string) []string {
 	seen := make(map[string]struct{})
 	for _, token := range strings.FieldsFunc(prompt, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune("`'\"()[]{}<>,;:!?=", r)
@@ -423,12 +547,6 @@ func extractTaskContextFileAnchors(prompt, workspaceRoot string) []string {
 		}
 		path, err := cleanTaskContextRepositoryPath(token)
 		if err == nil {
-			if !strings.Contains(path, "/") && !strings.Contains(filepath.Base(path), ".") {
-				info, statErr := os.Stat(filepath.Join(workspaceRoot, filepath.FromSlash(path)))
-				if statErr != nil || !info.Mode().IsRegular() {
-					continue
-				}
-			}
 			seen[path] = struct{}{}
 		}
 	}
@@ -478,6 +596,12 @@ func safeTaskContextFTSQuery(term string) string {
 		}
 	}
 	return `"` + strings.ReplaceAll(term, `"`, `""`) + `"`
+}
+
+func taskContextSymbolNameMatches(name, term string) bool {
+	name = strings.TrimSpace(name)
+	term = strings.TrimSpace(term)
+	return name != "" && term != "" && strings.EqualFold(name, term)
 }
 
 func uniqueTaskContextSymbols(symbols []rhizome.Symbol) []rhizome.Symbol {
@@ -548,37 +672,9 @@ func renderTaskContextCandidate(candidate taskContextCandidate, source taskConte
 		}
 		builder.WriteString(strings.Join(names, ", "))
 		builder.WriteString("\n")
-		builder.WriteString(taskContextSymbolSource(source.content, candidate.symbols))
-	} else {
-		builder.Write(source.content)
 	}
+	builder.Write(source.content)
 	return strings.TrimSpace(builder.String())
-}
-
-func taskContextSymbolSource(content []byte, symbols []rhizome.Symbol) string {
-	if len(symbols) == 0 {
-		return string(content)
-	}
-	start, end := 0, 0
-	for _, symbol := range symbols {
-		if start == 0 || (symbol.LineStart > 0 && symbol.LineStart < start) {
-			start = symbol.LineStart
-		}
-		if symbol.LineEnd > end {
-			end = symbol.LineEnd
-		}
-	}
-	if start <= 0 || end < start {
-		return string(content)
-	}
-	lines := strings.Split(strings.ReplaceAll(string(content), "\r\n", "\n"), "\n")
-	if start > len(lines) {
-		return ""
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
-	return strings.Join(lines[start-1:end], "\n")
 }
 
 func truncateTaskContextEvidence(content string, limit int) string {

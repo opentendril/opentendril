@@ -69,6 +69,32 @@ func TestTaskContextExactFileAnchorsHavePriority(t *testing.T) {
 	}
 }
 
+func TestTaskContextExactSymbolMatchesHavePriority(t *testing.T) {
+	root := t.TempDir()
+	exactContent := "package fixture\n\nfunc ExactSymbol() {}\n"
+	broadContent := "package fixture\n\nfunc BroadSymbol() {}\n"
+	writeTaskContextFile(t, root, "z-exact.go", exactContent)
+	writeTaskContextFile(t, root, "a-broad.go", broadContent)
+	index := &taskContextTestIndex{
+		symbols: []rhizome.Symbol{
+			{Name: "ExactSymbol", Type: "function", FilePath: "z-exact.go", LineStart: 3, LineEnd: 3},
+			{Name: "BroadSymbol", Type: "function", FilePath: "a-broad.go", LineStart: 3, LineEnd: 3},
+		},
+		files: map[string]rhizome.FileRecord{
+			"z-exact.go": {Hash: taskContextContentIdentity([]byte(exactContent))},
+			"a-broad.go": {Hash: taskContextContentIdentity([]byte(broadContent))},
+		},
+	}
+
+	assembly := assembleTaskContextForTest(t, root, "inspect ExactSymbol Broad", index)
+	if len(assembly.Manifest.Items) < 2 {
+		t.Fatalf("expected exact and broad symbol candidates: %+v", assembly.Manifest.Items)
+	}
+	if assembly.Manifest.Items[0].Path != "z-exact.go" || assembly.Manifest.Items[1].Path != "a-broad.go" {
+		t.Fatalf("exact symbol priority was lost to alphabetical order: %+v", assembly.Manifest.Items)
+	}
+}
+
 func TestTaskContextDifferentTranscriptsSelectDifferentEvidence(t *testing.T) {
 	root := t.TempDir()
 	writeTaskContextFile(t, root, "first.go", "first evidence\n")
@@ -170,6 +196,96 @@ func TestTaskContextAdmitsExactCurrentRhizomeEvidence(t *testing.T) {
 	}
 	if !strings.Contains(assembly.Rendered, "func Current()") {
 		t.Fatalf("current source was not rendered: %s", assembly.Rendered)
+	}
+}
+
+func TestTaskContextOversizedSourceReadRetainsOnlyEvidenceBudget(t *testing.T) {
+	root := t.TempDir()
+	content := "package fixture\n\n" + strings.Repeat("x", 1<<20) + "\n"
+	writeTaskContextFile(t, root, "large.go", content)
+
+	canonical, err := taskContextWorkspaceRoot(root)
+	if err != nil {
+		t.Fatalf("canonicalize fixture workspace: %v", err)
+	}
+	workspace, err := os.OpenRoot(canonical)
+	if err != nil {
+		t.Fatalf("open fixture workspace root: %v", err)
+	}
+	defer workspace.Close()
+
+	source, err := readTaskContextSourceFile(workspace, "large.go", 64, nil)
+	if err != nil {
+		t.Fatalf("read oversized fixture: %v", err)
+	}
+	if len(source.content) > 64 {
+		t.Fatalf("oversized source retained %d bytes, want at most 64", len(source.content))
+	}
+	if source.hash != taskContextContentIdentity([]byte(content)) {
+		t.Fatalf("oversized source hash mismatch: got %s", source.hash)
+	}
+
+	symbolContent := "package fixture\n\nfunc Target() {}\n" + strings.Repeat("y", 1<<20) + "\n"
+	writeTaskContextFile(t, root, "symbol-large.go", symbolContent)
+	symbolSource, err := readTaskContextSourceFile(workspace, "symbol-large.go", 64, []rhizome.Symbol{{Name: "Target", LineStart: 3, LineEnd: 3}})
+	if err != nil {
+		t.Fatalf("read oversized symbol fixture: %v", err)
+	}
+	if len(symbolSource.content) > 64 || !strings.Contains(string(symbolSource.content), "func Target()") || strings.Contains(string(symbolSource.content), "yyyy") {
+		t.Fatalf("symbol evidence was not bounded to the indexed lines: %q", string(symbolSource.content))
+	}
+	if symbolSource.hash != taskContextContentIdentity([]byte(symbolContent)) {
+		t.Fatalf("oversized symbol source hash mismatch: got %s", symbolSource.hash)
+	}
+
+	t.Setenv(taskContextMaxBytesEnv, "128")
+	t.Setenv(taskContextItemMaxBytesEnv, "64")
+	t.Setenv(taskContextMaxItemsEnv, "1")
+	assembly := assembleTaskContextForTest(t, root, "inspect large.go", nil)
+	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Bytes > 64 {
+		t.Fatalf("oversized source exceeded admitted evidence budget: %+v", assembly.Manifest.Items)
+	}
+}
+
+func TestTaskContextCanonicalizesSourceAndExecutionWorkspace(t *testing.T) {
+	source := t.TempDir()
+	workspace := t.TempDir()
+	writeTaskContextFile(t, workspace, "current.go", "workspace evidence\n")
+
+	sourceAlias := filepath.Join(t.TempDir(), "source-link")
+	if err := os.Symlink(source, sourceAlias); err != nil {
+		t.Fatalf("create source alias: %v", err)
+	}
+	workspaceAlias := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, workspaceAlias); err != nil {
+		t.Fatalf("create workspace alias: %v", err)
+	}
+	wantSource, err := filepath.EvalSymlinks(sourceAlias)
+	if err != nil {
+		t.Fatalf("resolve source alias: %v", err)
+	}
+	wantWorkspace, err := filepath.EvalSymlinks(workspaceAlias)
+	if err != nil {
+		t.Fatalf("resolve workspace alias: %v", err)
+	}
+
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:         "inspect current.go",
+		SourceRepository:   sourceAlias,
+		ExecutionWorkspace: workspaceAlias,
+		StartingRevision:   "revision-1",
+	}, nil, "")
+	if err != nil {
+		t.Fatalf("assemble canonical identity fixture: %v", err)
+	}
+	if assembly.Manifest.SourceRepository != wantSource {
+		t.Fatalf("source repository was not canonicalized: got %q want %q", assembly.Manifest.SourceRepository, wantSource)
+	}
+	if assembly.Manifest.ExecutionWorkspace != wantWorkspace {
+		t.Fatalf("execution workspace was not canonicalized: got %q want %q", assembly.Manifest.ExecutionWorkspace, wantWorkspace)
+	}
+	if !strings.Contains(assembly.Rendered, "workspace evidence") {
+		t.Fatalf("evidence was not read from the execution workspace: %s", assembly.Rendered)
 	}
 }
 
