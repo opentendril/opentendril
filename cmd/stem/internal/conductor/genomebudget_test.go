@@ -125,3 +125,29 @@ func TestIsGeneratedGenomeFile(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadGenomeContextUsesRemainingTaskContextBudget(t *testing.T) {
+	workspace := t.TempDir()
+	writeGenomeFile(t, workspace, "curated.md", strings.Repeat("curated line\n", 1000))
+	taskContext := strings.Repeat("task evidence\n", 200)
+	remaining := genomeTotalByteBudget - len(taskContext)
+	if remaining <= 0 {
+		t.Fatalf("fixture task context unexpectedly consumes the full envelope")
+	}
+
+	withTask, err := loadGenomeContext(workspace, remaining)
+	if err != nil {
+		t.Fatalf("loadGenomeContext with task budget: %v", err)
+	}
+	if len(taskContext)+len(withTask) > genomeTotalByteBudget {
+		t.Fatalf("task context and curated genome exceed shared envelope: task=%d genome=%d", len(taskContext), len(withTask))
+	}
+
+	withoutTask, err := loadGenomeContext(workspace)
+	if err != nil {
+		t.Fatalf("loadGenomeContext without task budget: %v", err)
+	}
+	if len(withoutTask) <= len(withTask) {
+		t.Fatalf("no-context case did not retain the full genome allowance: without=%d with=%d", len(withoutTask), len(withTask))
+	}
+}

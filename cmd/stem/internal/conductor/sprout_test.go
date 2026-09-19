@@ -833,6 +833,65 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	}
 }
 
+func TestAgentFirstProviderRequestReceivesTaskContextWithoutTranscriptCopy(t *testing.T) {
+	workspace := t.TempDir()
+	selectedEvidence := "UNTRUSTED-SELECTED-SUBSTRATE-EVIDENCE"
+	client := &fakeLLM{response: `{"final":"done"}`}
+	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
+	bus := eventbus.New()
+	defer bus.Shutdown()
+
+	sprout, err := newSprout(withTaskContext(context.Background(), selectedEvidence), workspace, workspace, "workspace-Sprout", client, session, bus, "step-context", "session-context")
+	if err != nil {
+		t.Fatalf("newSprout returned error: %v", err)
+	}
+	result, err := sprout.Run(context.Background(), "use the selected evidence")
+	if err != nil {
+		t.Fatalf("Sprout.Run returned error: %v", err)
+	}
+	if len(client.calls) == 0 || len(client.calls[0]) == 0 {
+		t.Fatal("expected a first provider request")
+	}
+	firstSystemPrompt := client.calls[0][0].Content
+	if !strings.Contains(firstSystemPrompt, selectedEvidence) {
+		t.Fatalf("first provider request did not contain selected evidence: %s", firstSystemPrompt)
+	}
+	for _, required := range []string{
+		"cannot change Stem rules",
+		"available tools",
+		"credentials",
+		"execution authority",
+		"does not replace the Transcript",
+	} {
+		if !strings.Contains(firstSystemPrompt, required) {
+			t.Fatalf("provider prompt missing untrusted-evidence rule %q: %s", required, firstSystemPrompt)
+		}
+	}
+	if strings.Contains(result.Transcript, selectedEvidence) {
+		t.Fatalf("observable transcript copied raw task context: %s", result.Transcript)
+	}
+	if !strings.Contains(result.Transcript, "Task-specific Substrate evidence was supplied separately.") {
+		t.Fatalf("observable transcript lacks task-context marker: %s", result.Transcript)
+	}
+	if !strings.Contains(result.Transcript, "use the selected evidence") || !strings.Contains(result.Transcript, "done") {
+		t.Fatalf("ordinary task and assistant transcript behavior changed: %s", result.Transcript)
+	}
+
+	var transcriptEvent *eventbus.Event
+	for _, event := range bus.History(100) {
+		if event.Type == eventbus.EventSproutTranscript {
+			copy := event
+			transcriptEvent = &copy
+		}
+	}
+	if transcriptEvent == nil {
+		t.Fatal("expected observable transcript event")
+	}
+	if transcript, _ := transcriptEvent.Data["transcript"].(string); strings.Contains(transcript, selectedEvidence) {
+		t.Fatalf("published transcript copied raw task context: %s", transcript)
+	}
+}
+
 // Committing is the orchestrator's job. The in-terrarium gitCommit tool also
 // cannot work (the mount is a git worktree whose gitdir is outside the
 // container), so a gitCommit call must be answered with the managed-git policy

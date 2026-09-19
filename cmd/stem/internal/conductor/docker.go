@@ -129,6 +129,7 @@ var (
 	runContainerFitnessTestFn      = runContainerFitnessTest
 	generateRepoMapFn              = GenerateRepoMap
 	generateMemoryMapFn            = GenerateMemoryMap
+	openRhizomeIndexFn             = openRhizomeIndex
 	runSproutPreflightChecksFn     = runSproutPreflightChecks
 	runVerifierCommandFn           = runVerifierCommand
 	materializeSproutBuildInputsFn = materializeSproutBuildInputs
@@ -891,6 +892,48 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", memoryMapFile)
 		_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
 	}
+
+	startingRevision := strings.TrimSpace(d.SeedStartRevision)
+	if startingRevision == "" {
+		if resolved, revisionErr := runGitCommand(ctx, mountPath, "rev-parse", "HEAD"); revisionErr == nil {
+			startingRevision = strings.TrimSpace(resolved)
+		}
+	}
+	var taskContextIndex taskContextRhizomeIndex
+	var taskContextRepositoryName string
+	var closeTaskContextIndex func()
+	rhizomeDatabasePath := filepath.Join(mountPath, tendrilStateDirectory, rhizomeIndexDatabase)
+	if databaseInfo, statErr := os.Stat(rhizomeDatabasePath); statErr == nil && databaseInfo.Mode().IsRegular() {
+		index, repositoryName, openErr := openRhizomeIndexFn(ctx, mountPath)
+		if openErr != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return report, fmt.Errorf("open refreshed Rhizome index: %w", openErr)
+		}
+		taskContextIndex = index
+		taskContextRepositoryName = repositoryName
+		closeTaskContextIndex = func() { _ = index.Close() }
+	}
+	taskContext, taskContextErr := assembleTaskContext(ctx, taskContextAssemblyInput{
+		TaskPrompt:              taskPrompt,
+		ConfiguredSubstrateName: plan.name,
+		SourceRepository:        sourcePath,
+		ExecutionWorkspace:      mountPath,
+		StartingRevision:        startingRevision,
+	}, taskContextIndex, taskContextRepositoryName)
+	if taskContextErr != nil {
+		if closeTaskContextIndex != nil {
+			closeTaskContextIndex()
+		}
+		if cleanup != nil {
+			cleanup()
+		}
+		return report, fmt.Errorf("assemble task context: %w", taskContextErr)
+	}
+	if closeTaskContextIndex != nil {
+		closeTaskContextIndex()
+	}
 	if generatedState != nil {
 		if err := generatedState.captureInitialAfter(); err != nil {
 			if cleanup != nil {
@@ -948,6 +991,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// and the terrarium watchdog is derived from it for the same reason it
 	// always was: the context expires first, the watchdog is the backstop.
 	workCtx, releaseWork := newSproutWorkContext(callerCtx, plan.reapBudget)
+	workCtx = withTaskContext(workCtx, taskContext.Rendered)
 	defer func() {
 		if detached {
 			return

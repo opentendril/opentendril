@@ -92,37 +92,11 @@ func GenerateRepoMap(ctx context.Context, mountPath string) (string, error) {
 		ctx = context.Background()
 	}
 
-	tendrilDir := filepath.Join(mountPath, tendrilStateDirectory)
-	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tendril dir: %w", err)
-	}
-
-	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
-	material, err := heartwood.ResolveKey(keyPath)
+	store, repositoryName, err := openRhizomeIndex(ctx, mountPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve index key: %w", err)
-	}
-
-	cipher, err := heartwood.NewCipher(material)
-	if err != nil {
-		return "", fmt.Errorf("initialize cipher: %w", err)
-	}
-
-	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
-	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, cipher)
-	if err != nil {
-		return "", fmt.Errorf("open index store: %w", err)
+		return "", err
 	}
 	defer store.Close()
-
-	absoluteMountPath, err := filepath.Abs(mountPath)
-	if err != nil {
-		absoluteMountPath = mountPath
-	}
-	repositoryName := filepath.Base(absoluteMountPath)
-	if repositoryName == "." || repositoryName == "" {
-		repositoryName = "workspace"
-	}
 
 	// DefaultParsers gives Go the go/ast parser, non-Go files the in-process
 	// pure-Go tree-sitter engine (rhizome.TreeSitterParser), and regex as the
@@ -143,37 +117,11 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 		ctx = context.Background()
 	}
 
-	tendrilDir := filepath.Join(mountPath, tendrilStateDirectory)
-	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
-		return "", fmt.Errorf("create .tendril dir: %w", err)
-	}
-
-	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
-	material, err := heartwood.ResolveKey(keyPath)
+	store, repositoryName, err := openRhizomeIndex(ctx, mountPath)
 	if err != nil {
-		return "", fmt.Errorf("resolve index key: %w", err)
-	}
-
-	cipher, err := heartwood.NewCipher(material)
-	if err != nil {
-		return "", fmt.Errorf("initialize cipher: %w", err)
-	}
-
-	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
-	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, cipher)
-	if err != nil {
-		return "", fmt.Errorf("open index store: %w", err)
+		return "", err
 	}
 	defer store.Close()
-
-	absoluteMountPath, err := filepath.Abs(mountPath)
-	if err != nil {
-		absoluteMountPath = mountPath
-	}
-	repositoryName := filepath.Base(absoluteMountPath)
-	if repositoryName == "." || repositoryName == "" {
-		repositoryName = "workspace"
-	}
 
 	memoryMap, err := rhizome.GenerateMemoryMap(ctx, store, repositoryName, "*", 2000)
 	if err != nil {
@@ -183,4 +131,45 @@ func GenerateMemoryMap(ctx context.Context, mountPath string) (string, error) {
 		return "", nil
 	}
 	return memoryMap, nil
+}
+
+// openRhizomeIndex opens the workspace-local index after the Repo Map scan has
+// refreshed it. It deliberately does not scan; task-context assembly uses this
+// narrow query seam so it cannot introduce a second whole-repository walk.
+func openRhizomeIndex(ctx context.Context, mountPath string) (*rhizome.SQLiteIndexStore, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tendrilDir := filepath.Join(mountPath, tendrilStateDirectory)
+	if err := os.MkdirAll(tendrilDir, 0o755); err != nil {
+		return nil, "", fmt.Errorf("create .tendril dir: %w", err)
+	}
+
+	keyPath := filepath.Join(tendrilDir, rhizomeIndexKeyFile)
+	material, err := heartwood.ResolveKey(keyPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve index key: %w", err)
+	}
+
+	cipher, err := heartwood.NewCipher(material)
+	if err != nil {
+		return nil, "", fmt.Errorf("initialize cipher: %w", err)
+	}
+
+	dbPath := filepath.Join(tendrilDir, rhizomeIndexDatabase)
+	store, err := rhizome.OpenSQLiteIndexStore(ctx, dbPath, cipher)
+	if err != nil {
+		return nil, "", fmt.Errorf("open index store: %w", err)
+	}
+
+	absoluteMountPath, err := filepath.Abs(mountPath)
+	if err != nil {
+		absoluteMountPath = mountPath
+	}
+	repositoryName := filepath.Base(absoluteMountPath)
+	if repositoryName == "." || repositoryName == "" {
+		repositoryName = "workspace"
+	}
+	return store, repositoryName, nil
 }
