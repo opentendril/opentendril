@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
+	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/cmd/stem/internal/rhizome"
+	"github.com/opentendril/opentendril/cmd/stem/internal/terrarium"
 )
 
 type taskContextTestIndex struct {
@@ -24,6 +27,17 @@ type taskContextTestMemoryIndex struct {
 	memories []rhizome.Memory
 	queries  []string
 	err      error
+}
+
+type taskContextTranscriptCapture struct {
+	inner      sproutRunner
+	transcript *string
+}
+
+func (c *taskContextTranscriptCapture) Run(ctx context.Context, taskPrompt string) (sproutResult, error) {
+	result, err := c.inner.Run(ctx, taskPrompt)
+	*c.transcript = result.Transcript
+	return result, err
 }
 
 func (f *taskContextTestMemoryIndex) SearchMemories(_ context.Context, repositoryName, query, _ string, _ int) ([]rhizome.Memory, error) {
@@ -887,9 +901,9 @@ func TestRunSproutEmitsOneTaskContextEventPerGrowthIncludingZeroEvidence(t *test
 	stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "done"}, nil)
 	originalNewSprout := newSproutFn
 	var renderedContext string
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
-		renderedContext = taskContextFromContext(ctx)
-		return originalNewSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
+		renderedContext = renderedTaskContext
+		return originalNewSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID, renderedTaskContext)
 	}
 	t.Cleanup(func() { newSproutFn = originalNewSprout })
 	orch := &DockerOrchestrator{Substrate: root, StepID: "task-context-growth", SessionID: "phytomer-1", EventBus: bus, DisableMergeBack: true}
@@ -907,5 +921,137 @@ func TestRunSproutEmitsOneTaskContextEventPerGrowthIncludingZeroEvidence(t *test
 	}
 	if renderedContext != "" {
 		t.Fatalf("empty-context growth injected a raw context block: %q", renderedContext)
+	}
+}
+
+func TestRunSproutTaskContextDeliveryAndTranscriptPersistence(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	selectedEvidence := "QUALIFICATION-SELECTED-EVIDENCE-RAW"
+
+	t.Setenv(historydb.EnvEncryptAtRest, "off")
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open HistoryDB: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	bus := eventbus.New()
+	bus.AttachSink(store, 0, "historydb")
+	t.Cleanup(bus.Shutdown)
+
+	stubRunSproutCollaborators(t, root, &mockSproutRunner{response: "unused"}, nil)
+	client := &fakeLLM{response: `{"final":"done"}`}
+	createShadow := createShadowWorktreeFn
+	createShadowWorktreeFn = func(sourcePath, substrateBranch string) (string, error) {
+		shadowPath := filepath.Join(root, "shadow-worktree")
+		if err := os.MkdirAll(shadowPath, 0o755); err != nil {
+			return "", err
+		}
+		writeTaskContextFile(t, shadowPath, "evidence.go", "package fixture\n\n// "+selectedEvidence+"\n")
+		return shadowPath, nil
+	}
+	t.Cleanup(func() { createShadowWorktreeFn = createShadow })
+	startSession := startTerrariumSessionFn
+	startTerrariumSessionFn = func(context.Context, string, string, string, bool, []string, []string, time.Duration, ...terrarium.ActivationObserver) (toolSession, error) {
+		return &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}, nil
+	}
+	t.Cleanup(func() { startTerrariumSessionFn = startSession })
+	startSprout := newSproutFn
+	var deliveredTaskContext string
+	var deliveredSourcePath string
+	var producedTranscript string
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
+		deliveredTaskContext = renderedTaskContext
+		deliveredSourcePath = genotypeRoot
+		created, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID, renderedTaskContext)
+		if err != nil {
+			return nil, err
+		}
+		return &taskContextTranscriptCapture{inner: created, transcript: &producedTranscript}, nil
+	}
+	t.Cleanup(func() { newSproutFn = startSprout })
+
+	const stepID = "qualification-step-context-20260920-0123456789abcdef"
+	const sessionID = "phytomer-qualification-20260920-0123456789abcdef"
+	orch := &DockerOrchestrator{
+		Substrate:        root,
+		StepID:           stepID,
+		SessionID:        sessionID,
+		EventBus:         bus,
+		DisableMergeBack: true,
+	}
+	if _, err := orch.RunSprout(context.Background(), "inspect evidence.go"); err != nil {
+		t.Fatalf("RunSprout: %v", err)
+	}
+	bus.Shutdown()
+
+	if len(client.calls) == 0 || len(client.calls[0]) == 0 {
+		t.Fatal("expected a first provider-facing system request")
+	}
+	if client.calls[0][0].Role != "system" {
+		t.Fatalf("first provider request role = %q, want system", client.calls[0][0].Role)
+	}
+	if !strings.Contains(client.calls[0][0].Content, selectedEvidence) {
+		t.Fatalf("first provider request omitted selected raw evidence (source %q, delivered context %q): %s", deliveredSourcePath, deliveredTaskContext, client.calls[0][0].Content)
+	}
+	for _, required := range []string{
+		"Task-specific Substrate evidence was supplied separately.",
+		"See the task-context provenance manifest for selection facts.",
+	} {
+		if !strings.Contains(producedTranscript, required) {
+			t.Fatalf("Sprout producer transcript missing %q: %s", required, producedTranscript)
+		}
+	}
+	if strings.Contains(producedTranscript, selectedEvidence) {
+		t.Fatalf("Sprout producer transcript leaked selected raw evidence: %s", producedTranscript)
+	}
+
+	records, err := store.LoadEvents(context.Background(), sessionID, 100)
+	if err != nil {
+		t.Fatalf("load persisted events: %v", err)
+	}
+	var contextRecord, transcriptRecord *historydb.EventRecord
+	for index := range records {
+		record := records[index]
+		switch record.Type {
+		case string(eventbus.EventTaskContextAssembled):
+			contextRecord = &record
+		case string(eventbus.EventSproutTranscript):
+			transcriptRecord = &record
+		}
+	}
+	if contextRecord == nil || transcriptRecord == nil {
+		t.Fatalf("missing persisted task-context/transcript events: %+v", records)
+	}
+	if contextRecord.Source != stepID || contextRecord.SessionID != sessionID {
+		t.Fatalf("task-context correlation = source %q/session %q", contextRecord.Source, contextRecord.SessionID)
+	}
+	if transcriptRecord.Source != stepID || transcriptRecord.SessionID != sessionID {
+		t.Fatalf("transcript correlation = source %q/session %q", transcriptRecord.Source, transcriptRecord.SessionID)
+	}
+	admittedCount := 0
+	switch value := contextRecord.Data["admittedCount"].(type) {
+	case int:
+		admittedCount = value
+	case float64:
+		admittedCount = int(value)
+	}
+	if admittedCount <= 0 {
+		t.Fatalf("persisted admittedCount = %#v, want > 0; source=%q event=%#v", contextRecord.Data["admittedCount"], deliveredSourcePath, contextRecord.Data)
+	}
+	transcript, ok := transcriptRecord.Data["transcript"].(string)
+	if !ok {
+		t.Fatalf("persisted transcript has unexpected shape: %#v", transcriptRecord.Data["transcript"])
+	}
+	for _, required := range []string{
+		"Task-specific Substrate evidence was supplied separately.",
+		"See the task-context provenance manifest for selection facts.",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("persisted transcript missing %q: %s", required, transcript)
+		}
+	}
+	if strings.Contains(transcript, selectedEvidence) {
+		t.Fatalf("persisted transcript leaked selected raw evidence: %s", transcript)
 	}
 }

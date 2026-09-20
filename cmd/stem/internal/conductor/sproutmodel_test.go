@@ -94,7 +94,7 @@ func stubSproutRun(t *testing.T, capture func(client llmCaller)) {
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return &terrariumToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		if capture != nil {
 			capture(client)
 		}

@@ -301,7 +301,7 @@ func TestRunSequenceSproutAtPathWatchesForDormancyWhenConfigured(t *testing.T) {
 		startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 			return &stubToolSession{}, nil
 		}
-		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 			return probe, nil
 		}
 

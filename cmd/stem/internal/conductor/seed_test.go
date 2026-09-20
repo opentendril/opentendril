@@ -891,7 +891,7 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 
 	origSprout := newSproutFn
 	t.Cleanup(func() { newSproutFn = origSprout })
-	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 		return &testSproutRunner{
 			run: func(ctx context.Context, taskPrompt string) (sproutResult, error) {
 				prompts = append(prompts, taskPrompt)

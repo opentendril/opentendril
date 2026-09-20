@@ -103,7 +103,7 @@ func TestProviderToolIntentUsesBoundedCorrectionWithoutTranslation(t *testing.T)
 			client := &fakeLLM{responses: []string{reply, `{"final":"corrected"}`}}
 			session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
 
-			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 			if err != nil {
 				t.Fatalf("newSprout: %v", err)
 			}
@@ -142,7 +142,7 @@ func TestSeedIntegrationStopsAfterWorkspaceWriteOnUnusableReply(t *testing.T) {
 		workspace:   workspace,
 	}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSeedIntegrationCorrectsUnusableReplyBeforeWorkspaceWrite(t *testing.T) 
 	}}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestSeedIntegrationStopsAfterNativeWorkspaceWriteOnUnusableReply(t *testing
 		workspace:   workspace,
 	}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestOrdinarySproutCorrectsUnusableReplyAfterWorkspaceWrite(t *testing.T) {
 		workspace:   workspace,
 	}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestOneUnusableReplyIsCorrectedAndTheRunContinues(t *testing.T) {
 	}}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}, {Name: "readFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestTwoConsecutiveUnusableRepliesEndTheRun(t *testing.T) {
 	client := &fakeLLM{response: unreadableWrapperReply}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestSproutTurnLimitPreservesBudgetAndIdentity(t *testing.T) {
 	client := &fakeLLM{response: `{"tool":"execCommand","arguments":{"command":"keep trying"}}`}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "execCommand"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestUnusableFailureAfterUnknownToolRefusalRemainsSalvageable(t *testing.T) 
 	}}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestMalformedNativeUnknownToolRefusalDoesNotPoisonSalvage(t *testing.T) {
 	}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -481,7 +481,7 @@ func TestUnusableCounterResetsOnAGoodTurn(t *testing.T) {
 	}}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}, {Name: "writeFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}

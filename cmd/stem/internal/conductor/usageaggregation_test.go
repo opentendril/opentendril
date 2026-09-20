@@ -46,7 +46,7 @@ func usageTestSession() *fakeSession {
 
 func newUsageTestSprout(t *testing.T, client llmCaller) *Sprout {
 	t.Helper()
-	sprout, err := newSprout(context.Background(), t.TempDir(), t.TempDir(), "", client, usageTestSession(), nil, "step", "session")
+	sprout, err := newSprout(context.Background(), t.TempDir(), t.TempDir(), "", client, usageTestSession(), nil, "step", "session", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -472,7 +472,7 @@ func stubUsageReportRun(t *testing.T, runner sproutRunner) {
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		return runner, nil
 	}
 }

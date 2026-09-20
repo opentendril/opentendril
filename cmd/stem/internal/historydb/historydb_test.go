@@ -153,17 +153,19 @@ func TestEventPersistenceViaBusSink(t *testing.T) {
 }
 
 func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
-	t.Setenv("TENDRIL_TELEMETRY_REDACTION", "off")
+	t.Setenv("TENDRIL_TELEMETRY_REDACTION", "on")
 	store := openTestStore(t)
 	bus := eventbus.New()
 	bus.AttachSink(store, 0, "historydb")
+	stepID := "qualification-step-20260920-0123456789abcdef"
+	sessionID := "phytomer-qualification-20260920-0123456789abcdef"
 
 	event := eventbus.Event{
 		Type:      eventbus.EventTaskContextAssembled,
-		Source:    "step-context",
-		SessionID: "phytomer-context",
+		Source:    stepID,
+		SessionID: sessionID,
 		Data: map[string]interface{}{
-			"stepId":                "step-context",
+			"stepId":                stepID,
 			"substrate":             "fixture",
 			"substrateRef":          "0123456789ab",
 			"workspaceRevisionRef":  "abcdefabcdef",
@@ -176,25 +178,32 @@ func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
 			"omissionCounts":        map[string]interface{}{},
 			"items": []map[string]interface{}{{
 				"sourceClass":     "file-anchor",
-				"sourceIdentity":  "foo.go",
+				"sourceIdentity":  "fixtures/ghp_123456789012345678901234567890123456.txt",
 				"selectionReason": "explicit-file-anchor",
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   32,
 				"truncated":       false,
 			}},
-			"content":    "raw selected evidence",
-			"transcript": "raw Transcript text",
+			"content":      "raw selected evidence",
+			"transcript":   "raw Transcript text",
+			"credential":   "bearer secret",
+			"environment":  map[string]interface{}{"TOKEN": "secret"},
+			"absolutePath": "/home/private/repository",
+			"reasoning":    "<thought>private</thought>",
 		},
 	}
 	bus.Publish(telemetry.SanitizeObservationEvent(event))
 	bus.Shutdown()
 
-	records, err := store.LoadEvents(context.Background(), "phytomer-context", 10)
+	records, err := store.LoadEvents(context.Background(), sessionID, 10)
 	if err != nil {
 		t.Fatalf("LoadEvents: %v", err)
 	}
-	if len(records) != 1 || records[0].Type != string(eventbus.EventTaskContextAssembled) || records[0].SessionID != "phytomer-context" {
+	if len(records) != 1 || records[0].Type != string(eventbus.EventTaskContextAssembled) || records[0].SessionID != sessionID || records[0].Source != stepID {
 		t.Fatalf("task-context event did not reload under its Phytomer: %+v", records)
+	}
+	if records[0].Data["stepId"] != stepID {
+		t.Fatalf("task-context step correlation did not survive HistoryDB: %+v", records[0].Data)
 	}
 	encoded := stringifyEventData(records[0].Data)
 	if strings.Contains(encoded, "raw selected evidence") || strings.Contains(encoded, "raw Transcript text") || strings.Contains(encoded, "content=") || strings.Contains(encoded, "transcript=") {
@@ -202,6 +211,13 @@ func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
 	}
 	if records[0].Data["substrateRef"] != "0123456789ab" {
 		t.Fatalf("safe provenance did not survive round trip: %+v", records[0].Data)
+	}
+	items, ok := records[0].Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("safe provenance items did not survive round trip: %#v", records[0].Data["items"])
+	}
+	if items[0]["sourceIdentity"] != "fixtures/[REDACTED]" {
+		t.Fatalf("credential-shaped source identity was not redacted in HistoryDB: %#v", records[0].Data["items"])
 	}
 }
 

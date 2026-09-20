@@ -136,7 +136,7 @@ func TestSanitizeTaskContextEventIsFailClosedAllowList(t *testing.T) {
 			"omissionCounts":       map[string]interface{}{"budget-bytes": 1},
 			"items": []map[string]interface{}{{
 				"sourceClass":     "file-anchor",
-				"sourceIdentity":  "pkg/foo.go",
+				"sourceIdentity":  "fixtures/ghp_123456789012345678901234567890123456.txt",
 				"selectionReason": "explicit-file-anchor",
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   32,
@@ -164,6 +164,9 @@ func TestSanitizeTaskContextEventIsFailClosedAllowList(t *testing.T) {
 	}
 	if _, ok := items[0]["content"]; ok {
 		t.Fatalf("raw item content survived: %+v", items[0])
+	}
+	if items[0]["sourceIdentity"] != "fixtures/ghp_123456789012345678901234567890123456.txt" {
+		t.Fatalf("safe source identity was not retained: %+v", items[0])
 	}
 	if safe.Data["sourceIdentity"] != nil {
 		t.Fatalf("unexpected top-level source identity: %+v", safe.Data)
@@ -200,6 +203,28 @@ func TestSanitizeTaskContextEventStaysSafeWhenGeneralRedactionIsDisabled(t *test
 	}
 	if items, ok := safe.Data["items"].([]map[string]interface{}); !ok || len(items) != 0 {
 		t.Fatalf("unsafe absolute item survived with redaction disabled: %+v", safe.Data)
+	}
+}
+
+func TestSanitizeTaskContextEventRetainsGeneratedCorrelation(t *testing.T) {
+	stepID := "qualification-step-20260920-0123456789abcdef"
+	event := eventbus.Event{
+		Type:      eventbus.EventTaskContextAssembled,
+		Source:    stepID,
+		SessionID: "phytomer-qualification-20260920-0123456789abcdef",
+		Data: map[string]interface{}{
+			"stepId":        stepID,
+			"admittedCount": 1,
+			"content":       "raw evidence",
+		},
+	}
+
+	safe := SanitizeObservationEvent(event)
+	if safe.Source != stepID || safe.Data["stepId"] != stepID {
+		t.Fatalf("generated task-context correlation was not retained: source=%q data=%v", safe.Source, safe.Data)
+	}
+	if _, ok := safe.Data["content"]; ok {
+		t.Fatalf("unsafe task-context content survived: %+v", safe.Data)
 	}
 }
 

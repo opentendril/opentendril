@@ -108,8 +108,8 @@ var (
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return startTerrariumSession(ctx, providerName, imageName, mountPath, readOnly, command, extraEnv, timeout, observers...)
 	}
-	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
-		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID)
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
+		return newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, eventBus, stepID, sessionID, renderedTaskContext)
 	}
 	stashHostWorkspaceFn           = stashHostWorkspace
 	restoreHostStashFn             = restoreHostStash
@@ -1079,7 +1079,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// and the terrarium watchdog is derived from it for the same reason it
 	// always was: the context expires first, the watchdog is the backstop.
 	workCtx, releaseWork := newSproutWorkContext(callerCtx, plan.reapBudget)
-	workCtx = withTaskContext(workCtx, taskContext.Rendered)
 	defer func() {
 		if detached {
 			return
@@ -1106,7 +1105,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	teardown = append(teardown, func() { _ = session.Close() })
 
-	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, mind, session, d.EventBus, stepID, d.SessionID)
+	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, mind, session, d.EventBus, stepID, d.SessionID, taskContext.Rendered)
 	if err != nil {
 		return report, err
 	}

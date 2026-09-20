@@ -812,7 +812,7 @@ func TestRunSproutFailClosedIsolation(t *testing.T) {
 			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 				return &terrariumToolSession{}, nil // Dummy session
 			}
-			newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+			newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 				if tc.allowHost && workspace != tc.wantTarget {
 					t.Errorf("sprout workspace = %q, want %q (host workspace)", workspace, tc.wantTarget)
 				}
@@ -917,7 +917,7 @@ func TestRunSproutCarriesProtocolOntoTheReport(t *testing.T) {
 			startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 				return &stubToolSession{}, nil
 			}
-			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 				return &mockSproutRunner{response: "done", protocol: "prose", err: tc.runErr}, nil
 			}
 
@@ -1079,7 +1079,7 @@ func TestRunSproutInvestigationMountsReadOnly(t *testing.T) {
 				return &stubToolSession{}, nil
 			}
 
-			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+			newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 				return &mockSproutRunner{
 					response: "done",
 				}, nil

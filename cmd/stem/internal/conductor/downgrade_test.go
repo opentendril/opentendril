@@ -38,7 +38,7 @@ func TestNativeToolResultThenCanonicalProseToolCallRecovers(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestNativeProviderShapedToolIntentUsesBoundedCorrection(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestNativeProviderShapedToolIntentDoesNotMature(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestNativeOrdinaryTextAndJSONRemainFinalAnswers(t *testing.T) {
 			bus := eventbus.New()
 			defer bus.Shutdown()
 
-			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+			sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 			if err != nil {
 				t.Fatalf("newSprout: %v", err)
 			}
@@ -266,7 +266,7 @@ func TestDeclaredIncapableEndpointRunsInProseAndSaysSo(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRefusedToolDefinitionsDowngradeAndSaySo(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestProseToolCallAfterDowngradeIsExecuted(t *testing.T) {
 	}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -475,7 +475,7 @@ func TestDowngradeAnnouncesOncePerRun(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -512,7 +512,7 @@ func TestRefusedTurnDoesNotSpendAnIteration(t *testing.T) {
 	client.response = `{"tool":"readFile","arguments":{"path":"README.md"}}`
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestNativeRunPublishesNoDowngrade(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestProbeFailsNoDowngrade(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -682,7 +682,7 @@ func TestProbeSendsCorrectMessages(t *testing.T) {
 
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", rec, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", rec, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -758,7 +758,7 @@ func TestAnnouncedReasonCarriesEndpointMessage(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}

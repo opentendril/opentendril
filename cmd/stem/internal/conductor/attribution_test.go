@@ -89,7 +89,7 @@ func TestSproutRecordsWhichToolsCouldWrite(t *testing.T) {
 			client := &fakeLLM{responses: []string{testCase.toolCall, `{"final":"done"}`}}
 			session := &fakeSession{tools: attributionToolCatalog()}
 
-			sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "")
+			sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "", "")
 			if err != nil {
 				t.Fatalf("newSprout returned error: %v", err)
 			}
@@ -118,7 +118,7 @@ func TestSproutRemembersAWriteAcrossLaterReads(t *testing.T) {
 	}}
 	session := &fakeSession{tools: attributionToolCatalog()}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestSproutReportsItsWritesEvenWhenTheRunBreaks(t *testing.T) {
 	}
 	session := &fakeSession{tools: attributionToolCatalog()}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -423,7 +423,7 @@ func stubSequenceAttributionCollaborators(t *testing.T, root string, runner spro
 	startTerrariumSessionFn = func(ctx context.Context, providerName, imageName, mountPath string, readOnly bool, command []string, extraEnv []string, timeout time.Duration, observers ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		return runner, nil
 	}
 	collectGitDiffFn = func(ctx context.Context, mountPath string) (string, error) { return "", nil }

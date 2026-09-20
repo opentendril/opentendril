@@ -182,7 +182,7 @@ func TestRunSequenceSproutAtPathCallSitePassesDerivedWatchdog(t *testing.T) {
 		removeShadowWorktreeFn = func(sourcePath, shadowPath string) {}
 		injectMycorrhizalCacheFn = func(sourcePath, shadowPath string) {}
 		stashHostWorkspaceFn = func(ctx context.Context, repoRoot, runID string) (bool, error) { return false, nil }
-		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 			return &mockSproutRunner{response: "done"}, nil
 		}
 
@@ -246,7 +246,7 @@ func TestRunSequenceSproutAtPathCallSitePassesDerivedWatchdog(t *testing.T) {
 			capturedTimeout = timeout
 			return &stubToolSession{}, nil
 		}
-		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+		newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 			return &mockSproutRunner{response: "done"}, nil
 		}
 

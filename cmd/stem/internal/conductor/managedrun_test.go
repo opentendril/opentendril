@@ -331,7 +331,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 	}
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "# repo map\n", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		iteration++
 		var responses []string
 		if iteration == 1 {
@@ -349,7 +349,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidate(t *testing.T) {
 			refusalMessage: "tools unsupported for this model",
 		}
 		clients = append(clients, client)
-		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID)
+		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID, "")
 		if err == nil {
 			sprouts = append(sprouts, sprout)
 		}
@@ -676,7 +676,7 @@ func installManagedRunSeams(t *testing.T, capture *managedRunCapture, runners ma
 	startTerrariumSessionFn = func(context.Context, string, string, string, bool, []string, []string, time.Duration, ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		runner, ok := runners[stepID]
 		if !ok {
 			return nil, errors.New("missing managed test runner for " + stepID)
@@ -877,14 +877,14 @@ func TestRunSproutManagedRunAttributesTaskContextToBackingSubstrate(t *testing.T
 	t.Cleanup(func() { createRunWorkspaceFn = originalCreateWorkspace })
 
 	originalNewSprout := newSproutFn
-	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, gotStepID, sessionID string) (sproutRunner, error) {
-		contextPayload = taskContextFromContext(ctx)
+	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, gotStepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
+		contextPayload = renderedTaskContext
 		var toolsErr error
 		availableTools, toolsErr = session.ListAvailableTools(ctx)
 		if toolsErr != nil {
 			t.Fatalf("list Terrarium tools: %v", toolsErr)
 		}
-		created, createErr := originalNewSprout(ctx, workspace, sourcePath, genotypeName, client, session, bus, gotStepID, sessionID)
+		created, createErr := originalNewSprout(ctx, workspace, sourcePath, genotypeName, client, session, bus, gotStepID, sessionID, renderedTaskContext)
 		if createErr == nil {
 			if removeErr := os.Remove(filepath.Join(workspace, workspaceOnlyFile)); removeErr != nil {
 				t.Fatalf("remove context-only workspace evidence before Sprout execution: %v", removeErr)
@@ -1574,7 +1574,7 @@ func TestCheckoutPathStillUsesShadowWorktree(t *testing.T) {
 		mounted = mountPath
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(context.Context, string, string, string, llmCaller, toolSession, *eventbus.Bus, string, string) (sproutRunner, error) {
+	newSproutFn = func(context.Context, string, string, string, llmCaller, toolSession, *eventbus.Bus, string, string, string) (sproutRunner, error) {
 		return &stubSproutRunner{result: sproutResult{Response: "path"}}, nil
 	}
 	collectStageableFilesFn = func(context.Context, string, ...string) ([]string, error) { return []string{}, nil }

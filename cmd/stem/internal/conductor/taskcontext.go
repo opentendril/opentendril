@@ -120,25 +120,6 @@ type taskContextAssembly struct {
 	Manifest taskContextSelectionManifest
 }
 
-type taskContextContextKey struct{}
-
-func withTaskContext(ctx context.Context, rendered string) context.Context {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return context.WithValue(ctx, taskContextContextKey{}, strings.TrimSpace(rendered))
-}
-
-func taskContextFromContext(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	if rendered, ok := ctx.Value(taskContextContextKey{}).(string); ok {
-		return strings.TrimSpace(rendered)
-	}
-	return ""
-}
-
 type taskContextRhizomeIndex interface {
 	GetFile(ctx context.Context, repositoryName string, path string) (rhizome.FileRecord, bool, error)
 	SearchSymbols(ctx context.Context, repositoryName string, query string, limit int) ([]rhizome.Symbol, error)

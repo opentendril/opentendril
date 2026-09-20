@@ -630,7 +630,7 @@ func stubSequenceRunner(t *testing.T, runner sproutRunner) {
 	original := newSproutFn
 	t.Cleanup(func() { newSproutFn = original })
 
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		return runner, nil
 	}
 }
