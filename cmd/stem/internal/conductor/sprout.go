@@ -187,7 +187,7 @@ type sproutResult struct {
 	ToolInvocations int
 }
 
-func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (*Sprout, error) {
+func newSprout(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (*Sprout, error) {
 	if strings.TrimSpace(workspace) == "" {
 		workspace = "."
 	}
@@ -204,7 +204,7 @@ func newSprout(ctx context.Context, workspace string, genotypeRoot string, genot
 		ctx = context.Background()
 	}
 
-	taskContext := taskContextFromContext(ctx)
+	taskContext := strings.TrimSpace(renderedTaskContext)
 	var genomeContext string
 	var err error
 	if taskContext == "" {

@@ -521,7 +521,7 @@ substrates:
 		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		return &stubSproutRunner{result: sproutResult{Response: "edited TERRARIUM.md"}}, nil
 	}
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
@@ -656,7 +656,7 @@ substrates:
 		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		return &stubSproutRunner{result: sproutResult{Response: "edited TERRARIUM.md"}}, nil
 	}
 	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return false, nil }
@@ -789,7 +789,7 @@ substrates:
 		mountedHasGit = err == nil
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, genotypeSourceRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeSourceRoot, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		genotypeRoot = genotypeSourceRoot
 		return &stubSproutRunner{result: sproutResult{Response: "read TERRARIUM.md"}}, nil
 	}
@@ -1002,7 +1002,7 @@ substrates:
 		return &stubToolSession{}, nil
 	}
 	origNewSproutFn := newSproutFn
-	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 		return &stubSproutRunner{result: sproutResult{Response: "read-only result", Transcript: "transcript", WroteWorkspace: true}}, nil
 	}
 	defer func() {

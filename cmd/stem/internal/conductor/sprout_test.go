@@ -173,7 +173,7 @@ func TestAgentRunsToolLoop(t *testing.T) {
 		},
 	}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestAgentDenyPlasmidsFilter(t *testing.T) {
 	}
 	bus := eventbus.New()
 	defer bus.Shutdown()
-	sprout, err := newSprout(context.Background(), workspace, workspace, "secure", client, session, bus, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "secure", client, session, bus, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -584,7 +584,7 @@ func TestAgentPublishesProgressWhenGivenABus(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -628,7 +628,7 @@ func TestAgentPublishesStreamTokensWithoutContent(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -669,7 +669,7 @@ func TestAgentRetainsPrivateCognitionForNextTurn(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestAgentPublishesToolInvokedEvents(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -763,7 +763,7 @@ func TestSproutPublishesMycorrhizalRequestBegunOnce(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -803,7 +803,7 @@ func TestAgentPublishesTranscriptEvent(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -841,7 +841,7 @@ func TestAgentFirstProviderRequestReceivesTaskContextWithoutTranscriptCopy(t *te
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(withTaskContext(context.Background(), selectedEvidence), workspace, workspace, "workspace-Sprout", client, session, bus, "step-context", "session-context")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-context", "session-context", selectedEvidence)
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestAgentInterceptsGitCommit(t *testing.T) {
 		{Name: "gitCommit", Description: "Stage files and create a git commit."},
 	}}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -940,7 +940,7 @@ func TestAgentWithoutABusIsSilent(t *testing.T) {
 	workspace := t.TempDir()
 	client := &fakeLLM{response: "done"}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Description: "read a file"}}}
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -986,7 +986,7 @@ func TestAgentRunsNativeToolLoop(t *testing.T) {
 	bus := eventbus.New()
 	defer bus.Shutdown()
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step-1", "session-1", "")
 	if err != nil {
 		t.Fatalf("newSprout returned error: %v", err)
 	}
@@ -1040,7 +1040,7 @@ func TestNativeSystemPrompt(t *testing.T) {
 	session := &fakeSession{
 		tools: []ToolDefinition{{Name: "readFile"}},
 	}
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -1063,7 +1063,7 @@ func TestProseSystemPrompt(t *testing.T) {
 	session := &fakeSession{
 		tools: []ToolDefinition{{Name: "readFile"}},
 	}
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -1126,7 +1126,7 @@ func TestMalformedArguments(t *testing.T) {
 		tools: []ToolDefinition{{Name: "readFile"}},
 	}
 
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -1161,7 +1161,7 @@ func TestSproutDoesNotForgeToolInvokedForUnparsableArguments(t *testing.T) {
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile"}}}
 
 	bus := eventbus.New()
-	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step", "sess")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout", client, session, bus, "step", "sess", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}

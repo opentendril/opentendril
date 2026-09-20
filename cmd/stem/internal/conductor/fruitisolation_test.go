@@ -95,7 +95,7 @@ func installRemoteManagedRunSeams(
 	startTerrariumSessionFn = func(context.Context, string, string, string, bool, []string, []string, time.Duration, ...terrarium.ActivationObserver) (toolSession, error) {
 		return &stubToolSession{}, nil
 	}
-	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		runner, ok := runners[stepID]
 		if !ok {
 			return nil, errors.New("missing runner for " + stepID)
@@ -1185,7 +1185,7 @@ func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
 		return &stubToolSession{}, nil
 	}
 	var ephemeralMount string
-	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, sID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, sourcePath, genotypeName string, client llmCaller, session toolSession, bus *eventbus.Bus, sID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		ephemeralMount = workspace
 		_ = capture.remember(stepID, workspace, sourcePath, runner.file)
 		runner.setWorkspace(workspace)

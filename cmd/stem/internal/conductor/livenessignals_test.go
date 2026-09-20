@@ -306,7 +306,7 @@ func TestNativeToolOnlyTurnWithoutTokenDoesTriggerDormancyReport(t *testing.T) {
 	}
 
 	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout",
-		client, session, runBus, "step-silent", "session-silent")
+		client, session, runBus, "step-silent", "session-silent", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestNativeToolOnlyTurnPublishesBothLivenessSignals(t *testing.T) {
 	}
 
 	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout",
-		client, session, bus, "step-liveness", "session-liveness")
+		client, session, bus, "step-liveness", "session-liveness", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -456,7 +456,7 @@ func TestNativeToolOnlyTurnDoesNotTriggerDormancyReport(t *testing.T) {
 	}
 
 	sprout, err := newSprout(context.Background(), workspace, workspace, "workspace-Sprout",
-		client, session, runBus, "step-nodormancy", "session-nodormancy")
+		client, session, runBus, "step-nodormancy", "session-nodormancy", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}

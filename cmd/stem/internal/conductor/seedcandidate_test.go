@@ -193,7 +193,7 @@ func TestSproutLoadsGenomeFromHostPathWithoutExposingIt(t *testing.T) {
 	}
 	client := &fakeLLM{responses: []string{`{"final":"done"}`}}
 	session := &fakeSession{tools: []ToolDefinition{{Name: "readFile", Arguments: []ToolArgument{{Name: "path", Type: "string", Required: true}}}}}
-	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "")
+	sprout, err := newSprout(context.Background(), workspace, workspace, "", client, session, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("newSprout: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestRound19SeedRetryCarriesCandidateEvidenceAndRejectsProviderProse(t *test
 			fakeSession: fakeSession{tools: []ToolDefinition{{Name: "writeFile"}}},
 			workspace:   repo,
 		}
-		sprout, err := newSprout(ctx, repo, repo, "workspace-Sprout", client, session, nil, "round-19", "round-19")
+		sprout, err := newSprout(ctx, repo, repo, "workspace-Sprout", client, session, nil, "round-19", "round-19", "")
 		if err != nil {
 			return SproutRunReport{}, err
 		}
@@ -1346,7 +1346,7 @@ func TestPassingVerificationMatchesManagedAPIFruitPaths(t *testing.T) {
 	}
 	origSprout := newSproutFn
 	t.Cleanup(func() { newSproutFn = origSprout })
-	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace string, genotypeRoot string, genotypeName string, client llmCaller, session toolSession, eventBus *eventbus.Bus, stepID string, sessionID string, renderedTaskContext string) (sproutRunner, error) {
 		return &testSproutRunner{run: func(ctx context.Context, taskPrompt string) (sproutResult, error) {
 			if err := os.WriteFile(filepath.Join(workspace, "HELLO.md"), []byte("Hello from OpenTendril.\n"), 0o644); err != nil {
 				return sproutResult{}, err
@@ -1718,7 +1718,7 @@ func installPathBackedSeedSeams(t *testing.T, runners map[string]sproutRunner) *
 		probe.mu.Unlock()
 		return originalPush(ctx, mountPath, branch, credential, allowDefault, stepID)
 	}
-	newSproutFn = func(_ context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, stepID, _ string) (sproutRunner, error) {
+	newSproutFn = func(_ context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, stepID, _ string, _ string) (sproutRunner, error) {
 		runner, ok := runners[stepID]
 		if !ok {
 			if fallback, exists := runners["*"]; exists {
@@ -2021,9 +2021,9 @@ func TestPathBackedSeedSecondIterationInheritsCheckpoint(t *testing.T) {
 	var renderedContexts []string
 	iteration := 0
 	installPathBackedSeedSeams(t, nil)
-	newSproutFn = func(ctx context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, _, _ string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, _ string, _ string, _ llmCaller, _ toolSession, _ *eventbus.Bus, _, _ string, renderedTaskContext string) (sproutRunner, error) {
 		iteration++
-		renderedContexts = append(renderedContexts, taskContextFromContext(ctx))
+		renderedContexts = append(renderedContexts, renderedTaskContext)
 		runner := &pathBackedSeedRunner{workspace: workspace}
 		if iteration == 1 {
 			runner.file = "HELLO.md"

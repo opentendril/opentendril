@@ -203,6 +203,28 @@ func TestSanitizeTaskContextEventStaysSafeWhenGeneralRedactionIsDisabled(t *test
 	}
 }
 
+func TestSanitizeTaskContextEventRetainsGeneratedCorrelation(t *testing.T) {
+	stepID := "qualification-step-20260920-0123456789abcdef"
+	event := eventbus.Event{
+		Type:      eventbus.EventTaskContextAssembled,
+		Source:    stepID,
+		SessionID: "phytomer-qualification-20260920-0123456789abcdef",
+		Data: map[string]interface{}{
+			"stepId":        stepID,
+			"admittedCount": 1,
+			"content":       "raw evidence",
+		},
+	}
+
+	safe := SanitizeObservationEvent(event)
+	if safe.Source != stepID || safe.Data["stepId"] != stepID {
+		t.Fatalf("generated task-context correlation was not retained: source=%q data=%v", safe.Source, safe.Data)
+	}
+	if _, ok := safe.Data["content"]; ok {
+		t.Fatalf("unsafe task-context content survived: %+v", safe.Data)
+	}
+}
+
 func TestSanitizeTaskContextEventDropsUnsafeCorrelationAndUnknownEnums(t *testing.T) {
 	event := eventbus.Event{
 		Type:   eventbus.EventTaskContextAssembled,

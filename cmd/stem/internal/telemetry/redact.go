@@ -41,6 +41,23 @@ func RedactionDisabled() bool {
 // RedactEvent returns a deep-copy of the event with sensitive data scrubbed.
 // It leaves the original event unmodified.
 func RedactEvent(event eventbus.Event) eventbus.Event {
+	switch event.Type {
+	case eventbus.EventTaskContextAssembled:
+		// Task-context telemetry has already crossed its mandatory fail-closed
+		// allow-list. Reconstruct it through that sanitizer so generic entropy
+		// redaction cannot destroy an accepted correlation identifier.
+		return SanitizeObservationEvent(event)
+	case eventbus.EventSproutTranscript:
+		redacted := event
+		if event.Data != nil {
+			redacted.Data = redactMap(event.Data)
+			if transcript, ok := event.Data["transcript"].(string); ok {
+				redacted.Data["transcript"] = redactTranscript(transcript)
+			}
+		}
+		return redacted
+	}
+
 	redacted := event
 	if event.Data != nil {
 		redacted.Data = redactMap(event.Data)
@@ -103,6 +120,23 @@ func redactString(s string) string {
 		res = re.ReplaceAllString(res, "[REDACTED]")
 	}
 	return res
+}
+
+const (
+	taskContextMarkerOne = "Task-specific Substrate evidence was supplied separately."
+	taskContextMarkerTwo = "See the task-context provenance manifest for selection facts."
+)
+
+func redactTranscript(transcript string) string {
+	const (
+		markerTokenOne = "__task_context_marker_one__"
+		markerTokenTwo = "__task_context_marker_two__"
+	)
+	protected := strings.ReplaceAll(transcript, taskContextMarkerOne, markerTokenOne)
+	protected = strings.ReplaceAll(protected, taskContextMarkerTwo, markerTokenTwo)
+	protected = redactString(protected)
+	protected = strings.ReplaceAll(protected, markerTokenOne, taskContextMarkerOne)
+	return strings.ReplaceAll(protected, markerTokenTwo, taskContextMarkerTwo)
 }
 
 // RedactString scrubs secret patterns from a raw string and returns the result.

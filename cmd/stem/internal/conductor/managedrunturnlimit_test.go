@@ -62,7 +62,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidateAfterTurnLimit(t *testi
 	}
 	generateRepoMapFn = func(context.Context, string) (string, error) { return "# repo map\n", nil }
 	generateMemoryMapFn = func(context.Context, string) (string, error) { return "", nil }
-	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID string) (sproutRunner, error) {
+	newSproutFn = func(ctx context.Context, workspace, genotypeRoot, genotypeName string, _ llmCaller, session toolSession, bus *eventbus.Bus, stepID, sessionID, renderedTaskContext string) (sproutRunner, error) {
 		iteration++
 		var responses []string
 		if iteration == 1 {
@@ -80,7 +80,7 @@ func TestRunSeedRound19SalvagesAndRepairsPartialCandidateAfterTurnLimit(t *testi
 			refusalMessage: "tools unsupported for this model",
 		}
 		clients = append(clients, client)
-		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID)
+		sprout, err := newSprout(ctx, workspace, genotypeRoot, genotypeName, client, session, bus, stepID, sessionID, "")
 		if err == nil {
 			sprouts = append(sprouts, sprout)
 		}
