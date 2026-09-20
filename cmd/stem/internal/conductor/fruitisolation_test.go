@@ -1120,7 +1120,7 @@ substrates:
     checkout:
       mode: managed
     patience:
-      growth: 50ms
+      growth: 1s
 `, repository))
 
 	stepID := "detached-fruit"
