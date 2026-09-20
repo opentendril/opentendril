@@ -606,6 +606,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	var hostStashed bool
 	var hostRestorePath string
 	var cleanup func()
+	var retainEphemeralFruitWorkspace bool
 	var managedRun bool
 	var managedWorkspace RunWorkspace
 	var managedWorkspaceAllocated bool
@@ -699,6 +700,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// persist (they are Tendril-owned or user-chosen and refreshed on reuse).
 		if !persistent {
 			cleanup = func() {
+				if retainEphemeralFruitWorkspace {
+					return
+				}
 				_ = os.RemoveAll(clonedPath)
 			}
 		}
@@ -1384,16 +1388,23 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				} else {
 					createdAt := time.Now().UTC()
 					fruitBranch, err := pushTerrariumCommitResultFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID)
-					if fruitBranch != "" {
-						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationLocalOnly, createdAt); recordErr != nil {
-							return report, changes, recordErr
-						}
-					}
 					pushErr = err
 					if pushErr == nil {
-						report.FruitPublicationState = FruitPublicationPublished
-					} else if report.FruitBranch != "" {
-						report.FruitPublicationState = FruitPublicationFailed
+						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationPublished, createdAt); recordErr != nil {
+							return report, changes, recordErr
+						}
+					} else {
+						localFruitBranch, branchErr := runGitCommand(postMortemCtx, mountPath, "branch", "--show-current")
+						if branchErr != nil {
+							return report, changes, fmt.Errorf("resolve local Fruit branch after remote publication failure: %w", branchErr)
+						}
+						if localFruitBranch == "" {
+							return report, changes, errors.New("resolve local Fruit branch after remote publication failure: checkout is detached")
+						}
+						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, localFruitBranch, commitHash, FruitPublicationFailed, createdAt); recordErr != nil {
+							return report, changes, recordErr
+						}
+						retainEphemeralFruitWorkspace = true
 					}
 				}
 				if pushErr != nil {

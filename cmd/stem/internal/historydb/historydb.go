@@ -290,6 +290,11 @@ type Store struct {
 	encryptWrites bool
 }
 
+var vacuumHistoryFn = func(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "VACUUM")
+	return err
+}
+
 func encryptionDisabled() bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv(EnvEncryptAtRest)))
 	switch value {
@@ -1772,7 +1777,9 @@ WHERE startedAt < ? AND NOT (TRIM(fruitBranch) <> '' AND TRIM(fruitCommit) <> ''
 	compactedSprouts, err := s.db.ExecContext(ctx, `
 UPDATE sproutruns
 SET genotype = '', transcript = '', output = '', error = '', usage = '', observation = ''
-WHERE startedAt < ? AND TRIM(fruitBranch) <> '' AND TRIM(fruitCommit) <> ''`, cutoffStr)
+WHERE startedAt < ? AND TRIM(fruitBranch) <> '' AND TRIM(fruitCommit) <> ''
+  AND (TRIM(genotype) <> '' OR TRIM(transcript) <> '' OR TRIM(output) <> ''
+    OR TRIM(error) <> '' OR TRIM(usage) <> '' OR TRIM(observation) <> '')`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("compact Fruit sprout runs older than %s: %w", cutoffStr, err)
 	}
@@ -1792,7 +1799,9 @@ SET goal = '', iterations = 0,
     branch = CASE WHEN TRIM(branch) <> '' AND TRIM(fruitCommit) <> '' THEN branch ELSE '' END,
     fruitCommit = CASE WHEN TRIM(branch) <> '' AND TRIM(fruitCommit) <> '' THEN fruitCommit ELSE '' END,
     diff = '', logs = '', error = '', observation = ''
-WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
+WHERE startedAt < ? AND "idempotency-key" <> ''
+  AND (TRIM(goal) <> '' OR iterations <> 0 OR TRIM(diff) <> '' OR TRIM(logs) <> ''
+    OR TRIM(error) <> '' OR TRIM(observation) <> '')`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("compact detached seed runs older than %s: %w", cutoffStr, err)
 	}
@@ -1803,7 +1812,9 @@ WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
 	compactedSeedFruit, err := s.db.ExecContext(ctx, `
 UPDATE seedruns
 SET goal = '', iterations = 0, diff = '', logs = '', error = '', observation = ''
-WHERE startedAt < ? AND TRIM(branch) <> '' AND TRIM(fruitCommit) <> ''`, cutoffStr)
+WHERE startedAt < ? AND TRIM(branch) <> '' AND TRIM(fruitCommit) <> ''
+  AND (TRIM(goal) <> '' OR iterations <> 0 OR TRIM(diff) <> '' OR TRIM(logs) <> ''
+    OR TRIM(error) <> '' OR TRIM(observation) <> '')`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("compact Fruit seed runs older than %s: %w", cutoffStr, err)
 	}
@@ -1823,7 +1834,7 @@ WHERE startedAt < ? AND TRIM(branch) <> '' AND TRIM(fruitCommit) <> ''`, cutoffS
 	total += legacyCount
 
 	if total > 0 || compactedCount > 0 || compactedSproutCount > 0 || compactedSeedFruitCount > 0 {
-		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+		if err := vacuumHistoryFn(ctx, s.db); err != nil {
 			return total, fmt.Errorf("vacuum after pruning %d row(s): %w", total, err)
 		}
 	}

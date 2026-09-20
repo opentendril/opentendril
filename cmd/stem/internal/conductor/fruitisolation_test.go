@@ -1024,10 +1024,9 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 	}
 }
 
-// TestNonManagedPublicationFailureRetainsFruit proves the same retention
-// invariant for a non-managed remote Sprout: the exact published target is
-// known from the publication operation, so a failed push still leaves a
-// durable local Fruit claim with publication-failed state.
+// TestNonManagedPublicationFailureRetainsFruit proves the retention invariant
+// for a non-managed remote Sprout: a failed push leaves a durable local Fruit
+// claim with publication-failed state and a surviving local review ref.
 func TestNonManagedPublicationFailureRetainsFruit(t *testing.T) {
 	clearLLMEnv(t)
 	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
@@ -1057,8 +1056,26 @@ func TestNonManagedPublicationFailureRetainsFruit(t *testing.T) {
 	if !errors.Is(err, pushErr) {
 		t.Fatalf("RunSprout error = %v, want push error", err)
 	}
-	if report.FruitBranch != "sprout/task-"+stepID || report.FruitCommit == "" || report.FruitPublicationState != FruitPublicationFailed {
+	wantRemoteBranch := "sprout/task-" + stepID
+	wantLocalBranch := "main"
+	if report.FruitBranch != wantLocalBranch || report.FruitCommit == "" || report.FruitPublicationState != FruitPublicationFailed {
 		t.Fatalf("non-managed failed publication report = %+v", report)
+	}
+	if report.FruitWorkspace == "" {
+		t.Fatal("non-managed failed publication omitted FruitWorkspace")
+	}
+	if info, statErr := os.Stat(report.FruitWorkspace); statErr != nil || !info.IsDir() {
+		t.Fatalf("non-managed failed publication workspace = %q, stat error = %v", report.FruitWorkspace, statErr)
+	}
+	localCommit, err := runGitCommand(context.Background(), report.FruitWorkspace, "rev-parse", "--verify", "refs/heads/"+report.FruitBranch)
+	if err != nil {
+		t.Fatalf("retained local Fruit branch %q: %v", report.FruitBranch, err)
+	}
+	if localCommit != report.FruitCommit {
+		t.Fatalf("retained local Fruit branch %q resolves to %q, want exact FruitCommit %q", report.FruitBranch, localCommit, report.FruitCommit)
+	}
+	if got := remoteRef(t, remote, wantRemoteBranch); got != "" {
+		t.Fatalf("failed remote publication created remote ref %q at %q", wantRemoteBranch, got)
 	}
 }
 
@@ -1183,7 +1200,7 @@ func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
 	t.Cleanup(func() { pushTerrariumCommitFn = origPush })
 	pushTerrariumCommitFn = func(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {
 		capturedPushBranch = branch
-		return nil
+		return origPush(ctx, mountPath, branch, cred, allowDefaultBranchCommit, stepID)
 	}
 
 	ephemeralRemote := prepareBareRemoteRepo(t, "feat")
@@ -1258,6 +1275,12 @@ func TestEphemeralPublicationSemanticsUnchanged(t *testing.T) {
 	}
 	if report.FruitPublicationState != FruitPublicationPublished || report.FruitRepository == "" {
 		t.Errorf("ephemeral Fruit provenance = repository %q state %q, want stable published provenance", report.FruitRepository, report.FruitPublicationState)
+	}
+	if got := remoteRef(t, ephemeralRemote, wantPublishedBranch); got != report.FruitCommit {
+		t.Errorf("published ephemeral remote branch %q resolves to %q, want exact FruitCommit %q", wantPublishedBranch, got, report.FruitCommit)
+	}
+	if _, statErr := os.Stat(ephemeralMount); !os.IsNotExist(statErr) {
+		t.Errorf("successful ephemeral workspace %q still exists after teardown; stat error = %v", ephemeralMount, statErr)
 	}
 
 	// The push must target exactly the configured source branch ("feat"),

@@ -160,6 +160,13 @@ func TestPruneOlderThanPreservesFruitStructureAndCompactsPayload(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	old := time.Now().UTC().Add(-48 * time.Hour)
+	originalVacuum := vacuumHistoryFn
+	vacuumCalls := 0
+	vacuumHistoryFn = func(ctx context.Context, db *sql.DB) error {
+		vacuumCalls++
+		return originalVacuum(ctx, db)
+	}
+	t.Cleanup(func() { vacuumHistoryFn = originalVacuum })
 
 	if err := store.RecordSproutRun(ctx, SproutRun{
 		RunID:                 "old-fruit",
@@ -182,6 +189,7 @@ func TestPruneOlderThanPreservesFruitStructureAndCompactsPayload(t *testing.T) {
 	if err := store.RecordSeedRun(ctx, SeedRun{
 		Handle:                "old-seed-fruit",
 		PhytomerID:            "phytomer-old",
+		Substrate:             "seed-substrate",
 		Status:                "complete",
 		Goal:                  "large goal",
 		Diff:                  "large diff",
@@ -206,14 +214,42 @@ func TestPruneOlderThanPreservesFruitStructureAndCompactsPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSproutRuns: %v", err)
 	}
-	if len(runs) != 1 || runs[0].FruitBranch != "review/fruit" || runs[0].FruitCommit != "deadbeef" || runs[0].FruitRepository != "local:/repo" || runs[0].Transcript != "" || runs[0].Output != "" || runs[0].Error != "" {
+	if len(runs) != 1 {
 		t.Fatalf("retained sprout = %+v", runs)
+	}
+	sprout := runs[0]
+	if sprout.SessionID != "phytomer-old" || sprout.Status != "matured" || !sprout.StartedAt.Equal(old) || !sprout.FinishedAt.Equal(old) {
+		t.Fatalf("retained sprout lifecycle = %+v", sprout)
+	}
+	if sprout.FruitRepository != "local:/repo" || sprout.FruitWorkspace != "/repo" || sprout.FruitBranch != "review/fruit" || sprout.FruitCommit != "deadbeef" || sprout.FruitPublicationState != FruitPublicationLocalOnly || !sprout.FruitCreatedAt.Equal(old) {
+		t.Fatalf("retained sprout provenance = %+v", sprout)
+	}
+	if sprout.Transcript != "" || sprout.Output != "" || sprout.Error != "" {
+		t.Fatalf("retained sprout payload = %+v", sprout)
 	}
 	seed, ok, err := store.GetSeedRun(ctx, "old-seed-fruit")
 	if err != nil || !ok {
 		t.Fatalf("GetSeedRun: ok=%v err=%v", ok, err)
 	}
-	if seed.Branch != "seed/review" || seed.Commit != "seedcommit" || seed.FruitRepository != "github.com/example/seed" || seed.FruitPublicationState != FruitPublicationPublished || seed.Goal != "" || seed.Diff != "" || seed.Logs != "" {
-		t.Fatalf("retained seed = %+v", seed)
+	if seed.PhytomerID != "phytomer-old" || seed.Substrate != "seed-substrate" || seed.Status != "complete" || !seed.StartedAt.Equal(old) || !seed.FinishedAt.Equal(old) {
+		t.Fatalf("retained seed lifecycle = %+v", seed)
+	}
+	if seed.Branch != "seed/review" || seed.Commit != "seedcommit" || seed.FruitRepository != "github.com/example/seed" || seed.FruitWorkspace != "/repo" || seed.FruitPublicationState != FruitPublicationPublished || !seed.FruitCreatedAt.Equal(old) {
+		t.Fatalf("retained seed provenance = %+v", seed)
+	}
+	if seed.Goal != "" || seed.Diff != "" || seed.Logs != "" {
+		t.Fatalf("retained seed payload = %+v", seed)
+	}
+	if vacuumCalls != 1 {
+		t.Fatalf("first retention sweep vacuum calls = %d, want 1", vacuumCalls)
+	}
+
+	if pruned, err := store.PruneOlderThan(ctx, time.Now().UTC().Add(-24*time.Hour)); err != nil {
+		t.Fatalf("identical PruneOlderThan: %v", err)
+	} else if pruned != 0 {
+		t.Fatalf("identical PruneOlderThan deleted %d rows, want 0", pruned)
+	}
+	if vacuumCalls != 1 {
+		t.Fatalf("identical retention sweep vacuum calls = %d, want unchanged at 1", vacuumCalls)
 	}
 }
