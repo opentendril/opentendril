@@ -131,10 +131,10 @@ type SproutRunReport struct {
 	// ToolInvocations is how many tool requests the Sprout handled, including
 	// requests refused before Terrarium execution.
 	ToolInvocations int
-	// FruitBranch is the run-specific Fruit branch on which this managed run
-	// created a reviewable commit. It is set immediately after the local commit
-	// is created, before any push or merge is attempted. Consequently:
-	//   - Non-empty when a managed run produced a reviewable local commit,
+	// FruitBranch is the exact Fruit branch on which this run created a
+	// reviewable commit. It is set when the branch is known, before any push or
+	// merge is allowed to erase the local evidence. Consequently:
+	//   - Non-empty when any reviewable run produced an exact branch and commit,
 	//     regardless of whether remote publication later succeeded or failed.
 	//   - A push failure changes the run's final outcome to SproutOutcomeFailed
 	//     but does NOT clear this field: the locally-committed work exists and
@@ -146,6 +146,17 @@ type SproutRunReport struct {
 	// It is non-empty exactly when FruitBranch is non-empty, and carries the
 	// same publication-failure retention guarantee.
 	FruitCommit string
+	// FruitRepository is the stable repository identity captured from the
+	// execution repository when Fruit was created.
+	FruitRepository string
+	// FruitWorkspace is a private canonical repository locator used only for
+	// later local verification. It is not Pollinator-facing provenance.
+	FruitWorkspace string
+	// FruitPublicationState is one of FruitPublicationLocalOnly,
+	// FruitPublicationPublished, or FruitPublicationFailed.
+	FruitPublicationState string
+	// FruitCreatedAt is when the exact Fruit branch and commit were captured.
+	FruitCreatedAt time.Time
 
 	// seedCandidateCommit is an internal Seed-growth checkpoint. It is kept
 	// separate from FruitCommit because a checkpoint from a failed Sprout is
@@ -430,6 +441,12 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID string, report S
 	}
 	if report.FruitCommit != "" {
 		data["fruitCommit"] = report.FruitCommit
+	}
+	if report.FruitRepository != "" {
+		data["fruitRepository"] = report.FruitRepository
+	}
+	if report.FruitPublicationState != "" {
+		data["fruitPublicationState"] = report.FruitPublicationState
 	}
 
 	bus.Publish(eventbus.Event{

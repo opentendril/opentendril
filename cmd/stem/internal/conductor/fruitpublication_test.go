@@ -204,6 +204,9 @@ func TestFruitPublicationNoEngagementDoesNotPushRemote(t *testing.T) {
 	if report.Outcome != SproutOutcomeNoEngagement {
 		t.Fatalf("report.Outcome = %q, want %q", report.Outcome, SproutOutcomeNoEngagement)
 	}
+	if report.FruitBranch != "" || report.FruitCommit != "" || report.FruitRepository != "" || report.FruitPublicationState != "" {
+		t.Fatalf("no-engagement run fabricated Fruit provenance: %+v", report)
+	}
 
 	if commitCalled {
 		t.Errorf("commitTerrariumExecutionFn was called for no-engagement run; want not called")
@@ -271,6 +274,12 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 
 	if report.Outcome != SproutOutcomeComplete {
 		t.Fatalf("report.Outcome = %q, want %q", report.Outcome, SproutOutcomeComplete)
+	}
+	if report.FruitBranch != "outcome-test" || report.FruitCommit != "deadbeef1234" {
+		t.Fatalf("non-managed local Fruit = %q/%q, want exact review branch/commit", report.FruitBranch, report.FruitCommit)
+	}
+	if report.FruitRepository != root || report.FruitPublicationState != FruitPublicationLocalOnly || report.FruitCreatedAt.IsZero() {
+		t.Fatalf("local Fruit provenance = repository %q state %q createdAt %v", report.FruitRepository, report.FruitPublicationState, report.FruitCreatedAt)
 	}
 
 	if capturedStatusPath != "" {

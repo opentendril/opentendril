@@ -129,6 +129,7 @@ var (
 	publishManagedAPIFruitFn       = publishManagedAPIFruit
 	mergeTerrariumCommitFn         = mergeTerrariumCommit
 	pushTerrariumCommitFn          = pushTerrariumCommit
+	pushTerrariumCommitResultFn    = pushTerrariumCommitWithResult
 	runContainerFitnessTestFn      = runContainerFitnessTest
 	generateRepoMapFn              = GenerateRepoMap
 	generateMemoryMapFn            = generateSourceLocalMemoryMap
@@ -1297,14 +1298,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return report, changes, commitErr
 			}
 
-			// Record normal Sprout Fruit identity immediately after the commit is
-			// created, before any push or merge. Seed checkpoints use their
-			// internal identity below because they are not yet Fruit.
-			if isReviewableFruit && managedRun {
-				report.FruitBranch = managedWorkspace.Branch
-				report.FruitCommit = strings.TrimSpace(commitHash)
-			}
-
 			if isSeedCandidateCheckpoint {
 				if generatedState != nil {
 					if err := generatedState.cleanup(); err != nil {
@@ -1346,6 +1339,20 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 
 			if d.DisableMergeBack || (managedRun && !plan.remoteClone) {
+				if isReviewableFruit {
+					fruitBranch := ""
+					if managedRun {
+						fruitBranch = managedWorkspace.Branch
+					} else {
+						fruitBranch, _ = runGitCommand(postMortemCtx, mountPath, "branch", "--show-current")
+						fruitBranch = strings.TrimSpace(fruitBranch)
+					}
+					if fruitBranch != "" {
+						if err := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationLocalOnly, time.Now().UTC()); err != nil {
+							return report, changes, err
+						}
+					}
+				}
 				report.Output = sproutResult.Response
 				return report, changes, runErr
 			}
@@ -1359,11 +1366,35 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				// not dependent on the protected-branch detection.
 				var pushErr error
 				if apiCommit {
+					if err := recordSproutFruit(postMortemCtx, &report, sourcePath, managedWorkspace.Branch, commitHash, FruitPublicationPublished, time.Now().UTC()); err != nil {
+						return report, changes, err
+					}
 					pushErr = managedWorkspace.ReconcilePublishedFruit(postMortemCtx, apiCommitOID)
 				} else if managedRun {
+					createdAt := time.Now().UTC()
+					if err := recordSproutFruit(postMortemCtx, &report, sourcePath, managedWorkspace.Branch, commitHash, FruitPublicationLocalOnly, createdAt); err != nil {
+						return report, changes, err
+					}
 					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, managedWorkspace.Branch, plan.credential, false, stepID)
+					if pushErr == nil {
+						report.FruitPublicationState = FruitPublicationPublished
+					} else {
+						report.FruitPublicationState = FruitPublicationFailed
+					}
 				} else {
-					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID)
+					createdAt := time.Now().UTC()
+					fruitBranch, err := pushTerrariumCommitResultFn(postMortemCtx, mountPath, plan.cloneBranch, plan.credential, plan.allowDefaultBranchCommit, stepID)
+					if fruitBranch != "" {
+						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationLocalOnly, createdAt); recordErr != nil {
+							return report, changes, recordErr
+						}
+					}
+					pushErr = err
+					if pushErr == nil {
+						report.FruitPublicationState = FruitPublicationPublished
+					} else if report.FruitBranch != "" {
+						report.FruitPublicationState = FruitPublicationFailed
+					}
 				}
 				if pushErr != nil {
 					report.Outcome = ""
@@ -1373,8 +1404,17 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					return report, changes, pushErr
 				}
 			} else {
+				createdAt := time.Now().UTC()
+				fruitBranch, branchErr := runGitCommand(postMortemCtx, sourcePath, "branch", "--show-current")
+				if branchErr != nil || strings.TrimSpace(fruitBranch) == "" {
+					return report, changes, fmt.Errorf("resolve local Fruit branch: %w", branchErr)
+				}
+				if err := recordSproutFruit(postMortemCtx, &report, sourcePath, strings.TrimSpace(fruitBranch), commitHash, FruitPublicationLocalOnly, createdAt); err != nil {
+					return report, changes, err
+				}
 				mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
 				if mergeErr != nil {
+					report.FruitPublicationState = FruitPublicationFailed
 					report.Outcome = ""
 					if runErr != nil {
 						return report, changes, errors.Join(runErr, mergeErr)
@@ -2871,17 +2911,39 @@ func cloneCheckout(dest, url, branch string, gitEnv []string) error {
 	return nil
 }
 
-func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {
+func recordSproutFruit(ctx context.Context, report *SproutRunReport, executionPath, branch, commit, publicationState string, createdAt time.Time) error {
+	if report == nil {
+		return fmt.Errorf("record Fruit provenance: nil Sprout report")
+	}
+	branch = strings.TrimSpace(branch)
+	commit = strings.TrimSpace(commit)
+	if branch == "" || commit == "" {
+		return fmt.Errorf("record Fruit provenance: exact branch and commit are required")
+	}
+	provenance, err := captureFruitProvenance(ctx, executionPath, branch, commit, publicationState, createdAt)
+	if err != nil {
+		return err
+	}
+	report.FruitBranch = provenance.Branch
+	report.FruitCommit = provenance.Commit
+	report.FruitRepository = provenance.Repository
+	report.FruitWorkspace = provenance.Workspace
+	report.FruitPublicationState = provenance.PublicationState
+	report.FruitCreatedAt = provenance.CreatedAt
+	return nil
+}
+
+func resolveTerrariumPushBranch(ctx context.Context, mountPath, branch string, allowDefaultBranchCommit bool, stepID string) (string, error) {
 	targetBranch := strings.TrimSpace(branch)
 	if targetBranch == "" {
 		currentBranch, err := runGitCommand(ctx, mountPath, "branch", "--show-current")
 		if err != nil {
-			return err
+			return "", err
 		}
 		targetBranch = strings.TrimSpace(currentBranch)
 	}
 	if targetBranch == "" {
-		return fmt.Errorf("unable to determine branch for push")
+		return "", fmt.Errorf("unable to determine branch for push")
 	}
 	targetBranch = strings.TrimPrefix(targetBranch, "refs/heads/")
 
@@ -2891,6 +2953,23 @@ func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred Res
 		fmt.Fprintf(os.Stderr, "🛡️  Branch Protection: Auto-branching push from %s to %s\n", targetBranch, newBranch)
 
 		targetBranch = newBranch
+	}
+	return targetBranch, nil
+}
+
+func pushTerrariumCommitWithResult(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) (string, error) {
+	targetBranch, err := resolveTerrariumPushBranch(ctx, mountPath, branch, allowDefaultBranchCommit, stepID)
+	if err != nil {
+		return "", err
+	}
+	err = pushTerrariumCommitFn(ctx, mountPath, branch, cred, allowDefaultBranchCommit, stepID)
+	return targetBranch, err
+}
+
+func pushTerrariumCommit(ctx context.Context, mountPath, branch string, cred ResolvedCredential, allowDefaultBranchCommit bool, stepID string) error {
+	targetBranch, err := resolveTerrariumPushBranch(ctx, mountPath, branch, allowDefaultBranchCommit, stepID)
+	if err != nil {
+		return err
 	}
 
 	commitMessage, err := runGitCommand(ctx, mountPath, "log", "-1", "--pretty=%B", "HEAD")

@@ -782,6 +782,9 @@ func TestSeedFruitCommitIsNotInventedFromUnchangedBranch(t *testing.T) {
 	if res.Commit != "" {
 		t.Fatalf("invented commit %q from a no-change seed branch", res.Commit)
 	}
+	if res.Repository != "" || res.PublicationState != "" || !res.CreatedAt.IsZero() {
+		t.Fatalf("no-change Seed fabricated Fruit provenance: %+v", res)
+	}
 }
 
 func TestSeedFruitCommitIsTheBranchTipWhenWorkExists(t *testing.T) {
@@ -835,6 +838,13 @@ func TestSeedFruitCommitIsTheBranchTipWhenWorkExists(t *testing.T) {
 	}
 	if res.Commit == strings.TrimSpace(head) {
 		t.Fatal("Fruit commit was the pre-run HEAD")
+	}
+	// The repository has no remote, so it must use its canonical root path.
+	if res.Repository != repo {
+		t.Fatalf("repository = %q, want canonical local root %q", res.Repository, repo)
+	}
+	if res.Workspace != repo || res.PublicationState != FruitPublicationLocalOnly || res.CreatedAt.IsZero() {
+		t.Fatalf("local Seed Fruit provenance = repository %q workspace %q state %q createdAt %v", res.Repository, res.Workspace, res.PublicationState, res.CreatedAt)
 	}
 }
 
@@ -938,6 +948,9 @@ func TestRunSeedManagedAPIFruit(t *testing.T) {
 	}
 	if res.Commit != "abcd1234abcd1234abcd1234abcd1234abcd1234" {
 		t.Fatalf("commit = %q, want published OID from GraphQL mock", res.Commit)
+	}
+	if res.Repository != normalizeFruitRemote(repo) || res.PublicationState != FruitPublicationPublished || res.Workspace == "" || res.CreatedAt.IsZero() {
+		t.Fatalf("managed API Seed Fruit provenance = repository %q workspace %q state %q createdAt %v", res.Repository, res.Workspace, res.PublicationState, res.CreatedAt)
 	}
 
 	if fake.graphQLCalled != 1 {
@@ -1097,6 +1110,9 @@ func TestRunSeedManagedAPIPublicationFailureReportsNoFruit(t *testing.T) {
 	}
 	if res.Branch != "" || res.Commit != "" {
 		t.Fatalf("Fruit identity = branch %q commit %q, want none after failed API publication", res.Branch, res.Commit)
+	}
+	if res.Repository != "" || res.Workspace != "" || res.PublicationState != "" || !res.CreatedAt.IsZero() {
+		t.Fatalf("failed API publication retained a Fruit claim: %+v", res)
 	}
 	if seedBranch == "" || !branchExists(t, repo, seedBranch) {
 		t.Fatalf("local Seed branch %q was not preserved", seedBranch)

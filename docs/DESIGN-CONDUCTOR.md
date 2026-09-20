@@ -97,8 +97,11 @@ Reviewable Fruit requires completed execution with measured modifications, no ru
 - Managed remote publication targets that run-specific branch.
 - Managed local Fruit remains on that run-specific local branch.
 - The configured source/default branch is the managed run's starting source and is not advanced by managed Fruit publication.
-- `SproutRunReport.FruitBranch` and `FruitCommit` describe managed committed Fruit, retaining this identity even if remote publication fails.
-- Ordinary non-managed local merge-back and non-managed remote publication retain their existing semantics.
+- `SproutRunReport.FruitBranch` and `FruitCommit` describe every actual reviewable Sprout commit, retaining this exact identity even if publication fails.
+- Non-managed local Fruit records the review/source branch; non-managed remote Fruit records the exact branch passed to publication.
+- `FruitPublicationState` is closed to `local-only`, `published`, and `publication-failed`.
+- `FruitRepository` is captured from the execution repository's Git evidence, using canonical GitHub identity, normalized other-remote identity, or the canonical repository-root path for local-only repositories. `FruitWorkspace` is private local verification evidence and is not exposed to Pollinators.
+- Ordinary non-managed local merge-back and non-managed remote publication retain their existing execution semantics while now carrying this provenance.
 - Failure isolation is run-scoped: teardown or publication failure for one managed run must not delete or mutate another run's worktree, branch, or Fruit.
 - `DisableMergeBack` may leave the commit isolated.
 - Internal merge-back is not Botanist acceptance. Final review and acceptance remains human-controlled.
