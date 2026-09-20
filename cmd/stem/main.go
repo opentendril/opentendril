@@ -15,6 +15,7 @@
 //   tendril sprout - Delegate a one-shot task to an autonomous Tendril
 //   tendril stoma - Run one bounded command in a network-sealed terrarium
 //   tendril seed  - Grow a Seed: build toward a goal until a verify command passes
+//   tendril fruit  - Observe the Botanist's deterministic Fruit review inventory
 //   tendril git   - Commit a substrate's workspace under its configured identity
 //   tendril substrate - Manage the Botanist's persistent Substrate registry
 //   tendril terrarium - Manage execution terrarium environments
@@ -107,6 +108,8 @@ func main() {
 		runStomaCmd(ctx, os.Args[2:])
 	case "seed":
 		runSeedCmd(ctx, os.Args[2:])
+	case "fruit":
+		runFruitCmd(ctx, os.Args[2:])
 	case "git":
 		runGitCmd(ctx, os.Args[2:])
 	case "substrate":
@@ -171,6 +174,7 @@ func printUsage() {
 	fmt.Printf("  %-11s  %s\n", "sprout", "Delegate a one-shot task to an autonomous Tendril in a terrarium")
 	fmt.Printf("  %-11s  %s\n", "stoma", "Pass one bounded command through a Terrarium's controlled aperture")
 	fmt.Printf("  %-11s  %s\n", "seed", "Grow a Seed: build toward a goal until a verify command passes")
+	fmt.Printf("  %-11s  %s\n", "fruit", "Observe the Botanist's deterministic Fruit review inventory")
 	fmt.Printf("  %-11s  %s\n", "git", "Commit a substrate's workspace under its configured commit identity")
 	fmt.Printf("  %-11s  %s\n", "substrate", "List, inspect, add, update, or verify Substrate configuration")
 	fmt.Printf("  %-11s  %s\n", "terrarium", "Manage execution terrarium environments")

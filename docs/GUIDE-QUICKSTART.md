@@ -400,6 +400,26 @@ Grant names remain dotted (`seed.grow`, `sprout.watch`, `phytomer.continue`).
 Tool names are lower-camel MCP presentation. Each grant is checked
 independently. `sproutWatch` is a view, not a governed command.
 
+## Botanist Fruit review inventory
+
+The Botanist can inspect all durable Fruit claims from the Stem account without
+enumerating Git branches:
+
+```bash
+sudo -u tendril -i tendril fruit list
+sudo -u tendril -i tendril fruit list --json
+```
+
+The text view shows review pressure and each Fruit's producer, Phytomer when
+present, Substrate, repository, branch, commit, publication state, review
+state, safe unknown reason, and pull-request number when established. The JSON
+view is the deterministic Core `FruitInventory` contract. The same contract is
+available to a Botanist through private `GET /v1/fruit`; it is not a public
+Pollinator route or an MCP tool/view. Review pressure is observational only:
+inventory does not accept, merge, delete, block, or mutate Fruit. If persisted
+inventory evidence is unavailable, the commands report that condition instead
+of presenting an empty inventory.
+
 ## 7. Learn what a refusal looks like
 
 A refusal is not a fault. Knowing the difference between these three saves an

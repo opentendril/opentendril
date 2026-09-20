@@ -63,6 +63,11 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 		Bus:         bus,
 	}
 
+	coreService := core.NewService(manager).WithFruitInventoryObservationSource(core.FruitInventoryObservationSource{
+		Observe: func(context.Context) ([]core.FruitInventoryEvidence, error) {
+			return []core.FruitInventoryEvidence{}, nil
+		},
+	})
 	deps := serveDependencies{
 		APIKey:         apiKey,
 		Authority:      core.NewAuthority(dir),
@@ -72,7 +77,7 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 		EventBus:       bus,
 		Sessions:       manager,
 		History:        nil,
-		CoreService:    core.NewService(manager),
+		CoreService:    coreService,
 		HealthMonitor:  newDefaultHealthMonitor(bus, time.Hour),
 		TendrilDir:     dir,
 		MeshServer:     mesh.NewServer(dir),
@@ -135,6 +140,7 @@ func TestBotanistLaneRefusesPollinatorLaneBearers(t *testing.T) {
 		// 404 because the confirmation ID "123" does not exist in the store.
 		{"POST", "/v1/delegation/pending/123/approve", http.StatusNotFound},
 		{"POST", "/v1/delegation/pending/123/deny", http.StatusNotFound},
+		{"GET", "/v1/fruit", http.StatusOK},
 	}
 
 	// A route on the Pollinator lane wrapped by guardedAuth. We assert 403 (Forbidden)

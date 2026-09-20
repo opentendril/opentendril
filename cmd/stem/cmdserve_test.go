@@ -159,6 +159,7 @@ func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
 		{http.MethodPost, "/v1/mesh/graft"},
 		{http.MethodGet, "/v1/delegation/pending"},
 		{http.MethodPost, "/v1/chat/completions"},
+		{http.MethodGet, "/v1/fruit"},
 		{http.MethodGet, "/ws"},
 		{http.MethodPost, "/v1/phytomers"},
 		{http.MethodGet, "/v1/phytomers/phytomer-1"},
@@ -171,6 +172,25 @@ func TestBuildRemoteServeMuxProjectsOnlyPollinatorRoutes(t *testing.T) {
 				t.Fatalf("status = %d, want 404 (%s)", response.Code, response.Body.String())
 			}
 		})
+	}
+}
+
+func TestPublicRemoteMuxRefusesFruitInventoryEvenWithAccessToken(t *testing.T) {
+	fixture := newRemoteMuxTestFixture(t, "", nil)
+	token, err := fixture.signer.MintAccessToken("claude", time.Minute, core.AccessTokenScope{})
+	if err != nil {
+		t.Fatalf("mint access token: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/fruit", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	fixture.mux.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("public /v1/fruit status = %d, want 404 (%s)", response.Code, response.Body.String())
+	}
+	if _, pattern := fixture.mux.Handler(request); pattern != "" {
+		t.Fatalf("public mux registered /v1/fruit as %q", pattern)
 	}
 }
 

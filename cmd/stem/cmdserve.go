@@ -1160,6 +1160,11 @@ func buildServeMux(deps serveDependencies) *http.ServeMux {
 		WithDelegation(deps.DelegationGate)
 	sessionsHandler.Register(mux, guardedAuth, observeAuth)
 
+	// Fruit inventory is a Botanist-only control-plane observation. It is not a
+	// governed capability and is deliberately absent from the public mux.
+	fruitHandler := receptors.NewFruitHandler(deps.CoreService)
+	registerBotanistRoute(mux, deps, "GET /v1/fruit", fruitHandler.Handle)
+
 	// Genome REST API (adapter, slice 1).
 	genomeHandler := receptors.NewGenomeHandler(deps.CoreService)
 	genomeHandler.Register(mux, guardedAuth)

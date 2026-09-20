@@ -14,7 +14,7 @@
 - Define and evaluate the delegation grant model: `DelegationGrant`, `DelegationRequest`, `DelegationDecision`, and `DelegationAuthorizer.Authorize` (`delegation.go`); load grants from the Stem's own control-plane file (`delegationconfig.go`); carry the authorized Pollen through the request context and only the context (`delegationcontext.go`).
 - Classify which capabilities are delegated operation-classes that must pass the grant gate before running for a Pollinator (`DelegatedCapabilityNames`, `IsDelegatedCapability` in `registry.go`).
 - Own the credential security model: mint/verify short-lived access tokens with the Stem's Ed25519 key (`accesstoken.go`) and issue/resolve/revoke digest-stored Pollinator credentials (`pollinatorcredentials.go`).
-- Own the transport-free Botanist Fruit inventory read model: the closed review-state and unknown-reason vocabularies, exact-evidence precedence, deterministic ordering, and review-pressure counts (`fruitinventory.go`).
+- Own the transport-free Botanist Fruit inventory read model exposed by the local CLI and private REST adapter: the closed review-state and unknown-reason vocabularies, exact-evidence precedence, deterministic ordering, and review-pressure counts (`fruitinventory.go`). `ObserveFruitInventory` returns the same `FruitInventory` contract to both surfaces; the adapters do not derive classification, ordering, or counts.
 - Read pure filesystem state directly (genome view, plasmid list, session reads) without touching an execution port.
 
 **Does not:**

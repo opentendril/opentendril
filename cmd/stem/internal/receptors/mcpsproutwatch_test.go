@@ -177,7 +177,7 @@ func TestMCPToolsListIncludesSproutWatchOnce(t *testing.T) {
 		if tool.Name == MCPViewSproutWatch {
 			count++
 		}
-		if tool.Name == "sprout.watch" || tool.Name == "seedWatch" || tool.Name == "phytomerWatch" {
+		if tool.Name == "sprout.watch" || tool.Name == "seedWatch" || tool.Name == "phytomerWatch" || tool.Name == "fruit" || tool.Name == "fruitList" || tool.Name == "fruitInventory" {
 			t.Fatalf("tools/list published forbidden view name %q", tool.Name)
 		}
 	}
