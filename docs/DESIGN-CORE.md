@@ -14,6 +14,7 @@
 - Define and evaluate the delegation grant model: `DelegationGrant`, `DelegationRequest`, `DelegationDecision`, and `DelegationAuthorizer.Authorize` (`delegation.go`); load grants from the Stem's own control-plane file (`delegationconfig.go`); carry the authorized Pollen through the request context and only the context (`delegationcontext.go`).
 - Classify which capabilities are delegated operation-classes that must pass the grant gate before running for a Pollinator (`DelegatedCapabilityNames`, `IsDelegatedCapability` in `registry.go`).
 - Own the credential security model: mint/verify short-lived access tokens with the Stem's Ed25519 key (`accesstoken.go`) and issue/resolve/revoke digest-stored Pollinator credentials (`pollinatorcredentials.go`).
+- Own the transport-free Botanist Fruit inventory read model: the closed review-state and unknown-reason vocabularies, exact-evidence precedence, deterministic ordering, and review-pressure counts (`fruitinventory.go`).
 - Read pure filesystem state directly (genome view, plasmid list, session reads) without touching an execution port.
 
 **Does not:**
@@ -23,6 +24,7 @@
 - Authenticate callers or gate invocations. Surfaces authenticate, derive the Pollen, call `DelegationAuthorizer.Authorize`, and only then invoke — the Core never reads the Pollen (`delegationcontext.go`).
 - Discover grants inside a cloned Substrate, or accept grant/policy/Pollen material from caller-supplied input — the no-self-escalation invariant.
 - Persist grants, credentials, or the authorizer's decision surface as mutable runtime state: grants and credentials are file-backed and reloaded, and the authorizer is immutable once constructed.
+- Collect Fruit persistence or forge/Git evidence directly. Those factual inputs arrive through `FruitInventoryObservationSource`; Core classifies them into review state, unknown reason, deterministic order, and review-pressure counts without importing HistoryDB, Conductor, or a transport.
 
 ## Public interface
 
@@ -45,6 +47,8 @@
 | `PendingConfirmationStore` / `NewPendingConfirmationStore` | In-memory, process-local store for confirm-above escalations: `Create`/`Get`/`List`/`Approve`/`Deny`. An approved confirmation is re-validated against the *live* grant (not a snapshot) and consumed exactly once when `Authorize` matches it. |
 | `LoadDelegationGrants(tendrilDir)` | Reads `grants.yaml` from the Stem's own control-plane directory; a missing file is the secure default (zero grants). |
 | `WithPollen(ctx, pollen)` / `PollenFromContext(ctx)` | Bind the authorized Pollen onto the request context and read it in the port; `""` means "not delegated". |
+| `FruitClaim` / `FruitInventoryEvidence` / `FruitInventoryObservationSource` | Transport-free evidence contract for persisted Fruit claims and factual local, remote-ref, and forge observations. |
+| `ObserveFruitInventory(ctx)` / `FruitInventory` | Botanist observation with the closed review states (`outstanding`, `merged`, `closed-unmerged`, `unknown`), safe item projection, deterministic order, and counts. It is not a governed capability. |
 | `StemSigner` / `LoadOrCreateStemSigner` | Mints and verifies access tokens with the Stem's own Ed25519 key; `Public()` lets a remote verify with no shared state. |
 | `MintAccessToken` / `MintFromCredential` / `VerifyAccessToken` / `AccessTokenClaims` / `AccessTokenScope` | The short-lived (≤15 min, hard-capped) signature-verified bearer half of the credential model. |
 | `PollinatorCredential` / `IssuePollinatorCredential` / `ResolvePollenFromCredential` / `RevokePollinatorCredentials` / `LoadPollinatorCredentials` | The durable refresh-root half: the credential *is* the Pollen; only a SHA-256 digest is stored; lookup is constant-time. |
@@ -56,7 +60,7 @@ Sentinel errors and secure-default returns: `ErrNotFound` (transport-neutral "se
 
 **Fan-out:** `internal/session` only. The `Service` embeds a `*session.Manager` and returns `session.Phytomer` / `session.Message` / `session.Preferences` from the session-command methods; execution families that bind a run to a session (e.g. `SproutRun`) read the session's preferences to shape the spec, degrading to a sessionless run rather than refusing when resolution fails. Everything else the Core needs — terrariums, git, mesh, orchestration — arrives through the injected `*Operations` ports, never as an import.
 
-**Fan-in:** `cmd/stem` and `internal/receptors` are the transport adapters that project the Core. `cmd/stem` builds the `Service`, wires each `WithX` port to a conductor-backed implementation, and constructs the `DelegationAuthorizer` from `LoadDelegationGrants`. `internal/receptors` holds the CLI/REST/MCP surface handlers: each delegated route derives the Pollen, calls `DelegationGate.Authorize(core.DelegationRequest{…})`, refuses on denial, then stamps the authorized Pollen onto the context with `core.WithPollen` before invoking (`receptors/git.go`, `receptors/config.go`). `internal/conductor` imports Core only to call `ClassifyFailure` with typed observation facts before it publishes and persists a run ending. This is dependency inversion: the Core declares the `Core` interface and the `*Operations` ports; the outer adapters depend inward on those abstractions, and the Core depends on none of them.
+**Fan-in:** `cmd/stem` and `internal/receptors` are the transport adapters that project the Core. `cmd/stem` builds the `Service`, wires each `WithX` port to a conductor-backed implementation, and constructs the `DelegationAuthorizer` from `LoadDelegationGrants`. It also wires the HistoryDB-backed Fruit evidence source; that adapter joins the persisted repository identity to current Substrate credentials before asking the conductor for factual Git/forge evidence. `internal/receptors` holds the CLI/REST/MCP surface handlers: each delegated route derives the Pollen, calls `DelegationGate.Authorize(core.DelegationRequest{…})`, refuses on denial, then stamps the authorized Pollen onto the context with `core.WithPollen` before invoking (`receptors/git.go`, `receptors/config.go`). `internal/conductor` imports Core only to call `ClassifyFailure` with typed observation facts before it publishes and persists a run ending. This is dependency inversion: the Core declares the `Core` interface and the `*Operations` ports; the outer adapters depend inward on those abstractions, and the Core depends on none of them.
 
 ## Limitations
 
@@ -68,6 +72,7 @@ Sentinel errors and secure-default returns: `ErrNotFound` (transport-neutral "se
 - **Credentials and signing key are single-directory, file-backed.** Both live 0600 in the Stem's own `.tendril` control-plane directory. Access tokens are stateless-verified with no per-token denylist: revocation is at the root (revoke the credential, minting stops, outstanding tokens age out within the ≤15-minute cap). Deleting the signing key rotates it and invalidates every outstanding token at once.
 - **Egress allow-list is carried, not enforced here.** A grant's `Egress` and the `StomaPassInput.Egress` field (JSON-invisible, `json:"-"`) transport the allow-list to the execution seam; the actual mediation lives in the conductor/terrarium, outside the Core.
 - **In-memory session state via the manager.** Session reads and history come through `session.Manager`; the Core adds no persistence of its own.
+- **Fruit inventory is observation only.** Its counts do not affect Seed or Sprout admission, delegation, confirmation, execution, publication, merge, branch deletion, or default-branch state. No presentation route or governed capability is defined by the Core read model.
 
 ## Design & rationale
 

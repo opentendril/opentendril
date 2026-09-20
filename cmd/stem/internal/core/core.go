@@ -92,6 +92,10 @@ type Core interface {
 	// Seed-owned Phytomer. It is not a governed Pollinator command. Safety
 	// projection — which persisted fields may be released — is owned here.
 	ObservePhytomer(ctx context.Context, phytomerID string) (PhytomerObservation, error)
+	// ObserveFruitInventory is the transport-free Botanist view of persisted
+	// Fruit joined with factual Git/forge evidence. It is not a governed
+	// Pollinator command and does not mutate execution or repository state.
+	ObserveFruitInventory(ctx context.Context) (FruitInventory, error)
 	// Git family: commit a substrate's workspace under its configured commit
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.
@@ -211,12 +215,13 @@ type Service struct {
 	seed       SeedOperations
 	git        GitOperations
 
-	seedPersist   SeedPersistence
-	observation   PhytomerObservationSource
-	continuation  ContinuationPersistence
-	seedMu        sync.Mutex
-	seedOpenMu    sync.Mutex
-	preparedSeeds map[string]*preparedSeed
+	seedPersist    SeedPersistence
+	observation    PhytomerObservationSource
+	fruitInventory FruitInventoryObservationSource
+	continuation   ContinuationPersistence
+	seedMu         sync.Mutex
+	seedOpenMu     sync.Mutex
+	preparedSeeds  map[string]*preparedSeed
 	// newPreparedSeedToken, when set, replaces crypto/rand token minting.
 	// Tests inject a failing seam; production leaves it nil.
 	newPreparedSeedToken func() (string, error)
