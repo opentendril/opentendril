@@ -178,7 +178,7 @@ func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
 			"omissionCounts":        map[string]interface{}{},
 			"items": []map[string]interface{}{{
 				"sourceClass":     "file-anchor",
-				"sourceIdentity":  "foo.go",
+				"sourceIdentity":  "fixtures/ghp_123456789012345678901234567890123456.txt",
 				"selectionReason": "explicit-file-anchor",
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   32,
@@ -211,6 +211,13 @@ func TestTaskContextAssembledEventRoundTripsOnlySafeProvenance(t *testing.T) {
 	}
 	if records[0].Data["substrateRef"] != "0123456789ab" {
 		t.Fatalf("safe provenance did not survive round trip: %+v", records[0].Data)
+	}
+	items, ok := records[0].Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("safe provenance items did not survive round trip: %#v", records[0].Data["items"])
+	}
+	if items[0]["sourceIdentity"] != "fixtures/[REDACTED]" {
+		t.Fatalf("credential-shaped source identity was not redacted in HistoryDB: %#v", records[0].Data["items"])
 	}
 }
 

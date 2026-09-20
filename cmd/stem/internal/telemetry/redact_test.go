@@ -115,7 +115,7 @@ func TestRedactTaskContextEventPreservesAllowListedCorrelation(t *testing.T) {
 			"admittedBytes":         32,
 			"items": []map[string]interface{}{{
 				"sourceClass":     "file-anchor",
-				"sourceIdentity":  "fixture.go",
+				"sourceIdentity":  "fixtures/ghp_123456789012345678901234567890123456.txt",
 				"selectionReason": "explicit-file-anchor",
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   32,
@@ -130,6 +130,12 @@ func TestRedactTaskContextEventPreservesAllowListedCorrelation(t *testing.T) {
 		},
 	}
 
+	safe := SanitizeObservationEvent(event)
+	items, ok := safe.Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 || items[0]["sourceIdentity"] != "fixtures/ghp_123456789012345678901234567890123456.txt" {
+		t.Fatalf("sanitized source identity was not retained: %+v", safe.Data)
+	}
+
 	redacted := RedactEvent(event)
 	if redacted.Source != stepID || redacted.Data["stepId"] != stepID {
 		t.Fatalf("allow-listed step correlation was redacted: source=%q data=%v", redacted.Source, redacted.Data)
@@ -141,6 +147,14 @@ func TestRedactTaskContextEventPreservesAllowListedCorrelation(t *testing.T) {
 		if _, ok := redacted.Data[forbidden]; ok {
 			t.Fatalf("unsafe task-context field %q survived: %v", forbidden, redacted.Data)
 		}
+	}
+	items, ok = redacted.Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 || items[0]["sourceIdentity"] != "fixtures/[REDACTED]" {
+		t.Fatalf("generic redaction did not scrub source identity: %+v", redacted.Data)
+	}
+	originalItems := event.Data["items"].([]map[string]interface{})
+	if originalItems[0]["sourceIdentity"] != "fixtures/ghp_123456789012345678901234567890123456.txt" {
+		t.Fatalf("redaction mutated the original source identity: %+v", event.Data)
 	}
 }
 

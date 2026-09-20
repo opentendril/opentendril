@@ -43,10 +43,20 @@ func RedactionDisabled() bool {
 func RedactEvent(event eventbus.Event) eventbus.Event {
 	switch event.Type {
 	case eventbus.EventTaskContextAssembled:
-		// Task-context telemetry has already crossed its mandatory fail-closed
-		// allow-list. Reconstruct it through that sanitizer so generic entropy
-		// redaction cannot destroy an accepted correlation identifier.
-		return SanitizeObservationEvent(event)
+		// Task-context telemetry must cross its mandatory fail-closed allow-list
+		// before generic redaction. Preserve only the validated correlation
+		// identifier across that generic pass; provenance strings remain subject
+		// to the normal redaction rules.
+		safe := SanitizeObservationEvent(event)
+		stepID, hasStepID := safe.Data["stepId"].(string)
+		redacted := safe
+		if safe.Data != nil {
+			redacted.Data = redactMap(safe.Data)
+			if hasStepID {
+				redacted.Data["stepId"] = stepID
+			}
+		}
+		return redacted
 	case eventbus.EventSproutTranscript:
 		redacted := event
 		if event.Data != nil {
@@ -101,6 +111,17 @@ func redactSlice(s []interface{}) []interface{} {
 	return res
 }
 
+func redactMapSlice(s []map[string]interface{}) []map[string]interface{} {
+	if s == nil {
+		return nil
+	}
+	res := make([]map[string]interface{}, len(s))
+	for i, value := range s {
+		res[i] = redactMap(value)
+	}
+	return res
+}
+
 func redactValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case string:
@@ -109,6 +130,8 @@ func redactValue(v interface{}) interface{} {
 		return redactMap(val)
 	case []interface{}:
 		return redactSlice(val)
+	case []map[string]interface{}:
+		return redactMapSlice(val)
 	default:
 		return v
 	}

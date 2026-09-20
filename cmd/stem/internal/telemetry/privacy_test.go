@@ -136,7 +136,7 @@ func TestSanitizeTaskContextEventIsFailClosedAllowList(t *testing.T) {
 			"omissionCounts":       map[string]interface{}{"budget-bytes": 1},
 			"items": []map[string]interface{}{{
 				"sourceClass":     "file-anchor",
-				"sourceIdentity":  "pkg/foo.go",
+				"sourceIdentity":  "fixtures/ghp_123456789012345678901234567890123456.txt",
 				"selectionReason": "explicit-file-anchor",
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   32,
@@ -164,6 +164,9 @@ func TestSanitizeTaskContextEventIsFailClosedAllowList(t *testing.T) {
 	}
 	if _, ok := items[0]["content"]; ok {
 		t.Fatalf("raw item content survived: %+v", items[0])
+	}
+	if items[0]["sourceIdentity"] != "fixtures/ghp_123456789012345678901234567890123456.txt" {
+		t.Fatalf("safe source identity was not retained: %+v", items[0])
 	}
 	if safe.Data["sourceIdentity"] != nil {
 		t.Fatalf("unexpected top-level source identity: %+v", safe.Data)
