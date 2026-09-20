@@ -659,6 +659,11 @@ func (m *mockCore) ObservePhytomer(_ context.Context, phytomerID string) (core.P
 	return core.PhytomerObservation{}, core.ErrPhytomerObservationNotFound
 }
 
+func (m *mockCore) ObserveFruitInventory(_ context.Context) (core.FruitInventory, error) {
+	m.record("ObserveFruitInventory", nil)
+	return core.FruitInventory{Items: []core.FruitInventoryItem{}}, nil
+}
+
 func (m *mockCore) SeedGrow(_ context.Context, in core.SeedGrowInput) (core.SeedGrowResult, error) {
 	m.record("SeedGrow", in)
 	if in.Detached {

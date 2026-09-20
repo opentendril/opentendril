@@ -106,6 +106,28 @@ Reviewable Fruit requires completed execution with measured modifications, no ru
 - `DisableMergeBack` may leave the commit isolated.
 - Internal merge-back is not Botanist acceptance. Final review and acceptance remains human-controlled.
 
+### Fruit review evidence
+
+The Conductor supplies read-only factual evidence for the Stem's Fruit
+inventory. GitHub review evidence combines:
+
+- the exact commit-to-pull-request lookup, which remains valid for squash-merge
+  workflows;
+- the historical branch-head lookup, retaining each pull request's head SHA so
+  a reused branch name cannot establish a relationship for another Fruit
+  commit; and
+- the exact remote branch ref lookup, which is positive only when the ref's
+  object SHA equals the persisted Fruit commit.
+
+Local-only and publication-failed Fruit are checked only in their persisted
+private workspace, against the exact persisted commit. The inventory starts
+from `HistoryDB.ListFruitClaims`; it does not enumerate branches or create a
+second Fruit registry. Repository identity is matched before current
+Substrate credentials are used, and a repointed Substrate is not queried for
+historical Fruit. These reads do not mutate Git, remove refs, or change any
+execution or publication authority. Existing `git.branch.list` and
+`git.prune` retain their conservative lifecycle rules.
+
 ## Chronicler
 
 Adaptation/history-driven genome behavior is separate from Epigenetic Chronicler behavior. 

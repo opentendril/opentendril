@@ -101,10 +101,11 @@ type GitBranchListResult struct {
 // forgePullRequestState is what the interface reports about a commit: the pull
 // request it belongs to, and whether that pull request merged.
 type forgePullRequestState struct {
-	Number int
-	State  string
-	Merged bool
-	Known  bool
+	Number  int
+	State   string
+	Merged  bool
+	Known   bool
+	HeadSHA string
 }
 
 // lookupPullRequestForCommit asks which pull request a commit belongs to. This
@@ -115,6 +116,9 @@ func lookupPullRequestForCommit(ctx context.Context, owner, repo, sha, token str
 		Number   int    `json:"number"`
 		State    string `json:"state"`
 		MergedAt string `json:"merged_at"`
+		Head     struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
 	}
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/pulls", owner, repo, sha)
 	if err := githubRESTRequest(ctx, http.MethodGet, path, token, nil, &pulls); err != nil {
@@ -132,10 +136,10 @@ func lookupPullRequestForCommit(ctx context.Context, owner, repo, sha, token str
 	// Prefer a merged pull request when a commit belongs to several.
 	for _, pull := range pulls {
 		if strings.TrimSpace(pull.MergedAt) != "" {
-			return forgePullRequestState{Number: pull.Number, State: pull.State, Merged: true, Known: true}, nil
+			return forgePullRequestState{Number: pull.Number, State: pull.State, Merged: true, Known: true, HeadSHA: pull.Head.SHA}, nil
 		}
 	}
-	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true}, nil
+	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true, HeadSHA: pulls[0].Head.SHA}, nil
 }
 
 // lookupPullRequestsForHead asks which pull requests were ever opened FROM a
@@ -156,6 +160,9 @@ func lookupPullRequestsForHead(ctx context.Context, owner, repo, branch, token s
 		Number   int    `json:"number"`
 		State    string `json:"state"`
 		MergedAt string `json:"merged_at"`
+		Head     struct {
+			SHA string `json:"sha"`
+		} `json:"head"`
 	}
 	path := fmt.Sprintf("/repos/%s/%s/pulls?state=all&head=%s", owner, repo, url.QueryEscape(owner+":"+branch))
 	if err := githubRESTRequest(ctx, http.MethodGet, path, token, nil, &pulls); err != nil {
@@ -168,10 +175,10 @@ func lookupPullRequestsForHead(ctx context.Context, owner, repo, branch, token s
 	// result is deliberately NOT reported as merged here (see above).
 	for _, pull := range pulls {
 		if strings.EqualFold(pull.State, "open") {
-			return forgePullRequestState{Number: pull.Number, State: pull.State, Known: true}, nil
+			return forgePullRequestState{Number: pull.Number, State: pull.State, Known: true, HeadSHA: pull.Head.SHA}, nil
 		}
 	}
-	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true}, nil
+	return forgePullRequestState{Number: pulls[0].Number, State: pulls[0].State, Known: true, HeadSHA: pulls[0].Head.SHA}, nil
 }
 
 // RunGitBranchList enumerates local branches and classifies each one against

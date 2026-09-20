@@ -1037,6 +1037,7 @@ func buildServeCore(sessions *session.Manager, tendrilDir string, history *histo
 		WithSeed(seedOperations(history, bus)).
 		WithSeedPersistence(seedPersistence(history)).
 		WithPhytomerObservationSource(phytomerObservationSource(history)).
+		WithFruitInventoryObservationSource(fruitInventorySource(history)).
 		WithContinuationPersistence(continuationPersistence(history)).
 		WithSeedLifecycleReporter(serveSeedLifecycleReporter).
 		WithGit(gitOperations())
