@@ -119,6 +119,10 @@ type SeedRunResult struct {
 	Iterations              int
 	Branch                  string
 	Commit                  string
+	Repository              string
+	Workspace               string
+	PublicationState        string
+	CreatedAt               time.Time
 	Diff                    string
 	Logs                    string
 	PublicationDiagnostic   *core.SeedPublicationDiagnostic
@@ -314,6 +318,9 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 			Iterations:              iterations,
 			Branch:                  fruitBranch,
 			Commit:                  fruitCommit,
+			Repository:              "",
+			Workspace:               "",
+			PublicationState:        "",
 			Diff:                    diff,
 			Logs:                    strings.TrimSpace(logs.String()),
 			VerificationDiagnostics: core.CopySeedVerificationDiagnostics(verificationDiagnostics),
@@ -331,6 +338,7 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 	}
 
 	if commit != "" && commit != base {
+		fruitCreatedAt := time.Now().UTC()
 		orchProto := NewDockerOrchestrator()
 		orchProto.Substrate = execution.Substrate
 
@@ -372,7 +380,28 @@ func RunSeed(ctx context.Context, execution SeedExecution) (SeedRunResult, error
 
 			branch = localSeedBranch
 			commit = publishedOID
+			resultWithFruit := result(branch, commit)
+			provenance, provenanceErr := captureFruitProvenance(ctx, sourcePath, branch, commit, FruitPublicationPublished, fruitCreatedAt)
+			if provenanceErr != nil {
+				return seedPublicationFailure(result("", ""), "publication", "provenance-unavailable", false, "", "capture Seed Fruit provenance: repository identity could not be resolved")
+			}
+			resultWithFruit.Repository = provenance.Repository
+			resultWithFruit.Workspace = provenance.Workspace
+			resultWithFruit.PublicationState = provenance.PublicationState
+			resultWithFruit.CreatedAt = provenance.CreatedAt
+			return resultWithFruit, nil
 		}
+
+		provenance, provenanceErr := captureFruitProvenance(ctx, sourcePath, branch, commit, FruitPublicationLocalOnly, fruitCreatedAt)
+		if provenanceErr != nil {
+			return seedPublicationFailure(result("", ""), "publication", "provenance-unavailable", false, "", "capture Seed Fruit provenance: repository identity could not be resolved")
+		}
+		fruitResult := result(branch, commit)
+		fruitResult.Repository = provenance.Repository
+		fruitResult.Workspace = provenance.Workspace
+		fruitResult.PublicationState = provenance.PublicationState
+		fruitResult.CreatedAt = provenance.CreatedAt
+		return fruitResult, nil
 	}
 
 	return result(branch, commit), nil

@@ -497,8 +497,8 @@ func TestSchemaVersion7UpgradesSeedRunsWithoutInventingRetryIdentity(t *testing.
 	if err := store.db.QueryRowContext(ctx, `SELECT version FROM schemaMeta WHERE id = 1`).Scan(&version); err != nil {
 		t.Fatalf("read migrated schema version: %v", err)
 	}
-	if version != 8 {
-		t.Fatalf("migrated schema version = %d, want 8", version)
+	if version != currentSchemaVersion {
+		t.Fatalf("migrated schema version = %d, want %d", version, currentSchemaVersion)
 	}
 }
 

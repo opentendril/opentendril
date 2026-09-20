@@ -94,6 +94,12 @@ func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, ope
 		run.Output = report.Output
 	}
 	run.Usage = sproutRunUsageFromReport(report)
+	run.FruitRepository = report.FruitRepository
+	run.FruitWorkspace = report.FruitWorkspace
+	run.FruitBranch = report.FruitBranch
+	run.FruitCommit = report.FruitCommit
+	run.FruitPublicationState = report.FruitPublicationState
+	run.FruitCreatedAt = report.FruitCreatedAt
 	applyObservationToRun(&run, report, runErr)
 	if recordErr := history.RecordSproutRun(ctx, run); recordErr != nil {
 		log.Printf("[Sprout] Failed to record sprout run: %v", recordErr)

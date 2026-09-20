@@ -99,7 +99,27 @@ func historyRetentionDaysFromEnv() int {
 //
 // Version 8 records caller idempotency keys and semantic request digests for
 // detached Seed openings. Historical and synchronous rows retain empty values.
-const currentSchemaVersion = 8
+//
+// Version 9 records exact Fruit branch/commit provenance, stable repository
+// identity, private local verification locator, publication state, and Fruit
+// creation time on the existing Seed/Sprout execution rows. Historical rows
+// retain empty provenance; no identity is reconstructed.
+const currentSchemaVersion = 9
+
+const (
+	FruitPublicationLocalOnly = "local-only"
+	FruitPublicationPublished = "published"
+	FruitPublicationFailed    = "publication-failed"
+)
+
+func validFruitPublicationState(state string) bool {
+	switch strings.TrimSpace(state) {
+	case "", FruitPublicationLocalOnly, FruitPublicationPublished, FruitPublicationFailed:
+		return true
+	default:
+		return false
+	}
+}
 
 // SproutRun is one Sprout execution history record. It records the dispatching
 // Pollen and the substrate the work targeted so the read surface can scope a
@@ -139,6 +159,14 @@ type SproutRun struct {
 	ProviderRequestAttempted bool `json:"providerRequestAttempted"`
 	// ToolInvocations is how many terrarium tool calls the Sprout made.
 	ToolInvocations int `json:"toolInvocations"`
+	// FruitRepository is the stable repository identity captured at Fruit
+	// creation. FruitWorkspace is private local verification evidence.
+	FruitRepository       string    `json:"fruitRepository,omitempty"`
+	FruitWorkspace        string    `json:"-"`
+	FruitBranch           string    `json:"fruitBranch,omitempty"`
+	FruitCommit           string    `json:"fruitCommit,omitempty"`
+	FruitPublicationState string    `json:"fruitPublicationState,omitempty"`
+	FruitCreatedAt        time.Time `json:"fruitCreatedAt,omitempty"`
 }
 
 // ProviderDiagnostic is the durable copy of the Core's safe provider
@@ -202,6 +230,10 @@ type SeedRun struct {
 	Iterations              int                          `json:"iterations"`
 	Branch                  string                       `json:"branch,omitempty"`
 	Commit                  string                       `json:"commit,omitempty"`
+	FruitRepository         string                       `json:"fruitRepository,omitempty"`
+	FruitWorkspace          string                       `json:"-"`
+	FruitPublicationState   string                       `json:"fruitPublicationState,omitempty"`
+	FruitCreatedAt          time.Time                    `json:"fruitCreatedAt,omitempty"`
 	Diff                    string                       `json:"diff,omitempty"`
 	Logs                    string                       `json:"logs,omitempty"`
 	Error                   string                       `json:"error,omitempty"`
@@ -256,6 +288,11 @@ type Store struct {
 	eventErrors   atomic.Int64
 	cipher        *heartwood.Cipher
 	encryptWrites bool
+}
+
+var vacuumHistoryFn = func(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, "VACUUM")
+	return err
 }
 
 func encryptionDisabled() bool {
@@ -435,7 +472,13 @@ CREATE TABLE IF NOT EXISTS sproutruns (
 	startedAt TEXT NOT NULL,
 	finishedAt TEXT NOT NULL DEFAULT '',
 	usage TEXT NOT NULL DEFAULT '',
-	observation TEXT NOT NULL DEFAULT ''
+	observation TEXT NOT NULL DEFAULT '',
+	fruitRepository TEXT NOT NULL DEFAULT '',
+	fruitWorkspace TEXT NOT NULL DEFAULT '',
+	fruitBranch TEXT NOT NULL DEFAULT '',
+	fruitCommit TEXT NOT NULL DEFAULT '',
+	fruitPublicationState TEXT NOT NULL DEFAULT '',
+	fruitCreatedAt TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sproutrunsBySession ON sproutruns(sessionId, startedAt);
 CREATE TABLE IF NOT EXISTS seedruns (
@@ -448,6 +491,10 @@ CREATE TABLE IF NOT EXISTS seedruns (
 	iterations INTEGER NOT NULL DEFAULT 0,
 	branch TEXT NOT NULL DEFAULT '',
 	fruitCommit TEXT NOT NULL DEFAULT '',
+	fruitRepository TEXT NOT NULL DEFAULT '',
+	fruitWorkspace TEXT NOT NULL DEFAULT '',
+	fruitPublicationState TEXT NOT NULL DEFAULT '',
+	fruitCreatedAt TEXT NOT NULL DEFAULT '',
 	diff TEXT NOT NULL DEFAULT '',
 	logs TEXT NOT NULL DEFAULT '',
 	error TEXT NOT NULL DEFAULT '',
@@ -522,6 +569,21 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	if err := s.ensureColumn(ctx, "sproutruns", "observation", `ALTER TABLE sproutruns ADD COLUMN observation TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
+	for _, column := range []struct {
+		name  string
+		alter string
+	}{
+		{"fruitRepository", `ALTER TABLE sproutruns ADD COLUMN fruitRepository TEXT NOT NULL DEFAULT ''`},
+		{"fruitWorkspace", `ALTER TABLE sproutruns ADD COLUMN fruitWorkspace TEXT NOT NULL DEFAULT ''`},
+		{"fruitBranch", `ALTER TABLE sproutruns ADD COLUMN fruitBranch TEXT NOT NULL DEFAULT ''`},
+		{"fruitCommit", `ALTER TABLE sproutruns ADD COLUMN fruitCommit TEXT NOT NULL DEFAULT ''`},
+		{"fruitPublicationState", `ALTER TABLE sproutruns ADD COLUMN fruitPublicationState TEXT NOT NULL DEFAULT ''`},
+		{"fruitCreatedAt", `ALTER TABLE sproutruns ADD COLUMN fruitCreatedAt TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := s.ensureColumn(ctx, "sproutruns", column.name, column.alter); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS sproutrunsByPollen ON sproutruns(pollen, startedAt)`); err != nil {
 		return fmt.Errorf("index sprout runs by pollen: %w", err)
 	}
@@ -530,6 +592,19 @@ func (s *Store) migrateSchema(ctx context.Context) error {
 	}
 	if err := s.ensureColumn(ctx, "seedruns", "fruitCommit", `ALTER TABLE seedruns ADD COLUMN fruitCommit TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
+	}
+	for _, column := range []struct {
+		name  string
+		alter string
+	}{
+		{"fruitRepository", `ALTER TABLE seedruns ADD COLUMN fruitRepository TEXT NOT NULL DEFAULT ''`},
+		{"fruitWorkspace", `ALTER TABLE seedruns ADD COLUMN fruitWorkspace TEXT NOT NULL DEFAULT ''`},
+		{"fruitPublicationState", `ALTER TABLE seedruns ADD COLUMN fruitPublicationState TEXT NOT NULL DEFAULT ''`},
+		{"fruitCreatedAt", `ALTER TABLE seedruns ADD COLUMN fruitCreatedAt TEXT NOT NULL DEFAULT ''`},
+	} {
+		if err := s.ensureColumn(ctx, "seedruns", column.name, column.alter); err != nil {
+			return err
+		}
 	}
 	if err := s.ensureColumn(ctx, "seedruns", "observation", `ALTER TABLE seedruns ADD COLUMN observation TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
@@ -1013,6 +1088,9 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	if strings.TrimSpace(run.RunID) == "" {
 		return fmt.Errorf("sprout run requires runId")
 	}
+	if !validFruitPublicationState(run.FruitPublicationState) {
+		return fmt.Errorf("sprout run has invalid Fruit publication state %q", run.FruitPublicationState)
+	}
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now().UTC()
 	}
@@ -1020,6 +1098,10 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	finishedAt := ""
 	if !run.FinishedAt.IsZero() {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	fruitCreatedAt := ""
+	if !run.FruitCreatedAt.IsZero() {
+		fruitCreatedAt = run.FruitCreatedAt.UTC().Format(time.RFC3339Nano)
 	}
 
 	genotype, err := s.enc(run.Genotype, "historydb/sproutruns/genotype")
@@ -1058,8 +1140,8 @@ func (s *Store) RecordSproutRun(ctx context.Context, run SproutRun) error {
 	// leaves a stored value alone. A non-empty envelope settles an initially
 	// empty row. Provider is settled the same way as model.
 	const statement = `
-INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sproutruns (runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation, fruitRepository, fruitWorkspace, fruitBranch, fruitCommit, fruitPublicationState, fruitCreatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(runId) DO UPDATE SET
 	status = excluded.status,
 	pollen = CASE WHEN pollen = '' THEN excluded.pollen ELSE pollen END,
@@ -1070,7 +1152,13 @@ ON CONFLICT(runId) DO UPDATE SET
 	error = excluded.error,
 	finishedAt = excluded.finishedAt,
 	usage = COALESCE(NULLIF(excluded.usage, ''), usage),
-	observation = COALESCE(NULLIF(excluded.observation, ''), observation)`
+	observation = COALESCE(NULLIF(excluded.observation, ''), observation),
+	fruitRepository = COALESCE(NULLIF(excluded.fruitRepository, ''), sproutruns.fruitRepository),
+	fruitWorkspace = COALESCE(NULLIF(excluded.fruitWorkspace, ''), sproutruns.fruitWorkspace),
+	fruitBranch = COALESCE(NULLIF(excluded.fruitBranch, ''), sproutruns.fruitBranch),
+	fruitCommit = COALESCE(NULLIF(excluded.fruitCommit, ''), sproutruns.fruitCommit),
+	fruitPublicationState = COALESCE(NULLIF(excluded.fruitPublicationState, ''), sproutruns.fruitPublicationState),
+	fruitCreatedAt = COALESCE(NULLIF(excluded.fruitCreatedAt, ''), sproutruns.fruitCreatedAt)`
 
 	_, err = s.db.ExecContext(ctx, statement,
 		run.RunID,
@@ -1090,6 +1178,12 @@ ON CONFLICT(runId) DO UPDATE SET
 		finishedAt,
 		usage,
 		observation,
+		strings.TrimSpace(run.FruitRepository),
+		strings.TrimSpace(run.FruitWorkspace),
+		strings.TrimSpace(run.FruitBranch),
+		strings.TrimSpace(run.FruitCommit),
+		strings.TrimSpace(run.FruitPublicationState),
+		fruitCreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("record sprout run: %w", err)
@@ -1105,7 +1199,7 @@ func (s *Store) LoadSproutRuns(ctx context.Context, sessionID string, limit int)
 	}
 
 	query := `
-SELECT runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation
+SELECT runId, sessionId, stepId, origin, pollen, substrate, provider, model, genotype, transcript, status, output, error, startedAt, finishedAt, usage, observation, fruitRepository, fruitWorkspace, fruitBranch, fruitCommit, fruitPublicationState, fruitCreatedAt
 FROM sproutruns`
 	args := []any{}
 	if strings.TrimSpace(sessionID) != "" {
@@ -1127,8 +1221,8 @@ LIMIT ?`
 	runs := make([]SproutRun, 0)
 	for rows.Next() {
 		var run SproutRun
-		var startedAt, finishedAt, usage, observation string
-		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Provider, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt, &usage, &observation); err != nil {
+		var startedAt, finishedAt, usage, observation, fruitCreatedAt string
+		if err := rows.Scan(&run.RunID, &run.SessionID, &run.StepID, &run.Origin, &run.Pollen, &run.Substrate, &run.Provider, &run.Model, &run.Genotype, &run.Transcript, &run.Status, &run.Output, &run.Error, &startedAt, &finishedAt, &usage, &observation, &run.FruitRepository, &run.FruitWorkspace, &run.FruitBranch, &run.FruitCommit, &run.FruitPublicationState, &fruitCreatedAt); err != nil {
 			return nil, fmt.Errorf("scan sprout run: %w", err)
 		}
 		if run.Genotype, err = s.dec(run.Genotype, "historydb/sproutruns/genotype"); err != nil {
@@ -1153,6 +1247,11 @@ LIMIT ?`
 				return nil, fmt.Errorf("parse sprout run finishedAt: %w", err)
 			}
 		}
+		if fruitCreatedAt != "" {
+			if run.FruitCreatedAt, err = time.Parse(time.RFC3339Nano, fruitCreatedAt); err != nil {
+				return nil, fmt.Errorf("parse sprout Fruit createdAt: %w", err)
+			}
+		}
 		if run.Usage, err = decodeSproutRunUsage(usage); err != nil {
 			return nil, fmt.Errorf("decode sprout run usage: %w", err)
 		}
@@ -1171,6 +1270,77 @@ LIMIT ?`
 		return nil, fmt.Errorf("iterate sprout runs: %w", err)
 	}
 	return runs, nil
+}
+
+// FruitClaim is the structural evidence for one exact Fruit ref persisted on
+// an execution row. It contains no forge/review-state classification.
+type FruitClaim struct {
+	Kind             string    `json:"kind"`
+	ExecutionID      string    `json:"executionId"`
+	PhytomerID       string    `json:"phytomerId,omitempty"`
+	Substrate        string    `json:"substrate,omitempty"`
+	Repository       string    `json:"repository"`
+	Workspace        string    `json:"-"`
+	Branch           string    `json:"branch"`
+	Commit           string    `json:"commit"`
+	PublicationState string    `json:"publicationState,omitempty"`
+	CreatedAt        time.Time `json:"createdAt,omitempty"`
+	StartedAt        time.Time `json:"startedAt"`
+	FinishedAt       time.Time `json:"finishedAt,omitempty"`
+}
+
+// ListFruitClaims returns every persisted exact branch/commit pair from the
+// existing Seed and Sprout execution rows. It intentionally has no observation
+// limit and does not infer Fruit from branch names or mutable Substrate aliases.
+func (s *Store) ListFruitClaims(ctx context.Context) ([]FruitClaim, error) {
+	const query = `
+	SELECT kind, executionId, phytomerId, substrate, repository, workspace, branch, fruitCommitValue, publicationState, createdAt, startedAt, finishedAt
+FROM (
+	SELECT 'sprout' AS kind, runId AS executionId, sessionId AS phytomerId, substrate, fruitRepository AS repository, fruitWorkspace AS workspace, fruitBranch AS branch, fruitCommit AS fruitCommitValue, fruitPublicationState AS publicationState, fruitCreatedAt AS createdAt, startedAt, finishedAt
+	FROM sproutruns
+	UNION ALL
+	SELECT 'seed' AS kind, handle AS executionId, phytomerId, substrate, fruitRepository AS repository, fruitWorkspace AS workspace, branch, fruitCommit AS fruitCommitValue, fruitPublicationState AS publicationState, fruitCreatedAt AS createdAt, startedAt, finishedAt
+	FROM seedruns
+)
+WHERE TRIM(branch) <> '' AND TRIM(fruitCommitValue) <> ''
+ORDER BY CASE WHEN createdAt = '' THEN 1 ELSE 0 END, createdAt DESC, startedAt DESC, executionId`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list Fruit claims: %w", err)
+	}
+	defer rows.Close()
+
+	claims := make([]FruitClaim, 0)
+	for rows.Next() {
+		var claim FruitClaim
+		var createdAt, startedAt, finishedAt string
+		if err := rows.Scan(&claim.Kind, &claim.ExecutionID, &claim.PhytomerID, &claim.Substrate, &claim.Repository, &claim.Workspace, &claim.Branch, &claim.Commit, &claim.PublicationState, &createdAt, &startedAt, &finishedAt); err != nil {
+			return nil, fmt.Errorf("scan Fruit claim: %w", err)
+		}
+		var parseErr error
+		if createdAt != "" {
+			claim.CreatedAt, parseErr = time.Parse(time.RFC3339Nano, createdAt)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse Fruit claim createdAt: %w", parseErr)
+			}
+		}
+		claim.StartedAt, parseErr = time.Parse(time.RFC3339Nano, startedAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse Fruit claim startedAt: %w", parseErr)
+		}
+		if finishedAt != "" {
+			claim.FinishedAt, parseErr = time.Parse(time.RFC3339Nano, finishedAt)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse Fruit claim finishedAt: %w", parseErr)
+			}
+		}
+		claims = append(claims, claim)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate Fruit claims: %w", err)
+	}
+	return claims, nil
 }
 
 // SproutRunOwner is one distinct pairing of dispatching subject and substrate
@@ -1218,28 +1388,35 @@ ORDER BY pollen, substrate`
 }
 
 type encodedSeedRun struct {
-	handle         string
-	pollen         string
-	phytomerID     string
-	idempotencyKey string
-	requestDigest  string
-	substrate      string
-	goal           string
-	status         string
-	iterations     int
-	branch         string
-	commit         string
-	diff           string
-	logs           string
-	runError       string
-	startedAt      string
-	finishedAt     string
-	observation    string
+	handle                string
+	pollen                string
+	phytomerID            string
+	idempotencyKey        string
+	requestDigest         string
+	substrate             string
+	goal                  string
+	status                string
+	iterations            int
+	branch                string
+	commit                string
+	diff                  string
+	logs                  string
+	runError              string
+	fruitRepository       string
+	fruitWorkspace        string
+	fruitPublicationState string
+	fruitCreatedAt        string
+	startedAt             string
+	finishedAt            string
+	observation           string
 }
 
 func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 	if strings.TrimSpace(run.Handle) == "" {
 		return encodedSeedRun{}, fmt.Errorf("seed run requires a handle")
+	}
+	if !validFruitPublicationState(run.FruitPublicationState) {
+		return encodedSeedRun{}, fmt.Errorf("seed run has invalid Fruit publication state %q", run.FruitPublicationState)
 	}
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now().UTC()
@@ -1248,6 +1425,10 @@ func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 	finishedAt := ""
 	if !run.FinishedAt.IsZero() {
 		finishedAt = run.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	fruitCreatedAt := ""
+	if !run.FruitCreatedAt.IsZero() {
+		fruitCreatedAt = run.FruitCreatedAt.UTC().Format(time.RFC3339Nano)
 	}
 
 	goal, err := s.enc(run.Goal, "historydb/seedruns/goal")
@@ -1271,23 +1452,27 @@ func (s *Store) encodeSeedRun(run SeedRun) (encodedSeedRun, error) {
 		return encodedSeedRun{}, fmt.Errorf("encode seed run observation: %w", err)
 	}
 	return encodedSeedRun{
-		handle:         run.Handle,
-		pollen:         run.Pollen,
-		phytomerID:     run.PhytomerID,
-		idempotencyKey: run.IdempotencyKey,
-		requestDigest:  run.RequestDigest,
-		substrate:      run.Substrate,
-		goal:           goal,
-		status:         run.Status,
-		iterations:     run.Iterations,
-		branch:         run.Branch,
-		commit:         run.Commit,
-		diff:           diff,
-		logs:           logs,
-		runError:       runError,
-		startedAt:      run.StartedAt.UTC().Format(time.RFC3339Nano),
-		finishedAt:     finishedAt,
-		observation:    observation,
+		handle:                run.Handle,
+		pollen:                run.Pollen,
+		phytomerID:            run.PhytomerID,
+		idempotencyKey:        run.IdempotencyKey,
+		requestDigest:         run.RequestDigest,
+		substrate:             run.Substrate,
+		goal:                  goal,
+		status:                run.Status,
+		iterations:            run.Iterations,
+		branch:                run.Branch,
+		commit:                run.Commit,
+		diff:                  diff,
+		logs:                  logs,
+		runError:              runError,
+		fruitRepository:       strings.TrimSpace(run.FruitRepository),
+		fruitWorkspace:        strings.TrimSpace(run.FruitWorkspace),
+		fruitPublicationState: strings.TrimSpace(run.FruitPublicationState),
+		fruitCreatedAt:        fruitCreatedAt,
+		startedAt:             run.StartedAt.UTC().Format(time.RFC3339Nano),
+		finishedAt:            finishedAt,
+		observation:           observation,
 	}, nil
 }
 
@@ -1308,8 +1493,8 @@ func (s *Store) RecordSeedOpening(ctx context.Context, run SeedRun) error {
 		return err
 	}
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = s.db.ExecContext(ctx, statement,
 		encoded.handle,
 		encoded.pollen,
@@ -1320,6 +1505,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		encoded.iterations,
 		encoded.branch,
 		encoded.commit,
+		encoded.fruitRepository,
+		encoded.fruitWorkspace,
+		encoded.fruitPublicationState,
+		encoded.fruitCreatedAt,
 		encoded.diff,
 		encoded.logs,
 		encoded.runError,
@@ -1347,8 +1536,8 @@ func (s *Store) RecordSeedRun(ctx context.Context, run SeedRun) error {
 	}
 
 	const statement = `
-INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO seedruns (handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest")
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(handle) DO UPDATE SET
 	status = excluded.status,
 	substrate = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.substrate ELSE excluded.substrate END,
@@ -1356,6 +1545,10 @@ ON CONFLICT(handle) DO UPDATE SET
 	iterations = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.iterations ELSE excluded.iterations END,
 	branch = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.branch ELSE excluded.branch END,
 	fruitCommit = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitCommit ELSE excluded.fruitCommit END,
+	fruitRepository = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitRepository ELSE COALESCE(NULLIF(excluded.fruitRepository, ''), seedruns.fruitRepository) END,
+	fruitWorkspace = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitWorkspace ELSE COALESCE(NULLIF(excluded.fruitWorkspace, ''), seedruns.fruitWorkspace) END,
+	fruitPublicationState = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitPublicationState ELSE COALESCE(NULLIF(excluded.fruitPublicationState, ''), seedruns.fruitPublicationState) END,
+	fruitCreatedAt = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.fruitCreatedAt ELSE COALESCE(NULLIF(excluded.fruitCreatedAt, ''), seedruns.fruitCreatedAt) END,
 	diff = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.diff ELSE excluded.diff END,
 	logs = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.logs ELSE excluded.logs END,
 	error = CASE WHEN seedruns."idempotency-key" <> '' AND seedruns.goal = '' THEN seedruns.error ELSE excluded.error END,
@@ -1373,6 +1566,10 @@ ON CONFLICT(handle) DO UPDATE SET
 		encoded.iterations,
 		encoded.branch,
 		encoded.commit,
+		encoded.fruitRepository,
+		encoded.fruitWorkspace,
+		encoded.fruitPublicationState,
+		encoded.fruitCreatedAt,
 		encoded.diff,
 		encoded.logs,
 		encoded.runError,
@@ -1388,7 +1585,7 @@ ON CONFLICT(handle) DO UPDATE SET
 	return nil
 }
 
-const seedRunSelectColumns = `handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest"`
+const seedRunSelectColumns = `handle, pollen, phytomerId, substrate, goal, status, iterations, branch, fruitCommit, fruitRepository, fruitWorkspace, fruitPublicationState, fruitCreatedAt, diff, logs, error, startedAt, finishedAt, observation, "idempotency-key", "request-digest"`
 
 type seedRunScanner interface {
 	Scan(dest ...any) error
@@ -1396,15 +1593,22 @@ type seedRunScanner interface {
 
 func (s *Store) scanSeedRun(row seedRunScanner) (SeedRun, error) {
 	var run SeedRun
-	var startedAt, finishedAt, observation string
+	var startedAt, finishedAt, observation, fruitCreatedAt string
 	if err := row.Scan(
 		&run.Handle, &run.Pollen, &run.PhytomerID, &run.Substrate, &run.Goal, &run.Status, &run.Iterations,
-		&run.Branch, &run.Commit, &run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation,
+		&run.Branch, &run.Commit, &run.FruitRepository, &run.FruitWorkspace, &run.FruitPublicationState, &fruitCreatedAt,
+		&run.Diff, &run.Logs, &run.Error, &startedAt, &finishedAt, &observation,
 		&run.IdempotencyKey, &run.RequestDigest); err != nil {
 		return SeedRun{}, err
 	}
 	if err := s.decodeSeedRun(&run, startedAt, finishedAt, observation); err != nil {
 		return SeedRun{}, err
+	}
+	if fruitCreatedAt != "" {
+		var err error
+		if run.FruitCreatedAt, err = time.Parse(time.RFC3339Nano, fruitCreatedAt); err != nil {
+			return SeedRun{}, fmt.Errorf("parse seed Fruit createdAt: %w", err)
+		}
 	}
 	return run, nil
 }
@@ -1526,14 +1730,13 @@ func (s *Store) decodeSeedRun(run *SeedRun, startedAt, finishedAt, observationRa
 	return nil
 }
 
-// PruneOlderThan deletes rows from messages, events, sproutruns, and
-// synchronous or legacy seedruns whose timestamp column is older than cutoff.
-// Detached seedruns keep only their retry and lifecycle identity: the tuple
-// needed for replay, canonical handle/Phytomer, and current status/timestamps.
-// Their request and Fruit payload is cleared. VACUUM runs whenever rows are
-// deleted or detached rows are compacted. Never touches sessions — session
-// lifecycle is session.Manager's own Prune/DeleteSession path, not this
-// package's. Returns the total row count deleted across the tables.
+// PruneOlderThan deletes non-Fruit payload rows from messages, events, and
+// execution history whose timestamp is older than cutoff. Fruit-bearing rows
+// are retained and compacted to their structural provenance; age alone is not
+// authority to dispose of a Fruit claim. No forge or review-state lookup is
+// performed. Never touches sessions — session lifecycle is session.Manager's
+// own Prune/DeleteSession path, not this package's. Returns the total row count
+// deleted across the tables.
 func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error) {
 	if s == nil {
 		return 0, nil
@@ -1547,7 +1750,6 @@ func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, er
 	}{
 		{"messages", "createdAt"},
 		{"events", "createdAt"},
-		{"sproutruns", "startedAt"},
 	} {
 		result, err := s.db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s WHERE %s < ?", q.table, q.column), cutoffStr)
 		if err != nil {
@@ -1560,6 +1762,32 @@ func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, er
 		total += n
 	}
 
+	deletedSproutRuns, err := s.db.ExecContext(ctx, `
+DELETE FROM sproutruns
+WHERE startedAt < ? AND NOT (TRIM(fruitBranch) <> '' AND TRIM(fruitCommit) <> '')`, cutoffStr)
+	if err != nil {
+		return total, fmt.Errorf("prune sprout runs older than %s: %w", cutoffStr, err)
+	}
+	deletedSproutCount, err := deletedSproutRuns.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("count pruned sprout runs: %w", err)
+	}
+	total += deletedSproutCount
+
+	compactedSprouts, err := s.db.ExecContext(ctx, `
+UPDATE sproutruns
+SET genotype = '', transcript = '', output = '', error = '', usage = '', observation = ''
+WHERE startedAt < ? AND TRIM(fruitBranch) <> '' AND TRIM(fruitCommit) <> ''
+  AND (TRIM(genotype) <> '' OR TRIM(transcript) <> '' OR TRIM(output) <> ''
+    OR TRIM(error) <> '' OR TRIM(usage) <> '' OR TRIM(observation) <> '')`, cutoffStr)
+	if err != nil {
+		return total, fmt.Errorf("compact Fruit sprout runs older than %s: %w", cutoffStr, err)
+	}
+	compactedSproutCount, err := compactedSprouts.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("count compacted Fruit sprout runs: %w", err)
+	}
+
 	// A Seed's substrate remains necessary to resolve its lifecycle owner for
 	// continuation. Clearing its required non-empty goal with the other
 	// request/result payload marks this row as identity-only, without adding a
@@ -1567,8 +1795,13 @@ func (s *Store) PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, er
 	// form and updates only lifecycle status/timestamps if it settles later.
 	compacted, err := s.db.ExecContext(ctx, `
 UPDATE seedruns
-SET goal = '', iterations = 0, branch = '', fruitCommit = '', diff = '', logs = '', error = '', observation = ''
-WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
+SET goal = '', iterations = 0,
+    branch = CASE WHEN TRIM(branch) <> '' AND TRIM(fruitCommit) <> '' THEN branch ELSE '' END,
+    fruitCommit = CASE WHEN TRIM(branch) <> '' AND TRIM(fruitCommit) <> '' THEN fruitCommit ELSE '' END,
+    diff = '', logs = '', error = '', observation = ''
+WHERE startedAt < ? AND "idempotency-key" <> ''
+  AND (TRIM(goal) <> '' OR iterations <> 0 OR TRIM(diff) <> '' OR TRIM(logs) <> ''
+    OR TRIM(error) <> '' OR TRIM(observation) <> '')`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("compact detached seed runs older than %s: %w", cutoffStr, err)
 	}
@@ -1576,8 +1809,21 @@ WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("count compacted detached seed runs: %w", err)
 	}
+	compactedSeedFruit, err := s.db.ExecContext(ctx, `
+UPDATE seedruns
+SET goal = '', iterations = 0, diff = '', logs = '', error = '', observation = ''
+WHERE startedAt < ? AND TRIM(branch) <> '' AND TRIM(fruitCommit) <> ''
+  AND (TRIM(goal) <> '' OR iterations <> 0 OR TRIM(diff) <> '' OR TRIM(logs) <> ''
+    OR TRIM(error) <> '' OR TRIM(observation) <> '')`, cutoffStr)
+	if err != nil {
+		return total, fmt.Errorf("compact Fruit seed runs older than %s: %w", cutoffStr, err)
+	}
+	compactedSeedFruitCount, err := compactedSeedFruit.RowsAffected()
+	if err != nil {
+		return total, fmt.Errorf("count compacted Fruit seed runs: %w", err)
+	}
 
-	deletedLegacySeeds, err := s.db.ExecContext(ctx, `DELETE FROM seedruns WHERE startedAt < ? AND "idempotency-key" = ''`, cutoffStr)
+	deletedLegacySeeds, err := s.db.ExecContext(ctx, `DELETE FROM seedruns WHERE startedAt < ? AND "idempotency-key" = '' AND NOT (TRIM(branch) <> '' AND TRIM(fruitCommit) <> '')`, cutoffStr)
 	if err != nil {
 		return total, fmt.Errorf("prune synchronous or legacy seed runs older than %s: %w", cutoffStr, err)
 	}
@@ -1587,8 +1833,8 @@ WHERE startedAt < ? AND "idempotency-key" <> '' AND goal <> ''`, cutoffStr)
 	}
 	total += legacyCount
 
-	if total > 0 || compactedCount > 0 {
-		if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+	if total > 0 || compactedCount > 0 || compactedSproutCount > 0 || compactedSeedFruitCount > 0 {
+		if err := vacuumHistoryFn(ctx, s.db); err != nil {
 			return total, fmt.Errorf("vacuum after pruning %d row(s): %w", total, err)
 		}
 	}

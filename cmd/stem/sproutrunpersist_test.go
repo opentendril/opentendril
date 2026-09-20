@@ -130,6 +130,7 @@ func TestPersistTerminalSproutRunSettlesUsageAndLeavesOpeningNonTerminalUntilThe
 		t.Fatalf("opening row = %+v err=%v", runs, err)
 	}
 
+	fruitCreated := time.Date(2026, 9, 20, 1, 2, 3, 0, time.UTC)
 	persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
 		Output:       "done",
 		Outcome:      conductor.SproutOutcomeComplete,
@@ -143,6 +144,12 @@ func TestPersistTerminalSproutRunSettlesUsageAndLeavesOpeningNonTerminalUntilThe
 			Model:        "cheap-local",
 			Usage:        persistUsage(1, 1, 2, "0.01", "points", "lab"),
 		},
+		FruitRepository:       "github.com/example/repo",
+		FruitWorkspace:        "/private/repo",
+		FruitBranch:           "review/fruit",
+		FruitCommit:           "deadbeef",
+		FruitPublicationState: conductor.FruitPublicationPublished,
+		FruitCreatedAt:        fruitCreated,
 	}, nil)
 
 	runs, err = store.LoadSproutRuns(context.Background(), "s1", 10)
@@ -158,6 +165,9 @@ func TestPersistTerminalSproutRunSettlesUsageAndLeavesOpeningNonTerminalUntilThe
 	}
 	if got.Usage.PostRun == nil || got.Usage.PostRun.Provider != "lab" {
 		t.Fatalf("post-run usage = %+v", got.Usage.PostRun)
+	}
+	if got.FruitRepository != "github.com/example/repo" || got.FruitWorkspace != "/private/repo" || got.FruitBranch != "review/fruit" || got.FruitCommit != "deadbeef" || got.FruitPublicationState != conductor.FruitPublicationPublished || !got.FruitCreatedAt.Equal(fruitCreated) {
+		t.Fatalf("Fruit provenance = %+v", got)
 	}
 
 	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{

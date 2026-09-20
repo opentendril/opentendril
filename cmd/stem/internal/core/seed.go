@@ -241,6 +241,10 @@ type SeedSettlement struct {
 	Iterations              int
 	Branch                  string
 	Commit                  string
+	Repository              string
+	Workspace               string
+	PublicationState        string
+	CreatedAt               time.Time
 	Diff                    string
 	Logs                    string
 	Error                   string
@@ -322,6 +326,14 @@ type SeedGrowResult struct {
 	// Commit is the independently identifiable Fruit commit SHA when Seed
 	// execution actually produced one. Empty when the branch has no Seed change.
 	Commit string `json:"commit,omitempty"`
+	// Repository is the stable repository identity captured at Fruit creation.
+	Repository string `json:"repository,omitempty"`
+	// Workspace is a private local locator for later verification.
+	Workspace string `json:"-"`
+	// PublicationState is the closed Fruit publication vocabulary.
+	PublicationState string `json:"publicationState,omitempty"`
+	// CreatedAt is when the exact Fruit branch and commit were captured.
+	CreatedAt time.Time `json:"createdAt,omitempty"`
 	// Diff is the unified diff of the work, carried home for review (Phloem).
 	Diff string `json:"diff,omitempty"`
 	// Logs is the captured transcript/verify output (Xylem).
@@ -437,6 +449,10 @@ func (s *Service) GrowPreparedSeed(ctx context.Context, growth SeedGrowth) (Seed
 		result.Status = SeedStatusFruitPublicationFailed
 		result.Branch = ""
 		result.Commit = ""
+		result.Repository = ""
+		result.Workspace = ""
+		result.PublicationState = ""
+		result.CreatedAt = time.Time{}
 	}
 	if opened {
 		return s.finalizeOpenedSeed(ctx, lifecycle, spec, pollen, handle, started, result, err, publicationFailed)
@@ -486,6 +502,10 @@ func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started t
 		settled.Status = SeedStatusFruitPublicationFailed
 		settled.Branch = ""
 		settled.Commit = ""
+		settled.Repository = ""
+		settled.Workspace = ""
+		settled.PublicationState = ""
+		settled.CreatedAt = time.Time{}
 		copied := *result.PublicationDiagnostic
 		settled.PublicationDiagnostic = &copied
 		settled.Error = copied.Message
@@ -503,6 +523,10 @@ func composeOpenedSeedSettlement(spec SeedSpec, pollen, handle string, started t
 	settled.Status = result.Status
 	settled.Branch = result.Branch
 	settled.Commit = result.Commit
+	settled.Repository = result.Repository
+	settled.Workspace = result.Workspace
+	settled.PublicationState = result.PublicationState
+	settled.CreatedAt = result.CreatedAt
 	return settled
 }
 
