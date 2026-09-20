@@ -25,6 +25,7 @@
 - Discover grants inside a cloned Substrate, or accept grant/policy/Pollen material from caller-supplied input — the no-self-escalation invariant.
 - Persist grants, credentials, or the authorizer's decision surface as mutable runtime state: grants and credentials are file-backed and reloaded, and the authorizer is immutable once constructed.
 - Collect Fruit persistence or forge/Git evidence directly. Those factual inputs arrive through `FruitInventoryObservationSource`; Core classifies them into review state, unknown reason, deterministic order, and review-pressure counts without importing HistoryDB, Conductor, or a transport.
+- Own the Botanist Fruit inventory model exposed by the local CLI and private REST adapter. `ObserveFruitInventory` returns the same transport-free `FruitInventory` contract to both surfaces; the adapters do not derive classification, ordering, or counts.
 
 ## Public interface
 

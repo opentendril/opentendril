@@ -286,3 +286,19 @@ func TestMCPViewToolNamesLocked(t *testing.T) {
 		}
 	}
 }
+
+func TestFruitInventoryIsOutsideMCPAndCapabilityRegistry(t *testing.T) {
+	for _, name := range []string{"fruit", "fruitList", "fruitInventory"} {
+		if _, ok := ResolveMCPToolName(name); ok {
+			t.Fatalf("Fruit inventory name %q resolved as a governed MCP tool", name)
+		}
+		if _, ok := ResolveMCPViewToolName(name); ok {
+			t.Fatalf("Fruit inventory name %q resolved as an MCP view", name)
+		}
+	}
+	for _, name := range core.CapabilityNames() {
+		if name == "fruit" || name == "fruit.list" || name == "fruit.inventory" || MCPToolName(name) == "fruit" || MCPToolName(name) == "fruitList" || MCPToolName(name) == "fruitInventory" {
+			t.Fatalf("Fruit inventory unexpectedly entered CapabilityNames(): %q", name)
+		}
+	}
+}

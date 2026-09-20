@@ -72,7 +72,9 @@ not public. Public MCP accepts initialization, `tools/list`, and `tools/call`
 only; repository-backed `resources/list` and `resources/read` are not public.
 Its tool list contains primary identifiers for `DelegatedCapabilityNames()`
 and the `sproutWatch` view. Compatibility aliases can resolve only to an
-already-allowed delegated Core capability.
+already-allowed delegated Core capability. The public projection does not
+register the private Botanist route `GET /v1/fruit` and does not expose a Fruit
+inventory MCP tool or view.
 
 `TENDRIL_REMOTE_LISTEN_ADDR`, `TENDRIL_REMOTE_TLS_CERT`, and
 `TENDRIL_REMOTE_TLS_KEY` must be configured together; with all three absent the
@@ -202,6 +204,25 @@ lease and never overwrites an existing ref. The resulting root commit is setup
 state, not Fruit; `git setup --verify` remains the read-only readiness check.
 
 For `seed.grow` on a managed App/API Substrate, each writing iteration runs in a Tendril-owned RunWorkspace. A successful iteration is transferred into a local `tendril/seed-*` checkpoint only after newly introduced paths are valid repository-relative content; internal execution locations (host RunWorkspace paths, Terrarium mounts, pseudo-home expansions) cannot become Fruit. The next iteration starts from that checkpoint. These checkpoints are internal convergence state: they are not remotely published, do not receive GitHub credentials, use a Tendril-owned local Git identity, and are not returned as Botanist-reviewable Fruit. Deterministic verification runs against that accumulated candidate in a network-sealed Terrarium; the Stem records a bounded verification diagnostic per iteration (`passed`, `predicate-failed`, or `infrastructure-failed`, with exit code and timeout). After convergence, the accumulated Seed result is published through the Stem-held managed App/API path. Mutation outcomes are classified from transport facts, including whether the request was written, and an uncertain result is reconciled read-only against the exact intended parent, message, changed paths, and file contents. Only one final identical mutation is permitted after reconciliation proves the target ref is still at the expected base; no third mutation is issued. Only the GitHub-created review branch and authoritative GitHub commit OID are reported as Fruit. If publication configuration, execution-plan resolution, or final API publication fails, the completed Seed execution evidence is preserved, the terminal status is `fruit-publication-failed`, a structured safe diagnostic is recorded, and no Fruit branch or commit is reported. The default branch remains unchanged.
+
+### Botanist Fruit review inventory
+
+Every inventoried Fruit begins with exact durable provenance on its execution
+record: producer kind and identity, Phytomer where present, Substrate,
+repository, branch, commit, publication state, and production time. The Stem
+joins those claims with exact current Git and forge evidence in Core. Core owns
+the deterministic review states `outstanding`, `unknown`, `closed-unmerged`,
+and `merged`, their safe unknown reasons, stable item ordering, and review
+pressure counts.
+
+The Botanist can observe this model with `tendril fruit list` or
+`tendril fruit list --json`. The private local Stem mux exposes the same model
+at `GET /v1/fruit` through the Botanist authentication lane. These surfaces
+render or serialize Core values only; they do not enumerate branches, inspect
+forge state independently, or recalculate classification and counts. Review
+pressure is observational and does not accept, merge, delete, block, or mutate
+Fruit. Persistence or evidence that is unavailable is reported as unavailable,
+not as an empty inventory.
 
 ## Observation/Persistence
 

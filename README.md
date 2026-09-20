@@ -150,6 +150,20 @@ Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers 
 
 Successful reviewable Sprout work becomes Git-reviewable Fruit. A local RunSprout can internally merge a Terrarium commit back into its source branch, and remote execution may publish its commit, but this internal merge-back or publication is NOT Botanist acceptance. `git.commit`, `git.push`, and `git.pr` are distinct governed capabilities. `git.pr` opens a pull request and does not merge; there is no governed `git.merge`. Final review acceptance and merge remain the Botanist's decision.
 
+The Botanist's current Fruit review inventory is available locally with:
+
+```bash
+tendril fruit list
+tendril fruit list --json
+```
+
+The view starts from durable execution provenance and composes deterministic
+review evidence in Stem Core. It reports `outstanding`, `unknown`,
+`closed-unmerged`, and `merged` Fruit plus review-pressure counts. The private
+Botanist route `GET /v1/fruit` returns the same Core model. Inventory is
+observational only: it does not accept, merge, delete, block, or otherwise
+mutate Fruit. Public Pollinator REST and MCP surfaces do not expose it.
+
 ---
 
 ## 🔌 Client Integrations

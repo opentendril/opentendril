@@ -330,6 +330,9 @@ func TestMCPPollinatorProjectionExposesOnlyDelegatedPrimaryTools(t *testing.T) {
 	}
 	actual := make(map[string]int, len(listed.Result.Tools))
 	for _, tool := range listed.Result.Tools {
+		if tool.Name == "fruit" || tool.Name == "fruitList" || tool.Name == "fruitInventory" {
+			t.Fatalf("public tools/list exposed Fruit inventory tool %q", tool.Name)
+		}
 		actual[tool.Name]++
 	}
 	expected := make(map[string]bool)

@@ -110,6 +110,16 @@ inspects the projection, and `remove` removes one complete Pollen grant.
 `remove` are not governed capabilities and are not projected through REST or
 MCP; they resolve the Stem control plane and consume the Core grant lifecycle.
 
+The Botanist Fruit inventory is also a control-plane observation outside the
+governed registry and parity set. `tendril fruit list` and
+`tendril fruit list --json` call `ObserveFruitInventory`; private
+`GET /v1/fruit` returns the same Core model through the Botanist lane. It
+reports durable Fruit provenance, deterministic review states, and
+review-pressure counts. It does not accept, merge, delete, block, or otherwise
+mutate Fruit. It is not a `CapabilityNames()` entry, a DelegationGrant
+operation-class, or an MCP tool/view, and it is absent from the public
+Pollinator REST and MCP projections.
+
 The parity test `TestControlPlaneCapabilitiesExcluded` asserts that no
 capability name in `CapabilityNames()` carries a control-plane prefix. The
 current deny-list prefixes are:

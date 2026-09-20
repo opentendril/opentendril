@@ -128,6 +128,14 @@ historical Fruit. These reads do not mutate Git, remove refs, or change any
 execution or publication authority. Existing `git.branch.list` and
 `git.prune` retain their conservative lifecycle rules.
 
+The resulting Botanist observation is surfaced by the Stem's local
+`tendril fruit list` and `tendril fruit list --json` commands and by private
+`GET /v1/fruit`. Both adapters call Core's `ObserveFruitInventory` and preserve
+its item order, review states, unknown reasons, pull-request metadata, and
+review-pressure counts. The route is Botanist-only; the public Pollinator REST
+and MCP projections do not expose this inventory. Observation reports evidence
+unavailability and never accepts, merges, deletes, blocks, or mutates Fruit.
+
 ## Chronicler
 
 Adaptation/history-driven genome behavior is separate from Epigenetic Chronicler behavior. 
