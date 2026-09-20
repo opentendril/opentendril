@@ -13,77 +13,36 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can delegate a real coding task on a large Substrate without
-manually curating repository context, because OpenTendril supplies the
-Mycorrhiza with a bounded, task-specific, provenance-visible set of current
-Substrate evidence while preserving the existing execution, isolation, and
-Git-review boundaries.**
+**A Botanist can leave OpenTendril producing multiple Git-reviewable Fruit and later return to one deterministic review inventory that identifies the outstanding Fruit, its originating governed work, and its current review state without interrupting delegated execution, silently deleting reviewable work, or accepting Fruit automatically.**
 
 ## Done when
 
 Recorded exercises establish all of the following:
 
-- **Automatic task-specific context.** A Transcript can enter normal governed
-  work without the Botanist manually selecting every file, symbol, test,
-  document, or memory the Mycorrhiza should inspect first.
-- **Bounded independently of repository size.** The evidence supplied before a
-  Mycorrhizal turn has an explicit hard bound. A larger Substrate cannot cause
-  whole-repository context injection or unbounded prompt growth.
-- **Current evidence.** Repository evidence is bound to the actual execution
-  workspace and current Git state used by the Sprout. Stale indexed evidence
-  cannot silently be presented as current.
-- **Task specificity is observable.** Different materially different
-  Transcripts against the same Substrate can produce different bounded
-  evidence sets, while direct file and symbol anchors named by a Transcript are
-  deterministically represented when they exist.
-- **Provenance is visible and safe.** The Botanist can inspect which evidence
-  was supplied to a Sprout, where it came from, why it was admitted, its current
-  revision or content identity, and whether it was truncated or omitted by a
-  bound. Provenance follows the existing authorization and redaction boundaries
-  and does not require exposing secret values or private reasoning.
-- **Existing repository knowledge remains authoritative.** Context assembly
-  uses existing repository knowledge and execution state where that evidence can
-  be safely attributed to the active Substrate, rather than creating a second
-  repository index or hidden knowledge store.
-- **Growth refreshes context.** A later Sprout growth, including a later Seed
-  iteration, assembles against the workspace state it will actually execute
-  against rather than reusing an unverified earlier snapshot.
-- **Source boundaries remain deterministic.** Context assembly cannot read
-  outside the declared Substrate or widen its evidence sources, limits,
-  credentials, network access, tools, or execution authority through
-  Transcript content. Evidence whose binding to the active Substrate cannot be
-  established is omitted rather than admitted ambiguously.
-- **The Stem remains non-cognitive authority.** Any Mycorrhizal reasoning remains
-  on the cognitive side of the boundary. Deterministic Stem policy controls
-  admissible sources, limits, execution authority, and what is injected.
-- **Context assembly does not become work product.** OpenTendril-generated
-  context state is not attributed to the Sprout, committed as Fruit, or allowed
-  to contaminate the Botanist's repository state.
-- **Observation does not expose private reasoning.** Context provenance and
-  selection facts can be reviewed without requiring raw Mycorrhizal reasoning
-  to be persisted or displayed.
-- **Real governed work uses the mechanism.** At least one recorded coding run
-  against a Substrate whose available repository evidence materially exceeds
-  the configured context bound consumes the assembled context and produces
-  independently identifiable Git-reviewable Fruit.
-- **Protected state remains protected.** Context assembly does not advance the
-  protected/default branch, accept Fruit, or change the existing
-  Sprout/Terrarium containment boundary.
+* **Fruit is identifiable as Fruit.** OpenTendril can distinguish its reviewable Fruit from arbitrary Botanist-created or tool-created Git branches without relying only on branch-name heuristics.
+* **Origin is visible.** Each inventoried Fruit can be related back to the governed Seed, Sprout, Phytomer, or equivalent durable execution identity that produced it where that relationship exists.
+* **Review state is deterministic.** The Botanist can distinguish at minimum outstanding reviewable Fruit, merged Fruit, closed-unmerged Fruit, and Fruit whose remote state can no longer be established, using repository/forge facts rather than model judgement.
+* **Review pressure is observable.** The Botanist can see how much reviewable Fruit is outstanding without manually enumerating remote branches or reconstructing run history.
+* **Observation does not interrupt work.** Fruit accumulation or review pressure does not introduce a new confirmation requirement or stop otherwise-authorised Sprout or Seed execution merely because review work is outstanding.
+* **Existing Git evidence is reused.** The inventory builds on current persisted Fruit identity, Git/forge state, and governed observation records rather than creating a second source of execution truth.
+* **No silent disposal.** Reviewable remote Fruit is never deleted merely because it is old, duplicated, numerous, or inconvenient.
+* **Acceptance remains human-controlled.** Inventory, classification, warning, and deliberate cleanup do not merge Fruit or advance the protected/default branch.
+* **Cleanup remains explicit and conservative.** Any supported cleanup action is Botanist-directed and preserves dirty-worktree, current-branch, open-review, ownership, and default-branch protections.
+* **Observation remains safe.** Review inventory exposes lifecycle and Git-review facts without credentials, private model reasoning, or unnecessary repository contents.
+* **Scale is demonstrated.** A recorded exercise with multiple outstanding Fruit proves that the Botanist can recover the complete review set without branch archaeology and that protected/default state remains unchanged.
 
 This objective does not require:
 
-- persistent repository cognition or a new durable knowledge model;
-- replacing the Rhizome or MemoryBackend;
-- semantic embeddings, vector search, LSP, or any particular retrieval
-  technology;
-- exposing context assembly as a Pollinator-facing governed capability;
-- changing DelegationGrants, credentials, egress, Terrarium authority, or Fruit
-  acceptance;
-- Greenhouse redesign;
-- public Pollinator ingress or GitHub-native Pollinator work;
-- whole-repository context loading;
-- automatic Fruit acceptance or merge; or
-- OpenTendril deciding whether the Mycorrhiza's code or reasoning is good.
+* automatic Fruit acceptance or merge;
+* automatic deletion of reviewable remote branches;
+* blocking delegated work at an arbitrary Fruit-count threshold;
+* model-based judgement of whether Fruit is good, duplicate, or worth keeping;
+* redesigning Seed, Sprout, Phytomer, Terrarium, or Mycorrhizal execution;
+* changing DelegationGrant semantics;
+* Greenhouse redesign beyond what Gate A proves necessary to expose the inventory;
+* completing the parked public-Internet qualification;
+* activating the GitHub-native Pollinator objective; or
+* treating generic Git branches as Fruit merely because their names resemble Tendril branches.
 
 ---
 
