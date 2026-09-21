@@ -947,10 +947,17 @@ func TestCallStreamAnthropicUsageNoDeltaLeavesCompletionNil(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(ProviderSpec{Provider: "anthropic", BaseURL: server.URL, Mode: ModeAnthropic})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
-	if err != nil {
-		t.Fatalf("doCall failed: %v", err)
+	client := NewClient(ProviderSpec{
+		Provider: "anthropic",
+		BaseURL:  server.URL,
+		Endpoint: "/v1/messages",
+		Mode:     ModeAnthropic,
+		APIKey:   "key",
+		Model:    "claude-test",
+	})
+	res, err := client.CallStreamWithResult(context.Background(), []Message{{Role: "user", Content: "hi"}}, make(chan string, 10))
+	if !errors.Is(err, ErrNoUsableCompletion) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrNoUsableCompletion)", err)
 	}
 
 	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 15 {
