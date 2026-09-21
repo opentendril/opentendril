@@ -162,3 +162,27 @@ func TestClassifyFailureCategories(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyLifecycleStatus(t *testing.T) {
+	cases := []struct {
+		name     string
+		category core.FailureCategory
+		want     string
+	}{
+		{name: "matured", category: core.FailureCategoryMatured, want: "matured"},
+		{name: "provider auth rejected", category: core.FailureCategoryProviderAuthRejected, want: "withered"},
+		{name: "provider request rejected", category: core.FailureCategoryProviderRequestRejected, want: "withered"},
+		{name: "no engagement", category: core.FailureCategoryNoEngagement, want: "withered"},
+		{name: "terrarium runtime", category: core.FailureCategoryTerrariumRuntime, want: "withered"},
+		{name: "execution failed", category: core.FailureCategoryExecutionFailed, want: "withered"},
+		{name: "unknown category", category: core.FailureCategory("future-category"), want: "withered"},
+		{name: "empty category", category: "", want: "withered"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := core.ClassifyLifecycleStatus(testCase.category); got != testCase.want {
+				t.Fatalf("ClassifyLifecycleStatus(%q) = %q, want %q", testCase.category, got, testCase.want)
+			}
+		})
+	}
+}

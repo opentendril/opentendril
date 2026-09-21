@@ -86,3 +86,12 @@ func ClassifyFailure(facts ObservationFacts) FailureCategory {
 	}
 	return FailureCategoryMatured
 }
+
+// ClassifyLifecycleStatus maps a Core-owned FailureCategory onto the terminal
+// Sprout lifecycle. Unknown categories fail closed as withered.
+func ClassifyLifecycleStatus(category FailureCategory) string {
+	if category == FailureCategoryMatured {
+		return "matured"
+	}
+	return "withered"
+}

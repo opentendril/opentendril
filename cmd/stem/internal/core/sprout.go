@@ -64,7 +64,8 @@ type SproutRunResult struct {
 	StepID    string `json:"stepId"`
 	SessionID string `json:"sessionId,omitempty"`
 	// Status is the run lifecycle verdict every surface has always seen:
-	// matured (the run finished) or withered (it errored). Outcome refines it.
+	// matured or withered, derived from the Core-owned FailureCategory. Outcome
+	// refines it.
 	Status string `json:"status"`
 	Output string `json:"output,omitempty"`
 	// Outcome is the execution port's honest verdict on the work itself:
@@ -203,11 +204,10 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 			ProviderStatusCode:       statusCode,
 		}))
 	}
+	result.Status = ClassifyLifecycleStatus(FailureCategory(result.FailureCategory))
 	if err != nil {
-		result.Status = "withered"
 		return result, err
 	}
-	result.Status = "matured"
 	result.Output = report.Output
 	return result, nil
 }

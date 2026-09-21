@@ -390,15 +390,14 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID string, report S
 		return
 	}
 
-	outcome := report.Outcome
 	eventType := eventbus.EventSproutMatured
-	if outcome == SproutOutcomeFailed || outcome == SproutOutcomeTimedOut || outcome == SproutOutcomeNoEngagement || outcome == SproutOutcomeReaped {
+	if core.ClassifyLifecycleStatus(core.FailureCategory(report.FailureCategory)) != "matured" {
 		eventType = eventbus.EventSproutWithered
 	}
 
 	data := map[string]interface{}{
 		"stepId":                   stepID,
-		"outcome":                  outcome,
+		"outcome":                  report.Outcome,
 		"providerRequestAttempted": report.RequestsMade,
 		"toolInvocations":          report.ToolInvocations,
 	}

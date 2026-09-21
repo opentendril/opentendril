@@ -293,6 +293,53 @@ func TestPersistTerminalSproutRunClassifiesAuthWhenReportOmitsCategory(t *testin
 	}
 }
 
+func TestPersistTerminalSproutRunUsesCoreLifecycleForNoEngagement(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	opened := historydb.SproutRun{
+		RunID: "run-no-engagement", SessionID: "s1", StepID: "run-no-engagement",
+		Status: "running", StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSproutRun(context.Background(), opened); err != nil {
+		t.Fatalf("opening write: %v", err)
+	}
+
+	persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
+		Outcome:  conductor.SproutOutcomeNoEngagement,
+		Provider: "openrouter",
+		Model:    "anthropic/claude-sonnet-4.6",
+	}, nil)
+
+	runs, err := store.LoadSproutRuns(context.Background(), "s1", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load: %v %+v", err, runs)
+	}
+	got := runs[0]
+	if got.Status != "withered" {
+		t.Fatalf("status = %q, want withered", got.Status)
+	}
+	if got.Outcome != conductor.SproutOutcomeNoEngagement {
+		t.Fatalf("outcome = %q, want no-engagement", got.Outcome)
+	}
+	if got.FailureCategory != string(core.FailureCategoryNoEngagement) {
+		t.Fatalf("failureCategory = %q, want %q", got.FailureCategory, core.FailureCategoryNoEngagement)
+	}
+	if got.Error != "" {
+		t.Fatalf("error = %q, want empty for nil execution error", got.Error)
+	}
+	if got.Provider != "openrouter" || got.Model != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("provider/model = %s/%s", got.Provider, got.Model)
+	}
+}
+
 func TestPersistTerminalSproutRunKeepsUsageOnWitheredError(t *testing.T) {
 	dbDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {

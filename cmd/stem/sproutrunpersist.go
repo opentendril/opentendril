@@ -83,16 +83,6 @@ func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, ope
 	if resolved := strings.TrimSpace(report.Provider); resolved != "" {
 		run.Provider = resolved
 	}
-	if runErr != nil {
-		run.Status = "withered"
-		run.Error = runErr.Error()
-	} else {
-		run.Status = "matured"
-		if report.Outcome == conductor.SproutOutcomeNoEngagement {
-			run.Status = "withered"
-		}
-		run.Output = report.Output
-	}
 	run.Usage = sproutRunUsageFromReport(report)
 	run.FruitRepository = report.FruitRepository
 	run.FruitWorkspace = report.FruitWorkspace
@@ -101,6 +91,12 @@ func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, ope
 	run.FruitPublicationState = report.FruitPublicationState
 	run.FruitCreatedAt = report.FruitCreatedAt
 	applyObservationToRun(&run, report, runErr)
+	run.Status = core.ClassifyLifecycleStatus(core.FailureCategory(run.FailureCategory))
+	if runErr != nil {
+		run.Error = runErr.Error()
+	} else {
+		run.Output = report.Output
+	}
 	if recordErr := history.RecordSproutRun(ctx, run); recordErr != nil {
 		log.Printf("[Sprout] Failed to record sprout run: %v", recordErr)
 	}

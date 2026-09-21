@@ -243,6 +243,29 @@ func TestSproutRunCarriesExecutionOutcome(t *testing.T) {
 	}
 }
 
+func TestSproutRunNoEngagementWithersWithoutError(t *testing.T) {
+	svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+		return core.SproutRunReport{Outcome: "no-engagement"}, nil
+	})
+
+	result, err := svc.SproutRun(context.Background(), core.SproutRunInput{
+		Transcript: "wait for engagement",
+		Substrate:  "/workspaces/core",
+	})
+	if err != nil {
+		t.Fatalf("SproutRun returned an error: %v", err)
+	}
+	if result.Status != "withered" {
+		t.Fatalf("Status = %q, want withered", result.Status)
+	}
+	if result.Outcome != "no-engagement" {
+		t.Fatalf("Outcome = %q, want no-engagement", result.Outcome)
+	}
+	if result.FailureCategory != string(core.FailureCategoryNoEngagement) {
+		t.Fatalf("FailureCategory = %q, want %q", result.FailureCategory, core.FailureCategoryNoEngagement)
+	}
+}
+
 // The resolved provider and model reach the result on both endings. They are
 // reported by the execution port rather than echoed from the request: a run
 // that requested neither is exactly the run whose model nothing else could
