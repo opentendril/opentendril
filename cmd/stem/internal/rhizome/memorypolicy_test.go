@@ -1092,3 +1092,100 @@ func TestLegacyMemoryNotSilentlyPromoted(t *testing.T) {
 		t.Errorf("expected requires a proposed memory error, got: %v", err)
 	}
 }
+
+// TestSupersessionWhitespaceTitleNormalizationFailsBeforeWrite proves that when
+// the requested replacement title normalizes to the same identity as the old
+// title, the supersession is rejected before any backend write occurs.
+//
+// Concretely: old title "Rule", replacement input " Rule " must fail supersession
+// because ApplyBotanistAdd trims the new title to "Rule" and the StableID
+// of "Rule" == StableID of "Rule".
+func TestSupersessionWhitespaceTitleNormalizationFailsBeforeWrite(t *testing.T) {
+	ctx := context.Background()
+	backend := newFakeBackend()
+	backend.seed(Memory{
+		RepositoryName: "owner/repo",
+		Title:          "Rule",
+		Content:        "Enforce rule.",
+		Category:       "Design",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+		StableID:       StableMemoryIdentity("owner/repo", "Rule"),
+	})
+
+	initialCallCount := len(backend.storeCallOrder)
+
+	_, err := ApplySupersede(ctx, backend, SupersedeIntent{
+		RepositoryName: "owner/repo",
+		OldTitle:       "Rule",
+		NewTitle:       " Rule ", // normalizes to "Rule" in ApplyBotanistAdd
+		Content:        "Enforce rule (updated).",
+	})
+	if err == nil {
+		t.Fatal("expected error: replacement title ' Rule ' normalizes to 'Rule', which conflicts with old identity")
+	}
+	if !strings.Contains(err.Error(), "must differ") {
+		t.Errorf("expected 'must differ' error, got: %v", err)
+	}
+
+	// No write must have occurred.
+	if len(backend.storeCallOrder) != initialCallCount {
+		t.Errorf("expected no store writes before identity check, got %v", backend.storeCallOrder[initialCallCount:])
+	}
+}
+
+// TestSupersessionExistingReplacementIdentityPreventsOldMutation proves that if
+// a memory with the replacement identity already exists, the old record is not
+// mutated.
+func TestSupersessionExistingReplacementIdentityPreventsOldMutation(t *testing.T) {
+	ctx := context.Background()
+	backend := newFakeBackend()
+	backend.seed(Memory{
+		RepositoryName: "owner/repo",
+		Title:          "Old Rule",
+		Content:        "Old content.",
+		Category:       "Design",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+		StableID:       StableMemoryIdentity("owner/repo", "Old Rule"),
+	})
+	// Pre-seed the replacement identity so the collision check fires.
+	backend.seed(Memory{
+		RepositoryName: "owner/repo",
+		Title:          "New Rule",
+		Content:        "Already exists.",
+		Category:       "Design",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+		StableID:       StableMemoryIdentity("owner/repo", "New Rule"),
+	})
+
+	initialOldStatus := backend.records["Old Rule"].Status
+	initialCallCount := len(backend.storeCallOrder)
+
+	_, err := ApplySupersede(ctx, backend, SupersedeIntent{
+		RepositoryName: "owner/repo",
+		OldTitle:       "Old Rule",
+		NewTitle:       "New Rule",
+		Content:        "Replacement content.",
+	})
+	if err == nil {
+		t.Fatal("expected error: replacement identity already exists")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected 'already exists' error, got: %v", err)
+	}
+
+	// Old record status must remain unchanged.
+	if backend.records["Old Rule"].Status != initialOldStatus {
+		t.Errorf("old record status changed despite collision: want %q, got %q",
+			initialOldStatus, backend.records["Old Rule"].Status)
+	}
+	// No store writes must have occurred.
+	if len(backend.storeCallOrder) != initialCallCount {
+		t.Errorf("expected no store writes on collision, got %v", backend.storeCallOrder[initialCallCount:])
+	}
+}

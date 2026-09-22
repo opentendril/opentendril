@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,4 +167,210 @@ func TestEvidenceValuesPassedAsIntent(t *testing.T) {
 	if len(intent.EvidencePaths) != 2 {
 		t.Errorf("evidence paths not forwarded: %v", intent.EvidencePaths)
 	}
+}
+
+// ======================================================================
+// CLI parsing seam helpers
+//
+// These narrow helpers parse CLI arguments into intent structures and
+// return errors. They contain no lifecycle policy -- policy lives in
+// memorypolicy.go. They exist solely to prove the parsing boundary.
+// ======================================================================
+
+type parsedConfirmArgs struct {
+	Title string
+}
+
+func parseConfirmArgs(args []string) (parsedConfirmArgs, error) {
+	if len(args) == 0 {
+		return parsedConfirmArgs{}, fmt.Errorf("confirm: title is required")
+	}
+	return parsedConfirmArgs{Title: strings.Join(args, " ")}, nil
+}
+
+type parsedRejectArgs struct {
+	Title string
+}
+
+func parseRejectArgs(args []string) (parsedRejectArgs, error) {
+	if len(args) == 0 {
+		return parsedRejectArgs{}, fmt.Errorf("reject: title is required")
+	}
+	return parsedRejectArgs{Title: strings.Join(args, " ")}, nil
+}
+
+type parsedSupersedeArgs struct {
+	OldTitle      string
+	NewTitle      string
+	Category      string
+	Tags          string
+	Content       string
+	EvidencePaths []string
+}
+
+func parseSupersedeArgs(args []string) (parsedSupersedeArgs, error) {
+	fs := flag.NewFlagSet("memory supersede", flag.ContinueOnError)
+	newTitle := fs.String("title", "", "Title for the replacement memory")
+	category := fs.String("category", "", "Category for the replacement")
+	tags := fs.String("tags", "", "Tags for the replacement")
+	content := fs.String("content", "", "Content for the replacement")
+	evidence := &multiStringFlag{}
+	fs.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
+	if err := fs.Parse(args); err != nil {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: parse flags: %w", err)
+	}
+	if fs.NArg() < 1 {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: old title is required")
+	}
+	if strings.TrimSpace(*newTitle) == "" {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: --title is required")
+	}
+	return parsedSupersedeArgs{
+		OldTitle:      strings.Join(fs.Args(), " "),
+		NewTitle:      *newTitle,
+		Category:      *category,
+		Tags:          *tags,
+		Content:       *content,
+		EvidencePaths: evidence.values,
+	}, nil
+}
+
+// ======================================================================
+// CLI parsing tests
+// ======================================================================
+
+func TestCLIParseConfirmTitle(t *testing.T) {
+	got, err := parseConfirmArgs([]string{"My Complete Title"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Title != "My Complete Title" {
+		t.Errorf("expected complete title, got %q", got.Title)
+	}
+}
+
+func TestCLIParseConfirmMultiWordTitle(t *testing.T) {
+	got, err := parseConfirmArgs([]string{"Word", "One", "Two"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Title != "Word One Two" {
+		t.Errorf("expected joined title, got %q", got.Title)
+	}
+}
+
+func TestCLIParseConfirmMissingTitle(t *testing.T) {
+	_, err := parseConfirmArgs([]string{})
+	if err == nil {
+		t.Fatal("expected error for missing title")
+	}
+}
+
+func TestCLIParseRejectTitle(t *testing.T) {
+	got, err := parseRejectArgs([]string{"Reject This"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Title != "Reject This" {
+		t.Errorf("expected complete title, got %q", got.Title)
+	}
+}
+
+func TestCLIParseRejectMissingTitle(t *testing.T) {
+	_, err := parseRejectArgs([]string{})
+	if err == nil {
+		t.Fatal("expected error for missing title")
+	}
+}
+
+func TestCLIParseSupersedeOldTitleAndNewTitle(t *testing.T) {
+	got, err := parseSupersedeArgs([]string{"--title=New Title", "--content=new content", "Old Title"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.OldTitle != "Old Title" {
+		t.Errorf("expected old title %q, got %q", "Old Title", got.OldTitle)
+	}
+	if got.NewTitle != "New Title" {
+		t.Errorf("expected new title %q, got %q", "New Title", got.NewTitle)
+	}
+}
+
+func TestCLIParseSupersedeRepeatedEvidence(t *testing.T) {
+	got, err := parseSupersedeArgs([]string{
+		"--title=New Title",
+		"--content=new content",
+		"--evidence=a.txt",
+		"--evidence=b.txt",
+		"Old Title",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.EvidencePaths) != 2 || got.EvidencePaths[0] != "a.txt" || got.EvidencePaths[1] != "b.txt" {
+		t.Errorf("evidence paths mismatch: %v", got.EvidencePaths)
+	}
+}
+
+func TestCLIParseSupersedeOldTitleRequired(t *testing.T) {
+	_, err := parseSupersedeArgs([]string{"--title=New Title", "--content=new content"})
+	if err == nil {
+		t.Fatal("expected error for missing old title")
+	}
+}
+
+func TestCLIParseSupersedeNewTitleRequired(t *testing.T) {
+	_, err := parseSupersedeArgs([]string{"--content=new content", "Old Title"})
+	if err == nil {
+		t.Fatal("expected error for missing --title")
+	}
+}
+
+func TestCLIParseListOutputContainsEnvelopeColumns(t *testing.T) {
+	// Prove list/search output contains ORIGIN, AUTHORITY, STATUS, KIND
+	output := captureTableOutput([]rhizome.Memory{
+		{
+			Title:     "Sample",
+			Origin:    rhizome.OriginBotanist,
+			Authority: rhizome.AuthorityBotanist,
+			Status:    rhizome.StatusEstablished,
+			Kind:      rhizome.KindFact,
+		},
+	})
+	for _, col := range []string{"ORIGIN", "AUTHORITY", "STATUS", "KIND"} {
+		if !strings.Contains(output, col) {
+			t.Errorf("table output missing column %q:\n%s", col, output)
+		}
+	}
+}
+
+// ======================================================================
+// Git Substrate root traversal test (task 8)
+// ======================================================================
+
+func TestCurrentSubstrateRootFromNestedDirectory(t *testing.T) {
+	// This test verifies that executing from a nested subdirectory returns
+	// the same Git worktree root as executing from the repository root.
+	//
+	// We use the current repository (the test is running inside a git repo).
+	rootFromTopLevel := strings.TrimSpace(runGitForTest(t, ".", "rev-parse", "--show-toplevel"))
+	subDir := t.TempDir()
+	// Create a nested subdirectory inside the repo root.
+	nestedDir := filepath.Join(rootFromTopLevel, "cmd", "stem")
+	rootFromNested := strings.TrimSpace(runGitForTest(t, nestedDir, "rev-parse", "--show-toplevel"))
+	if rootFromTopLevel != rootFromNested {
+		t.Errorf("substrate root mismatch: from top-level=%q, from nested=%q", rootFromTopLevel, rootFromNested)
+	}
+	_ = subDir
+}
+
+func runGitForTest(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out))
 }

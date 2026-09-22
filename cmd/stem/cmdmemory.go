@@ -355,8 +355,10 @@ func currentRepositoryName() string {
 	return filepath.Base(root)
 }
 
-// currentSubstrateRoot returns the absolute path of the working directory,
-// which serves as the substrate root for evidence path resolution.
+// currentSubstrateRoot returns the absolute path of the Git worktree root
+// (the directory containing the .git folder) by running
+// "git rev-parse --show-toplevel". It resolves the same root regardless of
+// which subdirectory inside the repository the command is executed from.
 func currentSubstrateRoot() string {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	out, err := cmd.Output()
