@@ -1055,6 +1055,138 @@ func TestRunSproutManagedRunAttributesTaskContextToBackingSubstrate(t *testing.T
 	assertManagedBaseClean(t, repository)
 }
 
+func TestRunSproutManagedRunRevalidatesMemoryAgainstEachCandidateWorkspace(t *testing.T) {
+	repository := prepareManagedRunRepository(t)
+	if err := os.WriteFile(filepath.Join(repository, ".git", "info", "exclude"), []byte(".tendril/\n"), 0o644); err != nil {
+		t.Fatalf("ignore source-local Rhizome state: %v", err)
+	}
+	const supportingFile = "support.txt"
+	const originalSupportingContent = "supporting evidence at candidate creation\n"
+	if err := os.WriteFile(filepath.Join(repository, supportingFile), []byte(originalSupportingContent), 0o644); err != nil {
+		t.Fatalf("write supporting file: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repository, "add", supportingFile); err != nil {
+		t.Fatalf("stage supporting file: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repository, "commit", "-q", "-m", "add supporting evidence"); err != nil {
+		t.Fatalf("commit supporting file: %v", err)
+	}
+
+	sourceIndex, sourceName, err := openRhizomeIndex(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("open source-local Rhizome index: %v", err)
+	}
+	memory, err := rhizome.ApplyBotanistAdd(rhizome.BotanistAddIntent{
+		RepositoryName: sourceName,
+		Category:       "design",
+		Title:          "support-fact",
+		Content:        "support evidence remains valid",
+		Kind:           rhizome.KindFact,
+		EvidencePaths:  []string{supportingFile},
+		SubstrateRoot:  repository,
+	})
+	if err != nil {
+		_ = sourceIndex.Close()
+		t.Fatalf("construct evidence-bound memory: %v", err)
+	}
+	if err := sourceIndex.StoreMemory(context.Background(), memory); err != nil {
+		_ = sourceIndex.Close()
+		t.Fatalf("store source-local memory: %v", err)
+	}
+	if err := sourceIndex.Close(); err != nil {
+		t.Fatalf("close source-local Rhizome index: %v", err)
+	}
+
+	firstStep := "managed-memory-candidate-1"
+	secondStep := "managed-memory-candidate-2"
+	firstRunner := newManagedWritingRunner("")
+	firstRunner.releaseRun()
+	secondRunner := newManagedWritingRunner("")
+	secondRunner.releaseRun()
+	capture := newManagedRunCapture()
+	installManagedRunSeams(t, capture, map[string]sproutRunner{
+		firstStep:  firstRunner,
+		secondStep: secondRunner,
+	})
+
+	var candidateNumber int
+	var candidateWorkspaces []string
+	originalCreateWorkspace := createRunWorkspaceFn
+	t.Cleanup(func() { createRunWorkspaceFn = originalCreateWorkspace })
+	createRunWorkspaceFn = func(ctx context.Context, sourcePath, stepID, startRevision string) (RunWorkspace, error) {
+		workspace, createErr := CreateRunWorkspace(ctx, sourcePath, stepID, startRevision)
+		if createErr != nil {
+			return RunWorkspace{}, createErr
+		}
+		candidateNumber++
+		candidateWorkspaces = append(candidateWorkspaces, workspace.Path)
+		if candidateNumber == 2 {
+			writeTaskContextFile(t, workspace.Path, supportingFile, "changed supporting evidence in candidate two\n")
+			if _, gitErr := runGitCommand(ctx, workspace.Path, "add", supportingFile); gitErr != nil {
+				t.Fatalf("stage changed candidate evidence: %v", gitErr)
+			}
+			if _, gitErr := runGitCommand(ctx, workspace.Path, "commit", "-q", "-m", "refresh candidate evidence"); gitErr != nil {
+				t.Fatalf("commit changed candidate evidence: %v", gitErr)
+			}
+		}
+		return workspace, nil
+	}
+
+	bus := eventbus.New()
+	t.Cleanup(bus.Shutdown)
+	var contextEvents []eventbus.Event
+	bus.Subscribe(eventbus.EventTaskContextAssembled, func(event eventbus.Event) {
+		contextEvents = append(contextEvents, event)
+	})
+	for _, stepID := range []string{firstStep, secondStep} {
+		if _, runErr := (&DockerOrchestrator{
+			Substrate:        repository,
+			StepID:           stepID,
+			SessionID:        stepID + "-session",
+			EventBus:         bus,
+			DisableMergeBack: true,
+		}).RunSprout(context.Background(), "support evidence"); runErr != nil {
+			t.Fatalf("managed RunSprout %s: %v", stepID, runErr)
+		}
+	}
+
+	if len(candidateWorkspaces) != 2 {
+		t.Fatalf("managed candidate workspace count = %d, want 2 (%v)", len(candidateWorkspaces), candidateWorkspaces)
+	}
+	for _, workspace := range candidateWorkspaces {
+		if sameFilePath(workspace, repository) {
+			t.Fatalf("managed candidate workspace reused canonical source: %q", workspace)
+		}
+	}
+	if len(contextEvents) != 2 {
+		t.Fatalf("task-context event count = %d, want 2: %+v", len(contextEvents), contextEvents)
+	}
+	firstItems, ok := contextEvents[0].Data["items"].([]map[string]interface{})
+	if !ok || len(firstItems) != 1 || firstItems[0]["sourceClass"] != taskContextEvidenceMemory || firstItems[0]["status"] != string(rhizome.StatusEstablished) {
+		t.Fatalf("candidate 1 did not admit established memory: %+v", contextEvents[0].Data)
+	}
+	secondOmissions, ok := contextEvents[1].Data["omissionCounts"].(map[string]interface{})
+	if !ok || secondOmissions[taskContextOmissionMemoryStale] != 1 {
+		t.Fatalf("candidate 2 did not omit changed evidence as stale: %+v", contextEvents[1].Data)
+	}
+	if secondItems, ok := contextEvents[1].Data["items"].([]map[string]interface{}); ok && len(secondItems) != 0 {
+		t.Fatalf("candidate 2 admitted stale memory: %+v", secondItems)
+	}
+
+	storedIndex, storedName, err := openRhizomeIndex(context.Background(), repository)
+	if err != nil {
+		t.Fatalf("reopen source-local Rhizome index: %v", err)
+	}
+	defer storedIndex.Close()
+	stored, found, err := storedIndex.GetMemory(context.Background(), storedName, "support-fact")
+	if err != nil {
+		t.Fatalf("read source-local memory after candidates: %v", err)
+	}
+	if !found || stored.Status != rhizome.StatusEstablished {
+		t.Fatalf("candidate stale result mutated canonical source memory: found=%t status=%q", found, stored.Status)
+	}
+}
+
 func TestCopyMycorrhizalCacheCopiesAbsentDestination(t *testing.T) {
 	source := t.TempDir()
 	runPath := t.TempDir()

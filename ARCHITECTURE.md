@@ -132,7 +132,7 @@ There is no direct Pollinator → Sprout/Terrarium channel. Accepted continued i
 
 The **Mycorrhizae** (LLM) is the cognitive engine, running entirely externally. The Stem interacts with the Mycorrhizae via the `roots/llm` package, which acts as the provider connectivity and model routing layer. 
 
-The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. Before each Sprout growth, the Conductor deterministically assembles a bounded task-specific Plasmid from current Substrate evidence after resolving the execution workspace and refreshing the Rhizome index. Evidence may include explicit file anchors, Rhizome structural matches, current Git-state paths, and deterministic associated tests and documentation. Legacy unclassified source-local project memory is quarantined. The selection is Stem execution preparation, not Stem reasoning.
+The Stem is a deterministic routing and lifecycle kernel; it is not a reasoning component and does not plan or reason cognitively. Before each Sprout growth, the Conductor deterministically assembles a bounded task-specific Plasmid from current Substrate evidence after resolving the execution workspace and refreshing the Rhizome index. Evidence may include explicit file anchors, Rhizome structural matches, current Git-state paths, deterministic associated tests and documentation, and eligible Rhizome memories. A Rhizome memory is eligible for automatic Mycorrhizal context only when its status is `established` and its authority is `botanist` or `deterministic`. Memories with any other status or authority are omitted and their omission reason is recorded in the provenance manifest. Evidence-bound memories (those carrying a v1 `EvidenceManifest` in `RevisionMetadata`) are additionally validated by recomputing the SHA-256 content hash of each referenced workspace file and comparing it against the stored manifest; a hash mismatch is treated as stale and the memory is omitted. When the execution workspace is the canonical source repository and a memory becomes stale, the Conductor persists a `status=stale` transition to the source-local Rhizome index without modifying any other field. This is a safe persistence to a canonical source-local store only; it never writes to a shared or remote memory backend. The eligibility and validation decisions are entirely deterministic. No LLM is involved in determining priority, authority, relevance, status, or validity.
 
 The task context is assembled against the actual execution workspace and is refreshed for later Seed iterations as their candidate revision changes. Task context and curated genome content share the existing bounded evidence envelope. Repository evidence is explicitly untrusted and does not widen execution authority. Raw selected evidence is not copied into the observable Sprout transcript; safe selection provenance is published through `task-context-assembled`. The Mycorrhizae receives these Plasmids and repository maps and returns tool calls or text. Continued developer intent reaches the Mycorrhizae only as a delimited section of the next Sprout prompt, composed at a new cognitive boundary from the durable continuation ledger.
 
@@ -179,7 +179,7 @@ Sequences support:
 
 ## Fruit/Review
 
-Successful Sprout execution produces **Fruit**—a Git-reviewable output.
+Successful Sprout execution produces **Fruit**, a Git-reviewable output.
 
 A commit is produced when a run has completed, has attributed modified files, did not error, is not readonly or investigation-only, and successfully measured its changes.
 
@@ -238,7 +238,7 @@ A long-lived Stem that can accept detached Seeds reconciles orphaned running/set
 
 For reviewable successful Fruit with a diff, an Epigenetic Chronicler consumes the Sprout transcript, diff, and session logs to distill durable learnings, appending them to epigenetic genome material.
 
-Hardiness reports deployment/Terroir posture—whether conditions permit the delegation boundary to be enforced rather than merely recorded. It evaluates principal separation, credential exclusivity, executable protection, and isolation tier. It does not decide Fruit acceptance.
+Hardiness reports deployment/Terroir posture: whether conditions permit the delegation boundary to be enforced rather than merely recorded. It evaluates principal separation, credential exclusivity, executable protection, and isolation tier. It does not decide Fruit acceptance.
 
 ## Trust boundaries
 

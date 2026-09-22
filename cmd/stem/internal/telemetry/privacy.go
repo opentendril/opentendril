@@ -264,14 +264,32 @@ func sanitizeTaskContextItems(value interface{}) ([]map[string]interface{}, bool
 			!safeTaskContextObservationSelectionReason(reason) || !safeTaskContextObservationReference(contentRef) || admittedBytes < 0 || admittedBytes > 8192 {
 			continue
 		}
-		items = append(items, map[string]interface{}{
+		safeItem := map[string]interface{}{
 			"sourceClass":     sourceClass,
 			"sourceIdentity":  sourceIdentity,
 			"selectionReason": reason,
 			"contentRef":      contentRef,
 			"admittedBytes":   admittedBytes,
 			"truncated":       truncated,
-		})
+		}
+		if sourceClass == "project-memory" {
+			if validityRef, ok := item["validityRef"].(string); ok && safeTaskContextObservationReference(validityRef) {
+				safeItem["validityRef"] = validityRef
+			}
+			if origin, ok := item["origin"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(origin, "origin") {
+				safeItem["origin"] = origin
+			}
+			if authority, ok := item["authority"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(authority, "authority") {
+				safeItem["authority"] = authority
+			}
+			if status, ok := item["status"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(status, "status") {
+				safeItem["status"] = status
+			}
+			if kind, ok := item["kind"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(kind, "kind") {
+				safeItem["kind"] = kind
+			}
+		}
+		items = append(items, safeItem)
 	}
 	return items, true
 }
@@ -362,7 +380,9 @@ func safeTaskContextObservationSelectionReason(value string) bool {
 
 func safeTaskContextObservationOmissionReason(value string) bool {
 	switch value {
-	case "budget-bytes", "budget-items", "stale-evidence", "path-security", "unreadable", "not-found", "memory-missing", "memory-unavailable", "memory-unbound", "memory-unclassified":
+	case "budget-bytes", "budget-items", "stale-evidence", "path-security", "unreadable", "not-found",
+		"memory-missing", "memory-unavailable", "memory-unbound", "memory-unclassified",
+		"memory-proposed", "memory-stale", "memory-conflicted", "memory-rejected", "memory-superseded":
 		return true
 	default:
 		return false
@@ -393,4 +413,33 @@ func safeTaskContextObservationReference(value string) bool {
 		}
 	}
 	return true
+}
+
+// safeTaskContextObservationMemoryEnvelopeField validates a single enumerated
+// memory envelope field value (origin, authority, or status). It accepts only
+// the finite set of values that are safe to emit in telemetry.
+func safeTaskContextObservationMemoryEnvelopeField(value, field string) bool {
+	switch field {
+	case "origin":
+		switch value {
+		case "legacy", "botanist", "substrate", "mycorrhizal":
+			return true
+		}
+	case "authority":
+		switch value {
+		case "none", "botanist", "deterministic":
+			return true
+		}
+	case "status":
+		switch value {
+		case "unclassified", "established", "proposed", "stale", "conflicted", "rejected", "superseded":
+			return true
+		}
+	case "kind":
+		switch value {
+		case "observation", "fact", "constraint", "correction", "rejected-interpretation":
+			return true
+		}
+	}
+	return false
 }
