@@ -151,8 +151,6 @@ func (m *Memory) Validate() error {
 	return nil
 }
 
-// StableMemoryIdentity returns a deterministic hex identifier for a memory
-// based on its repository name and title. This identity is stable across backends.
 func StableMemoryIdentity(repositoryName, title string) string {
 	sum := sha256.Sum256([]byte(repositoryName + "\x00" + title))
 	return hex.EncodeToString(sum[:])
@@ -171,6 +169,7 @@ type IndexStore interface {
 
 type MemoryBackend interface {
 	DeleteMemory(ctx context.Context, repositoryName string, title string) error
+	GetMemory(ctx context.Context, repositoryName string, title string) (Memory, bool, error)
 	ListMemories(ctx context.Context, repositoryName string, category string, limit int) ([]Memory, error)
 	SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]Memory, error)
 	StoreMemory(ctx context.Context, memory Memory) error
@@ -592,6 +591,36 @@ LIMIT ?`
 	defer rows.Close()
 
 	return s.scanMemoryRows(rows)
+}
+
+func (s *SQLiteIndexStore) GetMemory(ctx context.Context, repositoryName string, title string) (Memory, bool, error) {
+	statement := `
+SELECT m.repositoryName, m.category, m.title, m.content, m.tags, m.createdAt, m.sessionId,
+	COALESCE(e.origin, 'legacy'), COALESCE(e.authority, 'none'), COALESCE(e.status, 'unclassified'),
+	COALESCE(e.kind, ''), COALESCE(e.provenance, ''), COALESCE(e.sourceClass, ''),
+	COALESCE(e.sourceIdentity, ''), COALESCE(e.contentIdentity, ''), COALESCE(e.revisionIdentity, ''),
+	COALESCE(e.stableId, ''), COALESCE(e.revisionMetadata, ''), COALESCE(e.supersession, '')
+FROM memories m
+LEFT JOIN memory_envelopes e ON e.repositoryName = m.repositoryName AND e.title = m.title
+WHERE m.repositoryName = ? AND m.title = ?`
+
+	rows, err := s.db.QueryContext(ctx, statement, repositoryName, title)
+	if err != nil {
+		return Memory{}, false, fmt.Errorf("get memory: %w", err)
+	}
+	defer rows.Close()
+
+	memories, err := s.scanMemoryRows(rows)
+	if err != nil {
+		return Memory{}, false, err
+	}
+	if len(memories) == 0 {
+		return Memory{}, false, nil
+	}
+	if len(memories) > 1 {
+		return Memory{}, false, fmt.Errorf("duplicate exact memories found for %q/%q", repositoryName, title)
+	}
+	return memories[0], true, nil
 }
 
 func (s *SQLiteIndexStore) ListMemories(ctx context.Context, repositoryName string, category string, limit int) ([]Memory, error) {

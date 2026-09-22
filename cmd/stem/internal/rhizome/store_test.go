@@ -873,3 +873,114 @@ func TestMemoryEnvelopeValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestStableMemoryIdentityCompatibility(t *testing.T) {
+	if StableMemoryIdentity("repo", "Rule") == StableMemoryIdentity(" repo ", " Rule ") {
+		t.Fatal("expected distinct raw identity inputs to remain distinct for \"Rule\" != \" Rule \" and \"repo\" != \" repo \"")
+	}
+	if StableMemoryIdentity("owner/repo", "Rule") == StableMemoryIdentity("owner/repo", " Rule ") {
+		t.Fatal("expected distinct raw identity inputs to remain distinct for \"Rule\" != \" Rule \"")
+	}
+	if StableMemoryIdentity("repo", "Rule") == StableMemoryIdentity(" repo ", "Rule") {
+		t.Fatal("expected distinct raw identity inputs to remain distinct for \"repo\" != \" repo \"")
+	}
+}
+
+func TestSQLiteGetMemory(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "rhizome.db")
+	store := openTestStore(t, ctx, dbPath)
+	defer store.Close()
+
+	// 1. exact miss returns found=false
+	_, found, err := store.GetMemory(ctx, "owner/repo", "NonExistent")
+	if err != nil {
+		t.Fatalf("unexpected error for exact miss: %v", err)
+	}
+	if found {
+		t.Fatal("expected found=false for exact miss")
+	}
+
+	mem := Memory{
+		RepositoryName: "owner/repo",
+		Title:          "ExactTitle",
+		Content:        "Content",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+		CreatedAt:      time.Now().UTC(),
+	}
+	if err := store.StoreMemory(ctx, mem); err != nil {
+		t.Fatalf("StoreMemory returned error: %v", err)
+	}
+
+	// 2. exact hit returns found=true
+	// 3. exact repository/title matching is used
+	got, found, err := store.GetMemory(ctx, "owner/repo", "ExactTitle")
+	if err != nil {
+		t.Fatalf("unexpected error for exact hit: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true for exact hit")
+	}
+	if got.Title != "ExactTitle" || got.RepositoryName != "owner/repo" {
+		t.Fatalf("expected exact repository/title match, got %q / %q", got.RepositoryName, got.Title)
+	}
+
+	_, found, _ = store.GetMemory(ctx, "owner/repo", " ExactTitle")
+	if found {
+		t.Fatal("expected found=false for fuzzy title match")
+	}
+	_, found, _ = store.GetMemory(ctx, " owner/repo", "ExactTitle")
+	if found {
+		t.Fatal("expected found=false for fuzzy repo match")
+	}
+
+	// 4. duplicate legacy FTS rows with the exact same repository/title fail closed
+	cipher, _ := heartwood.NewCipher(heartwood.Material{Key: []byte("0123456789abcdef0123456789abcdef")})
+	cDup, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00DupLegacy"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'DupLegacy', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, cDup)
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'DupLegacy', ?, 'tag', '2026-07-05T11:00:00Z', 'session-1')`, cDup)
+
+	_, _, err = store.GetMemory(ctx, "owner/repo", "DupLegacy")
+	if err == nil {
+		t.Fatal("expected duplicate legacy rows to fail closed, got nil error")
+	} else if !strings.Contains(err.Error(), "duplicate exact memories") {
+		t.Fatalf("expected duplicate error, got: %v", err)
+	}
+
+	// 5. malformed envelope metadata fails closed
+	// Use INSERT OR REPLACE to force-overwrite the valid envelope already stored.
+	store.db.Exec(`INSERT OR REPLACE INTO memory_envelopes (repositoryName, title, origin, authority, status) VALUES ('owner/repo', 'ExactTitle', 'weird', 'weird', 'weird')`)
+	_, _, err = store.GetMemory(ctx, "owner/repo", "ExactTitle")
+	if err == nil {
+		t.Fatal("expected malformed envelope to fail closed, got nil error")
+	} else if !strings.Contains(err.Error(), "unknown origin") {
+		t.Fatalf("expected unknown origin error, got: %v", err)
+	}
+
+	// 6. conflicting stored StableID fails closed
+	cConflict, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00ConflictID"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'ConflictID', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, cConflict)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, stableId) VALUES ('owner/repo', 'ConflictID', 'legacy', 'none', 'unclassified', 'bad-id')`)
+	_, _, err = store.GetMemory(ctx, "owner/repo", "ConflictID")
+	if err == nil {
+		t.Fatal("expected conflicting StableID to fail closed, got nil error")
+	} else if !strings.Contains(err.Error(), "conflicts with canonical identity") {
+		t.Fatalf("expected identity conflict error, got: %v", err)
+	}
+
+	// 7. a normal legacy row without sidecar metadata still returns legacy/none/unclassified
+	cLegacy, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00LegacyOnly"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'LegacyOnly', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, cLegacy)
+	gotLegacy, foundLegacy, err := store.GetMemory(ctx, "owner/repo", "LegacyOnly")
+	if err != nil {
+		t.Fatalf("unexpected error for normal legacy row: %v", err)
+	}
+	if !foundLegacy {
+		t.Fatal("expected found=true for legacy row")
+	}
+	if gotLegacy.Origin != OriginLegacy || gotLegacy.Authority != AuthorityNone || gotLegacy.Status != StatusUnclassified {
+		t.Fatalf("expected legacy/none/unclassified, got %q / %q / %q", gotLegacy.Origin, gotLegacy.Authority, gotLegacy.Status)
+	}
+}
