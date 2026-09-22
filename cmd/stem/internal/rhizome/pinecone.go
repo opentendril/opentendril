@@ -41,6 +41,10 @@ func NewPineconeMemoryBackend(config MemoryConfig) (*PineconeMemoryBackend, erro
 }
 
 func (b *PineconeMemoryBackend) StoreMemory(ctx context.Context, memory Memory) error {
+	if err := memory.Validate(); err != nil {
+		return fmt.Errorf("invalid memory before persistence: %w", err)
+	}
+
 	if memory.CreatedAt.IsZero() {
 		memory.CreatedAt = time.Now().UTC()
 	}
@@ -83,7 +87,11 @@ func (b *PineconeMemoryBackend) SearchMemories(ctx context.Context, repositoryNa
 
 	memories := make([]Memory, 0, len(response.Matches))
 	for _, match := range response.Matches {
-		memories = append(memories, memoryFromMetadata(match.Metadata))
+		mem, err := memoryFromMetadata(match.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		memories = append(memories, mem)
 	}
 	return memories, nil
 }
@@ -122,7 +130,10 @@ func (b *PineconeMemoryBackend) ListMemories(ctx context.Context, repositoryName
 
 	memories := make([]Memory, 0, len(fetchResponse.Vectors))
 	for _, vector := range fetchResponse.Vectors {
-		memory := memoryFromMetadata(vector.Metadata)
+		memory, err := memoryFromMetadata(vector.Metadata)
+		if err != nil {
+			return nil, err
+		}
 		if memory.RepositoryName != repositoryName {
 			continue
 		}
@@ -178,7 +189,7 @@ func (b *PineconeMemoryBackend) doJSON(ctx context.Context, method string, path 
 }
 
 func pineconeMemoryMetadata(memory Memory) map[string]any {
-	return map[string]any{
+	m := map[string]any{
 		"repositoryName": memory.RepositoryName,
 		"category":       memory.Category,
 		"title":          memory.Title,
@@ -187,21 +198,70 @@ func pineconeMemoryMetadata(memory Memory) map[string]any {
 		"createdAt":      memory.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"sessionId":      memory.SessionID,
 	}
+	if memory.Origin != "" {
+		m["origin"] = string(memory.Origin)
+		m["authority"] = string(memory.Authority)
+		m["status"] = string(memory.Status)
+		m["kind"] = string(memory.Kind)
+		m["provenance"] = memory.Provenance
+		m["sourceClass"] = memory.SourceClass
+		m["sourceIdentity"] = memory.SourceIdentity
+		m["contentIdentity"] = memory.ContentIdentity
+		m["revisionIdentity"] = memory.RevisionIdentity
+		m["stableId"] = memory.StableID
+		m["revisionMetadata"] = memory.RevisionMetadata
+		m["supersession"] = memory.Supersession
+	}
+	return m
 }
 
-func memoryFromMetadata(metadata map[string]any) Memory {
+func memoryFromMetadata(metadata map[string]any) (Memory, error) {
+	origin := Origin(stringMetadata(metadata, "origin"))
+	if origin == "" {
+		origin = OriginLegacy
+	}
+	authority := Authority(stringMetadata(metadata, "authority"))
+	if authority == "" {
+		authority = AuthorityNone
+	}
+	status := Status(stringMetadata(metadata, "status"))
+	if status == "" {
+		status = StatusUnclassified
+	}
+	switch status {
+	case StatusUnclassified, StatusEstablished, StatusProposed, StatusStale,
+		StatusConflicted, StatusRejected, StatusSuperseded:
+		// valid
+	default:
+		return Memory{}, fmt.Errorf("invalid memory status %q", status)
+	}
 	memory := Memory{
-		RepositoryName: stringMetadata(metadata, "repositoryName"),
-		Category:       stringMetadata(metadata, "category"),
-		Title:          stringMetadata(metadata, "title"),
-		Content:        stringMetadata(metadata, "content"),
-		Tags:           stringMetadata(metadata, "tags"),
-		SessionID:      stringMetadata(metadata, "sessionId"),
+		RepositoryName:   stringMetadata(metadata, "repositoryName"),
+		Category:         stringMetadata(metadata, "category"),
+		Title:            stringMetadata(metadata, "title"),
+		Content:          stringMetadata(metadata, "content"),
+		Tags:             stringMetadata(metadata, "tags"),
+		SessionID:        stringMetadata(metadata, "sessionId"),
+		Origin:           origin,
+		Authority:        authority,
+		Status:           status,
+		Kind:             Kind(stringMetadata(metadata, "kind")),
+		Provenance:       stringMetadata(metadata, "provenance"),
+		SourceClass:      stringMetadata(metadata, "sourceClass"),
+		SourceIdentity:   stringMetadata(metadata, "sourceIdentity"),
+		ContentIdentity:  stringMetadata(metadata, "contentIdentity"),
+		RevisionIdentity: stringMetadata(metadata, "revisionIdentity"),
+		StableID:         stringMetadata(metadata, "stableId"),
+		RevisionMetadata: stringMetadata(metadata, "revisionMetadata"),
+		Supersession:     stringMetadata(metadata, "supersession"),
 	}
 	if parsed, err := time.Parse(time.RFC3339Nano, stringMetadata(metadata, "createdAt")); err == nil {
 		memory.CreatedAt = parsed
 	}
-	return memory
+	if err := memory.Validate(); err != nil {
+		return Memory{}, fmt.Errorf("invalid memory envelope: %w", err)
+	}
+	return memory, nil
 }
 
 func stringMetadata(metadata map[string]any, key string) string {

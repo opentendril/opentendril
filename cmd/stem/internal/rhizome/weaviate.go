@@ -34,22 +34,42 @@ func NewWeaviateMemoryBackend(config MemoryConfig) (*WeaviateMemoryBackend, erro
 }
 
 func (b *WeaviateMemoryBackend) StoreMemory(ctx context.Context, memory Memory) error {
+	if err := memory.Validate(); err != nil {
+		return fmt.Errorf("invalid memory before persistence: %w", err)
+	}
+
 	if memory.CreatedAt.IsZero() {
 		memory.CreatedAt = time.Now().UTC()
 	}
 
+	properties := map[string]any{
+		"repositoryName": memory.RepositoryName,
+		"category":       memory.Category,
+		"title":          memory.Title,
+		"content":        memory.Content,
+		"tags":           memory.Tags,
+		"createdAt":      memory.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"sessionId":      memory.SessionID,
+	}
+	if memory.Origin != "" {
+		properties["origin"] = string(memory.Origin)
+		properties["authority"] = string(memory.Authority)
+		properties["status"] = string(memory.Status)
+		properties["kind"] = string(memory.Kind)
+		properties["provenance"] = memory.Provenance
+		properties["sourceClass"] = memory.SourceClass
+		properties["sourceIdentity"] = memory.SourceIdentity
+		properties["contentIdentity"] = memory.ContentIdentity
+		properties["revisionIdentity"] = memory.RevisionIdentity
+		properties["stableId"] = memory.StableID
+		properties["revisionMetadata"] = memory.RevisionMetadata
+		properties["supersession"] = memory.Supersession
+	}
+
 	payload := map[string]any{
-		"class": weaviateMemoryClass,
-		"id":    deterministicUUID(memory.RepositoryName, memory.Title),
-		"properties": map[string]any{
-			"repositoryName": memory.RepositoryName,
-			"category":       memory.Category,
-			"title":          memory.Title,
-			"content":        memory.Content,
-			"tags":           memory.Tags,
-			"createdAt":      memory.CreatedAt.UTC().Format(time.RFC3339Nano),
-			"sessionId":      memory.SessionID,
-		},
+		"class":      weaviateMemoryClass,
+		"id":         deterministicUUID(memory.RepositoryName, memory.Title),
+		"properties": properties,
 	}
 
 	return b.doJSON(ctx, http.MethodPost, "/v1/objects", payload, nil)
@@ -79,6 +99,18 @@ Get {
     tags
     createdAt
     sessionId
+    origin
+    authority
+    status
+    kind
+    provenance
+    sourceClass
+    sourceIdentity
+    contentIdentity
+    revisionIdentity
+    stableId
+    revisionMetadata
+    supersession
   }
 }
 }`, weaviateMemoryClass, query, where, limit)
@@ -99,7 +131,11 @@ Get {
 	items := response.Data.Get[weaviateMemoryClass]
 	memories := make([]Memory, 0, len(items))
 	for _, item := range items {
-		memories = append(memories, memoryFromMetadata(item))
+		mem, err := memoryFromMetadata(item)
+		if err != nil {
+			return nil, err
+		}
+		memories = append(memories, mem)
 	}
 	return memories, nil
 }
@@ -121,7 +157,10 @@ func (b *WeaviateMemoryBackend) ListMemories(ctx context.Context, repositoryName
 
 	memories := make([]Memory, 0, len(response.Objects))
 	for _, object := range response.Objects {
-		memory := memoryFromMetadata(object.Properties)
+		memory, err := memoryFromMetadata(object.Properties)
+		if err != nil {
+			return nil, err
+		}
 		if memory.RepositoryName != repositoryName {
 			continue
 		}
