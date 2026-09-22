@@ -754,6 +754,31 @@ func TestMemoryEnvelopeValidation(t *testing.T) {
 			wantErr: "unknown kind",
 		},
 		{
+			name:    "legacy none established invalid",
+			memory:  Memory{Origin: OriginLegacy, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "botanist none established invalid",
+			memory:  Memory{Origin: OriginBotanist, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "substrate none established invalid",
+			memory:  Memory{Origin: OriginSubstrate, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "mycorrhizal none established invalid",
+			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "botanist plus botanist established valid",
+			memory:  Memory{Origin: OriginBotanist, Authority: AuthorityBotanist, Status: StatusEstablished},
+			wantErr: "",
+		},
+		{
 			name:    "Mycorrhizal proposal valid",
 			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityNone, Status: StatusProposed},
 			wantErr: "",

@@ -1,6 +1,10 @@
 package rhizome
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -41,5 +45,87 @@ func TestWeaviateMalformedFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown status") {
 		t.Fatalf("Expected invalid status error, got %v", err)
+	}
+}
+
+func TestWeaviateWriteSideEnvelopeSerialization(t *testing.T) {
+	ctx := context.Background()
+	var capturedPayload map[string]any
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/objects" && r.Method == http.MethodPost {
+			if err := json.NewDecoder(r.Body).Decode(&capturedPayload); err != nil {
+				t.Errorf("failed to decode request body: %v", err)
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	config := MemoryConfig{
+		Backend:            "weaviate",
+		WeaviateBaseURL:    ts.URL,
+		RemoteCleartextAck: true,
+	}
+	backend, err := NewWeaviateMemoryBackend(config)
+	if err != nil {
+		t.Fatalf("NewWeaviateMemoryBackend failed: %v", err)
+	}
+
+	fullMem := Memory{
+		RepositoryName:   "owner/repo",
+		Title:            "Full Memory",
+		Origin:           OriginSubstrate,
+		Authority:        AuthorityDeterministic,
+		Status:           StatusEstablished,
+		Kind:             KindFact,
+		Provenance:       "some-provenance",
+		SourceClass:      "some-class",
+		SourceIdentity:   "some-id",
+		ContentIdentity:  "content-id",
+		RevisionIdentity: "rev-id",
+		RevisionMetadata: "meta",
+		Supersession:     "super",
+	}
+
+	if err := backend.StoreMemory(ctx, fullMem); err != nil {
+		t.Fatalf("StoreMemory failed: %v", err)
+	}
+
+	if capturedPayload == nil {
+		t.Fatal("expected payload to be captured")
+	}
+
+	props, ok := capturedPayload["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties in payload, got %v", capturedPayload)
+	}
+
+	expectedStableID := StableMemoryIdentity(fullMem.RepositoryName, fullMem.Title)
+	if props["stableId"] != expectedStableID {
+		t.Errorf("expected stableId %q, got %v", expectedStableID, props["stableId"])
+	}
+
+	// Verify complete semantic envelope round-trips
+	roundTripped, err := memoryFromMetadata(props)
+	if err != nil {
+		t.Fatalf("memoryFromMetadata failed: %v", err)
+	}
+
+	if roundTripped.Origin != fullMem.Origin ||
+		roundTripped.Authority != fullMem.Authority ||
+		roundTripped.Status != fullMem.Status ||
+		roundTripped.Kind != fullMem.Kind ||
+		roundTripped.Provenance != fullMem.Provenance ||
+		roundTripped.SourceClass != fullMem.SourceClass ||
+		roundTripped.SourceIdentity != fullMem.SourceIdentity ||
+		roundTripped.ContentIdentity != fullMem.ContentIdentity ||
+		roundTripped.RevisionIdentity != fullMem.RevisionIdentity ||
+		roundTripped.StableID != expectedStableID ||
+		roundTripped.RevisionMetadata != fullMem.RevisionMetadata ||
+		roundTripped.Supersession != fullMem.Supersession {
+		t.Errorf("round tripped memory envelope mismatch:\nwant: %+v\ngot:  %+v", fullMem, roundTripped)
 	}
 }

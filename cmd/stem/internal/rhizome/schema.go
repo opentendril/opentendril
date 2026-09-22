@@ -95,9 +95,10 @@ type Memory struct {
 }
 
 // Validate returns an error if the envelope contains an invalid field combination.
-// Authority=botanist requires Origin=botanist.
-// Authority=deterministic requires Origin=substrate or Origin=mycorrhizal.
-// Status=established requires Authority != none.
+// Established status requires botanist or deterministic authority.
+// Mycorrhizal origin requires botanist authority to be established.
+// Deterministic substrate establishment requires source identity and content/revision identity.
+// Unknown fields or mismatched StableID fail closed.
 func (m *Memory) Validate() error {
 	if m.Origin != "" && m.Origin != OriginLegacy && m.Origin != OriginBotanist && m.Origin != OriginSubstrate && m.Origin != OriginMycorrhizal {
 		return fmt.Errorf("unknown origin %q", m.Origin)
@@ -128,6 +129,10 @@ func (m *Memory) Validate() error {
 	s := m.Status
 	if s == "" {
 		s = StatusUnclassified
+	}
+
+	if s == StatusEstablished && a != AuthorityBotanist && a != AuthorityDeterministic {
+		return fmt.Errorf("established status requires botanist or deterministic authority, got %q", a)
 	}
 
 	if o == OriginMycorrhizal && s == StatusEstablished && a != AuthorityBotanist {
