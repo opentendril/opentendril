@@ -234,7 +234,7 @@ func TestSanitizeTaskContextEventDropsUnsafeCorrelationAndUnknownEnums(t *testin
 		Source: "/home/private/step",
 		Data: map[string]interface{}{
 			"stepId":         "/home/private/step",
-			"omissionCounts": map[string]interface{}{"secret-search-term": 1, "budget-bytes": 1},
+			"omissionCounts": map[string]interface{}{"secret-search-term": 1, "budget-bytes": 1, "memory-unclassified": 1},
 			"items": []map[string]interface{}{{
 				"sourceClass":     "unexpected-class",
 				"sourceIdentity":  "foo.go",
@@ -253,7 +253,7 @@ func TestSanitizeTaskContextEventDropsUnsafeCorrelationAndUnknownEnums(t *testin
 		t.Fatalf("unsafe step ID survived: %+v", safe.Data)
 	}
 	counts, ok := safe.Data["omissionCounts"].(map[string]interface{})
-	if !ok || counts["budget-bytes"] != 1 {
+	if !ok || counts["budget-bytes"] != 1 || counts["memory-unclassified"] != 1 {
 		t.Fatalf("stable omission reason was not preserved: %+v", safe.Data)
 	}
 	if _, ok := counts["secret-search-term"]; ok {

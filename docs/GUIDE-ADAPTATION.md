@@ -1,6 +1,6 @@
 # Adaptation Guide
 
-OpenTendril’s adaptation loop is intentionally biological: the isolated worker is the **Sprout**, the repository rules are the **genome**, and the learned, durable lessons that survive one run become **epigenetic** context for the next run.
+OpenTendril’s adaptation loop is intentionally biological: the isolated worker is the **Sprout**, the repository rules are the **genome**, and the learned, durable lessons that survive one run are recorded as **epigenetic** material. That material is available for review and curated promotion, but it is not automatically injected as Sprout context.
 
 This guide explains how the Lamarckian-style loop works in practice and how to manage it from the `tendril` CLI.
 
@@ -14,30 +14,33 @@ OpenTendril adds a Lamarckian layer:
 2. The host orchestrator collects the resulting diff and execution logs.
 3. The epigenetic chronicler distills durable learnings.
 4. Those learnings are written into `.tendril/genome/epigenetics.md`.
-5. Future sprouts load the updated genome as part of their system context.
+5. The Botanist can inspect, curate, and promote those learnings into the active genome.
 
-The result is a repository that can remember reusable rules, constraints, and lessons learned without duplicating them in every prompt.
+The result is a repository that can accumulate reusable rules, constraints, and lessons without duplicating them in every prompt. Automatic chronicling persists material to `epigenetics.md`, but persistence does not confer automatic Sprout context authority.
 
 ## Genome Layout
 
 The active genome lives in `.tendril/genome/`.
 
-At startup, Tendril concatenates the Markdown files in that directory in alphabetical order and injects the result into the sprout context.
+At startup, Tendril loads genome material according to the following rules:
 
-Recommended files:
+- Ordinary curated Markdown files (e.g. `README.md`, `naming-conventions.md`, injected plasmids) may be included under the bounded genome token budget.
+- The Repo Map (`repomap.md`) is available as an on-disk pointer and is staged by the Conductor before a Sprout grows.
+- `memorymap.md` and `epigenetics.md` are **quarantined**: they are neither inlined into Sprout context nor advertised to Sprouts at startup.
+
+Recommended curated files:
 
 - `README.md` for human orientation
 - `naming-conventions.md` for repository-wide style rules
-- `epigenetics.md` for learned, durable rules extracted from successful runs
 - Plasmid files copied in from `.tendril/genotypes/plasmids/`
 
 ## CLI Reference
 
 ### `tendril genome view`
 
-Prints the active genome exactly as Tendril will load it, with clear separators between files.
+Lists the Markdown genome files stored in `.tendril/genome/`, with clear separators between files.
 
-Use it when you want to inspect the effective context before a run.
+This is **not** an exact preview of effective Sprout context: quarantined files (`epigenetics.md`, `memorymap.md`) appear on disk and are shown by this command but receive different execution-time treatment and are excluded from automatic Sprout context injection.
 
 Example:
 
@@ -151,7 +154,7 @@ The orchestrator uses a simple approximation of `1 token = 4 characters`.
 - Default: `2000`
 - Effective character limit: about `8000` characters
 
-If `.tendril/genome/epigenetics.md` grows beyond that size after transcription, Tendril automatically runs the reduction pass.
+If `.tendril/genome/epigenetics.md` grows beyond that size after transcription, Tendril automatically runs the reduction pass to keep the stored file compact. Reduction does not change the quarantine status of `epigenetics.md`; the file remains excluded from automatic Sprout context regardless of its size.
 
 Example:
 
@@ -163,11 +166,12 @@ export TENDRIL_GENOME_MAX_TOKENS=3000
 
 1. Run a task that teaches Tendril something new.
 2. Let the chronicler append the learning to `epigenetics.md`.
-3. Inspect the genome with `tendril genome view`.
-4. If the file gets noisy, run `tendril genome reduce`.
-5. If you maintain reusable context blocks, inject them with `tendril plasmid inject <name>`.
+3. Inspect stored genome files with `tendril genome view`.
+4. If `epigenetics.md` gets noisy, run `tendril genome reduce`.
+5. Curate and promote durable learnings into named plasmids or dedicated curated genome files.
+6. If you maintain reusable context blocks, inject them with `tendril plasmid inject <name>`.
 
-For a stronger persistence loop, enable `TENDRIL_GENOME_AUTO_PUSH=true` so successful transcriptions are committed and pushed automatically.
+For a stronger persistence loop, enable `TENDRIL_GENOME_AUTO_PUSH=true` so successful transcriptions are committed and pushed automatically. This persists `epigenetics.md` to the repository but does not change its quarantine status: the file will not be automatically injected as Sprout context on future runs.
 
 ## Practical Notes
 

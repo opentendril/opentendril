@@ -945,13 +945,6 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	localMemoryAvailability := taskContextSourceLocalMemoryAvailability(sourcePath)
-	if localMemoryAvailability == "" {
-		memoryMapMarkdown, memErr := generateMemoryMapFn(ctx, sourcePath)
-		if memErr == nil && memoryMapMarkdown != "" {
-			memoryMapPath := filepath.Join(mountPath, ".tendril", "genome", memoryMapFile)
-			_ = os.WriteFile(memoryMapPath, []byte(memoryMapMarkdown), 0o644)
-		}
-	}
 
 	startingRevision := strings.TrimSpace(d.SeedStartRevision)
 	if startingRevision == "" {

@@ -1502,7 +1502,17 @@ const (
 // needs.
 func isGeneratedGenomeFile(name string) bool {
 	switch strings.ToLower(name) {
-	case repositoryMapFile, memoryMapFile:
+	case repositoryMapFile:
+		return true
+	}
+	return false
+}
+
+// isQuarantinedGenomeFile reports whether a machine-generated context file
+// lacks durable provenance and must be quarantined from automatic Sprout context.
+func isQuarantinedGenomeFile(name string) bool {
+	switch strings.ToLower(name) {
+	case memoryMapFile, genomicEpigeneticsFilename:
 		return true
 	}
 	return false
@@ -1519,7 +1529,7 @@ func truncateGenomeContent(name string, content string, budget int) string {
 	if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
 		cut = cut[:idx]
 	}
-	return cut + "\n[truncated — read .tendril/genome/" + name + " for the full content]"
+	return cut + "\n[truncated; read .tendril/genome/" + name + " for the full content]"
 }
 
 func loadGenomeContext(workspace string, availableBudgets ...int) (string, error) {
@@ -1547,6 +1557,9 @@ func readGenomeContextFiles(workspace string) ([]genomeContextFile, error) {
 	files := make([]genomeContextFile, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if isQuarantinedGenomeFile(entry.Name()) {
 			continue
 		}
 		if isGeneratedGenomeFile(entry.Name()) {
@@ -1582,6 +1595,9 @@ func loadGenomeContextLegacy(workspace string) (string, error) {
 	remaining := genomeTotalByteBudget
 	var onDiskOnly []string
 	for _, file := range files {
+		if isQuarantinedGenomeFile(file.name) {
+			continue
+		}
 		if isGeneratedGenomeFile(file.name) {
 			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
 			continue
@@ -1636,6 +1652,9 @@ func loadGenomeContextWithBudget(workspace string, availableBudget int) (string,
 	remaining := availableBudget
 	var onDiskOnly []string
 	for _, file := range files {
+		if isQuarantinedGenomeFile(file.name) {
+			continue
+		}
 		if isGeneratedGenomeFile(file.name) {
 			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
 			continue
@@ -1703,7 +1722,7 @@ func truncateGenomeContentWithinBudget(name string, content string, budget int) 
 	if len(content) <= budget {
 		return content
 	}
-	marker := "\n[truncated — read .tendril/genome/" + name + " for the full content]"
+	marker := "\n[truncated; read .tendril/genome/" + name + " for the full content]"
 	if budget <= len(marker) {
 		return marker[:budget]
 	}

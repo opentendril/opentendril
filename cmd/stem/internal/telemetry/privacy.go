@@ -362,7 +362,7 @@ func safeTaskContextObservationSelectionReason(value string) bool {
 
 func safeTaskContextObservationOmissionReason(value string) bool {
 	switch value {
-	case "budget-bytes", "budget-items", "stale-evidence", "path-security", "unreadable", "not-found", "memory-missing", "memory-unavailable", "memory-unbound":
+	case "budget-bytes", "budget-items", "stale-evidence", "path-security", "unreadable", "not-found", "memory-missing", "memory-unavailable", "memory-unbound", "memory-unclassified":
 		return true
 	default:
 		return false
