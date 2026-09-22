@@ -13,36 +13,42 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can leave OpenTendril producing multiple Git-reviewable Fruit and later return to one deterministic review inventory that identifies the outstanding Fruit, its originating governed work, and its current review state without interrupting delegated execution, silently deleting reviewable work, or accepting Fruit automatically.**
+**A Botanist can delegate non-trivial work on a large Substrate without repeatedly teaching each Sprout how the repository works, because OpenTendril supplies fresh Mycorrhizal contexts with bounded, provenance-backed, revision-aware repository evidence that preserves established constraints and known corrections without silently promoting model inference into authoritative repository knowledge.**
 
 ## Done when
 
 Recorded exercises establish all of the following:
 
-* **Fruit is identifiable as Fruit.** OpenTendril can distinguish its reviewable Fruit from arbitrary Botanist-created or tool-created Git branches without relying only on branch-name heuristics.
-* **Origin is visible.** Each inventoried Fruit can be related back to the governed Seed, Sprout, Phytomer, or equivalent durable execution identity that produced it where that relationship exists.
-* **Review state is deterministic.** The Botanist can distinguish at minimum outstanding reviewable Fruit, merged Fruit, closed-unmerged Fruit, and Fruit whose remote state can no longer be established, using repository/forge facts rather than model judgement.
-* **Review pressure is observable.** The Botanist can see how much reviewable Fruit is outstanding without manually enumerating remote branches or reconstructing run history.
-* **Observation does not interrupt work.** Fruit accumulation or review pressure does not introduce a new confirmation requirement or stop otherwise-authorised Sprout or Seed execution merely because review work is outstanding.
-* **Existing Git evidence is reused.** The inventory builds on current persisted Fruit identity, Git/forge state, and governed observation records rather than creating a second source of execution truth.
-* **No silent disposal.** Reviewable remote Fruit is never deleted merely because it is old, duplicated, numerous, or inconvenient.
-* **Acceptance remains human-controlled.** Inventory, classification, warning, and deliberate cleanup do not merge Fruit or advance the protected/default branch.
-* **Cleanup remains explicit and conservative.** Any supported cleanup action is Botanist-directed and preserves dirty-worktree, current-branch, open-review, ownership, and default-branch protections.
-* **Observation remains safe.** Review inventory exposes lifecycle and Git-review facts without credentials, private model reasoning, or unnecessary repository contents.
-* **Scale is demonstrated.** A recorded exercise with multiple outstanding Fruit proves that the Botanist can recover the complete review set without branch archaeology and that protected/default state remains unchanged.
+* **Repository knowledge survives transient reasoning.** Relevant durable knowledge remains available across new Sprouts, Phytomers, context windows, model changes, and provider changes without depending on one model conversation surviving.
+* **Current evidence remains authoritative.** Repository structure, tests, configuration, Git state, committed documentation, and other current Substrate evidence retain their source identity rather than being flattened into undifferentiated generated prose.
+* **Provenance is preserved.** Durable knowledge supplied to a Sprout can be traced to the evidence, explicit Botanist input, or other recorded source from which it was established.
+* **Inference is not silently promoted.** Model-generated interpretation cannot become authoritative repository knowledge merely because a previous Mycorrhizal context stated it confidently.
+* **Known corrections persist.** Explicit constraints, rejected interpretations, recurring corrections, and other applicable negative knowledge can survive and be supplied to later fresh reasoning with provenance.
+* **Knowledge is revision-aware.** Repository-derived knowledge can be identified as current, stale, conflicted, or otherwise no longer safely applicable when the Substrate changes.
+* **Task context remains bounded.** A Sprout receives a bounded task-specific Plasmid rather than an indiscriminate repository or memory dump.
+* **Existing context machinery is reused.** The capability extends the current Rhizome, project-memory, task-context, provenance, and Plasmid pipeline rather than creating a second repository truth system.
+* **Governance remains deterministic.** The Stem does not become a cognitive repository architect, quality judge, or reasoning component. Authorization, containment, lifecycle, and capability authority remain deterministic.
+* **Repository evidence cannot widen authority.** Stored or retrieved context cannot create capabilities, widen DelegationGrants, alter Terrarium boundaries, or provide credentials.
+* **Observation remains safe.** Context provenance can be inspected without exposing unnecessary repository contents, credentials, or private model reasoning.
+* **Fruit remains the acceptance boundary.** Better repository context does not grant the organism authority to accept its own work. Successful changes still arrive as Git-reviewable Fruit for the Botanist.
+* **Persistence has observable value.** A recorded exercise using fresh Mycorrhizal contexts demonstrates reuse of previously established repository knowledge without Botanist re-teaching, while bounded context metrics and provenance remain observable.
+* **Revision change is demonstrated.** A recorded exercise changes relevant Substrate state and proves that superseded repository knowledge is not silently supplied to later reasoning as current fact.
 
 This objective does not require:
 
+* making probabilistic reasoning deterministic or infallible;
+* storing complete model conversations as repository memory;
+* restoring Sprout cognitive state after termination;
+* introducing a new biological organ;
+* treating provider KV, prefix, prompt, or inference caches as repository memory;
+* implementing an unbounded repository knowledge graph;
+* storing every model inference;
 * automatic Fruit acceptance or merge;
-* automatic deletion of reviewable remote branches;
-* blocking delegated work at an arbitrary Fruit-count threshold;
-* model-based judgement of whether Fruit is good, duplicate, or worth keeping;
-* redesigning Seed, Sprout, Phytomer, Terrarium, or Mycorrhizal execution;
 * changing DelegationGrant semantics;
-* Greenhouse redesign beyond what Gate A proves necessary to expose the inventory;
+* changing Terrarium containment;
 * completing the parked public-Internet qualification;
 * activating the GitHub-native Pollinator objective; or
-* treating generic Git branches as Fruit merely because their names resemble Tendril branches.
+* Greenhouse redesign.
 
 ---
 
