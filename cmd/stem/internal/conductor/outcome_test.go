@@ -328,6 +328,14 @@ func TestRunSproutOutcomes(t *testing.T) {
 			wantTerminal:  eventbus.EventSproutMatured,
 		},
 		{
+			name:                "no engagement",
+			runner:              &stubSproutRunner{result: sproutResult{}},
+			modifiedFiles:       []string{},
+			wantOutcome:         SproutOutcomeNoEngagement,
+			wantTerminal:        eventbus.EventSproutWithered,
+			wantFailureCategory: string(core.FailureCategoryNoEngagement),
+		},
+		{
 			name:          "failed",
 			runner:        &failingSproutRunner{err: sproutFailure},
 			modifiedFiles: []string{},
