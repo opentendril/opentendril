@@ -232,10 +232,18 @@ func memoryFromMetadata(metadata map[string]any) (Memory, error) {
 		status = StatusUnclassified
 	}
 
+	repositoryName := stringMetadata(metadata, "repositoryName")
+	title := stringMetadata(metadata, "title")
+	canonicalID := StableMemoryIdentity(repositoryName, title)
+	storedID := stringMetadata(metadata, "stableId")
+	if storedID != "" && storedID != canonicalID {
+		return Memory{}, fmt.Errorf("corrupted memory envelope for %q/%q: stored stableId %q conflicts with canonical identity %q", repositoryName, title, storedID, canonicalID)
+	}
+
 	memory := Memory{
-		RepositoryName:   stringMetadata(metadata, "repositoryName"),
+		RepositoryName:   repositoryName,
 		Category:         stringMetadata(metadata, "category"),
-		Title:            stringMetadata(metadata, "title"),
+		Title:            title,
 		Content:          stringMetadata(metadata, "content"),
 		Tags:             stringMetadata(metadata, "tags"),
 		SessionID:        stringMetadata(metadata, "sessionId"),
@@ -248,7 +256,7 @@ func memoryFromMetadata(metadata map[string]any) (Memory, error) {
 		SourceIdentity:   stringMetadata(metadata, "sourceIdentity"),
 		ContentIdentity:  stringMetadata(metadata, "contentIdentity"),
 		RevisionIdentity: stringMetadata(metadata, "revisionIdentity"),
-		StableID:         StableMemoryIdentity(stringMetadata(metadata, "repositoryName"), stringMetadata(metadata, "title")),
+		StableID:         canonicalID,
 		RevisionMetadata: stringMetadata(metadata, "revisionMetadata"),
 		Supersession:     stringMetadata(metadata, "supersession"),
 	}

@@ -31,6 +31,39 @@ func TestWeaviateLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestWeaviateStableIDLegacyNormalization(t *testing.T) {
+	// Legacy properties with no stableId must receive the canonical StableID.
+	props := map[string]any{
+		"repositoryName": "owner/repo",
+		"title":          "Legacy Title",
+	}
+	got, err := memoryFromMetadata(props)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	canonical := StableMemoryIdentity("owner/repo", "Legacy Title")
+	if got.StableID != canonical {
+		t.Fatalf("Expected canonical StableID %q, got %q", canonical, got.StableID)
+	}
+}
+
+func TestWeaviateStableIDConflictFailsClosed(t *testing.T) {
+	// A stored stableId that conflicts with the canonical value must return
+	// an envelope corruption error and must not be silently overwritten.
+	props := map[string]any{
+		"repositoryName": "owner/repo",
+		"title":          "Conflict Title",
+		"stableId":       "wrong-id",
+	}
+	_, err := memoryFromMetadata(props)
+	if err == nil {
+		t.Fatal("Expected corruption error for conflicting stableId, got nil")
+	}
+	if !strings.Contains(err.Error(), "corrupted memory envelope") {
+		t.Fatalf("Expected 'corrupted memory envelope' in error, got: %v", err)
+	}
+}
+
 func TestWeaviateMalformedFailsClosed(t *testing.T) {
 	malformedMeta := map[string]any{
 		"repositoryName": "owner/repo",

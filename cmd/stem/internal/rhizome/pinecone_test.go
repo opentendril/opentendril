@@ -19,7 +19,7 @@ func TestPineconeEnvelopeRoundTrip(t *testing.T) {
 		SourceIdentity:   "some-id",
 		ContentIdentity:  "content-id",
 		RevisionIdentity: "rev-id",
-		StableID:         "stable-id",
+		StableID:         StableMemoryIdentity("owner/repo", "Full Memory"),
 		RevisionMetadata: "meta",
 		Supersession:     "super",
 		CreatedAt:        time.Now().UTC(),
@@ -54,6 +54,56 @@ func TestPineconeLegacyFallback(t *testing.T) {
 	}
 	if got.Origin != OriginLegacy || got.Authority != AuthorityNone || got.Status != StatusUnclassified {
 		t.Fatalf("Legacy fallback failed: %+v", got)
+	}
+}
+
+func TestPineconeStableIDLegacyNormalization(t *testing.T) {
+	// Legacy metadata with no stableId must receive the canonical StableID.
+	meta := map[string]any{
+		"repositoryName": "owner/repo",
+		"title":          "Legacy Title",
+	}
+	got, err := memoryFromMetadata(meta)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	canonical := StableMemoryIdentity("owner/repo", "Legacy Title")
+	if got.StableID != canonical {
+		t.Fatalf("Expected canonical StableID %q, got %q", canonical, got.StableID)
+	}
+}
+
+func TestPineconeStableIDMatchingAccepted(t *testing.T) {
+	// Stored stableId that matches the canonical value must be accepted.
+	canonical := StableMemoryIdentity("owner/repo", "Match Title")
+	meta := map[string]any{
+		"repositoryName": "owner/repo",
+		"title":          "Match Title",
+		"stableId":       canonical,
+	}
+	got, err := memoryFromMetadata(meta)
+	if err != nil {
+		t.Fatalf("Unexpected error for matching StableID: %v", err)
+	}
+	if got.StableID != canonical {
+		t.Fatalf("Expected canonical StableID %q, got %q", canonical, got.StableID)
+	}
+}
+
+func TestPineconeStableIDConflictFailsClosed(t *testing.T) {
+	// A stored stableId that conflicts with the canonical value must return
+	// an envelope corruption error and must not be silently overwritten.
+	meta := map[string]any{
+		"repositoryName": "owner/repo",
+		"title":          "Conflict Title",
+		"stableId":       "wrong-id",
+	}
+	_, err := memoryFromMetadata(meta)
+	if err == nil {
+		t.Fatal("Expected corruption error for conflicting stableId, got nil")
+	}
+	if !strings.Contains(err.Error(), "corrupted memory envelope") {
+		t.Fatalf("Expected 'corrupted memory envelope' in error, got: %v", err)
 	}
 }
 
