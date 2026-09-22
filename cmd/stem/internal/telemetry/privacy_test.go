@@ -263,3 +263,146 @@ func TestSanitizeTaskContextEventDropsUnsafeCorrelationAndUnknownEnums(t *testin
 		t.Fatalf("unknown item enums survived: %+v", safe.Data)
 	}
 }
+
+// TestSanitizeTaskContextEventNewOmissionReasonsAreAllowed verifies that each
+// Slice 4 omission reason constant passes the telemetry allowlist.
+func TestSanitizeTaskContextEventNewOmissionReasonsAreAllowed(t *testing.T) {
+	newReasons := []string{
+		"memory-proposed",
+		"memory-stale",
+		"memory-conflicted",
+		"memory-rejected",
+		"memory-superseded",
+	}
+	for _, reason := range newReasons {
+		reason := reason
+		t.Run(reason, func(t *testing.T) {
+			event := eventbus.Event{
+				Type: eventbus.EventTaskContextAssembled,
+				Data: map[string]interface{}{
+					"stepId":         "step-1",
+					"omissionCounts": map[string]interface{}{reason: 1},
+					"admittedCount":  0,
+				},
+			}
+			safe := SanitizeObservationEvent(event)
+			counts, ok := safe.Data["omissionCounts"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("omissionCounts missing or wrong type: %#v", safe.Data["omissionCounts"])
+			}
+			if counts[reason] != 1 {
+				t.Fatalf("new omission reason %q was not preserved: %v", reason, counts)
+			}
+		})
+	}
+}
+
+// TestSanitizeTaskContextEventMemoryEnvelopeFieldsEmittedForMemoryItems
+// verifies that origin, authority, status, and validityRef are emitted in the
+// sanitized output when present with valid enum values on a project-memory item.
+func TestSanitizeTaskContextEventMemoryEnvelopeFieldsEmittedForMemoryItems(t *testing.T) {
+	event := eventbus.Event{
+		Type: eventbus.EventTaskContextAssembled,
+		Data: map[string]interface{}{
+			"stepId":        "step-1",
+			"admittedCount": 1,
+			"items": []map[string]interface{}{{
+				"sourceClass":     "project-memory",
+				"sourceIdentity":  "memory/abcdef012345",
+				"selectionReason": "source-local-memory",
+				"contentRef":      "0123456789ab",
+				"admittedBytes":   64,
+				"truncated":       false,
+				"origin":          "botanist",
+				"authority":       "botanist",
+				"status":          "established",
+				"validityRef":     "fedcba987654",
+			}},
+		},
+	}
+	safe := SanitizeObservationEvent(event)
+	items, ok := safe.Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected 1 safe item, got: %#v", safe.Data["items"])
+	}
+	item := items[0]
+	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+		if item[field] == nil {
+			t.Errorf("memory envelope field %q was stripped from safe item: %v", field, item)
+		}
+	}
+	if item["origin"] != "botanist" || item["authority"] != "botanist" || item["status"] != "established" {
+		t.Fatalf("memory envelope field values incorrect: %v", item)
+	}
+	if item["validityRef"] != "fedcba987654" {
+		t.Fatalf("validityRef incorrect: %v", item["validityRef"])
+	}
+}
+
+// TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid verifies
+// that unknown enum values for origin, authority, and status are rejected.
+func TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid(t *testing.T) {
+	event := eventbus.Event{
+		Type: eventbus.EventTaskContextAssembled,
+		Data: map[string]interface{}{
+			"stepId":        "step-1",
+			"admittedCount": 1,
+			"items": []map[string]interface{}{{
+				"sourceClass":     "project-memory",
+				"sourceIdentity":  "memory/abcdef012345",
+				"selectionReason": "source-local-memory",
+				"contentRef":      "0123456789ab",
+				"admittedBytes":   64,
+				"truncated":       false,
+				"origin":          "unknown-origin",
+				"authority":       "god-mode",
+				"status":          "hacked",
+				"validityRef":     "not-hex!@#$%^",
+			}},
+		},
+	}
+	safe := SanitizeObservationEvent(event)
+	items, ok := safe.Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected 1 safe item even with invalid envelope fields: %#v", safe.Data["items"])
+	}
+	item := items[0]
+	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+		if _, present := item[field]; present {
+			t.Errorf("invalid envelope field %q survived sanitization: %v", field, item[field])
+		}
+	}
+}
+
+// TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems
+// verifies that envelope fields are silently ignored on non-memory items
+// (they simply are not present in the input for file/symbol items).
+func TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems(t *testing.T) {
+	event := eventbus.Event{
+		Type: eventbus.EventTaskContextAssembled,
+		Data: map[string]interface{}{
+			"stepId":        "step-1",
+			"admittedCount": 1,
+			"items": []map[string]interface{}{{
+				"sourceClass":     "file-anchor",
+				"sourceIdentity":  "cmd/foo.go",
+				"selectionReason": "explicit-file-anchor",
+				"contentRef":      "0123456789ab",
+				"admittedBytes":   256,
+				"truncated":       false,
+				// No origin/authority/status/validityRef — normal file item.
+			}},
+		},
+	}
+	safe := SanitizeObservationEvent(event)
+	items, ok := safe.Data["items"].([]map[string]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("expected 1 safe item: %#v", safe.Data["items"])
+	}
+	item := items[0]
+	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+		if _, present := item[field]; present {
+			t.Errorf("unexpected envelope field %q on file-anchor item: %v", field, item[field])
+		}
+	}
+}

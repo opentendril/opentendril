@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,11 @@ const (
 	taskContextOmissionMemoryUnavailable  = "memory-unavailable"
 	taskContextOmissionMemoryUnbound      = "memory-unbound"
 	taskContextOmissionMemoryUnclassified = "memory-unclassified"
+	taskContextOmissionMemoryProposed     = "memory-proposed"
+	taskContextOmissionMemoryStale        = "memory-stale"
+	taskContextOmissionMemoryConflicted   = "memory-conflicted"
+	taskContextOmissionMemoryRejected     = "memory-rejected"
+	taskContextOmissionMemorySuperseded   = "memory-superseded"
 )
 
 var errTaskContextPathSecurity = errors.New("task-context path security rejection")
@@ -95,6 +101,10 @@ type taskContextManifestItem struct {
 	Bytes            int
 	AdmittedBytes    int
 	Truncated        bool
+	Origin           string
+	Authority        string
+	Status           string
+	ValidityRef      string
 }
 
 // taskContextSelectionManifest is deliberately in-memory in Slice 1. Its
@@ -144,6 +154,7 @@ type taskContextCandidate struct {
 	selectionReason string
 	symbols         []rhizome.Symbol
 	memory          *rhizome.Memory
+	validityRef     string
 }
 
 type taskContextCandidateQueue struct {
@@ -363,15 +374,14 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 		taskContextAddOmission(&manifest, input.MemoryOmissionReason, 1)
 	}
 	if input.MemoryIndex != nil && strings.TrimSpace(input.MemoryRepositoryName) != "" {
-		memoryCandidates, unbound, memoryErr := taskContextMemoryCandidates(ctx, input.MemoryIndex, input.MemoryRepositoryName, input.TaskPrompt)
+		memoryCandidates, memoryErr := taskContextMemoryCandidates(ctx, input.MemoryIndex, input.MemoryRepositoryName, input.TaskPrompt, &manifest)
 		if memoryErr != nil {
 			taskContextAddOmission(&manifest, taskContextOmissionMemoryUnavailable, 1)
 		} else {
-			if unbound > 0 {
-				taskContextAddOmission(&manifest, taskContextOmissionMemoryUnbound, unbound)
-			}
-			if len(memoryCandidates) > 0 {
-				taskContextAddOmission(&manifest, taskContextOmissionMemoryUnclassified, len(memoryCandidates))
+			for _, mc := range memoryCandidates {
+				if _, exists := candidates[mc.dedupeKey]; !exists {
+					candidates[mc.dedupeKey] = mc
+				}
 			}
 		}
 	}
@@ -404,6 +414,104 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 
 		var source taskContextSourceFile
 		if candidate.memory != nil {
+			validityRef := ""
+			if candidate.memory.RevisionMetadata != "" {
+				var evidenceManifest rhizome.EvidenceManifest
+				if err := json.Unmarshal([]byte(candidate.memory.RevisionMetadata), &evidenceManifest); err != nil {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
+					continue
+				}
+				if evidenceManifest.Version != "v1" || len(evidenceManifest.Files) == 0 {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
+					continue
+				}
+
+				conflicted := false
+				stale := false
+				var recomputedFiles []rhizome.EvidenceFile
+
+				for _, f := range evidenceManifest.Files {
+					cleaned, err := cleanTaskContextRepositoryPath(f.RelativePath)
+					if err != nil || cleaned != f.RelativePath {
+						conflicted = true
+						break
+					}
+					if err := taskContextRejectRootSymlinks(workspace, f.RelativePath); err != nil {
+						conflicted = true
+						break
+					}
+
+					info, err := workspace.Stat(filepath.FromSlash(f.RelativePath))
+					if err != nil {
+						if os.IsNotExist(err) {
+							stale = true
+							break
+						}
+						conflicted = true
+						break
+					}
+					if !info.Mode().IsRegular() {
+						conflicted = true
+						break
+					}
+					file, err := workspace.Open(filepath.FromSlash(f.RelativePath))
+					if err != nil {
+						conflicted = true
+						break
+					}
+
+					hash := sha256.New()
+					if _, err := io.Copy(hash, file); err != nil {
+						file.Close()
+						conflicted = true
+						break
+					}
+					file.Close()
+
+					currentHash := hex.EncodeToString(hash.Sum(nil))
+					if currentHash != f.ContentHash {
+						stale = true
+						break
+					}
+					recomputedFiles = append(recomputedFiles, rhizome.EvidenceFile{RelativePath: f.RelativePath, ContentHash: currentHash})
+				}
+
+				if conflicted {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
+					continue
+				}
+				if stale {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryStale, 1)
+					if input.ExecutionWorkspace == input.SourceRepository && input.MemoryIndex != nil {
+						if writer, ok := input.MemoryIndex.(interface {
+							StoreMemory(context.Context, rhizome.Memory) error
+						}); ok {
+							m := *candidate.memory
+							m.Status = rhizome.StatusStale
+							if err := writer.StoreMemory(ctx, m); err != nil {
+								return assembly, fmt.Errorf("persist source-local stale transition for memory %q: %w", m.Title, err)
+							}
+						}
+					}
+					continue
+				}
+
+				encoded, err := json.Marshal(recomputedFiles)
+				if err != nil {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
+					continue
+				}
+				recomputedSum := sha256.Sum256(encoded)
+				recomputedHash := hex.EncodeToString(recomputedSum[:])
+				if recomputedHash != evidenceManifest.ManifestHash || recomputedHash != candidate.memory.ContentIdentity {
+					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
+					continue
+				}
+
+				validityRef = taskContextShortReference(recomputedHash)
+			}
+
+			candidate.validityRef = validityRef
 			source = taskContextSourceFile{
 				content: []byte(candidate.memory.Content),
 				hash:    taskContextContentIdentity([]byte(candidate.memory.Content)),
@@ -474,6 +582,12 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			Bytes:            len(rendered),
 			AdmittedBytes:    len(rendered),
 			Truncated:        source.truncated || renderedTruncated,
+			ValidityRef:      candidate.validityRef,
+		}
+		if candidate.memory != nil {
+			manifestItem.Origin = string(candidate.memory.Origin)
+			manifestItem.Authority = string(candidate.memory.Authority)
+			manifestItem.Status = string(candidate.memory.Status)
 		}
 		for _, symbol := range candidate.symbols {
 			manifestItem.Symbols = append(manifestItem.Symbols, symbol.Name)
@@ -510,14 +624,13 @@ func taskContextAddOmission(manifest *taskContextSelectionManifest, reason strin
 	manifest.OmissionCounts[reason] += count
 }
 
-func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryIndex, repositoryName, prompt string) ([]taskContextCandidate, int, error) {
+func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryIndex, repositoryName, prompt string, manifest *taskContextSelectionManifest) ([]taskContextCandidate, error) {
 	terms := extractTaskContextLexicalTerms(prompt)
 	if len(terms) == 0 {
 		terms = []string{"*"}
 	}
 
 	memoriesByKey := make(map[string]rhizome.Memory)
-	unbound := 0
 	for _, term := range terms {
 		query := term
 		if term != "*" {
@@ -528,7 +641,7 @@ func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryInd
 		}
 		memories, err := index.SearchMemories(ctx, repositoryName, query, "", 32)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		sort.Slice(memories, func(i, j int) bool {
 			left := strings.Join([]string{memories[i].RepositoryName, memories[i].Category, memories[i].Title, memories[i].Content}, "\x00")
@@ -537,10 +650,13 @@ func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryInd
 		})
 		for _, memory := range memories {
 			if memory.RepositoryName != repositoryName {
-				unbound++
+				taskContextAddOmission(manifest, taskContextOmissionMemoryUnbound, 1)
 				continue
 			}
-			key := strings.Join([]string{memory.RepositoryName, memory.Category, memory.Title}, "\x00")
+			key := memory.StableID
+			if key == "" {
+				key = strings.Join([]string{memory.RepositoryName, memory.Category, memory.Title}, "\x00")
+			}
 			if _, exists := memoriesByKey[key]; !exists {
 				memoriesByKey[key] = memory
 			}
@@ -555,17 +671,57 @@ func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryInd
 	candidates := make([]taskContextCandidate, 0, len(keys))
 	for _, key := range keys {
 		memory := memoriesByKey[key]
+
+		omission := ""
+		if memory.Status == rhizome.StatusEstablished {
+			if memory.Authority == rhizome.AuthorityBotanist || memory.Authority == rhizome.AuthorityDeterministic {
+				omission = ""
+			} else {
+				omission = taskContextOmissionMemoryConflicted
+			}
+		} else {
+			switch memory.Status {
+			case rhizome.StatusUnclassified, "":
+				omission = taskContextOmissionMemoryUnclassified
+			case rhizome.StatusProposed:
+				omission = taskContextOmissionMemoryProposed
+			case rhizome.StatusStale:
+				omission = taskContextOmissionMemoryStale
+			case rhizome.StatusConflicted:
+				omission = taskContextOmissionMemoryConflicted
+			case rhizome.StatusRejected:
+				omission = taskContextOmissionMemoryRejected
+			case rhizome.StatusSuperseded:
+				omission = taskContextOmissionMemorySuperseded
+			default:
+				omission = taskContextOmissionMemoryConflicted
+			}
+		}
+
+		if omission != "" {
+			taskContextAddOmission(manifest, omission, 1)
+			continue
+		}
+
 		identity := taskContextShortReference(key)
+
+		priority := 6
+		if memory.Kind == rhizome.KindConstraint || memory.Kind == rhizome.KindCorrection || memory.Kind == rhizome.KindRejectedInterpretation {
+			priority = 5
+		}
+
+		// Save memory to a local variable to take its address safely
+		m := memory
 		candidates = append(candidates, taskContextCandidate{
 			kind:            taskContextEvidenceMemory,
 			path:            "memory/" + identity,
 			dedupeKey:       "memory:" + key,
-			priority:        5,
+			priority:        priority,
 			selectionReason: taskContextSelectionReasonLocalMemory,
-			memory:          &memory,
+			memory:          &m,
 		})
 	}
-	return candidates, unbound, nil
+	return candidates, nil
 }
 
 func taskContextAssociatedCandidates(sourcePath string) []taskContextCandidate {

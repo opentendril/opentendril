@@ -2,6 +2,8 @@ package conductor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -26,6 +28,7 @@ type taskContextTestIndex struct {
 type taskContextTestMemoryIndex struct {
 	memories []rhizome.Memory
 	queries  []string
+	stored   []rhizome.Memory
 	err      error
 }
 
@@ -46,6 +49,11 @@ func (f *taskContextTestMemoryIndex) SearchMemories(_ context.Context, repositor
 		return nil, f.err
 	}
 	return append([]rhizome.Memory(nil), f.memories...), nil
+}
+
+func (f *taskContextTestMemoryIndex) StoreMemory(_ context.Context, memory rhizome.Memory) error {
+	f.stored = append(f.stored, memory)
+	return nil
 }
 
 func (f *taskContextTestIndex) GetFile(_ context.Context, _ string, path string) (rhizome.FileRecord, bool, error) {
@@ -1068,5 +1076,528 @@ func TestRunSproutTaskContextDeliveryAndTranscriptPersistence(t *testing.T) {
 	}
 	if strings.Contains(transcript, selectedEvidence) {
 		t.Fatalf("persisted transcript leaked selected raw evidence: %s", transcript)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4 — Memory-context eligibility and evidence-bound validation
+// ---------------------------------------------------------------------------
+
+// newEstablishedBotanistMemory returns a minimal rhizome.Memory that passes
+// the Slice 4 eligibility gate (status=established, authority=botanist).
+func newEstablishedBotanistMemory(repositoryName, title, content string) rhizome.Memory {
+	return rhizome.Memory{
+		RepositoryName: repositoryName,
+		Title:          title,
+		Content:        content,
+		Status:         rhizome.StatusEstablished,
+		Authority:      rhizome.AuthorityBotanist,
+		Origin:         rhizome.OriginBotanist,
+		Kind:           rhizome.KindObservation,
+		StableID:       rhizome.StableMemoryIdentity(repositoryName, title),
+	}
+}
+
+// newEvidenceManifestJSON returns a minimal v1 JSON blob for one file entry.
+// The hash must match what sha256 of fileContent produces.
+func newEvidenceManifestJSON(t *testing.T, relPath string, fileContent []byte) string {
+	t.Helper()
+	sum := sha256.Sum256(fileContent)
+	contentHash := hex.EncodeToString(sum[:])
+	files := []rhizome.EvidenceFile{{RelativePath: relPath, ContentHash: contentHash}}
+	manifestBytes, err := json.Marshal(files)
+	if err != nil {
+		t.Fatalf("marshal evidence files: %v", err)
+	}
+	manifestSum := sha256.Sum256(manifestBytes)
+	manifestHash := hex.EncodeToString(manifestSum[:])
+	blob, err := json.Marshal(rhizome.EvidenceManifest{
+		Version:      "v1",
+		Files:        files,
+		ManifestHash: manifestHash,
+	})
+	if err != nil {
+		t.Fatalf("marshal evidence manifest: %v", err)
+	}
+	return string(blob)
+}
+
+// TestTaskContextEligibilityFilterAdmitsEstablishedBotanistAuthority verifies
+// that a memory with status=established and authority=botanist is admitted.
+func TestTaskContextEligibilityFilterAdmitsEstablishedBotanistAuthority(t *testing.T) {
+	root := t.TempDir()
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{
+		newEstablishedBotanistMemory("fixture", "constraint-alpha", "do not leak passwords"),
+	}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "constraint alpha",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !strings.Contains(assembly.Rendered, "do not leak passwords") {
+		t.Fatalf("established botanist memory was not admitted; rendered=%q omissions=%v", assembly.Rendered, assembly.Manifest.OmissionCounts)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 0 {
+		t.Fatalf("admitted memory incorrectly counted as unclassified: %v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+// TestTaskContextEligibilityFilterAdmitsDeterministicAuthority verifies that
+// established+deterministic is also eligible.
+func TestTaskContextEligibilityFilterAdmitsDeterministicAuthority(t *testing.T) {
+	root := t.TempDir()
+	mem := rhizome.Memory{
+		RepositoryName: "fixture",
+		Title:          "hash-rule",
+		Content:        "deterministic substrate fact",
+		Status:         rhizome.StatusEstablished,
+		Authority:      rhizome.AuthorityDeterministic,
+		Origin:         rhizome.OriginSubstrate,
+		Kind:           rhizome.KindFact,
+		StableID:       rhizome.StableMemoryIdentity("fixture", "hash-rule"),
+	}
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "hash rule",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !strings.Contains(assembly.Rendered, "deterministic substrate fact") {
+		t.Fatalf("established deterministic memory was not admitted; rendered=%q omissions=%v", assembly.Rendered, assembly.Manifest.OmissionCounts)
+	}
+}
+
+// TestTaskContextEligibilityFilterRejectsIneligibleStatuses verifies that each
+// non-established status is individually omitted with the correct reason.
+func TestTaskContextEligibilityFilterRejectsIneligibleStatuses(t *testing.T) {
+	cases := []struct {
+		status  rhizome.Status
+		wantKey string
+	}{
+		{rhizome.StatusProposed, taskContextOmissionMemoryProposed},
+		{rhizome.StatusStale, taskContextOmissionMemoryStale},
+		{rhizome.StatusConflicted, taskContextOmissionMemoryConflicted},
+		{rhizome.StatusRejected, taskContextOmissionMemoryRejected},
+		{rhizome.StatusSuperseded, taskContextOmissionMemorySuperseded},
+		{rhizome.StatusUnclassified, taskContextOmissionMemoryUnclassified},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(string(tc.status), func(t *testing.T) {
+			root := t.TempDir()
+			mem := rhizome.Memory{
+				RepositoryName: "fixture",
+				Title:          "test-mem",
+				Content:        "secret content",
+				Status:         tc.status,
+				Authority:      rhizome.AuthorityBotanist,
+				Origin:         rhizome.OriginBotanist,
+				Kind:           rhizome.KindObservation,
+				StableID:       rhizome.StableMemoryIdentity("fixture", "test-mem"),
+			}
+			memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+			assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+				TaskPrompt:           "test mem",
+				SourceRepository:     root,
+				ExecutionWorkspace:   root,
+				MemoryIndex:          memIdx,
+				MemoryRepositoryName: "fixture",
+				StartingRevision:     "rev-1",
+			}, nil, "fixture")
+			if err != nil {
+				t.Fatalf("assemble: %v", err)
+			}
+			if strings.Contains(assembly.Rendered, "secret content") {
+				t.Fatalf("ineligible memory (status=%s) leaked into context: %q", tc.status, assembly.Rendered)
+			}
+			if assembly.Manifest.OmissionCounts[tc.wantKey] != 1 {
+				t.Fatalf("status=%s: omission counts=%v want %s=1", tc.status, assembly.Manifest.OmissionCounts, tc.wantKey)
+			}
+		})
+	}
+}
+
+// TestTaskContextEligibilityFilterRejectsEstablishedNoneAuthority verifies
+// that established+none authority is rejected (conflicted, not admitted).
+func TestTaskContextEligibilityFilterRejectsEstablishedNoneAuthority(t *testing.T) {
+	root := t.TempDir()
+	mem := rhizome.Memory{
+		RepositoryName: "fixture",
+		Title:          "bad-established",
+		Content:        "should be rejected",
+		Status:         rhizome.StatusEstablished,
+		Authority:      rhizome.AuthorityNone,
+		Origin:         rhizome.OriginBotanist,
+		Kind:           rhizome.KindObservation,
+		StableID:       rhizome.StableMemoryIdentity("fixture", "bad-established"),
+	}
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "bad established",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if strings.Contains(assembly.Rendered, "should be rejected") {
+		t.Fatalf("established+none authority memory was admitted: %q", assembly.Rendered)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryConflicted] != 1 {
+		t.Fatalf("expected conflicted omission, got: %v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+// TestTaskContextEvidenceValidationAdmitsCurrentFile verifies that a memory
+// with RevisionMetadata containing a v1 manifest whose file hash matches the
+// workspace is admitted, and that the manifest item has a non-empty ValidityRef.
+func TestTaskContextEvidenceValidationAdmitsCurrentFile(t *testing.T) {
+	root := t.TempDir()
+	fileContent := []byte("package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo.go", string(fileContent))
+
+	manifestJSON := newEvidenceManifestJSON(t, "foo.go", fileContent)
+	mem := newEstablishedBotanistMemory("fixture", "foo-constraint", "foo must not panic")
+	mem.RevisionMetadata = manifestJSON
+
+	var evidenceManifest rhizome.EvidenceManifest
+	if err := json.Unmarshal([]byte(manifestJSON), &evidenceManifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	mem.ContentIdentity = evidenceManifest.ManifestHash
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "foo constraint",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !strings.Contains(assembly.Rendered, "foo must not panic") {
+		t.Fatalf("evidence-bound memory was not admitted; rendered=%q omissions=%v", assembly.Rendered, assembly.Manifest.OmissionCounts)
+	}
+	if len(assembly.Manifest.Items) == 0 {
+		t.Fatal("no manifest items after evidence-valid memory admission")
+	}
+	var memItem *taskContextManifestItem
+	for i := range assembly.Manifest.Items {
+		if assembly.Manifest.Items[i].Kind == taskContextEvidenceMemory {
+			memItem = &assembly.Manifest.Items[i]
+			break
+		}
+	}
+	if memItem == nil {
+		t.Fatalf("no project-memory item in manifest: %+v", assembly.Manifest.Items)
+	}
+	if memItem.ValidityRef == "" {
+		t.Fatalf("evidence-bound manifest item has empty ValidityRef: %+v", memItem)
+	}
+	if memItem.Origin != "botanist" || memItem.Authority != "botanist" || memItem.Status != "established" {
+		t.Fatalf("manifest item envelope fields incorrect: origin=%q authority=%q status=%q", memItem.Origin, memItem.Authority, memItem.Status)
+	}
+}
+
+// TestTaskContextEvidenceValidationRejectsChangedFile verifies that when a
+// file in the workspace has changed since the evidence manifest was created,
+// the memory is omitted as stale.
+func TestTaskContextEvidenceValidationRejectsChangedFile(t *testing.T) {
+	root := t.TempDir()
+	originalContent := []byte("package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo.go", string(originalContent))
+
+	manifestJSON := newEvidenceManifestJSON(t, "foo.go", originalContent)
+	mem := newEstablishedBotanistMemory("fixture", "foo-stale-constraint", "stale memory")
+	mem.RevisionMetadata = manifestJSON
+	var evidenceManifest rhizome.EvidenceManifest
+	if err := json.Unmarshal([]byte(manifestJSON), &evidenceManifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	mem.ContentIdentity = evidenceManifest.ManifestHash
+
+	// Mutate the file after binding evidence.
+	writeTaskContextFile(t, root, "foo.go", "package fixture\n\nfunc Foo() { /* changed */ }\n")
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "foo stale constraint",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if strings.Contains(assembly.Rendered, "stale memory") {
+		t.Fatalf("stale evidence-bound memory was admitted: %q", assembly.Rendered)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryStale] != 1 {
+		t.Fatalf("expected stale omission, got: %v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+// TestTaskContextEvidenceValidationPersistsStaleToCanonicaWorkspace verifies
+// that when the execution workspace equals the source repository and the memory
+// has stale evidence, the conductor persists a stale transition via StoreMemory.
+func TestTaskContextEvidenceValidationPersistsStaleToCanonicaWorkspace(t *testing.T) {
+	root := t.TempDir()
+	originalContent := []byte("package fixture\n\nfunc Bar() {}\n")
+	writeTaskContextFile(t, root, "bar.go", string(originalContent))
+
+	manifestJSON := newEvidenceManifestJSON(t, "bar.go", originalContent)
+	mem := newEstablishedBotanistMemory("fixture", "bar-constraint", "bar must be stable")
+	mem.RevisionMetadata = manifestJSON
+	var evidenceManifest rhizome.EvidenceManifest
+	if err := json.Unmarshal([]byte(manifestJSON), &evidenceManifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	mem.ContentIdentity = evidenceManifest.ManifestHash
+
+	// Change the file to trigger stale detection.
+	writeTaskContextFile(t, root, "bar.go", "package fixture\n\nfunc Bar() { /* modified */ }\n")
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "bar constraint",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root, // same as source — stale persistence should fire
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if strings.Contains(assembly.Rendered, "bar must be stable") {
+		t.Fatalf("stale memory should not have been rendered")
+	}
+	if len(memIdx.stored) != 1 {
+		t.Fatalf("expected 1 StoreMemory call for stale persistence, got %d; stored=%+v", len(memIdx.stored), memIdx.stored)
+	}
+	if memIdx.stored[0].Status != rhizome.StatusStale {
+		t.Fatalf("persisted stale memory has wrong status: %s", memIdx.stored[0].Status)
+	}
+	if memIdx.stored[0].Title != "bar-constraint" {
+		t.Fatalf("persisted stale memory has wrong title: %q", memIdx.stored[0].Title)
+	}
+}
+
+// TestTaskContextEvidenceValidationDoesNotPersistStaleForNonCanonicalWorkspace
+// verifies that when the execution workspace differs from the source repository
+// (e.g. a managed-run terrarium), stale detection still omits but does NOT
+// attempt to StoreMemory.
+func TestTaskContextEvidenceValidationDoesNotPersistStaleForNonCanonicalWorkspace(t *testing.T) {
+	sourceRoot := filepath.Join(t.TempDir(), "source")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	for _, dir := range []string{sourceRoot, workspaceRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	originalContent := []byte("package fixture\n\nfunc Baz() {}\n")
+	// Write original content manifest referencing a workspace file.
+	writeTaskContextFile(t, workspaceRoot, "baz.go", string(originalContent))
+	manifestJSON := newEvidenceManifestJSON(t, "baz.go", originalContent)
+	// Change the workspace file to trigger stale.
+	writeTaskContextFile(t, workspaceRoot, "baz.go", "package fixture\n\nfunc Baz() { /* changed */ }\n")
+
+	mem := newEstablishedBotanistMemory("fixture", "baz-constraint", "baz must be pure")
+	mem.RevisionMetadata = manifestJSON
+	var evidenceManifest rhizome.EvidenceManifest
+	if err := json.Unmarshal([]byte(manifestJSON), &evidenceManifest); err != nil {
+		t.Fatalf("parse manifest: %v", err)
+	}
+	mem.ContentIdentity = evidenceManifest.ManifestHash
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "baz constraint",
+		SourceRepository:     sourceRoot,
+		ExecutionWorkspace:   workspaceRoot, // different from source — no persistence
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if strings.Contains(assembly.Rendered, "baz must be pure") {
+		t.Fatalf("stale memory should not have been rendered")
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryStale] != 1 {
+		t.Fatalf("expected stale omission: %v", assembly.Manifest.OmissionCounts)
+	}
+	if len(memIdx.stored) != 0 {
+		t.Fatalf("StoreMemory must not be called for non-canonical workspace; calls=%d", len(memIdx.stored))
+	}
+}
+
+// TestTaskContextEvidenceValidationRejectsMalformedManifest verifies that a
+// memory with RevisionMetadata that is not valid JSON or has wrong version is
+// omitted as conflicted (fail closed).
+func TestTaskContextEvidenceValidationRejectsMalformedManifest(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata string
+	}{
+		{"invalid-json", `{not json}`},
+		{"wrong-version", `{"version":"v2","files":[{"relativePath":"foo.go","contentHash":"abc"}],"manifestHash":"abc"}`},
+		{"empty-files", `{"version":"v1","files":[],"manifestHash":"abc"}`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTaskContextFile(t, root, "foo.go", "package fixture\n")
+			mem := newEstablishedBotanistMemory("fixture", "bad-manifest-"+tc.name, "private content")
+			mem.RevisionMetadata = tc.metadata
+			memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+			assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+				TaskPrompt:           "bad manifest " + tc.name,
+				SourceRepository:     root,
+				ExecutionWorkspace:   root,
+				MemoryIndex:          memIdx,
+				MemoryRepositoryName: "fixture",
+				StartingRevision:     "rev-1",
+			}, nil, "fixture")
+			if err != nil {
+				t.Fatalf("assemble: %v", err)
+			}
+			if strings.Contains(assembly.Rendered, "private content") {
+				t.Fatalf("malformed manifest memory admitted: %q", assembly.Rendered)
+			}
+			if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryConflicted] != 1 {
+				t.Fatalf("expected conflicted omission for %s, got: %v", tc.name, assembly.Manifest.OmissionCounts)
+			}
+		})
+	}
+}
+
+// TestTaskContextMemoryPriorityConstraintPrecedesFact verifies that a
+// constraint-kind memory has higher priority (lower number → admitted first)
+// than an observation-kind memory when competing for the same item budget.
+func TestTaskContextMemoryPriorityConstraintPrecedesFact(t *testing.T) {
+	root := t.TempDir()
+	observation := newEstablishedBotanistMemory("fixture", "obs-1", "observation content")
+	observation.Kind = rhizome.KindObservation
+
+	constraint := newEstablishedBotanistMemory("fixture", "cons-1", "constraint content")
+	constraint.Kind = rhizome.KindConstraint
+
+	t.Setenv(taskContextMaxItemsEnv, "1")
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{observation, constraint}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "obs cons",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !strings.Contains(assembly.Rendered, "constraint content") {
+		t.Fatalf("constraint-kind memory was not admitted first; rendered=%q", assembly.Rendered)
+	}
+	if strings.Contains(assembly.Rendered, "observation content") {
+		t.Fatalf("observation-kind memory should have been displaced by budget: rendered=%q", assembly.Rendered)
+	}
+}
+
+// TestTaskContextEvidenceValidationManifestHashMismatchIsConflicted verifies
+// that a memory whose stored ContentIdentity disagrees with the recomputed
+// manifest hash fails closed as conflicted.
+func TestTaskContextEvidenceValidationManifestHashMismatchIsConflicted(t *testing.T) {
+	root := t.TempDir()
+	fileContent := []byte("package fixture\n\nfunc Foo() {}\n")
+	writeTaskContextFile(t, root, "foo.go", string(fileContent))
+
+	manifestJSON := newEvidenceManifestJSON(t, "foo.go", fileContent)
+	mem := newEstablishedBotanistMemory("fixture", "hash-mismatch", "private content")
+	mem.RevisionMetadata = manifestJSON
+	// Deliberately set wrong ContentIdentity.
+	mem.ContentIdentity = "000000000000000000000000000000000000000000000000000000000000cafe"
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "hash mismatch",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if strings.Contains(assembly.Rendered, "private content") {
+		t.Fatalf("hash-mismatched memory was admitted: %q", assembly.Rendered)
+	}
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryConflicted] != 1 {
+		t.Fatalf("expected conflicted omission: %v", assembly.Manifest.OmissionCounts)
+	}
+}
+
+// TestTaskContextEvidenceValidationNoManifestAdmitsWithoutValidityRef verifies
+// that a memory without RevisionMetadata (no file evidence) is still admitted
+// when eligible, and its manifest item has an empty ValidityRef.
+func TestTaskContextEvidenceValidationNoManifestAdmitsWithoutValidityRef(t *testing.T) {
+	root := t.TempDir()
+	mem := newEstablishedBotanistMemory("fixture", "repository-wide", "repository-wide fact")
+	// No RevisionMetadata — repository-wide memory.
+
+	memIdx := &taskContextTestMemoryIndex{memories: []rhizome.Memory{mem}}
+	assembly, err := assembleTaskContext(context.Background(), taskContextAssemblyInput{
+		TaskPrompt:           "repository wide",
+		SourceRepository:     root,
+		ExecutionWorkspace:   root,
+		MemoryIndex:          memIdx,
+		MemoryRepositoryName: "fixture",
+		StartingRevision:     "rev-1",
+	}, nil, "fixture")
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	if !strings.Contains(assembly.Rendered, "repository-wide fact") {
+		t.Fatalf("repository-wide memory was not admitted; rendered=%q omissions=%v", assembly.Rendered, assembly.Manifest.OmissionCounts)
+	}
+	if len(assembly.Manifest.Items) == 0 {
+		t.Fatal("no manifest items")
+	}
+	var memItem *taskContextManifestItem
+	for i := range assembly.Manifest.Items {
+		if assembly.Manifest.Items[i].Kind == taskContextEvidenceMemory {
+			memItem = &assembly.Manifest.Items[i]
+			break
+		}
+	}
+	if memItem == nil {
+		t.Fatalf("no project-memory manifest item: %+v", assembly.Manifest.Items)
+	}
+	if memItem.ValidityRef != "" {
+		t.Fatalf("repository-wide memory should have empty ValidityRef, got %q", memItem.ValidityRef)
 	}
 }
