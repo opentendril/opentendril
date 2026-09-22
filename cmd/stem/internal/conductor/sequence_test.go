@@ -20,6 +20,80 @@ import (
 	"github.com/opentendril/opentendril/roots/llm"
 )
 
+func TestDefaultSequenceStepRunnerBindsSessionID(t *testing.T) {
+	original := runSequenceSproutFn
+	t.Cleanup(func() { runSequenceSproutFn = original })
+
+	var captured *DockerOrchestrator
+	runSequenceSproutFn = func(ctx context.Context, orch *DockerOrchestrator, taskPrompt string) (string, error) {
+		captured = orch
+		return "done", nil
+	}
+	seq := &Sequence{Name: "phytomer-sequence", Branch: "main"}
+	step := &SequenceStep{ID: "step-5", Transcript: "retain the result"}
+	if _, err := defaultSequenceStepRunnerWithOpts(context.Background(), seq, step, t.TempDir(), nil, "", "", ""); err != nil {
+		t.Fatalf("default sequence step runner: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("sequence did not invoke the Sprout runner")
+	}
+	if captured.StepID != step.ID {
+		t.Fatalf("StepID = %q, want %q", captured.StepID, step.ID)
+	}
+	if captured.SessionID != seq.Name {
+		t.Fatalf("SessionID = %q, want sequence Phytomer %q", captured.SessionID, seq.Name)
+	}
+}
+
+func TestSequenceSproutCarriesCanonicalProposalContext(t *testing.T) {
+	sourcePath := proposalWorkspace(t)
+	candidatePath := proposalWorkspace(t)
+	originalCreate := createShadowWorktreeFn
+	originalRemove := removeShadowWorktreeFn
+	originalInject := injectMycorrhizalCacheFn
+	originalRun := runSequenceSproutAtPathFn
+	t.Cleanup(func() {
+		createShadowWorktreeFn = originalCreate
+		removeShadowWorktreeFn = originalRemove
+		injectMycorrhizalCacheFn = originalInject
+		runSequenceSproutAtPathFn = originalRun
+	})
+
+	var capturedSource, capturedMount, capturedStep, capturedSession string
+	createShadowWorktreeFn = func(source, branch string) (string, error) {
+		if source != sourcePath {
+			t.Fatalf("shadow source = %q, want %q", source, sourcePath)
+		}
+		return candidatePath, nil
+	}
+	removeShadowWorktreeFn = func(source, mount string) {}
+	injectMycorrhizalCacheFn = func(source, mount string) {}
+	runSequenceSproutAtPathFn = func(ctx context.Context, orch *DockerOrchestrator, taskPrompt, source, mount string) (sproutExecutionResult, error) {
+		capturedSource = source
+		capturedMount = mount
+		capturedStep = orch.StepID
+		capturedSession = orch.SessionID
+		return sproutExecutionResult{Response: "done", Outcome: SproutOutcomeComplete}, nil
+	}
+
+	orch := &DockerOrchestrator{
+		Substrate:        sourcePath,
+		SubstrateBranch:  "step-5",
+		StepID:           "step-5",
+		SessionID:        "phytomer-sequence",
+		DisableMergeBack: true,
+	}
+	if _, err := runSequenceSprout(context.Background(), orch, "task"); err != nil {
+		t.Fatalf("runSequenceSprout: %v", err)
+	}
+	if capturedSource != sourcePath || capturedMount != candidatePath {
+		t.Fatalf("proposal source context = source %q mount %q, want source %q mount %q", capturedSource, capturedMount, sourcePath, candidatePath)
+	}
+	if capturedStep != "step-5" || capturedSession != "phytomer-sequence" {
+		t.Fatalf("proposal provenance context = step %q session %q", capturedStep, capturedSession)
+	}
+}
+
 func TestSequenceLoadSaveRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sequence.yaml")

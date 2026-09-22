@@ -1111,6 +1111,13 @@ func defaultSequenceStepRunner(ctx context.Context, seq *Sequence, step *Sequenc
 	return defaultSequenceStepRunnerWithBus(ctx, seq, step, substratePath, nil)
 }
 
+func sequenceSessionID(seq *Sequence) string {
+	if seq == nil || strings.TrimSpace(seq.Name) == "" {
+		return "sequence"
+	}
+	return strings.TrimSpace(seq.Name)
+}
+
 func defaultSequenceStepRunnerWithBus(ctx context.Context, seq *Sequence, step *SequenceStep, substratePath string, bus *eventbus.Bus) (string, error) {
 	return defaultSequenceStepRunnerWithOpts(ctx, seq, step, substratePath, bus, "", "", "")
 }
@@ -1144,6 +1151,7 @@ func defaultSequenceStepRunnerWithOpts(ctx context.Context, seq *Sequence, step 
 		Substrate:       substratePath,
 		SubstrateBranch: derivedSequenceBranch(seq.Branch, step.ID),
 		StepID:          step.ID,
+		SessionID:       sequenceSessionID(seq),
 		IsCoordinator:   isMeristemStep(step.ID),
 		Genotype:        genotype,
 		Investigation:   step.Investigation,
@@ -1186,6 +1194,7 @@ func runParallelSequenceStep(ctx context.Context, seq *Sequence, step *SequenceS
 		Substrate:        shadowPath,
 		SubstrateBranch:  branchName,
 		StepID:           step.ID,
+		SessionID:        sequenceSessionID(seq),
 		IsCoordinator:    isMeristemStep(step.ID),
 		Genotype:         genotype,
 		Investigation:    step.Investigation,
@@ -1284,6 +1293,7 @@ func runPhenotypicSelection(ctx context.Context, seq *Sequence, step *SequenceSt
 				Substrate:        sourcePath,
 				SubstrateBranch:  branchName,
 				StepID:           step.ID,
+				SessionID:        sequenceSessionID(seq),
 				IsCoordinator:    isMeristemStep(step.ID),
 				Genotype:         genotype,
 				Investigation:    step.Investigation,
@@ -1774,7 +1784,7 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 		if !orch.DisableMergeBack {
 			gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
 			if diffErr != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for Mycorrhizal proposal extraction: %v\n", diffErr)
 			}
 		}
 
@@ -1826,8 +1836,8 @@ func runSequenceSproutAtPath(ctx context.Context, orch *DockerOrchestrator, task
 
 			if gitDiff != "" && runErr == nil {
 				chronicler := newRunChroniclerFn(sourcePath, llm.TierCheapest)
-				if _, err := chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs()); err != nil {
-					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", err)
+				if _, err := chronicler.TranscribeLearningsWithProvenance(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs(), stepID, orch.SessionID, sourcePath); err != nil {
+					fmt.Fprintf(os.Stderr, "⚠️ Mycorrhizal proposal extraction skipped: %v\n", err)
 				}
 			}
 		} else {

@@ -27,7 +27,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Branch** | A capability group / security zone the Stem initialises at boot. | Capability group / security zone | persistent |
 | **Dormant bud** | See **Axillary bud** (an inactive branch point). Distinguish from **Dormant growth**. | Inactive fork point | per-run |
 | **Dormant growth** | A Sprout that is alive and running but showing no observable progress. | Hung / stalled worker | per-run |
-| **Epigenetics** | Distilled learnings appended after runs and fed forward into prompts. | Persistent memory / self-correction | persistent |
+| **Epigenetics** | Preserved legacy genome learning material kept quarantined; it is not the automatic repository-knowledge path. | Legacy persistent memory | persistent |
 | **Fruit** | Git-reviewable output a cycle yields (a branch / PR / artifact); the **Botanist** decides acceptance. | Output / deliverable | per-cycle |
 | **Genotype** | The base persona / system prompt (*who* a Sprout is). | System prompt / persona | definition |
 | **Greenhouse** | The Command Center UI the Botanist observes through. | Dashboard / observability UI | external |

@@ -13,7 +13,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Biome**: the normative climate (ISO 27001, ISO 42001, SDLC).
 - **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
 - **Branch**: a capability group / security zone.
-- **Epigenetics**: distilled learnings fed forward into future prompts.
+- **Epigenetics**: preserved legacy genome learning material kept quarantined; it is not the automatic repository-knowledge path.
 - **Fruit**: Git-reviewable output a cycle yields (a branch / PR / artifact); the Botanist decides acceptance.
 - **Genotype**: the base persona / system prompt (*who* a Sprout is).
 - **Greenhouse**: the observer UI.

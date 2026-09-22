@@ -118,9 +118,9 @@ type SproutRunReport struct {
 	// provider request(s) occurred and the provider reported no accounting.
 	// False means no execution provider request occurred.
 	RequestsMade bool
-	// PostRun is the post-Sprout cognitive component: epigenetic chronicling
-	// and any genome reduction that chronicling triggers. Its provider and
-	// model name the chronicler mind, which is not the Sprout mind.
+	// PostRun is the post-Sprout cognitive component: bounded Mycorrhizal
+	// proposal extraction. Its provider and model name the chronicler mind,
+	// which is not the Sprout mind.
 	PostRun PostRunUsage
 	// FailureCategory is the Core-owned Botanist-facing class. Conductor
 	// fills it by calling core.ClassifyFailure with typed facts only.
@@ -183,7 +183,7 @@ type PostRunUsage struct {
 // change anything" is what the outcome vocabulary claims. They come apart
 // whenever something other than the model writes into the mount, and
 // OpenTendril writes into it repeatedly — a repository map and a memory map
-// before the run, the epigenetic genome after it, an encrypted index and its
+// before the run, the source-local Rhizome state after it, an encrypted index and its
 // write-ahead log throughout. A run in which the model only read files then
 // reported "complete" with those artifacts as its file list, and committed
 // them as the Sprout's work.
