@@ -1,8 +1,8 @@
-# Component: Rhizome — the plant's code-sensing (Thigmotropism): AST symbol index, repo-map generation, and pluggable project-memory backends.
+# Component: Rhizome: the plant's code-sensing (Thigmotropism): AST symbol index, repo-map generation, and pluggable project-memory backends.
 
 ## Purpose
 
-`cmd/stem/internal/rhizome` is the self-contained leaf that implements **Thigmotropism** and **project memory**. It walks a Substrate, extracts structural symbols (functions, types, classes, imports) through a docker-free parser stack, stores them in an encrypted local SQLite index, and renders a compact markdown **Repo Map**. The same package also owns a **MemoryBackend** surface for durable project memories (SQLite FTS default; optional Pinecone and Weaviate HTTP backends) and a markdown **Memory Map**. It owns parsing, indexing, encryption-at-rest for local stubs/content, and map rendering only — the Conductor and CLI adapters open stores, stage plasmids, and choose backends.
+`cmd/stem/internal/rhizome` is the self-contained leaf that implements **Thigmotropism** and **project memory**. It walks a Substrate, extracts structural symbols (functions, types, classes, imports) through a docker-free parser stack, stores them in an encrypted local SQLite index, and renders a compact markdown **Repo Map**. The same package also owns a **MemoryBackend** surface for durable project memories (SQLite FTS default; optional Pinecone and Weaviate HTTP backends) and a markdown **Memory Map**. It owns parsing, indexing, encryption-at-rest for local stubs/content, and map rendering only. The Conductor and CLI adapters open stores, stage plasmids, and choose backends.
 
 ## Responsibilities
 
@@ -19,8 +19,8 @@
 **Does not:**
 
 - Own CLI, REST, or MCP surface wiring (`tendril repomap`, `tendril memory *` live in `cmd/stem`; no governed Core capability for rhizome today).
-- Stage plasmids into terraria or decide when to inject maps — that is Conductor (`rhizomefacade.go`, `docker.go`).
-- Commit-filter runtime artifacts — Conductor owns the “do not commit rhizome.key / rhizome.db / repomap.md” list.
+- Stage plasmids into terraria or decide when to inject maps. That is Conductor (`rhizomefacade.go`, `docker.go`).
+- Commit-filter runtime artifacts. Conductor owns the "do not commit rhizome.key / rhizome.db / repomap.md" list.
 - Call external embedding models. Pinecone vectors are a local character-bucket hash (`textVector` in `pinecone.go`); Weaviate search is BM25 GraphQL, not dense vectors.
 - Parse languages outside the Go + py/js/ts/tsx family, or claim full language semantics for regex fallback paths.
 - Delete index rows for files removed from disk (incremental scan only upserts/skips files still present).
@@ -57,7 +57,7 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 
 **Fan-in:**
 
-- **`cmd/stem`** — `cmdrepomap.go` calls Conductor’s facade (not rhizome directly). `cmdmemory.go` imports rhizome for `LoadMemoryConfig`, `OpenMemoryBackend`, `Memory` CRUD, and key material under `.tendril/rhizome.key`.
+- **`cmd/stem`**: `cmdrepomap.go` calls Conductor's facade (not rhizome directly). `cmdmemory.go` imports rhizome for `LoadMemoryConfig`, `OpenMemoryBackend`, `Memory` CRUD, and key material under `.tendril/rhizome.key`.
 - **`internal/conductor`**: `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing the generated `.tendril` key, SQLite database and sidecars, genome Repo Map and Memory Map, and chronicler epigenetics and fitness artifacts.
 
 ## Limitations
