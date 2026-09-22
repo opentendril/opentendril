@@ -2,7 +2,9 @@ package rhizome
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +32,45 @@ type Symbol struct {
 	StubContent    string
 }
 
+type Origin string
+
+const (
+	OriginLegacy      Origin = "legacy"
+	OriginBotanist    Origin = "botanist"
+	OriginSubstrate   Origin = "substrate"
+	OriginMycorrhizal Origin = "mycorrhizal"
+)
+
+type Authority string
+
+const (
+	AuthorityNone          Authority = "none"
+	AuthorityBotanist      Authority = "botanist"
+	AuthorityDeterministic Authority = "deterministic"
+)
+
+type Status string
+
+const (
+	StatusUnclassified Status = "unclassified"
+	StatusEstablished  Status = "established"
+	StatusProposed     Status = "proposed"
+	StatusStale        Status = "stale"
+	StatusConflicted   Status = "conflicted"
+	StatusRejected     Status = "rejected"
+	StatusSuperseded   Status = "superseded"
+)
+
+type Kind string
+
+const (
+	KindObservation            Kind = "observation"
+	KindFact                   Kind = "fact"
+	KindConstraint             Kind = "constraint"
+	KindCorrection             Kind = "correction"
+	KindRejectedInterpretation Kind = "rejected-interpretation"
+)
+
 type Memory struct {
 	RepositoryName string    `json:"repositoryName"`
 	Category       string    `json:"category"`
@@ -38,6 +79,83 @@ type Memory struct {
 	Tags           string    `json:"tags"`
 	CreatedAt      time.Time `json:"createdAt"`
 	SessionID      string    `json:"sessionId"`
+
+	Origin           Origin    `json:"origin,omitempty"`
+	Authority        Authority `json:"authority,omitempty"`
+	Status           Status    `json:"status,omitempty"`
+	Kind             Kind      `json:"kind,omitempty"`
+	Provenance       string    `json:"provenance,omitempty"`
+	SourceClass      string    `json:"sourceClass,omitempty"`
+	SourceIdentity   string    `json:"sourceIdentity,omitempty"`
+	ContentIdentity  string    `json:"contentIdentity,omitempty"`
+	RevisionIdentity string    `json:"revisionIdentity,omitempty"`
+	StableID         string    `json:"stableId,omitempty"`
+	RevisionMetadata string    `json:"revisionMetadata,omitempty"`
+	Supersession     string    `json:"supersession,omitempty"`
+}
+
+// Validate returns an error if the envelope contains an invalid field combination.
+// Established status requires botanist or deterministic authority.
+// Mycorrhizal origin requires botanist authority to be established.
+// Deterministic substrate establishment requires source identity and content/revision identity.
+// Unknown fields or mismatched StableID fail closed.
+func (m *Memory) Validate() error {
+	if m.Origin != "" && m.Origin != OriginLegacy && m.Origin != OriginBotanist && m.Origin != OriginSubstrate && m.Origin != OriginMycorrhizal {
+		return fmt.Errorf("unknown origin %q", m.Origin)
+	}
+	if m.Authority != "" && m.Authority != AuthorityNone && m.Authority != AuthorityBotanist && m.Authority != AuthorityDeterministic {
+		return fmt.Errorf("unknown authority %q", m.Authority)
+	}
+	if m.Status != "" && m.Status != StatusUnclassified && m.Status != StatusEstablished && m.Status != StatusProposed && m.Status != StatusStale && m.Status != StatusConflicted && m.Status != StatusRejected && m.Status != StatusSuperseded {
+		return fmt.Errorf("unknown status %q", m.Status)
+	}
+	if m.Kind != "" && m.Kind != KindObservation && m.Kind != KindFact && m.Kind != KindConstraint && m.Kind != KindCorrection && m.Kind != KindRejectedInterpretation {
+		return fmt.Errorf("unknown kind %q", m.Kind)
+	}
+
+	canonicalID := StableMemoryIdentity(m.RepositoryName, m.Title)
+	if m.StableID != "" && m.StableID != canonicalID {
+		return fmt.Errorf("provided StableID %q conflicts with canonical identity %q", m.StableID, canonicalID)
+	}
+
+	o := m.Origin
+	if o == "" {
+		o = OriginLegacy
+	}
+	a := m.Authority
+	if a == "" {
+		a = AuthorityNone
+	}
+	s := m.Status
+	if s == "" {
+		s = StatusUnclassified
+	}
+
+	if s == StatusEstablished && a != AuthorityBotanist && a != AuthorityDeterministic {
+		return fmt.Errorf("established status requires botanist or deterministic authority, got %q", a)
+	}
+
+	if o == OriginMycorrhizal && s == StatusEstablished && a != AuthorityBotanist {
+		return fmt.Errorf("mycorrhizal origin requires botanist authority to be established, got %q", a)
+	}
+
+	if o == OriginSubstrate && a == AuthorityDeterministic && s == StatusEstablished {
+		if m.SourceIdentity == "" {
+			return fmt.Errorf("deterministic substrate establishment requires source identity")
+		}
+		if m.ContentIdentity == "" && m.RevisionIdentity == "" {
+			return fmt.Errorf("deterministic substrate establishment requires content or revision identity")
+		}
+	}
+
+	return nil
+}
+
+// StableMemoryIdentity returns a deterministic hex identifier for a memory
+// based on its repository name and title. This identity is stable across backends.
+func StableMemoryIdentity(repositoryName, title string) string {
+	sum := sha256.Sum256([]byte(repositoryName + "\x00" + title))
+	return hex.EncodeToString(sum[:])
 }
 
 type IndexStore interface {
@@ -131,6 +249,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5(
 	tags,
 	createdAt UNINDEXED,
 	sessionId UNINDEXED
+);
+
+CREATE TABLE IF NOT EXISTS memory_envelopes (
+	repositoryName TEXT NOT NULL,
+	title TEXT NOT NULL,
+	origin TEXT NOT NULL DEFAULT 'legacy',
+	authority TEXT NOT NULL DEFAULT 'none',
+	status TEXT NOT NULL DEFAULT 'unclassified',
+	kind TEXT NOT NULL DEFAULT '',
+	provenance TEXT NOT NULL DEFAULT '',
+	sourceClass TEXT NOT NULL DEFAULT '',
+	sourceIdentity TEXT NOT NULL DEFAULT '',
+	contentIdentity TEXT NOT NULL DEFAULT '',
+	revisionIdentity TEXT NOT NULL DEFAULT '',
+	stableId TEXT NOT NULL DEFAULT '',
+	revisionMetadata TEXT NOT NULL DEFAULT '',
+	supersession TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (repositoryName, title)
 );`
 
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -327,6 +463,12 @@ func (s *SQLiteIndexStore) scanSymbolRows(rows *sql.Rows) ([]Symbol, error) {
 }
 
 func (s *SQLiteIndexStore) StoreMemory(ctx context.Context, memory Memory) error {
+	if memory.StableID == "" {
+		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
+	}
+	if err := memory.Validate(); err != nil {
+		return fmt.Errorf("invalid memory envelope: %w", err)
+	}
 	if memory.CreatedAt.IsZero() {
 		memory.CreatedAt = time.Now().UTC()
 	}
@@ -337,11 +479,80 @@ func (s *SQLiteIndexStore) StoreMemory(ctx context.Context, memory Memory) error
 		return fmt.Errorf("encrypt memory content: %w", err)
 	}
 
-	const statement = `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin memory store: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Delete the old FTS row if present (upsert on FTS5 is delete+insert).
+	if _, err = tx.ExecContext(ctx,
+		`DELETE FROM memories WHERE repositoryName = ? AND title = ?`,
+		memory.RepositoryName, memory.Title,
+	); err != nil {
+		return fmt.Errorf("delete old memory fts row: %w", err)
+	}
+
+	const insertMemory = `
 INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId)
 VALUES (?, ?, ?, ?, ?, ?, ?)`
-	if _, err := s.db.ExecContext(ctx, statement, memory.RepositoryName, memory.Category, memory.Title, encryptedContent, memory.Tags, memory.CreatedAt.UTC().Format(time.RFC3339Nano), memory.SessionID); err != nil {
-		return fmt.Errorf("store memory: %w", err)
+	if _, err = tx.ExecContext(ctx, insertMemory,
+		memory.RepositoryName, memory.Category, memory.Title, encryptedContent,
+		memory.Tags, memory.CreatedAt.UTC().Format(time.RFC3339Nano), memory.SessionID,
+	); err != nil {
+		return fmt.Errorf("insert memory fts row: %w", err)
+	}
+
+	const upsertEnvelope = `
+INSERT INTO memory_envelopes
+	(repositoryName, title, origin, authority, status, kind, provenance,
+	sourceClass, sourceIdentity, contentIdentity, revisionIdentity,
+	stableId, revisionMetadata, supersession)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(repositoryName, title) DO UPDATE SET
+	origin = excluded.origin,
+	authority = excluded.authority,
+	status = excluded.status,
+	kind = excluded.kind,
+	provenance = excluded.provenance,
+	sourceClass = excluded.sourceClass,
+	sourceIdentity = excluded.sourceIdentity,
+	contentIdentity = excluded.contentIdentity,
+	revisionIdentity = excluded.revisionIdentity,
+	stableId = excluded.stableId,
+	revisionMetadata = excluded.revisionMetadata,
+	supersession = excluded.supersession`
+
+	origin := string(memory.Origin)
+	if origin == "" {
+		origin = string(OriginLegacy)
+	}
+	authority := string(memory.Authority)
+	if authority == "" {
+		authority = string(AuthorityNone)
+	}
+	status := string(memory.Status)
+	if status == "" {
+		status = string(StatusUnclassified)
+	}
+
+	if _, err = tx.ExecContext(ctx, upsertEnvelope,
+		memory.RepositoryName, memory.Title,
+		origin, authority, status,
+		string(memory.Kind), memory.Provenance,
+		memory.SourceClass, memory.SourceIdentity, memory.ContentIdentity,
+		memory.RevisionIdentity, memory.StableID, memory.RevisionMetadata,
+		memory.Supersession,
+	); err != nil {
+		return fmt.Errorf("upsert memory envelope: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit memory store: %w", err)
 	}
 	return nil
 }
@@ -356,12 +567,17 @@ func (s *SQLiteIndexStore) SearchMemories(ctx context.Context, repositoryName st
 	}
 
 	statement := `
-SELECT repositoryName, category, title, content, tags, createdAt, sessionId
-FROM memories
-WHERE repositoryName = ? AND memories MATCH ?`
+SELECT m.repositoryName, m.category, m.title, m.content, m.tags, m.createdAt, m.sessionId,
+	COALESCE(e.origin, 'legacy'), COALESCE(e.authority, 'none'), COALESCE(e.status, 'unclassified'),
+	COALESCE(e.kind, ''), COALESCE(e.provenance, ''), COALESCE(e.sourceClass, ''),
+	COALESCE(e.sourceIdentity, ''), COALESCE(e.contentIdentity, ''), COALESCE(e.revisionIdentity, ''),
+	COALESCE(e.stableId, ''), COALESCE(e.revisionMetadata, ''), COALESCE(e.supersession, '')
+FROM memories m
+LEFT JOIN memory_envelopes e ON e.repositoryName = m.repositoryName AND e.title = m.title
+WHERE m.repositoryName = ? AND memories MATCH ?`
 	args := []any{repositoryName, trimmedQuery}
 	if strings.TrimSpace(category) != "" {
-		statement += ` AND category = ?`
+		statement += ` AND m.category = ?`
 		args = append(args, category)
 	}
 	statement += `
@@ -384,16 +600,21 @@ func (s *SQLiteIndexStore) ListMemories(ctx context.Context, repositoryName stri
 	}
 
 	statement := `
-SELECT repositoryName, category, title, content, tags, createdAt, sessionId
-FROM memories
-WHERE repositoryName = ?`
+SELECT m.repositoryName, m.category, m.title, m.content, m.tags, m.createdAt, m.sessionId,
+	COALESCE(e.origin, 'legacy'), COALESCE(e.authority, 'none'), COALESCE(e.status, 'unclassified'),
+	COALESCE(e.kind, ''), COALESCE(e.provenance, ''), COALESCE(e.sourceClass, ''),
+	COALESCE(e.sourceIdentity, ''), COALESCE(e.contentIdentity, ''), COALESCE(e.revisionIdentity, ''),
+	COALESCE(e.stableId, ''), COALESCE(e.revisionMetadata, ''), COALESCE(e.supersession, '')
+FROM memories m
+LEFT JOIN memory_envelopes e ON e.repositoryName = m.repositoryName AND e.title = m.title
+WHERE m.repositoryName = ?`
 	args := []any{repositoryName}
 	if strings.TrimSpace(category) != "" {
-		statement += ` AND category = ?`
+		statement += ` AND m.category = ?`
 		args = append(args, category)
 	}
 	statement += `
-ORDER BY createdAt DESC
+ORDER BY m.createdAt DESC
 LIMIT ?`
 	args = append(args, limit)
 
@@ -407,9 +628,28 @@ LIMIT ?`
 }
 
 func (s *SQLiteIndexStore) DeleteMemory(ctx context.Context, repositoryName string, title string) error {
-	const statement = `DELETE FROM memories WHERE repositoryName = ? AND title = ?`
-	if _, err := s.db.ExecContext(ctx, statement, repositoryName, title); err != nil {
-		return fmt.Errorf("delete memory: %w", err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete memory tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const statementMem = `DELETE FROM memories WHERE repositoryName = ? AND title = ?`
+	if _, err = tx.ExecContext(ctx, statementMem, repositoryName, title); err != nil {
+		return fmt.Errorf("delete memory fts row: %w", err)
+	}
+
+	const statementEnv = `DELETE FROM memory_envelopes WHERE repositoryName = ? AND title = ?`
+	if _, err = tx.ExecContext(ctx, statementEnv, repositoryName, title); err != nil {
+		return fmt.Errorf("delete memory envelope sidecar: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete memory tx: %w", err)
 	}
 	return nil
 }
@@ -420,7 +660,16 @@ func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
 		var memory Memory
 		var encryptedContent string
 		var createdAt string
-		if err := rows.Scan(&memory.RepositoryName, &memory.Category, &memory.Title, &encryptedContent, &memory.Tags, &createdAt, &memory.SessionID); err != nil {
+		var origin, authority, status, kind, provenance string
+		var sourceClass, sourceIdentity, contentIdentity, revisionIdentity string
+		var stableID, revisionMetadata, supersession string
+		if err := rows.Scan(
+			&memory.RepositoryName, &memory.Category, &memory.Title, &encryptedContent,
+			&memory.Tags, &createdAt, &memory.SessionID,
+			&origin, &authority, &status, &kind, &provenance,
+			&sourceClass, &sourceIdentity, &contentIdentity, &revisionIdentity,
+			&stableID, &revisionMetadata, &supersession,
+		); err != nil {
 			return nil, fmt.Errorf("scan memory: %w", err)
 		}
 		var err error
@@ -432,6 +681,28 @@ func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
 		memory.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("parse memory createdAt: %w", err)
+		}
+		memory.Origin = Origin(origin)
+		memory.Authority = Authority(authority)
+		memory.Status = Status(status)
+		memory.Kind = Kind(kind)
+		memory.Provenance = provenance
+		memory.SourceClass = sourceClass
+		memory.SourceIdentity = sourceIdentity
+		memory.ContentIdentity = contentIdentity
+		memory.RevisionIdentity = revisionIdentity
+		canonicalID := StableMemoryIdentity(memory.RepositoryName, memory.Title)
+		if stableID != "" && stableID != canonicalID {
+			return nil, fmt.Errorf("corrupted memory envelope for %q/%q: stored stableId %q conflicts with canonical identity %q", memory.RepositoryName, memory.Title, stableID, canonicalID)
+		}
+		memory.StableID = canonicalID
+
+		memory.RevisionMetadata = revisionMetadata
+		memory.Supersession = supersession
+
+		// Fail closed: reject any memory with an invalid envelope combination
+		if err := memory.Validate(); err != nil {
+			return nil, fmt.Errorf("corrupted memory envelope for %q/%q: %w", memory.RepositoryName, memory.Title, err)
 		}
 		memories = append(memories, memory)
 	}

@@ -2,6 +2,7 @@ package rhizome
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -390,26 +391,54 @@ func TestDeleteMemory(t *testing.T) {
 	store := openTestStore(t, ctx, dbPath)
 	defer store.Close()
 
+	title := "Temporary deletion target"
 	err := store.StoreMemory(ctx, Memory{
 		RepositoryName: "owner/repo",
 		Category:       "Patterns",
-		Title:          "Temporary deletion target",
+		Title:          title,
 		Content:        "Delete this memory.",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
 		CreatedAt:      time.Date(2026, 7, 5, 10, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatalf("StoreMemory returned error: %v", err)
 	}
-	if err := store.DeleteMemory(ctx, "owner/repo", "Temporary deletion target"); err != nil {
+
+	// 1. Delete memory
+	if err := store.DeleteMemory(ctx, "owner/repo", title); err != nil {
 		t.Fatalf("DeleteMemory returned error: %v", err)
 	}
 
+	// 2. Verify sidecar metadata is gone
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM memory_envelopes WHERE repositoryName = ? AND title = ?`, "owner/repo", title).Scan(&count); err != nil {
+		t.Fatalf("Query sidecar: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected sidecar to be deleted, found %d", count)
+	}
+
+	// 3. Subsequently introduced legacy row
+	cipher, _ := heartwood.NewCipher(heartwood.Material{Key: []byte("0123456789abcdef0123456789abcdef")})
+	aad := []byte("rhizome/memories/content\x00owner/repo\x00" + title)
+	enc, _ := cipher.Encrypt("content", aad)
+	_, err = store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Patterns', ?, ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, title, enc)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	// 4. Reads as legacy/none/unclassified
 	results, err := store.SearchMemories(ctx, "owner/repo", "Temporary", "", 10)
 	if err != nil {
 		t.Fatalf("SearchMemories returned error: %v", err)
 	}
-	if len(results) != 0 {
-		t.Fatalf("expected deleted memory to be absent, got %+v", results)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Origin != OriginLegacy || results[0].Authority != AuthorityNone || results[0].Status != StatusUnclassified {
+		t.Fatalf("expected legacy/none/unclassified, got %s/%s/%s", results[0].Origin, results[0].Authority, results[0].Status)
 	}
 }
 
@@ -537,5 +566,310 @@ func TestLoadMemoryConfig_RemoteAck(t *testing.T) {
 	}
 	if config.RemoteCleartextAck {
 		t.Fatalf("expected RemoteCleartextAck to be false")
+	}
+}
+
+func TestSQLiteMemoryEnvelope(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "rhizome.db")
+
+	// Seed a legacy database (only the FTS5 table, no sidecar) before the
+	// current store code runs its additive migration.
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("Open sqlite: %v", err)
+	}
+	const legacySchema = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5(
+	repositoryName, category, title, content UNINDEXED, tags, createdAt UNINDEXED, sessionId UNINDEXED
+);
+`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("Create legacy schema: %v", err)
+	}
+	cipher, _ := heartwood.NewCipher(heartwood.Material{Key: []byte("0123456789abcdef0123456789abcdef")})
+	aad1 := []byte("rhizome/memories/content\x00owner/repo\x00Legacy Memory")
+	c1, _ := cipher.Encrypt("content", aad1)
+	aad2 := []byte("rhizome/memories/content\x00owner/repo\x00Legacy Duplicate")
+	c2, _ := cipher.Encrypt("content1", aad2)
+	c3, _ := cipher.Encrypt("content2", aad2)
+	_, err = db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId)
+	VALUES ('owner/repo', 'Test', 'Legacy Memory', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c1)
+	if err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	_, _ = db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId)
+	VALUES ('owner/repo', 'Test', 'Legacy Duplicate', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c2)
+	_, _ = db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId)
+	VALUES ('owner/repo', 'Test', 'Legacy Duplicate', ?, 'tag', '2026-07-05T11:00:00Z', 'session-1')`, c3)
+	db.Close()
+
+	// Open with current code: additive migration creates memory_envelopes sidecar.
+	store := openTestStore(t, ctx, dbPath)
+	defer store.Close()
+
+	// Legacy row survives sidecar creation and reads as legacy/none/unclassified.
+	results, err := store.SearchMemories(ctx, "owner/repo", "Legacy Memory", "", 10)
+	if err != nil {
+		t.Fatalf("Search legacy memory: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Expected 1 legacy memory, got %d", len(results))
+	}
+	if results[0].Origin != OriginLegacy || results[0].Authority != AuthorityNone || results[0].Status != StatusUnclassified {
+		t.Fatalf("Legacy fallback failed: %+v", results[0])
+	}
+
+	// Repeated writes converge to one FTS row (upsert via delete+insert).
+	err = store.StoreMemory(ctx, Memory{
+		RepositoryName: "owner/repo",
+		Title:          "New Write",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+	})
+	if err != nil {
+		t.Fatalf("StoreMemory first write: %v", err)
+	}
+	err = store.StoreMemory(ctx, Memory{
+		RepositoryName: "owner/repo",
+		Title:          "New Write",
+		Origin:         OriginBotanist,
+		Authority:      AuthorityBotanist,
+		Status:         StatusEstablished,
+	})
+	if err != nil {
+		t.Fatalf("StoreMemory second write: %v", err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT count(*) FROM memories WHERE title = 'New Write'`).Scan(&count); err != nil {
+		t.Fatalf("QueryRow count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("Expected 1 row for New Write, got %d", count)
+	}
+
+	// Pre-existing legacy duplicates (not written by this code) are preserved.
+	if err := store.db.QueryRow(`SELECT count(*) FROM memories WHERE title = 'Legacy Duplicate'`).Scan(&count); err != nil {
+		t.Fatalf("QueryRow duplicate count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("Expected 2 rows for Legacy Duplicate, got %d", count)
+	}
+
+	// Full envelope round-trips through store + search.
+	fullMem := Memory{
+		RepositoryName:   "owner/repo",
+		Title:            "Full Memory",
+		Origin:           OriginSubstrate,
+		Authority:        AuthorityDeterministic,
+		Status:           StatusEstablished,
+		Kind:             KindFact,
+		Provenance:       "some-provenance",
+		SourceClass:      "some-class",
+		SourceIdentity:   "some-id",
+		ContentIdentity:  "content-id",
+		RevisionIdentity: "rev-id",
+		RevisionMetadata: "meta",
+		Supersession:     "super",
+	}
+	fullMem.StableID = StableMemoryIdentity(fullMem.RepositoryName, fullMem.Title)
+	if err := store.StoreMemory(ctx, fullMem); err != nil {
+		t.Fatalf("Store full memory: %v", err)
+	}
+	res, err := store.SearchMemories(ctx, "owner/repo", "Full Memory", "", 10)
+	if err != nil || len(res) != 1 {
+		t.Fatalf("Search full memory: err=%v len=%d", err, len(res))
+	}
+	got := res[0]
+	if got.Origin != fullMem.Origin || got.Authority != fullMem.Authority ||
+		got.Status != fullMem.Status || got.Kind != fullMem.Kind ||
+		got.Provenance != fullMem.Provenance || got.SourceClass != fullMem.SourceClass ||
+		got.SourceIdentity != fullMem.SourceIdentity ||
+		got.ContentIdentity != fullMem.ContentIdentity ||
+		got.RevisionIdentity != fullMem.RevisionIdentity ||
+		got.RevisionMetadata != fullMem.RevisionMetadata ||
+		got.Supersession != fullMem.Supersession {
+		t.Fatalf("Envelope round-trip mismatch:\nwant: %+v\ngot:  %+v", fullMem, got)
+	}
+	if got.StableID != fullMem.StableID {
+		t.Fatalf("StableID mismatch: want canonical %q, got %q", fullMem.StableID, got.StableID)
+	}
+
+	// StableMemoryIdentity must be non-empty and deterministic.
+	sid := StableMemoryIdentity("owner/repo", "Full Memory")
+	if sid == "" {
+		t.Fatal("StableMemoryIdentity returned empty string")
+	}
+	if sid != StableMemoryIdentity("owner/repo", "Full Memory") {
+		t.Fatal("StableMemoryIdentity is not deterministic")
+	}
+
+	// Invalid envelope combinations are rejected before persistence.
+	invalidMem := Memory{
+		RepositoryName: "owner/repo",
+		Title:          "Invalid Memory",
+		Origin:         OriginMycorrhizal,
+		Authority:      AuthorityNone,
+		Status:         StatusEstablished,
+	}
+	if err := store.StoreMemory(ctx, invalidMem); err == nil {
+		t.Fatal("Expected error for invalid envelope, got nil")
+	}
+
+	// Corrupted status value causes fail-closed on read.
+	if _, err := store.db.Exec(`UPDATE memory_envelopes SET status = 'weird' WHERE title = 'Full Memory'`); err != nil {
+		t.Fatalf("Corrupt status: %v", err)
+	}
+	_, err = store.SearchMemories(ctx, "owner/repo", "Full Memory", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for corrupted status, got nil")
+	}
+
+	// legacy / invalid-authority / unclassified sidecar fails closed
+	c4, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadAuth"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadAuth', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c4)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status) VALUES ('owner/repo', 'BadAuth', 'legacy', 'invalid-auth', 'unclassified')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadAuth", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for legacy / invalid-authority / unclassified sidecar, got nil")
+	} else if !strings.Contains(err.Error(), "unknown authority") {
+		t.Fatalf("Expected unknown authority error, got %v", err)
+	}
+
+	// legacy / none / unclassified / invalid-kind sidecar fails closed
+	c5, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadKind"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadKind', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c5)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, kind) VALUES ('owner/repo', 'BadKind', 'legacy', 'none', 'unclassified', 'bad-kind')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadKind", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for legacy / none / unclassified / invalid-kind sidecar, got nil")
+	} else if !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("Expected unknown kind error, got %v", err)
+	}
+
+	// corrupt non-empty stored StableID fails closed
+	c6, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadStableID"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadStableID', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c6)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, stableId) VALUES ('owner/repo', 'BadStableID', 'legacy', 'none', 'unclassified', 'wrong-id')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadStableID", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for corrupt non-empty stored StableID, got nil")
+	} else if !strings.Contains(err.Error(), "conflicts with canonical identity") {
+		t.Fatalf("Expected canonical identity conflict error, got %v", err)
+	}
+
+	// empty StableID on a genuine legacy row is normalized to the canonical deterministic StableID
+	c7, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00EmptyStableID"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'EmptyStableID', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c7)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, stableId) VALUES ('owner/repo', 'EmptyStableID', 'legacy', 'none', 'unclassified', '')`)
+	resEmpty, err := store.SearchMemories(ctx, "owner/repo", "EmptyStableID", "", 10)
+	if err != nil {
+		t.Fatalf("Unexpected error for empty StableID row: %v", err)
+	}
+	if len(resEmpty) != 1 || resEmpty[0].StableID != StableMemoryIdentity("owner/repo", "EmptyStableID") {
+		t.Fatalf("Expected empty StableID to be canonicalized, got: %+v", resEmpty)
+	}
+}
+
+func TestMemoryEnvelopeValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		memory  Memory
+		wantErr string
+	}{
+		{
+			name:    "unknown origin rejected before write",
+			memory:  Memory{Origin: "weird-origin", Authority: AuthorityNone, Status: StatusUnclassified},
+			wantErr: "unknown origin",
+		},
+		{
+			name:    "unknown authority rejected before write",
+			memory:  Memory{Origin: OriginLegacy, Authority: "weird-authority", Status: StatusUnclassified},
+			wantErr: "unknown authority",
+		},
+		{
+			name:    "unknown status rejected before write",
+			memory:  Memory{Origin: OriginLegacy, Authority: AuthorityNone, Status: "weird-status"},
+			wantErr: "unknown status",
+		},
+		{
+			name:    "unknown kind rejected before write",
+			memory:  Memory{Origin: OriginLegacy, Authority: AuthorityNone, Status: StatusUnclassified, Kind: "weird-kind"},
+			wantErr: "unknown kind",
+		},
+		{
+			name:    "legacy none established invalid",
+			memory:  Memory{Origin: OriginLegacy, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "botanist none established invalid",
+			memory:  Memory{Origin: OriginBotanist, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "substrate none established invalid",
+			memory:  Memory{Origin: OriginSubstrate, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "mycorrhizal none established invalid",
+			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityNone, Status: StatusEstablished},
+			wantErr: "established status requires botanist or deterministic authority",
+		},
+		{
+			name:    "botanist plus botanist established valid",
+			memory:  Memory{Origin: OriginBotanist, Authority: AuthorityBotanist, Status: StatusEstablished},
+			wantErr: "",
+		},
+		{
+			name:    "Mycorrhizal proposal valid",
+			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityNone, Status: StatusProposed},
+			wantErr: "",
+		},
+		{
+			name:    "Mycorrhizal plus Botanist authority established valid",
+			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityBotanist, Status: StatusEstablished},
+			wantErr: "",
+		},
+		{
+			name:    "Mycorrhizal plus deterministic established invalid",
+			memory:  Memory{Origin: OriginMycorrhizal, Authority: AuthorityDeterministic, Status: StatusEstablished},
+			wantErr: "mycorrhizal origin requires botanist authority to be established",
+		},
+		{
+			name:    "Substrate deterministic established without evidence invalid",
+			memory:  Memory{Origin: OriginSubstrate, Authority: AuthorityDeterministic, Status: StatusEstablished},
+			wantErr: "deterministic substrate establishment requires source identity",
+		},
+		{
+			name:    "Substrate deterministic established with evidence valid",
+			memory:  Memory{Origin: OriginSubstrate, Authority: AuthorityDeterministic, Status: StatusEstablished, SourceIdentity: "src", ContentIdentity: "cid"},
+			wantErr: "",
+		},
+		{
+			name:    "mismatched StableID cannot persist",
+			memory:  Memory{RepositoryName: "owner/repo", Title: "test", StableID: "wrong-id", Origin: OriginLegacy, Authority: AuthorityNone, Status: StatusUnclassified},
+			wantErr: "conflicts with canonical identity",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.memory.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected valid, got: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error containing %q, got: %v", tc.wantErr, err)
+				}
+			}
+		})
 	}
 }

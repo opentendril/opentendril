@@ -45,7 +45,11 @@ func GenerateMemoryMap(ctx context.Context, backend MemoryBackend, repositoryNam
 		builder.WriteString(category)
 		builder.WriteString("\n")
 		for _, memory := range grouped[category] {
-			fmt.Fprintf(&builder, "- **%s** (%s)\n", memory.Title, memory.CreatedAt.Format("2006-01-02"))
+			statusMark := ""
+			if memory.Status != StatusEstablished {
+				statusMark = fmt.Sprintf(" [%s]", strings.ToUpper(string(memory.Status)))
+			}
+			fmt.Fprintf(&builder, "- **%s** (%s)%s\n", memory.Title, memory.CreatedAt.Format("2006-01-02"), statusMark)
 			builder.WriteString("  ")
 			builder.WriteString(memory.Content)
 			builder.WriteString("\n")
