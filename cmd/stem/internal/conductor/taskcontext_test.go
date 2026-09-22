@@ -556,11 +556,14 @@ func TestTaskContextLocalMemoryAdmissionAndNoRemoteFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("assemble local memory: %v", err)
 	}
-	if len(assembly.Manifest.Items) != 1 || assembly.Manifest.Items[0].Kind != taskContextEvidenceMemory {
-		t.Fatalf("local memory was not admitted: %+v", assembly.Manifest.Items)
+	if len(assembly.Manifest.Items) != 0 {
+		t.Fatalf("local memory was unexpectedly admitted: %+v", assembly.Manifest.Items)
 	}
-	if !strings.Contains(assembly.Rendered, "local project memory") {
-		t.Fatalf("local memory content missing from evidence: %q", assembly.Rendered)
+	if assembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("local memory omission count mismatch: %+v", assembly.Manifest.OmissionCounts)
+	}
+	if strings.Contains(assembly.Rendered, "local project memory") {
+		t.Fatalf("local memory content appeared in evidence: %q", assembly.Rendered)
 	}
 
 	t.Setenv("TENDRIL_MEMORY_BACKEND", "pinecone")
@@ -626,11 +629,17 @@ func TestTaskContextSameBasenameMemoryIsolation(t *testing.T) {
 
 	leftAssembly := assemble(left, "left memory")
 	rightAssembly := assemble(right, "right memory")
-	if !strings.Contains(leftAssembly.Rendered, "left memory") || strings.Contains(leftAssembly.Rendered, "right memory") {
-		t.Fatalf("left same-basename repository crossed memory boundary: %q", leftAssembly.Rendered)
+	if strings.Contains(leftAssembly.Rendered, "left memory") || strings.Contains(leftAssembly.Rendered, "right memory") {
+		t.Fatalf("left same-basename repository admitted quarantined memory: %q", leftAssembly.Rendered)
 	}
-	if !strings.Contains(rightAssembly.Rendered, "right memory") || strings.Contains(rightAssembly.Rendered, "left memory") {
-		t.Fatalf("right same-basename repository crossed memory boundary: %q", rightAssembly.Rendered)
+	if strings.Contains(rightAssembly.Rendered, "right memory") || strings.Contains(rightAssembly.Rendered, "left memory") {
+		t.Fatalf("right same-basename repository admitted quarantined memory: %q", rightAssembly.Rendered)
+	}
+	if leftAssembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("left memory not counted as unclassified: %+v", leftAssembly.Manifest.OmissionCounts)
+	}
+	if rightAssembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("right memory not counted as unclassified: %+v", rightAssembly.Manifest.OmissionCounts)
 	}
 }
 
@@ -691,11 +700,17 @@ func TestTaskContextSourceLocalMemorySameBasenameIsolation(t *testing.T) {
 
 	leftAssembly := assemble(leftRoot, leftName, leftIndex)
 	rightAssembly := assemble(rightRoot, rightName, rightIndex)
-	if !strings.Contains(leftAssembly.Rendered, "left source memory") || strings.Contains(leftAssembly.Rendered, "right source memory") {
-		t.Fatalf("left automatic memory crossed same-basename source boundary: %q", leftAssembly.Rendered)
+	if strings.Contains(leftAssembly.Rendered, "left source memory") || strings.Contains(leftAssembly.Rendered, "right source memory") {
+		t.Fatalf("left automatic memory was not quarantined: %q", leftAssembly.Rendered)
 	}
-	if !strings.Contains(rightAssembly.Rendered, "right source memory") || strings.Contains(rightAssembly.Rendered, "left source memory") {
-		t.Fatalf("right automatic memory crossed same-basename source boundary: %q", rightAssembly.Rendered)
+	if strings.Contains(rightAssembly.Rendered, "right source memory") || strings.Contains(rightAssembly.Rendered, "left source memory") {
+		t.Fatalf("right automatic memory was not quarantined: %q", rightAssembly.Rendered)
+	}
+	if leftAssembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("left memory not counted as unclassified: %+v", leftAssembly.Manifest.OmissionCounts)
+	}
+	if rightAssembly.Manifest.OmissionCounts[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("right memory not counted as unclassified: %+v", rightAssembly.Manifest.OmissionCounts)
 	}
 }
 

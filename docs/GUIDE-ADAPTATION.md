@@ -14,7 +14,7 @@ OpenTendril adds a Lamarckian layer:
 2. The host orchestrator collects the resulting diff and execution logs.
 3. The epigenetic chronicler distills durable learnings.
 4. Those learnings are written into `.tendril/genome/epigenetics.md`.
-5. Future sprouts load the updated genome as part of their system context.
+5. The genome is loaded as part of future system context (note: legacy unclassified material in `epigenetics.md` and `memorymap.md` is currently quarantined from automatic steering).
 
 The result is a repository that can remember reusable rules, constraints, and lessons learned without duplicating them in every prompt.
 
@@ -28,7 +28,7 @@ Recommended files:
 
 - `README.md` for human orientation
 - `naming-conventions.md` for repository-wide style rules
-- `epigenetics.md` for learned, durable rules extracted from successful runs
+- `epigenetics.md` (historical unclassified material; currently quarantined from automatic Sprout context)
 - Plasmid files copied in from `.tendril/genotypes/plasmids/`
 
 ## CLI Reference

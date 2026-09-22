@@ -55,15 +55,18 @@ func TestLoadGenomeContextNeverInlinesGeneratedMaps(t *testing.T) {
 	if strings.Contains(context, "symbol line") || strings.Contains(context, "some map") {
 		t.Fatalf("generated maps must never be inlined, got: %s", context)
 	}
-	if !strings.Contains(context, ".tendril/genome/repomap.md") || !strings.Contains(context, ".tendril/genome/memorymap.md") {
+	if !strings.Contains(context, ".tendril/genome/repomap.md") {
 		t.Fatalf("generated maps must be named with their on-disk path, got: %s", context)
+	}
+	if strings.Contains(context, "memorymap.md") {
+		t.Fatalf("quarantined map must not be advertised, got: %s", context)
 	}
 }
 
 func TestLoadGenomeContextTruncatesOversizedCuratedFile(t *testing.T) {
 	workspace := t.TempDir()
 	oversized := "# Learnings\n" + strings.Repeat("- lesson learned from a run\n", 1000)
-	writeGenomeFile(t, workspace, "epigenetics.md", oversized)
+	writeGenomeFile(t, workspace, "curated-oversized.md", oversized)
 
 	context, err := loadGenomeContext(workspace)
 	if err != nil {
@@ -72,8 +75,34 @@ func TestLoadGenomeContextTruncatesOversizedCuratedFile(t *testing.T) {
 	if len(context) > genomePerFileByteBudget+1024 {
 		t.Fatalf("oversized curated file must be truncated, got %d bytes", len(context))
 	}
-	if !strings.Contains(context, "[truncated — read .tendril/genome/epigenetics.md") {
-		t.Fatalf("truncation must point at the on-disk file, got tail: %s", context[len(context)-200:])
+	if !strings.Contains(context, "[truncated — read .tendril/genome/curated-oversized.md") {
+		tailStart := len(context) - 200
+		if tailStart < 0 {
+			tailStart = 0
+		}
+		t.Fatalf("truncation must point at the on-disk file, got tail: %s", context[tailStart:])
+	}
+}
+
+func TestLoadGenomeContextQuarantinesUnclassifiedMaterial(t *testing.T) {
+	workspace := t.TempDir()
+	writeGenomeFile(t, workspace, "epigenetics.md", "learned material")
+	writeGenomeFile(t, workspace, "memorymap.md", "memory map")
+	writeGenomeFile(t, workspace, "repomap.md", "repo map")
+
+	context, err := loadGenomeContext(workspace)
+	if err != nil {
+		t.Fatalf("loadGenomeContext: %v", err)
+	}
+
+	if strings.Contains(context, "epigenetics.md") || strings.Contains(context, "learned material") {
+		t.Fatalf("epigenetics.md must be quarantined entirely, got: %s", context)
+	}
+	if strings.Contains(context, "memorymap.md") || strings.Contains(context, "memory map") {
+		t.Fatalf("memorymap.md must be quarantined entirely, got: %s", context)
+	}
+	if !strings.Contains(context, ".tendril/genome/repomap.md") {
+		t.Fatalf("repomap.md must still be advertised, got: %s", context)
 	}
 }
 
@@ -101,25 +130,25 @@ func TestLoadGenomeContextNamesFilesPastTotalBudget(t *testing.T) {
 
 func TestTruncateGenomeContentCutsOnLineBoundary(t *testing.T) {
 	content := "first line\nsecond line\nthird line"
-	got := truncateGenomeContent("epigenetics.md", content, 15)
+	got := truncateGenomeContent("curated-oversized.md", content, 15)
 	if !strings.HasPrefix(got, "first line\n") {
 		t.Fatalf("truncation must keep whole lines, got: %q", got)
 	}
 	if strings.Contains(got, "second") {
 		t.Fatalf("truncation must not keep partial lines past the budget, got: %q", got)
 	}
-	if !strings.Contains(got, ".tendril/genome/epigenetics.md") {
+	if !strings.Contains(got, ".tendril/genome/curated-oversized.md") {
 		t.Fatalf("marker must name the on-disk file, got: %q", got)
 	}
 }
 
 func TestIsGeneratedGenomeFile(t *testing.T) {
-	for _, name := range []string{"repomap.md", "memorymap.md", "Repomap.md"} {
+	for _, name := range []string{"repomap.md", "Repomap.md"} {
 		if !isGeneratedGenomeFile(name) {
 			t.Fatalf("%s must be classified as generated", name)
 		}
 	}
-	for _, name := range []string{"taxonomy-canonical.md", "epigenetics.md", "README.md"} {
+	for _, name := range []string{"taxonomy-canonical.md", "README.md"} {
 		if isGeneratedGenomeFile(name) {
 			t.Fatalf("%s must not be classified as generated", name)
 		}

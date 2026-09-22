@@ -1502,7 +1502,17 @@ const (
 // needs.
 func isGeneratedGenomeFile(name string) bool {
 	switch strings.ToLower(name) {
-	case repositoryMapFile, memoryMapFile:
+	case repositoryMapFile:
+		return true
+	}
+	return false
+}
+
+// isQuarantinedGenomeFile reports whether a machine-generated context file
+// lacks durable provenance and must be quarantined from automatic Sprout context.
+func isQuarantinedGenomeFile(name string) bool {
+	switch strings.ToLower(name) {
+	case memoryMapFile, genomicEpigeneticsFilename:
 		return true
 	}
 	return false
@@ -1549,6 +1559,9 @@ func readGenomeContextFiles(workspace string) ([]genomeContextFile, error) {
 		if entry.IsDir() {
 			continue
 		}
+		if isQuarantinedGenomeFile(entry.Name()) {
+			continue
+		}
 		if isGeneratedGenomeFile(entry.Name()) {
 			files = append(files, genomeContextFile{name: entry.Name()})
 			continue
@@ -1582,6 +1595,9 @@ func loadGenomeContextLegacy(workspace string) (string, error) {
 	remaining := genomeTotalByteBudget
 	var onDiskOnly []string
 	for _, file := range files {
+		if isQuarantinedGenomeFile(file.name) {
+			continue
+		}
 		if isGeneratedGenomeFile(file.name) {
 			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
 			continue
@@ -1636,6 +1652,9 @@ func loadGenomeContextWithBudget(workspace string, availableBudget int) (string,
 	remaining := availableBudget
 	var onDiskOnly []string
 	for _, file := range files {
+		if isQuarantinedGenomeFile(file.name) {
+			continue
+		}
 		if isGeneratedGenomeFile(file.name) {
 			onDiskOnly = append(onDiskOnly, ".tendril/genome/"+file.name)
 			continue
