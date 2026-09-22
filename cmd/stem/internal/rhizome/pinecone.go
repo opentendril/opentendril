@@ -41,6 +41,9 @@ func NewPineconeMemoryBackend(config MemoryConfig) (*PineconeMemoryBackend, erro
 }
 
 func (b *PineconeMemoryBackend) StoreMemory(ctx context.Context, memory Memory) error {
+	if memory.StableID == "" {
+		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
+	}
 	if err := memory.Validate(); err != nil {
 		return fmt.Errorf("invalid memory before persistence: %w", err)
 	}
@@ -228,13 +231,7 @@ func memoryFromMetadata(metadata map[string]any) (Memory, error) {
 	if status == "" {
 		status = StatusUnclassified
 	}
-	switch status {
-	case StatusUnclassified, StatusEstablished, StatusProposed, StatusStale,
-		StatusConflicted, StatusRejected, StatusSuperseded:
-		// valid
-	default:
-		return Memory{}, fmt.Errorf("invalid memory status %q", status)
-	}
+
 	memory := Memory{
 		RepositoryName:   stringMetadata(metadata, "repositoryName"),
 		Category:         stringMetadata(metadata, "category"),
@@ -251,7 +248,7 @@ func memoryFromMetadata(metadata map[string]any) (Memory, error) {
 		SourceIdentity:   stringMetadata(metadata, "sourceIdentity"),
 		ContentIdentity:  stringMetadata(metadata, "contentIdentity"),
 		RevisionIdentity: stringMetadata(metadata, "revisionIdentity"),
-		StableID:         stringMetadata(metadata, "stableId"),
+		StableID:         StableMemoryIdentity(stringMetadata(metadata, "repositoryName"), stringMetadata(metadata, "title")),
 		RevisionMetadata: stringMetadata(metadata, "revisionMetadata"),
 		Supersession:     stringMetadata(metadata, "supersession"),
 	}

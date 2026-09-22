@@ -64,10 +64,11 @@ const (
 type Kind string
 
 const (
-	KindFact     Kind = "fact"
-	KindConcept  Kind = "concept"
-	KindDecision Kind = "decision"
-	KindRule     Kind = "rule"
+	KindObservation            Kind = "observation"
+	KindFact                   Kind = "fact"
+	KindConstraint             Kind = "constraint"
+	KindCorrection             Kind = "correction"
+	KindRejectedInterpretation Kind = "rejected-interpretation"
 )
 
 type Memory struct {
@@ -98,19 +99,50 @@ type Memory struct {
 // Authority=deterministic requires Origin=substrate or Origin=mycorrhizal.
 // Status=established requires Authority != none.
 func (m *Memory) Validate() error {
-	switch m.Authority {
-	case AuthorityBotanist:
-		if m.Origin != OriginBotanist {
-			return fmt.Errorf("authority %q requires origin %q, got %q", m.Authority, OriginBotanist, m.Origin)
+	if m.Origin != "" && m.Origin != OriginLegacy && m.Origin != OriginBotanist && m.Origin != OriginSubstrate && m.Origin != OriginMycorrhizal {
+		return fmt.Errorf("unknown origin %q", m.Origin)
+	}
+	if m.Authority != "" && m.Authority != AuthorityNone && m.Authority != AuthorityBotanist && m.Authority != AuthorityDeterministic {
+		return fmt.Errorf("unknown authority %q", m.Authority)
+	}
+	if m.Status != "" && m.Status != StatusUnclassified && m.Status != StatusEstablished && m.Status != StatusProposed && m.Status != StatusStale && m.Status != StatusConflicted && m.Status != StatusRejected && m.Status != StatusSuperseded {
+		return fmt.Errorf("unknown status %q", m.Status)
+	}
+	if m.Kind != "" && m.Kind != KindObservation && m.Kind != KindFact && m.Kind != KindConstraint && m.Kind != KindCorrection && m.Kind != KindRejectedInterpretation {
+		return fmt.Errorf("unknown kind %q", m.Kind)
+	}
+
+	canonicalID := StableMemoryIdentity(m.RepositoryName, m.Title)
+	if m.StableID != "" && m.StableID != canonicalID {
+		return fmt.Errorf("provided StableID %q conflicts with canonical identity %q", m.StableID, canonicalID)
+	}
+
+	o := m.Origin
+	if o == "" {
+		o = OriginLegacy
+	}
+	a := m.Authority
+	if a == "" {
+		a = AuthorityNone
+	}
+	s := m.Status
+	if s == "" {
+		s = StatusUnclassified
+	}
+
+	if o == OriginMycorrhizal && s == StatusEstablished && a != AuthorityBotanist {
+		return fmt.Errorf("mycorrhizal origin requires botanist authority to be established, got %q", a)
+	}
+
+	if o == OriginSubstrate && a == AuthorityDeterministic && s == StatusEstablished {
+		if m.SourceIdentity == "" {
+			return fmt.Errorf("deterministic substrate establishment requires source identity")
 		}
-	case AuthorityDeterministic:
-		if m.Origin != OriginSubstrate && m.Origin != OriginMycorrhizal {
-			return fmt.Errorf("authority %q requires origin substrate or mycorrhizal, got %q", m.Authority, m.Origin)
+		if m.ContentIdentity == "" && m.RevisionIdentity == "" {
+			return fmt.Errorf("deterministic substrate establishment requires content or revision identity")
 		}
 	}
-	if m.Status == StatusEstablished && m.Authority == AuthorityNone {
-		return fmt.Errorf("status %q requires authority != none", m.Status)
-	}
+
 	return nil
 }
 
@@ -426,10 +458,11 @@ func (s *SQLiteIndexStore) scanSymbolRows(rows *sql.Rows) ([]Symbol, error) {
 }
 
 func (s *SQLiteIndexStore) StoreMemory(ctx context.Context, memory Memory) error {
-	if memory.Origin != "" || memory.Authority != "" || memory.Status != "" {
-		if err := memory.Validate(); err != nil {
-			return fmt.Errorf("invalid memory envelope: %w", err)
-		}
+	if memory.StableID == "" {
+		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
+	}
+	if err := memory.Validate(); err != nil {
+		return fmt.Errorf("invalid memory envelope: %w", err)
 	}
 	if memory.CreatedAt.IsZero() {
 		memory.CreatedAt = time.Now().UTC()
@@ -467,10 +500,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?)`
 		memory.Tags, memory.CreatedAt.UTC().Format(time.RFC3339Nano), memory.SessionID,
 	); err != nil {
 		return fmt.Errorf("insert memory fts row: %w", err)
-	}
-
-	if memory.StableID == "" {
-		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
 	}
 
 	const upsertEnvelope = `
@@ -594,9 +623,28 @@ LIMIT ?`
 }
 
 func (s *SQLiteIndexStore) DeleteMemory(ctx context.Context, repositoryName string, title string) error {
-	const statement = `DELETE FROM memories WHERE repositoryName = ? AND title = ?`
-	if _, err := s.db.ExecContext(ctx, statement, repositoryName, title); err != nil {
-		return fmt.Errorf("delete memory: %w", err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin delete memory tx: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	const statementMem = `DELETE FROM memories WHERE repositoryName = ? AND title = ?`
+	if _, err = tx.ExecContext(ctx, statementMem, repositoryName, title); err != nil {
+		return fmt.Errorf("delete memory fts row: %w", err)
+	}
+
+	const statementEnv = `DELETE FROM memory_envelopes WHERE repositoryName = ? AND title = ?`
+	if _, err = tx.ExecContext(ctx, statementEnv, repositoryName, title); err != nil {
+		return fmt.Errorf("delete memory envelope sidecar: %w", err)
+	}
+
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit delete memory tx: %w", err)
 	}
 	return nil
 }
@@ -641,20 +689,14 @@ func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
 		memory.StableID = stableID
 		memory.RevisionMetadata = revisionMetadata
 		memory.Supersession = supersession
-		// Fail closed: reject any memory with an unrecognised status.
+		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
+
+		// Fail closed: reject any memory with an invalid envelope combination
 		if err := memory.Validate(); err != nil {
 			// Only validate if the record carries an explicit (non-legacy-default) status.
 			if memory.Status != StatusUnclassified || memory.Origin != OriginLegacy {
 				return nil, fmt.Errorf("corrupted memory envelope for %q/%q: %w", memory.RepositoryName, memory.Title, err)
 			}
-		}
-		// Any unrecognised status value is an envelope corruption.
-		switch memory.Status {
-		case StatusUnclassified, StatusEstablished, StatusProposed, StatusStale,
-			StatusConflicted, StatusRejected, StatusSuperseded:
-			// valid
-		default:
-			return nil, fmt.Errorf("corrupted memory envelope for %q/%q: unknown status %q", memory.RepositoryName, memory.Title, memory.Status)
 		}
 		memories = append(memories, memory)
 	}

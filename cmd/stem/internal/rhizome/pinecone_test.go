@@ -34,9 +34,12 @@ func TestPineconeEnvelopeRoundTrip(t *testing.T) {
 
 	if got.Origin != fullMem.Origin || got.Authority != fullMem.Authority || got.Status != fullMem.Status || got.Kind != fullMem.Kind ||
 		got.Provenance != fullMem.Provenance || got.SourceClass != fullMem.SourceClass || got.SourceIdentity != fullMem.SourceIdentity ||
-		got.ContentIdentity != fullMem.ContentIdentity || got.RevisionIdentity != fullMem.RevisionIdentity || got.StableID != fullMem.StableID ||
+		got.ContentIdentity != fullMem.ContentIdentity || got.RevisionIdentity != fullMem.RevisionIdentity ||
 		got.RevisionMetadata != fullMem.RevisionMetadata || got.Supersession != fullMem.Supersession {
 		t.Fatalf("Envelope round-trip mismatch. want: %+v got: %+v", fullMem, got)
+	}
+	if got.StableID != StableMemoryIdentity(fullMem.RepositoryName, fullMem.Title) {
+		t.Fatalf("StableID mismatch. want canonical, got %q", got.StableID)
 	}
 }
 
@@ -66,7 +69,7 @@ func TestPineconeMalformedFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Expected error for malformed status, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid memory status") {
+	if !strings.Contains(err.Error(), "unknown status") {
 		t.Fatalf("Expected invalid status error, got %v", err)
 	}
 }

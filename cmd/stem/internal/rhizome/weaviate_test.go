@@ -39,7 +39,7 @@ func TestWeaviateMalformedFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Expected error for malformed status, got nil")
 	}
-	if !strings.Contains(err.Error(), "invalid memory status") {
+	if !strings.Contains(err.Error(), "unknown status") {
 		t.Fatalf("Expected invalid status error, got %v", err)
 	}
 }

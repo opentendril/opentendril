@@ -34,6 +34,9 @@ func NewWeaviateMemoryBackend(config MemoryConfig) (*WeaviateMemoryBackend, erro
 }
 
 func (b *WeaviateMemoryBackend) StoreMemory(ctx context.Context, memory Memory) error {
+	if memory.StableID == "" {
+		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
+	}
 	if err := memory.Validate(); err != nil {
 		return fmt.Errorf("invalid memory before persistence: %w", err)
 	}
