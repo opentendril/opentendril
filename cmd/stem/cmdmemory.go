@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
@@ -134,16 +135,12 @@ func runMemoryAddCmd(ctx context.Context, args []string) {
 		intent.SubstrateRoot = currentSubstrateRoot()
 	}
 
-	mem, err := rhizome.ApplyBotanistAdd(intent)
-	if err != nil {
-		failMemoryCmd("apply botanist add policy", err)
-	}
-
 	backend := openMemoryBackendForCLI(ctx)
 	defer closeMemoryBackend(backend)
 
-	if err := backend.StoreMemory(ctx, mem); err != nil {
-		failMemoryCmd("store memory", err)
+	mem, err := rhizome.ExecuteBotanistAdd(ctx, backend, intent)
+	if err != nil {
+		failMemoryCmd("execute botanist add policy", err)
 	}
 	fmt.Printf("Memory stored: origin=%s authority=%s status=%s kind=%s\n",
 		mem.Origin, mem.Authority, mem.Status, mem.Kind)
@@ -354,25 +351,23 @@ func printMemoryTable(memories []rhizome.Memory) {
 }
 
 func currentRepositoryName() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "workspace"
-	}
-	name := filepath.Base(wd)
-	if name == "." || name == "" {
-		return "workspace"
-	}
-	return name
+	root := currentSubstrateRoot()
+	return filepath.Base(root)
 }
 
 // currentSubstrateRoot returns the absolute path of the working directory,
 // which serves as the substrate root for evidence path resolution.
 func currentSubstrateRoot() string {
-	wd, err := os.Getwd()
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
 	if err != nil {
-		return "."
+		failMemoryCmd("resolve git substrate root", fmt.Errorf("must be run inside a git repository"))
 	}
-	return wd
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		failMemoryCmd("resolve git substrate root", fmt.Errorf("empty root returned by git rev-parse"))
+	}
+	return root
 }
 
 func failMemoryCmd(action string, err error) {

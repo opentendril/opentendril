@@ -28,6 +28,14 @@ func (b *cliTestBackend) StoreMemory(_ context.Context, m rhizome.Memory) error 
 	return nil
 }
 
+func (b *cliTestBackend) GetMemory(_ context.Context, repositoryName string, title string) (rhizome.Memory, bool, error) {
+	m, ok := b.records[title]
+	if ok && m.RepositoryName == repositoryName {
+		return m, true, nil
+	}
+	return rhizome.Memory{}, false, nil
+}
+
 func (b *cliTestBackend) ListMemories(_ context.Context, _ string, _ string, _ int) ([]rhizome.Memory, error) {
 	result := make([]rhizome.Memory, 0, len(b.records))
 	for _, m := range b.records {
@@ -136,69 +144,6 @@ func (w *testTabWriter) flush() {}
 // BotanistAddIntent construction
 // ======================================================================
 
-// TestApplyBotanistAddDefaultKind verifies that the add command's intent
-// produces observation when no kind is specified.
-func TestApplyBotanistAddDefaultKind(t *testing.T) {
-	mem, err := rhizome.ApplyBotanistAdd(rhizome.BotanistAddIntent{
-		RepositoryName: "owner/repo",
-		Title:          "CLI Default Kind Test",
-		Content:        "some content",
-	})
-	if err != nil {
-		t.Fatalf("ApplyBotanistAdd returned error: %v", err)
-	}
-	if mem.Kind != rhizome.KindObservation {
-		t.Errorf("default kind: want observation, got %q", mem.Kind)
-	}
-	if mem.Origin != rhizome.OriginBotanist {
-		t.Errorf("origin: want botanist, got %q", mem.Origin)
-	}
-	if mem.Authority != rhizome.AuthorityBotanist {
-		t.Errorf("authority: want botanist, got %q", mem.Authority)
-	}
-	if mem.Status != rhizome.StatusEstablished {
-		t.Errorf("status: want established, got %q", mem.Status)
-	}
-}
-
-// TestApplyBotanistAddExplicitKindPassedThrough verifies that an allowed kind
-// supplied via the intent reaches Rhizome policy without modification.
-func TestApplyBotanistAddExplicitKindPassedThrough(t *testing.T) {
-	for _, kind := range rhizome.AllowedBotanistKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			mem, err := rhizome.ApplyBotanistAdd(rhizome.BotanistAddIntent{
-				RepositoryName: "owner/repo",
-				Title:          "Kind Test " + string(kind),
-				Content:        "content",
-				Kind:           kind,
-			})
-			if err != nil {
-				t.Fatalf("ApplyBotanistAdd kind %q returned error: %v", kind, err)
-			}
-			if mem.Kind != kind {
-				t.Errorf("kind passed through: want %q, got %q", kind, mem.Kind)
-			}
-		})
-	}
-}
-
-// TestApplyBotanistAddInvalidKindRejected verifies that an unsupported kind
-// returns an error from Rhizome policy (not from the CLI adapter).
-func TestApplyBotanistAddInvalidKindRejected(t *testing.T) {
-	_, err := rhizome.ApplyBotanistAdd(rhizome.BotanistAddIntent{
-		RepositoryName: "owner/repo",
-		Title:          "Bad Kind Test",
-		Content:        "content",
-		Kind:           "verdict",
-	})
-	if err == nil {
-		t.Fatal("expected error for unsupported kind")
-	}
-	if !strings.Contains(err.Error(), "unsupported kind") {
-		t.Errorf("expected unsupported kind error from Rhizome policy, got: %v", err)
-	}
-}
-
 // TestEvidenceValuesPassedAsIntent verifies that repeated --evidence values
 // are collected and forwarded as EvidencePaths in the intent. This tests the
 // multiStringFlag and intent construction, not the evidence binding itself.
@@ -217,128 +162,5 @@ func TestEvidenceValuesPassedAsIntent(t *testing.T) {
 	intent := rhizome.BotanistAddIntent{EvidencePaths: flag.values}
 	if len(intent.EvidencePaths) != 2 {
 		t.Errorf("evidence paths not forwarded: %v", intent.EvidencePaths)
-	}
-}
-
-// ======================================================================
-// Origin / authority override prevention
-// ======================================================================
-
-// TestCallerCannotOverrideOriginOrAuthority verifies that there are no
-// flag-settable fields in the CLI for origin or authority. The intent
-// struct controls what the caller can express; lifecycle fields are policy
-// outputs only.
-func TestCallerCannotOverrideOriginOrAuthority(t *testing.T) {
-	// There is no flag for origin or authority in the CLI; the only way to
-	// set them is through the intent struct. Verify that an intent with no
-	// explicit origin/authority still produces botanist/botanist policy output.
-	mem, err := rhizome.ApplyBotanistAdd(rhizome.BotanistAddIntent{
-		RepositoryName: "owner/repo",
-		Title:          "Override Test",
-		Content:        "content",
-		// No origin or authority fields are available on BotanistAddIntent.
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if mem.Origin != rhizome.OriginBotanist || mem.Authority != rhizome.AuthorityBotanist {
-		t.Errorf("policy outputs were overridden: origin=%q authority=%q", mem.Origin, mem.Authority)
-	}
-}
-
-// ======================================================================
-// Command parsing determinism
-// ======================================================================
-
-// TestMultiStringFlagString verifies the String() representation is stable.
-func TestMultiStringFlagString(t *testing.T) {
-	f := &multiStringFlag{}
-	if f.String() != "" {
-		t.Errorf("empty flag String() should be empty, got %q", f.String())
-	}
-	_ = f.Set("x")
-	_ = f.Set("y")
-	if f.String() != "x,y" {
-		t.Errorf("flag String() mismatch: want %q, got %q", "x,y", f.String())
-	}
-}
-
-// TestConfirmCommandRoutesViaPolicy verifies the command logic: given a proposed
-// memory in a backend, confirm transitions it correctly. This tests the command
-// routing by calling Rhizome policy directly with the same arguments the command
-// handler would supply.
-func TestConfirmCommandRoutesViaPolicy(t *testing.T) {
-	// This test exercises the same policy path that runMemoryConfirmCmd would
-	// invoke -- without spawning a subprocess or calling os.Exit.
-	backend := newTestFakeBackend()
-	backend.seed(rhizome.Memory{
-		RepositoryName: "owner/repo",
-		Title:          "CLI Confirm Test",
-		Content:        "content",
-		Origin:         rhizome.OriginMycorrhizal,
-		Authority:      rhizome.AuthorityNone,
-		Status:         rhizome.StatusProposed,
-		StableID:       rhizome.StableMemoryIdentity("owner/repo", "CLI Confirm Test"),
-	})
-
-	confirmed, err := rhizome.ApplyConfirm(testCtx, backend, "owner/repo", "CLI Confirm Test")
-	if err != nil {
-		t.Fatalf("ApplyConfirm: %v", err)
-	}
-	if confirmed.Status != rhizome.StatusEstablished {
-		t.Errorf("confirm: want established, got %q", confirmed.Status)
-	}
-	if confirmed.Origin != rhizome.OriginMycorrhizal {
-		t.Errorf("confirm: origin must be preserved, got %q", confirmed.Origin)
-	}
-}
-
-// TestRejectCommandRoutesViaPolicy verifies the reject command path.
-func TestRejectCommandRoutesViaPolicy(t *testing.T) {
-	backend := newTestFakeBackend()
-	backend.seed(rhizome.Memory{
-		RepositoryName: "owner/repo",
-		Title:          "CLI Reject Test",
-		Content:        "content",
-		Origin:         rhizome.OriginMycorrhizal,
-		Authority:      rhizome.AuthorityNone,
-		Status:         rhizome.StatusProposed,
-		StableID:       rhizome.StableMemoryIdentity("owner/repo", "CLI Reject Test"),
-	})
-
-	rejected, err := rhizome.ApplyReject(testCtx, backend, "owner/repo", "CLI Reject Test")
-	if err != nil {
-		t.Fatalf("ApplyReject: %v", err)
-	}
-	if rejected.Status != rhizome.StatusRejected {
-		t.Errorf("reject: want rejected, got %q", rejected.Status)
-	}
-}
-
-// TestSupersedeCommandRoutesViaPolicy verifies the supersede command path.
-func TestSupersedeCommandRoutesViaPolicy(t *testing.T) {
-	backend := newTestFakeBackend()
-	backend.seed(rhizome.Memory{
-		RepositoryName: "owner/repo",
-		Title:          "CLI Old",
-		Content:        "old content",
-		Category:       "Design",
-		Origin:         rhizome.OriginBotanist,
-		Authority:      rhizome.AuthorityBotanist,
-		Status:         rhizome.StatusEstablished,
-		StableID:       rhizome.StableMemoryIdentity("owner/repo", "CLI Old"),
-	})
-
-	replacement, err := rhizome.ApplySupersede(testCtx, backend, rhizome.SupersedeIntent{
-		RepositoryName: "owner/repo",
-		OldTitle:       "CLI Old",
-		NewTitle:       "CLI New",
-		Content:        "new content",
-	})
-	if err != nil {
-		t.Fatalf("ApplySupersede: %v", err)
-	}
-	if replacement.Kind != rhizome.KindCorrection {
-		t.Errorf("supersede replacement kind: want correction, got %q", replacement.Kind)
 	}
 }

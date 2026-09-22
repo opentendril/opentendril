@@ -78,6 +78,29 @@ func (b *WeaviateMemoryBackend) StoreMemory(ctx context.Context, memory Memory) 
 	return b.doJSON(ctx, http.MethodPost, "/v1/objects", payload, nil)
 }
 
+func (b *WeaviateMemoryBackend) GetMemory(ctx context.Context, repositoryName string, title string) (Memory, bool, error) {
+	objectID := deterministicUUID(repositoryName, title)
+	requestURL := "/v1/objects/" + weaviateMemoryClass + "/" + objectID
+	var response struct {
+		Properties map[string]any `json:"properties"`
+	}
+	err := b.doJSON(ctx, http.MethodGet, requestURL, nil, &response)
+	if err != nil {
+		if strings.Contains(err.Error(), "status 404") {
+			return Memory{}, false, nil
+		}
+		return Memory{}, false, err
+	}
+	memory, err := memoryFromMetadata(response.Properties)
+	if err != nil {
+		return Memory{}, false, err
+	}
+	if memory.RepositoryName != repositoryName || memory.Title != title {
+		return Memory{}, false, fmt.Errorf("exact memory identity mismatch: returned %q/%q, expected %q/%q", memory.RepositoryName, memory.Title, repositoryName, title)
+	}
+	return memory, true, nil
+}
+
 func (b *WeaviateMemoryBackend) SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 20

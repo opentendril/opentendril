@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,6 +38,14 @@ func (f *fakeMemoryBackend) StoreMemory(_ context.Context, m Memory) error {
 	f.storeCallOrder = append(f.storeCallOrder, m.Title+"/"+string(m.Status))
 	f.records[m.Title] = m
 	return nil
+}
+
+func (f *fakeMemoryBackend) GetMemory(_ context.Context, repositoryName string, title string) (Memory, bool, error) {
+	m, ok := f.records[title]
+	if ok && m.RepositoryName == repositoryName {
+		return m, true, nil
+	}
+	return Memory{}, false, nil
 }
 
 func (f *fakeMemoryBackend) ListMemories(_ context.Context, _ string, _ string, _ int) ([]Memory, error) {
@@ -671,6 +680,14 @@ func (b *orderingFakeBackend) StoreMemory(_ context.Context, m Memory) error {
 	return nil
 }
 
+func (b *orderingFakeBackend) GetMemory(_ context.Context, repositoryName string, title string) (Memory, bool, error) {
+	m, ok := b.records[title]
+	if ok && m.RepositoryName == repositoryName {
+		return m, true, nil
+	}
+	return Memory{}, false, nil
+}
+
 func (b *orderingFakeBackend) ListMemories(_ context.Context, _ string, _ string, _ int) ([]Memory, error) {
 	result := make([]Memory, 0, len(b.records))
 	for _, m := range b.records {
@@ -726,6 +743,10 @@ func TestExactMemoryLookupAmbiguousFails(t *testing.T) {
 }
 
 type duplicateTitleBackend struct{ items []Memory }
+
+func (d *duplicateTitleBackend) GetMemory(_ context.Context, _ string, _ string) (Memory, bool, error) {
+	return Memory{}, false, fmt.Errorf("ambiguous exact hit simulation")
+}
 
 func (d *duplicateTitleBackend) ListMemories(_ context.Context, _ string, _ string, _ int) ([]Memory, error) {
 	return d.items, nil

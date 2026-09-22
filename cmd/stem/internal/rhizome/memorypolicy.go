@@ -188,24 +188,15 @@ func ApplyReject(ctx context.Context, backend MemoryBackend, repositoryName, tit
 	return rejected, nil
 }
 
-// ApplySupersede implements the fail-closed supersession protocol:
-//
-//  1. Validate and construct the replacement memory fully.
-//  2. Mark the old item superseded and persist it.
-//  3. Only after step 2 succeeds, persist the replacement.
-//
-// If step 2 fails, the replacement is not persisted.
-// If step 3 fails, the old item remains superseded and the caller is notified.
-// Supersession of an already superseded item is rejected.
 func ApplySupersede(ctx context.Context, backend MemoryBackend, intent SupersedeIntent) (replacement Memory, err error) {
-	if strings.TrimSpace(intent.OldTitle) == "" {
+	intent.OldTitle = strings.TrimSpace(intent.OldTitle)
+	intent.NewTitle = strings.TrimSpace(intent.NewTitle)
+
+	if intent.OldTitle == "" {
 		return Memory{}, fmt.Errorf("supersede: old title is required")
 	}
-	if strings.TrimSpace(intent.NewTitle) == "" {
+	if intent.NewTitle == "" {
 		return Memory{}, fmt.Errorf("supersede: new title is required")
-	}
-	if intent.OldTitle == intent.NewTitle {
-		return Memory{}, fmt.Errorf("supersede: replacement title must differ from old title")
 	}
 
 	old, err := exactMemoryLookup(ctx, backend, intent.RepositoryName, intent.OldTitle)
@@ -236,6 +227,18 @@ func ApplySupersede(ctx context.Context, backend MemoryBackend, intent Supersede
 	replacement, err = ApplyBotanistAdd(addIntent)
 	if err != nil {
 		return Memory{}, fmt.Errorf("supersede: build replacement: %w", err)
+	}
+
+	if replacement.StableID == old.StableID {
+		return Memory{}, fmt.Errorf("supersede: replacement identity %q must differ from old identity %q", replacement.StableID, old.StableID)
+	}
+
+	_, found, err := backend.GetMemory(ctx, replacement.RepositoryName, replacement.Title)
+	if err != nil {
+		return Memory{}, fmt.Errorf("supersede: check replacement existence: %w", err)
+	}
+	if found {
+		return Memory{}, fmt.Errorf("supersede rejected: replacement identity %q/%q already exists", replacement.RepositoryName, replacement.Title)
 	}
 
 	// Step 2: mark old item superseded before persisting the replacement.
@@ -292,6 +295,11 @@ func BindEvidence(relativePaths []string, substrateRoot string) (EvidenceManifes
 	for _, raw := range relativePaths {
 		if filepath.IsAbs(raw) {
 			return EvidenceManifest{}, fmt.Errorf("BindEvidence: absolute evidence path rejected: %q", raw)
+		}
+		for _, comp := range strings.Split(filepath.ToSlash(raw), "/") {
+			if comp == ".." {
+				return EvidenceManifest{}, fmt.Errorf("BindEvidence: traversal rejected: %q", raw)
+			}
 		}
 		clean := filepath.Clean(raw)
 		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
@@ -387,32 +395,35 @@ func resolveGitRevision(root string) (string, error) {
 // repository. It fails closed:
 //   - returns an error if no record with that exact title exists;
 //   - returns an error if multiple records share the same title (ambiguous).
-//
-// Only the MemoryBackend.ListMemories interface is used; the backend interface
-// is not widened in this slice.
 func exactMemoryLookup(ctx context.Context, backend MemoryBackend, repositoryName, title string) (Memory, error) {
-	// Fetch a broad set and filter locally to avoid relying on FTS inexact
-	// matching semantics. Limit is generous; exact comparison is the authority.
-	all, err := backend.ListMemories(ctx, repositoryName, "", 10000)
+	mem, found, err := backend.GetMemory(ctx, repositoryName, title)
 	if err != nil {
-		return Memory{}, fmt.Errorf("list memories for exact lookup: %w", err)
+		return Memory{}, err
 	}
-
-	var matches []Memory
-	for _, m := range all {
-		if m.Title == title {
-			matches = append(matches, m)
-		}
-	}
-
-	switch len(matches) {
-	case 0:
+	if !found {
 		return Memory{}, fmt.Errorf("no memory found with exact title %q in repository %q", title, repositoryName)
-	case 1:
-		return matches[0], nil
-	default:
-		return Memory{}, fmt.Errorf("ambiguous: %d records share the exact title %q in repository %q; explicit disambiguation required", len(matches), title, repositoryName)
 	}
+	return mem, nil
+}
+
+// ExecuteBotanistAdd validates the intent, proves the absence of an exact
+// identity collision, and stores the new Botanist-established memory.
+func ExecuteBotanistAdd(ctx context.Context, backend MemoryBackend, intent BotanistAddIntent) (Memory, error) {
+	mem, err := ApplyBotanistAdd(intent)
+	if err != nil {
+		return Memory{}, err
+	}
+	_, found, err := backend.GetMemory(ctx, mem.RepositoryName, mem.Title)
+	if err != nil {
+		return Memory{}, fmt.Errorf("check existing memory: %w", err)
+	}
+	if found {
+		return Memory{}, fmt.Errorf("add rejected: an exact memory identity %q/%q already exists", mem.RepositoryName, mem.Title)
+	}
+	if err := backend.StoreMemory(ctx, mem); err != nil {
+		return Memory{}, fmt.Errorf("store memory: %w", err)
+	}
+	return mem, nil
 }
 
 // isBotanistKind reports whether kind is in the allowed set for direct

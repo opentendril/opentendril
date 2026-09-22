@@ -63,6 +63,32 @@ func (b *PineconeMemoryBackend) StoreMemory(ctx context.Context, memory Memory) 
 	return b.doJSON(ctx, http.MethodPost, "/vectors/upsert", payload, nil)
 }
 
+func (b *PineconeMemoryBackend) GetMemory(ctx context.Context, repositoryName string, title string) (Memory, bool, error) {
+	fetchPayload := map[string]any{"ids": []string{memoryID(repositoryName, title)}}
+	var fetchResponse struct {
+		Vectors map[string]struct {
+			Metadata map[string]any `json:"metadata"`
+		} `json:"vectors"`
+	}
+	if err := b.doJSON(ctx, http.MethodPost, "/vectors/fetch", fetchPayload, &fetchResponse); err != nil {
+		return Memory{}, false, err
+	}
+	if len(fetchResponse.Vectors) == 0 {
+		return Memory{}, false, nil
+	}
+	for _, vector := range fetchResponse.Vectors {
+		memory, err := memoryFromMetadata(vector.Metadata)
+		if err != nil {
+			return Memory{}, false, err
+		}
+		if memory.RepositoryName != repositoryName || memory.Title != title {
+			return Memory{}, false, fmt.Errorf("exact memory identity mismatch: returned %q/%q, expected %q/%q", memory.RepositoryName, memory.Title, repositoryName, title)
+		}
+		return memory, true, nil
+	}
+	return Memory{}, false, nil
+}
+
 func (b *PineconeMemoryBackend) SearchMemories(ctx context.Context, repositoryName string, query string, category string, limit int) ([]Memory, error) {
 	if limit <= 0 {
 		limit = 20
