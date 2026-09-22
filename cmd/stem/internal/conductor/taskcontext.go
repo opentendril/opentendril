@@ -50,15 +50,16 @@ const (
 )
 
 const (
-	taskContextOmissionBudgetBytes       = "budget-bytes"
-	taskContextOmissionBudgetItems       = "budget-items"
-	taskContextOmissionStaleEvidence     = "stale-evidence"
-	taskContextOmissionPathSecurity      = "path-security"
-	taskContextOmissionUnreadable        = "unreadable"
-	taskContextOmissionNotFound          = "not-found"
-	taskContextOmissionMemoryMissing     = "memory-missing"
-	taskContextOmissionMemoryUnavailable = "memory-unavailable"
-	taskContextOmissionMemoryUnbound     = "memory-unbound"
+	taskContextOmissionBudgetBytes        = "budget-bytes"
+	taskContextOmissionBudgetItems        = "budget-items"
+	taskContextOmissionStaleEvidence      = "stale-evidence"
+	taskContextOmissionPathSecurity       = "path-security"
+	taskContextOmissionUnreadable         = "unreadable"
+	taskContextOmissionNotFound           = "not-found"
+	taskContextOmissionMemoryMissing      = "memory-missing"
+	taskContextOmissionMemoryUnavailable  = "memory-unavailable"
+	taskContextOmissionMemoryUnbound      = "memory-unbound"
+	taskContextOmissionMemoryUnclassified = "memory-unclassified"
 )
 
 var errTaskContextPathSecurity = errors.New("task-context path security rejection")
@@ -369,8 +370,8 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			if unbound > 0 {
 				taskContextAddOmission(&manifest, taskContextOmissionMemoryUnbound, unbound)
 			}
-			for _, candidate := range memoryCandidates {
-				candidates[candidate.dedupeKey] = candidate
+			if len(memoryCandidates) > 0 {
+				taskContextAddOmission(&manifest, taskContextOmissionMemoryUnclassified, len(memoryCandidates))
 			}
 		}
 	}

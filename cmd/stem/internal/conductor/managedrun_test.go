@@ -978,8 +978,12 @@ func TestRunSproutManagedRunAttributesTaskContextToBackingSubstrate(t *testing.T
 	if !strings.Contains(contextPayload, "run workspace evidence") {
 		t.Fatalf("task context did not read the actual RunWorkspace: %q", contextPayload)
 	}
-	if !strings.Contains(contextPayload, "backing source memory") {
-		t.Fatalf("task context did not use source-local project memory: %q", contextPayload)
+	if strings.Contains(contextPayload, "backing source memory") {
+		t.Fatalf("task context unexpectedly admitted backing source legacy memory: %q", contextPayload)
+	}
+	omissions, ok := event.Data["omissionCounts"].(map[string]interface{})
+	if !ok || omissions[taskContextOmissionMemoryUnclassified] != 1 {
+		t.Fatalf("managed provenance did not report the unclassified memory omission safely: %+v", event.Data)
 	}
 	if len(availableTools) != 1 || availableTools[0].Name != "readFile" {
 		t.Fatalf("task-context preparation changed the Terrarium tool catalog: %+v", availableTools)
