@@ -285,7 +285,18 @@ func parseSupersedeArgs(args []string) (parsedSupersedeArgs, error) {
 	evidence := &multiStringFlag{}
 	fs.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
 	fs.SetOutput(io.Discard)
-	if err := fs.Parse(args); err != nil {
+
+	var flagArgs []string
+	var leadingArgs []string
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			flagArgs = args[i:]
+			break
+		}
+		leadingArgs = append(leadingArgs, arg)
+	}
+
+	if err := fs.Parse(flagArgs); err != nil {
 		return parsedSupersedeArgs{}, fmt.Errorf("supersede: parse flags: %w", err)
 	}
 	for _, arg := range fs.Args() {
@@ -293,14 +304,17 @@ func parseSupersedeArgs(args []string) (parsedSupersedeArgs, error) {
 			return parsedSupersedeArgs{}, fmt.Errorf("supersede: unsupported or misplaced flag: %s", arg)
 		}
 	}
-	if fs.NArg() < 1 {
+
+	allPositionals := append(leadingArgs, fs.Args()...)
+
+	if len(allPositionals) < 1 {
 		return parsedSupersedeArgs{}, fmt.Errorf("supersede: old title is required")
 	}
 	if strings.TrimSpace(*newTitle) == "" {
 		return parsedSupersedeArgs{}, fmt.Errorf("supersede: --title is required")
 	}
 	return parsedSupersedeArgs{
-		OldTitle:      strings.Join(fs.Args(), " "),
+		OldTitle:      strings.Join(allPositionals, " "),
 		NewTitle:      *newTitle,
 		Category:      *category,
 		Tags:          *tags,

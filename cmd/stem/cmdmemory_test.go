@@ -234,6 +234,19 @@ func TestCLIParseSupersedeUnsupportedAuthorityFlagsRejected(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for --status")
 	}
+
+	_, err = parseSupersedeArgs([]string{"Old", "--title=New", "--origin=mycorrhizal"})
+	if err == nil {
+		t.Error("expected error for --origin (documented order)")
+	}
+	_, err = parseSupersedeArgs([]string{"Old", "--title=New", "--authority=deterministic"})
+	if err == nil {
+		t.Error("expected error for --authority (documented order)")
+	}
+	_, err = parseSupersedeArgs([]string{"Old", "--title=New", "--status=established"})
+	if err == nil {
+		t.Error("expected error for --status (documented order)")
+	}
 }
 
 // ======================================================================
@@ -295,18 +308,34 @@ func TestCLIParseSupersedeOldTitleAndNewTitle(t *testing.T) {
 	if got.NewTitle != "New Title" {
 		t.Errorf("expected new title %q, got %q", "New Title", got.NewTitle)
 	}
+
+	got, err = parseSupersedeArgs([]string{"Old Title", "--title=New Title", "--content=new content"})
+	if err != nil {
+		t.Fatalf("unexpected error (documented order): %v", err)
+	}
+	if got.OldTitle != "Old Title" {
+		t.Errorf("expected old title %q, got %q", "Old Title", got.OldTitle)
+	}
+	if got.NewTitle != "New Title" {
+		t.Errorf("expected new title %q, got %q", "New Title", got.NewTitle)
+	}
 }
 
 func TestCLIParseSupersedeRepeatedEvidence(t *testing.T) {
 	got, err := parseSupersedeArgs([]string{
-		"--title=New Title",
-		"--content=new content",
+		"Old Rule",
+		"--title=New Rule",
 		"--evidence=a.txt",
 		"--evidence=b.txt",
-		"Old Title",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.OldTitle != "Old Rule" {
+		t.Errorf("expected old title %q, got %q", "Old Rule", got.OldTitle)
+	}
+	if got.NewTitle != "New Rule" {
+		t.Errorf("expected new title %q, got %q", "New Rule", got.NewTitle)
 	}
 	if len(got.EvidencePaths) != 2 || got.EvidencePaths[0] != "a.txt" || got.EvidencePaths[1] != "b.txt" {
 		t.Errorf("evidence paths mismatch: %v", got.EvidencePaths)
