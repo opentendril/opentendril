@@ -355,6 +355,57 @@ func TestCallStreamOpenAIishTextOnly(t *testing.T) {
 	}
 }
 
+func TestCallStreamOpenAIishReturnsErrNoUsableCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+	res, err := client.CallStreamWithResult(context.Background(), []Message{{Role: "user", Content: "hi"}}, make(chan string, 10))
+	if !errors.Is(err, ErrNoUsableCompletion) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrNoUsableCompletion)", err)
+	}
+	if res.Text != "" || len(res.ToolCalls) != 0 {
+		t.Fatalf("result = %#v, want no text or tool calls", res)
+	}
+}
+
+func TestCallStreamOpenAIishRejectsWhitespaceOnlyText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" \\t \"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+	res, err := client.CallStreamWithResult(context.Background(), []Message{{Role: "user", Content: "hi"}}, make(chan string, 10))
+	if !errors.Is(err, ErrNoUsableCompletion) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrNoUsableCompletion)", err)
+	}
+	if res.Text != " \t " {
+		t.Errorf("Text = %q, want the assembled whitespace-only text", res.Text)
+	}
+}
+
 // Every stream carries a DIFFERENT call, so a splice between two of them shows
 // up in the content itself. An earlier version of this test gave all five
 // streams identical payloads: under a shared-accumulator mutation it passed
@@ -655,7 +706,6 @@ func TestCallStreamOpenRouterUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		events := []string{
-			`{"choices":[{"delta":{"content":"text only"}}]}`,
 			`{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30,"cost":0.000015000000002}}`,
 		}
 		for _, ev := range events {
@@ -665,14 +715,21 @@ func TestCallStreamOpenRouterUsage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewClient(ProviderSpec{Provider: "openrouter", BaseURL: server.URL, Mode: ModeOpenAIish})
-	res, err := client.doCall(context.Background(), server.URL, nil, nil, true, nil)
-	if err != nil {
-		t.Fatalf("doCall failed: %v", err)
+	client := NewClient(ProviderSpec{
+		Provider: "openrouter",
+		BaseURL:  server.URL,
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "router-model",
+	})
+	res, err := client.CallStreamWithResult(context.Background(), []Message{{Role: "user", Content: "hi"}}, make(chan string, 10))
+	if !errors.Is(err, ErrNoUsableCompletion) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrNoUsableCompletion)", err)
 	}
 
-	if res.Text != "text only" {
-		t.Errorf("Text = %q", res.Text)
+	if res.Text != "" {
+		t.Errorf("Text = %q, want empty", res.Text)
 	}
 	if res.Usage.PromptTokens == nil || *res.Usage.PromptTokens != 10 {
 		t.Errorf("PromptTokens = %v, want 10", res.Usage.PromptTokens)

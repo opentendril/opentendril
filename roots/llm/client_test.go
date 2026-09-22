@@ -663,6 +663,45 @@ func TestCallStreamAdvancesCandidateLoopOnNon200(t *testing.T) {
 	}
 }
 
+func TestCallStreamDoesNotAdvanceCandidateLoopOnNoUsableCompletion(t *testing.T) {
+	var server2Calls int
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\" \"}}]}\n\n")
+		fmt.Fprint(w, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server1.Close()
+
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server2Calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"server2\"}}]}\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server2.Close()
+
+	client := NewClient(ProviderSpec{
+		Provider: "openai",
+		BaseURL:  server1.URL,
+		BaseURLs: []string{server1.URL, server2.URL},
+		Endpoint: "/chat/completions",
+		Mode:     ModeOpenAIish,
+		APIKey:   "key",
+		Model:    "gpt-test",
+	})
+	res, err := client.CallStreamWithResult(context.Background(), []Message{{Role: "user", Content: "hi"}}, make(chan string, 10))
+	if !errors.Is(err, ErrNoUsableCompletion) {
+		t.Fatalf("error = %v, want it to satisfy errors.Is(err, ErrNoUsableCompletion)", err)
+	}
+	if res.Text != " " {
+		t.Errorf("Text = %q, want the assembled whitespace text from server1", res.Text)
+	}
+	if server2Calls != 0 {
+		t.Errorf("server2 calls = %d, want 0 — an empty semantic completion is terminal", server2Calls)
+	}
+}
+
 // Failover exists for an address that is down. A refusal is the endpoint
 // answering, and the candidates are one endpoint reached several ways, so
 // offering the same definitions to the next address only buys the same refusal

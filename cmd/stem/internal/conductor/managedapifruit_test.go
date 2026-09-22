@@ -743,13 +743,20 @@ func TestPublishManagedAPIFruitEndToEnd(t *testing.T) {
 // ----------------------------------------------------------------------------
 
 // TestPublishManagedAPIFruitRoutesThroughFn verifies that the managed remote
-
 // run path calls publishManagedAPIFruitFn (not commitTerrariumExecutionFn) when
-// CommitMode is api and the run is both managed and remoteClone.
+// CommitMode is api, including when the persistent managed checkout already
+// exists and materialization is not required for this invocation.
 func TestPublishManagedAPIFruitRoutesThroughFn(t *testing.T) {
 	_, keyPath := genTestKeyPEM(t)
 
 	repository := prepareManagedRunRepository(t)
+	managedCheckout := managedCheckoutDir("apifruit")
+	if err := os.MkdirAll(filepath.Dir(managedCheckout), 0o755); err != nil {
+		t.Fatalf("create managed checkout parent: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), filepath.Dir(managedCheckout), "clone", "-q", repository, managedCheckout); err != nil {
+		t.Fatalf("create existing managed checkout: %v", err)
+	}
 
 	// Write a substrates YAML pointing at the local repo with commit: api and
 	// auth: app.
@@ -761,19 +768,13 @@ func TestPublishManagedAPIFruitRoutesThroughFn(t *testing.T) {
 	fake := startAPIFruitFake(t, http.StatusCreated, "")
 	_ = fake
 
-	// Stub materializeManagedCheckoutFn so the actual clone uses the local
-	// repo URL without needing HTTPS credentials.
+	// The checkout already exists, so this invocation must not materialize it.
 	origMaterialize := materializeManagedCheckoutFn
+	materializeCalled := false
 	t.Cleanup(func() { materializeManagedCheckoutFn = origMaterialize })
-	materializeManagedCheckoutFn = func(name, dest, url, branch string, _ ResolvedCredential, _ []string) error {
-		ctx := context.Background()
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			return err
-		}
-		if _, err := runGitCommand(ctx, filepath.Dir(dest), "clone", "-q", repository, dest); err != nil {
-			return err
-		}
-		return nil
+	materializeManagedCheckoutFn = func(name, dest, url, branch string, cred ResolvedCredential, gitEnv []string) error {
+		materializeCalled = true
+		return origMaterialize(name, dest, url, branch, cred, gitEnv)
 	}
 
 	stepID := "api-fruit-route"
@@ -785,14 +786,16 @@ func TestPublishManagedAPIFruitRoutesThroughFn(t *testing.T) {
 	// Stub publishManagedAPIFruitFn and commitTerrariumExecutionFn.
 	var apiPublishCalled bool
 	var commitCalled bool
+	var observedPlan *substrateExecutionPlan
 	origPublish := publishManagedAPIFruitFn
 	origCommit := commitTerrariumExecutionFn
 	t.Cleanup(func() {
 		publishManagedAPIFruitFn = origPublish
 		commitTerrariumExecutionFn = origCommit
 	})
-	publishManagedAPIFruitFn = func(_ context.Context, _ string, _ sproutExecutionStatus, _ string, _ *substrateExecutionPlan, _ RunWorkspace) (string, error) {
+	publishManagedAPIFruitFn = func(_ context.Context, _ string, _ sproutExecutionStatus, _ string, plan *substrateExecutionPlan, _ RunWorkspace) (string, error) {
 		apiPublishCalled = true
+		observedPlan = plan
 		return "api-oid-deadbeef", nil
 	}
 	commitTerrariumExecutionFn = func(_ context.Context, _, _, _ string, _ sproutExecutionStatus, _ string, _ ResolvedCredential, _ bool) (string, error) {
@@ -819,6 +822,18 @@ func TestPublishManagedAPIFruitRoutesThroughFn(t *testing.T) {
 
 	if !apiPublishCalled {
 		t.Errorf("publishManagedAPIFruitFn was not called for commit:api managed remote run")
+	}
+	if materializeCalled {
+		t.Error("materializeManagedCheckoutFn was called for an existing managed checkout")
+	}
+	if observedPlan == nil {
+		t.Fatal("publishManagedAPIFruitFn did not receive an execution plan")
+	}
+	if observedPlan.remoteClone {
+		t.Error("observed plan remoteClone = true, want false for an existing managed checkout")
+	}
+	if !observedPlan.remotePublication {
+		t.Error("observed plan remotePublication = false, want true for URL-backed managed checkout")
 	}
 	if commitCalled {
 		t.Errorf("commitTerrariumExecutionFn was called; want only publishManagedAPIFruitFn for commit:api path")

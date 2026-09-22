@@ -353,6 +353,88 @@ func TestRemoteManagedPublicationAllowDefaultBranchCommitDoesNotBypassIsolation(
 	}
 }
 
+// TestSequentialRemoteManagedRunsPublishDistinctFruit proves that reusing a
+// persistent managed checkout does not change its remote Fruit semantics.
+func TestSequentialRemoteManagedRunsPublishDistinctFruit(t *testing.T) {
+	clearLLMEnv(t)
+	t.Setenv("DEFAULT_LLM_PROVIDER", "google")
+	t.Setenv("GOOGLE_API_KEY", "google-key")
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+	t.Setenv("TENDRIL_MANAGED_CHECKOUT_ROOT", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	chdirToTempDir(t)
+
+	remote := prepareBareRemoteRepo(t, "main")
+	initialMainCommit := remoteSourceCommit(t, remote, "main")
+
+	writeSubstratesYAML(t, filepath.Join(mustGetwd(), "substrates.yaml"),
+		"substrates:\n  repo:\n    url: "+remote+"\n    branch: main\n    identity:\n      name: Fruit Test Bot\n      email: test@example.invalid\n    checkout:\n      mode: managed\n")
+
+	stepA := "sequential-a"
+	stepB := "sequential-b"
+	runnerA := newManagedWritingRunner("first.txt")
+	runnerB := newManagedWritingRunner("second.txt")
+	runnerA.releaseRun()
+	runnerB.releaseRun()
+	capture := newManagedRunCapture()
+	installRemoteManagedRunSeams(t, capture,
+		map[string]sproutRunner{stepA: runnerA, stepB: runnerB})
+
+	originalMaterialize := materializeManagedCheckoutFn
+	materializeCalls := 0
+	t.Cleanup(func() { materializeManagedCheckoutFn = originalMaterialize })
+	materializeManagedCheckoutFn = func(name, dest, url, branch string, cred ResolvedCredential, gitEnv []string) error {
+		materializeCalls++
+		return originalMaterialize(name, dest, url, branch, cred, gitEnv)
+	}
+
+	// Both runs intentionally use only the named Substrate. The first run must
+	// materialize it; the second must reuse that persistent checkout.
+	reportA, err := (&DockerOrchestrator{Substrate: "repo", StepID: stepA}).RunSprout(context.Background(), "first work")
+	if err != nil {
+		t.Fatalf("first RunSprout: %v", err)
+	}
+	reportB, err := (&DockerOrchestrator{Substrate: "repo", StepID: stepB}).RunSprout(context.Background(), "second work")
+	if err != nil {
+		t.Fatalf("second RunSprout: %v", err)
+	}
+
+	for name, report := range map[string]SproutRunReport{"first": reportA, "second": reportB} {
+		if report.Outcome != SproutOutcomeComplete {
+			t.Errorf("%s outcome = %q, want %q", name, report.Outcome, SproutOutcomeComplete)
+		}
+		if report.FruitPublicationState != FruitPublicationPublished {
+			t.Errorf("%s FruitPublicationState = %q, want %q", name, report.FruitPublicationState, FruitPublicationPublished)
+		}
+		if report.FruitBranch == "" || report.FruitCommit == "" {
+			t.Errorf("%s Fruit identity = %q/%q, want branch and commit", name, report.FruitBranch, report.FruitCommit)
+		}
+	}
+	if materializeCalls != 1 {
+		t.Errorf("managed checkout materialization calls = %d, want exactly 1", materializeCalls)
+	}
+	if reportA.FruitBranch == reportB.FruitBranch {
+		t.Errorf("sequential runs share FruitBranch %q", reportA.FruitBranch)
+	}
+	if reportA.FruitCommit == reportB.FruitCommit {
+		t.Errorf("sequential runs share FruitCommit %q", reportA.FruitCommit)
+	}
+
+	for name, report := range map[string]SproutRunReport{"first": reportA, "second": reportB} {
+		if got := remoteRef(t, remote, report.FruitBranch); got != report.FruitCommit {
+			t.Errorf("%s remote Fruit ref = %q, want %q", name, got, report.FruitCommit)
+		}
+	}
+	_, sourceA, _ := capture.get(stepA)
+	_, sourceB, _ := capture.get(stepB)
+	if sourceA == "" || sourceA != sourceB {
+		t.Errorf("managed source paths = %q and %q, want the same persistent checkout", sourceA, sourceB)
+	}
+	if afterMain := remoteSourceCommit(t, remote, "main"); afterMain != initialMainCommit {
+		t.Errorf("remote main changed from %q to %q; source/default branch must be unchanged", initialMainCommit, afterMain)
+	}
+}
+
 // TestConcurrentRemoteManagedRunsProduceDistinctFruit verifies that two concurrent
 // managed remote runs starting from the same revision produce separate, independent
 // Fruit branches without interfering with each other or advancing the source branch.
@@ -904,15 +986,10 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 	events := recordSproutLifecycle(bus)
 
 	// Run the good run first (complete successfully with pushed Fruit).
-	// SubstrateURL is set so that the plan-resolution step always treats this
-	// as a remote-clone run, even when the managed checkout already exists on
-	// disk from a previous run in the same test (which would otherwise set
-	// remoteClone=false and bypass the push path).
 	reportGood, err := (&DockerOrchestrator{
-		Substrate:    "repo",
-		SubstrateURL: remote,
-		StepID:       stepGood,
-		EventBus:     bus,
+		Substrate: "repo",
+		StepID:    stepGood,
+		EventBus:  bus,
 	}).RunSprout(context.Background(), "good work")
 	if err != nil {
 		t.Fatalf("good RunSprout: %v", err)
@@ -925,13 +1002,13 @@ func TestPublicationFailureDoesNotDamageOtherRunFruit(t *testing.T) {
 		t.Fatalf("good Fruit not pushed; refs: %v", resolveRemoteRefs(t, remote))
 	}
 
-	// Run the fail run: its push is intercepted with pushFailErr.
-	// SubstrateURL forces remoteClone=true even on the persistent checkout.
+	// Run the fail run: its push is intercepted with pushFailErr. The named
+	// managed checkout is already persistent from the good run, so this also
+	// proves publication is not tied to materialization.
 	reportFail, failErr := (&DockerOrchestrator{
-		Substrate:    "repo",
-		SubstrateURL: remote,
-		StepID:       stepFail,
-		EventBus:     bus,
+		Substrate: "repo",
+		StepID:    stepFail,
+		EventBus:  bus,
 	}).RunSprout(context.Background(), "fail work")
 
 	// The push path must have been reached for the fail step.

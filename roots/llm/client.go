@@ -106,6 +106,10 @@ type Message struct {
 // announced as a capability finding.
 var ErrRejectedWithTools = errors.New("endpoint returned a client error on a request carrying tool definitions")
 
+// ErrNoUsableCompletion reports that a provider request completed but Roots
+// obtained no usable semantic assistant result from the streamed response.
+var ErrNoUsableCompletion = errors.New("provider response completed without a usable semantic assistant result")
+
 // ToolDefinition declares one tool to a provider. The shape is the OpenAI
 // family's, because Message is marshalled straight onto that family's wire and
 // the two have to agree; the Anthropic adapter builds its own payload and
@@ -504,6 +508,9 @@ func (c *Client) callInternal(ctx context.Context, messages []Message, tools []T
 		// request doing it.
 		if errors.Is(err, ErrRejectedWithTools) {
 			return Result{}, err
+		}
+		if errors.Is(err, ErrNoUsableCompletion) {
+			return result, err
 		}
 		primaryErr = preferAttemptError(primaryErr, err)
 	}
@@ -1303,7 +1310,11 @@ func (c *Client) doCall(ctx context.Context, baseURL string, messages []Message,
 		if err := decoder.Finalize(); err != nil {
 			return Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}, err
 		}
-		return Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}, nil
+		result := Result{Text: fullContent.String(), ToolCalls: toolCalls, Usage: accumulatedUsage}
+		if strings.TrimSpace(result.Text) == "" && len(result.ToolCalls) == 0 {
+			return result, fmt.Errorf("%w: stream contained neither assistant text nor native tool calls", ErrNoUsableCompletion)
+		}
+		return result, nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
