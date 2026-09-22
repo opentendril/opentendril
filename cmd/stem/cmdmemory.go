@@ -86,6 +86,49 @@ func runMemorySearchCmd(ctx context.Context, args []string) {
 	printMemoryTable(memories)
 }
 
+// parsedAddArgs contains the pure parsed CLI inputs for add.
+type parsedAddArgs struct {
+	Title         string
+	Category      string
+	Tags          string
+	Content       string
+	Kind          string
+	EvidencePaths []string
+}
+
+// parseAddArgs is the pure transport parsing boundary for memory add.
+func parseAddArgs(args []string) (parsedAddArgs, error) {
+	fs := flag.NewFlagSet("memory add", flag.ContinueOnError)
+	category := fs.String("category", "General", "Memory category")
+	title := fs.String("title", "", "Memory title")
+	tags := fs.String("tags", "", "Comma-separated tags")
+	content := fs.String("content", "", "Memory content (reads stdin when omitted)")
+	kind := fs.String("kind", "", "Knowledge kind: observation (default), fact, constraint, correction, rejected-interpretation")
+	evidence := &multiStringFlag{}
+	fs.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
+	// Setting Output to io.Discard prevents flag.Parse from printing to stderr on error
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return parsedAddArgs{}, fmt.Errorf("add: parse flags: %w", err)
+	}
+	for _, arg := range fs.Args() {
+		if strings.HasPrefix(arg, "-") {
+			return parsedAddArgs{}, fmt.Errorf("add: unsupported or misplaced flag: %s", arg)
+		}
+	}
+	if strings.TrimSpace(*title) == "" {
+		return parsedAddArgs{}, fmt.Errorf("add: --title is required")
+	}
+	return parsedAddArgs{
+		Title:         *title,
+		Category:      *category,
+		Tags:          *tags,
+		Content:       *content,
+		Kind:          *kind,
+		EvidencePaths: evidence.values,
+	}, nil
+}
+
 // runMemoryAddCmd stores a new Botanist-established memory.
 //
 // Origin, authority, and status are policy outputs; callers may not supply
@@ -93,23 +136,13 @@ func runMemorySearchCmd(ctx context.Context, args []string) {
 // observation. The --evidence flag may be repeated to bind repository-relative
 // evidence files.
 func runMemoryAddCmd(ctx context.Context, args []string) {
-	flags := flag.NewFlagSet("memory add", flag.ExitOnError)
-	category := flags.String("category", "General", "Memory category")
-	title := flags.String("title", "", "Memory title")
-	tags := flags.String("tags", "", "Comma-separated tags")
-	content := flags.String("content", "", "Memory content (reads stdin when omitted)")
-	kind := flags.String("kind", "", "Knowledge kind: observation (default), fact, constraint, correction, rejected-interpretation")
-	evidence := &multiStringFlag{}
-	flags.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
-	if err := flags.Parse(args); err != nil {
-		os.Exit(1)
-	}
-	if strings.TrimSpace(*title) == "" {
+	parsed, err := parseAddArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Usage: tendril memory add --title=X [--category=X] [--tags=X] [--content=X] [--kind=X] [--evidence=path ...]")
 		os.Exit(1)
 	}
 
-	body := *content
+	body := parsed.Content
 	if body == "" {
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -124,14 +157,14 @@ func runMemoryAddCmd(ctx context.Context, args []string) {
 
 	intent := rhizome.BotanistAddIntent{
 		RepositoryName: currentRepositoryName(),
-		Category:       *category,
-		Title:          *title,
+		Category:       parsed.Category,
+		Title:          parsed.Title,
 		Content:        strings.TrimSpace(body),
-		Tags:           *tags,
-		Kind:           rhizome.Kind(*kind),
-		EvidencePaths:  evidence.values,
+		Tags:           parsed.Tags,
+		Kind:           rhizome.Kind(parsed.Kind),
+		EvidencePaths:  parsed.EvidencePaths,
 	}
-	if len(evidence.values) > 0 {
+	if len(parsed.EvidencePaths) > 0 {
 		intent.SubstrateRoot = currentSubstrateRoot()
 	}
 
@@ -146,23 +179,42 @@ func runMemoryAddCmd(ctx context.Context, args []string) {
 		mem.Origin, mem.Authority, mem.Status, mem.Kind)
 }
 
+// parsedConfirmArgs contains the pure parsed CLI inputs for confirm.
+type parsedConfirmArgs struct {
+	Title string
+}
+
+// parseConfirmArgs is the pure transport parsing boundary for memory confirm.
+func parseConfirmArgs(args []string) (parsedConfirmArgs, error) {
+	fs := flag.NewFlagSet("memory confirm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return parsedConfirmArgs{}, fmt.Errorf("confirm: parse flags: %w", err)
+	}
+	for _, arg := range fs.Args() {
+		if strings.HasPrefix(arg, "-") {
+			return parsedConfirmArgs{}, fmt.Errorf("confirm: unsupported or misplaced flag: %s", arg)
+		}
+	}
+	if fs.NArg() < 1 {
+		return parsedConfirmArgs{}, fmt.Errorf("confirm: title is required")
+	}
+	return parsedConfirmArgs{Title: strings.Join(fs.Args(), " ")}, nil
+}
+
 // runMemoryConfirmCmd confirms a proposed memory, transitioning it to established
 // under Botanist authority while preserving origin and all provenance fields.
 func runMemoryConfirmCmd(ctx context.Context, args []string) {
-	flags := flag.NewFlagSet("memory confirm", flag.ExitOnError)
-	if err := flags.Parse(args); err != nil {
-		os.Exit(1)
-	}
-	if flags.NArg() < 1 {
+	parsed, err := parseConfirmArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Usage: tendril memory confirm <title>")
 		os.Exit(1)
 	}
-	title := strings.Join(flags.Args(), " ")
 
 	backend := openMemoryBackendForCLI(ctx)
 	defer closeMemoryBackend(backend)
 
-	confirmed, err := rhizome.ApplyConfirm(ctx, backend, currentRepositoryName(), title)
+	confirmed, err := rhizome.ApplyConfirm(ctx, backend, currentRepositoryName(), parsed.Title)
 	if err != nil {
 		failMemoryCmd("confirm memory", err)
 	}
@@ -170,23 +222,42 @@ func runMemoryConfirmCmd(ctx context.Context, args []string) {
 		confirmed.Origin, confirmed.Authority, confirmed.Status)
 }
 
+// parsedRejectArgs contains the pure parsed CLI inputs for reject.
+type parsedRejectArgs struct {
+	Title string
+}
+
+// parseRejectArgs is the pure transport parsing boundary for memory reject.
+func parseRejectArgs(args []string) (parsedRejectArgs, error) {
+	fs := flag.NewFlagSet("memory reject", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return parsedRejectArgs{}, fmt.Errorf("reject: parse flags: %w", err)
+	}
+	for _, arg := range fs.Args() {
+		if strings.HasPrefix(arg, "-") {
+			return parsedRejectArgs{}, fmt.Errorf("reject: unsupported or misplaced flag: %s", arg)
+		}
+	}
+	if fs.NArg() < 1 {
+		return parsedRejectArgs{}, fmt.Errorf("reject: title is required")
+	}
+	return parsedRejectArgs{Title: strings.Join(fs.Args(), " ")}, nil
+}
+
 // runMemoryRejectCmd rejects a proposed memory, recording the Botanist decision
 // while preserving the original content and origin.
 func runMemoryRejectCmd(ctx context.Context, args []string) {
-	flags := flag.NewFlagSet("memory reject", flag.ExitOnError)
-	if err := flags.Parse(args); err != nil {
-		os.Exit(1)
-	}
-	if flags.NArg() < 1 {
+	parsed, err := parseRejectArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Usage: tendril memory reject <title>")
 		os.Exit(1)
 	}
-	title := strings.Join(flags.Args(), " ")
 
 	backend := openMemoryBackendForCLI(ctx)
 	defer closeMemoryBackend(backend)
 
-	rejected, err := rhizome.ApplyReject(ctx, backend, currentRepositoryName(), title)
+	rejected, err := rhizome.ApplyReject(ctx, backend, currentRepositoryName(), parsed.Title)
 	if err != nil {
 		failMemoryCmd("reject memory", err)
 	}
@@ -194,31 +265,61 @@ func runMemoryRejectCmd(ctx context.Context, args []string) {
 		rejected.Origin, rejected.Authority, rejected.Status)
 }
 
+// parsedSupersedeArgs contains the pure parsed CLI inputs for supersede.
+type parsedSupersedeArgs struct {
+	OldTitle      string
+	NewTitle      string
+	Category      string
+	Tags          string
+	Content       string
+	EvidencePaths []string
+}
+
+// parseSupersedeArgs is the pure transport parsing boundary for memory supersede.
+func parseSupersedeArgs(args []string) (parsedSupersedeArgs, error) {
+	fs := flag.NewFlagSet("memory supersede", flag.ContinueOnError)
+	newTitle := fs.String("title", "", "Title for the replacement memory")
+	category := fs.String("category", "", "Category for the replacement")
+	tags := fs.String("tags", "", "Tags for the replacement")
+	content := fs.String("content", "", "Content for the replacement")
+	evidence := &multiStringFlag{}
+	fs.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
+	fs.SetOutput(io.Discard)
+	if err := fs.Parse(args); err != nil {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: parse flags: %w", err)
+	}
+	for _, arg := range fs.Args() {
+		if strings.HasPrefix(arg, "-") {
+			return parsedSupersedeArgs{}, fmt.Errorf("supersede: unsupported or misplaced flag: %s", arg)
+		}
+	}
+	if fs.NArg() < 1 {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: old title is required")
+	}
+	if strings.TrimSpace(*newTitle) == "" {
+		return parsedSupersedeArgs{}, fmt.Errorf("supersede: --title is required")
+	}
+	return parsedSupersedeArgs{
+		OldTitle:      strings.Join(fs.Args(), " "),
+		NewTitle:      *newTitle,
+		Category:      *category,
+		Tags:          *tags,
+		Content:       *content,
+		EvidencePaths: evidence.values,
+	}, nil
+}
+
 // runMemorySupersedeCmd creates a Botanist correction that supersedes an existing
 // memory. The old record is preserved and marked superseded; the replacement is
 // persisted only after the old item is successfully updated.
 func runMemorySupersedeCmd(ctx context.Context, args []string) {
-	flags := flag.NewFlagSet("memory supersede", flag.ExitOnError)
-	newTitle := flags.String("title", "", "Title for the replacement memory")
-	category := flags.String("category", "", "Category for the replacement (inherits from old when omitted)")
-	tags := flags.String("tags", "", "Tags for the replacement (inherits from old when omitted)")
-	content := flags.String("content", "", "Content for the replacement (reads stdin when omitted)")
-	evidence := &multiStringFlag{}
-	flags.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
-	if err := flags.Parse(args); err != nil {
-		os.Exit(1)
-	}
-	if flags.NArg() < 1 {
+	parsed, err := parseSupersedeArgs(args)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "Usage: tendril memory supersede <old-title> --title=<new-title> [--category=X] [--tags=X] [--content=X] [--evidence=path ...]")
 		os.Exit(1)
 	}
-	if strings.TrimSpace(*newTitle) == "" {
-		fmt.Fprintln(os.Stderr, "supersede requires --title=<new-title>")
-		os.Exit(1)
-	}
-	oldTitle := strings.Join(flags.Args(), " ")
 
-	body := *content
+	body := parsed.Content
 	if body == "" {
 		input, err := io.ReadAll(os.Stdin)
 		if err != nil {
@@ -233,14 +334,14 @@ func runMemorySupersedeCmd(ctx context.Context, args []string) {
 
 	intent := rhizome.SupersedeIntent{
 		RepositoryName: currentRepositoryName(),
-		OldTitle:       oldTitle,
-		NewTitle:       *newTitle,
-		Category:       *category,
-		Tags:           *tags,
+		OldTitle:       parsed.OldTitle,
+		NewTitle:       parsed.NewTitle,
+		Category:       parsed.Category,
+		Tags:           parsed.Tags,
 		Content:        strings.TrimSpace(body),
-		EvidencePaths:  evidence.values,
+		EvidencePaths:  parsed.EvidencePaths,
 	}
-	if len(evidence.values) > 0 {
+	if len(parsed.EvidencePaths) > 0 {
 		intent.SubstrateRoot = currentSubstrateRoot()
 	}
 
@@ -252,7 +353,7 @@ func runMemorySupersedeCmd(ctx context.Context, args []string) {
 		failMemoryCmd("supersede memory", err)
 	}
 	fmt.Printf("Memory superseded: old=%q marked superseded; replacement %q origin=%s authority=%s status=%s kind=%s\n",
-		oldTitle, replacement.Title, replacement.Origin, replacement.Authority, replacement.Status, replacement.Kind)
+		parsed.OldTitle, replacement.Title, replacement.Origin, replacement.Authority, replacement.Status, replacement.Kind)
 }
 
 func runMemoryRemoveCmd(ctx context.Context, args []string) {

@@ -197,6 +197,131 @@ func TestBotanistAddPolicyEmptyContentRejected(t *testing.T) {
 	}
 }
 
+func TestExecuteBotanistAddCollisionLegacyUnclassified(t *testing.T) {
+	testExecuteBotanistAddCollision(t, OriginLegacy, AuthorityNone, StatusUnclassified)
+}
+
+func TestExecuteBotanistAddCollisionMycorrhizalProposed(t *testing.T) {
+	testExecuteBotanistAddCollision(t, OriginMycorrhizal, AuthorityNone, StatusProposed)
+}
+
+func TestExecuteBotanistAddCollisionBotanistEstablished(t *testing.T) {
+	testExecuteBotanistAddCollision(t, OriginBotanist, AuthorityBotanist, StatusEstablished)
+}
+
+func testExecuteBotanistAddCollision(t *testing.T, origin Origin, authority Authority, status Status) {
+	ctx := context.Background()
+	backend := newFakeBackend()
+	seedMem := Memory{
+		RepositoryName: "owner/repo",
+		Title:          "Collision Test",
+		Content:        "original content",
+		Origin:         origin,
+		Authority:      authority,
+		Status:         status,
+		StableID:       StableMemoryIdentity("owner/repo", "Collision Test"),
+	}
+	backend.seed(seedMem)
+
+	initialCallCount := len(backend.storeCallOrder)
+
+	_, err := ExecuteBotanistAdd(ctx, backend, BotanistAddIntent{
+		RepositoryName: "owner/repo",
+		Title:          "Collision Test",
+		Content:        "new content",
+		Kind:           KindObservation,
+	})
+
+	if err == nil {
+		t.Fatal("expected error for existing identity")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("expected 'already exists' error, got: %v", err)
+	}
+
+	if len(backend.storeCallOrder) != initialCallCount {
+		t.Errorf("StoreMemory must not be called, but got %d calls", len(backend.storeCallOrder)-initialCallCount)
+	}
+
+	mem := backend.records["Collision Test"]
+	if mem.Content != "original content" {
+		t.Errorf("content changed: %q", mem.Content)
+	}
+	if mem.Origin != origin {
+		t.Errorf("origin changed: %q", mem.Origin)
+	}
+	if mem.Authority != authority {
+		t.Errorf("authority changed: %q", mem.Authority)
+	}
+	if mem.Status != status {
+		t.Errorf("status changed: %q", mem.Status)
+	}
+}
+
+func TestExecuteBotanistAddGetMemoryErrorPreventsStore(t *testing.T) {
+	ctx := context.Background()
+	backend := &failingGetFakeBackend{err: errors.New("simulated GetMemory failure")}
+
+	_, err := ExecuteBotanistAdd(ctx, backend, BotanistAddIntent{
+		RepositoryName: "owner/repo",
+		Title:          "Error Test",
+		Content:        "content",
+	})
+	if err == nil {
+		t.Fatal("expected error from GetMemory failure")
+	}
+	if backend.storeCalled {
+		t.Error("StoreMemory must not be called if GetMemory fails")
+	}
+}
+
+type failingGetFakeBackend struct {
+	err         error
+	storeCalled bool
+}
+
+func (b *failingGetFakeBackend) GetMemory(_ context.Context, _ string, _ string) (Memory, bool, error) {
+	return Memory{}, false, b.err
+}
+func (b *failingGetFakeBackend) StoreMemory(_ context.Context, _ Memory) error {
+	b.storeCalled = true
+	return nil
+}
+func (b *failingGetFakeBackend) ListMemories(_ context.Context, _ string, _ string, _ int) ([]Memory, error) {
+	return nil, nil
+}
+func (b *failingGetFakeBackend) SearchMemories(_ context.Context, _ string, _ string, _ string, _ int) ([]Memory, error) {
+	return nil, nil
+}
+func (b *failingGetFakeBackend) DeleteMemory(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+func TestExecuteBotanistAddAbsentIdentitySuccess(t *testing.T) {
+	ctx := context.Background()
+	backend := newFakeBackend()
+
+	mem, err := ExecuteBotanistAdd(ctx, backend, BotanistAddIntent{
+		RepositoryName: "owner/repo",
+		Title:          "New Identity",
+		Content:        "content",
+		Kind:           KindFact,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(backend.storeCallOrder) != 1 {
+		t.Errorf("expected exactly 1 store call, got %d", len(backend.storeCallOrder))
+	}
+	if mem.Origin != OriginBotanist || mem.Authority != AuthorityBotanist || mem.Status != StatusEstablished {
+		t.Errorf("expected botanist/botanist/established, got %s/%s/%s", mem.Origin, mem.Authority, mem.Status)
+	}
+	if mem.Kind != KindFact {
+		t.Errorf("expected kind %s, got %s", KindFact, mem.Kind)
+	}
+}
+
 // ======================================================================
 // Confirm policy
 // ======================================================================

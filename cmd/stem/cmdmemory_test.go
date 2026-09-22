@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"flag"
-	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -177,62 +176,64 @@ func TestEvidenceValuesPassedAsIntent(t *testing.T) {
 // memorypolicy.go. They exist solely to prove the parsing boundary.
 // ======================================================================
 
-type parsedConfirmArgs struct {
-	Title string
+func TestCLIParseAddUnsupportedAuthorityFlagsRejected(t *testing.T) {
+	_, err := parseAddArgs([]string{"--title=Test", "--origin=mycorrhizal"})
+	if err == nil {
+		t.Error("expected error for --origin")
+	}
+	_, err = parseAddArgs([]string{"--title=Test", "--authority=deterministic"})
+	if err == nil {
+		t.Error("expected error for --authority")
+	}
+	_, err = parseAddArgs([]string{"--title=Test", "--status=established"})
+	if err == nil {
+		t.Error("expected error for --status")
+	}
 }
 
-func parseConfirmArgs(args []string) (parsedConfirmArgs, error) {
-	if len(args) == 0 {
-		return parsedConfirmArgs{}, fmt.Errorf("confirm: title is required")
+func TestCLIParseConfirmUnsupportedAuthorityFlagsRejected(t *testing.T) {
+	_, err := parseConfirmArgs([]string{"Title", "--origin=mycorrhizal"})
+	if err == nil {
+		t.Error("expected error for --origin")
 	}
-	return parsedConfirmArgs{Title: strings.Join(args, " ")}, nil
+	_, err = parseConfirmArgs([]string{"Title", "--authority=deterministic"})
+	if err == nil {
+		t.Error("expected error for --authority")
+	}
+	_, err = parseConfirmArgs([]string{"Title", "--status=established"})
+	if err == nil {
+		t.Error("expected error for --status")
+	}
 }
 
-type parsedRejectArgs struct {
-	Title string
+func TestCLIParseRejectUnsupportedAuthorityFlagsRejected(t *testing.T) {
+	_, err := parseRejectArgs([]string{"Title", "--origin=mycorrhizal"})
+	if err == nil {
+		t.Error("expected error for --origin")
+	}
+	_, err = parseRejectArgs([]string{"Title", "--authority=deterministic"})
+	if err == nil {
+		t.Error("expected error for --authority")
+	}
+	_, err = parseRejectArgs([]string{"Title", "--status=established"})
+	if err == nil {
+		t.Error("expected error for --status")
+	}
 }
 
-func parseRejectArgs(args []string) (parsedRejectArgs, error) {
-	if len(args) == 0 {
-		return parsedRejectArgs{}, fmt.Errorf("reject: title is required")
+func TestCLIParseSupersedeUnsupportedAuthorityFlagsRejected(t *testing.T) {
+	_, err := parseSupersedeArgs([]string{"--title=New", "Old", "--origin=mycorrhizal"})
+	if err == nil {
+		t.Error("expected error for --origin")
 	}
-	return parsedRejectArgs{Title: strings.Join(args, " ")}, nil
-}
-
-type parsedSupersedeArgs struct {
-	OldTitle      string
-	NewTitle      string
-	Category      string
-	Tags          string
-	Content       string
-	EvidencePaths []string
-}
-
-func parseSupersedeArgs(args []string) (parsedSupersedeArgs, error) {
-	fs := flag.NewFlagSet("memory supersede", flag.ContinueOnError)
-	newTitle := fs.String("title", "", "Title for the replacement memory")
-	category := fs.String("category", "", "Category for the replacement")
-	tags := fs.String("tags", "", "Tags for the replacement")
-	content := fs.String("content", "", "Content for the replacement")
-	evidence := &multiStringFlag{}
-	fs.Var(evidence, "evidence", "Repository-relative evidence file path (may be repeated)")
-	if err := fs.Parse(args); err != nil {
-		return parsedSupersedeArgs{}, fmt.Errorf("supersede: parse flags: %w", err)
+	_, err = parseSupersedeArgs([]string{"--title=New", "Old", "--authority=deterministic"})
+	if err == nil {
+		t.Error("expected error for --authority")
 	}
-	if fs.NArg() < 1 {
-		return parsedSupersedeArgs{}, fmt.Errorf("supersede: old title is required")
+	_, err = parseSupersedeArgs([]string{"--title=New", "Old", "--status=established"})
+	if err == nil {
+		t.Error("expected error for --status")
 	}
-	if strings.TrimSpace(*newTitle) == "" {
-		return parsedSupersedeArgs{}, fmt.Errorf("supersede: --title is required")
-	}
-	return parsedSupersedeArgs{
-		OldTitle:      strings.Join(fs.Args(), " "),
-		NewTitle:      *newTitle,
-		Category:      *category,
-		Tags:          *tags,
-		Content:       *content,
-		EvidencePaths: evidence.values,
-	}, nil
 }
 
 // ======================================================================
@@ -349,19 +350,45 @@ func TestCLIParseListOutputContainsEnvelopeColumns(t *testing.T) {
 // ======================================================================
 
 func TestCurrentSubstrateRootFromNestedDirectory(t *testing.T) {
-	// This test verifies that executing from a nested subdirectory returns
-	// the same Git worktree root as executing from the repository root.
-	//
-	// We use the current repository (the test is running inside a git repo).
-	rootFromTopLevel := strings.TrimSpace(runGitForTest(t, ".", "rev-parse", "--show-toplevel"))
-	subDir := t.TempDir()
-	// Create a nested subdirectory inside the repo root.
-	nestedDir := filepath.Join(rootFromTopLevel, "cmd", "stem")
-	rootFromNested := strings.TrimSpace(runGitForTest(t, nestedDir, "rev-parse", "--show-toplevel"))
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Errorf("failed to restore working directory: %v", err)
+		}
+	}()
+
+	repoRoot := strings.TrimSpace(runGitForTest(t, ".", "rev-parse", "--show-toplevel"))
+
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatalf("chdir repoRoot: %v", err)
+	}
+	rootFromTopLevel := currentSubstrateRoot()
+	repoNameFromTopLevel := currentRepositoryName()
+
+	nestedDir := filepath.Join(repoRoot, "cmd", "stem")
+	if err := os.Chdir(nestedDir); err != nil {
+		t.Fatalf("chdir nestedDir: %v", err)
+	}
+	rootFromNested := currentSubstrateRoot()
+	repoNameFromNested := currentRepositoryName()
+
 	if rootFromTopLevel != rootFromNested {
 		t.Errorf("substrate root mismatch: from top-level=%q, from nested=%q", rootFromTopLevel, rootFromNested)
 	}
-	_ = subDir
+	if rootFromTopLevel != repoRoot {
+		t.Errorf("expected substrate root %q, got %q", repoRoot, rootFromTopLevel)
+	}
+
+	wantRepoName := filepath.Base(repoRoot)
+	if repoNameFromTopLevel != wantRepoName {
+		t.Errorf("top-level repository name mismatch: want %q, got %q", wantRepoName, repoNameFromTopLevel)
+	}
+	if repoNameFromNested != wantRepoName {
+		t.Errorf("nested repository name mismatch: want %q, got %q", wantRepoName, repoNameFromNested)
+	}
 }
 
 func runGitForTest(t *testing.T, dir string, args ...string) string {
