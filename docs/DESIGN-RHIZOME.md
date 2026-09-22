@@ -41,6 +41,9 @@
 | `FileRecord` | Indexed file row: repository name, path, content hash, last modified. |
 | `Symbol` | Indexed symbol: name, type, file path, line span, stub content (plaintext in memory; encrypted in SQLite). |
 | `Memory` | Project memory payload (JSON tags camelCase: `repositoryName`, `sessionId`, ...) including a semantic envelope (`origin`, `authority`, `status`, `kind`) and provenance metadata. |
+| `BotanistAddIntent` / `SupersedeIntent` | Intent structs for lifecycle state machine transitions (add, supersede). |
+| `ApplyBotanistAdd` / `ApplyConfirm` / `ApplyReject` / `ApplySupersede` | Policy logic ensuring deterministic, valid memory envelope state transitions. |
+| `BindEvidence` | Resolves, reads, and hashes files for deterministic revision evidence manifests. |
 | `IndexStore` | Close, list/get/upsert/delete files, symbol delete-for-file / upsert / search. |
 | `MemoryBackend` | Store / list / search / delete memories. |
 | `MemoryConfig` / `LoadMemoryConfig` | Backend name and paths/keys from `TENDRIL_*` env vars. |
@@ -82,6 +85,10 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 **Project memory (RAG-shaped backend).** Cross-session decisions and notes live beside the symbol index. `MemoryBackend` is a narrow CRUD+search port; SQLite FTS is the default local implementation sharing the same DB file and encryptor as the symbol index. Pinecone and Weaviate adapters exist for managed/off-box storage and match the historical "abstract vector store" direction, but as built they are **HTTP adapters with simplified retrieval** (hash vectors / BM25), not a full embedding pipeline.
 
 Knowledge requires a durable semantic envelope. Memory structures now contain an `Origin` (legacy, botanist, substrate, mycorrhizal), an `Authority` (none, botanist, deterministic), and a `Status` (unclassified, established, proposed, stale, conflicted, rejected, superseded) alongside an optional `Kind` (observation, fact, constraint, correction, rejected-interpretation) and provenance metadata (revision, source, supersession). Effective memory identity is defined as the repository name plus the memory title; it is treated as a stable, backend-independent identity. Legacy SQLite records without sidecar metadata inherently deserialize as unclassified, legacy origin, and none authority. The new `memory_envelopes` SQLite sidecar table safely provides additive storage alongside the FTS table, and both Pinecone and Weaviate backends encode these exact envelope semantics natively.
+
+**Botanist Lifecycle Policy.** Rhizome owns the strict policy for Botanist knowledge lifecycle and evidence binding. The CLI parses Botanist intent and delegates state transitions (add, confirm, reject, supersede) to the Rhizome policy module. Origin, authority, and status are determined by policy, not by caller-supplied CLI flags. Evidence binding hashes repository files and resolves Git revision SHAs to create deterministic revision metadata, preventing arbitrary or forged evidence from being injected.
+
+**Supersession.** Knowledge evolution uses a fail-closed chronological supersede mechanism instead of direct modification. Supersession enforces strict ordering: the old item is marked superseded before the correction replacement is persisted. If the old record fails to update, the new record is aborted, preventing old and new from existing simultaneously as equivalent established truths.
 
 `GenerateMemoryMap` renders search hits as a category-sectioned Markdown Memory Map. To prevent the Botanist from mistaking unclassified or proposed content for established knowledge, it visually highlights non-established memory status. It remains an available Rhizome rendering function, but the Conductor no longer stages that map as automatic Sprout context. Unclassified legacy memory is quarantined from automatic Sprout task context, and that Slice 1 quarantine currently remains strictly in force. Full Repo Map remains a fallback on-disk context artifact, while task-context selection belongs to the Conductor, not Rhizome.
 
