@@ -691,17 +691,18 @@ func (s *SQLiteIndexStore) scanMemoryRows(rows *sql.Rows) ([]Memory, error) {
 		memory.SourceIdentity = sourceIdentity
 		memory.ContentIdentity = contentIdentity
 		memory.RevisionIdentity = revisionIdentity
-		memory.StableID = stableID
+		canonicalID := StableMemoryIdentity(memory.RepositoryName, memory.Title)
+		if stableID != "" && stableID != canonicalID {
+			return nil, fmt.Errorf("corrupted memory envelope for %q/%q: stored stableId %q conflicts with canonical identity %q", memory.RepositoryName, memory.Title, stableID, canonicalID)
+		}
+		memory.StableID = canonicalID
+
 		memory.RevisionMetadata = revisionMetadata
 		memory.Supersession = supersession
-		memory.StableID = StableMemoryIdentity(memory.RepositoryName, memory.Title)
 
 		// Fail closed: reject any memory with an invalid envelope combination
 		if err := memory.Validate(); err != nil {
-			// Only validate if the record carries an explicit (non-legacy-default) status.
-			if memory.Status != StatusUnclassified || memory.Origin != OriginLegacy {
-				return nil, fmt.Errorf("corrupted memory envelope for %q/%q: %w", memory.RepositoryName, memory.Title, err)
-			}
+			return nil, fmt.Errorf("corrupted memory envelope for %q/%q: %w", memory.RepositoryName, memory.Title, err)
 		}
 		memories = append(memories, memory)
 	}

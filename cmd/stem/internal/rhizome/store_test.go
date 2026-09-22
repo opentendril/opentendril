@@ -725,6 +725,51 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories USING fts5(
 	if err == nil {
 		t.Fatal("Expected error for corrupted status, got nil")
 	}
+
+	// legacy / invalid-authority / unclassified sidecar fails closed
+	c4, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadAuth"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadAuth', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c4)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status) VALUES ('owner/repo', 'BadAuth', 'legacy', 'invalid-auth', 'unclassified')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadAuth", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for legacy / invalid-authority / unclassified sidecar, got nil")
+	} else if !strings.Contains(err.Error(), "unknown authority") {
+		t.Fatalf("Expected unknown authority error, got %v", err)
+	}
+
+	// legacy / none / unclassified / invalid-kind sidecar fails closed
+	c5, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadKind"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadKind', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c5)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, kind) VALUES ('owner/repo', 'BadKind', 'legacy', 'none', 'unclassified', 'bad-kind')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadKind", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for legacy / none / unclassified / invalid-kind sidecar, got nil")
+	} else if !strings.Contains(err.Error(), "unknown kind") {
+		t.Fatalf("Expected unknown kind error, got %v", err)
+	}
+
+	// corrupt non-empty stored StableID fails closed
+	c6, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00BadStableID"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'BadStableID', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c6)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, stableId) VALUES ('owner/repo', 'BadStableID', 'legacy', 'none', 'unclassified', 'wrong-id')`)
+	_, err = store.SearchMemories(ctx, "owner/repo", "BadStableID", "", 10)
+	if err == nil {
+		t.Fatal("Expected error for corrupt non-empty stored StableID, got nil")
+	} else if !strings.Contains(err.Error(), "conflicts with canonical identity") {
+		t.Fatalf("Expected canonical identity conflict error, got %v", err)
+	}
+
+	// empty StableID on a genuine legacy row is normalized to the canonical deterministic StableID
+	c7, _ := cipher.Encrypt("content", []byte("rhizome/memories/content\x00owner/repo\x00EmptyStableID"))
+	store.db.Exec(`INSERT INTO memories (repositoryName, category, title, content, tags, createdAt, sessionId) VALUES ('owner/repo', 'Test', 'EmptyStableID', ?, 'tag', '2026-07-05T10:00:00Z', 'session-1')`, c7)
+	store.db.Exec(`INSERT INTO memory_envelopes (repositoryName, title, origin, authority, status, stableId) VALUES ('owner/repo', 'EmptyStableID', 'legacy', 'none', 'unclassified', '')`)
+	resEmpty, err := store.SearchMemories(ctx, "owner/repo", "EmptyStableID", "", 10)
+	if err != nil {
+		t.Fatalf("Unexpected error for empty StableID row: %v", err)
+	}
+	if len(resEmpty) != 1 || resEmpty[0].StableID != StableMemoryIdentity("owner/repo", "EmptyStableID") {
+		t.Fatalf("Expected empty StableID to be canonicalized, got: %+v", resEmpty)
+	}
 }
 
 func TestMemoryEnvelopeValidation(t *testing.T) {
