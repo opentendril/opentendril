@@ -162,3 +162,142 @@ func TestWeaviateWriteSideEnvelopeSerialization(t *testing.T) {
 		t.Errorf("round tripped memory envelope mismatch:\nwant: %+v\ngot:  %+v", fullMem, roundTripped)
 	}
 }
+
+func TestWeaviateGetMemory(t *testing.T) {
+	ctx := context.Background()
+
+	newBackend := func(t *testing.T, handler http.HandlerFunc) *WeaviateMemoryBackend {
+		t.Helper()
+		ts := httptest.NewServer(handler)
+		t.Cleanup(ts.Close)
+		b, err := NewWeaviateMemoryBackend(MemoryConfig{
+			WeaviateBaseURL:    ts.URL,
+			RemoteCleartextAck: true,
+		})
+		if err != nil {
+			t.Fatalf("NewWeaviateMemoryBackend: %v", err)
+		}
+		return b
+	}
+
+	t.Run("exact lookup uses deterministicUUID", func(t *testing.T) {
+		expectedID := deterministicUUID("owner/repo", "Target")
+		var capturedPath string
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			capturedPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			props := map[string]any{
+				"repositoryName": "owner/repo",
+				"title":          "Target",
+				"stableId":       StableMemoryIdentity("owner/repo", "Target"),
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": props})
+		})
+
+		_, found, err := backend.GetMemory(ctx, "owner/repo", "Target")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !found {
+			t.Fatal("expected found=true")
+		}
+		expectedPath := "/v1/objects/" + weaviateMemoryClass + "/" + expectedID
+		if capturedPath != expectedPath {
+			t.Fatalf("expected request path %q, got %q", expectedPath, capturedPath)
+		}
+	})
+
+	t.Run("HTTP 404 returns found=false", func(t *testing.T) {
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			http.NotFound(w, r)
+		})
+
+		_, found, err := backend.GetMemory(ctx, "owner/repo", "Missing")
+		if err != nil {
+			t.Fatalf("unexpected error on 404: %v", err)
+		}
+		if found {
+			t.Fatal("expected found=false on 404")
+		}
+	})
+
+	t.Run("repository mismatch fails closed", func(t *testing.T) {
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			props := map[string]any{
+				"repositoryName": "other/repo",
+				"title":          "Target",
+				"stableId":       StableMemoryIdentity("other/repo", "Target"),
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": props})
+		})
+
+		_, _, err := backend.GetMemory(ctx, "owner/repo", "Target")
+		if err == nil {
+			t.Fatal("expected repository mismatch to fail closed")
+		}
+		if !strings.Contains(err.Error(), "exact memory identity mismatch") {
+			t.Fatalf("expected identity mismatch error, got: %v", err)
+		}
+	})
+
+	t.Run("title mismatch fails closed", func(t *testing.T) {
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			props := map[string]any{
+				"repositoryName": "owner/repo",
+				"title":          "Different",
+				"stableId":       StableMemoryIdentity("owner/repo", "Different"),
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": props})
+		})
+
+		_, _, err := backend.GetMemory(ctx, "owner/repo", "Target")
+		if err == nil {
+			t.Fatal("expected title mismatch to fail closed")
+		}
+		if !strings.Contains(err.Error(), "exact memory identity mismatch") {
+			t.Fatalf("expected identity mismatch error, got: %v", err)
+		}
+	})
+
+	t.Run("malformed envelope fails closed", func(t *testing.T) {
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			props := map[string]any{
+				"repositoryName": "owner/repo",
+				"title":          "Target",
+				"status":         "weird",
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": props})
+		})
+
+		_, _, err := backend.GetMemory(ctx, "owner/repo", "Target")
+		if err == nil {
+			t.Fatal("expected malformed envelope to fail closed")
+		}
+		if !strings.Contains(err.Error(), "unknown status") {
+			t.Fatalf("expected unknown status error, got: %v", err)
+		}
+	})
+
+	t.Run("conflicting StableID fails closed", func(t *testing.T) {
+		backend := newBackend(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			props := map[string]any{
+				"repositoryName": "owner/repo",
+				"title":          "Target",
+				"stableId":       "bad-id",
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"properties": props})
+		})
+
+		_, _, err := backend.GetMemory(ctx, "owner/repo", "Target")
+		if err == nil {
+			t.Fatal("expected conflicting StableID to fail closed")
+		}
+		if !strings.Contains(err.Error(), "conflicts with canonical identity") {
+			t.Fatalf("expected identity conflict error, got: %v", err)
+		}
+	})
+}

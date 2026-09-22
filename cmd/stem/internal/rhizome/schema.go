@@ -151,12 +151,8 @@ func (m *Memory) Validate() error {
 	return nil
 }
 
-// StableMemoryIdentity returns a deterministic hex identifier for a memory
-// based on its repository name and title. This identity is stable across backends.
 func StableMemoryIdentity(repositoryName, title string) string {
-	repoClean := strings.TrimSpace(strings.Trim(repositoryName, "\x00"))
-	titleClean := strings.TrimSpace(strings.Trim(title, "\x00"))
-	sum := sha256.Sum256([]byte(repoClean + "\x00" + titleClean))
+	sum := sha256.Sum256([]byte(repositoryName + "\x00" + title))
 	return hex.EncodeToString(sum[:])
 }
 
