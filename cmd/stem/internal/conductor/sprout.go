@@ -1529,7 +1529,7 @@ func truncateGenomeContent(name string, content string, budget int) string {
 	if idx := strings.LastIndexByte(cut, '\n'); idx > 0 {
 		cut = cut[:idx]
 	}
-	return cut + "\n[truncated — read .tendril/genome/" + name + " for the full content]"
+	return cut + "\n[truncated; read .tendril/genome/" + name + " for the full content]"
 }
 
 func loadGenomeContext(workspace string, availableBudgets ...int) (string, error) {
@@ -1722,7 +1722,7 @@ func truncateGenomeContentWithinBudget(name string, content string, budget int) 
 	if len(content) <= budget {
 		return content
 	}
-	marker := "\n[truncated — read .tendril/genome/" + name + " for the full content]"
+	marker := "\n[truncated; read .tendril/genome/" + name + " for the full content]"
 	if budget <= len(marker) {
 		return marker[:budget]
 	}

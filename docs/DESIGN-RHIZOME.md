@@ -58,7 +58,7 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 **Fan-in:**
 
 - **`cmd/stem`** — `cmdrepomap.go` calls Conductor’s facade (not rhizome directly). `cmdmemory.go` imports rhizome for `LoadMemoryConfig`, `OpenMemoryBackend`, `Memory` CRUD, and key material under `.tendril/rhizome.key`.
-- **`internal/conductor`** — `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing the generated `.tendril` key, SQLite database and sidecars, genome Repo Map and Memory Map, and chronicler epigenetics and fitness artifacts.
+- **`internal/conductor`**: `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing the generated `.tendril` key, SQLite database and sidecars, genome Repo Map and Memory Map, and chronicler epigenetics and fitness artifacts.
 
 ## Limitations
 

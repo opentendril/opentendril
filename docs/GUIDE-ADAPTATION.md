@@ -40,7 +40,7 @@ Recommended curated files:
 
 Lists the Markdown genome files stored in `.tendril/genome/`, with clear separators between files.
 
-This is **not** an exact preview of effective Sprout context: quarantined files (`epigenetics.md`, `memorymap.md`) appear on disk and are shown by this command but receive different execution-time treatment (they are excluded from automatic Sprout context injection).
+This is **not** an exact preview of effective Sprout context: quarantined files (`epigenetics.md`, `memorymap.md`) appear on disk and are shown by this command but receive different execution-time treatment and are excluded from automatic Sprout context injection.
 
 Example:
 

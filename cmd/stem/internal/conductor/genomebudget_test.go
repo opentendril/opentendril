@@ -75,7 +75,7 @@ func TestLoadGenomeContextTruncatesOversizedCuratedFile(t *testing.T) {
 	if len(context) > genomePerFileByteBudget+1024 {
 		t.Fatalf("oversized curated file must be truncated, got %d bytes", len(context))
 	}
-	if !strings.Contains(context, "[truncated — read .tendril/genome/curated-oversized.md") {
+	if !strings.Contains(context, "[truncated; read .tendril/genome/curated-oversized.md") {
 		tailStart := len(context) - 200
 		if tailStart < 0 {
 			tailStart = 0
