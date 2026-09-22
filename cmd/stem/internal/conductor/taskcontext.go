@@ -104,6 +104,7 @@ type taskContextManifestItem struct {
 	Origin           string
 	Authority        string
 	Status           string
+	KnowledgeKind    string
 	ValidityRef      string
 }
 
@@ -421,21 +422,15 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
 					continue
 				}
-				if evidenceManifest.Version != "v1" || len(evidenceManifest.Files) == 0 {
+				if !isCanonicalV1EvidenceManifest(evidenceManifest, candidate.memory.ContentIdentity) {
 					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
 					continue
 				}
 
 				conflicted := false
 				stale := false
-				var recomputedFiles []rhizome.EvidenceFile
 
 				for _, f := range evidenceManifest.Files {
-					cleaned, err := cleanTaskContextRepositoryPath(f.RelativePath)
-					if err != nil || cleaned != f.RelativePath {
-						conflicted = true
-						break
-					}
 					if err := taskContextRejectRootSymlinks(workspace, f.RelativePath); err != nil {
 						conflicted = true
 						break
@@ -473,7 +468,6 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 						stale = true
 						break
 					}
-					recomputedFiles = append(recomputedFiles, rhizome.EvidenceFile{RelativePath: f.RelativePath, ContentHash: currentHash})
 				}
 
 				if conflicted {
@@ -482,7 +476,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 				}
 				if stale {
 					taskContextAddOmission(&manifest, taskContextOmissionMemoryStale, 1)
-					if input.ExecutionWorkspace == input.SourceRepository && input.MemoryIndex != nil {
+					if workspaceRoot == sourceRepository && input.MemoryIndex != nil {
 						if writer, ok := input.MemoryIndex.(interface {
 							StoreMemory(context.Context, rhizome.Memory) error
 						}); ok {
@@ -496,19 +490,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 					continue
 				}
 
-				encoded, err := json.Marshal(recomputedFiles)
-				if err != nil {
-					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
-					continue
-				}
-				recomputedSum := sha256.Sum256(encoded)
-				recomputedHash := hex.EncodeToString(recomputedSum[:])
-				if recomputedHash != evidenceManifest.ManifestHash || recomputedHash != candidate.memory.ContentIdentity {
-					taskContextAddOmission(&manifest, taskContextOmissionMemoryConflicted, 1)
-					continue
-				}
-
-				validityRef = taskContextShortReference(recomputedHash)
+				validityRef = taskContextShortReference(evidenceManifest.ManifestHash)
 			}
 
 			candidate.validityRef = validityRef
@@ -588,6 +570,7 @@ func assembleTaskContext(ctx context.Context, input taskContextAssemblyInput, in
 			manifestItem.Origin = string(candidate.memory.Origin)
 			manifestItem.Authority = string(candidate.memory.Authority)
 			manifestItem.Status = string(candidate.memory.Status)
+			manifestItem.KnowledgeKind = string(candidate.memory.Kind)
 		}
 		for _, symbol := range candidate.symbols {
 			manifestItem.Symbols = append(manifestItem.Symbols, symbol.Name)
@@ -722,6 +705,39 @@ func taskContextMemoryCandidates(ctx context.Context, index taskContextMemoryInd
 		})
 	}
 	return candidates, nil
+}
+
+func isCanonicalV1EvidenceManifest(manifest rhizome.EvidenceManifest, contentIdentity string) bool {
+	if manifest.Version != "v1" || len(manifest.Files) == 0 || !isLowerSHA256Hex(manifest.ManifestHash) || contentIdentity != manifest.ManifestHash {
+		return false
+	}
+
+	previousPath := ""
+	for index, file := range manifest.Files {
+		cleanedPath, err := cleanTaskContextRepositoryPath(file.RelativePath)
+		if err != nil || cleanedPath != file.RelativePath || !isLowerSHA256Hex(file.ContentHash) {
+			return false
+		}
+		if index > 0 && file.RelativePath <= previousPath {
+			return false
+		}
+		previousPath = file.RelativePath
+	}
+
+	encoded, err := json.Marshal(manifest.Files)
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]) == manifest.ManifestHash
+}
+
+func isLowerSHA256Hex(value string) bool {
+	if len(value) != sha256.Size*2 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 func taskContextAssociatedCandidates(sourcePath string) []taskContextCandidate {
@@ -935,14 +951,32 @@ func taskContextObservationEvent(stepID, sessionID, substrate string, manifest t
 	safeSessionID := taskContextSafeCorrelationID(sessionID)
 	items := make([]map[string]interface{}, 0, len(manifest.Items))
 	for _, item := range manifest.Items {
-		items = append(items, map[string]interface{}{
+		obsItem := map[string]interface{}{
 			"sourceClass":     item.SourceClass,
 			"sourceIdentity":  item.SourceIdentity,
 			"selectionReason": item.SelectionReason,
 			"contentRef":      item.ContentReference,
 			"admittedBytes":   item.AdmittedBytes,
 			"truncated":       item.Truncated,
-		})
+		}
+		if item.SourceClass == "project-memory" {
+			if item.Origin != "" {
+				obsItem["origin"] = item.Origin
+			}
+			if item.Authority != "" {
+				obsItem["authority"] = item.Authority
+			}
+			if item.Status != "" {
+				obsItem["status"] = item.Status
+			}
+			if item.KnowledgeKind != "" {
+				obsItem["kind"] = item.KnowledgeKind
+			}
+			if item.ValidityRef != "" {
+				obsItem["validityRef"] = item.ValidityRef
+			}
+		}
+		items = append(items, obsItem)
 	}
 	omissions := make(map[string]interface{}, len(manifest.OmissionCounts))
 	for reason, count := range manifest.OmissionCounts {
@@ -1339,12 +1373,32 @@ func renderTaskContextCandidate(candidate taskContextCandidate, source taskConte
 	case taskContextEvidenceDoc:
 		builder.WriteString("Associated documentation evidence: ")
 	case taskContextEvidenceMemory:
-		builder.WriteString("Source-local project memory evidence: ")
+		builder.WriteString("Untrusted repository knowledge context\n\nSource-local project memory evidence: ")
 	}
 	builder.WriteString("`")
 	builder.WriteString(candidate.path)
 	builder.WriteString("`\n")
 	if candidate.memory != nil {
+		if strings.TrimSpace(string(candidate.memory.Origin)) != "" {
+			builder.WriteString("Origin: ")
+			builder.WriteString(strings.TrimSpace(string(candidate.memory.Origin)))
+			builder.WriteString("\n")
+		}
+		if strings.TrimSpace(string(candidate.memory.Authority)) != "" {
+			builder.WriteString("Authority: ")
+			builder.WriteString(strings.TrimSpace(string(candidate.memory.Authority)))
+			builder.WriteString("\n")
+		}
+		if strings.TrimSpace(string(candidate.memory.Status)) != "" {
+			builder.WriteString("Status: ")
+			builder.WriteString(strings.TrimSpace(string(candidate.memory.Status)))
+			builder.WriteString("\n")
+		}
+		if strings.TrimSpace(string(candidate.memory.Kind)) != "" {
+			builder.WriteString("Kind: ")
+			builder.WriteString(strings.TrimSpace(string(candidate.memory.Kind)))
+			builder.WriteString("\n")
+		}
 		if strings.TrimSpace(candidate.memory.Category) != "" {
 			builder.WriteString("Category: ")
 			builder.WriteString(strings.TrimSpace(candidate.memory.Category))

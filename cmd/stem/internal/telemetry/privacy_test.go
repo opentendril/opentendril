@@ -316,6 +316,7 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsEmittedForMemoryItems(t *te
 				"origin":          "botanist",
 				"authority":       "botanist",
 				"status":          "established",
+				"kind":            "fact",
 				"validityRef":     "fedcba987654",
 			}},
 		},
@@ -326,12 +327,12 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsEmittedForMemoryItems(t *te
 		t.Fatalf("expected 1 safe item, got: %#v", safe.Data["items"])
 	}
 	item := items[0]
-	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+	for _, field := range []string{"origin", "authority", "status", "kind", "validityRef"} {
 		if item[field] == nil {
 			t.Errorf("memory envelope field %q was stripped from safe item: %v", field, item)
 		}
 	}
-	if item["origin"] != "botanist" || item["authority"] != "botanist" || item["status"] != "established" {
+	if item["origin"] != "botanist" || item["authority"] != "botanist" || item["status"] != "established" || item["kind"] != "fact" {
 		t.Fatalf("memory envelope field values incorrect: %v", item)
 	}
 	if item["validityRef"] != "fedcba987654" {
@@ -339,8 +340,41 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsEmittedForMemoryItems(t *te
 	}
 }
 
+func TestSanitizeTaskContextEventEveryMemoryKnowledgeKindSurvives(t *testing.T) {
+	allowedKinds := []string{"observation", "fact", "constraint", "correction", "rejected-interpretation"}
+	for _, kind := range allowedKinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			event := eventbus.Event{
+				Type: eventbus.EventTaskContextAssembled,
+				Data: map[string]interface{}{
+					"admittedCount": 1,
+					"items": []map[string]interface{}{{
+						"sourceClass":     "project-memory",
+						"sourceIdentity":  "memory/abcdef012345",
+						"selectionReason": "source-local-memory",
+						"contentRef":      "0123456789ab",
+						"admittedBytes":   64,
+						"truncated":       false,
+						"origin":          "botanist",
+						"authority":       "botanist",
+						"status":          "established",
+						"kind":            kind,
+						"validityRef":     "fedcba987654",
+					}},
+				},
+			}
+			safe := SanitizeObservationEvent(event)
+			items, ok := safe.Data["items"].([]map[string]interface{})
+			if !ok || len(items) != 1 || items[0]["kind"] != kind {
+				t.Fatalf("knowledge kind %q did not survive sanitization: %#v", kind, safe.Data["items"])
+			}
+		})
+	}
+}
+
 // TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid verifies
-// that unknown enum values for origin, authority, and status are rejected.
+// that unknown enum values for origin, authority, status, and kind are rejected.
 func TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid(t *testing.T) {
 	event := eventbus.Event{
 		Type: eventbus.EventTaskContextAssembled,
@@ -357,6 +391,7 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid(t *test
 				"origin":          "unknown-origin",
 				"authority":       "god-mode",
 				"status":          "hacked",
+				"kind":            "bad-kind",
 				"validityRef":     "not-hex!@#$%^",
 			}},
 		},
@@ -367,7 +402,7 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid(t *test
 		t.Fatalf("expected 1 safe item even with invalid envelope fields: %#v", safe.Data["items"])
 	}
 	item := items[0]
-	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+	for _, field := range []string{"origin", "authority", "status", "kind", "validityRef"} {
 		if _, present := item[field]; present {
 			t.Errorf("invalid envelope field %q survived sanitization: %v", field, item[field])
 		}
@@ -375,8 +410,7 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsStrippedWhenInvalid(t *test
 }
 
 // TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems
-// verifies that envelope fields are silently ignored on non-memory items
-// (they simply are not present in the input for file/symbol items).
+// verifies that memory lifecycle fields are not forwarded for ordinary evidence.
 func TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems(t *testing.T) {
 	event := eventbus.Event{
 		Type: eventbus.EventTaskContextAssembled,
@@ -390,7 +424,11 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems(t *
 				"contentRef":      "0123456789ab",
 				"admittedBytes":   256,
 				"truncated":       false,
-				// No origin/authority/status/validityRef — normal file item.
+				"origin":          "botanist",
+				"authority":       "botanist",
+				"status":          "established",
+				"kind":            "fact",
+				"validityRef":     "fedcba987654",
 			}},
 		},
 	}
@@ -400,7 +438,7 @@ func TestSanitizeTaskContextEventMemoryEnvelopeFieldsAbsentForNonMemoryItems(t *
 		t.Fatalf("expected 1 safe item: %#v", safe.Data["items"])
 	}
 	item := items[0]
-	for _, field := range []string{"origin", "authority", "status", "validityRef"} {
+	for _, field := range []string{"origin", "authority", "status", "kind", "validityRef"} {
 		if _, present := item[field]; present {
 			t.Errorf("unexpected envelope field %q on file-anchor item: %v", field, item[field])
 		}

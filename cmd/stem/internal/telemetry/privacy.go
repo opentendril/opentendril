@@ -272,17 +272,22 @@ func sanitizeTaskContextItems(value interface{}) ([]map[string]interface{}, bool
 			"admittedBytes":   admittedBytes,
 			"truncated":       truncated,
 		}
-		if validityRef, ok := item["validityRef"].(string); ok && safeTaskContextObservationReference(validityRef) {
-			safeItem["validityRef"] = validityRef
-		}
-		if origin, ok := item["origin"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(origin, "origin") {
-			safeItem["origin"] = origin
-		}
-		if authority, ok := item["authority"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(authority, "authority") {
-			safeItem["authority"] = authority
-		}
-		if status, ok := item["status"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(status, "status") {
-			safeItem["status"] = status
+		if sourceClass == "project-memory" {
+			if validityRef, ok := item["validityRef"].(string); ok && safeTaskContextObservationReference(validityRef) {
+				safeItem["validityRef"] = validityRef
+			}
+			if origin, ok := item["origin"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(origin, "origin") {
+				safeItem["origin"] = origin
+			}
+			if authority, ok := item["authority"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(authority, "authority") {
+				safeItem["authority"] = authority
+			}
+			if status, ok := item["status"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(status, "status") {
+				safeItem["status"] = status
+			}
+			if kind, ok := item["kind"].(string); ok && safeTaskContextObservationMemoryEnvelopeField(kind, "kind") {
+				safeItem["kind"] = kind
+			}
 		}
 		items = append(items, safeItem)
 	}
@@ -428,6 +433,11 @@ func safeTaskContextObservationMemoryEnvelopeField(value, field string) bool {
 	case "status":
 		switch value {
 		case "unclassified", "established", "proposed", "stale", "conflicted", "rejected", "superseded":
+			return true
+		}
+	case "kind":
+		switch value {
+		case "observation", "fact", "constraint", "correction", "rejected-interpretation":
 			return true
 		}
 	}
