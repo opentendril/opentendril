@@ -211,14 +211,19 @@ type CredentialProfile struct {
 }
 
 type substrateExecutionPlan struct {
-	name                     string
-	hostPath                 string
-	cloneURL                 string
-	cloneBranch              string
-	authRef                  string
-	credential               ResolvedCredential
-	readOnly                 bool
-	named                    bool
+	name        string
+	hostPath    string
+	cloneURL    string
+	cloneBranch string
+	authRef     string
+	credential  ResolvedCredential
+	readOnly    bool
+	named       bool
+	// remotePublication is true when reviewable Fruit from this run belongs in
+	// the configured remote review domain. It is separate from remoteClone:
+	// an existing managed checkout may be reused without materialization while
+	// its named URL-backed Substrate remains remote-backed.
+	remotePublication        bool
 	remoteClone              bool
 	provider                 string
 	command                  []string
@@ -438,6 +443,9 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 	} else if plan.named && plan.cloneURL != "" && !localPathExists {
 		plan.remoteClone = true
 	}
+	checkoutMode := strings.ToLower(strings.TrimSpace(plan.credential.Checkout.Mode))
+	plan.remotePublication = explicitURL ||
+		(plan.named && plan.cloneURL != "" && checkoutMode != "path")
 
 	if !plan.remoteClone {
 		if !localPathExists {

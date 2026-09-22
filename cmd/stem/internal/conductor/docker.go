@@ -1284,7 +1284,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if shouldCommit {
 			var commitHash string
 			var commitErr error
-			apiCommit := isReviewableFruit && managedRun && plan.remoteClone && plan.credential.CommitMode == CommitModeAPI
+			apiCommit := isReviewableFruit && managedRun && plan.remotePublication && plan.credential.CommitMode == CommitModeAPI
 			var apiCommitOID string
 
 			if apiCommit {
@@ -1342,7 +1342,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return report, changes, runErr
 			}
 
-			if d.DisableMergeBack || (managedRun && !plan.remoteClone) {
+			if d.DisableMergeBack || (managedRun && !plan.remotePublication) {
 				if isReviewableFruit {
 					fruitBranch := ""
 					if managedRun {
@@ -1361,7 +1361,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				return report, changes, runErr
 			}
 
-			if plan.remoteClone {
+			if plan.remotePublication {
 				// For a managed remote run, publication targets the run-specific
 				// Fruit branch (managedWorkspace.Branch), never the configured
 				// source branch. The source branch is the STARTING POINT, not
