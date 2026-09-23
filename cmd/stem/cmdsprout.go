@@ -262,6 +262,15 @@ func newSproutRunOrchestrator(spec core.SproutSpec, wiring sproutSubstrateWiring
 }
 
 func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.SproutOperations {
+	return sproutOperationsWithOneShotHistory(history, ambientBus, oneShotHistoryOptions{})
+}
+
+type oneShotHistoryOptions struct {
+	sinkBuffer  int
+	recordEvent func(context.Context, eventbus.Event) error
+}
+
+func sproutOperationsWithOneShotHistory(history *historydb.Store, ambientBus *eventbus.Bus, options oneShotHistoryOptions) core.SproutOperations {
 	substratesConfig, err := conductor.LoadSubstratesConfig("")
 	if err != nil {
 		log.Printf("[Sprout] Failed to load substrates config: %v", err)
@@ -289,8 +298,12 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			if bus == nil {
 				bus = eventbus.New()
 				if history != nil {
-					eventSink = &oneShotHistorySink{history: history}
-					bus.AttachSink(eventSink, 0, "historydb")
+					eventSink = &oneShotHistorySink{history: history, recordEvent: options.recordEvent}
+					// Required one-shot evidence must bypass EventBus's deliberately
+					// lossy asynchronous sink queue. The typed Subscribe lane runs
+					// synchronously before Publish attempts sink delivery.
+					eventSink.subscribeRequired(bus)
+					bus.AttachSink(eventSink, options.sinkBuffer, "historydb")
 				}
 				defer func() {
 					// Shutdown drains the one-shot bus before the operation returns,

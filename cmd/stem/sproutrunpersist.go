@@ -48,16 +48,62 @@ func (f *sproutPersistenceFailure) Err() error {
 // RecordEvent remains the sole HistoryDB event path, retaining sanitisation,
 // redaction, encryption, and insertion behavior.
 type oneShotHistorySink struct {
-	history *historydb.Store
-	failure sproutPersistenceFailure
+	history     *historydb.Store
+	recordEvent func(context.Context, eventbus.Event) error
+	failure     sproutPersistenceFailure
 }
 
 func (s *oneShotHistorySink) Consume(event eventbus.Event) {
 	if s == nil || s.history == nil {
 		return
 	}
-	if err := s.history.RecordEvent(context.Background(), event); err != nil {
+	if isRequiredOneShotLifecycleEvent(event.Type) {
+		return
+	}
+	if err := s.record(event); err != nil {
 		s.failure.capture(fmt.Errorf("persist %q event: %w", event.Type, err))
+	}
+}
+
+func (s *oneShotHistorySink) persistRequired(event eventbus.Event) {
+	if s == nil || s.history == nil {
+		return
+	}
+	if err := s.record(event); err != nil {
+		s.failure.capture(fmt.Errorf("persist %q event: %w", event.Type, err))
+	}
+}
+
+func (s *oneShotHistorySink) record(event eventbus.Event) error {
+	if s.recordEvent != nil {
+		return s.recordEvent(context.Background(), event)
+	}
+	return s.history.RecordEvent(context.Background(), event)
+}
+
+func (s *oneShotHistorySink) subscribeRequired(bus *eventbus.Bus) {
+	if s == nil || bus == nil {
+		return
+	}
+	for _, eventType := range requiredOneShotLifecycleEvents() {
+		bus.Subscribe(eventType, s.persistRequired)
+	}
+}
+
+func isRequiredOneShotLifecycleEvent(eventType eventbus.EventType) bool {
+	switch eventType {
+	case eventbus.EventTaskContextAssembled, eventbus.EventSproutMatured, eventbus.EventSproutWithered:
+		return true
+	default:
+		return false
+	}
+}
+
+func requiredOneShotLifecycleEvents() []eventbus.EventType {
+	return []eventbus.EventType{
+		eventbus.EventTaskContextAssembled,
+		eventbus.EventSproutMatured,
+		eventbus.EventSproutWithered,
 	}
 }
 
