@@ -44,7 +44,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | **Pollinator** | An **external** requester that reaches *in* and asks the organism for governed work — a Botanist at a terminal, or an external Mycorrhizal mind connected over a governed interface. Carries a **Pollen** (its bound identity) and is granted operation-classes; no grant, no access. | External API caller / client (*not* "agent") | external |
 | **Ramet** | One running **Tendril instance** — a single individual on one Terroir. In botany a ramet is one member of a clonal colony; many ramets share one **Genet**. | Node / deployment / instance (*not* "agent") | persistent |
 | **Resin** | Live internal logging trace. | Debug log / trace | transient |
-| **Rhizome** | The background code/AST index of the Substrate. | Vector DB / code index | persistent |
+| **Rhizome** | The persistent Substrate index and project-knowledge store: structural code/AST evidence plus provenance-backed repository memory. | Code index / project knowledge store | persistent |
 | **Rhizosphere** | The **external** ecosystem the Roots tap — the LLM providers, Docker, git, MCP themselves. *(The outside world; contrast **Roots**, which is OpenTendril's own code that reaches into it.)* | Underlying tech stack / dependencies | environment |
 | **Roots** | OpenTendril's **own** connectivity organ (`roots/`) — provider clients, model discovery, and tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae. | Provider client / SDK layer | persistent |
 | **Genet** | All **Ramets** grown from the same Genome — the genetic individual they are copies of. What a mesh of instances collectively is. | Fleet / cluster of instances | persistent |
@@ -107,7 +107,7 @@ lifespan. (This table is the basis for the Stem-injectable canonical block.)
 | Microservice plugin (GCP/Datadog/GitHub API) | **Symbiotic Nodule** | |
 | Node / deployment / running instance | **Ramet** | One individual; the **Genet** is all ramets of the same Genome. |
 | Guest agent / in-VM command listener | **Stoma** | The one pore in the Terrarium wall; guard cells are the isolation policy. |
-| Code index / vector DB | **Rhizome** | |
+| Code index / project knowledge store | **Rhizome** | |
 | Sandbox / container | **Terrarium** | |
 | System prompt / persona | **Genotype** | |
 | RAG context / tool definition | **Plasmid** | |
