@@ -60,7 +60,7 @@ The package exports approximately 53 symbols. The load-bearing exports include:
 
 ## Routing & Caching
 
-`roots/llm` implements tier-based routing. The orchestrator uses specific tiers: `TierPremium` for complex planning, sequence coordination, and code writing; `TierStandard` for verification, compilation checks, and resolving linters; and `TierCheapest` for summarization, context stubs, and epigenetic logging.
+`roots/llm` implements tier-based routing. The orchestrator uses specific tiers: `TierPremium` for complex planning, sequence coordination, and code writing; `TierStandard` for verification, compilation checks, and resolving linters; and `TierCheapest` for summarization, context stubs, and bounded Mycorrhizal proposal extraction.
 
 The Anthropic adapter injects `cache_control` markers positionally. Every request receives at most four breakpoints: the system block is always marked. Up to three additional markers are placed in the message sequence, clustered near the end at roughly 15-block intervals. A short conversation places only as many markers as the content earns.
 

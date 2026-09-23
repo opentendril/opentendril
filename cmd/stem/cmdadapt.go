@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
@@ -43,7 +42,7 @@ func runAdaptCmd(ctx context.Context, args []string) {
 		return
 	}
 
-	fmt.Printf("🧬 Mining %d commit(s) from %s for Epigenetic Traits...\n", len(hashes), root)
+	fmt.Printf("🧬 Mining %d commit(s) from %s for Mycorrhizal proposals...\n", len(hashes), root)
 
 	samples := make([]conductor.CommitSample, 0, len(hashes))
 	hadError := false
@@ -93,7 +92,11 @@ func runAdaptCmd(ctx context.Context, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Adapted %d commit(s) into %s\n", len(samples), filepath.Join(root, ".tendril", "genome", "epigenetics.md"))
+	fmt.Println(adaptProposalSuccessMessage(len(samples)))
+}
+
+func adaptProposalSuccessMessage(commitCount int) string {
+	return fmt.Sprintf("✅ Proposed learnings from %d commit(s) in the source-local Rhizome", commitCount)
 }
 
 func gitHasCommits(ctx context.Context, repoRoot string) bool {

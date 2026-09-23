@@ -1270,7 +1270,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if isReviewableFruit {
 			gitDiff, diffErr = collectGitDiffFn(postMortemCtx, mountPath)
 			if diffErr != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for epigenetic chronicler: %v\n", diffErr)
+				fmt.Fprintf(os.Stderr, "⚠️ Failed to collect git diff for Mycorrhizal proposal extraction: %v\n", diffErr)
 			}
 		}
 
@@ -1432,29 +1432,23 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 
 			if gitDiff != "" {
-				// On the post-mortem's clock, not the wait's: transcribing what a
+				// On the post-mortem's clock, not the wait's: extracting what a
 				// run learned is part of the account of the run, and a detached
-				// call has long since let go of the context it waited on.
-				chroniclerPath := sourcePath
-				if managedRun {
-					chroniclerPath = mountPath
-				}
-				chronicler := newRunChroniclerFn(chroniclerPath, llm.TierCheapest)
+				// call has long since let go of the context it waited on. The
+				// canonical source Substrate owns the proposal Rhizome even when
+				// the result was produced in a managed candidate workspace.
+				chronicler := newRunChroniclerFn(sourcePath, llm.TierCheapest)
 				var postRun PostRunUsage
 				transcribe := func() error {
 					var transcribeErr error
-					postRun, transcribeErr = chronicler.TranscribeLearnings(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs())
+					postRun, transcribeErr = chronicler.TranscribeLearningsWithProvenance(postMortemCtx, sproutResult.Transcript, gitDiff, session.Logs(), stepID, d.SessionID, sourcePath)
 					return transcribeErr
 				}
 				var transcribeErr error
-				if generatedState != nil && managedRun {
-					transcribeErr = generatedState.captureTransition(transcribe)
-				} else {
-					transcribeErr = transcribe()
-				}
+				transcribeErr = transcribe()
 				report.PostRun = postRun
 				if transcribeErr != nil {
-					fmt.Fprintf(os.Stderr, "⚠️ Epigenetic chronicler skipped: %v\n", transcribeErr)
+					fmt.Fprintf(os.Stderr, "⚠️ Mycorrhizal proposal extraction skipped: %v\n", transcribeErr)
 				}
 			}
 		} else {
@@ -2370,12 +2364,13 @@ func restoreHostStash(ctx context.Context, root string) error {
 	return nil
 }
 
-// recoverFailedStashPop salvages the one stash-pop failure a sprout inflicts on
-// itself. The epigenetic chronicler regenerates an untracked state file on the
-// host during the run (e.g. .tendril/genome/epigenetics.md) that the pre-flight
-// stash also captured, so `git stash pop` cannot lay the stashed copy back down
-// and fails with "could not restore untracked files from stash" — withering an
-// otherwise successful run on self-inflicted state.
+// recoverFailedStashPop salvages the one stash-pop failure a Sprout can inflict
+// on itself. A Tendril-owned legacy state file such as
+// .tendril/genome/epigenetics.md may already be present on the host and also be
+// captured by the pre-flight stash. Git cannot lay the stashed copy back down
+// and reports "could not restore untracked files from stash". This helper
+// prevents that self-inflicted state from withering an otherwise successful
+// run.
 //
 // Git still does everything that matters before it fails: it applies the
 // stash's tracked changes and restores every non-colliding untracked file, then

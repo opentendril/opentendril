@@ -82,15 +82,12 @@ func TestTranscribeLearningsOneCallCountsRequest(t *testing.T) {
 	}
 }
 
-func TestTranscribeLearningsChroniclerAndReductionAggregate(t *testing.T) {
+func TestTranscribeLearningsDoesNotReduceLegacyGenome(t *testing.T) {
 	t.Setenv("TENDRIL_GENOME_MAX_TOKENS", "1")
 	workspace := t.TempDir()
 	seedGenome(t, workspace, epigeneticGenomeHeader+"\n\n- existing oversized rule that forces reduction\n")
 	fake := &usagePromptFake{
-		results: []llm.Result{
-			{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")},
-			{Text: "- reduced principle", Usage: completeUsage(4, 2, 6, "0.50", "USD", "openrouter")},
-		},
+		results:  []llm.Result{{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")}},
 		provider: "nvidia",
 		model:    "meta/llama-3.1-8b-instruct",
 	}
@@ -100,16 +97,16 @@ func TestTranscribeLearningsChroniclerAndReductionAggregate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TranscribeLearnings: %v", err)
 	}
-	if fake.calls != 2 {
-		t.Fatalf("provider requests = %d, want 2 (transcribe + reduction)", fake.calls)
+	if fake.calls != 1 {
+		t.Fatalf("provider requests = %d, want 1 proposal extraction request", fake.calls)
 	}
 	if !post.RequestsMade {
-		t.Fatal("RequestsMade = false after transcribe + reduction")
+		t.Fatal("RequestsMade = false after proposal extraction")
 	}
-	assertIntPtr(t, post.Usage.PromptTokens, 14, "PromptTokens")
-	assertIntPtr(t, post.Usage.CompletionTokens, 7, "CompletionTokens")
-	assertIntPtr(t, post.Usage.TotalTokens, 21, "TotalTokens")
-	assertStringPtr(t, post.Usage.CostAmount, "1.50", "CostAmount")
+	assertIntPtr(t, post.Usage.PromptTokens, 10, "PromptTokens")
+	assertIntPtr(t, post.Usage.CompletionTokens, 5, "CompletionTokens")
+	assertIntPtr(t, post.Usage.TotalTokens, 15, "TotalTokens")
+	assertStringPtr(t, post.Usage.CostAmount, "1.00", "CostAmount")
 	if post.Provider != "nvidia" || post.Model != "meta/llama-3.1-8b-instruct" {
 		t.Fatalf("attribution = %s/%s, want chronicler mind", post.Provider, post.Model)
 	}
@@ -161,16 +158,12 @@ func TestTranscribeLearningsErrorPreservesUsage(t *testing.T) {
 	}
 }
 
-func TestTranscribeLearningsReductionErrorKeepsBothUsagesAndSucceeds(t *testing.T) {
+func TestTranscribeLearningsDoesNotCallGenomeReduction(t *testing.T) {
 	t.Setenv("TENDRIL_GENOME_MAX_TOKENS", "1")
 	workspace := t.TempDir()
 	seedGenome(t, workspace, epigeneticGenomeHeader+"\n\n- existing oversized rule that forces reduction\n")
 	fake := &usagePromptFake{
-		results: []llm.Result{
-			{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "api")},
-			{Usage: completeUsage(4, 2, 6, "0.50", "USD", "api")},
-		},
-		errs:     []error{nil, errors.New("reduction failed")},
+		results:  []llm.Result{{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "api")}},
 		provider: "nvidia",
 		model:    "cheap-model",
 	}
@@ -180,25 +173,21 @@ func TestTranscribeLearningsReductionErrorKeepsBothUsagesAndSucceeds(t *testing.
 	if err != nil {
 		t.Fatalf("TranscribeLearnings returned %v; reduction errors are skipped", err)
 	}
-	if fake.calls != 2 {
-		t.Fatalf("provider requests = %d, want 2", fake.calls)
+	if fake.calls != 1 {
+		t.Fatalf("provider requests = %d, want 1", fake.calls)
 	}
 	if !post.RequestsMade {
-		t.Fatal("RequestsMade = false after transcribe + failed reduction")
+		t.Fatal("RequestsMade = false after proposal extraction")
 	}
-	assertIntPtr(t, post.Usage.PromptTokens, 14, "PromptTokens")
-	assertStringPtr(t, post.Usage.CostAmount, "1.50", "CostAmount")
+	assertIntPtr(t, post.Usage.PromptTokens, 10, "PromptTokens")
+	assertStringPtr(t, post.Usage.CostAmount, "1.00", "CostAmount")
 }
 
-func TestTranscribeLearningsMismatchedCostMakesComponentCostUnavailable(t *testing.T) {
-	t.Setenv("TENDRIL_GENOME_MAX_TOKENS", "1")
+func TestTranscribeLearningsUsesOnlyExtractionUsage(t *testing.T) {
 	workspace := t.TempDir()
 	seedGenome(t, workspace, epigeneticGenomeHeader+"\n\n- existing oversized rule that forces reduction\n")
 	fake := &usagePromptFake{
-		results: []llm.Result{
-			{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")},
-			{Text: "- reduced", Usage: completeUsage(4, 2, 6, "2.00", "credits", "nvidia")},
-		},
+		results:  []llm.Result{{Text: "- new learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")}},
 		provider: "nvidia",
 		model:    "cheap-model",
 	}
@@ -208,10 +197,10 @@ func TestTranscribeLearningsMismatchedCostMakesComponentCostUnavailable(t *testi
 	if err != nil {
 		t.Fatalf("TranscribeLearnings: %v", err)
 	}
-	assertIntPtr(t, post.Usage.PromptTokens, 14, "PromptTokens")
-	assertCostAbsent(t, post.Usage)
-	if !post.RequestsMade {
-		t.Fatal("RequestsMade = false after two requests with mismatched cost semantics")
+	assertIntPtr(t, post.Usage.PromptTokens, 10, "PromptTokens")
+	assertStringPtr(t, post.Usage.CostAmount, "1.00", "CostAmount")
+	if fake.calls != 1 {
+		t.Fatalf("provider requests = %d, want one extraction request", fake.calls)
 	}
 }
 
@@ -299,15 +288,12 @@ func TestSproutRunReportCarriesSeparatePostRunComponent(t *testing.T) {
 	}
 }
 
-func TestSproutRunReportPostRunReductionReachesReport(t *testing.T) {
+func TestSproutRunReportPostRunProposalUsageReachesReport(t *testing.T) {
 	t.Setenv("TENDRIL_GENOME_MAX_TOKENS", "1")
 	root := newOutcomeTestRepo(t)
 	seedGenome(t, root, epigeneticGenomeHeader+"\n\n- existing oversized rule that forces reduction\n")
 	stubRunChronicler(t, &usagePromptFake{
-		results: []llm.Result{
-			{Text: "- learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")},
-			{Text: "- reduced", Usage: completeUsage(4, 2, 6, "0.50", "USD", "openrouter")},
-		},
+		results:  []llm.Result{{Text: "- learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")}},
 		provider: "nvidia",
 		model:    "cheap-model",
 	})
@@ -315,8 +301,8 @@ func TestSproutRunReportPostRunReductionReachesReport(t *testing.T) {
 	report := runReviewableFruit(t, root, usageReportRunner{
 		result: sproutResult{Response: "done", WroteWorkspace: true, Usage: completeUsage(2, 1, 3, "0.10", "USD", "api"), RequestsMade: true},
 	})
-	assertIntPtr(t, report.PostRun.Usage.PromptTokens, 14, "post-run PromptTokens")
-	assertStringPtr(t, report.PostRun.Usage.CostAmount, "1.50", "post-run CostAmount")
+	assertIntPtr(t, report.PostRun.Usage.PromptTokens, 10, "post-run PromptTokens")
+	assertStringPtr(t, report.PostRun.Usage.CostAmount, "1.00", "post-run CostAmount")
 	assertIntPtr(t, report.Usage.PromptTokens, 2, "execution must stay uncombined")
 }
 
@@ -356,15 +342,11 @@ func TestSproutRunReportChroniclerErrorPreservesPostRunUsage(t *testing.T) {
 	assertIntPtr(t, report.Usage.PromptTokens, 30, "execution PromptTokens")
 }
 
-func TestSproutRunReportDifferingPostRunCostLeavesExecutionIntact(t *testing.T) {
-	t.Setenv("TENDRIL_GENOME_MAX_TOKENS", "1")
+func TestSproutRunReportProposalCostLeavesExecutionIntact(t *testing.T) {
 	root := newOutcomeTestRepo(t)
 	seedGenome(t, root, epigeneticGenomeHeader+"\n\n- existing oversized rule that forces reduction\n")
 	stubRunChronicler(t, &usagePromptFake{
-		results: []llm.Result{
-			{Text: "- learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")},
-			{Text: "- reduced", Usage: completeUsage(4, 2, 6, "2.00", "credits", "nvidia")},
-		},
+		results:  []llm.Result{{Text: "- learning", Usage: completeUsage(10, 5, 15, "1.00", "USD", "openrouter")}},
 		provider: "nvidia",
 		model:    "cheap-model",
 	})
@@ -372,7 +354,7 @@ func TestSproutRunReportDifferingPostRunCostLeavesExecutionIntact(t *testing.T) 
 	report := runReviewableFruit(t, root, usageReportRunner{
 		result: sproutResult{Response: "done", WroteWorkspace: true, Usage: completeUsage(30, 15, 45, "4.00", "USD", "api"), RequestsMade: true},
 	})
-	assertCostAbsent(t, report.PostRun.Usage)
+	assertStringPtr(t, report.PostRun.Usage.CostAmount, "1.00", "post-run CostAmount")
 	assertStringPtr(t, report.Usage.CostAmount, "4.00", "execution CostAmount")
 	assertStringPtr(t, report.Usage.CostUnit, "USD", "execution CostUnit")
 }

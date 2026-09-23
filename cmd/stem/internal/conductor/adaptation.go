@@ -30,10 +30,9 @@ func (c *EpigeneticChronicler) meristem() textCaller {
 	return c.coordinator
 }
 
-// AdaptFromHistory mines commit samples for Epigenetic Traits and encodes them
-// into the genome. Chunks are mapped through the Meristem coordinator
-// independently, then reduced into one consolidated trait list before
-// Inheritance picks them up on the next Sprout growth.
+// AdaptFromHistory mines commit samples for Mycorrhizal proposal statements.
+// Chunks are mapped through the Meristem coordinator independently, then
+// reduced into one consolidated proposal list before source-local persistence.
 func (c *EpigeneticChronicler) AdaptFromHistory(ctx context.Context, commits []CommitSample) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -53,9 +52,9 @@ func (c *EpigeneticChronicler) AdaptFromHistory(ctx context.Context, commits []C
 			return fmt.Errorf("trait extraction failed on chunk %d/%d: %w", index+1, len(chunks), err)
 		}
 
-		traits = normalizeMarkdownBullets(traits)
-		if strings.TrimSpace(traits) != "" {
-			candidates = append(candidates, traits)
+		contents := normalizeProposalContents(traits, "No recurring traits")
+		if len(contents) > 0 {
+			candidates = append(candidates, proposalBulletList(contents))
 		}
 	}
 
@@ -71,22 +70,39 @@ func (c *EpigeneticChronicler) AdaptFromHistory(ctx context.Context, commits []C
 			return fmt.Errorf("trait consolidation failed: %w", err)
 		}
 
-		consolidated = normalizeMarkdownBullets(consolidated)
-		if strings.TrimSpace(consolidated) == "" {
+		contents := normalizeProposalContents(consolidated, "No recurring traits")
+		if len(contents) == 0 {
 			return fmt.Errorf("Meristem returned no consolidated traits")
 		}
-		traits = consolidated
+		traits = proposalBulletList(contents)
 	}
 
-	if err := c.appendToGenome(traits); err != nil {
+	contents := normalizeProposalContents(traits, "No recurring traits")
+	if len(contents) == 0 {
+		return nil
+	}
+	provenance, err := encodeProposalProvenance("", "", len(commits))
+	if err != nil {
+		return err
+	}
+	if err := persistProposalInvocation(ctx, proposalInvocation{
+		sourcePath:  c.workspace,
+		sourceClass: mycorrhizalAdaptationSourceClass,
+		sourceID:    adaptationProposalSourceIdentity(commits),
+		provenance:  provenance,
+	}, contents); err != nil {
 		return err
 	}
 
-	if _, _, err := c.maybeReduceGenome(ctx, c.genomePath()); err != nil {
-		fmt.Printf("⚠️ Genome auto-reduction skipped: %v\n", err)
-	}
-
 	return nil
+}
+
+func proposalBulletList(contents []string) string {
+	bullets := make([]string, 0, len(contents))
+	for _, content := range contents {
+		bullets = append(bullets, "- "+content)
+	}
+	return strings.Join(bullets, "\n")
 }
 
 // chunkAdaptationCorpus renders commits into Meristem-sized chunks. Whole
@@ -204,21 +220,21 @@ func callMeristemPrompt(ctx context.Context, caller textCaller, systemPrompt str
 func buildTraitExtractionPrompt(chunk string) (string, string) {
 	systemPrompt := strings.TrimSpace(`
 You are the OpenTendril Meristem running an Adaptation pass.
-Extract recurring Epigenetic Traits from the substrate's commit history.
-Traits are durable, repository-specific habits: coding styles, architectural patterns,
+Extract recurring repository-specific proposal statements from the substrate's commit history.
+These statements describe durable habits: coding styles, architectural patterns,
 naming conventions, error-handling idioms, and UI aesthetics (e.g. preferred CSS styles).
 Return only concise Markdown bullet points.
 `)
 
 	userPrompt := fmt.Sprintf(`Analyze the following commit messages and diffs.
-Extract only recurring Epigenetic Traits:
+Extract only recurring proposal statements:
 - Coding style and formatting habits (e.g. error wrapping, guard clauses, receiver naming).
 - Architectural patterns and package layout conventions.
 - Variable, file, and symbol naming conventions.
 - Preferred UI/CSS aesthetics if frontend code is present.
 
 Ignore one-off changes, commit hashes, and task-specific details.
-If no recurring traits are visible, return:
+If no recurring traits are visible, return exactly:
 - No recurring traits.
 
 Commit history:
@@ -232,13 +248,13 @@ func buildTraitConsolidationPrompt(candidates string) (string, string) {
 	candidates = truncateMiddle(strings.TrimSpace(candidates), defaultMaxSection)
 
 	systemPrompt := strings.TrimSpace(`
-You are the OpenTendril Meristem consolidating Epigenetic Traits.
-Merge duplicate traits, keep only those that recur across chunks, and generalize them.
+You are the OpenTendril Meristem consolidating proposal statements.
+Merge duplicate statements, keep only those that recur across chunks, and generalize them.
 Return only concise Markdown bullet points.
 `)
 
-	userPrompt := fmt.Sprintf(`The following trait candidates were extracted from separate chunks of the same repository's history.
-Consolidate them into a single deduplicated list of durable Epigenetic Traits, ideally under 15 bullets.
+	userPrompt := fmt.Sprintf(`The following proposal candidates were extracted from separate chunks of the same repository's history.
+Consolidate them into a single deduplicated list of durable proposal statements, ideally under 15 bullets.
 Drop bullets that say no traits were found.
 
 Trait candidates:

@@ -138,8 +138,7 @@ unavailability and never accepts, merges, deletes, blocks, or mutates Fruit.
 
 ## Chronicler
 
-Adaptation/history-driven genome behavior is separate from Epigenetic Chronicler behavior. 
-For reviewable successful Fruit with a diff, the Chronicler consumes the Sprout transcript, diff, and session logs and distills durable learnings.
+The bounded Mycorrhizal Chronicler consumes the transcript, measured diff, and session logs from a reviewable successful Fruit. It retains concise repository-specific learnings as individual source-local Rhizome proposals with `origin=mycorrhizal`, `authority=none`, and `status=proposed`. It does not write the legacy Epigenetic genome, grant authority, or make a proposal eligible for Sprout context.
 
 ## Managed Run Workspaces
 

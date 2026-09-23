@@ -17,6 +17,97 @@ import (
 	"github.com/opentendril/opentendril/roots/llm"
 )
 
+func TestDockerPostRunManagedProposalUsesCanonicalSource(t *testing.T) {
+	sourcePath := proposalWorkspace(t)
+	candidatePath := proposalWorkspace(t)
+	chronicler := &EpigeneticChronicler{
+		workspace: candidatePath,
+		client:    &fakeLLM{response: "- Keep the canonical source Rhizome authoritative."},
+	}
+
+	if _, err := chronicler.TranscribeLearningsWithProvenance(
+		context.Background(),
+		"candidate transcript",
+		"candidate diff",
+		"candidate logs",
+		"managed-step",
+		"phytomer-session",
+		sourcePath,
+	); err != nil {
+		t.Fatalf("managed post-run proposal extraction: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(candidatePath, ".tendril", "rhizome.db")); !os.IsNotExist(err) {
+		t.Fatalf("candidate Rhizome became proposal authority, stat err=%v", err)
+	}
+	index, repositoryName, err := openRhizomeIndex(context.Background(), sourcePath)
+	if err != nil {
+		t.Fatalf("open canonical source Rhizome: %v", err)
+	}
+	if _, found, err := index.GetMemory(context.Background(), repositoryName, proposalTitle("Keep the canonical source Rhizome authoritative.")); err != nil || !found {
+		index.Close()
+		t.Fatalf("canonical proposal found=%v err=%v", found, err)
+	}
+	index.Close()
+
+	if err := os.RemoveAll(candidatePath); err != nil {
+		t.Fatalf("clean candidate workspace: %v", err)
+	}
+	index, repositoryName, err = openRhizomeIndex(context.Background(), sourcePath)
+	if err != nil {
+		t.Fatalf("reopen canonical source Rhizome: %v", err)
+	}
+	defer index.Close()
+	if _, found, err := index.GetMemory(context.Background(), repositoryName, proposalTitle("Keep the canonical source Rhizome authoritative.")); err != nil || !found {
+		t.Fatalf("proposal did not survive candidate cleanup, found=%v err=%v", found, err)
+	}
+}
+
+func TestDockerPostRunProposalIgnoresGenomeAutoPush(t *testing.T) {
+	t.Setenv("TENDRIL_GENOME_AUTO_PUSH", "true")
+	workspace := proposalWorkspace(t)
+	for _, args := range [][]string{
+		{"config", "user.name", "Test User"},
+		{"config", "user.email", "test@example.com"},
+		{"commit", "--allow-empty", "-m", "seed"},
+	} {
+		if _, err := runGitCommand(context.Background(), workspace, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	legacyPath := filepath.Join(workspace, ".tendril", "genome", "epigenetics.md")
+	legacy := []byte("preserved legacy learning\n")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("mkdir legacy genome: %v", err)
+	}
+	if err := os.WriteFile(legacyPath, legacy, 0o644); err != nil {
+		t.Fatalf("write legacy genome: %v", err)
+	}
+	before, err := runGitCommand(context.Background(), workspace, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("read initial HEAD: %v", err)
+	}
+
+	chronicler := &EpigeneticChronicler{
+		workspace: workspace,
+		client:    &fakeLLM{response: "- Keep proposal persistence source-local."},
+	}
+	if _, err := chronicler.TranscribeLearningsWithProvenance(context.Background(), "transcript", "diff", "logs", "step", "session", workspace); err != nil {
+		t.Fatalf("proposal extraction with auto-push enabled: %v", err)
+	}
+	after, err := runGitCommand(context.Background(), workspace, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatalf("read final HEAD: %v", err)
+	}
+	if strings.TrimSpace(before) != strings.TrimSpace(after) {
+		t.Fatalf("proposal extraction changed Git HEAD from %q to %q", before, after)
+	}
+	gotLegacy, err := os.ReadFile(legacyPath)
+	if err != nil || string(gotLegacy) != string(legacy) {
+		t.Fatalf("legacy genome changed with auto-push enabled: %q err=%v", gotLegacy, err)
+	}
+}
+
 func TestCloneForeignSubstrate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("clones a public repo over the network; skipped in -short, e.g. under the sealed scoped-ci verifier")
@@ -312,12 +403,10 @@ func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 	}
 }
 
-// A sprout run regenerates its own untracked state on the host after the
-// pre-flight stash captured the prior run's copy (the epigenetic chronicler
-// rewrites .tendril/genome/epigenetics.md). A plain `git stash pop` then fails
-// — "could not restore untracked files from stash" — and the run withers on a
-// self-inflicted conflict. Restore must survive it and still return the user's
-// stashed work.
+// A Sprout run may regenerate its own preserved legacy state on the host after
+// the pre-flight stash captured the prior run's copy. A plain `git stash pop`
+// can then fail with an untracked-file conflict. Restore must survive it and
+// still return the user's stashed work.
 func TestRestoreHostStashSurvivesRegeneratedUntrackedFile(t *testing.T) {
 	repo := t.TempDir()
 	ctx := context.Background()

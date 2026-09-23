@@ -40,10 +40,9 @@ const (
 // the diff, so it can no longer supply the evidence that makes an idle run look
 // productive.
 //
-// The genome entries were missing, and their absence is what let a run in which
-// the model only read files report itself complete: the epigenetic write from
-// the PREVIOUS run was still sitting in the checkout, unattributed, and the
-// diff handed it to whoever ran next.
+// The genome entries remain protected for preserved legacy material and
+// explicit genome operations. Current Chronicler output is stored in the
+// source-local Rhizome as proposed knowledge rather than written here.
 func generatedRuntimeArtifacts() []string {
 	genomeFile := func(name string) string {
 		return filepath.ToSlash(filepath.Join(tendrilStateDirectory, "genome", name))
@@ -54,8 +53,8 @@ func generatedRuntimeArtifacts() []string {
 		genomeFile(repositoryMapFile),
 		// Written before every run, by the repository and memory mappers.
 		genomeFile(memoryMapFile),
-		// Written after a run: the chronicler's learnings, and the genome
-		// fitness record. Both are Tendril accounting for itself.
+		// Preserved legacy genome material and fitness accounting are Tendril
+		// state, not Sprout work.
 		genomeFile(genomicEpigeneticsFilename),
 		genomeFile(genomicFitnessFilename),
 	}

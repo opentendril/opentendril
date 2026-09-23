@@ -13,7 +13,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Biome**: the normative climate (ISO 27001, ISO 42001, SDLC).
 - **Botanist**: the human who studies and cultivates (plants Seeds, prunes, reviews); observes via the Greenhouse.
 - **Branch**: a capability group / security zone.
-- **Epigenetics**: distilled learnings fed forward into future prompts.
+- **Epigenetics**: preserved legacy genome learning material kept quarantined; it is not the automatic repository-knowledge path.
 - **Fruit**: Git-reviewable output a cycle yields (a branch / PR / artifact); the Botanist decides acceptance.
 - **Genotype**: the base persona / system prompt (*who* a Sprout is).
 - **Greenhouse**: the observer UI.
@@ -29,7 +29,7 @@ the authority; fuller docs are `SYNTHETIC-TAXONOMY.md` (concept) and
 - **Pollinator**: an *external* requester that reaches IN and asks for governed work — a Botanist, or an external Mycorrhizal mind over a governed interface. Identified by a **Pollen**; granted operation-classes; no grant, no access. The mirror of a Symbiotic Nodule (which the organism reaches OUT to). Never call it an "agent": it is neither a Sprout (sealed internal worker) nor the Mycorrhizal Network itself.
 - **Ramet**: one running Tendril instance — a single individual on one Terroir. Many Ramets of the same Genome form a **Genet**. Never call an instance an "agent".
 - **Resin**: live internal log trace (hardens into Amber).
-- **Rhizome**: the code/AST index of the Substrate.
+- **Rhizome**: the persistent Substrate index and project-knowledge store: structural code/AST evidence plus provenance-backed repository memory.
 - **Rhizosphere**: the *external* ecosystem the Roots tap — the providers, Docker, git, MCP themselves (the outside world).
 - **Roots** (`roots/`): OpenTendril's *own* connectivity organ — provider clients, model discovery, tier routing that reach into the Rhizosphere to draw inference from the Mycorrhizae.
 - **Genet**: all Ramets grown from the same Genome — the genetic individual they are copies of.

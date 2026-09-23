@@ -61,7 +61,24 @@ Package-level sentinel errors: **none**. Callers match on formatted `fmt.Errorf`
 **Fan-in:**
 
 - **`cmd/stem`**: `cmdrepomap.go` calls Conductor's facade (not rhizome directly). `cmdmemory.go` imports rhizome for `LoadMemoryConfig`, `OpenMemoryBackend`, `Memory` CRUD, and key material under `.tendril/rhizome.key`.
-- **`internal/conductor`**: `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing the generated `.tendril` key, SQLite database and sidecars, genome Repo Map and Memory Map, and chronicler epigenetics and fitness artifacts.
+- **`internal/conductor`**: `rhizomefacade.go` opens the `heartwood` cipher + SQLite index, runs `ScanRepository` + `GenerateRepoMap` / `GenerateMemoryMap` for a mount path (hard-coded list limit 2000, query `*`). `docker.go` stages `repomap.md` (required) under `.tendril/genome/` before a Sprout grows. Golden tree-sitter tests exercise `NewTreeSitterParser` against fixture output. Runtime-artifact filtering skips committing the generated `.tendril` key, SQLite database and sidecars, genome Repo Map and Memory Map, preserved legacy epigenetics and fitness artifacts.
+
+## Mycorrhizal proposal lifecycle
+
+The bounded Chronicler and historical adaptation path use the canonical source Substrate's local SQLite Rhizome. A managed candidate workspace supplies the result and diff, but it never becomes the durable proposal authority.
+
+Each retained learning is stored as an individual memory with this envelope:
+
+```text
+origin = mycorrhizal
+authority = none
+status = proposed
+kind = observation
+```
+
+The normalized content gets a SHA-256 `ContentIdentity`, a title of `proposal:<full-sha256>`, and the existing `StableMemoryIdentity(repositoryName, title)`. Exact identity lookup is performed before storage. Existing proposed, established, rejected, stale, conflicted, superseded, or unclassified records are preserved unchanged. A content mismatch at the deterministic title fails closed.
+
+Post-run proposals use source class `mycorrhizal-post-run-v1` and safe step/session provenance. Historical adaptation uses source class `mycorrhizal-adaptation-v1` and a SHA-256 identity derived from ordered commit hashes. Neither path stores transcripts, diffs, logs, provider reasoning, credentials, or secrets in proposal provenance. Only the existing Botanist confirmation lifecycle can establish a proposal. Confirmed proposals then become eligible through normal task context rules.
 
 ## Limitations
 
