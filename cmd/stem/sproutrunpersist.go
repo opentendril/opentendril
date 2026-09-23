@@ -5,13 +5,68 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
+	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 	"github.com/opentendril/opentendril/roots/llm"
 )
+
+// sproutPersistenceFailure retains the first write failure observed by one
+// persistence path. EventBus sinks and terminal callbacks may run on different
+// goroutines, so the shared error is protected independently of the Store.
+type sproutPersistenceFailure struct {
+	mu  sync.Mutex
+	err error
+}
+
+func (f *sproutPersistenceFailure) capture(err error) {
+	if f == nil || err == nil {
+		return
+	}
+	f.mu.Lock()
+	if f.err == nil {
+		f.err = err
+	}
+	f.mu.Unlock()
+}
+
+func (f *sproutPersistenceFailure) Err() error {
+	if f == nil {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
+// oneShotHistorySink makes the one-shot adapter's owned telemetry writes
+// accountable without changing EventBus's asynchronous, lossy daemon contract.
+// RecordEvent remains the sole HistoryDB event path, retaining sanitisation,
+// redaction, encryption, and insertion behavior.
+type oneShotHistorySink struct {
+	history *historydb.Store
+	failure sproutPersistenceFailure
+}
+
+func (s *oneShotHistorySink) Consume(event eventbus.Event) {
+	if s == nil || s.history == nil {
+		return
+	}
+	if err := s.history.RecordEvent(context.Background(), event); err != nil {
+		s.failure.capture(fmt.Errorf("persist %q event: %w", event.Type, err))
+	}
+}
+
+func (s *oneShotHistorySink) Err() error {
+	if s == nil {
+		return nil
+	}
+	return s.failure.Err()
+}
 
 // sproutRunUsageFromReport copies the conductor's separate execution and
 // post-run components onto the durable envelope. Components are omitted when
@@ -71,9 +126,9 @@ func persistDispatchSproutRun(ctx context.Context, history *historydb.Store, run
 	return nil
 }
 
-func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, opened historydb.SproutRun, report conductor.SproutRunReport, runErr error) {
+func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, opened historydb.SproutRun, report conductor.SproutRunReport, runErr error) error {
 	if history == nil {
-		return
+		return nil
 	}
 	run := opened
 	run.FinishedAt = time.Now().UTC()
@@ -99,7 +154,9 @@ func persistTerminalSproutRun(ctx context.Context, history *historydb.Store, ope
 	}
 	if recordErr := history.RecordSproutRun(ctx, run); recordErr != nil {
 		log.Printf("[Sprout] Failed to record sprout run: %v", recordErr)
+		return fmt.Errorf("persist terminal sprout run: %w", recordErr)
 	}
+	return nil
 }
 
 // applyObservationToRun copies Conductor observation fields onto the durable
@@ -134,11 +191,13 @@ func applyObservationToRun(run *historydb.SproutRun, report conductor.SproutRunR
 	}
 }
 
-func installSproutTerminalHistory(orch *conductor.DockerOrchestrator, history *historydb.Store, persistCtx context.Context, opened historydb.SproutRun) {
+func installSproutTerminalHistory(orch *conductor.DockerOrchestrator, history *historydb.Store, persistCtx context.Context, opened historydb.SproutRun) *sproutPersistenceFailure {
 	if orch == nil || history == nil {
-		return
+		return nil
 	}
+	failure := &sproutPersistenceFailure{}
 	orch.OnTerminal = func(report conductor.SproutRunReport, runErr error) {
-		persistTerminalSproutRun(persistCtx, history, opened, report, runErr)
+		failure.capture(persistTerminalSproutRun(persistCtx, history, opened, report, runErr))
 	}
+	return failure
 }

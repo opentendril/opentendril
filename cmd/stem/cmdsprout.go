@@ -268,7 +268,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 	}
 
 	return core.SproutOperations{
-		Run: func(ctx context.Context, spec core.SproutSpec) (core.SproutRunReport, error) {
+		Run: func(ctx context.Context, spec core.SproutSpec) (result core.SproutRunReport, runErr error) {
 			wiring := resolveSproutSubstrateWiring(spec, substratesConfig)
 
 			// A Sprout run always has a bus. The Sprout streams only when it
@@ -284,12 +284,29 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 			// events outlive the process and the run can be explained
 			// afterwards.
 			bus := ambientBus
+			var eventSink *oneShotHistorySink
+			var terminalFailure *sproutPersistenceFailure
 			if bus == nil {
 				bus = eventbus.New()
 				if history != nil {
-					bus.AttachSink(history, 0, "historydb")
+					eventSink = &oneShotHistorySink{history: history}
+					bus.AttachSink(eventSink, 0, "historydb")
 				}
-				defer bus.Shutdown()
+				defer func() {
+					// Shutdown drains the one-shot bus before the operation returns,
+					// so every queued event's persistence result is known here.
+					bus.Shutdown()
+					var persistenceErr error
+					if terminalFailure != nil {
+						persistenceErr = errors.Join(persistenceErr, terminalFailure.Err())
+					}
+					if eventSink != nil {
+						persistenceErr = errors.Join(persistenceErr, eventSink.Err())
+					}
+					if persistenceErr != nil {
+						runErr = errors.Join(runErr, fmt.Errorf("one-shot sprout persistence failed: %w", persistenceErr))
+					}
+				}()
 			}
 
 			log.Printf("[Sprout] Delegating transcript to Tendril step %s: %s (Substrate: %s, URL: %s)", spec.StepID, spec.Transcript, wiring.Substrate, wiring.URL)
@@ -303,7 +320,7 @@ func sproutOperations(history *historydb.Store, ambientBus *eventbus.Bus) core.S
 				// Terminal writes go through the orchestrator observer so a
 				// detached return leaves this opening row non-terminal and the
 				// later completeRun settles status, output, model, and usage.
-				installSproutTerminalHistory(orch, history, context.WithoutCancel(ctx), run)
+				terminalFailure = installSproutTerminalHistory(orch, history, context.WithoutCancel(ctx), run)
 			}
 
 			sproutReport, err := runSproutTerrarium(ctx, orch, spec.Transcript)

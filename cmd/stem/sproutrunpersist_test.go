@@ -540,3 +540,255 @@ func TestOneShotSproutOrchestratorAwaitsRunEnding(t *testing.T) {
 		t.Fatal("daemon-backed sproutOperations wiring must remain detachable")
 	}
 }
+
+func openOneShotPersistenceHistory(t *testing.T) *historydb.Store {
+	t.Helper()
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func assertOneShotOpeningRow(t *testing.T, store *historydb.Store, sessionID, stepID string) {
+	t.Helper()
+	runs, err := store.LoadSproutRuns(context.Background(), sessionID, 10)
+	if err != nil || len(runs) != 1 || runs[0].StepID != stepID || runs[0].Status != "running" {
+		t.Fatalf("opening row = %+v err=%v", runs, err)
+	}
+}
+
+func oneShotPersistenceSpec(sessionID, stepID string) core.SproutSpec {
+	return core.SproutSpec{
+		StepID:     stepID,
+		SessionID:  sessionID,
+		Origin:     "cli",
+		Transcript: "safe fixture transcript",
+	}
+}
+
+func TestOneShotSproutOperationsDrainsEventsAndSettlesRunBeforeReturn(t *testing.T) {
+	store := openOneShotPersistenceHistory(t)
+	const sessionID = "s-one-shot-success"
+	const stepID = "step-one-shot-success"
+	semanticReport := conductor.SproutRunReport{
+		Output:  "semantic work completed",
+		Outcome: conductor.SproutOutcomeComplete,
+	}
+	originalRun := runSproutTerrarium
+	runSproutTerrarium = func(_ context.Context, orch *conductor.DockerOrchestrator, _ string) (conductor.SproutRunReport, error) {
+		assertOneShotOpeningRow(t, store, sessionID, stepID)
+		orch.EventBus.Publish(eventbus.Event{
+			Type:      eventbus.EventTaskContextAssembled,
+			SessionID: sessionID,
+			Source:    stepID,
+			Data: map[string]interface{}{
+				"items": []interface{}{map[string]interface{}{"kind": "file", "source": "README.md", "status": "included"}},
+			},
+		})
+		if orch.OnTerminal == nil {
+			t.Fatal("one-shot lifecycle did not install terminal persistence")
+		}
+		orch.OnTerminal(semanticReport, nil)
+		return semanticReport, nil
+	}
+	t.Cleanup(func() { runSproutTerrarium = originalRun })
+
+	result, err := sproutOperations(store, nil).Run(context.Background(), oneShotPersistenceSpec(sessionID, stepID))
+	if err != nil {
+		t.Fatalf("one-shot run: %v", err)
+	}
+	if result.Output != semanticReport.Output || result.Outcome != semanticReport.Outcome {
+		t.Fatalf("result = %+v, want %+v", result, semanticReport)
+	}
+
+	events, err := store.LoadEvents(context.Background(), sessionID, 10)
+	if err != nil {
+		t.Fatalf("load events after one-shot return: %v", err)
+	}
+	foundTaskContext := false
+	for _, event := range events {
+		if event.Type == string(eventbus.EventTaskContextAssembled) && event.Source == stepID {
+			foundTaskContext = true
+		}
+	}
+	if !foundTaskContext {
+		t.Fatalf("task-context-assembled was not persisted before return: %+v", events)
+	}
+
+	runs, err := store.LoadSproutRuns(context.Background(), sessionID, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load settled row: %+v err=%v", runs, err)
+	}
+	if runs[0].Status != "matured" || runs[0].Output != semanticReport.Output || runs[0].FinishedAt.IsZero() {
+		t.Fatalf("opening row was not settled before return: %+v", runs[0])
+	}
+}
+
+func TestOneShotSproutOperationsReturnsTerminalPersistenceFailure(t *testing.T) {
+	store := openOneShotPersistenceHistory(t)
+	const sessionID = "s-one-shot-terminal-failure"
+	const stepID = "step-one-shot-terminal-failure"
+	semanticReport := conductor.SproutRunReport{Output: "semantic work completed", Outcome: conductor.SproutOutcomeComplete}
+	originalRun := runSproutTerrarium
+	runSproutTerrarium = func(_ context.Context, orch *conductor.DockerOrchestrator, _ string) (conductor.SproutRunReport, error) {
+		assertOneShotOpeningRow(t, store, sessionID, stepID)
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("close HistoryDB during run: %v", closeErr)
+		}
+		if orch.OnTerminal == nil {
+			t.Fatal("one-shot lifecycle did not install terminal persistence")
+		}
+		orch.OnTerminal(semanticReport, nil)
+		return semanticReport, nil
+	}
+	t.Cleanup(func() { runSproutTerrarium = originalRun })
+
+	result, err := sproutOperations(store, nil).Run(context.Background(), oneShotPersistenceSpec(sessionID, stepID))
+	if result.Output != semanticReport.Output || result.Outcome != semanticReport.Outcome {
+		t.Fatalf("semantic result = %+v, want %+v", result, semanticReport)
+	}
+	if err == nil || !strings.Contains(err.Error(), "terminal sprout run") {
+		t.Fatalf("terminal persistence failure = %v, want propagated terminal write error", err)
+	}
+}
+
+func TestOneShotSproutOperationsReturnsEventPersistenceFailure(t *testing.T) {
+	store := openOneShotPersistenceHistory(t)
+	const sessionID = "s-one-shot-event-failure"
+	const stepID = "step-one-shot-event-failure"
+	semanticReport := conductor.SproutRunReport{Output: "semantic work completed", Outcome: conductor.SproutOutcomeComplete}
+	originalRun := runSproutTerrarium
+	runSproutTerrarium = func(_ context.Context, orch *conductor.DockerOrchestrator, _ string) (conductor.SproutRunReport, error) {
+		assertOneShotOpeningRow(t, store, sessionID, stepID)
+		handlerEntered := make(chan struct{})
+		releaseHandler := make(chan struct{})
+		orch.EventBus.Subscribe(eventbus.EventTaskContextAssembled, func(eventbus.Event) {
+			close(handlerEntered)
+			<-releaseHandler
+		})
+		published := make(chan struct{})
+		go func() {
+			orch.EventBus.Publish(eventbus.Event{
+				Type: eventbus.EventTaskContextAssembled, SessionID: sessionID, Source: stepID,
+			})
+			close(published)
+		}()
+		<-handlerEntered
+
+		// Settle the terminal row while HistoryDB is still available. The
+		// pending Publish cannot reach its asynchronous sink until the handler
+		// is released below, making this a deterministic event-only failure.
+		if orch.OnTerminal == nil {
+			t.Fatal("one-shot lifecycle did not install terminal persistence")
+		}
+		orch.OnTerminal(semanticReport, nil)
+		runs, loadErr := store.LoadSproutRuns(context.Background(), sessionID, 10)
+		if loadErr != nil || len(runs) != 1 || runs[0].Status != "matured" {
+			t.Fatalf("terminal row should persist before event-only failure: %+v err=%v", runs, loadErr)
+		}
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("close HistoryDB before asynchronous event sink: %v", closeErr)
+		}
+		close(releaseHandler)
+		<-published
+		return semanticReport, nil
+	}
+	t.Cleanup(func() { runSproutTerrarium = originalRun })
+
+	result, err := sproutOperations(store, nil).Run(context.Background(), oneShotPersistenceSpec(sessionID, stepID))
+	if result.Output != semanticReport.Output || result.Outcome != semanticReport.Outcome {
+		t.Fatalf("semantic result = %+v, want %+v", result, semanticReport)
+	}
+	if err == nil || !strings.Contains(err.Error(), "task-context-assembled") {
+		t.Fatalf("event persistence failure = %v, want propagated event write error", err)
+	}
+	if strings.Contains(err.Error(), "terminal sprout run") {
+		t.Fatalf("terminal persistence unexpectedly failed in event-only test: %v", err)
+	}
+}
+
+func TestOneShotSproutOperationsPropagatesPersistenceFailuresAfterSemanticSuccess(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	const sessionID = "s-one-shot-persistence-failure"
+	const stepID = "step-one-shot-persistence-failure"
+	semanticReport := conductor.SproutRunReport{
+		Output:  "semantic work completed",
+		Outcome: conductor.SproutOutcomeComplete,
+	}
+	originalRun := runSproutTerrarium
+	runSproutTerrarium = func(_ context.Context, orch *conductor.DockerOrchestrator, _ string) (conductor.SproutRunReport, error) {
+		if orch.EventBus == nil {
+			t.Fatal("one-shot lifecycle did not receive its EventBus")
+		}
+
+		// Prove the opening row was committed before simulating the mid-run
+		// HistoryDB failure. This is the ownership checkpoint sproutOperations
+		// is required to persist before invoking the Terrarium.
+		runs, loadErr := store.LoadSproutRuns(context.Background(), sessionID, 10)
+		if loadErr != nil || len(runs) != 1 || runs[0].StepID != stepID || runs[0].Status != "running" {
+			t.Fatalf("opening row before simulated run = %+v err=%v", runs, loadErr)
+		}
+
+		// Hold Publish in its synchronous handler after the event has reached
+		// the one-shot bus but before the asynchronous sink receives it. Closing
+		// the already-open HistoryDB here makes the sink failure deterministic.
+		handlerEntered := make(chan struct{})
+		releaseHandler := make(chan struct{})
+		orch.EventBus.Subscribe(eventbus.EventTaskContextAssembled, func(eventbus.Event) {
+			close(handlerEntered)
+			<-releaseHandler
+		})
+		published := make(chan struct{})
+		go func() {
+			orch.EventBus.Publish(eventbus.Event{
+				Type:      eventbus.EventTaskContextAssembled,
+				SessionID: sessionID,
+				Source:    stepID,
+				Data:      map[string]interface{}{"items": []interface{}{map[string]interface{}{"kind": "task", "source": "approved-context"}}},
+			})
+			close(published)
+		}()
+		<-handlerEntered
+		if closeErr := store.Close(); closeErr != nil {
+			t.Fatalf("close HistoryDB during run: %v", closeErr)
+		}
+		close(releaseHandler)
+		<-published
+
+		if orch.OnTerminal == nil {
+			t.Fatal("one-shot lifecycle did not install terminal persistence")
+		}
+		orch.OnTerminal(semanticReport, nil)
+		return semanticReport, nil
+	}
+	t.Cleanup(func() { runSproutTerrarium = originalRun })
+
+	operations := sproutOperations(store, nil)
+	result, runErr := operations.Run(context.Background(), core.SproutSpec{
+		StepID:     stepID,
+		SessionID:  sessionID,
+		Origin:     "cli",
+		Transcript: "report what you observe",
+	})
+	if result.Output != semanticReport.Output || result.Outcome != semanticReport.Outcome {
+		t.Fatalf("semantic result = %+v, want successful report %+v", result, semanticReport)
+	}
+	if runErr == nil {
+		t.Fatal("one-shot operation returned semantic success although required HistoryDB event and terminal persistence failed")
+	}
+}
