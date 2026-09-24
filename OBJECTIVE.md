@@ -13,42 +13,28 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can delegate non-trivial work on a large Substrate without repeatedly teaching each Sprout how the repository works, because OpenTendril supplies fresh Mycorrhizal contexts with bounded, provenance-backed, revision-aware repository evidence that preserves established constraints and known corrections without silently promoting model inference into authoritative repository knowledge.**
+**A Botanist can determine the lifecycle stage at which a failed Sprout stopped from bounded, durable observation, without inspecting private Mycorrhizal reasoning, credentials, arbitrary host paths, unrestricted internal errors, or Stem-shell state.**
 
 ## Done when
 
 Recorded exercises establish all of the following:
 
-* **Repository knowledge survives transient reasoning.** Relevant durable knowledge remains available across new Sprouts, Phytomers, context windows, model changes, and provider changes without depending on one model conversation surviving.
-* **Current evidence remains authoritative.** Repository structure, tests, configuration, Git state, committed documentation, and other current Substrate evidence retain their source identity rather than being flattened into undifferentiated generated prose.
-* **Provenance is preserved.** Durable knowledge supplied to a Sprout can be traced to the evidence, explicit Botanist input, or other recorded source from which it was established.
-* **Inference is not silently promoted.** Model-generated interpretation cannot become authoritative repository knowledge merely because a previous Mycorrhizal context stated it confidently.
-* **Known corrections persist.** Explicit constraints, rejected interpretations, recurring corrections, and other applicable negative knowledge can survive and be supplied to later fresh reasoning with provenance.
-* **Knowledge is revision-aware.** Repository-derived knowledge can be identified as current, stale, conflicted, or otherwise no longer safely applicable when the Substrate changes.
-* **Task context remains bounded.** A Sprout receives a bounded task-specific Plasmid rather than an indiscriminate repository or memory dump.
-* **Existing context machinery is reused.** The capability extends the current Rhizome, project-memory, task-context, provenance, and Plasmid pipeline rather than creating a second repository truth system.
-* **Governance remains deterministic.** The Stem does not become a cognitive repository architect, quality judge, or reasoning component. Authorization, containment, lifecycle, and capability authority remain deterministic.
-* **Repository evidence cannot widen authority.** Stored or retrieved context cannot create capabilities, widen DelegationGrants, alter Terrarium boundaries, or provide credentials.
-* **Observation remains safe.** Context provenance can be inspected without exposing unnecessary repository contents, credentials, or private model reasoning.
-* **Fruit remains the acceptance boundary.** Better repository context does not grant the organism authority to accept its own work. Successful changes still arrive as Git-reviewable Fruit for the Botanist.
-* **Persistence has observable value.** A recorded exercise using fresh Mycorrhizal contexts demonstrates reuse of previously established repository knowledge without Botanist re-teaching, while bounded context metrics and provenance remain observable.
-* **Revision change is demonstrated.** A recorded exercise changes relevant Substrate state and proves that superseded repository knowledge is not silently supplied to later reasoning as current fact.
+* **Different lifecycle points are distinguishable.** Recorded exercises deliberately induce a Substrate access failure before an external provider is contacted and a separate failure later in execution; an independent reviewer can identify the distinct lifecycle stages from durable observation.
+* **Observation reflects execution rather than inference.** For each exercise, the reported lifecycle stage agrees with deterministic execution evidence and does not depend on model-generated interpretation, parsing arbitrary error text, or inspecting host state.
+* **Failure evidence remains useful after termination.** After each failed Sprout ends, the Botanist can inspect bounded observation to identify the lifecycle stage without shell access or private reasoning.
+* **Observation remains bounded and safe.** Delegated observation exposes no credentials, raw provider payloads, arbitrary host paths, repository contents, private Mycorrhizal reasoning, or unrestricted internal errors.
+* **Existing authority and lifecycle semantics remain unchanged.** Sprout outcome semantics, provider selection, authorization, DelegationGrants, Terrarium containment, Git authority, and Fruit acceptance remain unchanged.
 
 This objective does not require:
 
-* making probabilistic reasoning deterministic or infallible;
-* storing complete model conversations as repository memory;
-* restoring Sprout cognitive state after termination;
-* introducing a new biological organ;
-* treating provider KV, prefix, prompt, or inference caches as repository memory;
-* implementing an unbounded repository knowledge graph;
-* storing every model inference;
-* automatic Fruit acceptance or merge;
-* changing DelegationGrant semantics;
-* changing Terrarium containment;
+* changing provider selection or Sprout success/failure behavior;
+* changing DelegationGrants, Pollen authority, or Terrarium containment;
+* adding reasoning to the Stem;
+* classifying arbitrary logs or free-form error strings as lifecycle facts;
+* exposing unbounded diagnostics or private execution details;
 * completing the parked public-Internet qualification;
 * activating the GitHub-native Pollinator objective; or
-* Greenhouse redesign.
+* broad redesign of observation surfaces.
 
 ---
 
