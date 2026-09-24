@@ -23,6 +23,7 @@ const (
 	tendrilStateDirectory = ".tendril"
 	rhizomeIndexKeyFile   = "rhizome.key"
 	rhizomeIndexDatabase  = "rhizome.db"
+	historyDatabase       = "history.db"
 	repositoryMapFile     = "repomap.md"
 	memoryMapFile         = "memorymap.md"
 )
@@ -50,6 +51,7 @@ func generatedRuntimeArtifacts() []string {
 	return []string{
 		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexKeyFile)),
 		filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase)),
+		filepath.ToSlash(filepath.Join(tendrilStateDirectory, historyDatabase)),
 		genomeFile(repositoryMapFile),
 		// Written before every run, by the repository and memory mappers.
 		genomeFile(memoryMapFile),
@@ -63,17 +65,20 @@ func generatedRuntimeArtifacts() []string {
 // isGeneratedRuntimeArtifact reports whether a substrate-relative path is
 // something OpenTendril wrote for itself.
 //
-// SQLite keeps its write-ahead log and shared-memory file beside the database
-// under names derived from it, so the database is matched by prefix rather than
-// equality — otherwise `rhizome.db-wal` would be committed as the Sprout's work.
+// SQLite keeps its write-ahead log and shared-memory file beside each database
+// under names derived from it, so HistoryDB and Rhizome are matched by prefix
+// rather than equality — otherwise their sidecars could be committed as the
+// Sprout's work.
 func isGeneratedRuntimeArtifact(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
 	if normalized == "" {
 		return false
 	}
-	databasePath := filepath.ToSlash(filepath.Join(tendrilStateDirectory, rhizomeIndexDatabase))
-	if strings.HasPrefix(normalized, databasePath) {
-		return true
+	for _, database := range []string{rhizomeIndexDatabase, historyDatabase} {
+		databasePath := filepath.ToSlash(filepath.Join(tendrilStateDirectory, database))
+		if strings.HasPrefix(normalized, databasePath) {
+			return true
+		}
 	}
 	for _, artifact := range generatedRuntimeArtifacts() {
 		if normalized == artifact {
