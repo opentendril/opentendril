@@ -157,6 +157,72 @@ func TestRunSproutLaterTerrariumFailureHasDistinctStageAndEventFields(t *testing
 	}
 }
 
+func TestRunSproutPreflightFailureProvenanceUsesTypedIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantStage core.FailureStage
+		wantCode  core.DiagnosticCode
+	}{
+		{
+			name:      "docker readiness despite local-provider wording",
+			err:       errors.New("local provider is unreachable and its model is unavailable"),
+			wantStage: core.FailureStageTerrariumPreparation,
+			wantCode:  core.DiagnosticCodeTerrariumPreparationFailed,
+		},
+		{
+			name: "local provider despite docker-readiness wording",
+			err: &localProviderPreflightError{
+				err: errors.New("Docker daemon is not responding"),
+			},
+			wantStage: core.FailureStageProviderPreflight,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("OPENAI_API_KEY", "test-key")
+			root := newOutcomeTestRepo(t)
+			chdirToTempDir(t)
+			stubRunSproutCollaborators(t, root, &stubSproutRunner{}, nil)
+			runSproutPreflightChecksFn = func(context.Context, *llm.Client) error {
+				return testCase.err
+			}
+
+			bus := eventbus.New()
+			events := recordSproutLifecycle(bus)
+			report, err := (&DockerOrchestrator{
+				Substrate: root,
+				Provider:  "openai",
+				Model:     "gpt-4o-mini",
+				EventBus:  bus,
+			}).RunSprout(context.Background(), "test preflight")
+			if err == nil {
+				t.Fatal("RunSprout error = nil, want preflight failure")
+			}
+			if report.FailureStage != testCase.wantStage || report.DiagnosticCode != testCase.wantCode {
+				t.Fatalf("report provenance = %q/%q, want %q/%q", report.FailureStage, report.DiagnosticCode, testCase.wantStage, testCase.wantCode)
+			}
+
+			terminal := filterEvents(*events, eventbus.EventSproutWithered)
+			if len(terminal) != 1 {
+				t.Fatalf("withered terminal count = %d, want 1", len(terminal))
+			}
+			if terminal[0].Data["failureStage"] != string(testCase.wantStage) {
+				t.Fatalf("terminal failureStage = %v, want %q", terminal[0].Data["failureStage"], testCase.wantStage)
+			}
+			gotCode, hasCode := terminal[0].Data["diagnosticCode"]
+			if testCase.wantCode == "" {
+				if hasCode {
+					t.Fatalf("terminal diagnosticCode = %v, want absent for provider reachability/model preflight", gotCode)
+				}
+			} else if !hasCode || gotCode != string(testCase.wantCode) {
+				t.Fatalf("terminal diagnosticCode = %v (present=%v), want %q", gotCode, hasCode, testCase.wantCode)
+			}
+		})
+	}
+}
+
 func TestRunSproutTeardownFailureCannotOverwritePrimaryStage(t *testing.T) {
 	root := newOutcomeTestRepo(t)
 	chdirToTempDir(t)

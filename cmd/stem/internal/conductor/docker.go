@@ -594,7 +594,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	if err := runSproutPreflightChecksFn(ctx, mind); err != nil {
-		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed)
+		stage, code := classifySproutPreflightFailure(err)
+		markFailure(stage, code)
 		return report, err
 	}
 
@@ -1353,7 +1354,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred, d.SeedIntegrationCheckpoint)
 			}
 			if commitErr != nil {
-				markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
+				if isReviewableFruit {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
+				} else {
+					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
+				}
 				report.Outcome = ""
 				if runErr != nil {
 					return report, changes, errors.Join(runErr, commitErr)
@@ -2165,6 +2170,26 @@ func getEnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
+type localProviderPreflightError struct {
+	err error
+}
+
+func (err *localProviderPreflightError) Error() string {
+	return fmt.Sprintf("local provider preflight failed: %v", err.err)
+}
+
+func (err *localProviderPreflightError) Unwrap() error {
+	return err.err
+}
+
+func classifySproutPreflightFailure(err error) (core.FailureStage, core.DiagnosticCode) {
+	var providerErr *localProviderPreflightError
+	if errors.As(err, &providerErr) {
+		return core.FailureStageProviderPreflight, ""
+	}
+	return core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed
+}
+
 func runSproutPreflightChecks(ctx context.Context, mind *llm.Client) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -2180,7 +2205,10 @@ func runSproutPreflightChecks(ctx context.Context, mind *llm.Client) error {
 		return nil
 	}
 
-	return checkLocalInferenceReachable(ctx, mind)
+	if err := checkLocalInferenceReachable(ctx, mind); err != nil {
+		return &localProviderPreflightError{err: err}
+	}
+	return nil
 }
 
 func checkLocalInferenceReachable(ctx context.Context, mind *llm.Client) error {

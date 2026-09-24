@@ -2289,11 +2289,43 @@ func TestPathBackedSeedFailuresDoNotCheckpoint(t *testing.T) {
 		if !errors.Is(runErr, commitErr) {
 			t.Fatalf("error = %v, want commit failure", runErr)
 		}
+		if report.FailureStage != core.FailureStagePostRun || report.DiagnosticCode != core.DiagnosticCodePostRunFailed {
+			t.Fatalf("Seed checkpoint commit provenance = %q/%q, want post-run/post-run-failed (not Fruit publication)", report.FailureStage, report.DiagnosticCode)
+		}
+		if report.FailureStage == core.FailureStageFruitPublication || report.DiagnosticCode == core.DiagnosticCodeFruitPublicationFailed {
+			t.Fatal("Seed checkpoint commit failure was labelled Fruit publication")
+		}
 		if report.seedCandidateCommit != "" || report.FruitCommit != "" {
 			t.Fatalf("commit failure exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
 		}
 		if localBranchExists(repo, seedBranch) {
 			t.Fatal("commit failure created a Seed ref")
+		}
+	})
+
+	t.Run("commit-failure-preserves-earlier-cause", func(t *testing.T) {
+		seedBranch := "tendril/seed-path-commit-failure-after-run-error"
+		stepID := "path-seed-commit-failure-after-run-error"
+		runner := &pathBackedSeedRunner{file: "HELLO.md", contents: "partial\n", runErr: errUnusableReply}
+		installPathBackedSeedSeams(t, map[string]sproutRunner{stepID: runner})
+		commitErr := errors.New("checkpoint commit unavailable after recoverable Sprout failure")
+		originalCommit := commitTerrariumExecutionFn
+		t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+		commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
+			return "", commitErr
+		}
+		report, runErr := runPathBackedSeedSprout(t, repo, stepID, seedBranch, base, runner)
+		if !errors.Is(runErr, errUnusableReply) || !errors.Is(runErr, commitErr) {
+			t.Fatalf("error = %v, want recoverable Sprout and checkpoint commit failures", runErr)
+		}
+		if report.FailureStage != core.FailureStageSproutExecution || report.DiagnosticCode != core.DiagnosticCodeSproutExecutionFailed {
+			t.Fatalf("primary provenance = %q/%q, want earlier sprout-execution cause to remain set", report.FailureStage, report.DiagnosticCode)
+		}
+		if report.FailureStage == core.FailureStageFruitPublication || report.DiagnosticCode == core.DiagnosticCodeFruitPublicationFailed {
+			t.Fatal("Seed checkpoint commit failure overwrote the earlier cause with Fruit publication")
+		}
+		if report.seedCandidateCommit != "" || report.FruitCommit != "" {
+			t.Fatalf("failed checkpoint exposed candidate %q fruit %q", report.seedCandidateCommit, report.FruitCommit)
 		}
 	})
 }
