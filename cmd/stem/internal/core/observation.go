@@ -53,6 +53,16 @@ func NormalizeFailureStage(stage FailureStage, lifecycleStatus string) FailureSt
 	if lifecycleStatus == "matured" {
 		return ""
 	}
+	if validated := ValidatePersistedFailureStage(stage); validated != "" {
+		return validated
+	}
+	return FailureStageUnknown
+}
+
+// ValidatePersistedFailureStage preserves an approved durable value and omits
+// empty or invalid historical data. Unlike NormalizeFailureStage, it never
+// manufactures unknown for an absent or invalid persisted value.
+func ValidatePersistedFailureStage(stage FailureStage) FailureStage {
 	switch stage {
 	case FailureStageSubstrateResolution,
 		FailureStageWorkspacePreparation,
@@ -66,7 +76,7 @@ func NormalizeFailureStage(stage FailureStage, lifecycleStatus string) FailureSt
 		FailureStageUnknown:
 		return stage
 	default:
-		return FailureStageUnknown
+		return ""
 	}
 }
 
@@ -76,6 +86,12 @@ func NormalizeDiagnosticCode(code DiagnosticCode, lifecycleStatus string) Diagno
 	if lifecycleStatus == "matured" {
 		return ""
 	}
+	return ValidatePersistedDiagnosticCode(code)
+}
+
+// ValidatePersistedDiagnosticCode preserves an approved durable value and
+// omits empty or invalid historical data.
+func ValidatePersistedDiagnosticCode(code DiagnosticCode) DiagnosticCode {
 	switch code {
 	case DiagnosticCodeSubstrateNotFound,
 		DiagnosticCodeSubstrateAccessDenied,

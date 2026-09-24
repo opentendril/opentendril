@@ -62,6 +62,33 @@ export type FailureCategory =
   | "matured"
   | string;
 
+export type FailureStage =
+  | "substrate-resolution"
+  | "workspace-preparation"
+  | "task-context-preparation"
+  | "provider-resolution"
+  | "provider-preflight"
+  | "terrarium-preparation"
+  | "sprout-execution"
+  | "post-run"
+  | "fruit-publication"
+  | "unknown";
+
+export type DiagnosticCode =
+  | "substrate-not-found"
+  | "substrate-access-denied"
+  | "substrate-invalid"
+  | "workspace-preparation-failed"
+  | "task-context-unavailable"
+  | "provider-unresolved"
+  | "provider-preflight-rejected"
+  | "terrarium-preparation-failed"
+  | "terrarium-start-failed"
+  | "terrarium-oom"
+  | "sprout-execution-failed"
+  | "post-run-failed"
+  | "fruit-publication-failed";
+
 export interface SproutRun {
   runId: string;
   sessionId?: string;
@@ -81,6 +108,8 @@ export interface SproutRun {
   usage?: SproutRunUsage;
   outcome?: string;
   failureCategory?: FailureCategory;
+  failureStage?: FailureStage;
+  diagnosticCode?: DiagnosticCode;
   providerDiagnostic?: ProviderDiagnostic;
   providerRequestAttempted?: boolean;
   toolInvocations?: number;

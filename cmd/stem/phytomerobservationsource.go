@@ -57,6 +57,8 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 					Model:                    run.Model,
 					Outcome:                  run.Outcome,
 					FailureCategory:          run.FailureCategory,
+					FailureStage:             core.FailureStage(run.FailureStage),
+					DiagnosticCode:           core.DiagnosticCode(run.DiagnosticCode),
 					ProviderRequestAttempted: run.ProviderRequestAttempted,
 					ToolInvocations:          run.ToolInvocations,
 					Transcript:               run.Transcript,

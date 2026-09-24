@@ -168,13 +168,18 @@ func TestProjectPhytomerObservationOmitsPersistedUnsafeFields(t *testing.T) {
 		Logs:       "Authorization: Bearer secret-token",
 		Error:      "internal path /home/operator/private\nAuthorization: Bearer secret-token\nPRIVATE_PROMPT_CONTENT",
 	}, []core.SproutObservationEvidence{{
-		RunID:      "run-a",
-		Status:     "withered",
-		Transcript: "private reasoning SECRET_TOKEN=sk-secret",
-		Output:     "chain-of-thought hidden",
-		Error:      "Authorization: Bearer secret-token",
-		StartedAt:  time.Unix(1, 0).UTC(),
+		RunID:          "run-a",
+		Status:         "withered",
+		Transcript:     "private reasoning SECRET_TOKEN=sk-secret",
+		Output:         "chain-of-thought hidden",
+		Error:          "Authorization: Bearer secret-token",
+		FailureStage:   core.FailureStageSubstrateResolution,
+		DiagnosticCode: core.DiagnosticCodeSubstrateAccessDenied,
+		StartedAt:      time.Unix(1, 0).UTC(),
 	}})
+	if len(obs.Sprouts) != 1 || obs.Sprouts[0].FailureStage != core.FailureStageSubstrateResolution || obs.Sprouts[0].DiagnosticCode != core.DiagnosticCodeSubstrateAccessDenied {
+		t.Fatalf("valid failure provenance was not projected: %+v", obs.Sprouts)
+	}
 	raw, err := json.Marshal(obs)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -195,6 +200,52 @@ func TestProjectPhytomerObservationOmitsPersistedUnsafeFields(t *testing.T) {
 	}
 	if strings.Contains(body, `"error"`) {
 		t.Fatalf("raw error field was released: %s", body)
+	}
+}
+
+func TestProjectPhytomerObservationPreservesAbsentAndOmitsInvalidFailureProvenance(t *testing.T) {
+	obs := projectObservation(t, core.SeedObservationEvidence{
+		Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+		Substrate: "myrepo", Status: "running",
+	}, []core.SproutObservationEvidence{
+		{
+			RunID: "a-valid", Pollen: "claude", Substrate: "myrepo", Status: "withered",
+			FailureStage: core.FailureStageSubstrateResolution, DiagnosticCode: core.DiagnosticCodeSubstrateAccessDenied,
+		},
+		{
+			RunID: "b-historical-empty", Pollen: "claude", Substrate: "myrepo", Status: "withered",
+		},
+		{
+			RunID: "c-invalid", Pollen: "claude", Substrate: "myrepo", Status: "withered",
+			FailureStage: "host-path-/private", DiagnosticCode: "permission denied: /private/repository",
+		},
+	})
+	if len(obs.Sprouts) != 3 {
+		t.Fatalf("sprouts = %d, want 3", len(obs.Sprouts))
+	}
+	if obs.Sprouts[0].FailureStage != core.FailureStageSubstrateResolution || obs.Sprouts[0].DiagnosticCode != core.DiagnosticCodeSubstrateAccessDenied {
+		t.Fatalf("valid persisted provenance = %+v", obs.Sprouts[0])
+	}
+	if obs.Sprouts[1].FailureStage != "" || obs.Sprouts[1].DiagnosticCode != "" {
+		t.Fatalf("absent historical provenance = %+v, want both empty", obs.Sprouts[1])
+	}
+	if obs.Sprouts[1].FailureStage == core.FailureStageUnknown {
+		t.Fatal("empty historical stage was normalized to unknown")
+	}
+	if obs.Sprouts[2].FailureStage != "" || obs.Sprouts[2].DiagnosticCode != "" {
+		t.Fatalf("invalid persisted provenance = %+v, want both omitted", obs.Sprouts[2])
+	}
+	if obs.Sprouts[2].FailureStage == core.FailureStageUnknown {
+		t.Fatal("invalid persisted stage was converted to unknown")
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, invalid := range []string{"host-path-/private", "permission denied: /private/repository"} {
+		if strings.Contains(string(raw), invalid) {
+			t.Fatalf("invalid persisted provenance %q leaked: %s", invalid, raw)
+		}
 	}
 }
 
@@ -282,12 +333,14 @@ func TestObservePhytomerRefusesSproutWithOtherPollen(t *testing.T) {
 		},
 		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
 			return []core.SproutObservationEvidence{{
-				RunID:     "run-intruder",
-				Pollen:    "codex",
-				Substrate: "myrepo",
-				Status:    "running",
-				Provider:  "intruder-provider",
-				Model:     "intruder-model",
+				RunID:          "run-intruder",
+				Pollen:         "codex",
+				Substrate:      "myrepo",
+				Status:         "running",
+				Provider:       "intruder-provider",
+				Model:          "intruder-model",
+				FailureStage:   core.FailureStageSubstrateResolution,
+				DiagnosticCode: core.DiagnosticCodeSubstrateAccessDenied,
 			}}, nil
 		},
 		ContinuationsByPhytomer: emptyContinuations,
@@ -296,7 +349,7 @@ func TestObservePhytomerRefusesSproutWithOtherPollen(t *testing.T) {
 	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
 		t.Fatalf("other pollen = %v, want ownership conflict", err)
 	}
-	assertObservationDoesNotContain(t, obs, "run-intruder", "intruder-provider", "intruder-model", "codex")
+	assertObservationDoesNotContain(t, obs, "run-intruder", "intruder-provider", "intruder-model", "codex", "substrate-resolution", "substrate-access-denied")
 }
 
 func TestObservePhytomerRefusesSproutWithOtherSubstrate(t *testing.T) {
@@ -309,12 +362,14 @@ func TestObservePhytomerRefusesSproutWithOtherSubstrate(t *testing.T) {
 		},
 		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
 			return []core.SproutObservationEvidence{{
-				RunID:     "run-otherrepo",
-				Pollen:    "claude",
-				Substrate: "otherrepo",
-				Status:    "running",
-				Provider:  "foreign-provider",
-				Model:     "foreign-model",
+				RunID:          "run-otherrepo",
+				Pollen:         "claude",
+				Substrate:      "otherrepo",
+				Status:         "running",
+				Provider:       "foreign-provider",
+				Model:          "foreign-model",
+				FailureStage:   core.FailureStageSubstrateResolution,
+				DiagnosticCode: core.DiagnosticCodeSubstrateAccessDenied,
 			}}, nil
 		},
 		ContinuationsByPhytomer: emptyContinuations,
@@ -323,7 +378,7 @@ func TestObservePhytomerRefusesSproutWithOtherSubstrate(t *testing.T) {
 	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
 		t.Fatalf("other substrate = %v, want ownership conflict", err)
 	}
-	assertObservationDoesNotContain(t, obs, "run-otherrepo", "foreign-provider", "foreign-model", "otherrepo")
+	assertObservationDoesNotContain(t, obs, "run-otherrepo", "foreign-provider", "foreign-model", "otherrepo", "substrate-resolution", "substrate-access-denied")
 }
 
 func TestObservePhytomerKeepsMatchingMultiSproutSeed(t *testing.T) {

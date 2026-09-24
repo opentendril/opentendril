@@ -31,6 +31,7 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{
 		RunID: "run-hostile", SessionID: "tendril-hostile", StepID: "run-hostile",
 		Pollen: "claude", Substrate: "myrepo", Status: "withered",
+		FailureStage: "substrate-resolution", DiagnosticCode: "substrate-access-denied",
 		Transcript: "private reasoning", Output: "chain-of-thought hidden",
 		Error: "Authorization: Bearer secret-token", StartedAt: time.Now().UTC(),
 	}); err != nil {
@@ -60,6 +61,9 @@ func TestPhytomerObservationSourceCopiesPersistedUnsafeFields(t *testing.T) {
 	}
 	if sprouts[0].Pollen != "claude" || sprouts[0].Substrate != "myrepo" {
 		t.Fatalf("source dropped sprout ownership evidence: %+v", sprouts[0])
+	}
+	if sprouts[0].FailureStage != "substrate-resolution" || sprouts[0].DiagnosticCode != "substrate-access-denied" {
+		t.Fatalf("source did not copy durable failure provenance: %+v", sprouts[0])
 	}
 }
 

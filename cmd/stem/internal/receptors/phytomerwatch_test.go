@@ -187,6 +187,79 @@ func (s *phytomerWatchStream) expectClosed(t *testing.T, wait time.Duration) {
 	}
 }
 
+func TestPhytomerWatchProjectsFailureProvenanceWithoutPrivateEvidence(t *testing.T) {
+	const phytomerID = "tendril-failure-provenance"
+	mux, store, _ := newPhytomerWatchFixture(t, watchOwnerGrants())
+	recordWatchSeed(t, store, historydb.SeedRun{
+		Handle: "seed-failure-provenance", Pollen: watchOwner, PhytomerID: phytomerID,
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	})
+	private := "raw failure at /home/operator/private; Authorization: Bearer secret-token; PRIVATE_PROMPT_CONTENT"
+	for _, run := range []historydb.SproutRun{
+		{
+			RunID: "run-valid", SessionID: phytomerID, StepID: "run-valid",
+			Pollen: watchOwner, Substrate: "myrepo", Status: "withered", Outcome: "failed",
+			FailureCategory: "execution-failed", FailureStage: "substrate-resolution",
+			DiagnosticCode: "substrate-access-denied", Transcript: "private reasoning", Output: "private output",
+			Error: private, StartedAt: time.Unix(1, 0).UTC(),
+		},
+		{
+			RunID: "run-historical", SessionID: phytomerID, StepID: "run-historical",
+			Pollen: watchOwner, Substrate: "myrepo", Status: "withered", Outcome: "failed",
+			FailureCategory: "execution-failed", Error: private, StartedAt: time.Unix(2, 0).UTC(),
+		},
+		{
+			RunID: "run-invalid", SessionID: phytomerID, StepID: "run-invalid",
+			Pollen: watchOwner, Substrate: "myrepo", Status: "withered", Outcome: "failed",
+			FailureCategory: "execution-failed", FailureStage: "host-path-/private",
+			DiagnosticCode: "permission denied: /private/repository", Error: private,
+			StartedAt: time.Unix(3, 0).UTC(),
+		},
+	} {
+		if err := store.RecordSproutRun(context.Background(), run); err != nil {
+			t.Fatalf("record Sprout %s: %v", run.RunID, err)
+		}
+	}
+
+	stream := openPhytomerWatch(t, mux, phytomerID, watchOwner)
+	if stream.status != http.StatusOK {
+		t.Fatalf("watch status = %d, want 200", stream.status)
+	}
+	event := stream.nextEvent(t, time.Second)
+	if event.event != "observation" {
+		t.Fatalf("event = %q, want observation", event.event)
+	}
+	var observation core.PhytomerObservation
+	if err := json.Unmarshal([]byte(event.data), &observation); err != nil {
+		t.Fatalf("decode observation: %v (%s)", err, event.data)
+	}
+	if len(observation.Sprouts) != 3 {
+		t.Fatalf("watch Sprouts = %+v, want all three owned records", observation.Sprouts)
+	}
+	byRunID := make(map[string]core.SproutObservation, len(observation.Sprouts))
+	for _, sprout := range observation.Sprouts {
+		byRunID[sprout.RunID] = sprout
+	}
+	if byRunID["run-valid"].FailureStage != core.FailureStageSubstrateResolution || byRunID["run-valid"].DiagnosticCode != core.DiagnosticCodeSubstrateAccessDenied {
+		t.Fatalf("watch omitted valid provenance: %+v", byRunID["run-valid"])
+	}
+	if byRunID["run-historical"].FailureStage != "" || byRunID["run-historical"].DiagnosticCode != "" {
+		t.Fatalf("watch fabricated historical provenance: %+v", byRunID["run-historical"])
+	}
+	if byRunID["run-invalid"].FailureStage != "" || byRunID["run-invalid"].DiagnosticCode != "" {
+		t.Fatalf("watch released invalid provenance: %+v", byRunID["run-invalid"])
+	}
+	for _, privateValue := range []string{
+		"/home/operator/private", "Authorization: Bearer secret-token", "PRIVATE_PROMPT_CONTENT",
+		"private reasoning", "private output", "raw failure", "host-path-/private",
+		"permission denied: /private/repository",
+	} {
+		if strings.Contains(event.data, privateValue) {
+			t.Fatalf("delegated observation leaked %q: %s", privateValue, event.data)
+		}
+	}
+}
+
 func observationFromRecorder(t *testing.T, rec *httptest.ResponseRecorder) core.PhytomerObservation {
 	t.Helper()
 	if rec.Code != http.StatusOK {

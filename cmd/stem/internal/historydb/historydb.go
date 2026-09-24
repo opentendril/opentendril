@@ -152,6 +152,10 @@ type SproutRun struct {
 	Outcome string `json:"outcome,omitempty"`
 	// FailureCategory is the Core-owned Botanist-facing class.
 	FailureCategory string `json:"failureCategory,omitempty"`
+	// FailureStage and DiagnosticCode are the typed, bounded failure
+	// provenance carried in the observation envelope.
+	FailureStage   string `json:"failureStage,omitempty"`
+	DiagnosticCode string `json:"diagnosticCode,omitempty"`
 	// ProviderDiagnostic is the credential-free provider explanation.
 	ProviderDiagnostic *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
 	// ProviderRequestAttempted is true when the first Mycorrhizal request
@@ -181,6 +185,8 @@ type ProviderDiagnostic struct {
 type sproutRunObservation struct {
 	Outcome                  string              `json:"outcome,omitempty"`
 	FailureCategory          string              `json:"failureCategory,omitempty"`
+	FailureStage             string              `json:"failureStage,omitempty"`
+	DiagnosticCode           string              `json:"diagnosticCode,omitempty"`
 	ProviderDiagnostic       *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
 	ProviderRequestAttempted bool                `json:"providerRequestAttempted,omitempty"`
 	ToolInvocations          int                 `json:"toolInvocations,omitempty"`
@@ -1007,12 +1013,14 @@ func decodeSproutRunUsage(raw string) (SproutRunUsage, error) {
 }
 
 func encodeSproutRunObservation(run SproutRun) (string, error) {
-	if run.Outcome == "" && run.FailureCategory == "" && run.ProviderDiagnostic == nil && !run.ProviderRequestAttempted && run.ToolInvocations == 0 {
+	if run.Outcome == "" && run.FailureCategory == "" && run.FailureStage == "" && run.DiagnosticCode == "" && run.ProviderDiagnostic == nil && !run.ProviderRequestAttempted && run.ToolInvocations == 0 {
 		return "", nil
 	}
 	encoded, err := json.Marshal(sproutRunObservation{
 		Outcome:                  run.Outcome,
 		FailureCategory:          run.FailureCategory,
+		FailureStage:             run.FailureStage,
+		DiagnosticCode:           run.DiagnosticCode,
 		ProviderDiagnostic:       run.ProviderDiagnostic,
 		ProviderRequestAttempted: run.ProviderRequestAttempted,
 		ToolInvocations:          run.ToolInvocations,
@@ -1261,6 +1269,8 @@ LIMIT ?`
 		}
 		run.Outcome = obs.Outcome
 		run.FailureCategory = obs.FailureCategory
+		run.FailureStage = obs.FailureStage
+		run.DiagnosticCode = obs.DiagnosticCode
 		run.ProviderDiagnostic = obs.ProviderDiagnostic
 		run.ProviderRequestAttempted = obs.ProviderRequestAttempted
 		run.ToolInvocations = obs.ToolInvocations
