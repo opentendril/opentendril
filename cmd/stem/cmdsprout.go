@@ -345,6 +345,8 @@ func sproutOperationsWithOneShotHistory(history *historydb.Store, ambientBus *ev
 				Provider:                 sproutReport.Provider,
 				Model:                    sproutReport.Model,
 				FailureCategory:          sproutReport.FailureCategory,
+				FailureStage:             sproutReport.FailureStage,
+				DiagnosticCode:           sproutReport.DiagnosticCode,
 				ProviderDiagnostic:       sproutReport.ProviderDiagnostic,
 				ProviderRequestAttempted: sproutReport.RequestsMade,
 				ToolInvocations:          sproutReport.ToolInvocations,

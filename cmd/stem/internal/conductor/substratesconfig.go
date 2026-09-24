@@ -3,6 +3,7 @@ package conductor
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/user"
@@ -425,7 +426,10 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 	}
 
 	explicitURL := strings.TrimSpace(d.SubstrateURL) != ""
-	localPathExists := pathExists(plan.hostPath)
+	localPathExists, pathErr := pathExists(plan.hostPath)
+	if pathErr != nil && !errors.Is(pathErr, fs.ErrNotExist) {
+		return nil, fmt.Errorf("inspect substrate path: %w", pathErr)
+	}
 	if errors.Is(resolutionErr, ErrWorkspaceAbsent) {
 		// Chat/Greenhouse sets only the Substrate name. A managed placeholder
 		// directory then looks like a local workspace and skips clone/fetch,
@@ -449,6 +453,12 @@ func resolveSubstrateExecutionPlan(d *DockerOrchestrator, config *SubstratesConf
 
 	if !plan.remoteClone {
 		if !localPathExists {
+			if errors.Is(resolutionErr, ErrWorkspaceAbsent) {
+				return nil, resolutionErr
+			}
+			if pathErr != nil {
+				return nil, fmt.Errorf("substrate path is unavailable: %w", pathErr)
+			}
 			if resolutionErr != nil {
 				return nil, resolutionErr
 			}
@@ -680,12 +690,17 @@ func trimSubstrateSpec(spec *SubstrateSpec) {
 	spec.Patience.Reap = strings.TrimSpace(spec.Patience.Reap)
 }
 
-func pathExists(path string) bool {
-	info, err := os.Stat(path)
+var statSubstratePathFn = os.Stat
+
+func pathExists(path string) (bool, error) {
+	info, err := statSubstratePathFn(path)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return info.IsDir()
+	if !info.IsDir() {
+		return false, &fs.PathError{Op: "stat", Path: path, Err: fs.ErrInvalid}
+	}
+	return true, nil
 }
 
 func sanitizeTempComponent(value string) string {

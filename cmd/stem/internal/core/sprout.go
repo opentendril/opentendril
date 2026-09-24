@@ -86,6 +86,11 @@ type SproutRunResult struct {
 	// FailureCategory is the Core-owned observation class. Adapters copy it;
 	// they do not invent it.
 	FailureCategory string `json:"failureCategory,omitempty"`
+	// FailureStage is the Core-approved deterministic lifecycle boundary where
+	// a withered run stopped.
+	FailureStage FailureStage `json:"failureStage,omitempty"`
+	// DiagnosticCode is optional bounded typed detail for a withered run.
+	DiagnosticCode DiagnosticCode `json:"diagnosticCode,omitempty"`
 	// ProviderDiagnostic is the credential-free provider explanation, when a
 	// typed provider response exists.
 	ProviderDiagnostic *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
@@ -111,6 +116,8 @@ type SproutRunReport struct {
 	// Observation fields are classified by the Core (or already classified by
 	// the execution port using ClassifyFailure). Adapters copy them.
 	FailureCategory          string
+	FailureStage             FailureStage
+	DiagnosticCode           DiagnosticCode
 	ProviderDiagnostic       *ProviderDiagnostic
 	ProviderRequestAttempted bool
 	ToolInvocations          int
@@ -205,6 +212,8 @@ func (s *Service) SproutRun(ctx context.Context, in SproutRunInput) (SproutRunRe
 		}))
 	}
 	result.Status = ClassifyLifecycleStatus(FailureCategory(result.FailureCategory))
+	result.FailureStage = NormalizeFailureStage(report.FailureStage, result.Status)
+	result.DiagnosticCode = NormalizeDiagnosticCode(report.DiagnosticCode, result.Status)
 	if err != nil {
 		return result, err
 	}

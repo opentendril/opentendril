@@ -1,10 +1,102 @@
 package core_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
+
+func TestFailureStageVocabularyIsClosedAndExact(t *testing.T) {
+	want := []core.FailureStage{
+		"substrate-resolution",
+		"workspace-preparation",
+		"task-context-preparation",
+		"provider-resolution",
+		"provider-preflight",
+		"terrarium-preparation",
+		"sprout-execution",
+		"post-run",
+		"fruit-publication",
+		"unknown",
+	}
+	got := []core.FailureStage{
+		core.FailureStageSubstrateResolution,
+		core.FailureStageWorkspacePreparation,
+		core.FailureStageTaskContextPreparation,
+		core.FailureStageProviderResolution,
+		core.FailureStageProviderPreflight,
+		core.FailureStageTerrariumPreparation,
+		core.FailureStageSproutExecution,
+		core.FailureStagePostRun,
+		core.FailureStageFruitPublication,
+		core.FailureStageUnknown,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FailureStage vocabulary = %v, want %v", got, want)
+	}
+	for _, stage := range want {
+		if normalized := core.NormalizeFailureStage(stage, "withered"); normalized != stage {
+			t.Errorf("NormalizeFailureStage(%q) = %q", stage, normalized)
+		}
+	}
+	if got := core.NormalizeFailureStage("invented-stage", "withered"); got != core.FailureStageUnknown {
+		t.Fatalf("invalid stage normalized to %q, want unknown", got)
+	}
+}
+
+func TestDiagnosticCodeVocabularyIsClosedAndExact(t *testing.T) {
+	want := []core.DiagnosticCode{
+		"substrate-not-found",
+		"substrate-access-denied",
+		"substrate-invalid",
+		"workspace-preparation-failed",
+		"task-context-unavailable",
+		"provider-unresolved",
+		"provider-preflight-rejected",
+		"terrarium-preparation-failed",
+		"terrarium-start-failed",
+		"terrarium-oom",
+		"sprout-execution-failed",
+		"post-run-failed",
+		"fruit-publication-failed",
+	}
+	got := []core.DiagnosticCode{
+		core.DiagnosticCodeSubstrateNotFound,
+		core.DiagnosticCodeSubstrateAccessDenied,
+		core.DiagnosticCodeSubstrateInvalid,
+		core.DiagnosticCodeWorkspacePreparationFailed,
+		core.DiagnosticCodeTaskContextUnavailable,
+		core.DiagnosticCodeProviderUnresolved,
+		core.DiagnosticCodeProviderPreflightRejected,
+		core.DiagnosticCodeTerrariumPreparationFailed,
+		core.DiagnosticCodeTerrariumStartFailed,
+		core.DiagnosticCodeTerrariumOOM,
+		core.DiagnosticCodeSproutExecutionFailed,
+		core.DiagnosticCodePostRunFailed,
+		core.DiagnosticCodeFruitPublicationFailed,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("DiagnosticCode vocabulary = %v, want %v", got, want)
+	}
+	for _, code := range want {
+		if normalized := core.NormalizeDiagnosticCode(code, "withered"); normalized != code {
+			t.Errorf("NormalizeDiagnosticCode(%q) = %q", code, normalized)
+		}
+	}
+	if got := core.NormalizeDiagnosticCode("invented-code", "withered"); got != "" {
+		t.Fatalf("invalid diagnostic code normalized to %q, want omitted", got)
+	}
+}
+
+func TestMaturedLifecycleHasNoFailureProvenance(t *testing.T) {
+	if got := core.NormalizeFailureStage(core.FailureStageSubstrateResolution, "matured"); got != "" {
+		t.Fatalf("matured stage = %q, want empty", got)
+	}
+	if got := core.NormalizeDiagnosticCode(core.DiagnosticCodeSubstrateAccessDenied, "matured"); got != "" {
+		t.Fatalf("matured diagnostic code = %q, want empty", got)
+	}
+}
 
 func TestClassifyFailureProviderAuthWinsOverFailedOutcome(t *testing.T) {
 	got := core.ClassifyFailure(core.ObservationFacts{

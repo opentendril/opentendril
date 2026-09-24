@@ -8,6 +8,94 @@ package core
 // Wire values are kebab-case domain enums.
 type FailureCategory string
 
+// FailureStage is the closed Core-owned lifecycle location vocabulary for a
+// withered Sprout. Values describe deterministic execution boundaries; they
+// are never derived from error text.
+type FailureStage string
+
+const (
+	FailureStageSubstrateResolution    FailureStage = "substrate-resolution"
+	FailureStageWorkspacePreparation   FailureStage = "workspace-preparation"
+	FailureStageTaskContextPreparation FailureStage = "task-context-preparation"
+	FailureStageProviderResolution     FailureStage = "provider-resolution"
+	FailureStageProviderPreflight      FailureStage = "provider-preflight"
+	FailureStageTerrariumPreparation   FailureStage = "terrarium-preparation"
+	FailureStageSproutExecution        FailureStage = "sprout-execution"
+	FailureStagePostRun                FailureStage = "post-run"
+	FailureStageFruitPublication       FailureStage = "fruit-publication"
+	FailureStageUnknown                FailureStage = "unknown"
+)
+
+// DiagnosticCode is the closed, optional vocabulary for bounded typed detail
+// about a failed Sprout. It must not carry paths, error messages, or payloads.
+type DiagnosticCode string
+
+const (
+	DiagnosticCodeSubstrateNotFound          DiagnosticCode = "substrate-not-found"
+	DiagnosticCodeSubstrateAccessDenied      DiagnosticCode = "substrate-access-denied"
+	DiagnosticCodeSubstrateInvalid           DiagnosticCode = "substrate-invalid"
+	DiagnosticCodeWorkspacePreparationFailed DiagnosticCode = "workspace-preparation-failed"
+	DiagnosticCodeTaskContextUnavailable     DiagnosticCode = "task-context-unavailable"
+	DiagnosticCodeProviderUnresolved         DiagnosticCode = "provider-unresolved"
+	DiagnosticCodeProviderPreflightRejected  DiagnosticCode = "provider-preflight-rejected"
+	DiagnosticCodeTerrariumPreparationFailed DiagnosticCode = "terrarium-preparation-failed"
+	DiagnosticCodeTerrariumStartFailed       DiagnosticCode = "terrarium-start-failed"
+	DiagnosticCodeTerrariumOOM               DiagnosticCode = "terrarium-oom"
+	DiagnosticCodeSproutExecutionFailed      DiagnosticCode = "sprout-execution-failed"
+	DiagnosticCodePostRunFailed              DiagnosticCode = "post-run-failed"
+	DiagnosticCodeFruitPublicationFailed     DiagnosticCode = "fruit-publication-failed"
+)
+
+// NormalizeFailureStage returns only a Core-approved lifecycle stage. A
+// matured run has no failure stage; a withered run with absent or invalid
+// evidence fails honestly to unknown.
+func NormalizeFailureStage(stage FailureStage, lifecycleStatus string) FailureStage {
+	if lifecycleStatus == "matured" {
+		return ""
+	}
+	switch stage {
+	case FailureStageSubstrateResolution,
+		FailureStageWorkspacePreparation,
+		FailureStageTaskContextPreparation,
+		FailureStageProviderResolution,
+		FailureStageProviderPreflight,
+		FailureStageTerrariumPreparation,
+		FailureStageSproutExecution,
+		FailureStagePostRun,
+		FailureStageFruitPublication,
+		FailureStageUnknown:
+		return stage
+	default:
+		return FailureStageUnknown
+	}
+}
+
+// NormalizeDiagnosticCode returns a code only when it belongs to the closed
+// Core vocabulary and the run withered. It never examines error text.
+func NormalizeDiagnosticCode(code DiagnosticCode, lifecycleStatus string) DiagnosticCode {
+	if lifecycleStatus == "matured" {
+		return ""
+	}
+	switch code {
+	case DiagnosticCodeSubstrateNotFound,
+		DiagnosticCodeSubstrateAccessDenied,
+		DiagnosticCodeSubstrateInvalid,
+		DiagnosticCodeWorkspacePreparationFailed,
+		DiagnosticCodeTaskContextUnavailable,
+		DiagnosticCodeProviderUnresolved,
+		DiagnosticCodeProviderPreflightRejected,
+		DiagnosticCodeTerrariumPreparationFailed,
+		DiagnosticCodeTerrariumStartFailed,
+		DiagnosticCodeTerrariumOOM,
+		DiagnosticCodeSproutExecutionFailed,
+		DiagnosticCodePostRunFailed,
+		DiagnosticCodeFruitPublicationFailed:
+		return code
+	default:
+		return ""
+	}
+}
+
 const (
 	// FailureCategoryProviderAuthRejected: the provider refused the principal
 	// (HTTP 401 / 403 / 407) after a Mycorrhizal request was issued.
