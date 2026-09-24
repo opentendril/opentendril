@@ -59,6 +59,9 @@ func TestRunSproutProviderAuthPreflightRejectsBeforeEmerge(t *testing.T) {
 	if report.FailureCategory != string(core.FailureCategoryProviderAuthRejected) {
 		t.Fatalf("FailureCategory = %q, want %q", report.FailureCategory, core.FailureCategoryProviderAuthRejected)
 	}
+	if report.FailureStage != core.FailureStageProviderPreflight || report.DiagnosticCode != core.DiagnosticCodeProviderPreflightRejected {
+		t.Fatalf("provider preflight provenance = %q/%q", report.FailureStage, report.DiagnosticCode)
+	}
 	if !report.RequestsMade {
 		t.Fatal("RequestsMade = false, want true for the preflight attempt")
 	}
@@ -81,6 +84,12 @@ func TestRunSproutProviderAuthPreflightRejectsBeforeEmerge(t *testing.T) {
 	}
 	if got := withered[0].Data["toolInvocations"]; got != 0 {
 		t.Fatalf("terminal toolInvocations = %v, want 0", got)
+	}
+	if got := withered[0].Data["failureStage"]; got != string(core.FailureStageProviderPreflight) {
+		t.Fatalf("terminal failureStage = %v, want %q", got, core.FailureStageProviderPreflight)
+	}
+	if got := withered[0].Data["diagnosticCode"]; got != string(core.DiagnosticCodeProviderPreflightRejected) {
+		t.Fatalf("terminal diagnosticCode = %v, want %q", got, core.DiagnosticCodeProviderPreflightRejected)
 	}
 }
 

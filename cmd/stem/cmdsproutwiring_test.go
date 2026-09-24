@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,30 @@ import (
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 )
+
+func TestSproutExecutionPortCopiesConductorFailureProvenance(t *testing.T) {
+	originalRun := runSproutTerrarium
+	runSproutTerrarium = func(context.Context, *conductor.DockerOrchestrator, string) (conductor.SproutRunReport, error) {
+		return conductor.SproutRunReport{
+			Outcome:        conductor.SproutOutcomeFailed,
+			FailureStage:   core.FailureStageTerrariumPreparation,
+			DiagnosticCode: core.DiagnosticCodeTerrariumStartFailed,
+		}, nil
+	}
+	t.Cleanup(func() { runSproutTerrarium = originalRun })
+
+	report, err := sproutOperationsWithOneShotHistory(nil, nil, oneShotHistoryOptions{}).Run(context.Background(), core.SproutSpec{
+		StepID:     "step-provenance-copy",
+		Transcript: "task",
+		Substrate:  "/unused/substrate",
+	})
+	if err != nil {
+		t.Fatalf("execution port: %v", err)
+	}
+	if report.FailureStage != core.FailureStageTerrariumPreparation || report.DiagnosticCode != core.DiagnosticCodeTerrariumStartFailed {
+		t.Fatalf("Core report provenance = %q/%q", report.FailureStage, report.DiagnosticCode)
+	}
+}
 
 // A named substrate must reach the orchestrator by NAME. The execution plan
 // looks the spec up by name to apply its identity, signing, auth and readonly

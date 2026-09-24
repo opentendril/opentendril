@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 )
 
@@ -307,6 +308,37 @@ func TestFruitPublicationMaturedPushesReviewableFruit(t *testing.T) {
 	}
 	if !strings.Contains(string(statusBytes), "step-matured-one-file") {
 		t.Fatalf("local status missing expected step id")
+	}
+}
+
+func TestFruitPublicationCommitFailureHasFruitProvenance(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	chdirToTempDir(t)
+	runner := &stubSproutRunner{result: sproutResult{Response: "added feature", WroteWorkspace: true}}
+	stubRunSproutCollaborators(t, root, runner, []string{"pkg/feature.go"})
+	commitErr := errors.New("fruit commit unavailable")
+	originalCommit := commitTerrariumExecutionFn
+	t.Cleanup(func() { commitTerrariumExecutionFn = originalCommit })
+	commitTerrariumExecutionFn = func(context.Context, string, string, string, sproutExecutionStatus, string, ResolvedCredential, bool) (string, error) {
+		return "", commitErr
+	}
+
+	bus := eventbus.New()
+	events := recordSproutLifecycle(bus)
+	report, err := (&DockerOrchestrator{
+		Substrate: root,
+		StepID:    "step-fruit-commit-failure",
+		EventBus:  bus,
+	}).RunSprout(context.Background(), "publish reviewable Fruit")
+	if !errors.Is(err, commitErr) {
+		t.Fatalf("RunSprout error = %v, want Fruit commit error", err)
+	}
+	if report.FailureStage != core.FailureStageFruitPublication || report.DiagnosticCode != core.DiagnosticCodeFruitPublicationFailed {
+		t.Fatalf("Fruit commit provenance = %q/%q, want fruit-publication/fruit-publication-failed", report.FailureStage, report.DiagnosticCode)
+	}
+	terminal := filterEvents(*events, eventbus.EventSproutWithered)
+	if len(terminal) != 1 || terminal[0].Data["failureStage"] != string(core.FailureStageFruitPublication) || terminal[0].Data["diagnosticCode"] != string(core.DiagnosticCodeFruitPublicationFailed) {
+		t.Fatalf("Fruit commit terminal provenance = %+v", terminal)
 	}
 }
 

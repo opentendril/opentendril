@@ -28,6 +28,7 @@ const detachWaitLimit = 10 * time.Second
 type heldSproutRunner struct {
 	released chan struct{}
 	response string
+	err      error
 	// observed is the context the turn was actually handed, so a test can
 	// prove the work was NOT run on the clock the Stem was waiting on.
 	observed     chan context.Context
@@ -55,7 +56,7 @@ func (h *heldSproutRunner) Run(ctx context.Context, taskPrompt string) (sproutRe
 			WroteWorkspace: true,
 			Usage:          h.usage,
 			RequestsMade:   h.requestsMade,
-		}, nil
+		}, h.err
 	case <-ctx.Done():
 		return sproutResult{
 			Usage:        h.usage,
@@ -304,6 +305,59 @@ func TestRunSproutDetachesInsteadOfKilling(t *testing.T) {
 	}
 	if committed := commits.Load(); committed != 1 {
 		t.Fatalf("the commit path ran %d times after the run ended, want exactly 1", committed)
+	}
+}
+
+func TestRunSproutDetachedAndSynchronousFailuresShareProvenance(t *testing.T) {
+	primaryErr := errors.New("active Sprout failed")
+
+	syncRoot := newOutcomeTestRepo(t)
+	chdirToTempDir(t)
+	stubRunSproutCollaborators(t, syncRoot, &failingSproutRunner{err: primaryErr}, nil)
+	syncReport, syncErr := (&DockerOrchestrator{
+		Substrate:        syncRoot,
+		StepID:           "sync-provenance",
+		DisableMergeBack: true,
+	}).RunSprout(context.Background(), "sync failure")
+	if !errors.Is(syncErr, primaryErr) {
+		t.Fatalf("synchronous error = %v, want active Sprout error", syncErr)
+	}
+	if syncReport.FailureStage != "sprout-execution" || syncReport.DiagnosticCode != "sprout-execution-failed" {
+		t.Fatalf("synchronous provenance = %q/%q", syncReport.FailureStage, syncReport.DiagnosticCode)
+	}
+
+	detachedRoot := newOutcomeTestRepo(t)
+	cwd := chdirToTempDir(t)
+	writePatienceSubstrate(t, cwd, "bounded", detachedRoot, "    patience:\n      growth: 300ms\n")
+	runner := newHeldSproutRunner("failed after detaching")
+	runner.err = primaryErr
+	stubRunSproutCollaborators(t, detachedRoot, runner, nil)
+	bus := eventbus.New()
+	recorder := recordSproutEvents(bus)
+	terminalReports := make(chan SproutRunReport, 1)
+	detachedReport, err := (&DockerOrchestrator{
+		Substrate:        "bounded",
+		StepID:           "detached-provenance",
+		DisableMergeBack: true,
+		EventBus:         bus,
+		OnTerminal: func(report SproutRunReport, _ error) {
+			terminalReports <- report
+		},
+	}).RunSprout(context.Background(), "detached failure")
+	if err != nil || detachedReport.Outcome != SproutOutcomeDetached {
+		t.Fatalf("detached RunSprout = (%q, %v), want a clean detached handoff", detachedReport.Outcome, err)
+	}
+	if recorder.terminalCount() != 0 {
+		t.Fatal("terminal event published before detached Sprout finished")
+	}
+	runner.release()
+	terminal := recorder.awaitTerminal(t, "detached failure provenance")
+	completedReport := <-terminalReports
+	if completedReport.FailureStage != syncReport.FailureStage || completedReport.DiagnosticCode != syncReport.DiagnosticCode {
+		t.Fatalf("detached provenance = %q/%q, synchronous = %q/%q", completedReport.FailureStage, completedReport.DiagnosticCode, syncReport.FailureStage, syncReport.DiagnosticCode)
+	}
+	if terminal.Data["failureStage"] != string(syncReport.FailureStage) || terminal.Data["diagnosticCode"] != string(syncReport.DiagnosticCode) {
+		t.Fatalf("detached terminal provenance = %v/%v, synchronous = %q/%q", terminal.Data["failureStage"], terminal.Data["diagnosticCode"], syncReport.FailureStage, syncReport.DiagnosticCode)
 	}
 }
 

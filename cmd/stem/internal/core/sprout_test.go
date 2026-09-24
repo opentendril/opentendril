@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -338,4 +339,59 @@ func TestSproutRunClassifiesProviderAuthFromTypedDiagnostic(t *testing.T) {
 	if result.ToolInvocations != 0 {
 		t.Fatalf("ToolInvocations = %d, want 0", result.ToolInvocations)
 	}
+}
+
+func TestSproutRunNormalizesFailureProvenance(t *testing.T) {
+	t.Run("withered run without stage becomes unknown", func(t *testing.T) {
+		svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			return core.SproutRunReport{Outcome: "failed"}, errors.New("execution failed")
+		})
+		result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+		if err == nil {
+			t.Fatal("expected run error")
+		}
+		if result.FailureStage != core.FailureStageUnknown {
+			t.Fatalf("FailureStage = %q, want unknown", result.FailureStage)
+		}
+	})
+
+	t.Run("invalid stage and code are not released", func(t *testing.T) {
+		svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			return core.SproutRunReport{
+				Outcome:        "failed",
+				FailureStage:   "host-path-/private",
+				DiagnosticCode: "permission denied: /private/repository",
+			}, errors.New("execution failed")
+		})
+		result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+		if err == nil {
+			t.Fatal("expected run error")
+		}
+		if result.FailureStage != core.FailureStageUnknown {
+			t.Fatalf("FailureStage = %q, want unknown", result.FailureStage)
+		}
+		if result.DiagnosticCode != "" {
+			t.Fatalf("DiagnosticCode = %q, want omitted", result.DiagnosticCode)
+		}
+	})
+
+	t.Run("matured run has no failure stage", func(t *testing.T) {
+		svc, _ := newSproutService(t, func(context.Context, core.SproutSpec) (core.SproutRunReport, error) {
+			return core.SproutRunReport{
+				Outcome:        "complete",
+				FailureStage:   core.FailureStageSproutExecution,
+				DiagnosticCode: core.DiagnosticCodeSproutExecutionFailed,
+			}, nil
+		})
+		result, err := svc.SproutRun(context.Background(), core.SproutRunInput{Transcript: "t", Substrate: "s"})
+		if err != nil {
+			t.Fatalf("SproutRun: %v", err)
+		}
+		if result.Status != "matured" || result.FailureStage != "" {
+			t.Fatalf("Status/FailureStage = %q/%q, want matured/empty", result.Status, result.FailureStage)
+		}
+		if result.DiagnosticCode != "" {
+			t.Fatalf("DiagnosticCode = %q, want omitted on matured run", result.DiagnosticCode)
+		}
+	})
 }

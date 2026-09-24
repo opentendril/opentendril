@@ -125,6 +125,10 @@ type SproutRunReport struct {
 	// FailureCategory is the Core-owned Botanist-facing class. Conductor
 	// fills it by calling core.ClassifyFailure with typed facts only.
 	FailureCategory string
+	// FailureStage is the typed lifecycle boundary where the run first failed.
+	FailureStage core.FailureStage
+	// DiagnosticCode is optional bounded typed detail for that failure.
+	DiagnosticCode core.DiagnosticCode
 	// ProviderDiagnostic is the credential-free provider explanation, when a
 	// typed provider response exists.
 	ProviderDiagnostic *core.ProviderDiagnostic
@@ -162,6 +166,22 @@ type SproutRunReport struct {
 	// separate from FruitCommit because a checkpoint from a failed Sprout is
 	// verified work for the next Seed iteration, not Botanist-reviewable Fruit.
 	seedCandidateCommit string
+}
+
+// primaryFailureProvenance holds the first deterministic failure boundary for
+// one run. Later processing or teardown failures cannot replace its stage or
+// diagnostic code.
+type primaryFailureProvenance struct {
+	stage core.FailureStage
+	code  core.DiagnosticCode
+}
+
+func (provenance *primaryFailureProvenance) setOnce(stage core.FailureStage, code core.DiagnosticCode) {
+	if provenance == nil || provenance.stage != "" || stage == "" {
+		return
+	}
+	provenance.stage = stage
+	provenance.code = code
 }
 
 // PostRunUsage is the fail-honest aggregate of every provider request made
@@ -350,6 +370,9 @@ func applyObservation(report *SproutRunReport, runErr error) {
 		ProviderRequestAttempted: report.RequestsMade,
 		ProviderStatusCode:       statusCode,
 	}))
+	lifecycleStatus := core.ClassifyLifecycleStatus(core.FailureCategory(report.FailureCategory))
+	report.FailureStage = core.NormalizeFailureStage(report.FailureStage, lifecycleStatus)
+	report.DiagnosticCode = core.NormalizeDiagnosticCode(report.DiagnosticCode, lifecycleStatus)
 }
 
 func providerDiagnosticFromError(err error) *core.ProviderDiagnostic {
@@ -403,6 +426,13 @@ func publishSproutTerminal(bus *eventbus.Bus, stepID, sessionID string, report S
 	}
 	if report.FailureCategory != "" {
 		data["failureCategory"] = report.FailureCategory
+	}
+	lifecycleStatus := core.ClassifyLifecycleStatus(core.FailureCategory(report.FailureCategory))
+	if stage := core.NormalizeFailureStage(report.FailureStage, lifecycleStatus); stage != "" {
+		data["failureStage"] = string(stage)
+	}
+	if code := core.NormalizeDiagnosticCode(report.DiagnosticCode, lifecycleStatus); code != "" {
+		data["diagnosticCode"] = string(code)
 	}
 	if report.Provider != "" {
 		data["provider"] = report.Provider

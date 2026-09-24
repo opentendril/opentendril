@@ -2,12 +2,33 @@ package conductor
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestResolveSubstrateExecutionPlanPreservesTypedNotFoundEvidence(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-substrate")
+	_, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{Substrate: missing}, nil)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("resolveSubstrateExecutionPlan error = %v, want typed fs.ErrNotExist", err)
+	}
+}
+
+func TestResolveSubstrateExecutionPlanMarksNonDirectoryAsInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(path, []byte("file"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	_, err := resolveSubstrateExecutionPlan(&DockerOrchestrator{Substrate: path}, nil)
+	if !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("resolveSubstrateExecutionPlan error = %v, want typed fs.ErrInvalid", err)
+	}
+}
 
 func TestAuthSpecUnmarshalExposeToken(t *testing.T) {
 	t.Run("exposeToken true", func(t *testing.T) {

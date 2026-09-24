@@ -18,6 +18,7 @@ import (
 	"time"
 
 	opentendril "github.com/opentendril/opentendril"
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/eventbus"
 	"github.com/opentendril/opentendril/cmd/stem/internal/heartwood"
 	"github.com/opentendril/opentendril/cmd/stem/internal/mesh"
@@ -489,10 +490,18 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// is not an ending: it hands the same publisher to the goroutine that
 	// outlives this call, which fires it when the work does end.
 	var changes changeEvidence
+	var failureProvenance primaryFailureProvenance
+	markFailure := func(stage core.FailureStage, code core.DiagnosticCode) {
+		failureProvenance.setOnce(stage, code)
+	}
 	detached := false
 	publishTerminal := func(report *SproutRunReport, changes changeEvidence, err error) {
 		if report.Outcome == "" {
 			report.Outcome = classifySproutOutcome(err, changes, report.Output, d.Investigation)
+		}
+		if failureProvenance.stage != "" {
+			report.FailureStage = failureProvenance.stage
+			report.DiagnosticCode = failureProvenance.code
 		}
 		applyObservation(report, err)
 		reason := ""
@@ -528,6 +537,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			return
 		}
 		runTeardown()
+		if teardownErr != nil {
+			markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
+		}
 		err = errors.Join(err, teardownErr)
 	}()
 
@@ -554,11 +566,22 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	substratesConfig, err := LoadSubstratesConfig("")
 	if err != nil {
+		markFailure(core.FailureStageSubstrateResolution, "")
 		return report, err
 	}
 
 	plan, err := resolveSubstrateExecutionPlan(d, substratesConfig)
 	if err != nil {
+		code := core.DiagnosticCode("")
+		switch {
+		case errors.Is(err, fs.ErrPermission):
+			code = core.DiagnosticCodeSubstrateAccessDenied
+		case errors.Is(err, fs.ErrInvalid):
+			code = core.DiagnosticCodeSubstrateInvalid
+		case errors.Is(err, fs.ErrNotExist), errors.Is(err, ErrWorkspaceAbsent):
+			code = core.DiagnosticCodeSubstrateNotFound
+		}
+		markFailure(core.FailureStageSubstrateResolution, code)
 		return report, err
 	}
 
@@ -571,6 +594,8 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 
 	if err := runSproutPreflightChecksFn(ctx, mind); err != nil {
+		stage, code := classifySproutPreflightFailure(err)
+		markFailure(stage, code)
 		return report, err
 	}
 
@@ -689,6 +714,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if plan.remoteClone {
 		clonedPath, persistent, err := cloneNamedForeignSubstrate(plan.name, plan.cloneURL, plan.cloneBranch, plan.credential)
 		if err != nil {
+			markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 			return report, err
 		}
 
@@ -710,6 +736,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			if cleanup != nil {
 				cleanup()
 			}
+			markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 			return report, fmt.Errorf("cloned substrate %s is not a git repository", clonedPath)
 		}
 
@@ -719,6 +746,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// specific failure and is reported as one. An absent managed checkout
 		// has already returned above, which is the whole point of the ordering.
 		if err := refuseUnresolvedMind(); err != nil {
+			markFailure(core.FailureStageProviderResolution, core.DiagnosticCodeProviderUnresolved)
 			if cleanup != nil {
 				cleanup()
 			}
@@ -727,6 +755,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		managedRun = isWritableManagedRun(sourcePath, plan, d.Investigation)
 		if managedRun {
 			if err := allocateManagedWorkspace(); err != nil {
+				markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 				if cleanup != nil {
 					cleanup()
 				}
@@ -741,6 +770,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// Before the isolation branch, the host stash and the shadow worktree,
 		// all of which are below this line.
 		if err := refuseUnresolvedMind(); err != nil {
+			markFailure(core.FailureStageProviderResolution, core.DiagnosticCodeProviderUnresolved)
 			return report, err
 		}
 
@@ -750,6 +780,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 		if gitRepo && statusPath != "" {
 			if existing, err := loadSproutStatus(statusPath); err != nil {
+				markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 				return report, err
 			} else if existing != nil && strings.TrimSpace(existing.StepID) == stepID {
 				// A timed-out status deliberately falls through to a fresh run:
@@ -769,6 +800,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 						errText = "previous execution failed"
 					}
 					fmt.Fprintf(os.Stderr, "⚠️ Resumption halted for %s: %s\n", stepID, errText)
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					return report, fmt.Errorf("step %s previously failed: %s", stepID, errText)
 				}
 			}
@@ -794,6 +826,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 						baseCommit = strings.TrimSpace(out)
 					}
 					if _, err := runGitCommand(ctx, sourcePath, "checkout", "-b", newBranch); err != nil {
+						markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 						return report, fmt.Errorf("branch protection failed: could not create isolation branch %s: %w", newBranch, err)
 					}
 					// Registered at creation, so this branch has a moment at
@@ -824,6 +857,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			}
 			hostStashed, err = stashHostWorkspaceFn(ctx, sourcePath, stepID)
 			if err != nil {
+				markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 				return report, err
 			}
 			if hostStashed {
@@ -836,6 +870,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		if gitRepo {
 			if managedRun {
 				if err := allocateManagedWorkspace(); err != nil {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					if cleanup != nil {
 						cleanup()
 					}
@@ -848,9 +883,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			} else if d.SeedIntegrationCheckpoint {
 				shadowPath, err := createSeedCandidateWorktreeFn(sourcePath, d.SeedStartRevision)
 				if err != nil {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					return report, fmt.Errorf("isolation could not be established (create Seed candidate worktree: %w); Seed execution does not fall back to the active workspace", err)
 				}
 				if sameFilePath(shadowPath, sourcePath) {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					return report, fmt.Errorf("isolation could not be established: Seed candidate worktree must not be the Botanist checkout")
 				}
 				mountPath = shadowPath
@@ -865,6 +902,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					seedCandidateWorktreeOwned = false
 				}
 				if err != nil {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					cleanup()
 					return report, err
 				}
@@ -874,12 +912,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				for _, cachePath := range cachePaths {
 					cacheState, stateErr := newRunWorkspaceCacheState(mountPath, cachePath)
 					if stateErr != nil {
+						markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 						cleanup()
 						return report, stateErr
 					}
 					managedCacheStates = append(managedCacheStates, cacheState)
 				}
 				if copyErr != nil {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					cleanup()
 					return report, copyErr
 				}
@@ -905,6 +945,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 						})
 					}
 				} else {
+					markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 					return report, fmt.Errorf("isolation could not be established (create shadow worktree: %w); set %s=true to run in the active workspace", err, EnvAllowHostWorkspace)
 				}
 			}
@@ -915,6 +956,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	if d.Genotype != "" {
 		if err := stagePlasmidsForGenotype(sourcePath, mountPath, d.Genotype); err != nil {
+			markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 			if cleanup != nil {
 				cleanup()
 			}
@@ -924,6 +966,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	repoMapMarkdown, err := generateRepoMapFn(ctx, mountPath)
 	if err != nil {
+		markFailure(core.FailureStageTaskContextPreparation, core.DiagnosticCodeTaskContextUnavailable)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -932,12 +975,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	repoMapPath := filepath.Join(mountPath, tendrilStateDirectory, "genome", repositoryMapFile)
 	if err := os.MkdirAll(filepath.Dir(repoMapPath), 0o755); err != nil {
+		markFailure(core.FailureStageTaskContextPreparation, core.DiagnosticCodeTaskContextUnavailable)
 		if cleanup != nil {
 			cleanup()
 		}
 		return report, fmt.Errorf("create repo map directory: %w", err)
 	}
 	if err := os.WriteFile(repoMapPath, []byte(repoMapMarkdown), 0o644); err != nil {
+		markFailure(core.FailureStageTaskContextPreparation, core.DiagnosticCodeTaskContextUnavailable)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -963,6 +1008,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	if databaseInfo, statErr := os.Stat(rhizomeDatabasePath); statErr == nil && databaseInfo.Mode().IsRegular() {
 		index, repositoryName, openErr := openRhizomeIndexFn(ctx, mountPath)
 		if openErr != nil {
+			markFailure(core.FailureStageTaskContextPreparation, core.DiagnosticCodeTaskContextUnavailable)
 			if cleanup != nil {
 				cleanup()
 			}
@@ -999,6 +1045,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		MemoryOmissionReason:    taskContextMemoryOmissionReason,
 	}, taskContextIndex, taskContextRepositoryName)
 	if taskContextErr != nil {
+		markFailure(core.FailureStageTaskContextPreparation, core.DiagnosticCodeTaskContextUnavailable)
 		if closeTaskContextMemory != nil {
 			closeTaskContextMemory()
 		}
@@ -1022,6 +1069,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}
 	if generatedState != nil {
 		if err := generatedState.captureInitialAfter(); err != nil {
+			markFailure(core.FailureStageWorkspacePreparation, core.DiagnosticCodeWorkspacePreparationFailed)
 			if cleanup != nil {
 				cleanup()
 			}
@@ -1031,6 +1079,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	imageName := d.resolveImageName(mountPath)
 	if err := ensureSproutImageFn(ctx, imageName); err != nil {
+		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -1047,6 +1096,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// before emergence is declared and before a Terrarium exists. A later
 	// mid-run 401 still uses the existing classification path.
 	if err := applyProviderAuthPreflight(ctx, mind, &report); err != nil {
+		markFailure(core.FailureStageProviderPreflight, core.DiagnosticCodeProviderPreflightRejected)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -1085,6 +1135,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	}()
 
 	if err := assertTerrariumBindMountSource(mountPath); err != nil {
+		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -1093,6 +1144,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	session, err := startTerrariumSessionFn(workCtx, providerName, imageName, mountPath, d.Investigation, plan.command, extraEnv, deriveWatchdogTimeout(workCtx), obs)
 	if err != nil {
+		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumStartFailed)
 		if cleanup != nil {
 			cleanup()
 		}
@@ -1105,10 +1157,12 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 
 	sprout, err := newSproutFn(workCtx, mountPath, sourcePath, d.Genotype, mind, session, d.EventBus, stepID, d.SessionID, taskContext.Rendered)
 	if err != nil {
+		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed)
 		return report, err
 	}
 	configurable, ok := sprout.(sproutExecutionConfigurator)
 	if d.SeedIntegrationCheckpoint && !ok {
+		markFailure(core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed)
 		return report, errors.New("SeedIntegrationCheckpoint requires an explicit Sprout execution configuration")
 	}
 	if ok {
@@ -1144,6 +1198,17 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		// post-mortem bound below is its own, and finite.
 		postMortemCtx, cancelPostMortem := context.WithTimeout(cleanupCtx, sproutPostMortemBudget)
 		defer cancelPostMortem()
+		if runErr != nil {
+			code := core.DiagnosticCode("")
+			switch {
+			case terrariumOOMFromError(runErr):
+				code = core.DiagnosticCodeTerrariumOOM
+			case providerDiagnosticFromError(runErr) == nil &&
+				!errors.Is(runErr, ErrSproutTimedOut) && !errors.Is(runErr, ErrSproutReaped):
+				code = core.DiagnosticCodeSproutExecutionFailed
+			}
+			markFailure(core.FailureStageSproutExecution, code)
+		}
 
 		// Recorded once, before any of the exits below. A run that failed is
 		// the one whose record gets asked whether the carrying protocol was to
@@ -1204,6 +1269,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			var err error
 			statusRelPath, err = workspaceRelativePath(sourcePath, statusPath)
 			if err != nil {
+				markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
 				return report, changes, err
 			}
 		}
@@ -1288,6 +1354,11 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				commitHash, commitErr = commitTerrariumExecutionFn(postMortemCtx, mountPath, sourcePath, "", executionStatus, taskPrompt, cred, d.SeedIntegrationCheckpoint)
 			}
 			if commitErr != nil {
+				if isReviewableFruit {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
+				} else {
+					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
+				}
 				report.Outcome = ""
 				if runErr != nil {
 					return report, changes, errors.Join(runErr, commitErr)
@@ -1298,6 +1369,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 			if isSeedCandidateCheckpoint {
 				if generatedState != nil {
 					if err := generatedState.cleanup(); err != nil {
+						markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
 						cleanupErr := fmt.Errorf("seed integration generated state cleanup: %w", err)
 						return report, changes, errors.Join(runErr, cleanupErr)
 					}
@@ -1305,6 +1377,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				}
 				for _, state := range managedCacheStates {
 					if err := state.cleanup(); err != nil {
+						markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
 						cleanupErr := fmt.Errorf("seed integration cache state cleanup: %w", err)
 						return report, changes, errors.Join(runErr, cleanupErr)
 					}
@@ -1324,6 +1397,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 				}
 				if integrateErr != nil {
+					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
 					report.Outcome = ""
 					if runErr != nil {
 						return report, changes, errors.Join(runErr, integrateErr)
@@ -1346,6 +1420,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					}
 					if fruitBranch != "" {
 						if err := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationLocalOnly, time.Now().UTC()); err != nil {
+							markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 							return report, changes, err
 						}
 					}
@@ -1364,12 +1439,14 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				var pushErr error
 				if apiCommit {
 					if err := recordSproutFruit(postMortemCtx, &report, sourcePath, managedWorkspace.Branch, commitHash, FruitPublicationPublished, time.Now().UTC()); err != nil {
+						markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 						return report, changes, err
 					}
 					pushErr = managedWorkspace.ReconcilePublishedFruit(postMortemCtx, apiCommitOID)
 				} else if managedRun {
 					createdAt := time.Now().UTC()
 					if err := recordSproutFruit(postMortemCtx, &report, sourcePath, managedWorkspace.Branch, commitHash, FruitPublicationLocalOnly, createdAt); err != nil {
+						markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 						return report, changes, err
 					}
 					pushErr = pushTerrariumCommitFn(postMortemCtx, mountPath, managedWorkspace.Branch, plan.credential, false, stepID)
@@ -1384,23 +1461,28 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 					pushErr = err
 					if pushErr == nil {
 						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, fruitBranch, commitHash, FruitPublicationPublished, createdAt); recordErr != nil {
+							markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 							return report, changes, recordErr
 						}
 					} else {
 						localFruitBranch, branchErr := runGitCommand(postMortemCtx, mountPath, "branch", "--show-current")
 						if branchErr != nil {
+							markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 							return report, changes, fmt.Errorf("resolve local Fruit branch after remote publication failure: %w", branchErr)
 						}
 						if localFruitBranch == "" {
+							markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 							return report, changes, errors.New("resolve local Fruit branch after remote publication failure: checkout is detached")
 						}
 						if recordErr := recordSproutFruit(postMortemCtx, &report, sourcePath, localFruitBranch, commitHash, FruitPublicationFailed, createdAt); recordErr != nil {
+							markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 							return report, changes, recordErr
 						}
 						retainEphemeralFruitWorkspace = true
 					}
 				}
 				if pushErr != nil {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 					report.Outcome = ""
 					if runErr != nil {
 						return report, changes, errors.Join(runErr, pushErr)
@@ -1411,13 +1493,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				createdAt := time.Now().UTC()
 				fruitBranch, branchErr := runGitCommand(postMortemCtx, sourcePath, "branch", "--show-current")
 				if branchErr != nil || strings.TrimSpace(fruitBranch) == "" {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 					return report, changes, fmt.Errorf("resolve local Fruit branch: %w", branchErr)
 				}
 				if err := recordSproutFruit(postMortemCtx, &report, sourcePath, strings.TrimSpace(fruitBranch), commitHash, FruitPublicationLocalOnly, createdAt); err != nil {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 					return report, changes, err
 				}
 				mergeErr := mergeTerrariumCommitFn(postMortemCtx, sourcePath, commitHash)
 				if mergeErr != nil {
+					markFailure(core.FailureStageFruitPublication, core.DiagnosticCodeFruitPublicationFailed)
 					report.FruitPublicationState = FruitPublicationFailed
 					report.Outcome = ""
 					if runErr != nil {
@@ -1497,6 +1582,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 				detachedReport, detachedChanges, detachedErr := completeRun(finished.result, runErr)
 				releaseWork(nil)
 				runTeardown()
+				if teardownErr != nil {
+					markFailure(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
+				}
 				publishTerminal(&detachedReport, detachedChanges, errors.Join(detachedErr, teardownErr))
 			}()
 			report.Outcome = SproutOutcomeDetached
@@ -2082,6 +2170,26 @@ func getEnvOrDefault(key, fallback string) string {
 	return fallback
 }
 
+type localProviderPreflightError struct {
+	err error
+}
+
+func (err *localProviderPreflightError) Error() string {
+	return fmt.Sprintf("local provider preflight failed: %v", err.err)
+}
+
+func (err *localProviderPreflightError) Unwrap() error {
+	return err.err
+}
+
+func classifySproutPreflightFailure(err error) (core.FailureStage, core.DiagnosticCode) {
+	var providerErr *localProviderPreflightError
+	if errors.As(err, &providerErr) {
+		return core.FailureStageProviderPreflight, ""
+	}
+	return core.FailureStageTerrariumPreparation, core.DiagnosticCodeTerrariumPreparationFailed
+}
+
 func runSproutPreflightChecks(ctx context.Context, mind *llm.Client) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -2097,7 +2205,10 @@ func runSproutPreflightChecks(ctx context.Context, mind *llm.Client) error {
 		return nil
 	}
 
-	return checkLocalInferenceReachable(ctx, mind)
+	if err := checkLocalInferenceReachable(ctx, mind); err != nil {
+		return &localProviderPreflightError{err: err}
+	}
+	return nil
 }
 
 func checkLocalInferenceReachable(ctx context.Context, mind *llm.Client) error {

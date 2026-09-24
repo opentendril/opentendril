@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +45,213 @@ func TestApplyObservationDoesNotParseErrorText(t *testing.T) {
 	}
 	if report.ProviderDiagnostic != nil {
 		t.Fatalf("ProviderDiagnostic = %+v, want nil without a typed RequestError", report.ProviderDiagnostic)
+	}
+}
+
+func TestPrimaryFailureProvenanceIsSetOnce(t *testing.T) {
+	var provenance primaryFailureProvenance
+	provenance.setOnce(core.FailureStageSproutExecution, core.DiagnosticCodeSproutExecutionFailed)
+	provenance.setOnce(core.FailureStagePostRun, core.DiagnosticCodePostRunFailed)
+	if provenance.stage != core.FailureStageSproutExecution || provenance.code != core.DiagnosticCodeSproutExecutionFailed {
+		t.Fatalf("provenance = %q/%q, want original sprout-execution provenance", provenance.stage, provenance.code)
+	}
+}
+
+func TestRunSproutPathBackedPermissionFailureHasTypedProvenance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TENDRIL_SUBSTRATE", "")
+	path := filepath.Join(t.TempDir(), "private-substrate")
+	permissionErr := &fs.PathError{Op: "stat", Path: path, Err: fs.ErrPermission}
+	originalStat := statSubstratePathFn
+	statSubstratePathFn = func(candidate string) (os.FileInfo, error) {
+		if candidate == path {
+			return nil, permissionErr
+		}
+		return originalStat(candidate)
+	}
+	t.Cleanup(func() { statSubstratePathFn = originalStat })
+
+	bus := eventbus.New()
+	events := recordSproutLifecycle(bus)
+	report, err := (&DockerOrchestrator{Substrate: path, EventBus: bus}).RunSprout(context.Background(), "test task")
+	if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("RunSprout error = %v, want typed fs.ErrPermission", err)
+	}
+	if report.FailureCategory != string(core.FailureCategoryExecutionFailed) ||
+		report.FailureStage != core.FailureStageSubstrateResolution ||
+		report.DiagnosticCode != core.DiagnosticCodeSubstrateAccessDenied || report.RequestsMade {
+		t.Fatalf("report provenance = category:%q stage:%q code:%q requests:%v", report.FailureCategory, report.FailureStage, report.DiagnosticCode, report.RequestsMade)
+	}
+	terminal := filterEvents(*events, eventbus.EventSproutWithered)
+	if len(terminal) != 1 {
+		t.Fatalf("withered terminal count = %d, want 1", len(terminal))
+	}
+	if terminal[0].Data["failureStage"] != string(core.FailureStageSubstrateResolution) ||
+		terminal[0].Data["diagnosticCode"] != string(core.DiagnosticCodeSubstrateAccessDenied) {
+		t.Fatalf("terminal bounded provenance = %v/%v", terminal[0].Data["failureStage"], terminal[0].Data["diagnosticCode"])
+	}
+	if strings.Contains(terminal[0].Data["failureStage"].(string), path) || strings.Contains(terminal[0].Data["diagnosticCode"].(string), path) {
+		t.Fatal("terminal provenance contains the raw Substrate path")
+	}
+}
+
+func TestRunSproutFilesystemClassificationDoesNotMatchErrorMessages(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TENDRIL_SUBSTRATE", "")
+	path := filepath.Join(t.TempDir(), "private-substrate")
+	originalStat := statSubstratePathFn
+	statSubstratePathFn = func(candidate string) (os.FileInfo, error) {
+		if candidate == path {
+			return nil, errors.New("permission denied")
+		}
+		return originalStat(candidate)
+	}
+	t.Cleanup(func() { statSubstratePathFn = originalStat })
+
+	report, err := (&DockerOrchestrator{Substrate: path}).RunSprout(context.Background(), "test task")
+	if err == nil {
+		t.Fatal("RunSprout error = nil, want path inspection failure")
+	}
+	if report.FailureStage != core.FailureStageSubstrateResolution || report.DiagnosticCode != "" {
+		t.Fatalf("untyped filesystem error provenance = %q/%q, want substrate-resolution with no code", report.FailureStage, report.DiagnosticCode)
+	}
+}
+
+func TestRunSproutPathBackedNotFoundUsesTypedDiagnostic(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TENDRIL_SUBSTRATE", "")
+	path := filepath.Join(t.TempDir(), "missing-substrate")
+	report, err := (&DockerOrchestrator{Substrate: path}).RunSprout(context.Background(), "test task")
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("RunSprout error = %v, want typed fs.ErrNotExist", err)
+	}
+	if report.FailureStage != core.FailureStageSubstrateResolution || report.DiagnosticCode != core.DiagnosticCodeSubstrateNotFound || report.RequestsMade {
+		t.Fatalf("not-found provenance = stage:%q code:%q requests:%v", report.FailureStage, report.DiagnosticCode, report.RequestsMade)
+	}
+}
+
+func TestRunSproutLaterTerrariumFailureHasDistinctStageAndEventFields(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	chdirToTempDir(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	stubRunSproutCollaborators(t, root, &stubSproutRunner{result: sproutResult{Response: "unused"}}, nil)
+	ensureSproutImageFn = func(context.Context, string) error { return errors.New("image preparation failed") }
+
+	bus := eventbus.New()
+	events := recordSproutLifecycle(bus)
+	report, err := (&DockerOrchestrator{
+		Substrate: root,
+		Provider:  "openai",
+		Model:     "gpt-4o-mini",
+		EventBus:  bus,
+	}).RunSprout(context.Background(), "test task")
+	if err == nil {
+		t.Fatal("RunSprout error = nil, want Terrarium preparation failure")
+	}
+	if report.FailureStage != core.FailureStageTerrariumPreparation || report.DiagnosticCode != core.DiagnosticCodeTerrariumPreparationFailed {
+		t.Fatalf("later failure provenance = %q/%q", report.FailureStage, report.DiagnosticCode)
+	}
+	terminal := filterEvents(*events, eventbus.EventSproutWithered)
+	if len(terminal) != 1 || terminal[0].Data["failureStage"] != string(core.FailureStageTerrariumPreparation) || terminal[0].Data["diagnosticCode"] != string(core.DiagnosticCodeTerrariumPreparationFailed) {
+		t.Fatalf("terminal event = %+v", terminal)
+	}
+}
+
+func TestRunSproutPreflightFailureProvenanceUsesTypedIdentity(t *testing.T) {
+	cases := []struct {
+		name      string
+		err       error
+		wantStage core.FailureStage
+		wantCode  core.DiagnosticCode
+	}{
+		{
+			name:      "docker readiness despite local-provider wording",
+			err:       errors.New("local provider is unreachable and its model is unavailable"),
+			wantStage: core.FailureStageTerrariumPreparation,
+			wantCode:  core.DiagnosticCodeTerrariumPreparationFailed,
+		},
+		{
+			name: "local provider despite docker-readiness wording",
+			err: &localProviderPreflightError{
+				err: errors.New("Docker daemon is not responding"),
+			},
+			wantStage: core.FailureStageProviderPreflight,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Setenv("OPENAI_API_KEY", "test-key")
+			root := newOutcomeTestRepo(t)
+			chdirToTempDir(t)
+			stubRunSproutCollaborators(t, root, &stubSproutRunner{}, nil)
+			runSproutPreflightChecksFn = func(context.Context, *llm.Client) error {
+				return testCase.err
+			}
+
+			bus := eventbus.New()
+			events := recordSproutLifecycle(bus)
+			report, err := (&DockerOrchestrator{
+				Substrate: root,
+				Provider:  "openai",
+				Model:     "gpt-4o-mini",
+				EventBus:  bus,
+			}).RunSprout(context.Background(), "test preflight")
+			if err == nil {
+				t.Fatal("RunSprout error = nil, want preflight failure")
+			}
+			if report.FailureStage != testCase.wantStage || report.DiagnosticCode != testCase.wantCode {
+				t.Fatalf("report provenance = %q/%q, want %q/%q", report.FailureStage, report.DiagnosticCode, testCase.wantStage, testCase.wantCode)
+			}
+
+			terminal := filterEvents(*events, eventbus.EventSproutWithered)
+			if len(terminal) != 1 {
+				t.Fatalf("withered terminal count = %d, want 1", len(terminal))
+			}
+			if terminal[0].Data["failureStage"] != string(testCase.wantStage) {
+				t.Fatalf("terminal failureStage = %v, want %q", terminal[0].Data["failureStage"], testCase.wantStage)
+			}
+			gotCode, hasCode := terminal[0].Data["diagnosticCode"]
+			if testCase.wantCode == "" {
+				if hasCode {
+					t.Fatalf("terminal diagnosticCode = %v, want absent for provider reachability/model preflight", gotCode)
+				}
+			} else if !hasCode || gotCode != string(testCase.wantCode) {
+				t.Fatalf("terminal diagnosticCode = %v (present=%v), want %q", gotCode, hasCode, testCase.wantCode)
+			}
+		})
+	}
+}
+
+func TestRunSproutTeardownFailureCannotOverwritePrimaryStage(t *testing.T) {
+	root := newOutcomeTestRepo(t)
+	chdirToTempDir(t)
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	primaryErr := errors.New("Sprout execution failed")
+	stubRunSproutCollaborators(t, root, &failingSproutRunner{err: primaryErr}, nil)
+	originalRestore := restoreHostStashFn
+	restoreErr := errors.New("host stash cleanup failed")
+	restoreHostStashFn = func(context.Context, string) error { return restoreErr }
+	t.Cleanup(func() { restoreHostStashFn = originalRestore })
+	stashHostWorkspaceFn = func(context.Context, string, string) (bool, error) { return true, nil }
+
+	bus := eventbus.New()
+	events := recordSproutLifecycle(bus)
+	report, err := (&DockerOrchestrator{
+		Substrate: root,
+		Provider:  "openai",
+		Model:     "gpt-4o-mini",
+		EventBus:  bus,
+	}).RunSprout(context.Background(), "test task")
+	if !errors.Is(err, primaryErr) || !errors.Is(err, restoreErr) {
+		t.Fatalf("RunSprout error = %v, want both execution and teardown errors", err)
+	}
+	if report.FailureStage != core.FailureStageSproutExecution || report.DiagnosticCode != core.DiagnosticCodeSproutExecutionFailed {
+		t.Fatalf("primary provenance overwritten: got %q/%q", report.FailureStage, report.DiagnosticCode)
+	}
+	terminal := filterEvents(*events, eventbus.EventSproutWithered)
+	if len(terminal) != 1 || terminal[0].Data["failureStage"] != string(core.FailureStageSproutExecution) {
+		t.Fatalf("terminal primary stage = %+v", terminal)
 	}
 }
 
