@@ -13,31 +13,28 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can identify the deterministic lifecycle stage of a failed Sprout through bounded, durable observation, without inspecting private Mycorrhizal reasoning, credentials, arbitrary host paths, unrestricted internal errors, or Stem-shell state.**
+**A Botanist can determine the lifecycle stage at which a failed Sprout stopped from bounded, durable observation, without inspecting private Mycorrhizal reasoning, credentials, arbitrary host paths, unrestricted internal errors, or Stem-shell state.**
 
 ## Done when
 
 Recorded exercises establish all of the following:
 
-* **Pre-provider failure is identifiable.** A deliberately induced Substrate access failure leaves durable observation identifying `failureStage=substrate-resolution` and `diagnosticCode=substrate-access-denied`, while preserving `failureCategory=execution-failed` and `providerRequestAttempted=false`.
-* **Failure stage is deterministic.** Failure-stage and diagnostic-code values use a closed deterministic vocabulary distinct from existing `FailureCategory` semantics.
-* **Typed facts originate at the failure boundary.** The deterministic lifecycle layer that encounters a failure supplies the applicable typed facts; observation persistence and read surfaces preserve them.
-* **Adapters do not diagnose.** REST, MCP, CLI, and Greenhouse surfaces transport or render typed observation and do not infer lifecycle stages by parsing free-form error strings.
+* **Different lifecycle points are distinguishable.** Recorded exercises deliberately induce a Substrate access failure before an external provider is contacted and a separate failure later in execution; an independent reviewer can identify the distinct lifecycle stages from durable observation.
+* **Observation reflects execution rather than inference.** For each exercise, the reported lifecycle stage agrees with deterministic execution evidence and does not depend on model-generated interpretation, parsing arbitrary error text, or inspecting host state.
+* **Failure evidence remains useful after termination.** After each failed Sprout ends, the Botanist can inspect bounded observation to identify the lifecycle stage without shell access or private reasoning.
 * **Observation remains bounded and safe.** Delegated observation exposes no credentials, raw provider payloads, arbitrary host paths, repository contents, private Mycorrhizal reasoning, or unrestricted internal errors.
-* **Failure evidence survives the run.** The diagnostic observation remains durably available after the failed Sprout terminates without requiring Stem-shell access.
 * **Existing authority and lifecycle semantics remain unchanged.** Sprout outcome semantics, provider selection, authorization, DelegationGrants, Terrarium containment, Git authority, and Fruit acceptance remain unchanged.
 
 This objective does not require:
 
-* changing existing `FailureCategory` semantics;
 * changing provider selection or Sprout success/failure behavior;
 * changing DelegationGrants, Pollen authority, or Terrarium containment;
 * adding reasoning to the Stem;
-* inferring typed facts from arbitrary logs or free-form error strings;
+* classifying arbitrary logs or free-form error strings as lifecycle facts;
 * exposing unbounded diagnostics or private execution details;
 * completing the parked public-Internet qualification;
 * activating the GitHub-native Pollinator objective; or
-* Greenhouse redesign beyond rendering the same safe observation contract if required.
+* broad redesign of observation surfaces.
 
 ---
 
