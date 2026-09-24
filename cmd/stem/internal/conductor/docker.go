@@ -2339,6 +2339,13 @@ func newSproutExecutionID(prefix string) string {
 }
 
 func stashHostWorkspace(ctx context.Context, root, runID string) (bool, error) {
+	if err := protectVisibleGeneratedRuntimeArtifacts(ctx, root); err != nil {
+		return false, fmt.Errorf("host pre-flight runtime-artifact protection failed: %w", err)
+	}
+
+	// Re-evaluate after installing repository-local exclusions. Runtime state
+	// must stay in place, while every remaining user change still follows the
+	// ordinary host-stash path below.
 	statusOutput, err := runGitCommand(ctx, root, "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("host pre-flight status check failed: %w", err)
@@ -2354,6 +2361,152 @@ func stashHostWorkspace(ctx context.Context, root, runID string) (bool, error) {
 
 	fmt.Fprintf(os.Stderr, "🧺 Stashed host workspace as %s\n", stashName)
 	return true, nil
+}
+
+// protectVisibleGeneratedRuntimeArtifacts excludes only untracked paths that
+// the canonical runtime-state classifier recognizes. Git exclusions do not
+// hide tracked files, so deliberately tracked .tendril content remains subject
+// to the normal status, stash, and restore behavior.
+func protectVisibleGeneratedRuntimeArtifacts(ctx context.Context, root string) error {
+	repositoryRootOutput, err := runGitCommandRawOutput(ctx, root, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("resolve Substrate root: %w", err)
+	}
+	repositoryRoot := strings.TrimRight(repositoryRootOutput, "\r\n")
+	if repositoryRoot == "" {
+		return fmt.Errorf("resolve Substrate root returned an empty path")
+	}
+	if !filepath.IsAbs(repositoryRoot) {
+		repositoryRoot, err = filepath.Abs(filepath.Join(root, repositoryRoot))
+		if err != nil {
+			return fmt.Errorf("make Substrate root absolute: %w", err)
+		}
+	}
+
+	status, err := runGitCommandRawOutput(ctx, repositoryRoot, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		return fmt.Errorf("inspect untracked Substrate paths: %w", err)
+	}
+	runtimePaths := generatedRuntimeArtifactPathsFromStatus(status)
+	if len(runtimePaths) == 0 {
+		return nil
+	}
+
+	if err := addRepositoryExcludeEntries(ctx, repositoryRoot, runtimePaths); err != nil {
+		return err
+	}
+
+	// Treat a successful file write as insufficient proof: a malformed or
+	// overridden exclusion must stop pre-flight before git stash can unlink a
+	// runtime artifact.
+	statusAfterProtection, err := runGitCommandRawOutput(ctx, repositoryRoot, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		return fmt.Errorf("re-evaluate Substrate status after runtime-artifact protection: %w", err)
+	}
+	stillVisible := generatedRuntimeArtifactPathsFromStatus(statusAfterProtection)
+	if len(stillVisible) > 0 {
+		return fmt.Errorf("repository-local Git exclusions did not hide generated runtime artifacts: %s", strings.Join(stillVisible, ", "))
+	}
+	return nil
+}
+
+func generatedRuntimeArtifactPathsFromStatus(status string) []string {
+	paths := make(map[string]struct{})
+	for _, entry := range strings.Split(status, "\x00") {
+		if len(entry) < 4 || entry[:2] != "??" {
+			continue
+		}
+		path := filepath.ToSlash(entry[3:])
+		if isGeneratedRuntimeArtifact(path) {
+			paths[path] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(paths))
+	for path := range paths {
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func addRepositoryExcludeEntries(ctx context.Context, repositoryRoot string, paths []string) error {
+	excludePathOutput, err := runGitCommandRawOutput(ctx, repositoryRoot, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return fmt.Errorf("resolve repository-local Git exclude file: %w", err)
+	}
+	excludePath := strings.TrimRight(excludePathOutput, "\r\n")
+	if excludePath == "" {
+		return fmt.Errorf("resolve repository-local Git exclude file returned an empty path")
+	}
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(repositoryRoot, excludePath)
+	}
+
+	content, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read repository-local Git exclude file %s: %w", excludePath, err)
+	}
+	existing := make(map[string]struct{})
+	for _, line := range strings.Split(string(content), "\n") {
+		existing[strings.TrimSuffix(line, "\r")] = struct{}{}
+	}
+
+	patterns := make([]string, 0, len(paths))
+	for _, path := range paths {
+		pattern := repositoryExcludePattern(path)
+		if _, found := existing[pattern]; found {
+			continue
+		}
+		patterns = append(patterns, pattern)
+		existing[pattern] = struct{}{}
+	}
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("create repository-local Git exclude directory: %w", err)
+	}
+	file, err := os.OpenFile(excludePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("open repository-local Git exclude file %s: %w", excludePath, err)
+	}
+	appendContent := make([]byte, 0, len(content)+len(patterns)*32)
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		appendContent = append(appendContent, '\n')
+	}
+	for _, pattern := range patterns {
+		appendContent = append(appendContent, pattern...)
+		appendContent = append(appendContent, '\n')
+	}
+	written, writeErr := file.Write(appendContent)
+	if writeErr == nil && written != len(appendContent) {
+		writeErr = fmt.Errorf("short write: wrote %d of %d bytes", written, len(appendContent))
+	}
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	closeErr := file.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write repository-local Git exclude file %s: %w", excludePath, writeErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close repository-local Git exclude file %s: %w", excludePath, closeErr)
+	}
+	return nil
+}
+
+func repositoryExcludePattern(path string) string {
+	normalized := filepath.ToSlash(filepath.Clean(path))
+	var pattern strings.Builder
+	pattern.WriteByte('/')
+	for index, char := range normalized {
+		if char == '*' || char == '?' || char == '[' || char == '\\' || (char == ' ' && strings.TrimRight(normalized[index:], " ") == "") {
+			pattern.WriteByte('\\')
+		}
+		pattern.WriteRune(char)
+	}
+	return pattern.String()
 }
 
 func restoreHostStash(ctx context.Context, root string) error {

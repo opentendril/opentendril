@@ -39,11 +39,15 @@ func TestGeneratedRuntimeArtifactsAreNeverStaged(t *testing.T) {
 	for _, path := range []string{
 		".tendril/rhizome.key",
 		".tendril/rhizome.db",
+		".tendril/history.db",
 		".tendril/genome/repomap.md",
 		// SQLite writes these beside the database under derived names.
 		".tendril/rhizome.db-wal",
 		".tendril/rhizome.db-shm",
 		".tendril/rhizome.db-journal",
+		".tendril/history.db-wal",
+		".tendril/history.db-shm",
+		".tendril/history.db-journal",
 	} {
 		if !isGeneratedRuntimeArtifact(path) {
 			t.Errorf("isGeneratedRuntimeArtifact(%q) = false; OpenTendril's own state must not reach a commit", path)

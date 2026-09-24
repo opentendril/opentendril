@@ -403,6 +403,400 @@ func TestHostWorkspaceStashRoundTrip(t *testing.T) {
 	}
 }
 
+// This regression uses a Substrate with no .gitignore. Before runtime-state
+// protection was added at the host stash boundary, Git removed these files
+// during `stash save -u` and recreated HistoryDB at a new inode on pop. The
+// assertions deliberately check state both while stashed and after restore so
+// the original unlink/recreate failure remains visible as a test failure.
+func TestHostWorkspaceStashPreservesUntrackedRuntimeStateInode(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.name", "Runtime State Test"},
+		{"config", "user.email", "runtime-state@example.invalid"},
+	} {
+		if _, err := runGitCommand(ctx, repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "baseline.txt"), []byte("baseline\n"), 0o644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "baseline.txt"); err != nil {
+		t.Fatalf("git add baseline: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-q", "-m", "baseline"); err != nil {
+		t.Fatalf("git commit baseline: %v", err)
+	}
+
+	contents := map[string]string{
+		filepath.Join(".tendril", "history.db"):  "history contents\n",
+		filepath.Join(".tendril", "rhizome.db"):  "rhizome contents\n",
+		filepath.Join(".tendril", "rhizome.key"): "rhizome key contents\n",
+		"ordinary-user-file.txt":                 "ordinary user contents\n",
+	}
+	for path, content := range contents {
+		fullPath := filepath.Join(repo, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	historyPath := filepath.Join(repo, ".tendril", "history.db")
+	beforeInfo, err := os.Stat(historyPath)
+	if err != nil {
+		t.Fatalf("stat HistoryDB before stash: %v", err)
+	}
+
+	stashed, err := stashHostWorkspace(ctx, repo, "runtime-state-regression")
+	if err != nil {
+		t.Fatalf("stashHostWorkspace: %v", err)
+	}
+	if !stashed {
+		t.Fatal("expected host changes to be stashed")
+	}
+
+	_, duringHistoryErr := os.Stat(historyPath)
+	_, duringRhizomeErr := os.Stat(filepath.Join(repo, ".tendril", "rhizome.db"))
+	_, duringKeyErr := os.Stat(filepath.Join(repo, ".tendril", "rhizome.key"))
+	_, duringUserFileErr := os.Stat(filepath.Join(repo, "ordinary-user-file.txt"))
+
+	restoreErr := restoreHostStash(ctx, repo)
+	afterInfo, afterStatErr := os.Stat(historyPath)
+	if restoreErr != nil {
+		t.Fatalf("restoreHostStash: %v", restoreErr)
+	}
+
+	if duringHistoryErr != nil {
+		t.Errorf("HistoryDB pathname was removed during host stash: %v", duringHistoryErr)
+	}
+	if duringRhizomeErr != nil {
+		t.Errorf("Rhizome database was removed during host stash: %v", duringRhizomeErr)
+	}
+	if duringKeyErr != nil {
+		t.Errorf("Rhizome key was removed during host stash: %v", duringKeyErr)
+	}
+	if duringUserFileErr == nil {
+		t.Error("ordinary untracked user file was not stashed")
+	}
+	if afterStatErr != nil {
+		t.Errorf("stat HistoryDB after restore: %v", afterStatErr)
+	} else if !os.SameFile(beforeInfo, afterInfo) {
+		t.Errorf("HistoryDB inode changed after stash/restore: before=%v after=%v", beforeInfo.Sys(), afterInfo.Sys())
+	}
+	for path, want := range contents {
+		got, readErr := os.ReadFile(filepath.Join(repo, path))
+		if readErr != nil {
+			t.Errorf("read %s after restore: %v", path, readErr)
+		} else if string(got) != want {
+			t.Errorf("content of %s after restore = %q, want %q", path, string(got), want)
+		}
+	}
+}
+
+func TestHostWorkspaceStashProtectsRuntimeAndPreservesGitStashSemantics(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	createHostStashTestRepository(t, repo)
+
+	trackedChanges := map[string][2]string{
+		"tracked-user-file.txt":                           {"tracked baseline\n", "tracked user change\n"},
+		filepath.Join(".tendril", "botanist-config.yaml"): {"tracked tendril baseline\n", "tracked tendril change\n"},
+	}
+	for path, contents := range trackedChanges {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0o755); err != nil {
+			t.Fatalf("mkdir tracked file parent %s: %v", path, err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(contents[0]), 0o644); err != nil {
+			t.Fatalf("write tracked baseline %s: %v", path, err)
+		}
+	}
+	if _, err := runGitCommand(ctx, repo, "add", "tracked-user-file.txt", filepath.Join(".tendril", "botanist-config.yaml")); err != nil {
+		t.Fatalf("git add tracked files: %v", err)
+	}
+	if _, err := runGitCommand(ctx, repo, "commit", "-q", "-m", "tracked substrate baseline"); err != nil {
+		t.Fatalf("git commit tracked files: %v", err)
+	}
+	for path, contents := range trackedChanges {
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(contents[1]), 0o644); err != nil {
+			t.Fatalf("write tracked change %s: %v", path, err)
+		}
+	}
+
+	runtimeContents := map[string]string{
+		filepath.Join(".tendril", "history.db"):           "history contents\n",
+		filepath.Join(".tendril", "history.db-wal"):       "history wal contents\n",
+		filepath.Join(".tendril", "history.db-shm"):       "history shm contents\n",
+		filepath.Join(".tendril", "rhizome.db"):           "rhizome contents\n",
+		filepath.Join(".tendril", "rhizome.db-wal"):       "rhizome wal contents\n",
+		filepath.Join(".tendril", "rhizome.db-shm"):       "rhizome shm contents\n",
+		filepath.Join(".tendril", "rhizome.key"):          "rhizome key contents\n",
+		filepath.Join(".tendril", "genome", "repomap.md"): "generated map\n",
+	}
+	for path, content := range runtimeContents {
+		fullPath := filepath.Join(repo, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatalf("mkdir runtime parent %s: %v", path, err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatalf("write runtime artifact %s: %v", path, err)
+		}
+	}
+	ordinaryUserPath := filepath.Join(repo, "ordinary-user-file.txt")
+	if err := os.WriteFile(ordinaryUserPath, []byte("ordinary user contents\n"), 0o644); err != nil {
+		t.Fatalf("write ordinary untracked user file: %v", err)
+	}
+	historyPath := filepath.Join(repo, ".tendril", "history.db")
+	historyBefore, err := os.Stat(historyPath)
+	if err != nil {
+		t.Fatalf("stat HistoryDB before protection: %v", err)
+	}
+	trackedTendrilStatus, err := runGitCommandRawOutput(ctx, repo, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		t.Fatalf("status before stash: %v", err)
+	}
+	if !strings.Contains(trackedTendrilStatus, filepath.Join(".tendril", "botanist-config.yaml")) {
+		t.Fatalf("modified tracked .tendril file is not visible to Git before stash: %q", trackedTendrilStatus)
+	}
+
+	if err := protectVisibleGeneratedRuntimeArtifacts(ctx, repo); err != nil {
+		t.Fatalf("first runtime-artifact protection: %v", err)
+	}
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	firstExclude, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read first repository-local exclude: %v", err)
+	}
+	if err := protectVisibleGeneratedRuntimeArtifacts(ctx, repo); err != nil {
+		t.Fatalf("repeated runtime-artifact protection: %v", err)
+	}
+	secondExclude, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read repeated repository-local exclude: %v", err)
+	}
+	if string(firstExclude) != string(secondExclude) {
+		t.Fatalf("repeated protection changed .git/info/exclude\nfirst:  %q\nsecond: %q", firstExclude, secondExclude)
+	}
+
+	stashed, err := stashHostWorkspace(ctx, repo, "runtime-protection")
+	if err != nil {
+		t.Fatalf("stashHostWorkspace: %v", err)
+	}
+	if !stashed {
+		t.Fatal("expected ordinary user changes to be stashed")
+	}
+	for path, want := range runtimeContents {
+		fullPath := filepath.Join(repo, path)
+		if _, err := os.Stat(fullPath); err != nil {
+			t.Errorf("runtime artifact %s was removed during host stash: %v", path, err)
+			continue
+		}
+		got, err := os.ReadFile(fullPath)
+		if err != nil {
+			t.Errorf("read runtime artifact %s during host stash: %v", path, err)
+		} else if string(got) != want {
+			t.Errorf("runtime artifact %s changed during host stash: got %q, want %q", path, string(got), want)
+		}
+	}
+	historyDuring, err := os.Stat(historyPath)
+	if err != nil {
+		t.Errorf("stat HistoryDB during host stash: %v", err)
+	} else if !os.SameFile(historyBefore, historyDuring) {
+		t.Errorf("HistoryDB inode changed during host stash: before=%v during=%v", historyBefore.Sys(), historyDuring.Sys())
+	}
+	if _, err := os.Stat(ordinaryUserPath); !os.IsNotExist(err) {
+		t.Errorf("ordinary untracked user file should be stashed, stat err=%v", err)
+	}
+	for path, contents := range trackedChanges {
+		got, err := os.ReadFile(filepath.Join(repo, path))
+		if err != nil {
+			t.Errorf("read tracked path %s while stashed: %v", path, err)
+		} else if string(got) != contents[0] {
+			t.Errorf("tracked path %s was not stashed: got %q, want baseline %q", path, string(got), contents[0])
+		}
+	}
+	cleanStatus, err := runGitCommand(ctx, repo, "status", "--porcelain")
+	if err != nil {
+		t.Fatalf("status while user changes are stashed: %v", err)
+	}
+	if cleanStatus != "" {
+		t.Errorf("expected clean Git status while only ignored runtime state remains, got %q", cleanStatus)
+	}
+
+	if err := restoreHostStash(ctx, repo); err != nil {
+		t.Fatalf("restoreHostStash: %v", err)
+	}
+	historyAfter, err := os.Stat(historyPath)
+	if err != nil {
+		t.Errorf("stat HistoryDB after restore: %v", err)
+	} else if !os.SameFile(historyBefore, historyAfter) {
+		t.Errorf("HistoryDB inode changed after stash/restore: before=%v after=%v", historyBefore.Sys(), historyAfter.Sys())
+	}
+	for path, want := range runtimeContents {
+		got, err := os.ReadFile(filepath.Join(repo, path))
+		if err != nil {
+			t.Errorf("read runtime artifact %s after restore: %v", path, err)
+		} else if string(got) != want {
+			t.Errorf("runtime artifact %s content after restore = %q, want %q", path, string(got), want)
+		}
+	}
+	userContents, err := os.ReadFile(ordinaryUserPath)
+	if err != nil {
+		t.Errorf("ordinary untracked user file was not restored: %v", err)
+	} else if string(userContents) != "ordinary user contents\n" {
+		t.Errorf("ordinary user file after restore = %q", string(userContents))
+	}
+	for path, contents := range trackedChanges {
+		got, err := os.ReadFile(filepath.Join(repo, path))
+		if err != nil {
+			t.Errorf("read tracked path %s after restore: %v", path, err)
+		} else if string(got) != contents[1] {
+			t.Errorf("tracked path %s change was not restored: got %q, want %q", path, string(got), contents[1])
+		}
+	}
+	restoredStatus, err := runGitCommandRawOutput(ctx, repo, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		t.Fatalf("status after restore: %v", err)
+	}
+	if !strings.Contains(restoredStatus, filepath.Join(".tendril", "botanist-config.yaml")) {
+		t.Errorf("modified tracked .tendril file is not visible to Git after restore: %q", restoredStatus)
+	}
+
+	if _, err := os.Stat(filepath.Join(repo, ".gitignore")); !os.IsNotExist(err) {
+		t.Errorf("runtime protection must not create a repository .gitignore, stat err=%v", err)
+	}
+	excludeAfterStash, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read repository-local exclude after stash: %v", err)
+	}
+	if string(excludeAfterStash) != string(secondExclude) {
+		t.Errorf("stash protection duplicated or changed repository-local excludes\nbefore: %q\nafter:  %q", secondExclude, excludeAfterStash)
+	}
+	for path := range runtimeContents {
+		pattern := repositoryExcludePattern(filepath.ToSlash(path)) + "\n"
+		if got := strings.Count(string(excludeAfterStash), pattern); got != 1 {
+			t.Errorf("repository exclude contains %d copies of %q, want exactly one", got, strings.TrimSpace(pattern))
+		}
+	}
+	if strings.Contains(string(excludeAfterStash), "/.tendril/\n") || strings.Contains(string(excludeAfterStash), "/.tendril/\r\n") {
+		t.Error("runtime protection added a blanket .tendril exclusion")
+	}
+}
+
+func TestHostWorkspaceStashFailsWhenRuntimeExclusionCannotBeEstablished(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	createHostStashTestRepository(t, repo)
+	runtimePath := filepath.Join(repo, ".tendril", "history.db")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o755); err != nil {
+		t.Fatalf("mkdir runtime parent: %v", err)
+	}
+	if err := os.WriteFile(runtimePath, []byte("history contents\n"), 0o644); err != nil {
+		t.Fatalf("write HistoryDB: %v", err)
+	}
+
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	if err := os.Remove(excludePath); err != nil {
+		t.Fatalf("remove repository exclude file: %v", err)
+	}
+	if err := os.Mkdir(excludePath, 0o755); err != nil {
+		t.Fatalf("make exclude path unusable: %v", err)
+	}
+
+	stashed, err := stashHostWorkspace(ctx, repo, "runtime-exclusion-failure")
+	if err == nil {
+		t.Fatal("stashHostWorkspace succeeded without establishing runtime-artifact exclusion")
+	}
+	if stashed {
+		t.Fatal("stashHostWorkspace reported a stash despite runtime-artifact exclusion failure")
+	}
+	if _, err := os.Stat(runtimePath); err != nil {
+		t.Errorf("HistoryDB was removed after exclusion failure: %v", err)
+	}
+	stashList, listErr := runGitCommand(ctx, repo, "stash", "list")
+	if listErr != nil {
+		t.Fatalf("git stash list: %v", listErr)
+	}
+	if stashList != "" {
+		t.Errorf("pre-flight exclusion failure still created a stash: %q", stashList)
+	}
+}
+
+func TestRuntimeArtifactProtectionResolvesLinkedWorktreeExclude(t *testing.T) {
+	mainRepo := t.TempDir()
+	ctx := context.Background()
+	createHostStashTestRepository(t, mainRepo)
+	linkedRepo := filepath.Join(t.TempDir(), "linked")
+	if _, err := runGitCommand(ctx, mainRepo, "worktree", "add", "-q", "-b", "runtime-exclude-linked", linkedRepo, "HEAD"); err != nil {
+		t.Fatalf("add linked worktree: %v", err)
+	}
+	runtimePath := filepath.Join(linkedRepo, ".tendril", "history.db")
+	if err := os.MkdirAll(filepath.Dir(runtimePath), 0o755); err != nil {
+		t.Fatalf("mkdir linked runtime parent: %v", err)
+	}
+	if err := os.WriteFile(runtimePath, []byte("linked HistoryDB\n"), 0o644); err != nil {
+		t.Fatalf("write linked HistoryDB: %v", err)
+	}
+
+	if err := protectVisibleGeneratedRuntimeArtifacts(ctx, linkedRepo); err != nil {
+		t.Fatalf("protect linked-worktree runtime artifact: %v", err)
+	}
+	excludePathOutput, err := runGitCommandRawOutput(ctx, linkedRepo, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		t.Fatalf("resolve linked-worktree exclude: %v", err)
+	}
+	excludePath := strings.TrimRight(excludePathOutput, "\r\n")
+	if !filepath.IsAbs(excludePath) {
+		excludePath = filepath.Join(linkedRepo, excludePath)
+	}
+	excludeContent, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read linked-worktree exclude %s: %v", excludePath, err)
+	}
+	if !strings.Contains(string(excludeContent), "/.tendril/history.db\n") {
+		t.Errorf("linked-worktree repository-local exclude missing HistoryDB pattern: %q", excludeContent)
+	}
+	status, err := runGitCommandRawOutput(ctx, linkedRepo, "status", "--porcelain", "-uall", "-z")
+	if err != nil {
+		t.Fatalf("linked-worktree status: %v", err)
+	}
+	if status != "" {
+		t.Errorf("linked-worktree HistoryDB remains Git-visible after protection: %q", status)
+	}
+}
+
+func createHostStashTestRepository(t *testing.T, repo string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main"},
+		{"config", "user.name", "Host Stash Test"},
+		{"config", "user.email", "host-stash@example.invalid"},
+	} {
+		if _, err := runGitCommand(context.Background(), repo, args...); err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".tendril"), 0o755); err != nil {
+		t.Fatalf("mkdir baseline .tendril: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "baseline.txt"), []byte("baseline\n"), 0o644); err != nil {
+		t.Fatalf("write baseline: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".tendril", "baseline.yaml"), []byte("tracked baseline\n"), 0o644); err != nil {
+		t.Fatalf("write tracked .tendril baseline: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "add", "baseline.txt", filepath.Join(".tendril", "baseline.yaml")); err != nil {
+		t.Fatalf("git add baseline files: %v", err)
+	}
+	if _, err := runGitCommand(context.Background(), repo, "commit", "-q", "-m", "normal baseline"); err != nil {
+		t.Fatalf("git commit baseline: %v", err)
+	}
+}
+
 // A Sprout run may regenerate its own preserved legacy state on the host after
 // the pre-flight stash captured the prior run's copy. A plain `git stash pop`
 // can then fail with an untracked-file conflict. Restore must survive it and
