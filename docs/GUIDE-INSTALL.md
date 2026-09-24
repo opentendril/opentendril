@@ -372,7 +372,7 @@ the restricted `tendril-mcp` client for that account.
 ```bash
 # [root] Linux amd64. Verify the archive before extracting or installing it.
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.14
+RELEASE=v0.4.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -899,7 +899,7 @@ account. Do not run `make install-mcp-client` on the normal path.
 ```bash
 # as the ordinary (Pollinator-hosting) account
 # The subshell exits on checksum failure, so extract/install do not run.
-RELEASE=v0.3.14
+RELEASE=v0.4.0
 ARCHIVE=opentendril-linux-amd64.tar.gz
 WORKDIR=$(mktemp -d)
 (
@@ -1385,14 +1385,14 @@ same release pin. Do **not** pipe the installer into `sudo sh`.
 
 ```bash
 # [root] Linux amd64 — substitute the newer release tag.
-RELEASE=v0.3.14
+RELEASE=v0.4.0
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/checksums.txt"
 grep 'install.sh$' checksums.txt | sha256sum -c || exit 1
 
-RELEASE=v0.3.14
+RELEASE=v0.4.0
 sudo sh install.sh \
   --governed-upgrade \
   --pollinator-user <ordinary-user> \
