@@ -4,6 +4,7 @@
 import { useEffect } from "react";
 import {
   diagnosticLine,
+  failureCategoryLabel,
   filesModifiedFromEvents,
   fruitLabel,
   observationLead,
@@ -81,6 +82,24 @@ export function DrilldownDrawer() {
               <div className="k">Outcome</div>
               <div className="v">{run.outcome || "—"}</div>
             </div>
+            {run.failureCategory ? (
+              <div className="fact">
+                <div className="k">Failure category</div>
+                <div className="v">{failureCategoryLabel(run.failureCategory)}</div>
+              </div>
+            ) : null}
+            {run.failureStage ? (
+              <div className="fact">
+                <div className="k">Failure stage</div>
+                <div className="v">{run.failureStage}</div>
+              </div>
+            ) : null}
+            {run.diagnosticCode ? (
+              <div className="fact">
+                <div className="k">Diagnostic code</div>
+                <div className="v">{run.diagnosticCode}</div>
+              </div>
+            ) : null}
             <div className="fact">
               <div className="k">Provider</div>
               <div className="v">{resolvedProvider(run) || "—"}</div>

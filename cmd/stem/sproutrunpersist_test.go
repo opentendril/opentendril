@@ -185,6 +185,42 @@ func TestPersistTerminalSproutRunSettlesUsageAndLeavesOpeningNonTerminalUntilThe
 	}
 }
 
+func TestPersistTerminalSproutRunCopiesFailureProvenance(t *testing.T) {
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	opened := historydb.SproutRun{
+		RunID: "run-failure-provenance", SessionID: "s-failure-provenance",
+		Status: "running", StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSproutRun(context.Background(), opened); err != nil {
+		t.Fatalf("opening write: %v", err)
+	}
+	if err := persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
+		Outcome:         conductor.SproutOutcomeFailed,
+		FailureCategory: string(core.FailureCategoryExecutionFailed),
+		FailureStage:    core.FailureStageSubstrateResolution,
+		DiagnosticCode:  core.DiagnosticCodeSubstrateAccessDenied,
+	}, nil); err != nil {
+		t.Fatalf("persist terminal report: %v", err)
+	}
+
+	runs, err := store.LoadSproutRuns(context.Background(), "s-failure-provenance", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load terminal report: runs=%+v err=%v", runs, err)
+	}
+	if runs[0].FailureStage != string(core.FailureStageSubstrateResolution) || runs[0].DiagnosticCode != string(core.DiagnosticCodeSubstrateAccessDenied) {
+		t.Fatalf("durable failure provenance = %q/%q", runs[0].FailureStage, runs[0].DiagnosticCode)
+	}
+}
+
 func TestInstallSproutTerminalHistoryIsNoopWithoutStore(t *testing.T) {
 	orch := &conductor.DockerOrchestrator{}
 	installSproutTerminalHistory(orch, nil, context.Background(), historydb.SproutRun{})
@@ -809,6 +845,9 @@ func TestOneShotSproutOperationsReturnsTerminalPersistenceFailure(t *testing.T) 
 	}
 	if err == nil || !strings.Contains(err.Error(), "terminal sprout run") {
 		t.Fatalf("terminal persistence failure = %v, want propagated terminal write error", err)
+	}
+	if result.FailureStage == core.FailureStage("persistence") || result.DiagnosticCode != "" {
+		t.Fatalf("HistoryDB write failure was classified as Sprout provenance: stage=%q code=%q", result.FailureStage, result.DiagnosticCode)
 	}
 }
 

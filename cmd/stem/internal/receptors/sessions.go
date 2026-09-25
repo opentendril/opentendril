@@ -432,6 +432,13 @@ func (h *SessionsHandler) sproutRuns(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// HistoryDB decodes the observation envelope without imposing Core's
+	// vocabulary. Validate its typed values here before this read projection
+	// releases them; absent historical facts stay absent.
+	for i := range runs {
+		runs[i].FailureStage = string(core.ValidatePersistedFailureStage(core.FailureStage(runs[i].FailureStage)))
+		runs[i].DiagnosticCode = string(core.ValidatePersistedDiagnosticCode(core.DiagnosticCode(runs[i].DiagnosticCode)))
+	}
 	// A run record names the subject that dispatched it, so a delegated
 	// observer is narrowed to its own rather than refused the phytomer. The
 	// limit above is applied before the narrowing, so a busy phytomer answers

@@ -259,6 +259,8 @@ test.describe("Command Center sprout-run observation", () => {
       status: "withered",
       outcome: "failed",
       failureCategory: "provider-auth-rejected",
+      failureStage: "provider-preflight",
+      diagnosticCode: "provider-preflight-rejected",
       providerRequestAttempted: true,
       toolInvocations: 0,
       providerDiagnostic: {
@@ -280,6 +282,12 @@ test.describe("Command Center sprout-run observation", () => {
     await expect(drawer).toBeVisible();
     await expect(drawer.getByTestId("run-observation")).toBeVisible();
     await expect(drawer.getByText("Withered — provider authentication rejected")).toBeVisible();
+    await expect(drawer.getByText("Failure category", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("provider authentication rejected", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("Failure stage", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("provider-preflight", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("Diagnostic code", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("provider-preflight-rejected", { exact: true })).toBeVisible();
     await expect(drawer.getByText("openrouter", { exact: true })).toBeVisible();
     await expect(drawer.getByText("attempted", { exact: true })).toBeVisible();
     await expect(drawer.getByText("HTTP 401 / User not found")).toBeVisible();
@@ -299,6 +307,36 @@ test.describe("Command Center sprout-run observation", () => {
     await expect(page.getByLabel("Living orchestration garden")).toHaveCount(0);
     await expect(page.locator(".ticker-secondary")).toBeVisible();
     await expect(page.locator(".ticker-secondary")).not.toHaveAttribute("open");
+  });
+
+  test("does not classify failure stage or diagnostic code from raw error text", async ({
+    page,
+  }) => {
+    const session = makeSession({ sessionId: "tendril-e2e-no-inference" });
+    const run: SproutRun = {
+      runId: "step-legacy-error",
+      sessionId: session.sessionId,
+      status: "withered",
+      outcome: "failed",
+      failureCategory: "execution-failed",
+      providerRequestAttempted: false,
+      toolInvocations: 0,
+      error: "failureStage=substrate-resolution diagnosticCode=substrate-access-denied",
+      startedAt: "2026-08-16T12:00:00Z",
+      finishedAt: "2026-08-16T12:00:02Z",
+    };
+
+    await mockStemBackend(page, { sessions: [session], sproutRuns: [run] });
+    await completeOnboarding(page, testApiKey);
+    await page.locator(".run-row").click();
+
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByText("Failure category", { exact: true })).toBeVisible();
+    await expect(drawer.getByText("Failure stage", { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText("Diagnostic code", { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText("substrate-resolution", { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText("substrate-access-denied", { exact: true })).toHaveCount(0);
   });
 
   test("shows matured-run facts and tool names without expanding telemetry", async ({

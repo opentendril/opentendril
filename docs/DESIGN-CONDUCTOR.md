@@ -78,6 +78,17 @@ Conductor `RunSprout` resolves the Terrarium provider in this order:
 
 Shadow-worktree establishment occurs **before** provider resolution. 
 
+## Failure provenance
+
+When a Sprout withers at a deterministic execution boundary, `SproutRunReport`
+and its terminal event carry the Core-owned `FailureStage` and optional
+`DiagnosticCode`. The Conductor sets the primary typed provenance once, so a
+later teardown failure does not replace the causal stage. Substrate access
+codes come from typed filesystem error identity; stage and code are never
+derived from error text. Core applies the closed-vocabulary validation and
+uses `unknown` only when a newly completed withered run has no valid specific
+stage.
+
 Regarding generic `RunSprout` compatibility: only Docker and gVisor satisfy its complete `TerrariumSpec` and interactive tool session today.
 
 ## Secrets and Credentials

@@ -45,6 +45,18 @@ func TestFailureStageVocabularyIsClosedAndExact(t *testing.T) {
 	}
 }
 
+func TestPersistedFailureStageValidationDoesNotNormalizeHistoricalValues(t *testing.T) {
+	if got := core.ValidatePersistedFailureStage(""); got != "" {
+		t.Fatalf("empty persisted stage = %q, want empty", got)
+	}
+	if got := core.ValidatePersistedFailureStage(core.FailureStageSubstrateResolution); got != core.FailureStageSubstrateResolution {
+		t.Fatalf("valid persisted stage = %q", got)
+	}
+	if got := core.ValidatePersistedFailureStage("host-path-/private"); got != "" {
+		t.Fatalf("invalid persisted stage = %q, want omitted rather than unknown", got)
+	}
+}
+
 func TestDiagnosticCodeVocabularyIsClosedAndExact(t *testing.T) {
 	want := []core.DiagnosticCode{
 		"substrate-not-found",
@@ -86,6 +98,18 @@ func TestDiagnosticCodeVocabularyIsClosedAndExact(t *testing.T) {
 	}
 	if got := core.NormalizeDiagnosticCode("invented-code", "withered"); got != "" {
 		t.Fatalf("invalid diagnostic code normalized to %q, want omitted", got)
+	}
+}
+
+func TestPersistedDiagnosticCodeValidationOmitsInvalidValues(t *testing.T) {
+	if got := core.ValidatePersistedDiagnosticCode(""); got != "" {
+		t.Fatalf("empty persisted diagnostic = %q, want empty", got)
+	}
+	if got := core.ValidatePersistedDiagnosticCode(core.DiagnosticCodeSubstrateAccessDenied); got != core.DiagnosticCodeSubstrateAccessDenied {
+		t.Fatalf("valid persisted diagnostic = %q", got)
+	}
+	if got := core.ValidatePersistedDiagnosticCode("permission denied: /private"); got != "" {
+		t.Fatalf("invalid persisted diagnostic = %q, want omitted", got)
 	}
 }
 

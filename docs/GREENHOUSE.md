@@ -38,8 +38,11 @@ WebSocket surface and has no knowledge of Go internals. This is what allows the
 UI to ship, version, and deploy independently of the Stem binary. The run
 drill-down renders the Stem's structured observation fields as the primary
 explanation of a run; it does not parse raw error strings to decide a failure
-category. Opening a run replaces the garden visualization with that review:
-observation facts, the task transcript, and tool activity sit above the fold.
+category, failure stage, or diagnostic code. It renders those typed backend
+values directly and does not derive a stage or code from raw errors, event text,
+or provider messages. Opening a run replaces the garden visualization with
+that review: observation facts, the task transcript, and tool activity sit
+above the fold. Historical rows without stage or code show neither field.
 Raw Event Pulse and terrarium output stay collapsed until opened.
 
 It leans on three Phase 1 backend capabilities:
@@ -74,7 +77,7 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
-| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
+| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). A Phytomer with `preferences.substrate` set passes that named Substrate into the grow path; an unset Substrate does not fall back to the Stem working directory. |
 | `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the session Substrate control. |

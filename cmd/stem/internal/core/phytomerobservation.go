@@ -72,6 +72,8 @@ type SproutObservation struct {
 	Model                    string              `json:"model,omitempty"`
 	Outcome                  string              `json:"outcome,omitempty"`
 	FailureCategory          string              `json:"failureCategory,omitempty"`
+	FailureStage             FailureStage        `json:"failureStage,omitempty"`
+	DiagnosticCode           DiagnosticCode      `json:"diagnosticCode,omitempty"`
 	ProviderDiagnostic       *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
 	ProviderRequestAttempted bool                `json:"providerRequestAttempted"`
 	ToolInvocations          int                 `json:"toolInvocations"`
@@ -101,7 +103,9 @@ type SeedObservationEvidence struct {
 // projection may consult. It includes persisted fields that are not part of
 // the public observation (transcript, output, raw error). Pollen and
 // Substrate are compared against the Seed before any Sprout is released.
-// StartedAt is used only to order the public Sprout list.
+// FailureStage and DiagnosticCode are validated against Core's closed
+// vocabularies before release. StartedAt is used only to order the public
+// Sprout list.
 type SproutObservationEvidence struct {
 	RunID                    string
 	Pollen                   string
@@ -111,6 +115,8 @@ type SproutObservationEvidence struct {
 	Model                    string
 	Outcome                  string
 	FailureCategory          string
+	FailureStage             FailureStage
+	DiagnosticCode           DiagnosticCode
 	ProviderDiagnostic       *ProviderDiagnostic
 	ProviderRequestAttempted bool
 	ToolInvocations          int
@@ -221,6 +227,8 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 				Model:                    strings.TrimSpace(run.Model),
 				Outcome:                  strings.TrimSpace(run.Outcome),
 				FailureCategory:          strings.TrimSpace(run.FailureCategory),
+				FailureStage:             ValidatePersistedFailureStage(run.FailureStage),
+				DiagnosticCode:           ValidatePersistedDiagnosticCode(run.DiagnosticCode),
 				ProviderRequestAttempted: run.ProviderRequestAttempted,
 				ToolInvocations:          run.ToolInvocations,
 			}

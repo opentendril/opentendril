@@ -16,6 +16,15 @@ func TestFreshSchemaIncludesObservationColumns(t *testing.T) {
 			t.Fatalf("fresh sproutruns missing %s column: %v", column, err)
 		}
 	}
+	for _, column := range []string{"failureStage", "diagnosticCode"} {
+		var count int
+		if err := store.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sproutruns') WHERE name = ?`, column).Scan(&count); err != nil {
+			t.Fatalf("inspect sproutruns for %s: %v", column, err)
+		}
+		if count != 0 {
+			t.Fatalf("fresh sproutruns unexpectedly includes %s column", column)
+		}
+	}
 }
 
 func TestSproutRunObservationRoundTrip(t *testing.T) {
@@ -32,6 +41,8 @@ func TestSproutRunObservationRoundTrip(t *testing.T) {
 		FinishedAt:               time.Now().UTC(),
 		Outcome:                  "failed",
 		FailureCategory:          "provider-auth-rejected",
+		FailureStage:             "provider-preflight",
+		DiagnosticCode:           "provider-preflight-rejected",
 		ProviderRequestAttempted: true,
 		ToolInvocations:          0,
 		ProviderDiagnostic: &ProviderDiagnostic{
@@ -54,6 +65,9 @@ func TestSproutRunObservationRoundTrip(t *testing.T) {
 	if loaded.Outcome != "failed" {
 		t.Fatalf("Outcome = %q", loaded.Outcome)
 	}
+	if loaded.FailureStage != "provider-preflight" || loaded.DiagnosticCode != "provider-preflight-rejected" {
+		t.Fatalf("failure provenance = %q/%q", loaded.FailureStage, loaded.DiagnosticCode)
+	}
 	if !loaded.ProviderRequestAttempted {
 		t.Fatal("ProviderRequestAttempted = false")
 	}
@@ -70,6 +84,34 @@ func TestSproutRunObservationRoundTrip(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "sk-") || strings.Contains(strings.ToLower(string(raw)), "bearer ") {
 		t.Fatalf("persisted JSON leaked a credential: %s", raw)
+	}
+}
+
+func TestHistoricalSproutObservationWithoutProvenanceStaysEmpty(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	if err := store.RecordSproutRun(ctx, SproutRun{
+		RunID:     "run-historical",
+		SessionID: "s1",
+		Status:    "withered",
+		Error:     "permission denied for /home/operator/private substrate",
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("RecordSproutRun: %v", err)
+	}
+	// Match an older structured envelope: it has failure category and the
+	// existing observations, but predates lifecycle provenance fields.
+	legacyObservation := `{"outcome":"failed","failureCategory":"execution-failed"}`
+	if _, err := store.db.ExecContext(ctx, `UPDATE sproutruns SET observation = ? WHERE runId = ?`, legacyObservation, "run-historical"); err != nil {
+		t.Fatalf("write historical observation envelope: %v", err)
+	}
+
+	loaded := loadRun(t, store, "run-historical")
+	if loaded.FailureStage != "" || loaded.DiagnosticCode != "" {
+		t.Fatalf("historical provenance = %q/%q, want both absent", loaded.FailureStage, loaded.DiagnosticCode)
+	}
+	if !strings.Contains(loaded.Error, "permission denied") {
+		t.Fatalf("raw historical error = %q, want persisted legacy text", loaded.Error)
 	}
 }
 

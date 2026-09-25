@@ -153,6 +153,8 @@ func testPhytomerObservationSource(store *historydb.Store) core.PhytomerObservat
 					Model:                    run.Model,
 					Outcome:                  run.Outcome,
 					FailureCategory:          run.FailureCategory,
+					FailureStage:             core.FailureStage(run.FailureStage),
+					DiagnosticCode:           core.DiagnosticCode(run.DiagnosticCode),
 					ProviderRequestAttempted: run.ProviderRequestAttempted,
 					ToolInvocations:          run.ToolInvocations,
 					Transcript:               run.Transcript,
@@ -233,6 +235,37 @@ func TestOwnerReadsItsOwnRun(t *testing.T) {
 	recorded := decodeRuns(t, runs.Body.Bytes())
 	if len(recorded) != 1 || recorded[0].RunID != "run-owner" {
 		t.Fatalf("owner read %d run(s), want exactly run-owner: %+v", len(recorded), recorded)
+	}
+}
+
+func TestSproutRunReadExposesDurableFailureProvenance(t *testing.T) {
+	mux, store := newWatchFixture(t)
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-owner", SessionID: watchSubject, StepID: "run-owner",
+		Pollen: watchOwner, Substrate: "myrepo", Status: "withered",
+		Outcome: "failed", FailureCategory: "execution-failed",
+		FailureStage: "substrate-resolution", DiagnosticCode: "substrate-access-denied",
+	})
+	seedWatchRun(t, store, historydb.SproutRun{
+		RunID: "run-invalid", SessionID: watchSubject, StepID: "run-invalid",
+		Pollen: watchOwner, Substrate: "myrepo", Status: "withered",
+		FailureStage: "host-path-/private", DiagnosticCode: "permission denied: /private",
+	})
+
+	response := watchRequest(t, mux, "/v1/phytomers/"+watchSubject+"/sprout-runs", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("Botanist run read = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	runs := decodeRuns(t, response.Body.Bytes())
+	byRunID := make(map[string]historydb.SproutRun, len(runs))
+	for _, run := range runs {
+		byRunID[run.RunID] = run
+	}
+	if len(runs) != 2 || byRunID["run-owner"].FailureStage != "substrate-resolution" || byRunID["run-owner"].DiagnosticCode != "substrate-access-denied" {
+		t.Fatalf("Botanist run read lost durable provenance: %+v", runs)
+	}
+	if byRunID["run-invalid"].FailureStage != "" || byRunID["run-invalid"].DiagnosticCode != "" {
+		t.Fatalf("Botanist run read released invalid provenance: %+v", byRunID["run-invalid"])
 	}
 }
 

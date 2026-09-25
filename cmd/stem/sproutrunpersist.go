@@ -223,6 +223,8 @@ func applyObservationToRun(run *historydb.SproutRun, report conductor.SproutRunR
 		}
 	}
 	run.FailureCategory = report.FailureCategory
+	run.FailureStage = string(report.FailureStage)
+	run.DiagnosticCode = string(report.DiagnosticCode)
 	if run.FailureCategory == "" {
 		statusCode := 0
 		if run.ProviderDiagnostic != nil {
