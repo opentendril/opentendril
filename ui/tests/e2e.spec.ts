@@ -5,7 +5,7 @@
 // no LLM provider. Response shapes mirror ui/src/lib/types.ts, which itself
 // mirrors the Go Stem's documented REST + WebSocket surface 1:1.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type WebSocketRoute } from "@playwright/test";
 import type { EventRecord, Session, SproutRun } from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
@@ -19,6 +19,33 @@ function makeSession(overrides: Partial<Session>): Session {
     lastActiveAt: "2026-01-01T00:00:00Z",
     preferences: {},
     ...overrides,
+  };
+}
+
+function makeRun(
+  sessionId: string,
+  runId: string,
+  status: SproutRun["status"] = "matured",
+): SproutRun {
+  return {
+    runId,
+    sessionId,
+    stepId: runId,
+    status,
+    transcript: `transcript for ${runId}`,
+    startedAt: "2026-09-01T12:00:00Z",
+    finishedAt: status === "running" ? undefined : "2026-09-01T12:00:08Z",
+  };
+}
+
+function makeEvent(sessionId: string, runId: string, id: number): EventRecord {
+  return {
+    id,
+    sessionId,
+    type: "tool-invoked",
+    source: runId,
+    data: { tool: "readFile", status: "success" },
+    createdAt: "2026-09-01T12:00:02Z",
   };
 }
 
@@ -37,10 +64,33 @@ async function mockStemBackend(
     sessions = [] as Session[],
     sproutRuns = [] as SproutRun[],
     events = [] as EventRecord[],
+    runsBySession,
+    eventsBySession,
+    runDelayMs = 0,
+  }: {
+    sessions?: Session[];
+    sproutRuns?: SproutRun[];
+    events?: EventRecord[];
+    runsBySession?: Record<string, SproutRun[]>;
+    eventsBySession?: Record<string, EventRecord[]>;
+    runDelayMs?: number;
   } = {},
 ): Promise<{
   lastSessionsAuthHeader: () => string | undefined;
   lastPreferencePatch: () => Record<string, unknown> | undefined;
+  runReads: () => string[];
+  eventReads: () => string[];
+  completedEventReads: () => string[];
+  requestOrder: () => string[];
+  maxConcurrentRunReads: () => number;
+  sessionListReads: () => number;
+  setSessions: (sessions: Session[]) => void;
+  setRuns: (sessionId: string, runs: SproutRun[]) => void;
+  setEvents: (sessionId: string, events: EventRecord[]) => void;
+  failEvents: (sessionId: string, status?: number) => void;
+  holdEvents: (sessionId: string) => () => void;
+  emit: (event: Record<string, unknown>) => void;
+  disconnectSocket: () => Promise<void>;
 }> {
   let lastSessionsAuthHeader: string | undefined;
   let lastPreferencePatch: Record<string, unknown> | undefined;
@@ -48,6 +98,20 @@ async function mockStemBackend(
     ...session,
     preferences: { ...session.preferences },
   }));
+  const liveRunsBySession = { ...runsBySession } as Record<string, SproutRun[]>;
+  const liveEventsBySession = { ...eventsBySession } as Record<string, EventRecord[]>;
+  let hasRunMap = runsBySession !== undefined;
+  let hasEventMap = eventsBySession !== undefined;
+  const runReadIds: string[] = [];
+  const eventReadIds: string[] = [];
+  const completedEventReadIds: string[] = [];
+  const requestSequence: string[] = [];
+  const eventFailures = new Map<string, number>();
+  const eventGates = new Map<string, { promise: Promise<void>; release: () => void }>();
+  let activeRunReads = 0;
+  let maxRunReads = 0;
+  let sessionsReadCount = 0;
+  let currentSocket: WebSocketRoute | null = null;
 
   await page.route("**/health", async (route) => {
     await route.fulfill({ status: 200, json: { overall: true } });
@@ -68,6 +132,8 @@ async function mockStemBackend(
       await route.continue();
       return;
     }
+    sessionsReadCount += 1;
+    requestSequence.push("sessions");
     lastSessionsAuthHeader = request.headers()["authorization"];
     await route.fulfill({ status: 200, json: { sessions: liveSessions } });
   });
@@ -110,18 +176,45 @@ async function mockStemBackend(
   await page.route(
     (url) => url.pathname.includes("/sprout-runs"),
     async (route) => {
+      const sessionId = sessionIdFromPath(route.request().url());
+      runReadIds.push(sessionId);
+      requestSequence.push(`runs/${sessionId}`);
+      activeRunReads += 1;
+      maxRunReads = Math.max(maxRunReads, activeRunReads);
+      if (runDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, runDelayMs));
+      }
+      const sessionRuns = hasRunMap
+        ? liveRunsBySession[sessionId] ?? []
+        : sproutRuns;
       await route.fulfill({
         status: 200,
-        json: { sessionId: sessionIdFromPath(route.request().url()), sproutRuns },
+        json: { sessionId, sproutRuns: sessionRuns },
       });
+      activeRunReads -= 1;
     },
   );
   await page.route(
     (url) => /\/v1\/sessions\/[^/]+\/events$/.test(new URL(url).pathname),
     async (route) => {
+      const sessionId = sessionIdFromPath(route.request().url());
+      eventReadIds.push(sessionId);
+      requestSequence.push(`events/${sessionId}`);
+      const gate = eventGates.get(sessionId);
+      if (gate) await gate.promise;
+      const failureStatus = eventFailures.get(sessionId);
+      if (failureStatus) {
+        completedEventReadIds.push(sessionId);
+        await route.fulfill({ status: failureStatus, body: "event history unavailable" });
+        return;
+      }
+      const sessionEvents = hasEventMap
+        ? liveEventsBySession[sessionId] ?? []
+        : events;
+      completedEventReadIds.push(sessionId);
       await route.fulfill({
         status: 200,
-        json: { sessionId: sessionIdFromPath(route.request().url()), events },
+        json: { sessionId, events: sessionEvents },
       });
     },
   );
@@ -131,12 +224,55 @@ async function mockStemBackend(
   // means Playwright mocks the socket entirely: the page's WebSocket opens
   // (onopen fires) without ever reaching a real server.
   await page.routeWebSocket("**/ws*", (ws) => {
+    currentSocket = ws;
     ws.send(JSON.stringify({ type: "connected" }));
   });
 
   return {
     lastSessionsAuthHeader: () => lastSessionsAuthHeader,
     lastPreferencePatch: () => lastPreferencePatch,
+    runReads: () => [...runReadIds],
+    eventReads: () => [...eventReadIds],
+    completedEventReads: () => [...completedEventReadIds],
+    requestOrder: () => [...requestSequence],
+    maxConcurrentRunReads: () => maxRunReads,
+    sessionListReads: () => sessionsReadCount,
+    setSessions: (next) => {
+      liveSessions.splice(
+        0,
+        liveSessions.length,
+        ...next.map((session) => ({
+          ...session,
+          preferences: { ...session.preferences },
+        })),
+      );
+    },
+    setRuns: (sessionId, next) => {
+      hasRunMap = true;
+      liveRunsBySession[sessionId] = next;
+    },
+    setEvents: (sessionId, next) => {
+      hasEventMap = true;
+      liveEventsBySession[sessionId] = next;
+    },
+    failEvents: (sessionId, status = 503) => {
+      eventFailures.set(sessionId, status);
+    },
+    holdEvents: (sessionId) => {
+      let releaseGate = () => {};
+      const promise = new Promise<void>((resolve) => {
+        releaseGate = resolve;
+      });
+      eventGates.set(sessionId, { promise, release: releaseGate });
+      return () => {
+        eventGates.get(sessionId)?.release();
+        eventGates.delete(sessionId);
+      };
+    },
+    emit: (event) => currentSocket?.send(JSON.stringify(event)),
+    disconnectSocket: async () => {
+      await currentSocket?.close({ code: 1001, reason: "Reconnect hydration case" });
+    },
   };
 }
 
@@ -499,6 +635,542 @@ test.describe("Command Center session rail", () => {
 
     await expect(page.locator(".session-card")).toHaveCount(0);
     await expect(page.getByText(/No Tendrils yet/)).toBeVisible();
+  });
+});
+
+test.describe("Command Center cross-Phytomer run discovery", () => {
+  test("shows runs from supported origins beneath their Phytomers without changing the active ChatPanel", async ({
+    page,
+  }) => {
+    const sessions = [
+      makeSession({
+        sessionId: "tendril-e2e-cli",
+        origin: "cli",
+        lastActiveAt: "2026-09-04T00:00:00Z",
+      }),
+      makeSession({
+        sessionId: "tendril-e2e-rest",
+        origin: "rest",
+        lastActiveAt: "2026-09-03T00:00:00Z",
+      }),
+      makeSession({
+        sessionId: "tendril-e2e-ws",
+        origin: "ws",
+        lastActiveAt: "2026-09-02T00:00:00Z",
+      }),
+      makeSession({
+        sessionId: "tendril-e2e-mcp",
+        origin: "mcp",
+        lastActiveAt: "2026-09-01T00:00:00Z",
+      }),
+    ];
+    const runsBySession = Object.fromEntries(
+      sessions.map((session) => [
+        session.sessionId,
+        [makeRun(session.sessionId, `run-${session.origin}`)],
+      ]),
+    );
+    const mcpSession = sessions[3];
+    const mcpRun = runsBySession[mcpSession.sessionId][0];
+    const backend = await mockStemBackend(page, {
+      sessions,
+      runsBySession,
+      eventsBySession: {
+        [sessions[0].sessionId]: [],
+        [mcpSession.sessionId]: [makeEvent(mcpSession.sessionId, mcpRun.runId, 41)],
+      },
+    });
+
+    await completeOnboarding(page, testApiKey);
+
+    await expect(page.locator(".session-run-row")).toHaveCount(4);
+    await expect(page.locator(".runs .run-row")).toHaveCount(1);
+    await expect(page.locator(".runs .run-row")).toContainText("run-cli");
+    for (const session of sessions) {
+      const group = page.getByRole("group", {
+        name: `Phytomer ${session.sessionId.replace(/^tendril-/, "")}`,
+      });
+      await expect(group.locator(".session-run-row")).toHaveCount(1);
+      await expect(group.locator(".origin-chip")).toHaveText(session.origin);
+    }
+    await expect(page.locator(".session-group button button")).toHaveCount(0);
+
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for run-mcp in Phytomer e2e-mcp",
+      })
+      .click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.locator("h2")).toHaveText("run-mcp");
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+    await expect(page.locator(".chat-head .mono")).toHaveText(sessions[0].sessionId);
+    expect(backend.eventReads()).toContain(mcpSession.sessionId);
+  });
+
+  test("bounds boot hydration to the ten most recent Phytomers selected by lastActiveAt", async ({
+    page,
+  }) => {
+    const allSessions = Array.from({ length: 14 }, (_, index) =>
+      makeSession({
+        sessionId: `tendril-e2e-set-${index}`,
+        origin: ["cli", "rest", "ws", "mcp"][index % 4],
+        lastActiveAt: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+      }),
+    );
+    const sorted = [...allSessions].sort(
+      (a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt),
+    );
+    const responseOrder = [sorted[0], sorted[13], ...sorted.slice(1, 10), ...sorted.slice(10, 13)];
+    const recentIds = sorted.slice(0, 10).map((session) => session.sessionId);
+    const runsBySession = Object.fromEntries(
+      allSessions.map((session, index) => [
+        session.sessionId,
+        [makeRun(session.sessionId, `set-run-${index}`)],
+      ]),
+    );
+    const backend = await mockStemBackend(page, {
+      sessions: responseOrder,
+      runsBySession,
+      runDelayMs: 60,
+    });
+
+    await completeOnboarding(page, testApiKey);
+
+    await expect(page.locator(".session-run-row")).toHaveCount(10);
+    expect(backend.runReads()).toHaveLength(10);
+    expect(new Set(backend.runReads())).toEqual(new Set(recentIds));
+    expect(backend.runReads()).not.toContain(sorted[13].sessionId);
+    expect(backend.maxConcurrentRunReads()).toBeLessThanOrEqual(3);
+
+    const oldSession = sorted[13];
+    const oldRun = runsBySession[oldSession.sessionId][0];
+    const oldCard = page
+      .locator(".session-card")
+      .filter({ hasText: oldSession.sessionId.replace(/^tendril-/, "") });
+    await oldCard.click();
+    await expect(page.locator(".runs .run-row")).toHaveCount(1);
+    await expect(page.locator(".runs .run-row")).toContainText(oldRun.transcript ?? "");
+    await expect(page.locator(".chat-head .mono")).toHaveText(oldSession.sessionId);
+    expect(backend.runReads().filter((id) => id === oldSession.sessionId)).toHaveLength(1);
+  });
+
+  test("refreshes a known Phytomer outside the boot set from canonical run data", async ({
+    page,
+  }) => {
+    const sessions = Array.from({ length: 12 }, (_, index) =>
+      makeSession({
+        sessionId: `tendril-e2e-live-${index}`,
+        lastActiveAt: new Date(Date.UTC(2026, 2, 12 - index)).toISOString(),
+      }),
+    );
+    const outside = sessions[sessions.length - 1];
+    const runsBySession = Object.fromEntries(
+      sessions.map((session) => [session.sessionId, [] as SproutRun[]]),
+    );
+    const backend = await mockStemBackend(page, { sessions, runsBySession });
+    await completeOnboarding(page, testApiKey);
+    await expect(page.locator(".session-run-row")).toHaveCount(0);
+
+    const canonicalRun = makeRun(outside.sessionId, "canonical-live-run", "running");
+    backend.setRuns(outside.sessionId, [canonicalRun]);
+    const initialSessionReads = backend.sessionListReads();
+    backend.emit({
+      type: "sprout-matured",
+      sessionId: outside.sessionId,
+      source: canonicalRun.stepId,
+      data: { status: "matured" },
+    });
+
+    await expect
+      .poll(() => backend.runReads().filter((id) => id === outside.sessionId).length)
+      .toBe(1);
+    const group = page.getByRole("group", { name: "Phytomer e2e-live-11" });
+    await expect(group.locator(".session-run-row")).toHaveCount(1);
+    await expect(group.locator(".session-run-dot.running")).toBeVisible();
+    expect(backend.sessionListReads()).toBe(initialSessionReads);
+  });
+
+  test("refreshes an unknown Phytomer before its targeted run discovery", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-known" });
+    const newlyObserved = makeSession({
+      sessionId: "tendril-e2e-new-mcp",
+      origin: "mcp",
+      lastActiveAt: "2026-09-25T00:00:00Z",
+    });
+    const backend = await mockStemBackend(page, {
+      sessions: [active],
+      runsBySession: { [active.sessionId]: [] },
+    });
+    await completeOnboarding(page, testApiKey);
+
+    backend.setSessions([active, newlyObserved]);
+    backend.setRuns(newlyObserved.sessionId, [
+      makeRun(newlyObserved.sessionId, "newly-observed-run"),
+    ]);
+    const start = backend.requestOrder().length;
+    backend.emit({
+      type: "sprout-emerged",
+      sessionId: newlyObserved.sessionId,
+      source: "newly-observed-run",
+    });
+
+    await expect(
+      page.getByRole("button", {
+        name: "Open Sprout run transcript for newly-observed-run in Phytomer e2e-new-mcp",
+      }),
+    ).toBeVisible();
+    const requests = backend.requestOrder().slice(start);
+    const sessionRefreshIndex = requests.indexOf("sessions");
+    const runRefreshIndex = requests.indexOf(`runs/${newlyObserved.sessionId}`);
+    expect(sessionRefreshIndex).toBeGreaterThanOrEqual(0);
+    expect(runRefreshIndex).toBeGreaterThan(sessionRefreshIndex);
+  });
+
+  test("fetches current persisted evidence for a run discovered after evidence was cached", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-evidence-refresh" });
+    const priorRun = makeRun(active.sessionId, "prior-evidence-run");
+    const backend = await mockStemBackend(page, {
+      sessions: [active],
+      runsBySession: { [active.sessionId]: [] },
+      eventsBySession: {
+        [active.sessionId]: [makeEvent(active.sessionId, priorRun.runId, 71)],
+      },
+    });
+    await completeOnboarding(page, testApiKey);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+    await expect
+      .poll(() => backend.runReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+
+    const discoveredRun = makeRun(active.sessionId, "later-canonical-run");
+    backend.setRuns(active.sessionId, [discoveredRun]);
+    backend.setEvents(active.sessionId, [
+      makeEvent(active.sessionId, discoveredRun.runId, 72),
+    ]);
+    backend.emit({
+      type: "sprout-matured",
+      sessionId: active.sessionId,
+      source: discoveredRun.stepId,
+      data: { status: "matured" },
+    });
+    const sessionGroup = page.getByRole("group", { name: "Phytomer e2e-evidence-refresh" });
+    const runRow = sessionGroup.locator(".session-run-row");
+    await expect(runRow).toHaveCount(1);
+
+    const release = backend.holdEvents(active.sessionId);
+    await runRow.click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === active.sessionId).length)
+      .toBe(2);
+    expect(
+      backend.completedEventReads().filter((id) => id === active.sessionId),
+    ).toHaveLength(1);
+
+    release();
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+  });
+
+  test("shows loading evidence until persisted observation data arrives", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-evidence-active" });
+    const background = makeSession({
+      sessionId: "tendril-e2e-evidence-mcp",
+      origin: "mcp",
+      lastActiveAt: "2026-09-02T00:00:00Z",
+    });
+    const run = makeRun(background.sessionId, "evidence-run");
+    const backend = await mockStemBackend(page, {
+      sessions: [active, background],
+      runsBySession: {
+        [active.sessionId]: [],
+        [background.sessionId]: [run],
+      },
+      eventsBySession: {
+        [active.sessionId]: [],
+        [background.sessionId]: [makeEvent(background.sessionId, run.runId, 52)],
+      },
+    });
+    const release = backend.holdEvents(background.sessionId);
+    await completeOnboarding(page, testApiKey);
+
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for evidence-run in Phytomer e2e-evidence-mcp",
+      })
+      .click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await expect(drawer.getByTestId("run-evidence")).toHaveText(
+      "Loading persisted observation evidence...",
+    );
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === background.sessionId).length)
+      .toBe(1);
+
+    release();
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+  });
+
+  test("makes a persisted evidence failure explicit", async ({ page }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-error-active" });
+    const background = makeSession({ sessionId: "tendril-e2e-error-run", origin: "mcp" });
+    const backend = await mockStemBackend(page, {
+      sessions: [active, background],
+      runsBySession: {
+        [active.sessionId]: [],
+        [background.sessionId]: [makeRun(background.sessionId, "error-run")],
+      },
+    });
+    backend.failEvents(background.sessionId);
+    await completeOnboarding(page, testApiKey);
+
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for error-run in Phytomer e2e-error-run",
+      })
+      .click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "error",
+    );
+    await expect(
+      drawer.getByText("The Stem could not provide persisted events."),
+    ).toBeVisible();
+    await drawer.getByText("Raw Event Pulse and telemetry").click();
+    await expect(drawer.getByText("Persisted observation evidence is unavailable.")).toBeVisible();
+    await expect(drawer.getByText("No persisted events share this run's step id.")).toHaveCount(0);
+  });
+
+  test("prevents an older evidence request from replacing a newer selected run", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-stale-active" });
+    const first = makeSession({ sessionId: "tendril-e2e-stale-first" });
+    const second = makeSession({ sessionId: "tendril-e2e-stale-second" });
+    const backend = await mockStemBackend(page, {
+      sessions: [active, first, second],
+      runsBySession: {
+        [active.sessionId]: [],
+        [first.sessionId]: [makeRun(first.sessionId, "first-run")],
+        [second.sessionId]: [makeRun(second.sessionId, "second-run")],
+      },
+      eventsBySession: {
+        [active.sessionId]: [],
+        [first.sessionId]: [makeEvent(first.sessionId, "first-run", 61)],
+        [second.sessionId]: [makeEvent(second.sessionId, "second-run", 62)],
+      },
+    });
+    const releaseFirst = backend.holdEvents(first.sessionId);
+    const releaseSecond = backend.holdEvents(second.sessionId);
+    await completeOnboarding(page, testApiKey);
+
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for first-run in Phytomer e2e-stale-first",
+      })
+      .click();
+    await expect(page.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for second-run in Phytomer e2e-stale-second",
+      })
+      .click();
+    await expect(page.getByRole("dialog").locator("h2")).toHaveText("second-run");
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === second.sessionId).length)
+      .toBe(1);
+
+    releaseSecond();
+    await expect(page.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    releaseFirst();
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === first.sessionId).length)
+      .toBe(1);
+    await expect(page.getByRole("dialog").locator("h2")).toHaveText("second-run");
+    await expect(page.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+  });
+
+  test("prevents an evidence response from reopening a closed drilldown", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-close-active" });
+    const background = makeSession({ sessionId: "tendril-e2e-close-run" });
+    const backend = await mockStemBackend(page, {
+      sessions: [active, background],
+      runsBySession: {
+        [active.sessionId]: [],
+        [background.sessionId]: [makeRun(background.sessionId, "closing-run")],
+      },
+    });
+    const release = backend.holdEvents(background.sessionId);
+    await completeOnboarding(page, testApiKey);
+
+    await page
+      .getByRole("button", {
+        name: "Open Sprout run transcript for closing-run in Phytomer e2e-close-run",
+      })
+      .click();
+    await expect(page.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await page.getByRole("button", { name: "✕ close" }).click();
+    await expect(page.getByRole("dialog", { name: "Sprout run detail" })).toHaveCount(0);
+
+    release();
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === background.sessionId).length)
+      .toBe(1);
+    await expect(page.getByRole("dialog", { name: "Sprout run detail" })).toHaveCount(0);
+  });
+
+  test("re-hydrates recent run discovery after the EventBus reconnects", async ({ page }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-reconnect-active" });
+    const background = makeSession({
+      sessionId: "tendril-e2e-reconnect-mcp",
+      origin: "mcp",
+    });
+    const backend = await mockStemBackend(page, {
+      sessions: [active, background],
+      runsBySession: {
+        [active.sessionId]: [],
+        [background.sessionId]: [makeRun(background.sessionId, "reconnect-run")],
+      },
+    });
+    await completeOnboarding(page, testApiKey);
+    await expect(page.locator(".session-run-row")).toHaveCount(1);
+    const initialRunReads = backend.runReads().length;
+
+    await backend.disconnectSocket();
+    await expect(page.locator(".conn-dot.closed")).toBeVisible();
+    await expect(page.getByText("EventBus live")).toBeVisible({ timeout: 8_000 });
+    await expect
+      .poll(() => backend.runReads().length, { timeout: 8_000 })
+      .toBeGreaterThan(initialRunReads);
+    await expect(
+      page.getByRole("button", {
+        name: "Open Sprout run transcript for reconnect-run in Phytomer e2e-reconnect-mcp",
+      }),
+    ).toBeVisible();
+  });
+
+  test("refreshes evidence for a newly re-hydrated run when prior evidence was cached", async ({
+    page,
+  }) => {
+    const cached = makeSession({
+      sessionId: "tendril-e2e-reconnect-evidence",
+      lastActiveAt: "2026-09-03T00:00:00Z",
+    });
+    const active = makeSession({
+      sessionId: "tendril-e2e-reconnect-active-session",
+      lastActiveAt: "2026-09-04T00:00:00Z",
+    });
+    const priorRun = makeRun(cached.sessionId, "pre-reconnect-run");
+    const backend = await mockStemBackend(page, {
+      sessions: [cached, active],
+      runsBySession: {
+        [cached.sessionId]: [],
+        [active.sessionId]: [],
+      },
+      eventsBySession: {
+        [cached.sessionId]: [makeEvent(cached.sessionId, priorRun.runId, 81)],
+        [active.sessionId]: [],
+      },
+    });
+    await completeOnboarding(page, testApiKey);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === cached.sessionId).length)
+      .toBe(1);
+    await expect
+      .poll(() => backend.runReads().filter((id) => id === cached.sessionId).length)
+      .toBe(1);
+
+    await page
+      .getByRole("group", { name: "Phytomer e2e-reconnect-active-session" })
+      .locator(".session-card")
+      .click();
+    await expect(page.locator(".chat-head .mono")).toHaveText(active.sessionId);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+
+    const discoveredRun = makeRun(cached.sessionId, "post-reconnect-run");
+    backend.setRuns(cached.sessionId, [discoveredRun]);
+    backend.setEvents(cached.sessionId, [
+      makeEvent(cached.sessionId, discoveredRun.runId, 82),
+    ]);
+    const priorRunReadCount = backend.runReads().filter((id) => id === cached.sessionId).length;
+
+    await backend.disconnectSocket();
+    await expect(page.locator(".conn-dot.closed")).toBeVisible();
+    await expect(page.getByText("EventBus live")).toBeVisible({ timeout: 8_000 });
+    await expect
+      .poll(
+        () => backend.runReads().filter((id) => id === cached.sessionId).length,
+        { timeout: 8_000 },
+      )
+      .toBeGreaterThan(priorRunReadCount);
+
+    const cachedGroup = page.getByRole("group", {
+      name: "Phytomer e2e-reconnect-evidence",
+    });
+    const runRow = cachedGroup.locator(".session-run-row");
+    await expect(runRow).toHaveCount(1);
+    const release = backend.holdEvents(cached.sessionId);
+    await runRow.click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === cached.sessionId).length)
+      .toBe(2);
+    release();
+
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+    await expect(page.locator(".chat-head .mono")).toHaveText(active.sessionId);
   });
 });
 

@@ -77,13 +77,24 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
-| `GET /v1/phytomers/{id}/sprout-runs` | The per-session execution list (drilldown source). Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
-| `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth. |
+| `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
+| `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth and Sprout-run review evidence. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). A Phytomer with `preferences.substrate` set passes that named Substrate into the grow path; an unset Substrate does not fall back to the Stem working directory. |
 | `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the session Substrate control. |
 
 The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` when
 `TENDRIL_DB_LOGGING=false`, since there is no persistent store to read from.
+
+The SessionRail provides bounded cross-Phytomer Sprout-run discovery. On boot
+and reconnect, Greenhouse fetches canonical run records for up to the 10 most
+recently active Phytomers. The active Phytomer still receives normal full
+session hydration for its messages, runs, and persisted events; if it is
+outside that recent set, its run list is fetched as part of that active-session
+hydration. Sprout lifecycle events on `/ws` trigger an authoritative
+`/sprout-runs` refresh and serve only as invalidation signals, not as run state.
+Selecting a discovered run fetches current persisted `/events` evidence from
+the Stem before its review is marked complete. The active Phytomer and ChatPanel
+remain unchanged when reviewing a run from another Phytomer.
 
 ---
 

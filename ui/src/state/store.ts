@@ -29,12 +29,19 @@ import type {
 
 const TICKER_LIMIT = 60;
 const ACTIVE_SESSION_KEY = "opentendril.activeSession";
+const RECENT_SESSION_LIMIT = 10;
+const MAX_BACKGROUND_RUN_REQUESTS = 3;
+const RUN_REFRESH_DEBOUNCE_MS = 250;
+const SESSION_REFRESH_DEBOUNCE_MS = 750;
 
 export type Hydration = "idle" | "hydrating" | "ready" | "error";
+export type EvidenceState = "loading" | "ready" | "error";
 
 export interface DrilldownTarget {
   run: SproutRun;
   events: EventRecord[];
+  evidenceState: EvidenceState;
+  evidenceError?: string;
 }
 
 interface StemStore {
@@ -47,6 +54,7 @@ interface StemStore {
   messagesBySession: Record<string, ChatMessage[]>;
   runsBySession: Record<string, SproutRun[]>;
   eventsBySession: Record<string, EventRecord[]>;
+  eventsStatusBySession: Record<string, EvidenceState>;
   garden: GardenState;
   ticker: StemEvent[];
   chatPending: Record<string, boolean>;
@@ -86,7 +94,72 @@ function tickerWorthy(event: StemEvent): boolean {
 
 let socket: StemSocket | null = null;
 let liveBuffer: StemEvent[] | null = null; // non-null while hydrating
-let refreshTimer: number | null = null;
+let sessionRefreshTimer: number | null = null;
+let pendingSessionRefreshIds = new Set<string>();
+let runRefreshTimers = new Map<string, number>();
+let activeRunRequests = 0;
+let runRequestQueue: Array<() => void> = [];
+let drilldownRequestId = 0;
+
+function recentSessions(sessions: Session[]): Session[] {
+  return [...sessions]
+    .sort((a, b) => {
+      const aTime = Date.parse(a.lastActiveAt);
+      const bTime = Date.parse(b.lastActiveAt);
+      const safeATime = Number.isFinite(aTime) ? aTime : Number.NEGATIVE_INFINITY;
+      const safeBTime = Number.isFinite(bTime) ? bTime : Number.NEGATIVE_INFINITY;
+      if (safeATime !== safeBTime) return safeBTime - safeATime;
+      return a.sessionId.localeCompare(b.sessionId);
+    })
+    .slice(0, RECENT_SESSION_LIMIT);
+}
+
+function withRunRequestLimit<T>(request: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const start = () => {
+      activeRunRequests += 1;
+      void (async () => {
+        try {
+          resolve(await request());
+        } catch (error) {
+          reject(error);
+        } finally {
+          activeRunRequests -= 1;
+          runRequestQueue.shift()?.();
+        }
+      })();
+    };
+
+    if (activeRunRequests < MAX_BACKGROUND_RUN_REQUESTS) start();
+    else runRequestQueue.push(start);
+  });
+}
+
+function correlatedEvents(run: SproutRun, events: EventRecord[]): EventRecord[] {
+  return events.filter(
+    (event) =>
+      (run.stepId && event.source === run.stepId) ||
+      (run.stepId && event.data?.["stepId"] === run.stepId),
+  );
+}
+
+function mergeEventRecords(
+  persisted: EventRecord[],
+  current: EventRecord[],
+): EventRecord[] {
+  const byId = new Map<number, EventRecord>();
+  for (const event of persisted) byId.set(event.id, event);
+  for (const event of current) byId.set(event.id, event);
+  return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function isSproutLifecycleEvent(type: string): boolean {
+  return (
+    type === "sprout-emerged" ||
+    type === "sprout-matured" ||
+    type === "sprout-withered"
+  );
+}
 
 export const useStem = create<StemStore>()((set, get) => {
   function foldEvent(event: StemEvent) {
@@ -116,26 +189,43 @@ export const useStem = create<StemStore>()((set, get) => {
       return next;
     });
 
-    // A session we do not know yet showed activity: refresh the rail soon.
-    if (
-      event.sessionId &&
-      !get().sessions.some((s) => s.sessionId === event.sessionId)
-    ) {
-      scheduleSessionRefresh();
+    if (!event.sessionId) return;
+
+    const knownSession = get().sessions.some(
+      (session) => session.sessionId === event.sessionId,
+    );
+    if (!knownSession) {
+      scheduleSessionRefresh(event.sessionId);
+    } else if (isSproutLifecycleEvent(event.type)) {
+      scheduleRunRefresh(event.sessionId);
     }
   }
 
-  function scheduleSessionRefresh() {
-    if (refreshTimer !== null) return;
-    refreshTimer = window.setTimeout(async () => {
-      refreshTimer = null;
+  function scheduleSessionRefresh(sessionId: string) {
+    pendingSessionRefreshIds.add(sessionId);
+    if (sessionRefreshTimer !== null) return;
+    sessionRefreshTimer = window.setTimeout(async () => {
+      sessionRefreshTimer = null;
+      const refreshIds = [...pendingSessionRefreshIds];
+      pendingSessionRefreshIds.clear();
       try {
         const { sessions } = await stemApi.listSessions(currentConnection());
         set({ sessions });
+        await Promise.all(refreshIds.map((id) => hydrateSessionRuns(id)));
       } catch {
         // transient; the next event will retry
       }
-    }, 750);
+    }, SESSION_REFRESH_DEBOUNCE_MS);
+  }
+
+  function scheduleRunRefresh(sessionId: string) {
+    const pending = runRefreshTimers.get(sessionId);
+    if (pending !== undefined) window.clearTimeout(pending);
+    const timer = window.setTimeout(() => {
+      runRefreshTimers.delete(sessionId);
+      void hydrateSessionRuns(sessionId);
+    }, RUN_REFRESH_DEBOUNCE_MS);
+    runRefreshTimers.set(sessionId, timer);
   }
 
   function onLiveEvent(event: StemEvent) {
@@ -146,28 +236,76 @@ export const useStem = create<StemStore>()((set, get) => {
     foldEvent(event);
   }
 
-  async function hydrateSessionData(sessionId: string) {
+  async function fetchSessionRuns(sessionId: string): Promise<SproutRun[]> {
+    const response = await withRunRequestLimit(() =>
+      stemApi.sproutRuns(currentConnection(), sessionId),
+    );
+    return (response.sproutRuns ?? []).map((run) => ({
+      ...run,
+      sessionId: run.sessionId ?? sessionId,
+    }));
+  }
+
+  async function hydrateSessionRuns(sessionId: string): Promise<void> {
+    try {
+      const runs = await fetchSessionRuns(sessionId);
+      set((state) => ({
+        runsBySession: { ...state.runsBySession, [sessionId]: runs },
+      }));
+    } catch {
+      // A later refresh or session selection can retry this observation read.
+    }
+  }
+
+  async function hydrateRecentRuns(sessions: Session[]): Promise<void> {
+    await Promise.all(sessions.map((session) => hydrateSessionRuns(session.sessionId)));
+  }
+
+  async function hydrateSessionData(
+    sessionId: string,
+    includeRuns = true,
+  ): Promise<EventRecord[]> {
     const conn = currentConnection();
-    const [messages, runs, events] = await Promise.all([
-      stemApi.messages(conn, sessionId).catch(() => ({ messages: [] as ChatMessage[] })),
-      stemApi.sproutRuns(conn, sessionId).catch(() => ({ sproutRuns: [] as SproutRun[] })),
-      stemApi.events(conn, sessionId).catch(() => ({ events: [] as EventRecord[] })),
-    ]);
     set((state) => ({
-      messagesBySession: {
-        ...state.messagesBySession,
-        [sessionId]: messages.messages ?? [],
-      },
-      runsBySession: {
-        ...state.runsBySession,
-        [sessionId]: runs.sproutRuns ?? [],
-      },
-      eventsBySession: {
-        ...state.eventsBySession,
-        [sessionId]: events.events ?? [],
+      eventsStatusBySession: {
+        ...state.eventsStatusBySession,
+        [sessionId]: "loading",
       },
     }));
-    return events.events ?? [];
+    const [messages, runs, events] = await Promise.all([
+      stemApi.messages(conn, sessionId).catch(() => ({ messages: [] as ChatMessage[] })),
+      includeRuns
+        ? fetchSessionRuns(sessionId).catch(() => null)
+        : Promise.resolve(null),
+      stemApi.events(conn, sessionId).catch(() => null),
+    ]);
+    const persistedEvents = events?.events ?? [];
+    set((state) => {
+      const next: Partial<StemStore> = {
+        messagesBySession: {
+          ...state.messagesBySession,
+          [sessionId]: messages.messages ?? [],
+        },
+        eventsStatusBySession: {
+          ...state.eventsStatusBySession,
+          [sessionId]: events ? "ready" : "error",
+        },
+      };
+      if (runs) {
+        next.runsBySession = { ...state.runsBySession, [sessionId]: runs };
+      }
+      if (events) {
+        next.eventsBySession = {
+          ...state.eventsBySession,
+          [sessionId]: mergeEventRecords(
+            persistedEvents,
+            state.eventsBySession[sessionId] ?? [],
+          ),
+        };
+      }
+      return next;
+    });
+    return persistedEvents;
   }
 
   async function hydrate() {
@@ -189,10 +327,15 @@ export const useStem = create<StemStore>()((set, get) => {
 
       set({ sessions, activeSessionId: active });
 
+      const recent = recentSessions(sessions);
+      const recentIds = new Set(recent.map((session) => session.sessionId));
       let persistedEvents: EventRecord[] = [];
-      if (active) {
-        persistedEvents = await hydrateSessionData(active);
-      }
+      const activeTask = active
+        ? hydrateSessionData(active, !recentIds.has(active)).then((events) => {
+            persistedEvents = events;
+          })
+        : Promise.resolve();
+      await Promise.all([activeTask, hydrateRecentRuns(recent)]);
 
       // Re-grow the garden from persisted telemetry, oldest first, then splice
       // in everything the socket buffered while we were reading history.
@@ -228,6 +371,7 @@ export const useStem = create<StemStore>()((set, get) => {
     messagesBySession: {},
     runsBySession: {},
     eventsBySession: {},
+    eventsStatusBySession: {},
     garden: emptyGarden,
     ticker: [],
     chatPending: {},
@@ -261,10 +405,18 @@ export const useStem = create<StemStore>()((set, get) => {
       socket?.close();
       socket = null;
       liveBuffer = null;
+      if (sessionRefreshTimer !== null) {
+        window.clearTimeout(sessionRefreshTimer);
+        sessionRefreshTimer = null;
+      }
+      pendingSessionRefreshIds.clear();
+      for (const timer of runRefreshTimers.values()) window.clearTimeout(timer);
+      runRefreshTimers.clear();
     },
 
     selectSession: (sessionId) => {
       window.localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
+      drilldownRequestId += 1;
       set({ activeSessionId: sessionId, drilldown: null, chatError: null });
       void hydrateSessionData(sessionId);
     },
@@ -279,6 +431,10 @@ export const useStem = create<StemStore>()((set, get) => {
         },
         runsBySession: { ...state.runsBySession, [session.sessionId]: [] },
         eventsBySession: { ...state.eventsBySession, [session.sessionId]: [] },
+        eventsStatusBySession: {
+          ...state.eventsStatusBySession,
+          [session.sessionId]: "ready",
+        },
       }));
       get().selectSession(session.sessionId);
     },
@@ -364,17 +520,73 @@ export const useStem = create<StemStore>()((set, get) => {
     },
 
     openDrilldown: (run) => {
-      const sessionEvents = run.sessionId
-        ? get().eventsBySession[run.sessionId] ?? []
-        : [];
-      const related = sessionEvents.filter(
-        (e) =>
-          (run.stepId && e.source === run.stepId) ||
-          (run.stepId && e.data?.["stepId"] === run.stepId),
-      );
-      set({ drilldown: { run, events: related } });
+      const requestId = ++drilldownRequestId;
+      const sessionId = run.sessionId;
+      if (!sessionId) {
+        set({ drilldown: { run, events: [], evidenceState: "ready" } });
+        return;
+      }
+
+      set((current) => ({
+        eventsBySession:
+          sessionId in current.eventsBySession
+            ? current.eventsBySession
+            : { ...current.eventsBySession, [sessionId]: [] },
+        eventsStatusBySession: {
+          ...current.eventsStatusBySession,
+          [sessionId]: "loading",
+        },
+        drilldown: { run, events: [], evidenceState: "loading" },
+      }));
+
+      void (async () => {
+        try {
+          const response = await stemApi.events(currentConnection(), sessionId);
+          const persistedEvents = response.events ?? [];
+          set((current) => {
+            const events = mergeEventRecords(
+              persistedEvents,
+              current.eventsBySession[sessionId] ?? [],
+            );
+            return {
+              eventsBySession: { ...current.eventsBySession, [sessionId]: events },
+              eventsStatusBySession: {
+                ...current.eventsStatusBySession,
+                [sessionId]: "ready",
+              },
+              drilldown:
+                drilldownRequestId === requestId && current.drilldown
+                  ? {
+                      ...current.drilldown,
+                      events: correlatedEvents(run, persistedEvents),
+                      evidenceState: "ready",
+                      evidenceError: undefined,
+                    }
+                  : current.drilldown,
+            };
+          });
+        } catch {
+          set((current) => ({
+            eventsStatusBySession: {
+              ...current.eventsStatusBySession,
+              [sessionId]: "error",
+            },
+            drilldown:
+              drilldownRequestId === requestId && current.drilldown
+                ? {
+                    ...current.drilldown,
+                    evidenceState: "error",
+                    evidenceError: "The Stem could not provide persisted events.",
+                  }
+                : current.drilldown,
+          }));
+        }
+      })();
     },
 
-    closeDrilldown: () => set({ drilldown: null }),
+    closeDrilldown: () => {
+      drilldownRequestId += 1;
+      set({ drilldown: null });
+    },
   };
 });
