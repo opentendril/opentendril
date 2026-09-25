@@ -527,19 +527,6 @@ export const useStem = create<StemStore>()((set, get) => {
         return;
       }
 
-      const state = get();
-      if (state.eventsStatusBySession[sessionId] === "ready") {
-        const events = state.eventsBySession[sessionId] ?? [];
-        set({
-          drilldown: {
-            run,
-            events: correlatedEvents(run, events),
-            evidenceState: "ready",
-          },
-        });
-        return;
-      }
-
       set((current) => ({
         eventsBySession:
           sessionId in current.eventsBySession
@@ -571,7 +558,7 @@ export const useStem = create<StemStore>()((set, get) => {
                 drilldownRequestId === requestId && current.drilldown
                   ? {
                       ...current.drilldown,
-                      events: correlatedEvents(run, events),
+                      events: correlatedEvents(run, persistedEvents),
                       evidenceState: "ready",
                       evidenceError: undefined,
                     }

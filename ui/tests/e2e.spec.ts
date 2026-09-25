@@ -832,6 +832,63 @@ test.describe("Command Center cross-Phytomer run discovery", () => {
     expect(runRefreshIndex).toBeGreaterThan(sessionRefreshIndex);
   });
 
+  test("fetches current persisted evidence for a run discovered after evidence was cached", async ({
+    page,
+  }) => {
+    const active = makeSession({ sessionId: "tendril-e2e-evidence-refresh" });
+    const priorRun = makeRun(active.sessionId, "prior-evidence-run");
+    const backend = await mockStemBackend(page, {
+      sessions: [active],
+      runsBySession: { [active.sessionId]: [] },
+      eventsBySession: {
+        [active.sessionId]: [makeEvent(active.sessionId, priorRun.runId, 71)],
+      },
+    });
+    await completeOnboarding(page, testApiKey);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+    await expect
+      .poll(() => backend.runReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+
+    const discoveredRun = makeRun(active.sessionId, "later-canonical-run");
+    backend.setRuns(active.sessionId, [discoveredRun]);
+    backend.setEvents(active.sessionId, [
+      makeEvent(active.sessionId, discoveredRun.runId, 72),
+    ]);
+    backend.emit({
+      type: "sprout-matured",
+      sessionId: active.sessionId,
+      source: discoveredRun.stepId,
+      data: { status: "matured" },
+    });
+    const sessionGroup = page.getByRole("group", { name: "Phytomer e2e-evidence-refresh" });
+    const runRow = sessionGroup.locator(".session-run-row");
+    await expect(runRow).toHaveCount(1);
+
+    const release = backend.holdEvents(active.sessionId);
+    await runRow.click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === active.sessionId).length)
+      .toBe(2);
+    expect(
+      backend.completedEventReads().filter((id) => id === active.sessionId),
+    ).toHaveLength(1);
+
+    release();
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+  });
+
   test("shows loading evidence until persisted observation data arrives", async ({
     page,
   }) => {
@@ -1032,6 +1089,88 @@ test.describe("Command Center cross-Phytomer run discovery", () => {
         name: "Open Sprout run transcript for reconnect-run in Phytomer e2e-reconnect-mcp",
       }),
     ).toBeVisible();
+  });
+
+  test("refreshes evidence for a newly re-hydrated run when prior evidence was cached", async ({
+    page,
+  }) => {
+    const cached = makeSession({
+      sessionId: "tendril-e2e-reconnect-evidence",
+      lastActiveAt: "2026-09-03T00:00:00Z",
+    });
+    const active = makeSession({
+      sessionId: "tendril-e2e-reconnect-active-session",
+      lastActiveAt: "2026-09-04T00:00:00Z",
+    });
+    const priorRun = makeRun(cached.sessionId, "pre-reconnect-run");
+    const backend = await mockStemBackend(page, {
+      sessions: [cached, active],
+      runsBySession: {
+        [cached.sessionId]: [],
+        [active.sessionId]: [],
+      },
+      eventsBySession: {
+        [cached.sessionId]: [makeEvent(cached.sessionId, priorRun.runId, 81)],
+        [active.sessionId]: [],
+      },
+    });
+    await completeOnboarding(page, testApiKey);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === cached.sessionId).length)
+      .toBe(1);
+    await expect
+      .poll(() => backend.runReads().filter((id) => id === cached.sessionId).length)
+      .toBe(1);
+
+    await page
+      .getByRole("group", { name: "Phytomer e2e-reconnect-active-session" })
+      .locator(".session-card")
+      .click();
+    await expect(page.locator(".chat-head .mono")).toHaveText(active.sessionId);
+    await expect
+      .poll(() => backend.completedEventReads().filter((id) => id === active.sessionId).length)
+      .toBe(1);
+
+    const discoveredRun = makeRun(cached.sessionId, "post-reconnect-run");
+    backend.setRuns(cached.sessionId, [discoveredRun]);
+    backend.setEvents(cached.sessionId, [
+      makeEvent(cached.sessionId, discoveredRun.runId, 82),
+    ]);
+    const priorRunReadCount = backend.runReads().filter((id) => id === cached.sessionId).length;
+
+    await backend.disconnectSocket();
+    await expect(page.locator(".conn-dot.closed")).toBeVisible();
+    await expect(page.getByText("EventBus live")).toBeVisible({ timeout: 8_000 });
+    await expect
+      .poll(
+        () => backend.runReads().filter((id) => id === cached.sessionId).length,
+        { timeout: 8_000 },
+      )
+      .toBeGreaterThan(priorRunReadCount);
+
+    const cachedGroup = page.getByRole("group", {
+      name: "Phytomer e2e-reconnect-evidence",
+    });
+    const runRow = cachedGroup.locator(".session-run-row");
+    await expect(runRow).toHaveCount(1);
+    const release = backend.holdEvents(cached.sessionId);
+    await runRow.click();
+    const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "loading",
+    );
+    await expect
+      .poll(() => backend.eventReads().filter((id) => id === cached.sessionId).length)
+      .toBe(2);
+    release();
+
+    await expect(drawer.getByTestId("run-evidence")).toHaveAttribute(
+      "data-evidence-state",
+      "ready",
+    );
+    await expect(drawer.locator(".tool-name")).toHaveText("readFile");
+    await expect(page.locator(".chat-head .mono")).toHaveText(active.sessionId);
   });
 });
 

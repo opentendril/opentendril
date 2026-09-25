@@ -156,12 +156,12 @@ manage them.
 App                         gates on stored connection settings
 ├─ Onboarding               welcome screen; validates /health + /v1/phytomers, persists to localStorage
 └─ CommandCenter            app shell; boots the store (WS + hydration), renders the grid
-   ├─ SessionRail           left: session list from GET /v1/phytomers; switch/create Tendrils
+   ├─ SessionRail           left: session list and bounded canonical Sprout-run discovery across Phytomers
    ├─ GardenCanvas          center: the living visualization (moves aside when a run is open)
    │  └─ PlantFigure        one orchestration = one plant (stem, branches, tendril tips)
    │     └─ SelectionArena  a phenotypic-selection step = an arena of competing phenotype pods
    ├─ EventTicker           center-bottom: EventBus pulse; collapsed while a run is open
-   ├─ ChatPanel             right: per-session chat (/v1/chat/completions) + sprout-runs list
+   ├─ ChatPanel             right: active-Phytomer chat (/v1/chat/completions) + sprout-runs list
    └─ DrilldownDrawer       run review: observation facts, task transcript, tool activity; raw telemetry collapsed
 ```
 
@@ -188,8 +188,11 @@ Supporting modules:
 One Zustand store (`state/store.ts`) is the single source of truth. It holds:
 
 - `sessions`, `activeSessionId` — the Tendril rail and current context.
-- `messagesBySession`, `runsBySession`, `eventsBySession` — per-session data
-  hydrated lazily from REST when a session is selected.
+- `messagesBySession`, `runsBySession`, `eventsBySession`: per-Phytomer data.
+  The active Phytomer's messages and events hydrate when selected. Boot and
+  reconnect discover canonical run records for up to the 10 most recently
+  active Phytomers. The active Phytomer still receives its normal full session
+  hydration, including its run list when it is outside that set.
 - `garden` — the botanical scene graph, produced *only* by folding events
   through `applyGardenEvent`.
 - `ticker` — a bounded rolling window of recent events for the Event Pulse.
@@ -212,10 +215,12 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
    immediately. While hydration is in flight, incoming live events are pushed
    into an in-memory `liveBuffer` instead of being applied — so nothing that
    arrives mid-hydration is dropped.
-2. **Hydrate cold state from REST underneath.** `GET /v1/phytomers`, then for the
-   active session `…/history` (chat), `…/sprout-runs` (executions), and
-   `…/events` (persisted telemetry). Previously rendered state is never cleared
-   while this runs.
+2. **Hydrate cold state from REST underneath.** `GET /v1/phytomers`, then the
+   active Phytomer's `…/history` (messages) and `…/events` (persisted
+   telemetry). In parallel, fetch canonical `…/sprout-runs` records for up to
+   the 10 most recently active Phytomers. The active Phytomer still receives
+   its normal full session hydration, including its run list if it is outside
+   that set. Previously rendered state is never cleared while this runs.
 3. **Re-grow the garden from persisted events**, oldest-first, through the same
    `applyGardenEvent` reducer. On a fresh connect the socket also requests
    `/ws?replay=100`, which prepends the bus's recent in-memory history — this
@@ -231,6 +236,14 @@ a small "re-growing state from history" pill is shown instead of a blank shell.
 On WebSocket drop, the client reconnects with backoff and re-runs the same
 hydrate-then-go-live sequence, so anything that happened while disconnected is
 recovered.
+
+SessionRail shows the bounded cross-Phytomer run discovery. Sprout lifecycle
+events on the EventBus trigger an authoritative `/sprout-runs` refresh; the
+event payloads are invalidation signals and do not define canonical run state.
+Selecting a discovered run fetches current persisted `/events` evidence from
+the Stem before the review is marked complete. Reviewing a run from another
+Phytomer does not switch the active Phytomer or change which session the
+ChatPanel displays.
 
 ---
 
