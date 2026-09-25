@@ -20,8 +20,12 @@ function shortId(session: Session): string {
 export function SessionRail() {
   const sessions = useStem((s) => s.sessions);
   const activeSessionId = useStem((s) => s.activeSessionId);
+  const runsBySession = useStem((s) => s.runsBySession);
+  const selectedRunId = useStem((s) => s.drilldown?.run.runId);
+  const selectedRunSessionId = useStem((s) => s.drilldown?.run.sessionId);
   const selectSession = useStem((s) => s.selectSession);
   const createSession = useStem((s) => s.createSession);
+  const openDrilldown = useStem((s) => s.openDrilldown);
   const [creating, setCreating] = useState(false);
 
   return (
@@ -52,29 +56,59 @@ export function SessionRail() {
           </p>
         ) : (
           sessions.map((session) => (
-            <button
+            <div
               key={session.sessionId}
-              className={`session-card ${session.sessionId === activeSessionId ? "active" : ""}`}
-              onClick={() => selectSession(session.sessionId)}
+              className="session-group"
+              role="group"
+              aria-label={`Phytomer ${shortId(session)}`}
             >
-              <span className="sid" title={session.sessionId}>
-                {shortId(session)}
-              </span>
-              <span className="meta">
-                <span className="origin-chip">{session.origin}</span>
-                <span>{relativeTime(session.lastActiveAt)}</span>
-              </span>
-              <span
-                className={`substrate-chip ${session.preferences?.substrate ? "set" : "unset"}`}
-                title={
-                  session.preferences?.substrate
-                    ? `Substrate ${session.preferences.substrate}`
-                    : "No Substrate bound"
-                }
+              <button
+                className={`session-card ${session.sessionId === activeSessionId ? "active" : ""}`}
+                onClick={() => selectSession(session.sessionId)}
               >
-                {session.preferences?.substrate || "no substrate"}
-              </span>
-            </button>
+                <span className="sid" title={session.sessionId}>
+                  {shortId(session)}
+                </span>
+                <span className="meta">
+                  <span className="origin-chip">{session.origin}</span>
+                  <span>{relativeTime(session.lastActiveAt)}</span>
+                </span>
+                <span
+                  className={`substrate-chip ${session.preferences?.substrate ? "set" : "unset"}`}
+                  title={
+                    session.preferences?.substrate
+                      ? `Substrate ${session.preferences.substrate}`
+                      : "No Substrate bound"
+                  }
+                >
+                  {session.preferences?.substrate || "no substrate"}
+                </span>
+              </button>
+              {(runsBySession[session.sessionId] ?? []).length > 0 ? (
+                <div className="session-runs" aria-label={`Sprout runs for ${shortId(session)}`}>
+                  {(runsBySession[session.sessionId] ?? []).map((run) => {
+                    const target = {
+                      ...run,
+                      sessionId: run.sessionId ?? session.sessionId,
+                    };
+                    return (
+                      <button
+                        className={`session-run-row${selectedRunId === run.runId && selectedRunSessionId === session.sessionId ? " active" : ""}`}
+                        key={run.runId}
+                        aria-label={`Open Sprout run ${run.transcript || run.runId} in Phytomer ${shortId(session)}`}
+                        onClick={() => openDrilldown(target)}
+                      >
+                        <span className={`session-run-dot ${run.status}`} />
+                        <span className="session-run-task" title={run.transcript}>
+                          {run.transcript || run.runId}
+                        </span>
+                        <span className="session-run-status">{run.status}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           ))
         )}
       </div>

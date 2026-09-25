@@ -43,7 +43,7 @@ export function DrilldownDrawer() {
   }, [closeDrilldown]);
 
   if (!drilldown) return null;
-  const { run, events } = drilldown;
+  const { run, events, evidenceState, evidenceError } = drilldown;
 
   const fitnessEvents = events.filter((e) => e.type === "phenotypic-selection");
   const bestScore = fitnessEvents
@@ -74,6 +74,19 @@ export function DrilldownDrawer() {
       </div>
 
       <div className="drawer-body">
+        <div
+          className={`run-evidence-state ${evidenceState}`}
+          data-testid="run-evidence"
+          data-evidence-state={evidenceState}
+          role={evidenceState === "error" ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {evidenceState === "loading"
+            ? "Loading persisted observation evidence..."
+            : evidenceState === "error"
+              ? evidenceError || "Persisted observation evidence could not be loaded."
+              : "Persisted observation evidence loaded."}
+        </div>
         <div className="drawer-section" data-testid="run-observation">
           <h3>Observation</h3>
           <p className="observation-lead">{observationLead(run)}</p>
@@ -171,7 +184,11 @@ export function DrilldownDrawer() {
 
         <div className="drawer-section" data-testid="run-tool-activity">
           <h3>Tool activity</h3>
-          {tools.length > 0 ? (
+          {evidenceState === "loading" ? (
+            <p className="runs-empty">Loading persisted tool activity...</p>
+          ) : evidenceState === "error" ? (
+            <p className="runs-empty">Persisted tool activity could not be loaded.</p>
+          ) : tools.length > 0 ? (
             <ul className="tool-list">
               {tools.map((tool, i) => (
                 <li className="tool-row" key={`${tool.name}-${i}`}>
@@ -206,7 +223,11 @@ export function DrilldownDrawer() {
           </div>
           <div className="drawer-section">
             <h3>Related telemetry ({events.length})</h3>
-            {events.length === 0 ? (
+            {evidenceState === "loading" ? (
+              <span className="runs-empty">Loading persisted observation evidence...</span>
+            ) : evidenceState === "error" ? (
+              <span className="runs-empty">Persisted observation evidence is unavailable.</span>
+            ) : events.length === 0 ? (
               <span className="runs-empty">
                 No persisted events share this run's step id.
               </span>
