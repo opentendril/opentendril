@@ -13,28 +13,29 @@ exists to make possible.
 
 ## Current
 
-**A Botanist can determine the lifecycle stage at which a failed Sprout stopped from bounded, durable observation, without inspecting private Mycorrhizal reasoning, credentials, arbitrary host paths, unrestricted internal errors, or Stem-shell state.**
+**A Botanist can discover and inspect active and recent governed Sprout runs across Phytomers in the Greenhouse, regardless of which supported Pollinator surface created them, without knowing a Phytomer or step identifier in advance and without Greenhouse inventing execution truth.**
 
 ## Done when
 
-Recorded exercises establish all of the following:
-
-* **Different lifecycle points are distinguishable.** Recorded exercises deliberately induce a Substrate access failure before an external provider is contacted and a separate failure later in execution; an independent reviewer can identify the distinct lifecycle stages from durable observation.
-* **Observation reflects execution rather than inference.** For each exercise, the reported lifecycle stage agrees with deterministic execution evidence and does not depend on model-generated interpretation, parsing arbitrary error text, or inspecting host state.
-* **Failure evidence remains useful after termination.** After each failed Sprout ends, the Botanist can inspect bounded observation to identify the lifecycle stage without shell access or private reasoning.
-* **Observation remains bounded and safe.** Delegated observation exposes no credentials, raw provider payloads, arbitrary host paths, repository contents, private Mycorrhizal reasoning, or unrestricted internal errors.
-* **Existing authority and lifecycle semantics remain unchanged.** Sprout outcome semantics, provider selection, authorization, DelegationGrants, Terrarium containment, Git authority, and Fruit acceptance remain unchanged.
+* **Runs are discoverable across Phytomers.** Recorded exercises create governed Sprout runs under multiple Phytomers and demonstrate that a Botanist can locate active and recent runs through normal Greenhouse navigation without first knowing their Phytomer or step identifiers.
+* **Pollinator origin does not control visibility.** Runs originating through supported Pollinator surfaces such as CLI, REST, or MCP are discoverable through the same Greenhouse observation model rather than requiring origin-specific presentation.
+* **Discovery reaches existing durable observation.** Selecting a discovered run reaches the Stem-owned persisted Sprout-run evidence and existing review/drilldown experience, including its owning Phytomer relationship.
+* **Refresh and reconnect preserve discovery.** Browser refresh and WebSocket reconnect reconstruct coherent run discovery from Stem-owned durable observation rather than Greenhouse-local assumptions.
+* **The Stem remains authoritative.** Greenhouse does not infer canonical run state from raw EventBus text, invent lifecycle facts, or introduce a second observation store.
+* **Existing authority remains unchanged.** Pollinator authorization, DelegationGrants, Seed and Phytomer lifecycle, Sprout execution, Terrarium containment, Git authority, and Fruit acceptance remain unchanged.
 
 This objective does not require:
 
-* changing provider selection or Sprout success/failure behavior;
-* changing DelegationGrants, Pollen authority, or Terrarium containment;
-* adding reasoning to the Stem;
-* classifying arbitrary logs or free-form error strings as lifecycle facts;
-* exposing unbounded diagnostics or private execution details;
+* a new global Stem Sprout-run endpoint unless implementation planning proves the existing documented contracts insufficient;
+* changing Sprout or Phytomer lifecycle semantics;
+* MCP-specific execution behavior;
+* changing Pollinator or Botanist authorization;
+* redesigning the overall Greenhouse visual language;
+* implementing pending-confirmation UX;
+* exposing private Mycorrhizal reasoning or unrestricted telemetry;
 * completing the parked public-Internet qualification;
 * activating the GitHub-native Pollinator objective; or
-* broad redesign of observation surfaces.
+* automatic Fruit acceptance or merge.
 
 ---
 
