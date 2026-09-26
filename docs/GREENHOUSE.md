@@ -169,7 +169,7 @@ unchanged.
 
 ---
 
-## 5. Deployment: the containerized UI front
+## 5. Deployment - the containerized UI front
 
 The Greenhouse ships as a **separate, optional, isolated, containerized
 component**: a hardened nginx container (built by
