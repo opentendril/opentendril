@@ -20,18 +20,21 @@ if [ -n "$staged_go" ]; then
 fi
 
 # Source-hygiene guards, run locally instead of only at CI time. CI has
-# caught the same two mistakes repeatedly (a banned taxonomy term, or a bare
-# GitHub issue reference, landing in a repo file) — CI was never wrong to
-# catch them, but every occurrence cost a push-wait-fail-fix-push round-trip
-# this makes unnecessary for the file-diff half of the problem. Neither guard
-# can see a violation typed only into a PR description (that never touches a
-# commit) — see `scripts/check-taxonomy.sh --text` for that half, which stays
-# a manual step before opening a PR.
+# caught the same mistakes repeatedly (a banned taxonomy term, a bare GitHub
+# issue reference, or a newly added em dash landing in a repo file). CI was
+# never wrong to catch them, but every occurrence cost a push-wait-fail-fix-push
+# round-trip this makes unnecessary for the file-diff half of the problem.
+# None of these guards can see a violation typed only into a PR description
+# (that never touches a commit). See `scripts/check-taxonomy.sh --text` for
+# that half, which stays a manual step before opening a PR.
 failed=0
 if ! bash scripts/check-taxonomy.sh; then
   failed=1
 fi
 if ! bash scripts/check-no-issue-refs.sh --staged; then
+  failed=1
+fi
+if ! bash scripts/check-no-em-dash.sh --staged; then
   failed=1
 fi
 if [ "$failed" -ne 0 ]; then
