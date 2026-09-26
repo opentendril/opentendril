@@ -140,7 +140,7 @@ OpenTendril is an **AI-SDLC** workspace, meaning you will see issues and draft P
 
 As a human contributor, your workflow is simple and respects the same quality gates:
 1. **Sign your commits.** See the section above. This is not optional — the push is rejected otherwise.
-2. **Install the git hooks once per clone:** `make hooks`. This catches a gofmt or source-hygiene violation (a banned taxonomy term, a bare GitHub issue reference) at commit time instead of at CI time.
+2. **Install the git hooks once per clone:** `make hooks`. This catches a gofmt or source-hygiene violation (a banned taxonomy term, a bare GitHub issue reference, or a newly added em dash) at commit time instead of at CI time.
 3. **Create a Branch:** Create a branch from `main` prefixed with `feat/` or `fix/` (e.g., `feat/add-github-provider`).
 4. **Implement Changes:** Stay focused on a single issue/purpose. Keep diffs minimal.
 5. **Verify Locally:** Before pushing, ensure all tests and linters pass:
@@ -161,9 +161,11 @@ These are ruleset rules, not conventions — they fail your push or block your m
 * **No force-pushes and no deletion** of the default branch.
 * **A pull request is required** — you cannot push straight to `main`.
 * **Review threads must be resolved** before merging.
-* **Required status checks** must pass: `Native PR Gate` (which aggregates the Go and Python suites according to what your change touched), `verify-commits`, and the six Source Hygiene checks — GitHub references, default-branch assumptions, delegated isolation, branch deletion, protected-path ownership, and taxonomy.
+* **Required status checks** must pass: `Native PR Gate`, `verify-commits`, and `Source Hygiene Gate`. The Source Hygiene Gate aggregates the repository hygiene checks and fails unless every required hygiene job succeeds.
 
-`make check-all` covers the language suites and the taxonomy/issue-ref hygiene checks (`make hygiene`) locally; `make hooks` runs the same two checks on every commit instead of waiting for a push. The remaining hygiene checks (default-branch assumptions, delegated isolation, branch deletion, protected-path ownership) are individual scripts under `scripts/` and can be run directly the same way — for example `bash scripts/check-default-branch-assumptions.sh origin/main`.
+* **No Unicode em dash (U+2014).** Repository prose, comments, user-visible strings, and documentation use commas, colons, semicolons, parentheses, or hyphens instead. Source Hygiene rejects a newly added line that contains an em dash (`scripts/check-no-em-dash.sh`). An unchanged historical em dash does not fail the check.
+
+`make check-all` covers the language suites and the local source-hygiene checks (`make hygiene`), including taxonomy, GitHub issue references, and the em dash guard. `make hooks` runs those same checks on every commit. Other hygiene checks (default-branch assumptions, delegated isolation, branch deletion, protected-path ownership) are individual scripts under `scripts/` and can be run directly the same way, for example `bash scripts/check-default-branch-assumptions.sh origin/main`.
 
 ### Changing a protected path
 

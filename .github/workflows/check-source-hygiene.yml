@@ -33,6 +33,25 @@ jobs:
           git fetch --no-tags origin "${{ github.base_ref }}"
           bash scripts/check-no-issue-refs.sh "origin/${{ github.base_ref }}"
 
+  no-em-dash:
+    name: no-em-dash
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Added lines must not introduce U+2014. Lines already on the base are
+      # ignored, including when a historical occurrence is deleted. The guard
+      # reports the file and line and does not rewrite anything.
+      - name: Em dash guard regressions
+        run: bash scripts/check-no-em-dash-test.sh
+
+      - name: No new em dash characters
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref }}"
+          bash scripts/check-no-em-dash.sh "origin/${{ github.base_ref }}"
+
   no-default-branch-assumptions:
     name: No hard-coded default branch
     runs-on: ubuntu-latest
@@ -263,6 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - no-issue-refs
+      - no-em-dash
       - no-default-branch-assumptions
       - delegated-workspace-isolation
       - branch-deletion-guard

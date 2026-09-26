@@ -91,12 +91,14 @@ test-all: test-stem ## Run all tests
 
 hooks: ## Install the repo's git hooks (gofmt-on-commit + source-hygiene guards)
 	git config core.hooksPath .githooks
-	@echo "✅ core.hooksPath set to .githooks — pre-commit now runs gofmt + the taxonomy/issue-ref guards."
+	@echo "✅ core.hooksPath set to .githooks. pre-commit now runs gofmt and the taxonomy, issue-ref, and em dash guards."
 
 hygiene: ## Run the source-hygiene guards locally, mirroring what CI enforces on a PR
 	@git fetch --no-tags origin main
+	bash scripts/check-no-em-dash-test.sh
 	bash scripts/check-taxonomy.sh
 	bash scripts/check-no-issue-refs.sh origin/main
+	bash scripts/check-no-em-dash.sh origin/main
 
 check-all: ## Full pre-merge gate: clean build + all tests + source hygiene (see .github/CONTRIBUTING.md / TESTING.md)
 	$(MAKE) stem
