@@ -143,7 +143,8 @@ func usageComponentFrom(requestsMade bool, usage llm.Usage, provider, model stri
 
 // persistDispatchSproutRun commits the opening ownership row before any
 // Terrarium work and before any "session ready" signal. Status is the
-// existing non-terminal value "running". A later OnTerminal write settles
+// existing non-terminal value "running". OnTerrariumCreated updates that
+// same row after the Terrarium exists. A later OnTerminal write settles
 // the same runId.
 //
 // When history is nil, persistence is disabled and there is no ready signal:
@@ -225,6 +226,9 @@ func applyObservationToRun(run *historydb.SproutRun, report conductor.SproutRunR
 	run.FailureCategory = report.FailureCategory
 	run.FailureStage = string(report.FailureStage)
 	run.DiagnosticCode = string(report.DiagnosticCode)
+	if providerName := strings.TrimSpace(report.TerrariumProvider); providerName != "" {
+		run.TerrariumProvider = providerName
+	}
 	if run.FailureCategory == "" {
 		statusCode := 0
 		if run.ProviderDiagnostic != nil {
@@ -239,11 +243,32 @@ func applyObservationToRun(run *historydb.SproutRun, report conductor.SproutRunR
 	}
 }
 
+func persistRunningTerrariumProvider(ctx context.Context, history *historydb.Store, runID, providerName string) error {
+	if history == nil {
+		return nil
+	}
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := history.RecordSproutTerrariumProvider(context.WithoutCancel(ctx), runID, providerName); err != nil {
+		log.Printf("[Sprout] Failed to record terrarium provider: %v", err)
+		return fmt.Errorf("persist running terrarium provider: %w", err)
+	}
+	return nil
+}
+
 func installSproutTerminalHistory(orch *conductor.DockerOrchestrator, history *historydb.Store, persistCtx context.Context, opened historydb.SproutRun) *sproutPersistenceFailure {
 	if orch == nil || history == nil {
 		return nil
 	}
 	failure := &sproutPersistenceFailure{}
+	orch.OnTerrariumCreated = func(providerName string) {
+		failure.capture(persistRunningTerrariumProvider(persistCtx, history, opened.RunID, providerName))
+	}
 	orch.OnTerminal = func(report conductor.SproutRunReport, runErr error) {
 		failure.capture(persistTerminalSproutRun(persistCtx, history, opened, report, runErr))
 	}

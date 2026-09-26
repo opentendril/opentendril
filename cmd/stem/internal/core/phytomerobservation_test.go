@@ -323,6 +323,77 @@ func TestObservePhytomerUsesSourceAndProjectsSafely(t *testing.T) {
 	}
 }
 
+func TestObservePhytomerProjectsStoredTerrariumProvider(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: "running",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{
+				{
+					RunID: "run-recorded", Pollen: "claude", Substrate: "myrepo", Status: "running",
+					TerrariumProvider: "gvisor", StartedAt: time.Unix(2, 0).UTC(),
+				},
+				{
+					RunID: "run-historical", Pollen: "claude", Substrate: "myrepo", Status: "matured",
+					StartedAt: time.Unix(1, 0).UTC(),
+				},
+			}, nil
+		},
+		ContinuationsByPhytomer: emptyContinuations,
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if err != nil {
+		t.Fatalf("ObservePhytomer: %v", err)
+	}
+	if len(obs.Sprouts) != 2 {
+		t.Fatalf("sprouts = %+v", obs.Sprouts)
+	}
+	if obs.Sprouts[0].RunID != "run-historical" || obs.Sprouts[0].TerrariumProvider != "" {
+		t.Fatalf("historical sprout = %+v, want absent provider", obs.Sprouts[0])
+	}
+	if obs.Sprouts[1].TerrariumProvider != "gvisor" {
+		t.Fatalf("recorded provider = %q, want gvisor", obs.Sprouts[1].TerrariumProvider)
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `"terrariumProvider":"gvisor"`) {
+		t.Fatalf("projection omitted the stored provider: %s", body)
+	}
+	if strings.Contains(body, `"runId":"run-historical","status":"matured","terrariumProvider"`) {
+		t.Fatalf("historical sprout invented a provider: %s", body)
+	}
+}
+
+func TestObservePhytomerRefusesMismatchedSproutWithTerrariumProvider(t *testing.T) {
+	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
+		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {
+			return core.SeedObservationEvidence{
+				Handle: "seed-1", Pollen: "claude", PhytomerID: "tendril-1",
+				Substrate: "myrepo", Status: "running",
+			}, true, nil
+		},
+		SproutsByPhytomer: func(context.Context, string) ([]core.SproutObservationEvidence, error) {
+			return []core.SproutObservationEvidence{{
+				RunID: "run-intruder", Pollen: "codex", Substrate: "myrepo", Status: "running",
+				TerrariumProvider: "docker",
+			}}, nil
+		},
+		ContinuationsByPhytomer: emptyContinuations,
+	})
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-1")
+	if !errors.Is(err, core.ErrPhytomerObservationOwnershipConflict) {
+		t.Fatalf("mismatched sprout with terrariumProvider = %v, want ownership conflict", err)
+	}
+	assertObservationDoesNotContain(t, obs, "run-intruder", "docker", "codex")
+}
+
 func TestObservePhytomerRefusesSproutWithOtherPollen(t *testing.T) {
 	svc := core.NewService(nil).WithPhytomerObservationSource(core.PhytomerObservationSource{
 		SeedByPhytomer: func(context.Context, string) (core.SeedObservationEvidence, bool, error) {

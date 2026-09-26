@@ -95,6 +95,11 @@ type SproutRunReport struct {
 	// checkable against what the provider billed for.
 	Provider string
 	Model    string
+	// TerrariumProvider is the provider that actually created this Sprout's
+	// Terrarium. It stays empty until that creation succeeds. It is not the
+	// mind named by Provider, and it is not filled by reading configuration
+	// again later. Empty means the fact is absent.
+	TerrariumProvider string
 	// FilesModified lists the workspace files the model changed, when the run
 	// happened in a git repository where that is measurable. Nil when unknown
 	// (non-git or readonly substrates). It is the run's change set, not the

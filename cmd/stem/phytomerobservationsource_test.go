@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/historydb"
 )
 
@@ -96,6 +99,68 @@ func TestPhytomerObservationSourceCopiesVerificationDiagnostics(t *testing.T) {
 	}
 	if seed.VerificationDiagnostics[0].ExitCode == nil || *seed.VerificationDiagnostics[0].ExitCode != 1 {
 		t.Fatalf("exit code = %+v", seed.VerificationDiagnostics[0])
+	}
+}
+
+func TestObservePhytomerProjectsPersistedTerrariumProvider(t *testing.T) {
+	store, err := historydb.Open(context.Background(), filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	if err := store.RecordSeedRun(context.Background(), historydb.SeedRun{
+		Handle: "seed-boundary", Pollen: "claude", PhytomerID: "tendril-boundary",
+		Substrate: "myrepo", Status: "running", StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record seed: %v", err)
+	}
+	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{
+		RunID: "run-live", SessionID: "tendril-boundary", StepID: "run-live",
+		Pollen: "claude", Substrate: "myrepo", Status: "running",
+		StartedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("record sprout: %v", err)
+	}
+	if err := store.RecordSproutRun(context.Background(), historydb.SproutRun{
+		RunID: "run-old", SessionID: "tendril-boundary", StepID: "run-old",
+		Pollen: "claude", Substrate: "myrepo", Status: "matured", Outcome: "complete",
+		StartedAt: time.Now().UTC().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("record historical sprout: %v", err)
+	}
+
+	svc := core.NewService(nil).WithPhytomerObservationSource(phytomerObservationSource(store))
+	before, err := svc.ObservePhytomer(context.Background(), "tendril-boundary")
+	if err != nil {
+		t.Fatalf("ObservePhytomer before provider: %v", err)
+	}
+	if len(before.Sprouts) != 2 || before.Sprouts[0].TerrariumProvider != "" || before.Sprouts[1].TerrariumProvider != "" {
+		t.Fatalf("provider was invented before creation: %+v", before.Sprouts)
+	}
+
+	if err := store.RecordSproutTerrariumProvider(context.Background(), "run-live", "docker"); err != nil {
+		t.Fatalf("record provider: %v", err)
+	}
+	obs, err := svc.ObservePhytomer(context.Background(), "tendril-boundary")
+	if err != nil {
+		t.Fatalf("ObservePhytomer: %v", err)
+	}
+	if len(obs.Sprouts) != 2 {
+		t.Fatalf("sprouts = %+v", obs.Sprouts)
+	}
+	if obs.Sprouts[0].RunID != "run-old" || obs.Sprouts[0].TerrariumProvider != "" {
+		t.Fatalf("historical sprout = %+v", obs.Sprouts[0])
+	}
+	if obs.Sprouts[1].RunID != "run-live" || obs.Sprouts[1].TerrariumProvider != "docker" || obs.Sprouts[1].Status != "running" {
+		t.Fatalf("running sprout = %+v", obs.Sprouts[1])
+	}
+	raw, err := json.Marshal(obs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"terrariumProvider":"docker"`) {
+		t.Fatalf("stored provider was not projected: %s", raw)
 	}
 }
 

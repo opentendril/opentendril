@@ -5,14 +5,14 @@ OpenTendril. Where
 [ARCHITECTURE.md §5](../ARCHITECTURE.md) describes the persistent, multi-session
 Go Stem *daemon* (the unified `SessionManager`, the `.tendril/history.db` state
 layer, and the pluggable EventBus), this document describes the **decoupled web
-client** that turns that daemon into a single, living dashboard — and the
+client** that turns that daemon into a single, living dashboard, and the
 Stem-side API contracts the client depends on.
 
 - **Where it lives:** [`ui/`](../ui/) (React 18 + Vite + TypeScript).
 - **How to run / build it, the component tree, and the full event → visual
   mapping:** [`ui/README.md`](../ui/README.md).
 - **Design intent:** deeply biological, dark-mode-first. The
-  Rhizome/Sprout/Tendril taxonomy is the actual visual language — each
+  Rhizome/Sprout/Tendril taxonomy is the actual visual language: each
   orchestration grows as a plant whose branches, tendril tips, and phenotype
   arenas mutate as EventBus telemetry streams in.
 
@@ -47,12 +47,12 @@ Raw Event Pulse and terrarium output stay collapsed until opened.
 
 It leans on three Phase 1 backend capabilities:
 
-1. **Unified `SessionManager`** — `GET /v1/phytomers` lists every live Tendril
+1. **Unified `SessionManager`**: `GET /v1/phytomers` lists every live Tendril
    regardless of which surface (CLI, MCP, REST, WS) sprouted it, so the operator
    sees the whole fleet in one rail.
-2. **`history.db` persistence** — the per-session history endpoints let the UI
+2. **`history.db` persistence**: the per-session history endpoints let the UI
    re-hydrate its entire state after a browser refresh instead of starting blank.
-3. **EventBus over `/ws`** — the live telemetry stream that drives the botanical
+3. **EventBus over `/ws`**: the live telemetry stream that drives the botanical
    visualization in real time.
 
 ---
@@ -62,7 +62,7 @@ It leans on three Phase 1 backend capabilities:
 All endpoints are served by the Go Stem on its API port (default `:8080`) and
 authenticated with the Botanist bearer key. `BOTANIST_KEY` sets it explicitly; if
 unset, the Stem generates one on first run and persists it to `.tendril/api-key`
-(printed once to the log) — the API is never served unauthenticated. Handlers:
+(printed once to the log); the API is never served unauthenticated. Handlers:
 `cmd/stem/internal/api/sessions.go`.
 
 The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
@@ -73,11 +73,11 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | --- | --- |
 | `GET /health` | Onboarding reachability check. |
 | `GET /v1/phytomers` | The session rail; also the onboarding key-validation call. |
-| `POST /v1/phytomers` | "+ Sprout" — create a new Tendril session. |
+| `POST /v1/phytomers` | "+ Sprout": create a new Tendril session. |
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
-| `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
+| `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, `terrariumProvider`, and the existing usage envelope. `terrariumProvider` is the recorded provider that actually created the Sprout's Terrarium. It is absent for historical runs where that fact was not recorded. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth and Sprout-run review evidence. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). A Phytomer with `preferences.substrate` set passes that named Substrate into the grow path; an unset Substrate does not fall back to the Stem working directory. |
 | `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the session Substrate control. |
@@ -98,7 +98,7 @@ remain unchanged when reviewing a run from another Phytomer.
 
 ---
 
-## 3. WebSocket surface — the EventBus gateway (`/ws`)
+## 3. WebSocket surface: the EventBus gateway (`/ws`)
 
 `/ws` requires the same bearer key as the REST surface. Native
 WebSocket clients (e.g. the CLI's gorilla/websocket dialer) send it as an
@@ -127,7 +127,7 @@ The registered event types are defined in
 subscribes a handler for every one of them. The UI's event → botanical-visual
 mapping for each type is tabulated in [`ui/README.md`](../ui/README.md).
 
-### 3.1 `?replay=N` — recent-history replay (public contract)
+### 3.1 `?replay=N`: recent-history replay (public contract)
 
 `/ws` accepts an **opt-in** `replay` query parameter:
 
@@ -138,7 +138,7 @@ ws://<stem>/ws?replay=100
 When present, immediately after the `connected` frame the gateway replays up to
 `N` events from the bus's in-memory history window (capped at 100, the bus's
 `maxHistory`) before the live feed begins. Without the parameter, behavior is
-unchanged — no replay.
+unchanged: no replay.
 
 **Why it exists:** the per-session `…/events` REST endpoint can only return
 events that carry a `sessionId`. Orchestration telemetry emitted by the sequence
@@ -148,8 +148,8 @@ cannot recover that timeline from REST alone. `?replay=N` lets a reconnecting
 client re-grow session-less sequence state from the bus's recent history. The
 Greenhouse requests `replay=100` on every connect.
 
-Replay is lossy by design — it only reaches back as far as the bus's 100-event
-in-memory window — and is a best-effort supplement to REST hydration, not a
+Replay is lossy by design (it only reaches back as far as the bus's 100-event
+in-memory window) and is a best-effort supplement to REST hydration, not a
 guaranteed-complete event log. The durable log remains `history.db`.
 
 ---
@@ -157,7 +157,7 @@ guaranteed-complete event log. The durable log remains `history.db`.
 ## 4. Stem changes made for the Greenhouse
 
 The following backend changes shipped alongside the UI. All are **additive and
-backward-compatible** — existing CLI, MCP, and Stem-Grafting behavior is
+backward-compatible**: existing CLI, MCP, and Stem-Grafting behavior is
 unchanged.
 
 | Change | File | Why | Blast radius |
@@ -165,11 +165,11 @@ unchanged.
 | **`phenotypic-selection` registered as a first-class `EventType`** and added to `AllEventTypes()`. | `internal/eventbus/eventbus.go`, `internal/orchestrator/selection.go` | It was previously published with an ad-hoc `EventType("phenotypic-selection")` that no gateway subscription covered, so Genetic-Algorithm telemetry reached persistence sinks but **never the `/ws` live feed** (and, carrying no `sessionId`, was unreachable over REST too). | The gateway now forwards these events to every WS client, and `history.db` still records them as before. No change to selection logic or the event payload shape. |
 | **`/ws?replay=N`** opt-in recent-history replay. | `internal/gateway/gateway.go` | Lets a refreshed/reconnected client recover session-less sequence telemetry (see §3.1). | Only active when the query parameter is supplied; default connections are byte-for-byte unchanged. Bounded by the bus's existing 100-event window. |
 | **`GATEWAY_PORT` env var** for the standalone WS listener (default `9090`). | `cmd/stem/cmdserve.go` | Allows running a second Stem (or the UI's dev Stem) without a port clash on the auxiliary gateway. | Purely additive; unset preserves the previous `:9090` default. |
-| **Graceful gateway-bind degradation.** | `cmd/stem/cmdserve.go` | The standalone `:9090` listener previously `log.Fatalf`'d — a port conflict there killed the **entire API server**. It now logs a warning and continues; the same `/ws` surface is already mounted on the main API mux, so live telemetry still works. | Strictly more robust. The main API `/ws` endpoint is unaffected and remains the primary WebSocket surface. |
+| **Graceful gateway-bind degradation.** | `cmd/stem/cmdserve.go` | The standalone `:9090` listener previously `log.Fatalf`'d: a port conflict there killed the **entire API server**. It now logs a warning and continues; the same `/ws` surface is already mounted on the main API mux, so live telemetry still works. | Strictly more robust. The main API `/ws` endpoint is unaffected and remains the primary WebSocket surface. |
 
 ---
 
-## 5. Deployment — the containerized UI front
+## 5. Deployment - the containerized UI front
 
 The Greenhouse ships as a **separate, optional, isolated, containerized
 component**: a hardened nginx container (built by
@@ -177,7 +177,7 @@ component**: a hardened nginx container (built by
 [`ui/nginx/default.conf.template`](../ui/nginx/default.conf.template)) that
 serves the static bundle **and** reverse-proxies the Stem's documented API
 surface, giving the browser a single origin. The Stem itself stays **on the
-host and headless** — it never serves the UI, and the system is fully
+host and headless**: it never serves the UI, and the system is fully
 operable with this container absent.
 
 The normal local path uses the Stem's authenticated Unix-domain socket.
@@ -198,14 +198,14 @@ Greenhouse does not use host networking and does not need
    └──────────────────────────────────────────────────────────────────┘
          │  read-only /var/lib/opentendril-transport
          ▼
-   Unified Go Stem (host daemon — headless, loopback TCP unchanged)
+   Unified Go Stem (host daemon: headless, loopback TCP unchanged)
 ```
 
 - **Opt-in:** the `ui` compose service sits behind the `ui` profile and never
   starts unless `--profile ui` is passed. One command brings it up alongside
   the host Stem: `docker compose --profile ui up -d`.
 - **Local Unix transport:** `/health`, `/v1*`, and `/ws` go through
-  `/var/lib/opentendril-transport/stem.sock` — the same authenticated mux the
+  `/var/lib/opentendril-transport/stem.sock`: the same authenticated mux the
   Stem already serves on loopback TCP. Socket reachability is not
   authorization.
 - **Single origin, no CORS:** the browser only ever talks to the container, so
@@ -213,12 +213,12 @@ Greenhouse does not use host networking and does not need
   In development, Vite's proxy plays the same role via `STEM_TARGET`.
 - **Auth preserved:** the proxy forwards the operator's bearer key untouched;
   the Stem's `withAPIKeyAuth` remains the sole authority. Only `/health`,
-  `/v1*`, and `/ws` are proxied — nothing else on the host is reachable. The
+  `/v1*`, and `/ws` are proxied; nothing else on the host is reachable. The
   Greenhouse holds no Botanist key.
 - **WebSocket upgrade:** the `/ws` proxy speaks HTTP/1.1 with
   `Upgrade`/`Connection` headers against the same Unix socket. Explicit TCP
   mode (`--profile ui-tcp`) still prefers the dedicated gateway listener
-  (`:9090`) and falls back to the main API mux (`:8080`) — mirroring the
+  (`:9090`) and falls back to the main API mux (`:8080`), mirroring the
   Stem's own graceful gateway-bind degradation (§4).
 - **Hardened:** non-root image (`nginx-unprivileged`), read-only root
   filesystem, all capabilities dropped, `no-new-privileges`, loopback-only
@@ -229,7 +229,7 @@ Greenhouse does not use host networking and does not need
   socket are not mounted. The CSP locks `script-src` to `'self'` (no inline
   scripts, no `eval`) and splits `style-src` so `<style>` tags/stylesheets
   are `'self'`-only (`style-src-elem`) while only React's inline `style=""`
-  attributes keep `'unsafe-inline'` (`style-src-attr`) — an XSS payload can
+  attributes keep `'unsafe-inline'` (`style-src-attr`): an XSS payload can
   no longer inject an arbitrary `<style>` element for CSS-based
   exfiltration or UI redress.
 - **Explicit TCP mode:** `STEM_HOST=stem.example docker compose --profile ui-tcp up -d`
@@ -237,8 +237,8 @@ Greenhouse does not use host networking and does not need
   `STEM_HOST` at container start, and mounts no
   `/var/lib/opentendril-transport` bind. A missing local socket on
   `--profile ui` is a transport failure; it does not select TCP.
-- **Growth path:** any future server-side layer — BFF, operator auth/SSO,
-  enterprise integration, the optional concierge mini-model — grows
+- **Growth path:** any future server-side layer (BFF, operator auth/SSO,
+  enterprise integration, the optional concierge mini-model) grows
   **inside this UI component**, never in the Stem. The Stem's surface stays
   the headless CLI/MCP/OpenAPI capability core.
 

@@ -77,6 +77,9 @@ type SproutObservation struct {
 	ProviderDiagnostic       *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
 	ProviderRequestAttempted bool                `json:"providerRequestAttempted"`
 	ToolInvocations          int                 `json:"toolInvocations"`
+	// TerrariumProvider is the recorded provider that created this Sprout's
+	// Terrarium. Empty means the durable record did not contain the fact.
+	TerrariumProvider string `json:"terrariumProvider,omitempty"`
 }
 
 // SeedObservationEvidence is durable Seed state the current-state projection
@@ -120,10 +123,13 @@ type SproutObservationEvidence struct {
 	ProviderDiagnostic       *ProviderDiagnostic
 	ProviderRequestAttempted bool
 	ToolInvocations          int
-	Transcript               string
-	Output                   string
-	Error                    string
-	StartedAt                time.Time
+	// TerrariumProvider is the recorded Terrarium provider. Empty means the
+	// stored observation did not contain the fact.
+	TerrariumProvider string
+	Transcript        string
+	Output            string
+	Error             string
+	StartedAt         time.Time
 }
 
 // ContinuationObservationEvidence is durable continuation state the
@@ -231,6 +237,7 @@ func ProjectPhytomerObservation(seed SeedObservationEvidence, sprouts []SproutOb
 				DiagnosticCode:           ValidatePersistedDiagnosticCode(run.DiagnosticCode),
 				ProviderRequestAttempted: run.ProviderRequestAttempted,
 				ToolInvocations:          run.ToolInvocations,
+				TerrariumProvider:        strings.TrimSpace(run.TerrariumProvider),
 			}
 			if run.ProviderDiagnostic != nil {
 				copied := *run.ProviderDiagnostic
