@@ -61,6 +61,7 @@ func phytomerObservationSource(history *historydb.Store) core.PhytomerObservatio
 					DiagnosticCode:           core.DiagnosticCode(run.DiagnosticCode),
 					ProviderRequestAttempted: run.ProviderRequestAttempted,
 					ToolInvocations:          run.ToolInvocations,
+					TerrariumProvider:        run.TerrariumProvider,
 					Transcript:               run.Transcript,
 					Output:                   run.Output,
 					Error:                    run.Error,

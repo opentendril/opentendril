@@ -224,7 +224,7 @@ func TestPersistTerminalSproutRunCopiesFailureProvenance(t *testing.T) {
 func TestInstallSproutTerminalHistoryIsNoopWithoutStore(t *testing.T) {
 	orch := &conductor.DockerOrchestrator{}
 	installSproutTerminalHistory(orch, nil, context.Background(), historydb.SproutRun{})
-	if orch.OnTerminal != nil {
+	if orch.OnTerminal != nil || orch.OnTerrariumCreated != nil {
 		t.Fatal("observer installed without a history store")
 	}
 }
@@ -930,5 +930,98 @@ func TestOneShotSproutOperationsPropagatesPersistenceFailuresAfterSemanticSucces
 	}
 	if strings.Contains(runErr.Error(), "terminal sprout run") {
 		t.Fatalf("terminal row unexpectedly failed in mid-run telemetry failure regression: %v", runErr)
+	}
+}
+
+func openPersistHistory(t *testing.T) *historydb.Store {
+	t.Helper()
+	dbDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dbDir, "rhizome.key"), []byte("01234567890123456789012345678901"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	store, err := historydb.Open(context.Background(), filepath.Join(dbDir, "history.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
+
+func TestRunningTerrariumProviderIsVisibleBeforeTerminalSettlement(t *testing.T) {
+	store := openPersistHistory(t)
+	opened := historydb.SproutRun{
+		RunID: "run-boundary", SessionID: "tendril-boundary", StepID: "run-boundary",
+		Pollen: "claude", Substrate: "myrepo", Status: "running",
+		StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSproutRun(context.Background(), opened); err != nil {
+		t.Fatalf("opening write: %v", err)
+	}
+	orch := &conductor.DockerOrchestrator{}
+	failure := installSproutTerminalHistory(orch, store, context.Background(), opened)
+	if orch.OnTerrariumCreated == nil {
+		t.Fatal("running terrarium observation was not installed")
+	}
+
+	orch.OnTerrariumCreated("firecracker")
+	if err := failure.Err(); err != nil {
+		t.Fatalf("running observation: %v", err)
+	}
+	running, err := store.LoadSproutRuns(context.Background(), "tendril-boundary", 10)
+	if err != nil || len(running) != 1 {
+		t.Fatalf("load running: %v %+v", err, running)
+	}
+	if running[0].Status != "running" || !running[0].FinishedAt.IsZero() {
+		t.Fatalf("running row was settled: %+v", running[0])
+	}
+	if running[0].TerrariumProvider != "firecracker" {
+		t.Fatalf("running TerrariumProvider = %q, want firecracker", running[0].TerrariumProvider)
+	}
+
+	orch.OnTerminal(conductor.SproutRunReport{
+		Output:            "done",
+		Outcome:           conductor.SproutOutcomeComplete,
+		Provider:          "openrouter",
+		Model:             "anthropic/claude-sonnet-4.6",
+		TerrariumProvider: "firecracker",
+		RequestsMade:      true,
+	}, nil)
+	if err := failure.Err(); err != nil {
+		t.Fatalf("terminal observation: %v", err)
+	}
+	settled, err := store.LoadSproutRuns(context.Background(), "tendril-boundary", 10)
+	if err != nil || len(settled) != 1 {
+		t.Fatalf("load settled: %v %+v", err, settled)
+	}
+	if settled[0].Status != "matured" || settled[0].TerrariumProvider != "firecracker" {
+		t.Fatalf("settled row = status %q provider %q", settled[0].Status, settled[0].TerrariumProvider)
+	}
+	if settled[0].Model != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("terminal model = %q", settled[0].Model)
+	}
+}
+
+func TestTerminalSettlementDoesNotInventTerrariumProvider(t *testing.T) {
+	store := openPersistHistory(t)
+	t.Setenv("TENDRIL_TERRARIUM_PROVIDER", "docker")
+	opened := historydb.SproutRun{
+		RunID: "run-absent", SessionID: "s1", Status: "running", StartedAt: time.Now().UTC(),
+	}
+	if err := store.RecordSproutRun(context.Background(), opened); err != nil {
+		t.Fatalf("opening write: %v", err)
+	}
+	if err := persistTerminalSproutRun(context.Background(), store, opened, conductor.SproutRunReport{
+		Outcome:  conductor.SproutOutcomeFailed,
+		Provider: "openrouter",
+		Model:    "some-model",
+	}, nil); err != nil {
+		t.Fatalf("terminal write: %v", err)
+	}
+	runs, err := store.LoadSproutRuns(context.Background(), "s1", 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("load: %v %+v", err, runs)
+	}
+	if runs[0].TerrariumProvider != "" {
+		t.Fatalf("terminal settlement invented provider %q", runs[0].TerrariumProvider)
 	}
 }

@@ -163,6 +163,11 @@ type SproutRun struct {
 	ProviderRequestAttempted bool `json:"providerRequestAttempted"`
 	// ToolInvocations is how many terrarium tool calls the Sprout made.
 	ToolInvocations int `json:"toolInvocations"`
+	// TerrariumProvider is the provider that created this Sprout's Terrarium.
+	// It is stored in the observation envelope, not a column. Historical rows
+	// omit it; an empty value means the fact was not recorded and must not be
+	// reconstructed.
+	TerrariumProvider string `json:"terrariumProvider,omitempty"`
 	// FruitRepository is the stable repository identity captured at Fruit
 	// creation. FruitWorkspace is private local verification evidence.
 	FruitRepository       string    `json:"fruitRepository,omitempty"`
@@ -182,6 +187,8 @@ type ProviderDiagnostic struct {
 }
 
 // sproutRunObservation is the JSON envelope persisted in sproutruns.observation.
+// terrariumProvider is carried here. Adding it does not add a column or a
+// schema generation. Historical envelopes omit the key and decode as absent.
 type sproutRunObservation struct {
 	Outcome                  string              `json:"outcome,omitempty"`
 	FailureCategory          string              `json:"failureCategory,omitempty"`
@@ -190,6 +197,7 @@ type sproutRunObservation struct {
 	ProviderDiagnostic       *ProviderDiagnostic `json:"providerDiagnostic,omitempty"`
 	ProviderRequestAttempted bool                `json:"providerRequestAttempted,omitempty"`
 	ToolInvocations          int                 `json:"toolInvocations,omitempty"`
+	TerrariumProvider        string              `json:"terrariumProvider,omitempty"`
 }
 
 // UsageComponent is one fail-honest usage component stored on a Sprout run.
@@ -1013,7 +1021,8 @@ func decodeSproutRunUsage(raw string) (SproutRunUsage, error) {
 }
 
 func encodeSproutRunObservation(run SproutRun) (string, error) {
-	if run.Outcome == "" && run.FailureCategory == "" && run.FailureStage == "" && run.DiagnosticCode == "" && run.ProviderDiagnostic == nil && !run.ProviderRequestAttempted && run.ToolInvocations == 0 {
+	terrariumProvider := strings.TrimSpace(run.TerrariumProvider)
+	if run.Outcome == "" && run.FailureCategory == "" && run.FailureStage == "" && run.DiagnosticCode == "" && run.ProviderDiagnostic == nil && !run.ProviderRequestAttempted && run.ToolInvocations == 0 && terrariumProvider == "" {
 		return "", nil
 	}
 	encoded, err := json.Marshal(sproutRunObservation{
@@ -1024,6 +1033,7 @@ func encodeSproutRunObservation(run SproutRun) (string, error) {
 		ProviderDiagnostic:       run.ProviderDiagnostic,
 		ProviderRequestAttempted: run.ProviderRequestAttempted,
 		ToolInvocations:          run.ToolInvocations,
+		TerrariumProvider:        terrariumProvider,
 	})
 	if err != nil {
 		return "", err
@@ -1199,6 +1209,105 @@ ON CONFLICT(runId) DO UPDATE SET
 	return nil
 }
 
+// RecordSproutTerrariumProvider merges the provider that created a Sprout's
+// Terrarium into the observation envelope of an already-open row. It does not
+// insert a row, settle status, or replace a provider that was already
+// recorded. An empty name writes nothing. The envelope is the existing
+// sproutruns.observation column; this does not add a column.
+func (s *Store) RecordSproutTerrariumProvider(ctx context.Context, runID, providerName string) error {
+	runID = strings.TrimSpace(runID)
+	providerName = strings.TrimSpace(providerName)
+	if runID == "" {
+		return fmt.Errorf("sprout run requires runId")
+	}
+	if providerName == "" {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin sprout terrarium provider update: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT observation FROM sproutruns WHERE runId = ?`, runID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sprout run %s is not open", runID)
+	}
+	if err != nil {
+		return fmt.Errorf("load sprout run observation: %w", err)
+	}
+	updated, changed, err := mergeSproutTerrariumProvider(raw, providerName)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE sproutruns SET observation = ? WHERE runId = ?`, updated, runID)
+	if err != nil {
+		return fmt.Errorf("record sprout terrarium provider: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("record sprout terrarium provider: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("sprout run %s is not open", runID)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sprout terrarium provider: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+// mergeSproutTerrariumProvider sets terrariumProvider on an observation
+// document without dropping keys it does not know. A non-empty existing value
+// is left unchanged. changed is false when the document already carried that
+// fact or the name is empty.
+func mergeSproutTerrariumProvider(raw, providerName string) (string, bool, error) {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return raw, false, nil
+	}
+	raw = strings.TrimSpace(raw)
+	doc := map[string]json.RawMessage{}
+	if raw != "" && raw != "null" {
+		if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+			return "", false, fmt.Errorf("decode sprout run observation: %w", err)
+		}
+		if doc == nil {
+			doc = map[string]json.RawMessage{}
+		}
+	}
+	if existing, ok := doc["terrariumProvider"]; ok {
+		var current string
+		if err := json.Unmarshal(existing, &current); err == nil && strings.TrimSpace(current) != "" {
+			return raw, false, nil
+		}
+	}
+	encoded, err := json.Marshal(providerName)
+	if err != nil {
+		return "", false, fmt.Errorf("encode sprout terrarium provider: %w", err)
+	}
+	doc["terrariumProvider"] = encoded
+	updated, err := json.Marshal(doc)
+	if err != nil {
+		return "", false, fmt.Errorf("encode sprout run observation: %w", err)
+	}
+	return string(updated), true, nil
+}
+
 // LoadSproutRuns returns recent sprout executions, optionally filtered by
 // session, most recent first.
 func (s *Store) LoadSproutRuns(ctx context.Context, sessionID string, limit int) ([]SproutRun, error) {
@@ -1274,6 +1383,7 @@ LIMIT ?`
 		run.ProviderDiagnostic = obs.ProviderDiagnostic
 		run.ProviderRequestAttempted = obs.ProviderRequestAttempted
 		run.ToolInvocations = obs.ToolInvocations
+		run.TerrariumProvider = obs.TerrariumProvider
 		runs = append(runs, run)
 	}
 	if err := rows.Err(); err != nil {

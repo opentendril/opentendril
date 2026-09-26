@@ -94,6 +94,13 @@ type DockerOrchestrator struct {
 	// finishes completeRun invokes this later. Adapters that persist history
 	// install this; the conductor does not write the store.
 	OnTerminal func(report SproutRunReport, err error)
+	// OnTerrariumCreated reports the provider that created this Sprout's
+	// Terrarium. It runs once, after creation succeeds and before the Sprout
+	// turn, so a running record can carry the fact before terminal settlement.
+	// The conductor does not write history. A nil func changes nothing, and
+	// creation failure does not call it. Nothing in the run's control flow
+	// reads the value back.
+	OnTerrariumCreated func(providerName string)
 }
 
 func NewDockerOrchestrator() *DockerOrchestrator {
@@ -490,6 +497,7 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// is not an ending: it hands the same publisher to the goroutine that
 	// outlives this call, which fires it when the work does end.
 	var changes changeEvidence
+	var terrariumProvider string
 	var failureProvenance primaryFailureProvenance
 	markFailure := func(stage core.FailureStage, code core.DiagnosticCode) {
 		failureProvenance.setOnce(stage, code)
@@ -1150,6 +1158,16 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 		}
 		return report, err
 	}
+	// The name is taken from the provider that just created the Terrarium.
+	// providerName above is only what was requested; it is not recorded if
+	// creation did not succeed, and it is not consulted again after this.
+	terrariumProvider = observedTerrariumProvider(session)
+	if terrariumProvider != "" {
+		report.TerrariumProvider = terrariumProvider
+		if d.OnTerrariumCreated != nil {
+			d.OnTerrariumCreated(terrariumProvider)
+		}
+	}
 	if cleanup != nil {
 		teardown = append(teardown, cleanup)
 	}
@@ -1190,6 +1208,9 @@ func (d *DockerOrchestrator) RunSprout(ctx context.Context, taskPrompt string) (
 	// it owns every value it touches and shares nothing with the caller's
 	// report, which by then belongs to somebody else.
 	completeRun := func(sproutResult sproutResult, runErr error) (report SproutRunReport, changes changeEvidence, err error) {
+		// This report is built fresh. Carry the provider captured at creation
+		// so terminal settlement retains it without consulting configuration.
+		report.TerrariumProvider = terrariumProvider
 		// Everything here runs on its own clock. The work's context may be
 		// spent — that is the ordinary way a run ends — and handing the
 		// post-mortem an already-expired context makes the clock that ended the
@@ -1789,7 +1810,30 @@ func workspaceHasExtension(workspace string, extensions ...string) bool {
 }
 
 type terrariumToolSession struct {
-	terrarium terrarium.Terrarium
+	terrarium         terrarium.Terrarium
+	terrariumProvider string
+}
+
+// TerrariumProvider is the name of the provider that created this session.
+// It is empty when creation did not succeed.
+func (s *terrariumToolSession) TerrariumProvider() string {
+	if s == nil {
+		return ""
+	}
+	return s.terrariumProvider
+}
+
+// observedTerrariumProvider reads the provider that created a session. A
+// session that cannot report one contributes absence, not a configured guess.
+func observedTerrariumProvider(session toolSession) string {
+	type named interface {
+		TerrariumProvider() string
+	}
+	namedSession, ok := session.(named)
+	if !ok || namedSession == nil {
+		return ""
+	}
+	return strings.TrimSpace(namedSession.TerrariumProvider())
 }
 
 // terrariumInspector is the narrow surface watchDormancy uses to observe a
@@ -1953,7 +1997,11 @@ func startTerrariumSession(ctx context.Context, providerName, imageName string, 
 		return nil, err
 	}
 
-	return &terrariumToolSession{terrarium: instance}, nil
+	observed := ""
+	if provider != nil {
+		observed = strings.TrimSpace(provider.Name())
+	}
+	return &terrariumToolSession{terrarium: instance, terrariumProvider: observed}, nil
 }
 
 // terrariumBindMountRunAsUser is the single bind-mounted Terrarium identity
