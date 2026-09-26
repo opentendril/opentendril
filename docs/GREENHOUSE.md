@@ -77,7 +77,7 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Chat log hydration. |
-| `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, and the existing usage envelope. |
+| `GET /v1/phytomers/{id}/sprout-runs` | The canonical per-Phytomer Sprout-run list. Each `SproutRun` carries status plus the structured observation fields: `provider`, `model`, `outcome`, `failureCategory`, `failureStage`, `diagnosticCode`, `providerDiagnostic`, `providerRequestAttempted`, `toolInvocations`, `terrariumProvider`, and the existing usage envelope. `terrariumProvider` is the recorded provider that actually created the Sprout's Terrarium. It is absent for historical runs where that fact was not recorded. |
 | `GET /v1/phytomers/{id}/events` | Persisted EventBus telemetry for garden re-growth and Sprout-run review evidence. |
 | `POST /v1/chat/completions` | Send a task into a session (sprouts a Tendril run). A Phytomer with `preferences.substrate` set passes that named Substrate into the grow path; an unset Substrate does not fall back to the Stem working directory. |
 | `GET /v1/config/substrates` | Named Substrates from `substrates.yaml`, for the session Substrate control. |
