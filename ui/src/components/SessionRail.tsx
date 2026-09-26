@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useStem } from "../state/store";
-import type { Session } from "../lib/types";
+import type { Session, SproutRun } from "../lib/types";
 
 function relativeTime(iso: string): string {
   const delta = Date.now() - Date.parse(iso);
@@ -17,10 +17,28 @@ function shortId(session: Session): string {
   return session.sessionId.replace(/^tendril-/, "");
 }
 
+function primaryLabel(goal: string | undefined, runs: SproutRun[]): string {
+  const durableGoal = goal?.trim();
+  if (durableGoal) return durableGoal;
+  const transcript = [...runs]
+    .sort((left, right) => {
+      const leftTime = Date.parse(left.startedAt);
+      const rightTime = Date.parse(right.startedAt);
+      const safeLeft = Number.isFinite(leftTime) ? leftTime : Number.NEGATIVE_INFINITY;
+      const safeRight = Number.isFinite(rightTime) ? rightTime : Number.NEGATIVE_INFINITY;
+      if (safeLeft !== safeRight) return safeRight - safeLeft;
+      return right.runId.localeCompare(left.runId);
+    })
+    .map((run) => run.transcript?.trim() ?? "")
+    .find((text) => text.length > 0);
+  return transcript || "Phytomer";
+}
+
 export function SessionRail() {
   const sessions = useStem((s) => s.sessions);
   const activeSessionId = useStem((s) => s.activeSessionId);
   const runsBySession = useStem((s) => s.runsBySession);
+  const seedRunByPhytomer = useStem((s) => s.seedRunByPhytomer);
   const selectedRunId = useStem((s) => s.drilldown?.run.runId);
   const selectedRunSessionId = useStem((s) => s.drilldown?.run.sessionId);
   const selectSession = useStem((s) => s.selectSession);
@@ -55,7 +73,10 @@ export function SessionRail() {
             MCP surfaces grow their own — they will appear here.
           </p>
         ) : (
-          sessions.map((session) => (
+          sessions.map((session) => {
+            const runs = runsBySession[session.sessionId] ?? [];
+            const label = primaryLabel(seedRunByPhytomer[session.sessionId]?.goal, runs);
+            return (
             <div
               key={session.sessionId}
               className="session-group"
@@ -66,6 +87,9 @@ export function SessionRail() {
                 className={`session-card ${session.sessionId === activeSessionId ? "active" : ""}`}
                 onClick={() => selectSession(session.sessionId)}
               >
+                <span className="phytomer-label" data-testid="phytomer-label" title={label}>
+                  {label}
+                </span>
                 <span className="sid" title={session.sessionId}>
                   {shortId(session)}
                 </span>
@@ -109,7 +133,8 @@ export function SessionRail() {
                 </div>
               ) : null}
             </div>
-          ))
+            );
+          })
         )}
       </div>
     </aside>

@@ -161,7 +161,7 @@ App                         gates on stored connection settings
    │  └─ PlantFigure        one orchestration = one plant (stem, branches, tendril tips)
    │     └─ SelectionArena  a phenotypic-selection step = an arena of competing phenotype pods
    ├─ EventTicker           center-bottom: EventBus pulse; collapsed while a run is open
-   ├─ ChatPanel             right: active-Phytomer chat (/v1/chat/completions) + sprout-runs list
+   ├─ ChatPanel             right: Seed workbench (dispatch, watch, continuation, Fruit) + sprout-runs list
    └─ DrilldownDrawer       run review: observation facts, task transcript, tool activity; raw telemetry collapsed
 ```
 
@@ -170,14 +170,16 @@ Supporting modules:
 - `lib/types.ts` — TypeScript shapes mirrored **field-for-field** from the Go
   structs (`session.go`, `historydb.go`, `gateway.go`, `eventbus.go`). Nothing
   here is invented; every field matches what the backend emits.
-- `lib/api.ts` — thin typed REST client; attaches the bearer key; builds the
-  `/ws` URL (with the `?replay=100` hydration parameter).
+- `lib/api.ts`: thin typed REST client. It attaches the bearer key, builds the
+  `/ws` URL (with the `?replay=100` hydration parameter), and reads the Phytomer
+  watch with that same bearer on the `Authorization` header.
 - `lib/ws.ts` — resilient WebSocket client with capped exponential-backoff
   reconnect and lifecycle-status callbacks.
 - `state/connection.ts` — onboarding settings, persisted to `localStorage`.
 - `state/garden.ts` — the pure garden reducer (the event → visual fold).
-- `state/store.ts` — the central store: hydration orchestration, sessions,
-  messages, runs, ticker, chat, and drilldown.
+- `state/store.ts`: the central store. It hydrates Phytomers, messages, runs,
+  and the ticker, and it tracks Seed dispatch, the active Phytomer watch, the
+  durable Seed record, continuation, Fruit inventory, and drilldown.
 - `styles/global.css` — the design system (deep-loam dark theme, glassmorphism,
   the Rhizome/Sprout/Tendril colour language) driven by CSS custom properties.
 
@@ -192,7 +194,10 @@ One Zustand store (`state/store.ts`) is the single source of truth. It holds:
   The active Phytomer's messages and events hydrate when selected. Boot and
   reconnect discover canonical run records for up to the 10 most recently
   active Phytomers. The active Phytomer still receives its normal full session
-  hydration, including its run list when it is outside that set.
+  hydration, including its run list when it is outside that set. New work
+  dispatches a detached Seed and then watches that canonical Phytomer. The
+  durable Seed `goal` is the task label. `/v1/chat/completions` is not used
+  for new work.
 - `garden` — the botanical scene graph, produced *only* by folding events
   through `applyGardenEvent`.
 - `ticker` — a bounded rolling window of recent events for the Event Pulse.
@@ -229,6 +234,13 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
    return because those events carry no session id.
 4. **Flush the buffer on top, then go live.** The buffered live events are
    applied over the hydrated state and the store switches to pass-through mode.
+   The active Phytomer watch then opens on `GET /v1/phytomers/{id}/watch`.
+   When the observation includes a Seed handle, Greenhouse collects
+   `GET /v1/seeds/runs/{handle}` and uses that `goal`, status, verification,
+   and Fruit provenance. Terminal work also reads `GET /v1/fruit` for review
+   state. A 404 from the watch leaves the Phytomer on its historical Sprout
+   runs. The watch stops at a terminal Seed status and does not reconnect on
+   its own.
 
 The transition is a *merge*, not a reset. A refresh mid-orchestration re-grows
 the garden from history and picks the live feed back up with no visible seam;
@@ -242,8 +254,9 @@ events on the EventBus trigger an authoritative `/sprout-runs` refresh; the
 event payloads are invalidation signals and do not define canonical run state.
 Selecting a discovered run fetches current persisted `/events` evidence from
 the Stem before the review is marked complete. Reviewing a run from another
-Phytomer does not switch the active Phytomer or change which session the
-ChatPanel displays.
+Phytomer does not switch the active Phytomer or retarget Seed continuation.
+The workbench stays on the active Seed, and the run drawer stays the detailed
+Sprout evidence, including `terrariumProvider` when that run recorded one.
 
 ---
 

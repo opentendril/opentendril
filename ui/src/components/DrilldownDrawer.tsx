@@ -13,6 +13,7 @@ import {
   toolActivityFromEvents,
   toolInvocationCount,
 } from "../lib/observation";
+import { terrariumProviderFact } from "../lib/terrarium";
 import { useStem } from "../state/store";
 
 function fmt(iso?: string): string {
@@ -60,6 +61,7 @@ export function DrilldownDrawer() {
   const fruit = fruitLabel(run, filesModified);
   const diagnostic = diagnosticLine(run);
   const toolCount = toolInvocationCount(run);
+  const terrarium = terrariumProviderFact(run.terrariumProvider);
 
   return (
     <section className="run-review glass" role="dialog" aria-label="Sprout run detail">
@@ -116,6 +118,13 @@ export function DrilldownDrawer() {
             <div className="fact">
               <div className="k">Provider</div>
               <div className="v">{resolvedProvider(run) || "—"}</div>
+            </div>
+            <div className="fact" data-testid="run-terrarium-provider">
+              <div className="k">Terrarium provider</div>
+              <div className="v" title={terrarium.note || terrarium.label}>
+                {terrarium.label}
+                {terrarium.note ? <div className="provider-note">{terrarium.note}</div> : null}
+              </div>
             </div>
             <div className="fact">
               <div className="k">Model</div>

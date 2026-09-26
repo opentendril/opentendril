@@ -11,7 +11,15 @@
 
 import { create } from "zustand";
 import { currentConnection } from "./connection";
-import { stemApi, websocketUrl, StemApiError } from "../lib/api";
+import {
+  stemApi,
+  websocketUrl,
+  StemApiError,
+  NotSeedWatchError,
+  isAbortError,
+} from "../lib/api";
+import { newIdempotencyKey } from "../lib/idempotency";
+import { seedStatusIsTerminal } from "../lib/seed";
 import { StemSocket, type WsStatus } from "../lib/ws";
 import {
   applyGardenEvent,
@@ -20,8 +28,13 @@ import {
 } from "./garden";
 import type {
   ChatMessage,
+  ContinuationRequest,
   EventRecord,
+  FruitInventory,
+  PhytomerObservation,
   Preferences,
+  SeedGrowRequest,
+  SeedRun,
   Session,
   SproutRun,
   StemEvent,
@@ -44,6 +57,47 @@ export interface DrilldownTarget {
   evidenceError?: string;
 }
 
+export type SeedDispatchPhase = "idle" | "pending" | "ambiguous" | "rejected";
+
+export interface SeedDispatchState {
+  phase: SeedDispatchPhase;
+  request?: SeedGrowRequest;
+  message?: string;
+}
+
+export type PhytomerWatchPhase =
+  | "idle"
+  | "connecting"
+  | "open"
+  | "terminal"
+  | "not-seed"
+  | "error";
+
+export interface PhytomerWatchState {
+  phase: PhytomerWatchPhase;
+  error?: string;
+}
+
+export type ContinuationPhase = "idle" | "pending" | "rejected" | "ambiguous";
+
+export interface ContinuationState {
+  phase: ContinuationPhase;
+  phytomerId?: string;
+  intent?: string;
+  idempotencyKey?: string;
+  message?: string;
+}
+
+export type FruitLoadStatus = "idle" | "loading" | "ready" | "error";
+
+export interface SeedWorkInput {
+  substrate: string;
+  goal: string;
+  verify: string[];
+  maxIterations?: number;
+  timeoutSeconds?: number;
+}
+
 interface StemStore {
   wsStatus: WsStatus;
   hydration: Hydration;
@@ -57,17 +111,29 @@ interface StemStore {
   eventsStatusBySession: Record<string, EvidenceState>;
   garden: GardenState;
   ticker: StemEvent[];
-  chatPending: Record<string, boolean>;
-  chatError: string | null;
   drilldown: DrilldownTarget | null;
   configuredSubstrates: string[];
+  seedDispatch: SeedDispatchState;
+  seedRunByPhytomer: Record<string, SeedRun>;
+  seedCollectErrorByPhytomer: Record<string, string>;
+  knownSeedHandleByPhytomer: Record<string, string>;
+  observationByPhytomer: Record<string, PhytomerObservation>;
+  watchByPhytomer: Record<string, PhytomerWatchState>;
+  continuation: ContinuationState;
+  fruitInventory: FruitInventory | null;
+  fruitStatus: FruitLoadStatus;
+  fruitError: string | null;
 
   boot: () => void;
   shutdown: () => void;
   selectSession: (sessionId: string) => void;
   createSession: (preferences?: Preferences) => Promise<void>;
   updatePreferences: (preferences: Preferences) => Promise<void>;
-  sendChat: (content: string) => Promise<void>;
+  startSeed: (input: SeedWorkInput) => Promise<void>;
+  retrySeedDispatch: () => Promise<void>;
+  discardUncertainDispatch: () => void;
+  continueSeed: (intent: string) => Promise<void>;
+  retryContinuation: () => Promise<void>;
   openDrilldown: (run: SproutRun) => void;
   closeDrilldown: () => void;
 }
@@ -100,6 +166,23 @@ let runRefreshTimers = new Map<string, number>();
 let activeRunRequests = 0;
 let runRequestQueue: Array<() => void> = [];
 let drilldownRequestId = 0;
+let watchAbort: AbortController | null = null;
+let watchPhytomerId: string | null = null;
+let watchInFlight = false;
+let fruitRequestId = 0;
+
+const IDLE_DISPATCH: SeedDispatchState = { phase: "idle" };
+const IDLE_CONTINUATION: ContinuationState = { phase: "idle" };
+
+function emptyFruitCounts(): FruitInventory["counts"] {
+  return {
+    outstanding: 0,
+    unknown: 0,
+    closedUnmerged: 0,
+    merged: 0,
+    total: 0,
+  };
+}
 
 function recentSessions(sessions: Session[]): Session[] {
   return [...sessions]
@@ -308,6 +391,357 @@ export const useStem = create<StemStore>()((set, get) => {
     return persistedEvents;
   }
 
+  function stillWatching(phytomerId: string, controller: AbortController): boolean {
+    return watchPhytomerId === phytomerId && watchAbort === controller;
+  }
+
+  function stopWatch() {
+    watchAbort?.abort();
+    watchAbort = null;
+    watchPhytomerId = null;
+    watchInFlight = false;
+  }
+
+  async function collectSeedIntoStore(handle: string, phytomerId: string) {
+    try {
+      const run = await stemApi.collectSeed(currentConnection(), handle);
+      const id = run.phytomerId || phytomerId;
+      set((state) => {
+        const errors = { ...state.seedCollectErrorByPhytomer };
+        delete errors[phytomerId];
+        delete errors[id];
+        return {
+          seedRunByPhytomer: { ...state.seedRunByPhytomer, [id]: run },
+          seedCollectErrorByPhytomer: errors,
+        };
+      });
+      if (seedStatusIsTerminal(run.status)) void loadFruitInventory();
+    } catch (err) {
+      const message =
+        err instanceof StemApiError ? `${err.status}: ${err.message}` : String(err);
+      set((state) => ({
+        seedCollectErrorByPhytomer: {
+          ...state.seedCollectErrorByPhytomer,
+          [phytomerId]: message,
+        },
+      }));
+    }
+  }
+
+  async function loadFruitInventory() {
+    const requestId = ++fruitRequestId;
+    set({ fruitStatus: "loading", fruitError: null });
+    try {
+      const inventory = await stemApi.fruitInventory(currentConnection());
+      if (requestId !== fruitRequestId) return;
+      set({
+        fruitInventory: {
+          items: inventory.items ?? [],
+          counts: inventory.counts ?? emptyFruitCounts(),
+        },
+        fruitStatus: "ready",
+        fruitError: null,
+      });
+    } catch (err) {
+      if (requestId !== fruitRequestId) return;
+      set({
+        fruitStatus: "error",
+        fruitError:
+          err instanceof StemApiError ? `${err.status}: ${err.message}` : String(err),
+      });
+    }
+  }
+
+  function applyObservation(phytomerId: string, observation: PhytomerObservation) {
+    set((state) => ({
+      observationByPhytomer: {
+        ...state.observationByPhytomer,
+        [phytomerId]: observation,
+      },
+      watchByPhytomer: {
+        ...state.watchByPhytomer,
+        [phytomerId]: {
+          phase: seedStatusIsTerminal(observation.status) ? "terminal" : "open",
+        },
+      },
+    }));
+    if (observation.handle) void collectSeedIntoStore(observation.handle, phytomerId);
+    if (seedStatusIsTerminal(observation.status)) void loadFruitInventory();
+  }
+
+  async function runWatch(phytomerId: string, controller: AbortController) {
+    watchInFlight = true;
+    let terminal = false;
+    try {
+      await stemApi.watchPhytomer(
+        currentConnection(),
+        phytomerId,
+        controller.signal,
+        (observation) => {
+          if (!stillWatching(phytomerId, controller)) return;
+          applyObservation(phytomerId, observation);
+          if (seedStatusIsTerminal(observation.status)) {
+            terminal = true;
+            controller.abort();
+          }
+        },
+      );
+      if (!stillWatching(phytomerId, controller) || controller.signal.aborted) return;
+      if (terminal || seedStatusIsTerminal(get().observationByPhytomer[phytomerId]?.status)) {
+        set((state) => ({
+          watchByPhytomer: {
+            ...state.watchByPhytomer,
+            [phytomerId]: { phase: "terminal" },
+          },
+        }));
+      }
+    } catch (err) {
+      if (!stillWatching(phytomerId, controller) || controller.signal.aborted || isAbortError(err)) {
+        return;
+      }
+      if (err instanceof NotSeedWatchError || (err instanceof StemApiError && err.status === 404)) {
+        set((state) => ({
+          watchByPhytomer: {
+            ...state.watchByPhytomer,
+            [phytomerId]: { phase: "not-seed" },
+          },
+        }));
+        return;
+      }
+      const message = err instanceof StemApiError
+        ? `Phytomer watch failed (${err.status}): ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+      set((state) => ({
+        watchByPhytomer: {
+          ...state.watchByPhytomer,
+          [phytomerId]: { phase: "error", error: message },
+        },
+      }));
+    } finally {
+      if (watchAbort === controller) watchInFlight = false;
+    }
+  }
+
+  function ensureWatch(phytomerId: string) {
+    if (!phytomerId) {
+      stopWatch();
+      return;
+    }
+    if (
+      watchPhytomerId === phytomerId &&
+      watchInFlight &&
+      watchAbort &&
+      !watchAbort.signal.aborted
+    ) {
+      return;
+    }
+    stopWatch();
+    const controller = new AbortController();
+    watchAbort = controller;
+    watchPhytomerId = phytomerId;
+    watchInFlight = true;
+    set((state) => ({
+      watchByPhytomer: {
+        ...state.watchByPhytomer,
+        [phytomerId]: { phase: "connecting" },
+      },
+    }));
+    void runWatch(phytomerId, controller);
+  }
+
+  function seedStatusFor(phytomerId: string): string {
+    return (
+      get().observationByPhytomer[phytomerId]?.status ||
+      get().seedRunByPhytomer[phytomerId]?.status ||
+      ""
+    );
+  }
+
+  function sameAmbiguousRequest(request: SeedGrowRequest): boolean {
+    const current = get().seedDispatch;
+    return (
+      current.phase === "ambiguous" &&
+      current.request?.idempotencyKey === request.idempotencyKey
+    );
+  }
+
+  async function probePhytomer(phytomerId: string): Promise<PhytomerObservation | null> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 4000);
+    let observed: PhytomerObservation | null = null;
+    try {
+      await stemApi.watchPhytomer(
+        currentConnection(),
+        phytomerId,
+        controller.signal,
+        (observation) => {
+          observed = observation;
+          controller.abort();
+        },
+      );
+    } catch (err) {
+      if (observed) return observed;
+      if (isAbortError(err) || err instanceof NotSeedWatchError) return null;
+      if (err instanceof StemApiError && err.status === 404) return null;
+      return null;
+    } finally {
+      window.clearTimeout(timer);
+    }
+    return observed;
+  }
+
+  async function hydrateAmbiguousDispatch(request: SeedGrowRequest, beforeIds: Set<string>) {
+    let sessions: Session[] = [];
+    try {
+      const listed = await stemApi.listSessions(currentConnection());
+      sessions = listed.sessions ?? [];
+      set({ sessions });
+    } catch {
+      return;
+    }
+    if (!sameAmbiguousRequest(request)) return;
+
+    const matches: string[] = [];
+    for (const session of sessions) {
+      if (beforeIds.has(session.sessionId)) continue;
+      if (!sameAmbiguousRequest(request)) return;
+      const observed = await probePhytomer(session.sessionId);
+      if (!observed?.handle) continue;
+      try {
+        const run = await stemApi.collectSeed(currentConnection(), observed.handle);
+        const goal = (run.goal ?? "").trim();
+        const substrate = (run.substrate ?? "").trim();
+        if (goal !== request.goal.trim() || substrate !== request.substrate.trim()) continue;
+        const id = run.phytomerId || session.sessionId;
+        set((state) => ({
+          seedRunByPhytomer: { ...state.seedRunByPhytomer, [id]: run },
+          observationByPhytomer: {
+            ...state.observationByPhytomer,
+            [session.sessionId]: observed,
+          },
+          knownSeedHandleByPhytomer: {
+            ...state.knownSeedHandleByPhytomer,
+            [id]: run.handle,
+          },
+        }));
+        matches.push(id);
+      } catch {
+        // The original idempotency key stays available for an explicit retry.
+      }
+    }
+    if (!sameAmbiguousRequest(request) || matches.length !== 1) return;
+    set({ seedDispatch: IDLE_DISPATCH });
+    get().selectSession(matches[0]);
+  }
+
+  async function markAmbiguousDispatch(
+    request: SeedGrowRequest,
+    beforeIds: Set<string>,
+    message: string,
+  ) {
+    set({ seedDispatch: { phase: "ambiguous", request, message } });
+    await hydrateAmbiguousDispatch(request, beforeIds);
+  }
+
+  async function dispatchPrepared(request: SeedGrowRequest, beforeIds: Set<string>) {
+    try {
+      const result = await stemApi.growSeed(currentConnection(), request);
+      if (!result?.handle || !result.phytomerId || !result.status) {
+        await markAmbiguousDispatch(
+          request,
+          beforeIds,
+          "The dispatch outcome is uncertain. The Stem response did not include a Seed handle and Phytomer.",
+        );
+        return;
+      }
+      set((state) => ({
+        seedDispatch: IDLE_DISPATCH,
+        knownSeedHandleByPhytomer: {
+          ...state.knownSeedHandleByPhytomer,
+          [result.phytomerId]: result.handle,
+        },
+      }));
+      try {
+        const listed = await stemApi.listSessions(currentConnection());
+        set({ sessions: listed.sessions ?? [] });
+      } catch {
+        // The dispatch identity is already known. A later hydration can refresh the rail.
+      }
+      void collectSeedIntoStore(result.handle, result.phytomerId);
+      get().selectSession(result.phytomerId);
+    } catch (err) {
+      if (isAbortError(err)) {
+        set({ seedDispatch: IDLE_DISPATCH });
+        return;
+      }
+      if (err instanceof StemApiError) {
+        set({
+          seedDispatch: {
+            phase: "rejected",
+            message: `Seed dispatch rejected (${err.status}): ${err.message}`,
+          },
+        });
+        return;
+      }
+      await markAmbiguousDispatch(
+        request,
+        beforeIds,
+        "The dispatch outcome is uncertain. The Stem may have accepted this Seed. Retry uses this same request.",
+      );
+    }
+  }
+
+  async function submitContinuation(intent: string, existingKey: string | null) {
+    const phytomerId = get().activeSessionId;
+    if (!phytomerId || seedStatusFor(phytomerId) !== "running") return;
+    const trimmed = intent.trim();
+    if (!trimmed || get().continuation.phase === "pending") return;
+    const idempotencyKey = existingKey ?? newIdempotencyKey();
+    const request: ContinuationRequest = {
+      intent: trimmed,
+      idempotencyKey,
+      sessionId: phytomerId,
+    };
+    set({
+      continuation: {
+        phase: "pending",
+        phytomerId,
+        intent: trimmed,
+        idempotencyKey,
+      },
+    });
+    try {
+      await stemApi.continuePhytomer(currentConnection(), phytomerId, request);
+      if (get().continuation.idempotencyKey !== idempotencyKey) return;
+      set({ continuation: IDLE_CONTINUATION });
+    } catch (err) {
+      if (isAbortError(err)) return;
+      if (get().continuation.idempotencyKey !== idempotencyKey) return;
+      if (err instanceof StemApiError) {
+        set({
+          continuation: {
+            phase: "rejected",
+            phytomerId,
+            message: `Continuation rejected (${err.status}): ${err.message}`,
+          },
+        });
+        return;
+      }
+      set({
+        continuation: {
+          phase: "ambiguous",
+          phytomerId,
+          intent: trimmed,
+          idempotencyKey,
+          message:
+            "The continuation outcome is uncertain. Retry uses this same request.",
+        },
+      });
+    }
+  }
+
   async function hydrate() {
     set({ hydration: "hydrating", hydrationError: null });
     liveBuffer = [];
@@ -350,6 +784,8 @@ export const useStem = create<StemStore>()((set, get) => {
       liveBuffer = null;
       set({ garden, hydration: "ready" });
       buffered.forEach(foldEvent);
+      if (active) ensureWatch(active);
+      else stopWatch();
     } catch (err) {
       liveBuffer = null;
       set({
@@ -374,10 +810,18 @@ export const useStem = create<StemStore>()((set, get) => {
     eventsStatusBySession: {},
     garden: emptyGarden,
     ticker: [],
-    chatPending: {},
-    chatError: null,
     drilldown: null,
     configuredSubstrates: [],
+    seedDispatch: IDLE_DISPATCH,
+    seedRunByPhytomer: {},
+    seedCollectErrorByPhytomer: {},
+    knownSeedHandleByPhytomer: {},
+    observationByPhytomer: {},
+    watchByPhytomer: {},
+    continuation: IDLE_CONTINUATION,
+    fruitInventory: null,
+    fruitStatus: "idle",
+    fruitError: null,
 
     boot: () => {
       socket?.close();
@@ -402,6 +846,7 @@ export const useStem = create<StemStore>()((set, get) => {
     },
 
     shutdown: () => {
+      stopWatch();
       socket?.close();
       socket = null;
       liveBuffer = null;
@@ -417,8 +862,9 @@ export const useStem = create<StemStore>()((set, get) => {
     selectSession: (sessionId) => {
       window.localStorage.setItem(ACTIVE_SESSION_KEY, sessionId);
       drilldownRequestId += 1;
-      set({ activeSessionId: sessionId, drilldown: null, chatError: null });
+      set({ activeSessionId: sessionId, drilldown: null });
       void hydrateSessionData(sessionId);
+      ensureWatch(sessionId);
     },
 
     createSession: async (preferences = {}) => {
@@ -442,81 +888,65 @@ export const useStem = create<StemStore>()((set, get) => {
     updatePreferences: async (preferences) => {
       const sessionId = get().activeSessionId;
       if (!sessionId) return;
-      try {
-        const session = await stemApi.updatePreferences(
-          currentConnection(),
-          sessionId,
-          preferences,
-        );
-        set((state) => ({
-          chatError: null,
-          sessions: state.sessions.map((existing) =>
-            existing.sessionId === sessionId ? session : existing,
-          ),
-        }));
-      } catch (err) {
-        set({
-          chatError:
-            err instanceof StemApiError
-              ? `Could not bind Substrate (${err.status}): ${err.message}`
-              : `Could not bind Substrate: ${String(err)}`,
-        });
-        throw err;
-      }
+      const session = await stemApi.updatePreferences(
+        currentConnection(),
+        sessionId,
+        preferences,
+      );
+      set((state) => ({
+        sessions: state.sessions.map((existing) =>
+          existing.sessionId === sessionId ? session : existing,
+        ),
+      }));
     },
 
-    sendChat: async (content) => {
-      const sessionId = get().activeSessionId;
-      if (!sessionId || !content.trim()) return;
-      const conn = currentConnection();
-      const now = new Date().toISOString();
+    startSeed: async (input) => {
+      const phase = get().seedDispatch.phase;
+      if (phase === "pending" || phase === "ambiguous") return;
+      const request: SeedGrowRequest = {
+        substrate: input.substrate,
+        goal: input.goal,
+        verify: [...input.verify],
+        origin: "rest",
+        detached: true,
+        idempotencyKey: newIdempotencyKey(),
+      };
+      if (input.maxIterations !== undefined) request.maxIterations = input.maxIterations;
+      if (input.timeoutSeconds !== undefined) request.timeoutSeconds = input.timeoutSeconds;
+      const beforeIds = new Set(get().sessions.map((session) => session.sessionId));
+      set({ seedDispatch: { phase: "pending", request } });
+      await dispatchPrepared(request, beforeIds);
+    },
 
-      set((state) => ({
-        chatError: null,
-        chatPending: { ...state.chatPending, [sessionId]: true },
-        messagesBySession: {
-          ...state.messagesBySession,
-          [sessionId]: [
-            ...(state.messagesBySession[sessionId] ?? []),
-            { sessionId, role: "user", content, createdAt: now },
-          ],
-        },
-      }));
+    retrySeedDispatch: async () => {
+      const current = get().seedDispatch;
+      if (current.phase !== "ambiguous" || !current.request) return;
+      const beforeIds = new Set(get().sessions.map((session) => session.sessionId));
+      set({ seedDispatch: { phase: "pending", request: current.request } });
+      await dispatchPrepared(current.request, beforeIds);
+    },
 
-      try {
-        const res = await stemApi.chat(conn, sessionId, content);
-        const reply = res.choices?.[0]?.message;
-        if (reply) {
-          set((state) => ({
-            messagesBySession: {
-              ...state.messagesBySession,
-              [sessionId]: [
-                ...(state.messagesBySession[sessionId] ?? []),
-                {
-                  sessionId,
-                  role: reply.role || "assistant",
-                  content: reply.content,
-                  model: res.model,
-                  createdAt: new Date().toISOString(),
-                },
-              ],
-            },
-          }));
-        }
-      } catch (err) {
-        set({
-          chatError:
-            err instanceof StemApiError
-              ? `Sprout failed (${err.status}): ${err.message}`
-              : `Sprout failed: ${String(err)}`,
-        });
-      } finally {
-        set((state) => ({
-          chatPending: { ...state.chatPending, [sessionId]: false },
-        }));
-        // The run (matured or withered) is now in history — refresh the drawerable list.
-        void hydrateSessionData(sessionId);
+    discardUncertainDispatch: () => {
+      if (get().seedDispatch.phase !== "ambiguous") return;
+      set({ seedDispatch: IDLE_DISPATCH });
+    },
+
+    continueSeed: async (intent) => {
+      await submitContinuation(intent, null);
+    },
+
+    retryContinuation: async () => {
+      const current = get().continuation;
+      if (
+        current.phase !== "ambiguous" ||
+        !current.intent ||
+        !current.idempotencyKey ||
+        !current.phytomerId
+      ) {
+        return;
       }
+      if (get().activeSessionId !== current.phytomerId) return;
+      await submitContinuation(current.intent, current.idempotencyKey);
     },
 
     openDrilldown: (run) => {

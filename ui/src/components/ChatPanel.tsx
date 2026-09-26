@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useStem } from "../state/store";
 import type { SproutRun } from "../lib/types";
+import { ActiveSeedWork } from "./ActiveSeedWork";
+import { NewWorkForm } from "./NewWorkForm";
 
 function timeOf(iso?: string): string {
   if (!iso) return "";
@@ -12,152 +14,95 @@ function timeOf(iso?: string): string {
 
 export function ChatPanel() {
   const activeSessionId = useStem((s) => s.activeSessionId);
-  const activeSession = useStem((s) =>
-    s.sessions.find((session) => session.sessionId === s.activeSessionId) ?? null,
+  const seedRun = useStem((s) =>
+    s.activeSessionId ? s.seedRunByPhytomer[s.activeSessionId] : undefined,
   );
-  const configuredSubstrates = useStem((s) => s.configuredSubstrates);
+  const observation = useStem((s) =>
+    s.activeSessionId ? s.observationByPhytomer[s.activeSessionId] : undefined,
+  );
+  const watch = useStem((s) =>
+    s.activeSessionId ? s.watchByPhytomer[s.activeSessionId] : undefined,
+  );
+  const dispatch = useStem((s) => s.seedDispatch);
   const messages = useStem((s) =>
     s.activeSessionId ? (s.messagesBySession[s.activeSessionId] ?? []) : [],
   );
   const runs = useStem((s) =>
     s.activeSessionId ? (s.runsBySession[s.activeSessionId] ?? []) : [],
   );
-  const pending = useStem((s) =>
-    s.activeSessionId ? Boolean(s.chatPending[s.activeSessionId]) : false,
-  );
-  const chatError = useStem((s) => s.chatError);
-  const sendChat = useStem((s) => s.sendChat);
-  const updatePreferences = useStem((s) => s.updatePreferences);
   const openDrilldown = useStem((s) => s.openDrilldown);
   const selectedRunId = useStem((s) => s.drilldown?.run.runId);
 
-  const boundSubstrate = activeSession?.preferences?.substrate?.trim() ?? "";
-  const [draft, setDraft] = useState("");
-  const [substrateDraft, setSubstrateDraft] = useState(boundSubstrate);
-  const [bindingSubstrate, setBindingSubstrate] = useState(false);
+  const [composingNew, setComposingNew] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setSubstrateDraft(boundSubstrate);
-  }, [activeSessionId, boundSubstrate]);
+    setComposingNew(false);
+  }, [activeSessionId]);
+
+  const seedOwned = Boolean(seedRun?.handle || observation?.handle);
+  const watchPhase = watch?.phase ?? "idle";
+  const checking =
+    Boolean(activeSessionId) &&
+    !seedOwned &&
+    (watchPhase === "connecting" || watchPhase === "idle");
+  const showForm =
+    dispatch.phase === "ambiguous" ||
+    composingNew ||
+    (!seedOwned && !checking);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [messages.length, pending, activeSessionId]);
-
-  async function persistSubstrate(): Promise<boolean> {
-    const next = substrateDraft.trim();
-    if (!activeSessionId || !next || next === boundSubstrate) return true;
-    setBindingSubstrate(true);
-    try {
-      await updatePreferences({ substrate: next });
-      return true;
-    } catch {
-      return false;
-    } finally {
-      setBindingSubstrate(false);
-    }
-  }
-
-  function submit() {
-    const content = draft.trim();
-    if (!content || pending || !activeSessionId) return;
-    setDraft("");
-    void (async () => {
-      if (!(await persistSubstrate())) return;
-      await sendChat(content);
-    })();
-  }
+  }, [messages.length, runs.length, activeSessionId, showForm, seedOwned]);
 
   return (
     <div className="chat-zone">
-      <section className="chat glass">
+      <section className="chat glass" aria-label="Seed workbench">
         <div className="chat-head">
-          <h2 className="panel-title">Session</h2>
-          <span className="mono" style={{ color: "var(--ink-faint)" }}>
-            {activeSessionId ?? "none"}
-          </span>
+          <h2 className="panel-title">Workbench</h2>
+          <span className="mono">{activeSessionId ?? "none"}</span>
         </div>
-
-        {activeSessionId ? (
-          <div className="substrate-bind">
-            <label htmlFor="session-substrate">Substrate</label>
-            <input
-              id="session-substrate"
-              list="configured-substrates"
-              value={substrateDraft}
-              placeholder="named substrate"
-              disabled={bindingSubstrate}
-              onChange={(e) => setSubstrateDraft(e.target.value)}
-              onBlur={() => {
-                void persistSubstrate();
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void persistSubstrate();
-                }
-              }}
-            />
-            <datalist id="configured-substrates">
-              {configuredSubstrates.map((name) => (
-                <option value={name} key={name} />
-              ))}
-            </datalist>
-            <span
-              className={`substrate-bound ${boundSubstrate ? "set" : "unset"}`}
-              title={boundSubstrate || "No Substrate bound"}
-            >
-              {boundSubstrate ? `bound: ${boundSubstrate}` : "unbound"}
-            </span>
-          </div>
-        ) : null}
 
         <div className="chat-log" ref={logRef}>
-          {activeSessionId === null ? (
-            <p className="rail-empty">Select or sprout a Tendril to chat.</p>
-          ) : messages.length === 0 && !pending ? (
-            <p className="rail-empty">
-              Quiet soil. Send a task below and watch it grow in the garden.
-            </p>
-          ) : (
-            messages.map((msg, i) => (
-              <div className={`msg ${msg.role === "user" ? "user" : "assistant"}`} key={i}>
-                <div className="bubble">{msg.content}</div>
-                <div className="msg-meta">
-                  {msg.role === "user" ? "you" : (msg.model || "tendril")} ·{" "}
-                  {timeOf(msg.createdAt)}
-                </div>
-              </div>
-            ))
-          )}
-          {pending ? (
-            <div className="sprouting">
-              <span className="frond">🌿</span> Tendril is growing your task…
+          {(seedOwned || checking) && dispatch.phase !== "ambiguous" && !composingNew ? (
+            <div className="workbench-actions">
+              <button type="button" className="btn-ghost" onClick={() => setComposingNew(true)}>
+                New work
+              </button>
             </div>
           ) : null}
-          {chatError ? <div className="chat-error">{chatError}</div> : null}
-        </div>
+          {composingNew && seedOwned ? (
+            <div className="workbench-actions">
+              <button type="button" className="btn-ghost" onClick={() => setComposingNew(false)}>
+                Back to active Seed
+              </button>
+            </div>
+          ) : null}
 
-        <div className="composer">
-          <textarea
-            value={draft}
-            placeholder={
-              activeSessionId ? "Describe a task for this Tendril…" : "No session selected"
-            }
-            disabled={!activeSessionId}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            rows={2}
-          />
-          <button className="btn" onClick={submit} disabled={!draft.trim() || pending}>
-            Sow
-          </button>
+          {showForm ? <NewWorkForm /> : null}
+          {!showForm && checking ? (
+            <p data-testid="seed-watch-pending">Checking whether this Phytomer is Seed-owned.</p>
+          ) : null}
+          {!showForm && seedOwned ? <ActiveSeedWork /> : null}
+          {watch?.phase === "error" && watch.error && !seedOwned ? (
+            <p className="chat-error" data-testid="watch-error">
+              {watch.error}
+            </p>
+          ) : null}
+
+          {messages.length > 0 ? (
+            <details className="historical-messages" data-testid="historical-messages">
+              <summary>Historical messages</summary>
+              {messages.map((msg, index) => (
+                <div className={`msg ${msg.role === "user" ? "user" : "assistant"}`} key={index}>
+                  <div className="bubble">{msg.content}</div>
+                  <div className="msg-meta">
+                    {msg.role === "user" ? "you" : msg.model || "tendril"} · {timeOf(msg.createdAt)}
+                  </div>
+                </div>
+              ))}
+            </details>
+          ) : null}
         </div>
       </section>
 

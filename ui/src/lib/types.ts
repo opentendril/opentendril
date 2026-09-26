@@ -113,6 +113,9 @@ export interface SproutRun {
   providerDiagnostic?: ProviderDiagnostic;
   providerRequestAttempted?: boolean;
   toolInvocations?: number;
+  // Recorded provider that created this Sprout's Terrarium. Absent when the
+  // durable observation did not contain the fact.
+  terrariumProvider?: string;
 }
 
 export interface EventRecord {
@@ -173,4 +176,148 @@ export interface ChatCompletionResponse {
 
 export interface HealthReport {
   [key: string]: unknown;
+}
+
+// Stem seed.grow request. verify is argv and is never a shell command line.
+// Zero or omitted bounds mean the Stem default. The Stem remains authoritative
+// for the maximums.
+export interface SeedGrowRequest {
+  substrate: string;
+  goal: string;
+  verify: string[];
+  maxIterations?: number;
+  timeoutSeconds?: number;
+  origin: string;
+  detached: true;
+  idempotencyKey: string;
+}
+
+// Detached POST /v1/seeds/grow success body.
+export interface SeedDispatchResult {
+  handle: string;
+  phytomerId: string;
+  status: string;
+}
+
+export interface SeedPublicationDiagnostic {
+  failureCategory: string;
+  executionStatus: string;
+  phase: string;
+  outcome: string;
+  retrySafe: boolean;
+  message: string;
+  requestId?: string;
+}
+
+export interface SeedVerificationDiagnostic {
+  iteration: number;
+  outcome: string;
+  exitCode?: number;
+  timedOut: boolean;
+  message?: string;
+}
+
+// GET /v1/seeds/runs/{handle}. Goal on this record is the durable task label.
+export interface SeedRun {
+  handle: string;
+  pollen?: string;
+  phytomerId?: string;
+  substrate?: string;
+  goal?: string;
+  status: string;
+  iterations: number;
+  branch?: string;
+  commit?: string;
+  fruitRepository?: string;
+  fruitPublicationState?: string;
+  fruitCreatedAt?: string;
+  diff?: string;
+  logs?: string;
+  error?: string;
+  publicationDiagnostic?: SeedPublicationDiagnostic;
+  verificationDiagnostics?: SeedVerificationDiagnostic[];
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface SproutObservation {
+  runId?: string;
+  status?: string;
+  provider?: string;
+  model?: string;
+  outcome?: string;
+  failureCategory?: string;
+  failureStage?: string;
+  diagnosticCode?: string;
+  providerDiagnostic?: ProviderDiagnostic;
+  providerRequestAttempted?: boolean;
+  toolInvocations?: number;
+  terrariumProvider?: string;
+}
+
+export interface ContinuationObservation {
+  continuationId: string;
+  sequence: number;
+  deliveryState: string;
+}
+
+// SSE event: observation payload from GET /v1/phytomers/{id}/watch.
+export interface PhytomerObservation {
+  pollen?: string;
+  substrate?: string;
+  handle?: string;
+  phytomerId?: string;
+  status?: string;
+  iterations: number;
+  branch?: string;
+  commit?: string;
+  publicationDiagnostic?: SeedPublicationDiagnostic;
+  verificationDiagnostics?: SeedVerificationDiagnostic[];
+  sprouts?: SproutObservation[];
+  continuations?: ContinuationObservation[];
+}
+
+export interface ContinuationRequest {
+  intent: string;
+  idempotencyKey: string;
+  sessionId: string;
+}
+
+export interface ContinuationResult {
+  continuationId: string;
+  sessionId: string;
+  sequence: number;
+  deliveryState: string;
+  idempotencyKey: string;
+  acceptedAt: string;
+}
+
+export interface FruitInventoryItem {
+  producerKind: string;
+  producerIdentity: string;
+  phytomerId?: string;
+  substrate?: string;
+  repository: string;
+  branch: string;
+  commit: string;
+  publicationState?: string;
+  createdAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  reviewState: string;
+  unknownReason?: string;
+  pullRequest?: number;
+}
+
+export interface FruitReviewPressure {
+  outstanding: number;
+  unknown: number;
+  closedUnmerged: number;
+  merged: number;
+  total: number;
+}
+
+export interface FruitInventory {
+  items: FruitInventoryItem[];
+  counts: FruitReviewPressure;
 }

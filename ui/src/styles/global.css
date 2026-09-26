@@ -198,10 +198,18 @@ input, textarea, select { font: inherit; }
   border-color: var(--glass-border-bright);
   background: rgba(99, 217, 124, 0.12);
 }
+.session-card .phytomer-label {
+  display: block;
+  font-size: 13px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-card .sid {
   font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--sap);
+  font-size: 11px;
+  color: var(--ink-faint);
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -635,6 +643,109 @@ input, textarea, select { font: inherit; }
 .run-time { font-size: 10px; color: var(--ink-faint); font-family: var(--font-mono); }
 .runs-empty { color: var(--ink-faint); font-size: 12px; }
 
+.workbench-intro,
+.seed-context,
+.workbench-retained {
+  margin: 0;
+  color: var(--ink-mute);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workbench-goal {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.workbench-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.verifier-fields,
+.seed-bounds,
+.historical-messages,
+.fruit-result,
+.publication-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.verifier-fields {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+}
+.verifier-fields legend,
+.fruit-result h3,
+.fruit-result h4,
+.active-seed h4,
+.publication-diagnostic h4 {
+  font-family: var(--font-display);
+  font-size: 14px;
+  margin: 0;
+}
+.arg-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.arg-row .field { flex: 1; min-width: 0; }
+.argv-list,
+.verification-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+}
+.technical-list { margin: 0; }
+.technical-list div { margin-bottom: 8px; }
+.technical-list dt {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.technical-list dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.technical-id,
+.review-state {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+.provider-note {
+  white-space: normal;
+  font-family: var(--font-ui);
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.dispatch-uncertain {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(232, 196, 104, 0.4);
+  border-radius: var(--radius-sm);
+  background: rgba(232, 196, 104, 0.08);
+}
+.active-seed,
+.new-work {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
 /* ── run review (garden-zone drill-down) ───────────────────────────────── */
 .run-review {
   flex: 1;
@@ -868,7 +979,9 @@ input, textarea, select { font: inherit; }
   text-transform: uppercase;
   color: var(--ink-mute);
 }
-.field input {
+.field input,
+.field textarea,
+.field select {
   padding: 10px 13px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--glass-border);
@@ -877,7 +990,11 @@ input, textarea, select { font: inherit; }
   outline: none;
   transition: border-color 160ms ease;
 }
-.field input:focus { border-color: var(--glass-border-bright); }
+.field textarea { resize: vertical; min-height: 72px; width: 100%; }
+.field select { width: 100%; }
+.field input:focus,
+.field textarea:focus,
+.field select:focus { border-color: var(--glass-border-bright); }
 .field .hint { font-size: 11px; color: var(--ink-faint); line-height: 1.5; }
 
 .onboard-status { min-height: 18px; font-size: 12px; text-align: center; }
@@ -933,6 +1050,9 @@ input, textarea, select { font: inherit; }
   .rail { flex: none; max-height: 160px; }
   .garden-zone { flex: 1 1 auto; min-height: 320px; }
   .chat-zone { flex: none; min-height: 280px; }
+  .chat { min-height: 460px; }
+  .arg-row { flex-wrap: wrap; }
+  .workbench-goal { font-size: 18px; }
   .shell.reviewing .rail,
   .shell.reviewing .chat-zone { display: none; }
   .shell.reviewing .garden-zone { min-height: calc(100dvh - 140px); }
