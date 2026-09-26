@@ -16,9 +16,9 @@ export function GardenCanvas() {
           </div>
           <h3>The garden is dormant</h3>
           <p>
-            When the Stem orchestrates — a chat sprout, parallel sprouting, a
-            phenotypic-selection sequence — it grows here in real time. Sow a
-            task in the session panel to plant the first tendril.
+            When the Stem orchestrates, parallel sprouting and phenotypic
+            selection grow here in real time. Start a Seed in the workbench to
+            plant the first tendril.
           </p>
         </div>
       ) : (

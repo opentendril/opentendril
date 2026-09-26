@@ -20,15 +20,15 @@ export function statusLabel(status: string): string {
   if (status === "withered") return "Withered";
   if (status === "matured") return "Matured";
   if (status === "running") return "Running";
-  return status || "—";
+  return status || "Unknown";
 }
 
 export function observationLead(run: SproutRun): string {
   const status = statusLabel(run.status);
   if (run.failureCategory) {
-    return `${status} — ${failureCategoryLabel(run.failureCategory)}`;
+    return `${status}: ${failureCategoryLabel(run.failureCategory)}`;
   }
-  if (run.outcome) return `${status} — ${run.outcome}`;
+  if (run.outcome) return `${status}: ${run.outcome}`;
   return status;
 }
 
@@ -79,7 +79,7 @@ export function toolActivityFromEvents(events: EventRecord[]): ToolActivityRow[]
     const status =
       typeof event.data?.["status"] === "string" ? event.data["status"] : "";
     if (!name && !status) continue;
-    rows.push({ name: name || "—", status: status || "unknown" });
+    rows.push({ name: name || "Unknown", status: status || "unknown" });
   }
   return rows;
 }
