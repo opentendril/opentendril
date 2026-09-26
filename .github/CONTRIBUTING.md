@@ -161,7 +161,7 @@ These are ruleset rules, not conventions — they fail your push or block your m
 * **No force-pushes and no deletion** of the default branch.
 * **A pull request is required** — you cannot push straight to `main`.
 * **Review threads must be resolved** before merging.
-* **Required status checks** must pass: `Native PR Gate` (which aggregates the Go and Python suites according to what your change touched), `verify-commits`, and the six Source Hygiene checks — GitHub references, default-branch assumptions, delegated isolation, branch deletion, protected-path ownership, and taxonomy.
+* **Required status checks** must pass: `Native PR Gate`, `verify-commits`, and `Source Hygiene Gate`. The Source Hygiene Gate aggregates the repository hygiene checks and fails unless every required hygiene job succeeds.
 
 * **No Unicode em dash (U+2014).** Repository prose, comments, user-visible strings, and documentation use commas, colons, semicolons, parentheses, or hyphens instead. Source Hygiene rejects a newly added line that contains an em dash (`scripts/check-no-em-dash.sh`). An unchanged historical em dash does not fail the check.
 
