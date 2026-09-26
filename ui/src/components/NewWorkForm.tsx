@@ -16,7 +16,6 @@ export function NewWorkForm() {
   const dispatch = useStem((s) => s.seedDispatch);
   const startSeed = useStem((s) => s.startSeed);
   const retrySeedDispatch = useStem((s) => s.retrySeedDispatch);
-  const discardUncertainDispatch = useStem((s) => s.discardUncertainDispatch);
 
   const [substrate, setSubstrate] = useState("");
   const [goal, setGoal] = useState("");
@@ -61,9 +60,6 @@ export function NewWorkForm() {
             disabled={pending}
           >
             Retry dispatch
-          </button>
-          <button type="button" className="btn-ghost" onClick={discardUncertainDispatch}>
-            Discard uncertain dispatch
           </button>
         </div>
       </div>

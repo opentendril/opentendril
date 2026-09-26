@@ -34,8 +34,9 @@ export class StemApiError extends Error {
   }
 }
 
-// GET /v1/phytomers/{id}/watch answered 404, or a successful response was not
-// an event stream. The Phytomer is not a Seed-owned work context.
+// GET /v1/phytomers/{id}/watch answered 404. That response is the authoritative
+// signal that the Phytomer is not a Seed-owned work context. A successful
+// response that is not an event stream is a watch failure, not this case.
 export class NotSeedWatchError extends Error {
   constructor(
     message: string,
@@ -218,9 +219,10 @@ export const stemApi = {
     }
     const contentType = response.headers.get("content-type") ?? "";
     if (!contentType.toLowerCase().includes("text/event-stream")) {
-      throw new NotSeedWatchError(
-        "phytomer watch did not return an event stream",
-        response.status,
+      await response.body?.cancel().catch(() => undefined);
+      const reported = contentType.split(";")[0]?.trim() || "no content type";
+      throw new Error(
+        `Phytomer watch failed because the response was ${reported}, not an event stream`,
       );
     }
     if (!response.body) {

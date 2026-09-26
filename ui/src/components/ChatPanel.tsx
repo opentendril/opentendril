@@ -24,6 +24,7 @@ export function ChatPanel() {
     s.activeSessionId ? s.watchByPhytomer[s.activeSessionId] : undefined,
   );
   const dispatch = useStem((s) => s.seedDispatch);
+  const dispatchReady = useStem((s) => s.dispatchReady);
   const messages = useStem((s) =>
     s.activeSessionId ? (s.messagesBySession[s.activeSessionId] ?? []) : [],
   );
@@ -46,10 +47,14 @@ export function ChatPanel() {
     Boolean(activeSessionId) &&
     !seedOwned &&
     (watchPhase === "connecting" || watchPhase === "idle");
+  const watchFailed = watchPhase === "error";
+  // A watch error is not the historical/non-Seed path. Only a 404 reaches not-seed.
   const showForm =
-    dispatch.phase === "ambiguous" ||
-    composingNew ||
-    (!seedOwned && !checking);
+    dispatchReady &&
+    (dispatch.phase === "ambiguous" ||
+      dispatch.phase === "pending" ||
+      (composingNew && (seedOwned || !watchFailed)) ||
+      (!seedOwned && !checking && !watchFailed));
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -57,7 +62,12 @@ export function ChatPanel() {
 
   return (
     <div className="chat-zone">
-      <section className="chat glass" aria-label="Seed workbench">
+      <section
+        className="chat glass"
+        aria-label="Seed workbench"
+        data-testid="seed-workbench"
+        data-watch-phase={watchPhase}
+      >
         <div className="chat-head">
           <h2 className="panel-title">Workbench</h2>
           <span className="mono">{activeSessionId ?? "none"}</span>
@@ -84,8 +94,8 @@ export function ChatPanel() {
             <p data-testid="seed-watch-pending">Checking whether this Phytomer is Seed-owned.</p>
           ) : null}
           {!showForm && seedOwned ? <ActiveSeedWork /> : null}
-          {watch?.phase === "error" && watch.error && !seedOwned ? (
-            <p className="chat-error" data-testid="watch-error">
+          {watchFailed && watch?.error ? (
+            <p className="chat-error" data-testid="watch-error" role="alert">
               {watch.error}
             </p>
           ) : null}

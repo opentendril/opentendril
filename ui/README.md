@@ -1,7 +1,7 @@
 # OpenTendril Greenhouse (`ui/`)
 
 The **Greenhouse** (the Command Center UI) is the visual operator UI for
-OpenTendril — a single, desktop-grade dashboard an operator leaves open all day
+OpenTendril, a single, desktop-grade dashboard an operator leaves open all day
 to watch every Tendril the Go Stem is growing. It replaces the fragmented "one
 CLI terminal per run" workflow with one living view where live orchestration
 activity is legible at a glance and nothing is lost on refresh.
@@ -33,7 +33,7 @@ The proxy (see [`vite.config.ts`](./vite.config.ts)) forwards `/v1`, `/health`,
 and `/ws` (with WebSocket upgrade) to the Stem, so the browser makes only
 same-origin requests.
 
-### Production — the containerized UI front (recommended)
+### Production: the containerized UI front (recommended)
 
 The supported local deployment is the **optional, isolated, containerized UI
 front**: a hardened nginx container that serves the built bundle **and**
@@ -42,7 +42,7 @@ governed Stem through the local Unix socket at
 `/var/lib/opentendril-transport/stem.sock`.
 The browser sees a **single origin**, so no CORS configuration exists anywhere
 and the Stem stays headless. Docker is already a core dependency (Tendrils
-sprout into containerized substrates), so this adds no new requirement — and
+sprout into containerized substrates), so this adds no new requirement, and
 no local Node/npm is needed; the image builds the bundle itself in a
 multi-stage build.
 
@@ -84,7 +84,7 @@ peers). Configuration knobs (all optional, via environment):
 | `STEM_PORT` | `8080` | Stem TCP API port (`--profile ui-tcp`). |
 | `STEM_GATEWAY_PORT` | `9090` | Dedicated `/ws` gateway listener in TCP mode; the proxy falls back to `STEM_PORT` if it is down. |
 
-**Security posture:** the proxy adds no credentials and bypasses nothing — the
+**Security posture:** the proxy adds no credentials and bypasses nothing. The
 operator's `Authorization: Bearer` key passes through untouched and the Stem's
 `withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
 are proxied; nothing else on the host is reachable. `--profile ui` bind-mounts
@@ -94,8 +94,8 @@ Neither profile mounts `/home/tendril`, Botanist keys, Pollinator credentials,
 grants, or the Stem executable. The container
 runs as a non-root user with a read-only root filesystem, all capabilities
 dropped, and `no-new-privileges`. Future server-side layers (BFF, auth,
-enterprise SSO, the concierge) grow **inside this component** — never in the
-Stem.
+enterprise SSO, the concierge) grow **inside this component**. They do not
+belong in the Stem.
 
 With the container in front, the operator opens `http://127.0.0.1:4173`,
 leaves the **Stem address** blank (same origin), and enters only the Botanist
@@ -109,7 +109,7 @@ npm run build     # type-checks with tsc, emits static assets to ui/dist/
 
 `ui/dist/` is a self-contained static bundle. Serve it from the **same origin
 as the Stem's API surface** (i.e. behind your own reverse proxy fronting both),
-so `/v1`, `/health`, and `/ws` resolve without cross-origin requests — the Stem
+so `/v1`, `/health`, and `/ws` resolve without cross-origin requests, because the Stem
 sets no CORS headers by design. A full Stem URL in onboarding is only for a
 cross-origin Stem that has been configured to allow it.
 
@@ -121,8 +121,8 @@ npm run test:e2e   # builds ui/dist, serves it via `vite preview`, runs Playwrig
 
 `tests/e2e.spec.ts` is a foundational Playwright suite covering onboarding,
 the `/ws` EventBus connection, and session-rail rendering. It mocks the Go
-Stem entirely at the network layer — HTTP via `page.route`, `/ws` via
-`page.routeWebSocket` — so it needs no Docker, no real Stem, and no LLM
+Stem entirely at the network layer (HTTP via `page.route`, `/ws` via
+`page.routeWebSocket`), so it needs no Docker, no real Stem, and no LLM
 provider, and runs identically in CI. Playwright lives in `devDependencies`
 only; `ui/Dockerfile`'s production stage copies just `dist/`, never
 `node_modules`, so it never reaches the shipped image.
@@ -131,8 +131,8 @@ only; `ui/Dockerfile`'s production stage copies just `dist/`, never
 
 On first load a welcome screen asks a non-technical operator for the Stem
 address and the Botanist bearer key (`BOTANIST_KEY`). The key is validated
-live — `/health` confirms the Stem is reachable, `/v1/phytomers` confirms the
-key is accepted — then persisted to `localStorage`. No `.env` editing, and the
+live. `/health` confirms the Stem is reachable, and `/v1/phytomers` confirms the
+key is accepted. It is then persisted to `localStorage`. No `.env` editing, and the
 key never leaves the browser. "Uproot" (top-right) clears it and returns to
 onboarding. Provider LLM keys remain server-side by design; the UI does not
 manage them.
@@ -143,9 +143,9 @@ manage them.
 
 | Choice | Rationale |
 | --- | --- |
-| **React 18 + Vite + TypeScript** | Vite over Next because this is a pure client of an existing API — there is no SSR surface. TypeScript because every wire shape is mirrored from the Go structs and the compiler enforces the match. |
+| **React 18 + Vite + TypeScript** | Vite over Next because this is a pure client of an existing API. There is no SSR surface. TypeScript because every wire shape is mirrored from the Go structs and the compiler enforces the match. |
 | **Zustand** for state | The whole app is one WebSocket-driven event fold. A small external store fits that far better than context/reducer prop-plumbing, and lets non-React modules (the socket client) dispatch into state directly. |
-| **Hand-written SVG + CSS animation** for the visualization | No charting or animation dependency. The botanical scene is bespoke — a generic chart library cannot express "a withering tendril tip" — and SVG keeps the whole thing declarative, themeable via CSS custom properties, and light (≈58 KB gzipped total bundle). |
+| **Hand-written SVG + CSS animation** for the visualization | No charting or animation dependency. The botanical scene is bespoke. A generic chart library cannot express "a withering tendril tip". SVG keeps the whole thing declarative, themeable via CSS custom properties, and light (≈58 KB gzipped total bundle). |
 | **A pure reducer for the garden** | `applyGardenEvent(state, event)` is a pure fold. Live WebSocket events, replayed persisted history rows, and `/ws?replay=` frames all drive the *identical* code path, which is what makes refresh-resilient hydration possible (see below). |
 
 ---
@@ -167,20 +167,20 @@ App                         gates on stored connection settings
 
 Supporting modules:
 
-- `lib/types.ts` — TypeScript shapes mirrored **field-for-field** from the Go
+- `lib/types.ts`: TypeScript shapes mirrored **field-for-field** from the Go
   structs (`session.go`, `historydb.go`, `gateway.go`, `eventbus.go`). Nothing
   here is invented; every field matches what the backend emits.
 - `lib/api.ts`: thin typed REST client. It attaches the bearer key, builds the
   `/ws` URL (with the `?replay=100` hydration parameter), and reads the Phytomer
   watch with that same bearer on the `Authorization` header.
-- `lib/ws.ts` — resilient WebSocket client with capped exponential-backoff
+- `lib/ws.ts`: resilient WebSocket client with capped exponential-backoff
   reconnect and lifecycle-status callbacks.
-- `state/connection.ts` — onboarding settings, persisted to `localStorage`.
-- `state/garden.ts` — the pure garden reducer (the event → visual fold).
+- `state/connection.ts`: onboarding settings, persisted to `localStorage`.
+- `state/garden.ts`: the pure garden reducer (the event → visual fold).
 - `state/store.ts`: the central store. It hydrates Phytomers, messages, runs,
   and the ticker, and it tracks Seed dispatch, the active Phytomer watch, the
   durable Seed record, continuation, Fruit inventory, and drilldown.
-- `styles/global.css` — the design system (deep-loam dark theme, glassmorphism,
+- `styles/global.css`: the design system (deep-loam dark theme, glassmorphism,
   the Rhizome/Sprout/Tendril colour language) driven by CSS custom properties.
 
 ---
@@ -189,19 +189,21 @@ Supporting modules:
 
 One Zustand store (`state/store.ts`) is the single source of truth. It holds:
 
-- `sessions`, `activeSessionId` — the Tendril rail and current context.
+- `sessions`, `activeSessionId`: the Tendril rail and current context.
 - `messagesBySession`, `runsBySession`, `eventsBySession`: per-Phytomer data.
   The active Phytomer's messages and events hydrate when selected. Boot and
   reconnect discover canonical run records for up to the 10 most recently
   active Phytomers. The active Phytomer still receives its normal full session
   hydration, including its run list when it is outside that set. New work
   dispatches a detached Seed and then watches that canonical Phytomer. The
-  durable Seed `goal` is the task label. `/v1/chat/completions` is not used
+  durable Seed `goal` is the task label. An unresolved Seed dispatch keeps one
+  retry identity in `sessionStorage` and resolves it only by retrying that same
+  request with the same idempotency key. `/v1/chat/completions` is not used
   for new work.
-- `garden` — the botanical scene graph, produced *only* by folding events
+- `garden`: the botanical scene graph, produced *only* by folding events
   through `applyGardenEvent`.
-- `ticker` — a bounded rolling window of recent events for the Event Pulse.
-- `wsStatus`, `hydration` — connection and hydration lifecycle flags that drive
+- `ticker`: a bounded rolling window of recent events for the Event Pulse.
+- `wsStatus`, `hydration`: connection and hydration lifecycle flags that drive
   the status badge and the "re-growing state" pill.
 
 The garden is deliberately **derived, never hand-mutated**: every visual change
@@ -218,7 +220,7 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
 
 1. **Open the WebSocket first and buffer.** `boot()` connects the socket
    immediately. While hydration is in flight, incoming live events are pushed
-   into an in-memory `liveBuffer` instead of being applied — so nothing that
+   into an in-memory `liveBuffer` instead of being applied, so nothing that
    arrives mid-hydration is dropped.
 2. **Hydrate cold state from REST underneath.** `GET /v1/phytomers`, then the
    active Phytomer's `…/history` (messages) and `…/events` (persisted
@@ -228,7 +230,7 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
    that set. Previously rendered state is never cleared while this runs.
 3. **Re-grow the garden from persisted events**, oldest-first, through the same
    `applyGardenEvent` reducer. On a fresh connect the socket also requests
-   `/ws?replay=100`, which prepends the bus's recent in-memory history — this
+   `/ws?replay=100`, which prepends the bus's recent in-memory history. This
    recovers *session-less* sequence telemetry (parallel-sprouting, mycelial
    merge, phenotypic-selection) that the per-session REST events endpoint cannot
    return because those events carry no session id.
@@ -239,8 +241,9 @@ flash of empty.** The order matters, and it is enforced in `state/store.ts`:
    `GET /v1/seeds/runs/{handle}` and uses that `goal`, status, verification,
    and Fruit provenance. Terminal work also reads `GET /v1/fruit` for review
    state. A 404 from the watch leaves the Phytomer on its historical Sprout
-   runs. The watch stops at a terminal Seed status and does not reconnect on
-   its own.
+   runs. A response that is not an event stream, and observation data that
+   cannot be read, stay watch errors and do not take that historical path. The
+   watch stops at a terminal Seed status and does not reconnect on its own.
 
 The transition is a *merge*, not a reset. A refresh mid-orchestration re-grows
 the garden from history and picks the live feed back up with no visible seam;
@@ -274,8 +277,8 @@ pods. Payload field names below match the Go publishers exactly.
 | `parallel-sprouting` | `phase:"map"`, `sproutCount` | Branch unfurls with `sproutCount` dashed **buds** awaiting sprouts. |
 | `sprout-emerged` | `sproutIndex`, `branchName`, `detail` | A **tendril tip** grows in (stroke-dash draw), lit chlorophyll-green. |
 | `mycorrhizal-request-begun` | `stepId`, `providerRequestAttempted` | Ambient pulse: the first provider / Mycorrhizal request for that Sprout has begun. |
-| `sprout-matured` | `sproutIndex`, `branchName` | The tip **blooms** — gold bud with a glow. |
-| `sprout-withered` | `sproutIndex`, `branchName`, `detail` | The tip **desaturates to umber, droops, and fades** (never removed — the loss stays visible). |
+| `sprout-matured` | `sproutIndex`, `branchName` | The tip **blooms**: gold bud with a glow. |
+| `sprout-withered` | `sproutIndex`, `branchName`, `detail` | The tip **desaturates to umber, droops, and fades** (never removed; the loss stays visible). |
 | `mycelial-merge` | `phase:"reduce"`, `maturedCount`, `witheredCount` | Glowing **filaments run from matured tips back into the branch node**, which pulses (consensus being grown). |
 | `mycelial-merge` | `phase:"complete"` | The node **consolidates** (spore-blue, steady glow). |
 | `phenotypic-selection` | `phase:"start"`, `populationSize`, `maxGenerations`, `fitnessGoal` | A **selection arena** ring appears at the branch tip. |
@@ -283,9 +286,9 @@ pods. Payload field names below match the Go publishers exactly.
 | `phenotypic-selection` | `phase:"evaluated"`, `survivors`, `withered`, `bestScore`, `alphaScore`, `alphaBranch` | The fittest **`survivors` pods stay lit green; the rest compost** (fall and fade). Best score labelled. |
 | `phenotypic-selection` | `phase:"complete"`, `alphaBranch`, `alphaScore` | The **AlphaPhenotype crowns gold** (bright glow) with its fitness score. |
 | `stream-token` | `source=stepId`, `data.type` `stream.start`/`stream.end` | Active step branch glows and pulses sap (content-free cadence signal). |
-| `sequence-complete` | `sequence` | The plant **fruits** — crown blooms gold, marked matured. |
+| `sequence-complete` | `sequence` | The plant **fruits**: crown blooms gold, marked matured. |
 | `sequence-failure` | `stepId`, `error` | The branch **scorches** red; the plant is marked withered with the failure detail. |
-| `health-*`, `terrarium-oom`, `terrarium-timeout`, `api-key-invalid`, `rhizome-update`, `xylem-transport`, `hormonal-trigger` | — | **Ambient weather.** These refresh the plant's liveness and surface in the Event Pulse ticker; they do not grow dedicated structures. |
+| `health-*`, `terrarium-oom`, `terrarium-timeout`, `api-key-invalid`, `rhizome-update`, `xylem-transport`, `hormonal-trigger` | none | **Ambient weather.** These refresh the plant's liveness and surface in the Event Pulse ticker; they do not grow dedicated structures. |
 
 ---
 
@@ -302,7 +305,7 @@ The repo's Go/Python rule is "merged lowercase, no underscores or hyphens". The
 `ui/` tree instead follows the **standard React/TypeScript convention**:
 `PascalCase.tsx` for components (`GardenCanvas.tsx`), `camelCase.ts` for modules
 (`garden.ts`), and a `PascalCase/` folder for a component family (`Garden/`).
-This is a deliberate, tooling-idiomatic exception scoped to `ui/` — do not
+This is a deliberate, tooling-idiomatic exception scoped to `ui/`. Do not
 "correct" these filenames to merged-lowercase. JSON payload keys remain
 `camelCase` and API paths remain `kebab-case`, matching the repo boundary rules.
 ```

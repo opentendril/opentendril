@@ -5,7 +5,7 @@
 // (2) hydrate cold state from REST (/v1/sessions + per-session history),
 // (3) replay persisted event records into the garden, then flush the live
 //     buffer on top, then switch to pass-through live mode.
-// Previously rendered state is never cleared while this runs — the swap is a
+// Previously rendered state is never cleared while this runs. The swap is a
 // merge, so a refresh mid-orchestration re-grows the garden from history and
 // picks up the live feed without a visible seam.
 
@@ -113,6 +113,8 @@ interface StemStore {
   ticker: StemEvent[];
   drilldown: DrilldownTarget | null;
   configuredSubstrates: string[];
+  // False until boot has restored any unresolved Seed retry. New dispatch stays closed.
+  dispatchReady: boolean;
   seedDispatch: SeedDispatchState;
   seedRunByPhytomer: Record<string, SeedRun>;
   seedCollectErrorByPhytomer: Record<string, string>;
@@ -131,7 +133,6 @@ interface StemStore {
   updatePreferences: (preferences: Preferences) => Promise<void>;
   startSeed: (input: SeedWorkInput) => Promise<void>;
   retrySeedDispatch: () => Promise<void>;
-  discardUncertainDispatch: () => void;
   continueSeed: (intent: string) => Promise<void>;
   retryContinuation: () => Promise<void>;
   openDrilldown: (run: SproutRun) => void;
@@ -173,6 +174,88 @@ let fruitRequestId = 0;
 
 const IDLE_DISPATCH: SeedDispatchState = { phase: "idle" };
 const IDLE_CONTINUATION: ContinuationState = { phase: "idle" };
+
+// One unresolved Seed write. Retry metadata only: the Stem still owns lifecycle.
+const UNRESOLVED_SEED_RETRY_KEY = "opentendril.unresolvedSeedRetry";
+
+const UNCERTAIN_TRANSPORT_MESSAGE =
+  "The dispatch outcome is uncertain. The Stem may have accepted this Seed. Retry uses this same request.";
+
+const UNCERTAIN_RESPONSE_MESSAGE =
+  "The dispatch outcome is uncertain. The Stem response did not include a Seed handle and Phytomer.";
+
+interface UnresolvedSeedRetry {
+  request: SeedGrowRequest;
+  message: string;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function isOptionalCount(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+
+function isSeedGrowRequest(value: unknown): value is SeedGrowRequest {
+  if (!value || typeof value !== "object") return false;
+  const request = value as SeedGrowRequest;
+  if (!isNonEmptyString(request.substrate) || !isNonEmptyString(request.goal)) return false;
+  if (!isNonEmptyString(request.idempotencyKey)) return false;
+  if (request.origin !== "rest" || request.detached !== true) return false;
+  if (!Array.isArray(request.verify) || request.verify.length === 0) return false;
+  if (!request.verify.every((token) => typeof token === "string")) return false;
+  return isOptionalCount(request.maxIterations) && isOptionalCount(request.timeoutSeconds);
+}
+
+function readUnresolvedSeedRetry(): UnresolvedSeedRetry | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const raw = window.sessionStorage.getItem(UNRESOLVED_SEED_RETRY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { request?: unknown; message?: unknown };
+    if (!isSeedGrowRequest(parsed.request)) return null;
+    const message =
+      typeof parsed.message === "string" && parsed.message.trim()
+        ? parsed.message
+        : UNCERTAIN_TRANSPORT_MESSAGE;
+    return { request: parsed.request, message };
+  } catch {
+    return null;
+  }
+}
+
+function persistUnresolvedSeedRetry(request: SeedGrowRequest, message: string) {
+  try {
+    if (typeof window === "undefined") return;
+    const envelope: UnresolvedSeedRetry = { request, message };
+    window.sessionStorage.setItem(UNRESOLVED_SEED_RETRY_KEY, JSON.stringify(envelope));
+  } catch {
+    // The in-memory request still blocks a new Seed on this page.
+  }
+}
+
+function clearUnresolvedSeedRetry() {
+  try {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem(UNRESOLVED_SEED_RETRY_KEY);
+  } catch {
+    // The authoritative outcome is still recorded in memory.
+  }
+}
+
+function ambiguousFromStorage(): SeedDispatchState | null {
+  const unresolved = readUnresolvedSeedRetry();
+  if (!unresolved) return null;
+  return {
+    phase: "ambiguous",
+    request: unresolved.request,
+    message: unresolved.message,
+  };
+}
 
 function emptyFruitCounts(): FruitInventory["counts"] {
   return {
@@ -567,95 +650,48 @@ export const useStem = create<StemStore>()((set, get) => {
     );
   }
 
-  async function probePhytomer(phytomerId: string): Promise<PhytomerObservation | null> {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 4000);
-    let observed: PhytomerObservation | null = null;
-    try {
-      await stemApi.watchPhytomer(
-        currentConnection(),
-        phytomerId,
-        controller.signal,
-        (observation) => {
-          observed = observation;
-          controller.abort();
-        },
-      );
-    } catch (err) {
-      if (observed) return observed;
-      if (isAbortError(err) || err instanceof NotSeedWatchError) return null;
-      if (err instanceof StemApiError && err.status === 404) return null;
-      return null;
-    } finally {
-      window.clearTimeout(timer);
-    }
-    return observed;
+  function dispatchStillOpen(request: SeedGrowRequest): boolean {
+    const current = get().seedDispatch;
+    return (
+      (current.phase === "pending" || current.phase === "ambiguous") &&
+      current.request?.idempotencyKey === request.idempotencyKey
+    );
   }
 
-  async function hydrateAmbiguousDispatch(request: SeedGrowRequest, beforeIds: Set<string>) {
-    let sessions: Session[] = [];
+  function holdUnresolvedDispatch(request: SeedGrowRequest, message: string) {
+    persistUnresolvedSeedRetry(request, message);
+    set({ seedDispatch: { phase: "ambiguous", request, message } });
+  }
+
+  function acceptedSeedDispatch(
+    result: { handle?: string; phytomerId?: string; status?: string } | null | undefined,
+  ): result is { handle: string; phytomerId: string; status: string } {
+    return Boolean(result?.handle && result.phytomerId && result.status);
+  }
+
+  // Refreshes the rail only. Goal and Substrate are not identities, so a newly
+  // listed Phytomer is never selected as the outcome of this write.
+  async function refreshListedPhytomers(request: SeedGrowRequest) {
     try {
       const listed = await stemApi.listSessions(currentConnection());
-      sessions = listed.sessions ?? [];
-      set({ sessions });
-    } catch {
-      return;
-    }
-    if (!sameAmbiguousRequest(request)) return;
-
-    const matches: string[] = [];
-    for (const session of sessions) {
-      if (beforeIds.has(session.sessionId)) continue;
       if (!sameAmbiguousRequest(request)) return;
-      const observed = await probePhytomer(session.sessionId);
-      if (!observed?.handle) continue;
-      try {
-        const run = await stemApi.collectSeed(currentConnection(), observed.handle);
-        const goal = (run.goal ?? "").trim();
-        const substrate = (run.substrate ?? "").trim();
-        if (goal !== request.goal.trim() || substrate !== request.substrate.trim()) continue;
-        const id = run.phytomerId || session.sessionId;
-        set((state) => ({
-          seedRunByPhytomer: { ...state.seedRunByPhytomer, [id]: run },
-          observationByPhytomer: {
-            ...state.observationByPhytomer,
-            [session.sessionId]: observed,
-          },
-          knownSeedHandleByPhytomer: {
-            ...state.knownSeedHandleByPhytomer,
-            [id]: run.handle,
-          },
-        }));
-        matches.push(id);
-      } catch {
-        // The original idempotency key stays available for an explicit retry.
-      }
+      set({ sessions: listed.sessions ?? [] });
+    } catch {
+      // The rail can stay stale. The unresolved request stays in place.
     }
-    if (!sameAmbiguousRequest(request) || matches.length !== 1) return;
-    set({ seedDispatch: IDLE_DISPATCH });
-    get().selectSession(matches[0]);
   }
 
-  async function markAmbiguousDispatch(
-    request: SeedGrowRequest,
-    beforeIds: Set<string>,
-    message: string,
-  ) {
-    set({ seedDispatch: { phase: "ambiguous", request, message } });
-    await hydrateAmbiguousDispatch(request, beforeIds);
-  }
-
-  async function dispatchPrepared(request: SeedGrowRequest, beforeIds: Set<string>) {
+  async function dispatchPrepared(request: SeedGrowRequest) {
+    persistUnresolvedSeedRetry(request, UNCERTAIN_TRANSPORT_MESSAGE);
     try {
       const result = await stemApi.growSeed(currentConnection(), request);
-      if (!result?.handle || !result.phytomerId || !result.status) {
-        await markAmbiguousDispatch(
-          request,
-          beforeIds,
-          "The dispatch outcome is uncertain. The Stem response did not include a Seed handle and Phytomer.",
-        );
+      if (!dispatchStillOpen(request)) return;
+      if (!acceptedSeedDispatch(result)) {
+        holdUnresolvedDispatch(request, UNCERTAIN_RESPONSE_MESSAGE);
+        await refreshListedPhytomers(request);
         return;
       }
+      clearUnresolvedSeedRetry();
       set((state) => ({
         seedDispatch: IDLE_DISPATCH,
         knownSeedHandleByPhytomer: {
@@ -665,18 +701,18 @@ export const useStem = create<StemStore>()((set, get) => {
       }));
       try {
         const listed = await stemApi.listSessions(currentConnection());
-        set({ sessions: listed.sessions ?? [] });
+        if (get().seedDispatch.phase === "idle") {
+          set({ sessions: listed.sessions ?? [] });
+        }
       } catch {
         // The dispatch identity is already known. A later hydration can refresh the rail.
       }
       void collectSeedIntoStore(result.handle, result.phytomerId);
       get().selectSession(result.phytomerId);
     } catch (err) {
-      if (isAbortError(err)) {
-        set({ seedDispatch: IDLE_DISPATCH });
-        return;
-      }
+      if (!dispatchStillOpen(request)) return;
       if (err instanceof StemApiError) {
+        clearUnresolvedSeedRetry();
         set({
           seedDispatch: {
             phase: "rejected",
@@ -685,11 +721,8 @@ export const useStem = create<StemStore>()((set, get) => {
         });
         return;
       }
-      await markAmbiguousDispatch(
-        request,
-        beforeIds,
-        "The dispatch outcome is uncertain. The Stem may have accepted this Seed. Retry uses this same request.",
-      );
+      holdUnresolvedDispatch(request, UNCERTAIN_TRANSPORT_MESSAGE);
+      await refreshListedPhytomers(request);
     }
   }
 
@@ -754,10 +787,17 @@ export const useStem = create<StemStore>()((set, get) => {
       set({ configuredSubstrates: substrates.substrates ?? [] });
 
       const stored = window.localStorage.getItem(ACTIVE_SESSION_KEY);
-      const active =
-        (stored && sessions.some((s) => s.sessionId === stored) && stored) ||
-        sessions[0]?.sessionId ||
-        null;
+      const storedActive =
+        stored && sessions.some((session) => session.sessionId === stored) ? stored : null;
+      const dispatchPhase = get().seedDispatch.phase;
+      const holdOpenDispatch =
+        dispatchPhase === "ambiguous" ||
+        dispatchPhase === "pending" ||
+        ambiguousFromStorage() !== null;
+      // An unresolved Seed write is not resolved by whichever Phytomer is first.
+      const active = holdOpenDispatch
+        ? storedActive
+        : storedActive || sessions[0]?.sessionId || null;
 
       set({ sessions, activeSessionId: active });
 
@@ -812,7 +852,8 @@ export const useStem = create<StemStore>()((set, get) => {
     ticker: [],
     drilldown: null,
     configuredSubstrates: [],
-    seedDispatch: IDLE_DISPATCH,
+    dispatchReady: false,
+    seedDispatch: ambiguousFromStorage() ?? IDLE_DISPATCH,
     seedRunByPhytomer: {},
     seedCollectErrorByPhytomer: {},
     knownSeedHandleByPhytomer: {},
@@ -824,6 +865,11 @@ export const useStem = create<StemStore>()((set, get) => {
     fruitError: null,
 
     boot: () => {
+      const unresolved = get().seedDispatch.phase === "pending" ? null : ambiguousFromStorage();
+      set({
+        dispatchReady: true,
+        ...(unresolved ? { seedDispatch: unresolved } : {}),
+      });
       socket?.close();
       socket = new StemSocket(websocketUrl(currentConnection()), {
         onEvent: onLiveEvent,
@@ -901,8 +947,14 @@ export const useStem = create<StemStore>()((set, get) => {
     },
 
     startSeed: async (input) => {
-      const phase = get().seedDispatch.phase;
-      if (phase === "pending" || phase === "ambiguous") return;
+      if (!get().dispatchReady) return;
+      if (get().seedDispatch.phase === "pending") return;
+      const unresolved = ambiguousFromStorage();
+      if (unresolved) {
+        set({ seedDispatch: unresolved });
+        return;
+      }
+      if (get().seedDispatch.phase === "ambiguous") return;
       const request: SeedGrowRequest = {
         substrate: input.substrate,
         goal: input.goal,
@@ -913,22 +965,19 @@ export const useStem = create<StemStore>()((set, get) => {
       };
       if (input.maxIterations !== undefined) request.maxIterations = input.maxIterations;
       if (input.timeoutSeconds !== undefined) request.timeoutSeconds = input.timeoutSeconds;
-      const beforeIds = new Set(get().sessions.map((session) => session.sessionId));
       set({ seedDispatch: { phase: "pending", request } });
-      await dispatchPrepared(request, beforeIds);
+      await dispatchPrepared(request);
     },
 
     retrySeedDispatch: async () => {
+      if (!get().dispatchReady) return;
       const current = get().seedDispatch;
-      if (current.phase !== "ambiguous" || !current.request) return;
-      const beforeIds = new Set(get().sessions.map((session) => session.sessionId));
-      set({ seedDispatch: { phase: "pending", request: current.request } });
-      await dispatchPrepared(current.request, beforeIds);
-    },
-
-    discardUncertainDispatch: () => {
-      if (get().seedDispatch.phase !== "ambiguous") return;
-      set({ seedDispatch: IDLE_DISPATCH });
+      if (current.phase === "pending") return;
+      const stored = ambiguousFromStorage();
+      const request = current.phase === "ambiguous" && current.request ? current.request : stored?.request;
+      if (!request) return;
+      set({ seedDispatch: { phase: "pending", request } });
+      await dispatchPrepared(request);
     },
 
     continueSeed: async (intent) => {

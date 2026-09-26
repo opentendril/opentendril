@@ -1,6 +1,6 @@
 // Foundational E2E suite for the Command Center SPA. Runs against the built
 // static bundle (vite preview) with the Go Stem mocked entirely at the
-// network layer — HTTP via page.route, /ws via page.routeWebSocket — so
+// network layer (HTTP via page.route, /ws via page.routeWebSocket), so
 // these run identically in CI and locally with no Docker, no real Stem, and
 // no LLM provider. Response shapes mirror ui/src/lib/types.ts, which itself
 // mirrors the Go Stem's documented REST + WebSocket surface 1:1.
@@ -52,7 +52,7 @@ function makeEvent(sessionId: string, runId: string, id: number): EventRecord {
 
 /**
  * Mocks the Go Stem's HTTP surface (/health, /v1/sessions and its
- * sub-resources) and the /ws EventBus gateway. Must run before page.goto —
+ * sub-resources) and the /ws EventBus gateway. Must run before page.goto.
  * page.routeWebSocket only routes sockets created after it is registered.
  *
  * Returns the Authorization header captured off the last /v1/sessions
@@ -128,7 +128,7 @@ async function mockStemBackend(
   await page.route("**/v1/sessions", async (route) => {
     const request = route.request();
     if (request.method() !== "GET") {
-      // Not exercised by this suite (session creation) — let it fall
+      // Not exercised by this suite (session creation). Let it fall
       // through rather than leaving the route handler unresolved.
       await route.continue();
       return;
@@ -220,7 +220,7 @@ async function mockStemBackend(
     },
   );
 
-  // The gateway's real first frame is `{"type":"connected"}` — see
+  // The gateway's real first frame is `{"type":"connected"}`. See
   // cmd/stem/internal/gateway/gateway.go. Not calling ws.connectToServer()
   // means Playwright mocks the socket entirely: the page's WebSocket opens
   // (onopen fires) without ever reaching a real server.
@@ -450,7 +450,7 @@ test.describe("Command Center sprout-run observation", () => {
     const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
     await expect(drawer).toBeVisible();
     await expect(drawer.getByTestId("run-observation")).toBeVisible();
-    await expect(drawer.getByText("Withered — provider authentication rejected")).toBeVisible();
+    await expect(drawer.getByText("Withered: provider authentication rejected")).toBeVisible();
     await expect(drawer.getByText("Failure category", { exact: true })).toBeVisible();
     await expect(drawer.getByText("provider authentication rejected", { exact: true })).toBeVisible();
     await expect(drawer.getByText("Failure stage", { exact: true })).toBeVisible();
@@ -564,7 +564,7 @@ test.describe("Command Center sprout-run observation", () => {
 
     await page.locator(".run-row").click();
     const drawer = page.getByRole("dialog", { name: "Sprout run detail" });
-    await expect(drawer.getByText("Matured — matured")).toBeVisible();
+    await expect(drawer.getByText("Matured: matured")).toBeVisible();
     await expect(drawer.getByText("complete", { exact: true })).toBeVisible();
     await expect(drawer.getByTestId("run-observation").getByText("docs/GUIDE.md")).toBeVisible();
     await expect(drawer.getByText("add a clarifying sentence to the guide")).toBeVisible();
@@ -632,7 +632,7 @@ test.describe("Command Center EventBus connection", () => {
     await completeOnboarding(page, testApiKey);
 
     // wsStatus starts "connecting" and flips to "open" on the mocked
-    // socket's onopen — see ui/src/state/store.ts boot() / ui/src/lib/ws.ts.
+    // socket's onopen. See ui/src/state/store.ts boot() / ui/src/lib/ws.ts.
     await expect(page.getByText("EventBus live")).toBeVisible();
     await expect(page.locator(".conn-dot.open")).toBeVisible();
   });
@@ -1355,6 +1355,18 @@ async function stableWatchCount(read: () => number, expected: number) {
     .toBe(expected);
 }
 
+const unresolvedRetryStorageKey = "opentendril.unresolvedSeedRetry";
+
+async function unresolvedRetryEnvelope(
+  page: Page,
+): Promise<{ request?: Record<string, unknown>; message?: string } | null> {
+  return page.evaluate((key) => {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as { request?: Record<string, unknown>; message?: string };
+  }, unresolvedRetryStorageKey);
+}
+
 test.describe("Canonical Seed workbench", () => {
   test("parses Phytomer observation frames split across byte chunks", async () => {
     const encoder = new TextEncoder();
@@ -1944,6 +1956,8 @@ test.describe("Canonical Seed workbench", () => {
     );
     expect(keysBeforeRetry).toBe(1);
 
+    await expect(page.getByRole("button", { name: "Discard uncertain dispatch" })).toHaveCount(0);
+
     await page.getByRole("button", { name: "Retry dispatch" }).click();
     await expect(page.getByTestId("seed-goal")).toHaveText("retry the same seed");
     expect(posts).toHaveLength(2);
@@ -1955,6 +1969,7 @@ test.describe("Canonical Seed workbench", () => {
       () => (window as Window & { __uuidCount?: number }).__uuidCount,
     );
     expect(keysAfterRetry).toBe(keysBeforeRetry);
+    expect(await unresolvedRetryEnvelope(page)).toBeNull();
   });
 
   test("presents an explicit Seed rejection without dispatching again", async ({ page }) => {
@@ -1988,9 +2003,363 @@ test.describe("Canonical Seed workbench", () => {
       "delegation denied: substrate is outside the grant",
     );
     await expect(page.getByTestId("dispatch-ambiguous")).toHaveCount(0);
+    await expect(page.getByTestId("new-work-form")).toBeVisible();
     await stableWatchCount(() => posts.length, 1);
     expect(
       await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount),
     ).toBe(1);
+    expect(await unresolvedRetryEnvelope(page)).toBeNull();
+  });
+
+  test("does not attach a concurrent Seed that shares the goal and Substrate", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const original = crypto.randomUUID.bind(crypto);
+      let count = 0;
+      crypto.randomUUID = () => {
+        count += 1;
+        (window as Window & { __uuidCount?: number }).__uuidCount = count;
+        return original();
+      };
+    });
+    const backend = await mockStemBackend(page, { sessions: [] });
+    const posts: Array<Record<string, unknown>> = [];
+    const impostorWatches: string[] = [];
+    const impostorCollects: string[] = [];
+    const sharedGoal = "shared goal text";
+    await serveSeed(page, {
+      phytomerId: "tendril-authoritative",
+      handle: "seed-authoritative",
+      goal: sharedGoal,
+      status: "running",
+      substrate: "opentendril",
+    });
+    // Registered after serveSeed so this Phytomer can answer the watch. Greenhouse
+    // must still not treat the shared goal and Substrate as the failed write.
+    await page.route(
+      (url) => /\/v1\/phytomers\/[^/]+\/watch$/.test(new URL(url).pathname),
+      async (route) => {
+        const id = phytomerIdFromPath(route.request().url());
+        if (id !== "tendril-impostor") {
+          await route.fallback();
+          return;
+        }
+        impostorWatches.push(route.request().url());
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: sseFrame({
+            handle: "seed-impostor",
+            phytomerId: "tendril-impostor",
+            substrate: "opentendril",
+            status: "running",
+            iterations: 1,
+            sprouts: [],
+          }),
+        });
+      },
+    );
+    await page.route(
+      (url) => /\/v1\/seeds\/runs\/[^/]+$/.test(new URL(url).pathname),
+      async (route) => {
+        if (!route.request().url().includes("/seed-impostor")) {
+          await route.fallback();
+          return;
+        }
+        impostorCollects.push(route.request().url());
+        await route.fulfill({
+          status: 200,
+          json: {
+            handle: "seed-impostor",
+            phytomerId: "tendril-impostor",
+            substrate: "opentendril",
+            goal: sharedGoal,
+            status: "running",
+            iterations: 1,
+            startedAt: "2026-09-26T00:00:00Z",
+          },
+        });
+      },
+    );
+    await page.route("**/v1/seeds/grow", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      posts.push(body);
+      if (posts.length === 1) {
+        backend.setSessions([makeSession({ sessionId: "tendril-impostor", origin: "rest" })]);
+        await route.abort("failed");
+        return;
+      }
+      backend.setSessions([
+        makeSession({ sessionId: "tendril-impostor", origin: "rest" }),
+        makeSession({ sessionId: "tendril-authoritative", origin: "rest" }),
+      ]);
+      await route.fulfill({
+        status: 202,
+        json: {
+          handle: "seed-authoritative",
+          phytomerId: "tendril-authoritative",
+          status: "running",
+        },
+      });
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
+    await page.getByLabel("Substrate").selectOption("opentendril");
+    await page.getByLabel("Task").fill(sharedGoal);
+    await fillVerifier(page, "go", ["test", "./..."]);
+    await page.getByRole("button", { name: "Start work" }).click();
+
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
+      "The dispatch outcome is uncertain",
+    );
+    await expect(page.getByRole("group", { name: "Phytomer impostor" })).toBeVisible();
+    const started = Date.now();
+    await expect
+      .poll(() => {
+        if (impostorWatches.length !== 0 || impostorCollects.length !== 0) return "attached";
+        return Date.now() - started >= 1000 ? "stable" : "waiting";
+      })
+      .toBe("stable");
+    await expect(page.locator(".chat-head .mono")).toHaveText("none");
+    await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
+    await expect(page.getByTestId("seed-goal")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Discard uncertain dispatch" })).toHaveCount(0);
+    expect(posts).toHaveLength(1);
+    const retained = await page.getByTestId("dispatch-idempotency-key").textContent();
+    expect(retained).toBe(posts[0].idempotencyKey);
+
+    await page.getByRole("button", { name: "Retry dispatch" }).click();
+    await expect(page.locator(".chat-head .mono")).toHaveText("tendril-authoritative");
+    await expect(page.getByTestId("seed-goal")).toHaveText(sharedGoal);
+    await expect(page.getByTestId("dispatch-ambiguous")).toHaveCount(0);
+    expect(posts).toHaveLength(2);
+    expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
+    expect(posts[1].goal).toBe(posts[0].goal);
+    expect(posts[1].substrate).toBe(posts[0].substrate);
+    expect(posts[1].verify).toEqual(posts[0].verify);
+    expect(impostorWatches).toEqual([]);
+    expect(impostorCollects).toEqual([]);
+    expect(
+      await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount),
+    ).toBe(1);
+  });
+
+  test("restores the unresolved Seed retry after reload and does not dispatch it", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const original = crypto.randomUUID.bind(crypto);
+      let count = 0;
+      crypto.randomUUID = () => {
+        count += 1;
+        (window as Window & { __uuidCount?: number }).__uuidCount = count;
+        return original();
+      };
+    });
+    const backend = await mockStemBackend(page, { sessions: [] });
+    const posts: Array<Record<string, unknown>> = [];
+    await serveSeed(page, {
+      phytomerId: "tendril-reloaded",
+      handle: "seed-reloaded",
+      goal: "survive the reload",
+      status: "running",
+      substrate: "docs",
+    });
+    await page.route("**/v1/seeds/grow", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      posts.push(body);
+      if (posts.length === 1) {
+        await route.abort("failed");
+        return;
+      }
+      backend.setSessions([makeSession({ sessionId: "tendril-reloaded", origin: "rest" })]);
+      await route.fulfill({
+        status: 202,
+        json: { handle: "seed-reloaded", phytomerId: "tendril-reloaded", status: "running" },
+      });
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByRole("option", { name: "docs" })).toBeAttached();
+    await page.getByLabel("Substrate").selectOption("docs");
+    await page.getByLabel("Task").fill("survive the reload");
+    await fillVerifier(page, "go", ["test", "./..."]);
+    await page.getByRole("button", { name: "Start work" }).click();
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
+      "The dispatch outcome is uncertain",
+    );
+    const retained = await page.getByTestId("dispatch-idempotency-key").textContent();
+    expect(retained).toBe(posts[0].idempotencyKey);
+    const beforeReload = await unresolvedRetryEnvelope(page);
+    expect(beforeReload?.request).toMatchObject({
+      substrate: "docs",
+      goal: "survive the reload",
+      verify: ["go", "test", "./..."],
+      detached: true,
+      origin: "rest",
+      idempotencyKey: posts[0].idempotencyKey,
+    });
+
+    await page.reload();
+    await expect(page.getByTestId("dispatch-idempotency-key")).toHaveText(retained ?? "", {
+      timeout: 10000,
+    });
+    await stableWatchCount(() => posts.length, 1);
+    const afterReload = await unresolvedRetryEnvelope(page);
+    expect(afterReload?.request).toMatchObject(beforeReload?.request ?? {});
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText("survive the reload");
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText("docs");
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText("./...");
+    await expect(page.getByTestId("new-work-form")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Discard uncertain dispatch" })).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount ?? 0),
+    ).toBe(0);
+
+    await page.getByRole("button", { name: "Retry dispatch" }).click();
+    await expect(page.getByTestId("seed-goal")).toHaveText("survive the reload");
+    await expect(page.locator(".chat-head .mono")).toHaveText("tendril-reloaded");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]).toMatchObject({
+      substrate: posts[0].substrate,
+      goal: posts[0].goal,
+      verify: posts[0].verify,
+      idempotencyKey: posts[0].idempotencyKey,
+      detached: true,
+      origin: "rest",
+    });
+    expect(
+      await page.evaluate(() => (window as Window & { __uuidCount?: number }).__uuidCount ?? 0),
+    ).toBe(0);
+    expect(await unresolvedRetryEnvelope(page)).toBeNull();
+  });
+
+  test("stays ambiguous when a successful Seed response has no canonical identity", async ({
+    page,
+  }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    const posts: Array<Record<string, unknown>> = [];
+    await serveSeed(page, {
+      phytomerId: "tendril-repaired",
+      handle: "seed-repaired",
+      goal: "repair the response",
+      status: "running",
+      substrate: "opentendril",
+    });
+    await page.route("**/v1/seeds/grow", async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      posts.push(body);
+      if (posts.length === 1) {
+        await route.fulfill({ status: 202, json: { status: "running" } });
+        return;
+      }
+      backend.setSessions([makeSession({ sessionId: "tendril-repaired", origin: "rest" })]);
+      await route.fulfill({
+        status: 202,
+        json: { handle: "seed-repaired", phytomerId: "tendril-repaired", status: "running" },
+      });
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByRole("option", { name: "opentendril" })).toBeAttached();
+    await page.getByLabel("Substrate").selectOption("opentendril");
+    await page.getByLabel("Task").fill("repair the response");
+    await fillVerifier(page, "go", ["test"]);
+    await page.getByRole("button", { name: "Start work" }).click();
+
+    await expect(page.getByTestId("dispatch-ambiguous")).toContainText(
+      "did not include a Seed handle and Phytomer",
+    );
+    await expect(page.locator(".chat-head .mono")).toHaveText("none");
+    await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Discard uncertain dispatch" })).toHaveCount(0);
+    expect(posts).toHaveLength(1);
+    const envelope = await unresolvedRetryEnvelope(page);
+    expect(envelope?.request?.idempotencyKey).toBe(posts[0].idempotencyKey);
+
+    await page.getByRole("button", { name: "Retry dispatch" }).click();
+    await expect(page.getByTestId("seed-goal")).toHaveText("repair the response");
+    await expect(page.locator(".chat-head .mono")).toHaveText("tendril-repaired");
+    expect(posts).toHaveLength(2);
+    expect(posts[1].idempotencyKey).toBe(posts[0].idempotencyKey);
+    expect(posts[1].goal).toBe(posts[0].goal);
+    expect(posts[1].verify).toEqual(posts[0].verify);
+    expect(await unresolvedRetryEnvelope(page)).toBeNull();
+  });
+
+  test("classifies only a 404 watch as historical non-Seed work", async ({ page }) => {
+    const session = makeSession({ sessionId: "tendril-historical-watch", origin: "cli" });
+    const run = makeRun(session.sessionId, "run-historical-watch");
+    await mockStemBackend(page, {
+      sessions: [session],
+      runsBySession: { [session.sessionId]: [run] },
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("seed-workbench")).toHaveAttribute("data-watch-phase", "not-seed");
+    await expect(page.getByTestId("new-work-form")).toBeVisible();
+    await expect(page.getByTestId("watch-error")).toHaveCount(0);
+    await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
+    await expect(page.locator(".runs .run-row")).toHaveCount(1);
+    await expect(page.locator(".chat-head .mono")).toHaveText(session.sessionId);
+  });
+
+  test("shows a non-event-stream watch response as a watch error", async ({ page }) => {
+    const session = makeSession({ sessionId: "tendril-bad-watch", origin: "cli" });
+    const run = makeRun(session.sessionId, "run-bad-watch");
+    await mockStemBackend(page, {
+      sessions: [session],
+      runsBySession: { [session.sessionId]: [run] },
+    });
+    await page.route(
+      (url) => /\/v1\/phytomers\/[^/]+\/watch$/.test(new URL(url).pathname),
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            handle: "seed-should-not-attach",
+            phytomerId: session.sessionId,
+            status: "running",
+            iterations: 1,
+            substrate: "opentendril",
+          }),
+        });
+      },
+    );
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("seed-workbench")).toHaveAttribute("data-watch-phase", "error");
+    await expect(page.getByTestId("watch-error")).toContainText("not an event stream");
+    await expect(page.getByTestId("new-work-form")).toHaveCount(0);
+    await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
+    await expect(page.getByTestId("seed-goal")).toHaveCount(0);
+    await expect(page.locator(".runs .run-row")).toHaveCount(1);
+    await expect(page.locator(".chat-head .mono")).toHaveText(session.sessionId);
+  });
+
+  test("keeps malformed Phytomer observation data a watch error", async ({ page }) => {
+    const session = makeSession({ sessionId: "tendril-malformed-watch", origin: "cli" });
+    await mockStemBackend(page, { sessions: [session] });
+    await page.route(
+      (url) => /\/v1\/phytomers\/[^/]+\/watch$/.test(new URL(url).pathname),
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+          body: "event: observation\ndata: not-json\n\n",
+        });
+      },
+    );
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByTestId("seed-workbench")).toHaveAttribute("data-watch-phase", "error");
+    await expect(page.getByTestId("watch-error")).toContainText(
+      "Phytomer watch observation was not valid JSON",
+    );
+    await expect(page.getByTestId("new-work-form")).toHaveCount(0);
+    await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
   });
 });

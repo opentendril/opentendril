@@ -70,7 +70,7 @@ export function SessionRail() {
         {sessions.length === 0 ? (
           <p className="rail-empty">
             No Tendrils yet. Sprout one to open a session, or let the CLI /
-            MCP surfaces grow their own — they will appear here.
+            MCP surfaces grow their own, and they will appear here.
           </p>
         ) : (
           sessions.map((session) => {

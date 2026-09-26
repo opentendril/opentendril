@@ -17,15 +17,15 @@ import { terrariumProviderFact } from "../lib/terrarium";
 import { useStem } from "../state/store";
 
 function fmt(iso?: string): string {
-  if (!iso) return "—";
+  if (!iso) return "Not recorded";
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
 }
 
 function durationOf(start: string, end?: string): string {
   if (!end) return "still growing";
   const ms = Date.parse(end) - Date.parse(start);
-  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (!Number.isFinite(ms) || ms < 0) return "Unknown";
   if (ms < 1000) return `${ms}ms`;
   const s = ms / 1000;
   return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
@@ -95,7 +95,7 @@ export function DrilldownDrawer() {
           <div className="fact-grid">
             <div className="fact">
               <div className="k">Outcome</div>
-              <div className="v">{run.outcome || "—"}</div>
+              <div className="v">{run.outcome || "Not recorded"}</div>
             </div>
             {run.failureCategory ? (
               <div className="fact">
@@ -117,7 +117,7 @@ export function DrilldownDrawer() {
             ) : null}
             <div className="fact">
               <div className="k">Provider</div>
-              <div className="v">{resolvedProvider(run) || "—"}</div>
+              <div className="v">{resolvedProvider(run) || "Unknown"}</div>
             </div>
             <div className="fact" data-testid="run-terrarium-provider">
               <div className="k">Terrarium provider</div>
@@ -156,12 +156,12 @@ export function DrilldownDrawer() {
             </div>
             <div className="fact">
               <div className="k">Origin</div>
-              <div className="v">{run.origin || "—"}</div>
+              <div className="v">{run.origin || "Not recorded"}</div>
             </div>
             <div className="fact">
               <div className="k">Step</div>
               <div className="v" title={run.stepId}>
-                {run.stepId || "—"}
+                {run.stepId || "Not recorded"}
               </div>
             </div>
             <div className="fact">
