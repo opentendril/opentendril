@@ -25,6 +25,13 @@ RUN npm run build
 # read-only root filesystem (see the `ui` service in docker-compose.yml).
 FROM nginxinc/nginx-unprivileged:1.27-alpine
 
+ARG OT_VERSION
+ARG OT_REVISION
+
+LABEL org.opencontainers.image.title="OpenTendril Greenhouse" \
+      org.opencontainers.image.version="${OT_VERSION}" \
+      org.opencontainers.image.revision="${OT_REVISION}"
+
 # The entrypoint renders /etc/nginx/templates/*.template with envsubst.
 # Restrict substitution to STEM_* so nginx's own $variables are untouched.
 ENV NGINX_ENVSUBST_FILTER="^STEM_"

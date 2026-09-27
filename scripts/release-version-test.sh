@@ -1011,6 +1011,7 @@ for archive in \
   opentendril-linux-arm64.tar.gz \
   opentendril-darwin-amd64.tar.gz \
   opentendril-darwin-arm64.tar.gz \
+  opentendril-greenhouse-linux-amd64.tar.gz \
   checksums.txt
 do
   if grep -q "${archive}" "${release_yml}"; then
@@ -1019,6 +1020,26 @@ do
     fail "release artifact name ${archive} is preserved"
   fi
 done
+
+published_assets="$(awk '
+  /^          files: \|$/ {p=1; next}
+  p && /^          body: \|$/ {exit}
+  p && /^            dist\// {sub(/^            dist\//, ""); print}
+' "${release_yml}" | sort)"
+want_published_assets="$(printf '%s\n' \
+  checksums.txt \
+  install.sh \
+  opentendril-darwin-amd64.tar.gz \
+  opentendril-darwin-arm64.tar.gz \
+  opentendril-greenhouse-linux-amd64.tar.gz \
+  opentendril-linux-amd64.tar.gz \
+  opentendril-linux-arm64.tar.gz | sort)"
+if [ "${published_assets}" = "${want_published_assets}" ]; then
+  pass "GitHub Release asset list contains exactly the seven verified assets"
+else
+  fail "GitHub Release asset list contains exactly the seven verified assets" \
+    "assets=$(printf '%s' "${published_assets}" | tr '\n' ' ')"
+fi
 
 if grep -q 'go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril" ./cmd/stem' "${release_yml}" &&
   grep -q 'go build -ldflags="-s -w -X github.com/opentendril/opentendril/internal/buildinfo.Version=${version}" -o "${staging}/tendril-mcp" ./cmd/tendril-mcp' "${release_yml}" &&
@@ -1031,16 +1052,32 @@ else
 fi
 
 if grep -q 'sha256sum' "${release_yml}"; then
-  pass "SHA-256 checksum generation is preserved"
+  pass "SHA-256 checksum generation includes release payloads"
 else
-  fail "SHA-256 checksum generation is preserved"
+  fail "SHA-256 checksum generation includes release payloads"
 fi
 
-# Governed publication ends after the GitHub Release. There is currently no
-# defined headless OpenTendril product Docker image, so Publish Release must
-# not invoke a Docker/GHCR publication job and docker-publish.yml must not
-# exist. Prove that statically. Do not dispatch, tag, log into GHCR, or push
-# an image.
+if grep -q 'docker buildx build' "${release_yml}" &&
+  grep -q -- '--platform linux/amd64' "${release_yml}" &&
+  grep -q -- '--build-arg "OT_VERSION=${version}"' "${release_yml}" &&
+  grep -q -- '--build-arg "OT_REVISION=${source_sha}"' "${release_yml}" &&
+  grep -q -- '--file ui/Dockerfile' "${release_yml}" &&
+  grep -q 'docker save "${image}"' "${release_yml}" &&
+  grep -q 'check-release-artifacts.sh dist "${version}" "${source_sha}"' "${release_yml}"; then
+  pass "Greenhouse archive is built for linux/amd64 from the bound version and source checkout"
+else
+  fail "Greenhouse archive is built for linux/amd64 from the bound version and source checkout"
+fi
+
+if grep -q 'org.opencontainers.image.version="${OT_VERSION}"' "${repo_root}/ui/Dockerfile" &&
+  grep -q 'org.opencontainers.image.revision="${OT_REVISION}"' "${repo_root}/ui/Dockerfile"; then
+  pass "Greenhouse image labels expose canonical version and source revision"
+else
+  fail "Greenhouse image labels expose canonical version and source revision"
+fi
+
+# Governed publication ends after the GitHub Release. The Greenhouse image is
+# distributed only as a checksummed archive, not through a container registry.
 
 job_block() {
   local file="$1" job="$2"
@@ -1092,16 +1129,10 @@ else
 fi
 
 if grep -Eq 'ghcr\.io|docker/login-action|docker/build-push-action|docker/metadata-action' "${release_yml}"; then
-  fail "release.yml has no GHCR login, metadata, or image push" \
+  fail "release.yml has no GHCR login or image push" \
     "$(grep -nE 'ghcr\.io|docker/login-action|docker/build-push-action|docker/metadata-action' "${release_yml}" | tr '\n' ' ')"
 else
-  pass "release.yml has no GHCR login, metadata, or image push"
-fi
-
-if grep -q 'ui/Dockerfile' "${release_yml}"; then
-  fail "release.yml does not redirect Docker publication to ui/Dockerfile"
-else
-  pass "release.yml does not redirect Docker publication to ui/Dockerfile"
+  pass "release.yml has no GHCR login or image push"
 fi
 
 bind_job="$(job_block "${release_yml}" "bind")"
@@ -1179,6 +1210,12 @@ if cmp -s "${caller_state_before}" "${caller_state_after}"; then
 else
   fail "read-only release-version operations do not mutate caller VERSION or Git state" \
     "$(diff -u "${caller_state_before}" "${caller_state_after}" | tr '\n' ' ')"
+fi
+
+if bash "${script_dir}/release-artifact-test.sh"; then
+  pass "focused Greenhouse release artifact checks pass"
+else
+  fail "focused Greenhouse release artifact checks pass"
 fi
 
 echo
