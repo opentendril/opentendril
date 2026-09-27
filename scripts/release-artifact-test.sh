@@ -68,10 +68,13 @@ with open(path, "wb") as output:
             for name, content in (
                 ("manifest.json", manifest_bytes),
                 ("image-config.json", config_bytes),
+                ("layer/", b""),
                 ("layer/layer.tar", layer_bytes),
             ):
                 info = tarfile.TarInfo(name)
                 info.size = len(content)
+                if name.endswith("/"):
+                    info.type = tarfile.DIRTYPE
                 archive.addfile(info, io.BytesIO(content))
 PY
 }

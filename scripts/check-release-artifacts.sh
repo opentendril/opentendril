@@ -84,8 +84,8 @@ try:
             member_map = {}
             for member in members:
                 path = pathlib.PurePosixPath(member.name)
-                if path.is_absolute() or ".." in path.parts or not member.isfile():
-                    fail("Greenhouse Docker archive contains an unsafe or non-file member")
+                if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+                    fail("Greenhouse Docker archive contains an unsafe or unsupported member")
                 if member.name in member_map:
                     fail("Greenhouse Docker archive contains duplicate members")
                 member_map[member.name] = member
