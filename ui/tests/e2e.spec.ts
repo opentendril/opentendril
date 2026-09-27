@@ -7,7 +7,7 @@
 
 import { test, expect, type Page, type Request, type WebSocketRoute } from "@playwright/test";
 import { readSSEFrames } from "../src/lib/sse";
-import type { EventRecord, Session, SproutRun } from "../src/lib/types";
+import type { EventRecord, PendingConfirmation, Session, SproutRun } from "../src/lib/types";
 
 const testApiKey = "e2e-test-key";
 
@@ -50,6 +50,19 @@ function makeEvent(sessionId: string, runId: string, id: number): EventRecord {
   };
 }
 
+interface PendingExchange {
+  method: string;
+  path: string;
+  startedAt: number;
+  settledAt: number;
+  authorization: string | undefined;
+}
+
+type PendingActionPlan =
+  | { type: "success" }
+  | { type: "http"; status: number; body: string }
+  | { type: "abort" };
+
 /**
  * Mocks the Go Stem's HTTP surface (/health, /v1/sessions and its
  * sub-resources) and the /ws EventBus gateway. Must run before page.goto.
@@ -68,6 +81,7 @@ async function mockStemBackend(
     runsBySession,
     eventsBySession,
     runDelayMs = 0,
+    pending = [] as PendingConfirmation[],
   }: {
     sessions?: Session[];
     sproutRuns?: SproutRun[];
@@ -75,6 +89,7 @@ async function mockStemBackend(
     runsBySession?: Record<string, SproutRun[]>;
     eventsBySession?: Record<string, EventRecord[]>;
     runDelayMs?: number;
+    pending?: PendingConfirmation[];
   } = {},
 ): Promise<{
   lastSessionsAuthHeader: () => string | undefined;
@@ -92,6 +107,16 @@ async function mockStemBackend(
   holdEvents: (sessionId: string) => () => void;
   emit: (event: Record<string, unknown>) => void;
   disconnectSocket: () => Promise<void>;
+  pendingGetStarts: () => number;
+  pendingGetSettled: () => number;
+  maxConcurrentPendingReads: () => number;
+  pendingExchanges: () => PendingExchange[];
+  setPending: (items: PendingConfirmation[]) => void;
+  holdPendingGets: () => () => void;
+  failNextPendingGet: (status?: number, body?: string) => void;
+  failPendingReads: (status?: number, body?: string) => void;
+  planNextPendingAction: (plan: PendingActionPlan) => void;
+  holdNextPendingAction: () => () => void;
 }> {
   let lastSessionsAuthHeader: string | undefined;
   let lastPreferencePatch: Record<string, unknown> | undefined;
@@ -113,6 +138,18 @@ async function mockStemBackend(
   let maxRunReads = 0;
   let sessionsReadCount = 0;
   let currentSocket: WebSocketRoute | null = null;
+  const livePending = pending.map((item) => ({ ...item }));
+  const pendingExchanges: PendingExchange[] = [];
+  let pendingGetStarts = 0;
+  let pendingGetSettled = 0;
+  let activePendingGets = 0;
+  let maxPendingGets = 0;
+  let getHold: Promise<void> | null = null;
+  let releaseGetHold: (() => void) | null = null;
+  let nextGetFailure: { status: number; body: string } | null = null;
+  let stickyGetFailure: { status: number; body: string } | null = null;
+  let actionHold: Promise<void> | null = null;
+  let nextActionPlan: PendingActionPlan | null = null;
 
   await page.route("**/health", async (route) => {
     await route.fulfill({ status: 200, json: { overall: true } });
@@ -261,6 +298,88 @@ async function mockStemBackend(
     });
   });
 
+  await page.route(
+    (url) => new URL(url).pathname === "/v1/delegation/pending",
+    async (route) => {
+      const request = route.request();
+      if (request.method() !== "GET") {
+        await route.fulfill({ status: 405, body: "method not allowed" });
+        return;
+      }
+      pendingGetStarts += 1;
+      activePendingGets += 1;
+      maxPendingGets = Math.max(maxPendingGets, activePendingGets);
+      const startedAt = Date.now();
+      const snapshot = livePending.map((item) => ({ ...item }));
+      const authorization = request.headers()["authorization"];
+      const hold = getHold;
+      try {
+        if (hold) await hold;
+        const failure = nextGetFailure ?? stickyGetFailure;
+        nextGetFailure = null;
+        if (failure) {
+          await route.fulfill({ status: failure.status, body: failure.body });
+          return;
+        }
+        await route.fulfill({ status: 200, json: snapshot });
+      } finally {
+        activePendingGets -= 1;
+        pendingGetSettled += 1;
+        pendingExchanges.push({
+          method: "GET",
+          path: new URL(request.url()).pathname,
+          startedAt,
+          settledAt: Date.now(),
+          authorization,
+        });
+      }
+    },
+  );
+
+  await page.route(
+    (url) => /^\/v1\/delegation\/pending\/[^/]+\/(approve|deny)$/.test(new URL(url).pathname),
+    async (route) => {
+      const request = route.request();
+      const url = new URL(request.url());
+      const match = /^\/v1\/delegation\/pending\/([^/]+)\/(approve|deny)$/.exec(url.pathname);
+      const id = decodeURIComponent(match?.[1] ?? "");
+      const kind = match?.[2] ?? "approve";
+      const startedAt = Date.now();
+      const authorization = request.headers()["authorization"];
+      const hold = actionHold;
+      actionHold = null;
+      try {
+        if (request.method() !== "POST") {
+          await route.fulfill({ status: 405, body: "method not allowed" });
+          return;
+        }
+        if (hold) await hold;
+        const plan = nextActionPlan ?? { type: "success" as const };
+        nextActionPlan = null;
+        if (plan.type === "abort") {
+          await route.abort("failed");
+          return;
+        }
+        if (plan.type === "http") {
+          await route.fulfill({ status: plan.status, body: plan.body });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          json: { status: kind === "deny" ? "denied" : "approved", id },
+        });
+      } finally {
+        pendingExchanges.push({
+          method: request.method(),
+          path: url.pathname,
+          startedAt,
+          settledAt: Date.now(),
+          authorization,
+        });
+      }
+    },
+  );
+
   return {
     lastSessionsAuthHeader: () => lastSessionsAuthHeader,
     lastPreferencePatch: () => lastPreferencePatch,
@@ -306,6 +425,43 @@ async function mockStemBackend(
     disconnectSocket: async () => {
       await currentSocket?.close({ code: 1001, reason: "Reconnect hydration case" });
     },
+    pendingGetStarts: () => pendingGetStarts,
+    pendingGetSettled: () => pendingGetSettled,
+    maxConcurrentPendingReads: () => maxPendingGets,
+    pendingExchanges: () => pendingExchanges.map((entry) => ({ ...entry })),
+    setPending: (items) => {
+      livePending.splice(0, livePending.length, ...items.map((item) => ({ ...item })));
+    },
+    holdPendingGets: () => {
+      if (releaseGetHold) return releaseGetHold;
+      let release = () => {};
+      getHold = new Promise<void>((resolve) => {
+        release = () => {
+          getHold = null;
+          releaseGetHold = null;
+          resolve();
+        };
+      });
+      releaseGetHold = release;
+      return release;
+    },
+    failNextPendingGet: (status = 500, body = "pending list unavailable") => {
+      nextGetFailure = { status, body };
+    },
+    failPendingReads: (status = 500, body = "pending list unavailable") => {
+      stickyGetFailure = { status, body };
+    },
+    planNextPendingAction: (plan) => {
+      nextActionPlan = plan;
+    },
+    holdNextPendingAction: () => {
+      let release = () => {};
+      const promise = new Promise<void>((resolve) => {
+        release = () => resolve();
+      });
+      actionHold = promise;
+      return release;
+    },
   };
 }
 
@@ -337,7 +493,9 @@ test.describe("Command Center onboarding", () => {
 
     // The onboarding form is gone and the shell is in its place.
     await expect(page.getByRole("button", { name: "Take root" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "+ Sprout" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ Sprout" })).toHaveCount(0);
+    await expect(page.getByText("No work observed yet")).toBeVisible();
 
     // The key collected during onboarding is the one actually sent.
     expect(backend.lastSessionsAuthHeader()).toBe(`Bearer ${testApiKey}`);
@@ -658,7 +816,7 @@ test.describe("Command Center session rail", () => {
     await expect(cards.last().getByText("mcp", { exact: true })).toBeVisible();
 
     // The empty-state copy must not appear alongside real sessions.
-    await expect(page.getByText("No Tendrils yet")).toHaveCount(0);
+    await expect(page.getByText("No work observed yet")).toHaveCount(0);
   });
 
   test("shows the empty state when the Stem has no sessions", async ({ page }) => {
@@ -667,7 +825,13 @@ test.describe("Command Center session rail", () => {
     await completeOnboarding(page, testApiKey);
 
     await expect(page.locator(".session-card")).toHaveCount(0);
-    await expect(page.getByText(/No Tendrils yet/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ Sprout" })).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "No work observed yet. Start new work in the Workbench, or activity from CLI, MCP, and REST will appear here.",
+      ),
+    ).toBeVisible();
   });
 });
 
@@ -2361,5 +2525,545 @@ test.describe("Canonical Seed workbench", () => {
     );
     await expect(page.getByTestId("new-work-form")).toHaveCount(0);
     await expect(page.getByTestId("active-seed-work")).toHaveCount(0);
+  });
+});
+
+function makePending(overrides: Partial<PendingConfirmation> = {}): PendingConfirmation {
+  return {
+    id: "pending-1",
+    pollen: "pollen-1",
+    operationClass: "git.push",
+    substrate: "opentendril",
+    impact: "publish",
+    createdAt: "2026-09-01T12:00:00Z",
+    expiresAt: "2026-09-01T13:00:00Z",
+    ...overrides,
+  };
+}
+
+type StemMock = Awaited<ReturnType<typeof mockStemBackend>>;
+
+async function openGreenhouse(
+  page: Page,
+  backend: StemMock,
+  options?: { clock?: boolean; settlePending?: boolean },
+) {
+  if (options?.clock) {
+    await page.clock.install({ time: new Date("2026-09-01T12:00:00.000Z") });
+  }
+  await completeOnboarding(page, testApiKey);
+  await expect(page.getByText("EventBus live")).toBeVisible();
+  await expect.poll(() => backend.pendingGetStarts()).toBeGreaterThan(0);
+  if (options?.settlePending !== false) {
+    await expect.poll(() => backend.pendingGetSettled()).toBe(backend.pendingGetStarts());
+  }
+  if (options?.clock) {
+    const now = await page.evaluate(() => Date.now());
+    await page.clock.pauseAt(now + 250);
+  }
+}
+
+function postsTo(paths: string[], suffix: string): string[] {
+  return paths.filter((path) => path.endsWith(suffix));
+}
+
+test.describe("Botanist pending confirmations", () => {
+  test("an empty pending list creates no attention noise", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    await openGreenhouse(page, backend, { clock: true });
+
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+    await expect(page.getByTestId("pending-notice")).toHaveCount(0);
+    await expect(page.getByTestId("pending-error")).toHaveCount(0);
+    await expect(page.getByText(/Needs attention/)).toHaveCount(0);
+    expect(backend.pendingExchanges().every((entry) => entry.authorization === `Bearer ${testApiKey}`)).toBe(true);
+  });
+
+  test("shows one open confirmation from the REST list", async ({ page }) => {
+    const item = {
+      ...makePending({
+        id: "confirm-visible",
+        pollen: "cli-pollen",
+        operationClass: "git.push",
+        substrate: "opentendril",
+        impact: "publish",
+        expiresAt: "2026-09-01T13:30:00Z",
+      }),
+      grant: { secret: "do-not-render-grant-secret" },
+    } as PendingConfirmation;
+    const backend = await mockStemBackend(page, { sessions: [], pending: [item] });
+    await openGreenhouse(page, backend, { clock: true });
+
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+    await page.getByTestId("pending-attention").click();
+    const row = page.getByTestId("pending-confirmation");
+    await expect(row.getByTestId("pending-pollen")).toHaveText("cli-pollen");
+    await expect(row.getByTestId("pending-operation")).toHaveText("git.push");
+    await expect(row.getByTestId("pending-substrate")).toHaveText("opentendril");
+    await expect(row.getByTestId("pending-impact")).toHaveText("publish");
+    await expect(row.getByTestId("pending-expiry")).toHaveAttribute("dateTime", "2026-09-01T13:30:00Z");
+    await expect(row.getByTestId("pending-id")).toBeHidden();
+    await expect(page.getByText("do-not-render-grant-secret")).toHaveCount(0);
+    const stored = await page.evaluate(() => ({
+      local: JSON.stringify(window.localStorage),
+      session: JSON.stringify(window.sessionStorage),
+    }));
+    expect(stored.local).not.toContain("confirm-visible");
+    expect(stored.session).not.toContain("confirm-visible");
+    expect(backend.pendingExchanges()[0]?.authorization).toBe(`Bearer ${testApiKey}`);
+    expect(backend.pendingExchanges()[0]?.path).toBe("/v1/delegation/pending");
+  });
+
+  test("shows every open confirmation without a per-item read", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [
+        makePending({ id: "confirm-a", pollen: "pollen-a", impact: "read" }),
+        makePending({ id: "confirm-b", pollen: "pollen-b", operationClass: "seed.grow", substrate: "docs" }),
+      ],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 2");
+    expect(backend.pendingGetStarts()).toBe(1);
+    await page.getByTestId("pending-attention").click();
+    await expect(page.getByTestId("pending-pollen")).toHaveText(["pollen-a", "pollen-b"]);
+  });
+
+  test("discovers a new confirmation by polling without reconnecting the EventBus", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    await openGreenhouse(page, backend, { clock: true });
+    const before = backend.pendingGetStarts();
+    backend.setPending([makePending({ id: "confirm-polled", pollen: "polled-pollen" })]);
+
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+    await page.clock.runFor(5000);
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+    await expect(page.getByText("EventBus live")).toBeVisible();
+    expect(backend.pendingGetStarts()).toBe(before + 1);
+    await page.getByTestId("pending-attention").click();
+    await expect(page.getByTestId("pending-pollen")).toHaveText("polled-pollen");
+  });
+
+  test("keeps at most one pending list read in flight", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [
+        makePending({ id: "confirm-a" }),
+        makePending({ id: "confirm-b", pollen: "pollen-b" }),
+        makePending({ id: "confirm-c", pollen: "pollen-c" }),
+      ],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    expect(backend.pendingGetStarts()).toBe(1);
+
+    await page.clock.runFor(5000);
+    await expect.poll(() => backend.pendingGetSettled()).toBe(2);
+    expect(backend.pendingGetStarts()).toBe(2);
+    expect(backend.maxConcurrentPendingReads()).toBe(1);
+  });
+
+  test("a slow pending GET does not overlap the next interval", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    const release = backend.holdPendingGets();
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByText("EventBus live")).toBeVisible();
+    await expect.poll(() => backend.pendingGetStarts()).toBe(1);
+
+    await page.waitForTimeout(6_000);
+    expect(backend.pendingGetStarts()).toBe(1);
+    expect(backend.maxConcurrentPendingReads()).toBe(1);
+
+    release();
+    await expect.poll(() => backend.pendingGetSettled()).toBe(1);
+    expect(backend.pendingGetStarts()).toBe(1);
+    expect(backend.maxConcurrentPendingReads()).toBe(1);
+  });
+
+  test("reconnect hydration refreshes pending confirmations without a second timer", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    await openGreenhouse(page, backend, { clock: true });
+    expect(backend.pendingGetStarts()).toBe(1);
+
+    await page.clock.runFor(5000);
+    await expect.poll(() => backend.pendingGetSettled()).toBe(2);
+    expect(backend.pendingGetStarts()).toBe(2);
+
+    await backend.disconnectSocket();
+    await page.clock.runFor(500);
+    await expect(page.getByText("EventBus live")).toBeVisible();
+    await expect.poll(() => backend.pendingGetSettled()).toBe(3);
+    expect(backend.pendingGetStarts()).toBe(3);
+
+    await page.clock.runFor(4_600);
+    await expect.poll(() => backend.pendingGetSettled()).toBe(4);
+    const duringGap = backend.pendingGetStarts();
+    await page.clock.runFor(700);
+    expect(backend.pendingGetStarts()).toBe(duringGap);
+  });
+
+  test("shutdown stops the recurring pending refresh", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    await openGreenhouse(page, backend, { clock: true });
+    const starts = backend.pendingGetStarts();
+
+    await page.getByRole("button", { name: "Uproot" }).click();
+    await expect(page.getByRole("button", { name: "Take root" })).toBeVisible();
+    await page.clock.runFor(20_000);
+    expect(backend.pendingGetStarts()).toBe(starts);
+  });
+
+  test("approve stays visible until a GET that starts after the POST settles", async ({ page }) => {
+    const before = makePending({ id: "confirm-approve", pollen: "pollen-before" });
+    const after = makePending({
+      id: "confirm-from-get",
+      pollen: "pollen-from-get",
+      operationClass: "git.publish",
+      substrate: "docs",
+      impact: "publish-from-get",
+    });
+    const backend = await mockStemBackend(page, { sessions: [], pending: [before] });
+    const posts: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      posts.push(new URL(request.url()).pathname);
+    });
+    await openGreenhouse(page, backend, { clock: true });
+
+    const releaseGets = backend.holdPendingGets();
+    await page.clock.runFor(5000);
+    await expect.poll(() => backend.pendingGetStarts()).toBe(2);
+
+    await page.getByTestId("pending-attention").click();
+    const releasePost = backend.holdNextPendingAction();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-approve" }).click();
+    await expect(page.getByText("Recording approval…")).toBeVisible();
+    await expect(page.getByTestId("pending-pollen")).toHaveText("pollen-before");
+    await expect(
+      page.getByRole("button", { name: "Approve pending confirmation confirm-approve" }),
+    ).toBeDisabled();
+    expect(backend.pendingGetStarts()).toBe(2);
+
+    releasePost();
+    await expect
+      .poll(() => backend.pendingExchanges().some((entry) => entry.path.endsWith("/approve") && entry.settledAt > 0))
+      .toBe(true);
+    expect(backend.pendingGetStarts()).toBe(2);
+    const post = backend.pendingExchanges().find((entry) => entry.path.endsWith("/approve"));
+    expect(post?.path).toBe("/v1/delegation/pending/confirm-approve/approve");
+    expect(post?.authorization).toBe(`Bearer ${testApiKey}`);
+
+    backend.setPending([after]);
+    releaseGets();
+    await expect.poll(() => backend.pendingGetStarts()).toBe(3);
+    await expect.poll(() => backend.pendingGetSettled()).toBe(3);
+    const getsAfterPost = backend
+      .pendingExchanges()
+      .filter((entry) => entry.method === "GET" && entry.startedAt >= (post?.settledAt ?? Number.POSITIVE_INFINITY));
+    expect(getsAfterPost.length).toBeGreaterThan(0);
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "recorded");
+    await expect(page.getByTestId("pending-notice")).toHaveText("Approval recorded");
+    await expect(page.getByTestId("pending-pollen")).toHaveText("pollen-from-get");
+    await expect(page.getByTestId("pending-impact")).toHaveText("publish-from-get");
+    await expect(page.getByText("pollen-before")).toHaveCount(0);
+    expect(postsTo(posts, "/approve")).toEqual(["/v1/delegation/pending/confirm-approve/approve"]);
+    expect(posts.some((path) => /resume|seeds\/grow|sprouts|chat\/completions/.test(path))).toBe(false);
+    expect(backend.maxConcurrentPendingReads()).toBe(1);
+  });
+
+  test("deny has the same reconciliation boundary as approve", async ({ page }) => {
+    const before = makePending({ id: "confirm-deny", pollen: "deny-before", impact: "mutate" });
+    const after = makePending({
+      id: "confirm-deny-get",
+      pollen: "deny-from-get",
+      operationClass: "files.write",
+      substrate: "docs",
+      impact: "mutate-from-get",
+    });
+    const backend = await mockStemBackend(page, { sessions: [], pending: [before] });
+    const posts: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      posts.push(new URL(request.url()).pathname);
+    });
+    await openGreenhouse(page, backend, { clock: true });
+
+    const releaseGets = backend.holdPendingGets();
+    await page.clock.runFor(5000);
+    await expect.poll(() => backend.pendingGetStarts()).toBe(2);
+    await page.getByTestId("pending-attention").click();
+    const releasePost = backend.holdNextPendingAction();
+    await page.getByRole("button", { name: "Deny pending confirmation confirm-deny" }).click();
+    await expect(page.getByText("Recording denial…")).toBeVisible();
+    await expect(page.getByTestId("pending-pollen")).toHaveText("deny-before");
+    await expect(page.getByRole("button", { name: "Deny pending confirmation confirm-deny" })).toBeDisabled();
+
+    releasePost();
+    await expect
+      .poll(() => backend.pendingExchanges().some((entry) => entry.path.endsWith("/deny") && entry.settledAt > 0))
+      .toBe(true);
+    expect(backend.pendingGetStarts()).toBe(2);
+    const post = backend.pendingExchanges().find((entry) => entry.path.endsWith("/deny"));
+    expect(post?.path).toBe("/v1/delegation/pending/confirm-deny/deny");
+    expect(post?.authorization).toBe(`Bearer ${testApiKey}`);
+
+    backend.setPending([after]);
+    releaseGets();
+    await expect.poll(() => backend.pendingGetSettled()).toBe(3);
+    expect(
+      backend
+        .pendingExchanges()
+        .some((entry) => entry.method === "GET" && entry.startedAt >= (post?.settledAt ?? Number.POSITIVE_INFINITY)),
+    ).toBe(true);
+    await expect(page.getByTestId("pending-notice")).toHaveText("Denial recorded");
+    await expect(page.getByTestId("pending-pollen")).toHaveText("deny-from-get");
+    expect(posts).toEqual(["/v1/delegation/pending/confirm-deny/deny"]);
+    expect(posts.some((path) => /resume|seeds\/grow|sprouts|chat\/completions/.test(path))).toBe(false);
+  });
+
+  test("a missing confirmation is stale, then reconciled from the list", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-missing", pollen: "gone-pollen" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.planNextPendingAction({
+      type: "http",
+      status: 404,
+      body: "pending confirmation not found\n",
+    });
+    backend.setPending([]);
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-missing" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "stale");
+    await expect(page.getByTestId("pending-notice")).toContainText("no matching pending confirmation");
+    await expect(page.getByTestId("pending-notice")).not.toContainText("Approval recorded");
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+  });
+
+  test("an expired confirmation is not recorded as approval", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-expired" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.planNextPendingAction({
+      type: "http",
+      status: 409,
+      body: "pending confirmation expired\n",
+    });
+    backend.setPending([]);
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-expired" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "stale");
+    await expect(page.getByTestId("pending-notice")).toContainText("has expired");
+    await expect(page.getByTestId("pending-notice")).not.toContainText("Approval recorded");
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+  });
+
+  test("a confirmation that is no longer open stays unsuccessful", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-closed" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.planNextPendingAction({
+      type: "http",
+      status: 409,
+      body: "pending confirmation is not open\n",
+    });
+    backend.setPending([]);
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Deny pending confirmation confirm-closed" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "stale");
+    await expect(page.getByTestId("pending-notice")).toContainText("no longer open");
+    await expect(page.getByTestId("pending-notice")).toContainText("Denial was not recorded");
+    await expect(page.getByText("Denial recorded")).toHaveCount(0);
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+  });
+
+  test("a generic POST failure keeps the displayed confirmation", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-error", pollen: "still-here" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.planNextPendingAction({
+      type: "http",
+      status: 500,
+      body: "authorizer unavailable",
+    });
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-error" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "failed");
+    await expect(page.getByTestId("pending-notice")).toContainText("Approval was not recorded");
+    await expect(page.getByTestId("pending-notice")).toContainText("authorizer unavailable");
+    await expect(page.getByTestId("pending-notice")).not.toContainText("Approval recorded");
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+    await expect(page.getByTestId("pending-pollen")).toHaveText("still-here");
+  });
+
+  test("a successful POST with a failed list read keeps the prior list", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-unreconciled", pollen: "still-pending" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.failNextPendingGet(500, "pending list unavailable");
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-unreconciled" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "unreconciled");
+    await expect(page.getByTestId("pending-notice")).toContainText(
+      "Approval response was received, but the pending list could not be reconciled.",
+    );
+    await expect(page.getByTestId("pending-notice")).not.toContainText("Approval recorded");
+    await expect(page.getByTestId("pending-error")).toContainText("could not be refreshed");
+    await expect(page.getByTestId("pending-pollen")).toHaveText("still-pending");
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+  });
+
+  test("an ambiguous POST stays failed when a later list changes", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-ambiguous", pollen: "before-abort" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    backend.planNextPendingAction({ type: "abort" });
+    backend.setPending([makePending({ id: "later-list", pollen: "later-list" })]);
+    await page.getByTestId("pending-attention").click();
+    await page.getByRole("button", { name: "Approve pending confirmation confirm-ambiguous" }).click();
+
+    await expect(page.getByTestId("pending-notice")).toHaveAttribute("data-phase", "failed");
+    await expect(page.getByTestId("pending-notice")).toContainText("outcome is uncertain");
+    await expect(page.getByText("Approval recorded")).toHaveCount(0);
+    await expect(page.getByTestId("pending-pollen")).toHaveText("later-list");
+    await expect(page.getByText("before-abort")).toHaveCount(0);
+  });
+
+  test("a past local expiry does not remove or resolve the confirmation", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "confirm-past", expiresAt: "2020-01-01T00:00:00Z", pollen: "still-open" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    await page.getByTestId("pending-attention").click();
+    await expect(page.getByTestId("pending-expiry")).toHaveAttribute("dateTime", "2020-01-01T00:00:00Z");
+    await expect(page.getByTestId("pending-expiry-relative")).toHaveText("local clock is past this expiry");
+
+    await page.clock.runFor(120_000);
+    await expect(page.getByTestId("pending-pollen")).toHaveText("still-open");
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+    expect(backend.pendingExchanges().some((entry) => entry.method === "POST")).toBe(false);
+  });
+
+  test("EventBus frames do not create pending confirmations", async ({ page }) => {
+    const backend = await mockStemBackend(page, {
+      sessions: [],
+      pending: [makePending({ id: "from-rest", pollen: "from-rest" })],
+    });
+    await openGreenhouse(page, backend, { clock: true });
+    const starts = backend.pendingGetStarts();
+    backend.emit({
+      type: "pending-confirmation",
+      data: {
+        id: "from-bus",
+        pollen: "from-bus",
+        operationClass: "git.push",
+        substrate: "opentendril",
+        impact: "publish",
+      },
+    });
+    await expect(page.getByTestId("pending-attention")).toHaveText("Needs attention: 1");
+    await page.getByTestId("pending-attention").click();
+    await expect(page.getByTestId("pending-pollen")).toHaveText(["from-rest"]);
+    await expect(page.getByText("from-bus")).toHaveCount(0);
+    expect(backend.pendingGetStarts()).toBe(starts);
+  });
+
+  test("a pending read failure leaves the rest of the workbench usable", async ({ page }) => {
+    const session = makeSession({
+      sessionId: "tendril-still-here",
+      origin: "cli",
+    });
+    const backend = await mockStemBackend(page, {
+      sessions: [session],
+      sproutRuns: [makeRun(session.sessionId, "run-still-here")],
+    });
+    backend.failPendingReads(503, "pending unavailable");
+    await openGreenhouse(page, backend, { clock: true });
+
+    await expect(page.getByText("hydration failed")).toHaveCount(0);
+    await expect(page.getByText("EventBus live")).toBeVisible();
+    await expect(page.getByText("still-here", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("pending-error")).toContainText("could not be refreshed (503)");
+    await expect(page.getByTestId("pending-attention")).toHaveCount(0);
+  });
+});
+
+test.describe("Workbench information architecture", () => {
+  test("labels work by Seed goal, then transcript, then Phytomer", async ({ page }) => {
+    const seedSession = makeSession({
+      sessionId: "tendril-seed-label",
+      origin: "rest",
+      lastActiveAt: "2026-09-04T00:00:00Z",
+    });
+    const cli = makeSession({
+      sessionId: "tendril-cli-label",
+      origin: "cli",
+      lastActiveAt: "2026-09-03T00:00:00Z",
+    });
+    const mcp = makeSession({
+      sessionId: "tendril-mcp-label",
+      origin: "mcp",
+      lastActiveAt: "2026-09-02T00:00:00Z",
+    });
+    const rest = makeSession({
+      sessionId: "tendril-rest-label",
+      origin: "rest",
+      lastActiveAt: "2026-09-01T00:00:00Z",
+    });
+    await mockStemBackend(page, {
+      sessions: [seedSession, cli, mcp, rest],
+      runsBySession: {
+        [seedSession.sessionId]: [makeRun(seedSession.sessionId, "run-seed")],
+        [cli.sessionId]: [
+          {
+            ...makeRun(cli.sessionId, "run-cli"),
+            transcript: "repair the cli report",
+          },
+        ],
+        [mcp.sessionId]: [makeRun(mcp.sessionId, "run-mcp")],
+        [rest.sessionId]: [],
+      },
+    });
+    await serveSeed(page, {
+      phytomerId: seedSession.sessionId,
+      handle: "seed-label",
+      goal: "document the workbench",
+      status: "running",
+      substrate: "docs",
+    });
+
+    await completeOnboarding(page, testApiKey);
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "+ Sprout" })).toHaveCount(0);
+    await expect(page.getByText("No work observed yet")).toHaveCount(0);
+
+    const seedCard = page.getByRole("group", { name: "Phytomer seed-label" });
+    await expect(seedCard.getByTestId("phytomer-label")).toHaveText("document the workbench");
+    const cliCard = page.getByRole("group", { name: "Phytomer cli-label" });
+    await expect(cliCard.getByTestId("phytomer-label")).toHaveText("repair the cli report");
+    await expect(cliCard.getByText("cli", { exact: true })).toBeVisible();
+    const mcpCard = page.getByRole("group", { name: "Phytomer mcp-label" });
+    await expect(mcpCard.getByText("mcp", { exact: true })).toBeVisible();
+    await expect(mcpCard.getByTestId("phytomer-label")).toHaveText("transcript for run-mcp");
+    const restCard = page.getByRole("group", { name: "Phytomer rest-label" });
+    await expect(restCard.getByTestId("phytomer-label")).toHaveText("Phytomer");
+    await expect(restCard.getByText("rest", { exact: true })).toBeVisible();
   });
 });

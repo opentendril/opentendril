@@ -321,3 +321,22 @@ export interface FruitInventory {
   items: FruitInventoryItem[];
   counts: FruitReviewPressure;
 }
+
+// GET /v1/delegation/pending returns a JSON array of these records.
+// The list is already limited to open, unexpired confirmations.
+export interface PendingConfirmation {
+  id: string;
+  pollen: string;
+  operationClass: string;
+  substrate: string;
+  impact: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+// POST /v1/delegation/pending/{id}/approve and /deny.
+// status is the Stem action result. It is not a pending-list record.
+export interface PendingConfirmationActionResult {
+  status: string;
+  id: string;
+}

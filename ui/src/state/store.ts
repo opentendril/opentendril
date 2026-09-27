@@ -31,6 +31,7 @@ import type {
   ContinuationRequest,
   EventRecord,
   FruitInventory,
+  PendingConfirmation,
   PhytomerObservation,
   Preferences,
   SeedGrowRequest,
@@ -46,6 +47,7 @@ const RECENT_SESSION_LIMIT = 10;
 const MAX_BACKGROUND_RUN_REQUESTS = 3;
 const RUN_REFRESH_DEBOUNCE_MS = 250;
 const SESSION_REFRESH_DEBOUNCE_MS = 750;
+export const PENDING_CONFIRMATION_REFRESH_MS = 5000;
 
 export type Hydration = "idle" | "hydrating" | "ready" | "error";
 export type EvidenceState = "loading" | "ready" | "error";
@@ -90,6 +92,21 @@ export interface ContinuationState {
 
 export type FruitLoadStatus = "idle" | "loading" | "ready" | "error";
 
+export type PendingStatus = "idle" | "loading" | "ready" | "error";
+export type PendingActionKind = "approve" | "deny";
+
+export interface PendingActionState {
+  id: string;
+  kind: PendingActionKind;
+}
+
+export type PendingNoticePhase = "recorded" | "stale" | "failed" | "unreconciled";
+
+export interface PendingNotice {
+  phase: PendingNoticePhase;
+  message: string;
+}
+
 export interface SeedWorkInput {
   substrate: string;
   goal: string;
@@ -125,12 +142,19 @@ interface StemStore {
   fruitInventory: FruitInventory | null;
   fruitStatus: FruitLoadStatus;
   fruitError: string | null;
+  // Last successful GET /v1/delegation/pending. Never written from EventBus
+  // frames and never stored in browser persistence.
+  pendingConfirmations: PendingConfirmation[];
+  pendingStatus: PendingStatus;
+  pendingError: string | null;
+  pendingAction: PendingActionState | null;
+  pendingNotice: PendingNotice | null;
 
   boot: () => void;
   shutdown: () => void;
   selectSession: (sessionId: string) => void;
-  createSession: (preferences?: Preferences) => Promise<void>;
   updatePreferences: (preferences: Preferences) => Promise<void>;
+  resolvePendingConfirmation: (id: string, kind: PendingActionKind) => Promise<void>;
   startSeed: (input: SeedWorkInput) => Promise<void>;
   retrySeedDispatch: () => Promise<void>;
   continueSeed: (intent: string) => Promise<void>;
@@ -171,6 +195,9 @@ let watchAbort: AbortController | null = null;
 let watchPhytomerId: string | null = null;
 let watchInFlight = false;
 let fruitRequestId = 0;
+let pendingLoopStarted = false;
+let pendingTimer: number | null = null;
+let pendingInFlight: Promise<boolean> | null = null;
 
 const IDLE_DISPATCH: SeedDispatchState = { phase: "idle" };
 const IDLE_CONTINUATION: ContinuationState = { phase: "idle" };
@@ -775,9 +802,169 @@ export const useStem = create<StemStore>()((set, get) => {
     }
   }
 
+  function pendingReadError(err: unknown): string {
+    if (err instanceof StemApiError) {
+      return `Pending confirmations could not be refreshed (${err.status}).`;
+    }
+    return "Pending confirmations could not be refreshed.";
+  }
+
+  function isPendingConfirmation(value: unknown): value is PendingConfirmation {
+    if (!value || typeof value !== "object") return false;
+    const item = value as PendingConfirmation;
+    return (
+      typeof item.id === "string" &&
+      typeof item.pollen === "string" &&
+      typeof item.operationClass === "string" &&
+      typeof item.substrate === "string" &&
+      typeof item.impact === "string" &&
+      typeof item.createdAt === "string" &&
+      typeof item.expiresAt === "string"
+    );
+  }
+
+  async function readPendingConfirmations(): Promise<boolean> {
+    set({ pendingStatus: "loading" });
+    try {
+      const body = await stemApi.pendingConfirmations(currentConnection());
+      if (!Array.isArray(body) || !body.every(isPendingConfirmation)) {
+        set({
+          pendingStatus: "error",
+          pendingError: "Pending confirmations could not be refreshed.",
+        });
+        return false;
+      }
+      set({
+        pendingConfirmations: body,
+        pendingStatus: "ready",
+        pendingError: null,
+      });
+      return true;
+    } catch (err) {
+      set({
+        pendingStatus: "error",
+        pendingError: pendingReadError(err),
+      });
+      return false;
+    }
+  }
+
+  function beginPendingRead(): Promise<boolean> {
+    if (pendingInFlight) return pendingInFlight;
+    const run = readPendingConfirmations().finally(() => {
+      if (pendingInFlight === run) pendingInFlight = null;
+    });
+    pendingInFlight = run;
+    return run;
+  }
+
+  // afterCurrent waits out a read that started earlier, then starts a new one.
+  // A poll joins the read already in flight so two list GETs never overlap.
+  function refreshPendingConfirmations(options: { afterCurrent: boolean }): Promise<boolean> {
+    if (!pendingInFlight) return beginPendingRead();
+    if (!options.afterCurrent) return pendingInFlight;
+    const current = pendingInFlight;
+    return current.then(() => beginPendingRead());
+  }
+
+  function schedulePendingObservation(delayMs: number) {
+    if (!pendingLoopStarted || pendingTimer !== null) return;
+    pendingTimer = window.setTimeout(() => {
+      pendingTimer = null;
+      void runPendingObservationTick();
+    }, delayMs);
+  }
+
+  async function runPendingObservationTick() {
+    if (!pendingLoopStarted) return;
+    await refreshPendingConfirmations({ afterCurrent: false });
+    if (!pendingLoopStarted) return;
+    schedulePendingObservation(PENDING_CONFIRMATION_REFRESH_MS);
+  }
+
+  function startPendingObservation() {
+    if (pendingLoopStarted) return;
+    pendingLoopStarted = true;
+    schedulePendingObservation(PENDING_CONFIRMATION_REFRESH_MS);
+  }
+
+  function stopPendingObservation() {
+    pendingLoopStarted = false;
+    if (pendingTimer !== null) {
+      window.clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+  }
+
+  type PendingPostFailure =
+    | { kind: "missing" }
+    | { kind: "expired" }
+    | { kind: "closed" }
+    | { kind: "rejected"; detail: string }
+    | { kind: "uncertain" };
+
+  function classifyPendingPostFailure(err: unknown): PendingPostFailure {
+    if (!(err instanceof StemApiError)) return { kind: "uncertain" };
+    const text = err.message.toLowerCase();
+    if (err.status === 404 || text.includes("not found")) return { kind: "missing" };
+    if (err.status === 409 && text.includes("expired")) return { kind: "expired" };
+    if (err.status === 409 && text.includes("not open")) return { kind: "closed" };
+    if (err.status === 409) return { kind: "closed" };
+    return { kind: "rejected", detail: err.message.trim() };
+  }
+
+  function pendingActionNoun(kind: PendingActionKind): string {
+    return kind === "approve" ? "Approval" : "Denial";
+  }
+
+  function pendingNoticeFor(
+    kind: PendingActionKind,
+    posted: boolean,
+    reconciled: boolean,
+    failure: PendingPostFailure,
+  ): PendingNotice {
+    const noun = pendingActionNoun(kind);
+    if (posted && reconciled) {
+      return { phase: "recorded", message: `${noun} recorded` };
+    }
+    if (posted) {
+      return {
+        phase: "unreconciled",
+        message: `${noun} response was received, but the pending list could not be reconciled.`,
+      };
+    }
+    if (failure.kind === "missing") {
+      return {
+        phase: "stale",
+        message: `${noun} was not recorded. The Stem has no matching pending confirmation.`,
+      };
+    }
+    if (failure.kind === "expired") {
+      return {
+        phase: "stale",
+        message: `${noun} was not recorded. The pending confirmation has expired.`,
+      };
+    }
+    if (failure.kind === "closed") {
+      return {
+        phase: "stale",
+        message: `${noun} was not recorded. The pending confirmation is no longer open.`,
+      };
+    }
+    if (failure.kind === "uncertain") {
+      return {
+        phase: "failed",
+        message: `${noun} was not recorded. The request did not receive a Stem response, so the outcome is uncertain.`,
+      };
+    }
+    const detail = failure.detail || "The Stem rejected the request.";
+    return { phase: "failed", message: `${noun} was not recorded. ${detail}` };
+  }
+
   async function hydrate() {
     set({ hydration: "hydrating", hydrationError: null });
     liveBuffer = [];
+    const pendingRefresh = refreshPendingConfirmations({ afterCurrent: true });
     try {
       const conn = currentConnection();
       const [{ sessions }, substrates] = await Promise.all([
@@ -836,6 +1023,7 @@ export const useStem = create<StemStore>()((set, get) => {
             : String(err),
       });
     }
+    await pendingRefresh;
   }
 
   return {
@@ -863,6 +1051,11 @@ export const useStem = create<StemStore>()((set, get) => {
     fruitInventory: null,
     fruitStatus: "idle",
     fruitError: null,
+    pendingConfirmations: [],
+    pendingStatus: "idle",
+    pendingError: null,
+    pendingAction: null,
+    pendingNotice: null,
 
     boot: () => {
       const unresolved = get().seedDispatch.phase === "pending" ? null : ambiguousFromStorage();
@@ -870,6 +1063,7 @@ export const useStem = create<StemStore>()((set, get) => {
         dispatchReady: true,
         ...(unresolved ? { seedDispatch: unresolved } : {}),
       });
+      startPendingObservation();
       socket?.close();
       socket = new StemSocket(websocketUrl(currentConnection()), {
         onEvent: onLiveEvent,
@@ -892,6 +1086,7 @@ export const useStem = create<StemStore>()((set, get) => {
     },
 
     shutdown: () => {
+      stopPendingObservation();
       stopWatch();
       socket?.close();
       socket = null;
@@ -911,24 +1106,6 @@ export const useStem = create<StemStore>()((set, get) => {
       set({ activeSessionId: sessionId, drilldown: null });
       void hydrateSessionData(sessionId);
       ensureWatch(sessionId);
-    },
-
-    createSession: async (preferences = {}) => {
-      const session = await stemApi.createSession(currentConnection(), preferences);
-      set((state) => ({
-        sessions: [session, ...state.sessions],
-        messagesBySession: {
-          ...state.messagesBySession,
-          [session.sessionId]: [],
-        },
-        runsBySession: { ...state.runsBySession, [session.sessionId]: [] },
-        eventsBySession: { ...state.eventsBySession, [session.sessionId]: [] },
-        eventsStatusBySession: {
-          ...state.eventsStatusBySession,
-          [session.sessionId]: "ready",
-        },
-      }));
-      get().selectSession(session.sessionId);
     },
 
     updatePreferences: async (preferences) => {
@@ -1066,6 +1243,29 @@ export const useStem = create<StemStore>()((set, get) => {
     closeDrilldown: () => {
       drilldownRequestId += 1;
       set({ drilldown: null });
+    },
+
+    resolvePendingConfirmation: async (id, kind) => {
+      const trimmed = id.trim();
+      if (!trimmed || get().pendingAction) return;
+      set({ pendingAction: { id: trimmed, kind }, pendingNotice: null });
+      let posted = false;
+      let failure: PendingPostFailure = { kind: "uncertain" };
+      try {
+        if (kind === "approve") {
+          await stemApi.approvePendingConfirmation(currentConnection(), trimmed);
+        } else {
+          await stemApi.denyPendingConfirmation(currentConnection(), trimmed);
+        }
+        posted = true;
+      } catch (err) {
+        failure = classifyPendingPostFailure(err);
+      }
+      const reconciled = await refreshPendingConfirmations({ afterCurrent: true });
+      set({
+        pendingAction: null,
+        pendingNotice: pendingNoticeFor(kind, posted, reconciled, failure),
+      });
     },
   };
 });

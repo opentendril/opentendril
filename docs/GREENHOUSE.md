@@ -73,7 +73,7 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | --- | --- |
 | `GET /health` | Onboarding reachability check. |
 | `GET /v1/phytomers` | The session rail; also the onboarding key-validation call. |
-| `POST /v1/phytomers` | "+ Sprout": create a new Tendril session. |
+| `POST /v1/phytomers` | Creates a Phytomer session for other clients. Greenhouse normal work does not call it. |
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
 | `GET /v1/phytomers/{id}/history` | Historical message hydration. Greenhouse does not send new work through chat completions. |
@@ -86,6 +86,9 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | `POST /v1/phytomers/{id}/continue` | Continued intent for that same Phytomer while the Seed status is `running`. A Stem rejection stays a rejection. Greenhouse does not start a replacement Seed. |
 | `GET /v1/fruit` | Deterministic Botanist Fruit inventory. For Seed Fruit, Greenhouse matches `producerKind` `seed` and `producerIdentity` equal to the Seed handle, and checks `phytomerId` when both sides have one. Review state comes only from that item. |
 | `POST /v1/chat/completions` | Still served by the Stem for other clients. The Greenhouse normal-work path does not call it. |
+| `GET /v1/delegation/pending` | Open, unexpired pending confirmations. The body is a JSON array. Each item has `id`, `pollen`, `operationClass`, `substrate`, `impact`, `createdAt`, and `expiresAt`. |
+| `POST /v1/delegation/pending/{id}/approve` | Records Botanist approval of that confirmation. A success body is `{ "status": "approved", "id" }`. Approval does not resume or execute the delegated operation. |
+| `POST /v1/delegation/pending/{id}/deny` | Records Botanist denial of that confirmation. A success body is `{ "status": "denied", "id" }`. |
 
 The `…/events` and `…/sprout-runs` endpoints return `501 Not Implemented` when
 `TENDRIL_DB_LOGGING=false`, since there is no persistent store to read from.
@@ -101,6 +104,12 @@ Selecting a discovered run fetches current persisted `/events` evidence from
 the Stem before its review is marked complete. The active Phytomer and workbench
 remain unchanged when reviewing a run from another Phytomer. Continuation stays
 on the running Seed, not on the Sprout run open for review.
+
+The left rail is headed Work. It lists observed Phytomers and the Sprout runs discovered for them. It does not offer a separate Sprout button, and the Botanist does not create an empty Phytomer before meaningful work. Normal new work starts from the Workbench. An empty rail says that no work has been observed yet, and that new work starts in the Workbench while activity from CLI, MCP, and REST still appears here. The preferred label is the durable Seed goal, then the persisted Sprout transcript, then Phytomer. The opaque Phytomer id stays secondary. Reviewing a historical Sprout does not retarget active Seed continuation.
+
+There is no pending-confirmation EventBus event. While Greenhouse is open it reads `GET /v1/delegation/pending` on one repeating timer, every 5 seconds, and also during initial hydration and EventBus reconnect hydration. Those reads share one in-flight list request. A failed read keeps the previous list and is reported on the attention surface. It does not fail Phytomer, Seed, Fruit, run, Garden, or EventBus hydration, and it does not clear the list. The list is not written to browser storage. When the list is empty and the attention surface has no error, Greenhouse does not show an attention badge.
+
+Approve and Deny call the Botanist routes above through the same bearer as the rest of the client. The row stays visible until a list read that starts after the POST has settled returns a new list. Greenhouse does not remove a row because the POST succeeded, because the browser clock is past `expiresAt`, or because an EventBus frame arrived. `404` and `409` stay unsuccessful: missing, expired, or no longer open, using the Stem response text when it distinguishes those cases. A POST that succeeds while the following list read fails keeps the previous list and says the action response was received but the list could not be reconciled. A later list read may replace that list. It does not turn an uncertain or failed action into approval or denial. Nothing in this surface calls a resume route or starts a Seed or Sprout.
 
 Normal work is `new work -> detached Seed -> canonical Phytomer -> current-state watch -> optional continuation -> terminal Seed -> Fruit review`.
 The workbench shows the Seed goal, configured Substrate, Seed status, iteration count, latest Sprout state, the recorded `terrariumProvider` when present, verification progress, and structured failure evidence. Host execution is labeled as bypassing Terrarium isolation because that is the recorded provider contract. An absent `terrariumProvider` stays unknown. Internal ids, provider diagnostics, the unified diff, and Seed logs stay behind technical details. Greenhouse does not run the verifier, does not infer Fruit review state from branch or commit text, and does not claim Fruit when the Stem omitted branch and commit provenance. A transport failure during Seed dispatch keeps the original request and idempotency key, refreshes Phytomer state from the Stem, and retries only that same request. A malformed successful response keeps that same request as well. Greenhouse retains one unresolved retry identity and resolves it only through same-key Seed retry. That identity is the exact request, stored in browser session storage, and restored on boot before a new Seed can be dispatched. A valid successful response clears it and selects the returned canonical Phytomer. An explicit HTTP rejection clears it. Another transport failure or a malformed success leaves it in place. Reload restores the identity and does not send the Seed request again. Seed lifecycle state still comes from Stem observation and the Seed collection.

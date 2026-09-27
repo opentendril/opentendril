@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useStem } from "../state/store";
 import type { Session, SproutRun } from "../lib/types";
 
@@ -42,35 +41,19 @@ export function SessionRail() {
   const selectedRunId = useStem((s) => s.drilldown?.run.runId);
   const selectedRunSessionId = useStem((s) => s.drilldown?.run.sessionId);
   const selectSession = useStem((s) => s.selectSession);
-  const createSession = useStem((s) => s.createSession);
   const openDrilldown = useStem((s) => s.openDrilldown);
-  const [creating, setCreating] = useState(false);
 
   return (
     <aside className="rail glass">
       <div className="rail-head">
-        <h2 className="panel-title">Tendrils</h2>
-        <button
-          className="btn"
-          disabled={creating}
-          onClick={async () => {
-            setCreating(true);
-            try {
-              await createSession();
-            } finally {
-              setCreating(false);
-            }
-          }}
-        >
-          {creating ? "Sprouting…" : "+ Sprout"}
-        </button>
+        <h2 className="panel-title">Work</h2>
       </div>
 
       <div className="rail-list">
         {sessions.length === 0 ? (
           <p className="rail-empty">
-            No Tendrils yet. Sprout one to open a session, or let the CLI /
-            MCP surfaces grow their own, and they will appear here.
+            No work observed yet. Start new work in the Workbench, or activity
+            from CLI, MCP, and REST will appear here.
           </p>
         ) : (
           sessions.map((session) => {
