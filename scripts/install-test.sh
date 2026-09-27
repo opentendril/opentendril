@@ -13,6 +13,7 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 installer="${repo_root}/install.sh"
+GREENHOUSE_WRAPPER="/usr/local/sbin/opentendril-greenhouse"
 
 if [ ! -f "${installer}" ]; then
   echo "missing ${installer}" >&2
@@ -43,6 +44,7 @@ need_host_cmd stat
 need_host_cmd grep
 need_host_cmd touch
 need_host_cmd cmp
+need_host_cmd python3
 
 real_home="${HOME}"
 host_tendril=""
@@ -105,6 +107,18 @@ UNAME_M=x86_64
 WSL_DISTRO=""
 PIN_VERSION=""
 CHECKSUM_TOOL=sha256sum
+FIXTURE_REVISION=0123456789abcdef0123456789abcdef01234567
+FIXTURE_IMAGE_VERSION=""
+FIXTURE_IMAGE_REVISION=""
+FIXTURE_IMAGE_ARCH=amd64
+FIXTURE_IMAGE_OS=linux
+FIXTURE_IMAGE_TAG=""
+FIXTURE_CANONICAL_VERSION=""
+FIXTURE_MISSING_GREENHOUSE=0
+FIXTURE_BAD_GREENHOUSE_CHECKSUM=0
+FIXTURE_CORRUPT_GREENHOUSE=0
+FIXTURE_PRESERVE_CHECKSUMS=0
+FIXTURE_MISSING_GREENHOUSE_CHECKSUM=0
 
 write_exec() {
   local path=$1
@@ -126,6 +140,11 @@ setup_shims() {
   ln -sfn "$(type -P rm)" "${SHIM_DIR}/rm"
   ln -sfn "$(type -P cat)" "${SHIM_DIR}/cat"
   ln -sfn "$(type -P tr)" "${SHIM_DIR}/tr"
+  ln -sfn "$(type -P env)" "${SHIM_DIR}/env"
+  ln -sfn "$(type -P wc)" "${SHIM_DIR}/wc"
+  ln -sfn "$(type -P awk)" "${SHIM_DIR}/awk"
+  ln -sfn "$(type -P mv)" "${SHIM_DIR}/mv"
+  ln -sfn "$(type -P dirname)" "${SHIM_DIR}/dirname"
   ln -sfn "$(type -P id)" "${SHIM_DIR}/id"
   ln -sfn "$(type -P grep)" "${SHIM_DIR}/grep"
   ln -sfn "$(type -P touch)" "${SHIM_DIR}/touch"
@@ -283,6 +302,67 @@ EOF
   write_default_checksums "${hash}"
 }
 
+setup_governed_release_fixture() {
+  local release_version=$1
+  local staging="${ROOT}/greenhouse-staging"
+  local platform_hash greenhouse_hash installer_hash expected_image_version expected_image_revision expected_image_tag
+  mkdir -p "${staging}"
+  expected_image_version=${FIXTURE_IMAGE_VERSION:-${release_version}}
+  expected_image_revision=${FIXTURE_IMAGE_REVISION:-${FIXTURE_REVISION}}
+  expected_image_tag=${FIXTURE_IMAGE_TAG:-opentendril-greenhouse:${release_version}}
+  printf '%s\n' "${release_version}" >"${ROOT}/state/greenhouse-target-version"
+  FIXTURE_CANONICAL_VERSION=${FIXTURE_CANONICAL_VERSION:-${release_version}}
+  printf '%s\n' "${FIXTURE_IMAGE_OS}" >"${ROOT}/state/greenhouse-image-os"
+  printf '%s\n' "${FIXTURE_IMAGE_ARCH}" >"${ROOT}/state/greenhouse-image-arch"
+  printf '%s\n' "${expected_image_version}" >"${ROOT}/state/greenhouse-image-version"
+  printf '%s\n' "${expected_image_revision}" >"${ROOT}/state/greenhouse-image-revision"
+  printf '%s\n' 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"${ROOT}/state/greenhouse-daemon-image-id"
+  printf '%s\n' "${FIXTURE_CANONICAL_VERSION}" >"${FIXTURE_DIR}/VERSION"
+  cat >"${staging}/manifest.json" <<EOF
+[{"Config":"greenhouse-config.json","RepoTags":["${expected_image_tag}"],"Layers":["greenhouse-layer/layer.tar"]}]
+EOF
+  cat >"${staging}/greenhouse-config.json" <<EOF
+{"architecture":"${FIXTURE_IMAGE_ARCH}","os":"${FIXTURE_IMAGE_OS}","config":{"Labels":{"org.opencontainers.image.version":"${expected_image_version}","org.opencontainers.image.revision":"${expected_image_revision}"}}}
+EOF
+  mkdir -p "${staging}/greenhouse-layer"
+  : >"${staging}/greenhouse-layer/layer.tar"
+  tar -C "${staging}" -czf "${FIXTURE_DIR}/opentendril-greenhouse-linux-amd64.tar.gz" manifest.json greenhouse-config.json greenhouse-layer/layer.tar
+  if [ "${FIXTURE_CORRUPT_GREENHOUSE}" -eq 1 ]; then
+    printf 'not a gzip archive\n' >"${FIXTURE_DIR}/opentendril-greenhouse-linux-amd64.tar.gz"
+  fi
+  platform_hash="$(file_hash "${FIXTURE_DIR}/opentendril-linux-amd64.tar.gz")"
+  greenhouse_hash="$(file_hash "${FIXTURE_DIR}/opentendril-greenhouse-linux-amd64.tar.gz")"
+  if [ "${FIXTURE_BAD_GREENHOUSE_CHECKSUM}" -eq 1 ]; then
+    greenhouse_hash=0000000000000000000000000000000000000000000000000000000000000000
+  fi
+  cp "${installer}" "${FIXTURE_DIR}/install.sh"
+  installer_hash="$(file_hash "${FIXTURE_DIR}/install.sh")"
+  if [ "${FIXTURE_MISSING_GREENHOUSE_CHECKSUM:-0}" -eq 1 ]; then
+    cat >"${FIXTURE_DIR}/checksums.txt" <<EOF
+${platform_hash}  opentendril-linux-amd64.tar.gz
+${platform_hash}  opentendril-linux-arm64.tar.gz
+${platform_hash}  opentendril-darwin-amd64.tar.gz
+${platform_hash}  opentendril-darwin-arm64.tar.gz
+${installer_hash}  install.sh
+EOF
+  else
+    cat >"${FIXTURE_DIR}/checksums.txt" <<EOF
+${platform_hash}  opentendril-linux-amd64.tar.gz
+${platform_hash}  opentendril-linux-arm64.tar.gz
+${platform_hash}  opentendril-darwin-amd64.tar.gz
+${platform_hash}  opentendril-darwin-arm64.tar.gz
+${greenhouse_hash}  opentendril-greenhouse-linux-amd64.tar.gz
+${installer_hash}  install.sh
+EOF
+  fi
+  if [ "${FIXTURE_PRESERVE_CHECKSUMS}" -eq 1 ]; then
+    cp "${ROOT}/custom-checksums.txt" "${FIXTURE_DIR}/checksums.txt"
+  fi
+  if [ "${FIXTURE_MISSING_GREENHOUSE}" -eq 1 ]; then
+    rm -f "${FIXTURE_DIR}/opentendril-greenhouse-linux-amd64.tar.gz"
+  fi
+}
+
 new_case() {
   ROOT="$(mktemp -d "${tmp_root}/case.XXXXXX")"
   HOME_DIR="${ROOT}/home"
@@ -300,6 +380,17 @@ new_case() {
   WSL_DISTRO=""
   PIN_VERSION=""
   CHECKSUM_TOOL=sha256sum
+  FIXTURE_IMAGE_VERSION=""
+  FIXTURE_IMAGE_REVISION=""
+  FIXTURE_IMAGE_ARCH=amd64
+  FIXTURE_IMAGE_OS=linux
+  FIXTURE_IMAGE_TAG=""
+  FIXTURE_CANONICAL_VERSION=""
+  FIXTURE_MISSING_GREENHOUSE=0
+  FIXTURE_BAD_GREENHOUSE_CHECKSUM=0
+  FIXTURE_CORRUPT_GREENHOUSE=0
+  FIXTURE_PRESERVE_CHECKSUMS=0
+  FIXTURE_MISSING_GREENHOUSE_CHECKSUM=0
   setup_default_fixtures
 }
 
@@ -843,6 +934,7 @@ setup_governed_host() {
   mkdir -p \
     "${HOSTFS}/etc/apt/keyrings" \
     "${HOSTFS}/etc/apt/sources.list.d" \
+    "${HOSTFS}/usr/local/sbin" \
     "${HOSTFS}/etc/systemd/system" \
     "${HOSTFS}/etc/sudoers.d" \
     "${HOSTFS}/home/alice" \
@@ -857,6 +949,7 @@ setup_governed_host() {
     "${ROOT}/state/enabled" \
     "${ROOT}/state/masked" \
     "${ROOT}/meta/owners"
+  chmod 0755 "${HOSTFS}/usr" "${HOSTFS}/usr/local" "${HOSTFS}/usr/local/sbin"
   printf '0\n' >"${ROOT}/euid"
   printf '6.8.0-generic\n' >"${HOSTFS}/proc/sys/kernel/osrelease"
   printf 'nf_tables 217088 0 - Live 0x0000000000000000\n' >"${HOSTFS}/proc/modules"
@@ -896,7 +989,7 @@ new_governed_case() {
 }
 
 setup_governed_shims() {
-  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch real_cmp real_ls
+  local real_stat real_mkdir real_chmod real_rm real_cat real_install real_cp real_touch real_cmp real_ls real_mv real_python
   setup_shims
   real_stat="$(type -P stat)"
   real_mkdir="$(type -P mkdir)"
@@ -908,6 +1001,8 @@ setup_governed_shims() {
   real_touch="$(type -P touch)"
   real_cmp="$(type -P cmp)"
   real_ls="$(type -P ls)"
+  real_mv="$(type -P mv)"
+  real_python="$(type -P python3)"
   ln -sf "$(type -P true)" "${SHIM_DIR}/true"
   ln -sf "$(type -P false)" "${SHIM_DIR}/false"
 
@@ -1312,6 +1407,7 @@ done
 printf 'CMD curl %s\\n' "\$url" >> "${events_file}"
 case "\$url" in
   https://github.com/opentendril/opentendril/releases/*) ;;
+  https://raw.githubusercontent.com/opentendril/opentendril/*/VERSION) ;;
   https://download.docker.com/linux/ubuntu/gpg) ;;
   *)
     printf 'curl shim: refusing URL: %s\\n' "\$url" >&2
@@ -1320,6 +1416,8 @@ case "\$url" in
 esac
 if [ "\$url" = "https://download.docker.com/linux/ubuntu/gpg" ]; then
   src="${FIXTURE_DIR}/docker-gpg"
+elif [ "\${url#https://raw.githubusercontent.com/opentendril/opentendril/}" != "\$url" ]; then
+  src="${FIXTURE_DIR}/VERSION"
 else
   base=\${url##*/}
   if [ "\$base" = checksums.txt ] && [ -f "${ROOT}/fail-checksums-download" ]; then
@@ -1343,6 +1441,66 @@ if [ -z "\$out" ]; then
   exit 1
 fi
 ${real_cp} "\$src" "\$out"
+EOF
+
+  write_exec "${SHIM_DIR}/git" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd git "\$*"
+if [ "\$1" != ls-remote ] || [ "\$2" != "https://github.com/opentendril/opentendril.git" ]; then
+  printf 'git shim: refused unexpected source-revision query\\n' >&2
+  exit 1
+fi
+tag_ref=\$3
+peeled_ref=\$4
+printf '%s %s\\n' '${FIXTURE_REVISION}' "\$tag_ref"
+printf '%s %s\\n' '${FIXTURE_REVISION}' "\$peeled_ref"
+EOF
+
+  write_exec "${SHIM_DIR}/python3" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd python3 "\$*"
+exec "${real_python}" "\$@"
+EOF
+
+  write_exec "${SHIM_DIR}/mv" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd mv "\$*"
+args=""
+source_path=""
+target_path=""
+for a in "\$@"; do
+  case "\$a" in
+    -*) args="\$args \$a" ;;
+    *)
+      args="\$args \$(hostpath "\$a")"
+      if [ -z "\$source_path" ]; then
+        source_path=\$a
+      else
+        target_path=\$a
+      fi
+      ;;
+  esac
+done
+# shellcheck disable=SC2086
+if ${real_mv} \$args; then
+  if [ -n "\$source_path" ] && [ -n "\$target_path" ]; then
+    owner=\$(get_owner "\$source_path")
+    group=\$(get_group "\$source_path")
+    set_owner "\$target_path" "\$owner"
+    set_group "\$target_path" "\$group"
+  fi
+  if [ -f "${ROOT}/state/fail-wrapper-mv-after" ] \
+    && [ "\$target_path" = "/usr/local/sbin/opentendril-greenhouse" ]; then
+    ${real_rm} -f "${ROOT}/state/fail-wrapper-mv-after"
+    printf 'mv shim: simulated failure after replacing Greenhouse wrapper\\n' >&2
+    exit 1
+  fi
+else
+  exit \$?
+fi
 EOF
 
   write_exec "${SHIM_DIR}/dpkg" <<EOF
@@ -1765,11 +1923,27 @@ EOF
 #!/bin/sh
 . "${SHIM_DIR}/hostpath.lib"
 logcmd docker "\$*"
-case "\${DOCKER_HOST:-}" in
-  unix:///run/user/*/docker.sock)
-    if [ -f "${ROOT}/state/docker-tendril-info-fail" ]; then
-      exit 1
-    fi
+printf 'DOCKER_ENV host=%s context=%s transport=%s socket=%s image=%s opts=%s\\n' \
+  "\${DOCKER_HOST:-}" "\${DOCKER_CONTEXT:-}" "\${STEM_TRANSPORT:-}" "\${STEM_SOCKET:-}" "\${IMAGE:-}" "\${DOCKER_OPTS:-}" >>"${events_file}"
+host="\${DOCKER_HOST:-}"
+case "\${1:-}" in
+  --host) host=\$2; shift 2 ;;
+  --host=*) host=\${1#--host=}; shift ;;
+esac
+if [ "\$host" != unix:///run/user/2001/docker.sock ]; then
+  if [ -f "${ROOT}/state/docker-info" ]; then
+    ${real_cat} "${ROOT}/state/docker-info"
+    exit 0
+  fi
+  if [ "\${1:-}" = info ] && [ -f "${ROOT}/state/docker-rootless-ready" ] && [ ! -f "${ROOT}/state/docker-info-fail" ]; then
+    printf '[name=seccomp,name=rootless,name=cgroupns]\\n'
+    exit 0
+  fi
+  exit 1
+fi
+case "\${1:-}" in
+  info)
+    if [ -f "${ROOT}/state/docker-tendril-info-fail" ]; then exit 1; fi
     if [ -f "${ROOT}/state/docker-tendril-info" ]; then
       ${real_cat} "${ROOT}/state/docker-tendril-info"
       exit 0
@@ -1780,18 +1954,143 @@ case "\${DOCKER_HOST:-}" in
     fi
     exit 1
     ;;
+  load)
+    if [ -f "${ROOT}/state/docker-load-fail" ]; then
+      printf 'docker shim: simulated image load failure\\n' >&2
+      exit 1
+    fi
+    if [ ! -s /dev/stdin ]; then
+      printf 'docker shim: verified Greenhouse archive was not streamed to image load\\n' >&2
+      exit 1
+    fi
+    : >"${ROOT}/state/greenhouse-image-loaded"
+    : >"${ROOT}/state/greenhouse-tag-present"
+    ${real_cat} "${ROOT}/state/greenhouse-daemon-image-id" >"${ROOT}/state/greenhouse-tag-image-id"
+    printf 'Loaded image\\n'
+    exit 0
+    ;;
+  image)
+    tag_version=$(${real_cat} "${ROOT}/state/greenhouse-target-version" 2>/dev/null || printf '0.3.13')
+    target_tag="opentendril-greenhouse:\$tag_version"
+    case "\${2:-}" in
+      ls)
+        [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 0
+        printf '%s\\n' "\$target_tag"
+        exit 0
+        ;;
+      tag)
+        [ "\${4:-}" = "\$target_tag" ] || exit 1
+        printf '%s\\n' "\${3:-}" >"${ROOT}/state/greenhouse-tag-image-id"
+        : >"${ROOT}/state/greenhouse-tag-present"
+        exit 0
+        ;;
+      rm)
+        [ "\${3:-}" = "\$target_tag" ] || exit 1
+        rm -f "${ROOT}/state/greenhouse-tag-present" "${ROOT}/state/greenhouse-tag-image-id"
+        exit 0
+        ;;
+      inspect) ;;
+      *) exit 1 ;;
+    esac
+    format=""
+    format_next=0
+    for arg in "\$@"; do
+      if [ "\$format_next" = 1 ]; then format=\$arg; format_next=0; continue; fi
+      if [ "\$arg" = --format ]; then format_next=1; fi
+    done
+    if [ "\$format" = '{{.Repository}}:{{.Tag}}' ]; then
+      [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 0
+      printf '%s\\n' "\$target_tag"
+      exit 0
+    fi
+    if [ "\$format" = '{{.Id}}' ]; then
+      [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 1
+      ${real_cat} "${ROOT}/state/greenhouse-tag-image-id"
+      exit 0
+    fi
+    [ -f "${ROOT}/state/greenhouse-image-loaded" ] || exit 1
+    case "\$format" in
+      *'{{.Id}}|{{.Os}}/'*)
+        image_id=\$(${real_cat} "${ROOT}/state/greenhouse-daemon-image-id" 2>/dev/null || printf 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef')
+        image_os=\$(${real_cat} "${ROOT}/state/greenhouse-image-os" 2>/dev/null || printf 'linux')
+        image_arch=\$(${real_cat} "${ROOT}/state/greenhouse-image-arch" 2>/dev/null || printf 'amd64')
+        image_version=\$(${real_cat} "${ROOT}/state/greenhouse-image-version" 2>/dev/null || printf '0.3.13')
+        image_revision=\$(${real_cat} "${ROOT}/state/greenhouse-image-revision")
+        printf '%s' "\$image_id|\$image_os/\$image_arch|\$image_version|\$image_revision"
+        ;;
+      *'{{.Id}}'*) ${real_cat} "${ROOT}/state/greenhouse-daemon-image-id" 2>/dev/null || printf 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' ;;
+      *)
+        image_os=\$(${real_cat} "${ROOT}/state/greenhouse-image-os" 2>/dev/null || printf 'linux')
+        image_arch=\$(${real_cat} "${ROOT}/state/greenhouse-image-arch" 2>/dev/null || printf 'amd64')
+        image_version=\$(${real_cat} "${ROOT}/state/greenhouse-image-version" 2>/dev/null || printf '0.3.13')
+        image_revision=\$(${real_cat} "${ROOT}/state/greenhouse-image-revision")
+        printf '%s|%s|%s\\n' "\${image_os}/\${image_arch}" "\$image_version" "\$image_revision"
+        ;;
+    esac
+    exit 0
+    ;;
+  container)
+    subcommand=\${2:-}
+    name=\${3:-}
+    case "\$subcommand" in
+      ls)
+        if [ -f "${ROOT}/state/greenhouse-container" ]; then
+          printf 'opentendril-greenhouse\\n'
+        fi
+        exit 0
+        ;;
+      inspect)
+        [ -f "${ROOT}/state/greenhouse-container" ] || exit 1
+        format=""
+        format_next=0
+        for arg in "\$@"; do
+          if [ "\$format_next" = 1 ]; then format=\$arg; format_next=0; continue; fi
+          if [ "\$arg" = --format ]; then format_next=1; fi
+        done
+        IFS='|' read -r container_image container_state container_health container_ref <"${ROOT}/state/greenhouse-container"
+        if [ "\$format" = '{{.Image}}' ]; then
+          printf '%s\\n' "\$container_image"
+        else
+          printf '%s|%s|%s\\n' "\$container_state" "\$container_health" "\$container_ref"
+        fi
+        exit 0
+        ;;
+      rm)
+        rm -f "${ROOT}/state/greenhouse-container"
+        exit 0
+        ;;
+      start|restart)
+        [ "\$name" = opentendril-greenhouse ] || exit 1
+        [ -f "${ROOT}/state/greenhouse-container" ] || exit 1
+        IFS='|' read -r container_image container_state container_health container_ref <"${ROOT}/state/greenhouse-container"
+        printf '%s|running|healthy|%s\\n' "\$container_image" "\$container_ref" >"${ROOT}/state/greenhouse-container"
+        exit 0
+        ;;
+      stop)
+        [ "\$name" = opentendril-greenhouse ] || exit 1
+        [ -f "${ROOT}/state/greenhouse-container" ] || exit 1
+        IFS='|' read -r container_image container_state container_health container_ref <"${ROOT}/state/greenhouse-container"
+        printf '%s|exited|%s|%s\\n' "\$container_image" "\$container_health" "\$container_ref" >"${ROOT}/state/greenhouse-container"
+        exit 0
+        ;;
+    esac
+    exit 1
+    ;;
+  run)
+    case "\$*" in
+      *'--pull=never'*'--name opentendril-greenhouse'*'--restart unless-stopped'*'--publish 127.0.0.1:4173:8080'*'--read-only'*'--cap-drop ALL'*'--security-opt no-new-privileges:true'*'--mount type=bind,source=/var/lib/opentendril-transport,target=/var/lib/opentendril-transport,readonly'*'--env STEM_TRANSPORT=unix'*'--env STEM_SOCKET=/var/lib/opentendril-transport/stem.sock'*'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'*) ;;
+      *) printf 'docker shim: fixed Greenhouse run contract missing\\n' >&2; exit 1 ;;
+    esac
+    run_count=0
+    if [ -f "${ROOT}/state/greenhouse-run-count" ]; then run_count=\$(${real_cat} "${ROOT}/state/greenhouse-run-count"); fi
+    run_count=\$((run_count + 1))
+    printf '%s\\n' "\$run_count" >"${ROOT}/state/greenhouse-run-count"
+    image_id=\$(${real_cat} "${ROOT}/state/greenhouse-daemon-image-id" 2>/dev/null || printf 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef')
+    printf '%s|running|healthy|%s' "\$image_id" "\$image_id" >"${ROOT}/state/greenhouse-container"
+    printf 'container-id\\n'
+    exit 0
+    ;;
 esac
-if [ -f "${ROOT}/state/docker-info-fail" ]; then
-  exit 1
-fi
-if [ -f "${ROOT}/state/docker-info" ]; then
-  ${real_cat} "${ROOT}/state/docker-info"
-  exit 0
-fi
-if [ -f "${ROOT}/state/docker-rootless-ready" ]; then
-  printf '[name=seccomp,name=rootless,name=cgroupns]\\n'
-  exit 0
-fi
 exit 1
 EOF
 
@@ -1968,6 +2267,7 @@ run_governed_installer() {
   if [ -f "${ROOT}/fail-version" ]; then
     fixture_version=9.9.9
   fi
+  setup_governed_release_fixture "${fixture_version}"
   local env_args=(
     env -i
     HOME="${HOSTFS}/root"
@@ -1984,6 +2284,8 @@ run_governed_installer() {
   if [ -n "${PIN_VERSION}" ]; then
     env_args+=(OPENTENDRIL_VERSION="${PIN_VERSION}")
   fi
+  env_args+=(FIXTURE_IMAGE_VERSION="${FIXTURE_IMAGE_VERSION:-${fixture_version}}")
+  env_args+=(FIXTURE_IMAGE_REVISION="${FIXTURE_IMAGE_REVISION:-${FIXTURE_REVISION}}")
   if [ -n "${GOVERNED_SUDO_USER}" ]; then
     env_args+=(SUDO_USER="${GOVERNED_SUDO_USER}")
   fi
@@ -2023,6 +2325,7 @@ run_governed_upgrade_installer() {
   if [ -f "${ROOT}/fail-version" ]; then
     fixture_version=9.9.9
   fi
+  setup_governed_release_fixture "${fixture_version}"
   local env_args=(
     env -i
     HOME="${HOSTFS}/root"
@@ -2039,6 +2342,8 @@ run_governed_upgrade_installer() {
   if [ -n "${PIN_VERSION}" ]; then
     env_args+=(OPENTENDRIL_VERSION="${PIN_VERSION}")
   fi
+  env_args+=(FIXTURE_IMAGE_VERSION="${FIXTURE_IMAGE_VERSION:-${fixture_version}}")
+  env_args+=(FIXTURE_IMAGE_REVISION="${FIXTURE_IMAGE_REVISION:-${FIXTURE_REVISION}}")
   if [ -n "${GOVERNED_SUDO_USER}" ]; then
     env_args+=(SUDO_USER="${GOVERNED_SUDO_USER}")
   fi
@@ -2260,6 +2565,17 @@ prepare_upgrade_host() {
   write_floor_systemctl_show 2001
   prepare_upgrade_rootless_runtime
   prepare_upgrade_p2_provenance
+}
+
+seed_greenhouse_rollback_state() {
+  local wrapper="${HOSTFS}${GREENHOUSE_WRAPPER}"
+  mkdir -p "$(dirname "${wrapper}")" "${ROOT}/meta/owners" "${ROOT}/meta/groups"
+  printf '#!/bin/sh\nprintf "prior-greenhouse-wrapper\\n"\n' >"${wrapper}"
+  chmod 0755 "${wrapper}"
+  printf 'root\n' >"${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse"
+  printf 'root\n' >"${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse"
+  printf '%s\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"${ROOT}/state/greenhouse-tag-image-id"
+  touch "${ROOT}/state/greenhouse-tag-present"
 }
 
 assert_canonical_p2_file() {
@@ -2744,6 +3060,8 @@ cat >"${FIXTURE_DIR}/checksums.txt" <<EOF
 0000000000000000000000000000000000000000000000000000000000000000  opentendril-linux-amd64.tar.gz
 ${hash}  opentendril-linux-arm64.tar.gz
 EOF
+cp "${FIXTURE_DIR}/checksums.txt" "${ROOT}/custom-checksums.txt"
+FIXTURE_PRESERVE_CHECKSUMS=1
 run_governed_installer --pollinator-user alice
 if assert_governed_failure "checksum failure prevents executable placement"; then
   if grep -q 'SHA-256 mismatch' "${stderr_file}"; then
@@ -3345,6 +3663,7 @@ fi
 
 new_governed_case
 setup_governed_host
+setup_governed_release_fixture 0.3.13
 setup_governed_shims
 write_exec "${SHIM_DIR}/docker" <<EOF
 #!/bin/sh
@@ -3518,6 +3837,15 @@ if [ "${status}" -eq 0 ]; then
     pass "governed upgrade pins the requested release"
   else
     fail "governed upgrade pins the requested release" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if [ -f "${HOSTFS}${GREENHOUSE_WRAPPER}" ] \
+    && [ -f "${ROOT}/state/greenhouse-tag-present" ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = "$(cat "${ROOT}/state/greenhouse-daemon-image-id")" ] \
+    && grep -Fqx "IMAGE='opentendril-greenhouse:0.3.0'" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+    && grep -Fqx "IMAGE_ID='sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'" "${HOSTFS}${GREENHOUSE_WRAPPER}"; then
+    pass "successful upgrade installs the verified release wrapper and matching immutable image tag"
+  else
+    fail "successful upgrade installs the verified release wrapper and matching immutable image tag" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
   if events_match '^CMD install -o tendril -g tendril -m 0750 .* /home/tendril/.local/bin/tendril$'; then
     pass "Stem binary remains owner tendril:tendril mode 0750"
@@ -3873,6 +4201,9 @@ place_old_mcp alice
 old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
 old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
 old_mcp="$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")"
+seed_greenhouse_rollback_state
+old_greenhouse_wrapper="${ROOT}/expected-greenhouse-wrapper"
+cp -a "${HOSTFS}${GREENHOUSE_WRAPPER}" "${old_greenhouse_wrapper}"
 touch "${ROOT}/state/active/tendril.service"
 touch "${ROOT}/state/fail-start-tendril-once"
 run_governed_upgrade_installer --pollinator-user alice
@@ -3885,8 +4216,64 @@ if [ "${status}" -ne 0 ] && grep -q 'failed to restart tendril.service' "${stder
   else
     fail "restart failure rollback: prior state was not restored"
   fi
+  if [ -f "${ROOT}/state/greenhouse-image-loaded" ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ] \
+    && cmp -s "${old_greenhouse_wrapper}" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+    && [ "$(stat -c '%a' "${HOSTFS}${GREENHOUSE_WRAPPER}")" = 755 ] \
+    && [ "$(cat "${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && [ "$(cat "${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$'; then
+    pass "Greenhouse prior tag and wrapper remain coherent after post-load, pre-wrapper upgrade failure"
+  else
+    fail "Greenhouse prior tag and wrapper remain coherent after post-load, pre-wrapper upgrade failure" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
 else
   fail "restart failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/active/tendril.service"
+touch "${ROOT}/state/fail-start-tendril-once"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.13
+if [ "${status}" -ne 0 ] \
+  && grep -q 'failed to restart tendril.service' "${stderr_file}" \
+  && [ -f "${ROOT}/state/greenhouse-image-loaded" ] \
+  && [ ! -e "${HOSTFS}${GREENHOUSE_WRAPPER}" ] \
+  && [ ! -e "${ROOT}/state/greenhouse-tag-present" ] \
+  && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image rm opentendril-greenhouse:0.3.13$' \
+  && ! events_match '^CMD docker --host=unix:///run/user/2001/docker.sock container (start|stop)'; then
+  pass "failed pre-Greenhouse upgrade removes the introduced tag and leaves the wrapper absent without lifecycle actions"
+else
+  fail "failed pre-Greenhouse upgrade removes the introduced tag and leaves the wrapper absent without lifecycle actions" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+seed_greenhouse_rollback_state
+old_greenhouse_wrapper="${ROOT}/expected-greenhouse-wrapper"
+cp -a "${HOSTFS}${GREENHOUSE_WRAPPER}" "${old_greenhouse_wrapper}"
+touch "${ROOT}/state/fail-wrapper-mv-after"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.13
+if [ "${status}" -ne 0 ] \
+  && grep -q 'failed to install /usr/local/sbin/opentendril-greenhouse' "${stderr_file}" \
+  && grep -q 'simulated failure after replacing Greenhouse wrapper' "${stderr_file}" \
+  && cmp -s "${old_greenhouse_wrapper}" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+  && [ "$(stat -c '%a' "${HOSTFS}${GREENHOUSE_WRAPPER}")" = 755 ] \
+  && [ "$(cat "${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+  && [ "$(cat "${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+  && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ] \
+  && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$'; then
+  pass "failure after wrapper replacement restores exact prior wrapper bytes, owner, mode, and same-tag image mapping"
+else
+  fail "failure after wrapper replacement restores exact prior wrapper bytes, owner, mode, and same-tag image mapping" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+if events_match '^CMD sudo -u tendril -H env -i .*XDG_RUNTIME_DIR=/run/user/2001 DOCKER_HOST=unix:///run/user/2001/docker.sock docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$' \
+  && ! events_match '^CMD sudo -u root .*docker image tag' \
+  && ! events_match '^CMD docker image tag'; then
+  pass "Greenhouse rollback restores image tags only through tendril rootless Docker"
+else
+  fail "Greenhouse rollback restores image tags only through tendril rootless Docker" "events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
 new_governed_case
@@ -4474,7 +4861,384 @@ else
   fail "visudo -c failure fails before mutation" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}")"
 fi
 
-# --- host isolation ---------------------------------------------------------
+greenhouse_wrapper_test=""
+greenhouse_wrapper_out=""
+greenhouse_wrapper_err=""
+greenhouse_wrapper_status=0
+
+prepare_installed_greenhouse_wrapper() {
+  local installed="${HOSTFS}${GREENHOUSE_WRAPPER}"
+  if [ ! -f "${installed}" ]; then
+    fail "installed Greenhouse wrapper is present" "missing ${installed}"
+    return 1
+  fi
+  greenhouse_wrapper_test="${ROOT}/greenhouse-wrapper-test"
+  greenhouse_wrapper_out="${ROOT}/greenhouse-wrapper.stdout"
+  greenhouse_wrapper_err="${ROOT}/greenhouse-wrapper.stderr"
+  sed \
+    -e "s|^SOCKET_CHECK_PATH=.*|SOCKET_CHECK_PATH='${HOSTFS}/var/lib/opentendril-transport/stem.sock'|" \
+    -e "s|^DOCKER_BIN=.*|DOCKER_BIN='${SHIM_DIR}/docker'|" \
+    -e "s|^RUNUSER_BIN=.*|RUNUSER_BIN='${SHIM_DIR}/runuser'|" \
+    -e "s|^ID_BIN=.*|ID_BIN='${SHIM_DIR}/wrapper-id'|" \
+    "${installed}" >"${greenhouse_wrapper_test}"
+  chmod 0755 "${greenhouse_wrapper_test}"
+  write_exec "${SHIM_DIR}/wrapper-id" <<EOF
+#!/bin/sh
+if [ "\$1" = -u ] && [ -f "${ROOT}/state/wrapper-nonroot" ]; then
+  printf '1000\\n'
+else
+  printf '0\\n'
+fi
+EOF
+  write_exec "${SHIM_DIR}/runuser" <<EOF
+#!/bin/sh
+. "${SHIM_DIR}/hostpath.lib"
+logcmd runuser "\$*"
+[ "\$1" = -u ] && [ "\$2" = tendril ] && [ "\$3" = -- ] || exit 1
+shift 3
+exec "\$@"
+EOF
+}
+
+run_installed_greenhouse_wrapper() {
+  set +e
+  /usr/bin/env \
+    DOCKER_HOST=tcp://127.0.0.1:2375 \
+    DOCKER_CONTEXT=attacker-selected \
+    DOCKER_CONFIG=/tmp/attacker-docker-config \
+    DOCKER_OPTS=--privileged \
+    IMAGE=attacker-selected-image \
+    STEM_TRANSPORT=tcp \
+    STEM_SOCKET=/etc/passwd \
+    UI_BIND=0.0.0.0 \
+    UI_PORT=80 \
+    "${greenhouse_wrapper_test}" "$@" >"${greenhouse_wrapper_out}" 2>"${greenhouse_wrapper_err}"
+  greenhouse_wrapper_status=$?
+  set -e
+}
+
+create_governed_stem_socket_fixture() {
+  local socket_path="${HOSTFS}/var/lib/opentendril-transport/stem.sock"
+  mkdir -p "$(dirname "${socket_path}")"
+  rm -f "${socket_path}"
+  python3 - "${socket_path}" <<'PY'
+import socket
+import sys
+
+listener = socket.socket(socket.AF_UNIX)
+listener.bind(sys.argv[1])
+listener.close()
+PY
+}
+
+assert_greenhouse_artifact_rejected() {
+  local name=$1
+  local reason=$2
+  if [ "${status}" -eq 0 ]; then
+    fail "${name}: installer succeeded unexpectedly" "stdout=$(tr '\n' ' ' <"${stdout_file}")"
+    return 1
+  fi
+  if grep -qi "${reason}" "${stderr_file}"; then
+    if events_match '^CMD docker .* load '; then
+      fail "${name}: Docker load ran after the artifact was rejected" "events=$(tr '\n' ' ' <"${events_file}")"
+      return 1
+    fi
+    if [ -e "${HOSTFS}${GREENHOUSE_WRAPPER}" ]; then
+      fail "${name}: installed wrapper was replaced after artifact rejection"
+      return 1
+    fi
+    pass "${name}"
+    return 0
+  fi
+  fail "${name}: rejection was not diagnostic" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+  return 1
+}
+
+# --- installed Greenhouse artifact and bounded lifecycle -------------------
+
+new_governed_case
+run_governed_installer --pollinator-user alice --version v0.3.13
+if assert_governed_success_core "governed install verifies and stages Greenhouse without starting it"; then
+  greenhouse_wrapper_path="${HOSTFS}${GREENHOUSE_WRAPPER}"
+  if events_match 'CMD curl https://github.com/opentendril/opentendril/releases/download/v0.3.13/checksums.txt' \
+    && events_match 'CMD curl https://github.com/opentendril/opentendril/releases/download/v0.3.13/opentendril-greenhouse-linux-amd64.tar.gz' \
+    && events_match "CMD curl https://raw.githubusercontent.com/opentendril/opentendril/${FIXTURE_REVISION}/VERSION" \
+    && events_match 'CMD git ls-remote https://github.com/opentendril/opentendril.git refs/tags/v0.3.13'; then
+    pass "Greenhouse archive, canonical VERSION, and source revision come from the pinned release"
+  else
+    fail "Greenhouse archive, canonical VERSION, and source revision come from the pinned release" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  greenhouse_verify_line=$(grep -n 'CMD python3 .*opentendril-greenhouse-linux-amd64.tar.gz' "${events_file}" | head -1 | cut -d: -f1)
+  greenhouse_checksum_line=$(grep -n 'CMD sha256sum .*opentendril-greenhouse-linux-amd64.tar.gz' "${events_file}" | head -1 | cut -d: -f1)
+  greenhouse_load_line=$(grep -n '^CMD docker --host=unix:///run/user/2001/docker.sock load$' "${events_file}" | head -1 | cut -d: -f1)
+  if [ -n "${greenhouse_verify_line}" ] && [ -n "${greenhouse_checksum_line}" ] && [ -n "${greenhouse_load_line}" ] \
+    && [ "${greenhouse_checksum_line}" -lt "${greenhouse_verify_line}" ] \
+    && [ "${greenhouse_verify_line}" -lt "${greenhouse_load_line}" ] \
+    && events_match '^CMD sudo -u tendril .*DOCKER_HOST=unix:///run/user/2001/docker.sock docker --host=unix:///run/user/2001/docker.sock load$' \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock load$'; then
+    pass "Greenhouse checksum and metadata verification precede a streamed load into tendril rootless Docker"
+  else
+    fail "Greenhouse checksum and metadata verification precede a streamed load into tendril rootless Docker" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if events_match 'CMD docker --host=unix:///run/user/2001/docker.sock image inspect .*opentendril-greenhouse:0.3.13' \
+    && grep -q "IMAGE='opentendril-greenhouse:0.3.13'" "${greenhouse_wrapper_path}" \
+    && grep -q "IMAGE_ID='sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'" "${greenhouse_wrapper_path}" \
+    && ! events_match '^CMD docker .* run '; then
+    pass "installed wrapper uses the exact verified image and install does not start Greenhouse"
+  else
+    fail "installed wrapper uses the exact verified image and install does not start Greenhouse" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  if [ "$(stat -c '%a' "${greenhouse_wrapper_path}")" = 755 ] \
+    && [ "$(cat "${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && [ "$(cat "${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && grep -q 'start|stop|restart|status|check|address' "${greenhouse_wrapper_path}"; then
+    pass "installed lifecycle wrapper is root-owned mode 0755 with only the approved verbs"
+  else
+    fail "installed lifecycle wrapper is root-owned mode 0755 with only the approved verbs"
+  fi
+  prepare_installed_greenhouse_wrapper
+else
+  fail "Greenhouse positive artifact fixture failed before focused assertions" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+FIXTURE_MISSING_GREENHOUSE=1
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "missing Greenhouse artifact is rejected before load" "failed to download"
+
+new_governed_case
+FIXTURE_MISSING_GREENHOUSE_CHECKSUM=1
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "missing Greenhouse checksum entry is rejected before load" "no entry for opentendril-greenhouse-linux-amd64.tar.gz"
+
+new_governed_case
+FIXTURE_BAD_GREENHOUSE_CHECKSUM=1
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "Greenhouse checksum mismatch is rejected before load" "SHA-256 mismatch for opentendril-greenhouse-linux-amd64.tar.gz"
+
+new_governed_case
+FIXTURE_CORRUPT_GREENHOUSE=1
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "malformed Greenhouse image archive is rejected before load" "archive is malformed"
+
+new_governed_case
+FIXTURE_IMAGE_VERSION=9.9.9
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "Greenhouse VERSION label incoherence is rejected before load" "OCI version label does not match canonical VERSION"
+
+new_governed_case
+FIXTURE_IMAGE_REVISION=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "Greenhouse source-revision incoherence is rejected before load" "OCI source revision label does not match the pinned release tag"
+
+new_governed_case
+FIXTURE_IMAGE_ARCH=arm64
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "Greenhouse architecture incoherence is rejected before load" "image is not linux/amd64"
+
+new_governed_case
+FIXTURE_IMAGE_TAG=opentendril-greenhouse:other
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "Greenhouse tag incoherence is rejected before load" "image tag does not match the pinned release identity"
+
+new_governed_case
+FIXTURE_CANONICAL_VERSION=0.3.99
+run_governed_installer --pollinator-user alice --version v0.3.13
+assert_greenhouse_artifact_rejected "canonical VERSION and expected release tag must agree" "canonical VERSION 0.3.99 does not match release tag v0.3.13"
+
+new_governed_case
+run_governed_installer --pollinator-user alice --version v0.3.13
+if assert_governed_success_core "Greenhouse lifecycle fixture installation"; then
+  prepare_installed_greenhouse_wrapper
+  if grep -q '^DOCKER_BIN=.*/docker' "${greenhouse_wrapper_test}" \
+    && grep -q '^RUNUSER_BIN=.*/runuser' "${greenhouse_wrapper_test}" \
+    && ! grep -Eq 'compose|docker-compose|sudoers|NOPASSWD' "${greenhouse_wrapper_test}"; then
+    pass "fixed lifecycle wrapper has no Compose, sudoers, or generic frontend surface"
+  else
+    fail "fixed lifecycle wrapper has no Compose, sudoers, or generic frontend surface"
+  fi
+
+  : >"${events_file}"
+  run_installed_greenhouse_wrapper address
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && [ "$(cat "${greenhouse_wrapper_out}")" = 'http://127.0.0.1:4173' ] \
+    && ! events_match '^CMD docker '; then
+    pass "address reports the fixed loopback URL without mutating or querying Docker"
+  else
+    fail "address reports the fixed loopback URL without mutating or querying Docker" "stdout=$(tr '\n' ' ' <"${greenhouse_wrapper_out}") stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+
+  run_installed_greenhouse_wrapper start --privileged
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] && grep -q 'exactly one supported verb' "${greenhouse_wrapper_err}"; then
+    pass "arbitrary lifecycle arguments are rejected"
+  else
+    fail "arbitrary lifecycle arguments are rejected" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  run_installed_greenhouse_wrapper --help
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] && grep -q 'unsupported verb' "${greenhouse_wrapper_err}"; then
+    pass "unsupported lifecycle verbs are rejected"
+  else
+    fail "unsupported lifecycle verbs are rejected" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  : >"${ROOT}/state/wrapper-nonroot"
+  run_installed_greenhouse_wrapper start
+  rm -f "${ROOT}/state/wrapper-nonroot"
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] \
+    && grep -q 'requires an explicit administrator invocation' "${greenhouse_wrapper_err}" \
+    && ! events_match '^CMD runuser '; then
+    pass "ordinary invocation cannot self-elevate or execute as tendril"
+  else
+    fail "ordinary invocation cannot self-elevate or execute as tendril" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+
+  transport_socket="${HOSTFS}/var/lib/opentendril-transport/stem.sock"
+  mkdir -p "$(dirname "${transport_socket}")"
+  rm -f "${transport_socket}"
+  run_installed_greenhouse_wrapper start
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] \
+    && grep -q 'governed Stem Unix socket is missing or not a socket' "${greenhouse_wrapper_err}" \
+    && ! events_match '^CMD docker .* run '; then
+    pass "start fails clearly when the Stem Unix socket is absent and never falls back to TCP"
+  else
+    fail "start fails clearly when the Stem Unix socket is absent and never falls back to TCP" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  printf 'not-a-socket\n' >"${transport_socket}"
+  run_installed_greenhouse_wrapper restart
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] \
+    && grep -q 'governed Stem Unix socket is missing or not a socket' "${greenhouse_wrapper_err}" \
+    && ! events_match '^CMD docker .* restart '; then
+    pass "restart rejects a non-socket Stem path without selecting TCP"
+  else
+    fail "restart rejects a non-socket Stem path without selecting TCP" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+
+  create_governed_stem_socket_fixture
+  : >"${events_file}"
+  run_installed_greenhouse_wrapper start
+  run_event=$(grep '^CMD docker .* run ' "${events_file}" | head -1)
+  run_args=${run_event#* run }
+  mount_count=$(printf '%s\n' "${run_args}" | grep -o -- '--mount' | wc -l | tr -d '[:space:]')
+  tmpfs_count=$(printf '%s\n' "${run_args}" | grep -o -- '--tmpfs' | wc -l | tr -d '[:space:]')
+  env_count=$(printf '%s\n' "${run_args}" | grep -o -- '--env' | wc -l | tr -d '[:space:]')
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && [ "${mount_count}" = 1 ] \
+    && [ "${tmpfs_count}" = 2 ] \
+    && [ "${env_count}" = 2 ] \
+    && [[ "${run_args}" == *'--publish 127.0.0.1:4173:8080'* ]] \
+    && [[ "${run_args}" == *'--mount type=bind,source=/var/lib/opentendril-transport,target=/var/lib/opentendril-transport,readonly'* ]] \
+    && [[ "${run_args}" == *'--env STEM_TRANSPORT=unix'* ]] \
+    && [[ "${run_args}" == *'--env STEM_SOCKET=/var/lib/opentendril-transport/stem.sock'* ]] \
+    && [[ "${run_args}" == *'--read-only'* ]] \
+    && [[ "${run_args}" == *'--tmpfs /tmp'* ]] \
+    && [[ "${run_args}" == *'--tmpfs /etc/nginx/conf.d:uid=101,gid=101,mode=0755'* ]] \
+    && [[ "${run_args}" == *'--cap-drop ALL'* ]] \
+    && [[ "${run_args}" == *'--security-opt no-new-privileges:true'* ]] \
+    && [[ "${run_args}" == *'--health-cmd wget -q -O /dev/null http://127.0.0.1:8080/'* ]] \
+    && [[ "${run_args}" == *'--restart unless-stopped'* ]] \
+    && [[ "${run_args}" == *'--pull=never'* ]] \
+    && [[ "${run_args}" == *'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'* ]] \
+    && ! printf '%s\n' "${run_args}" | grep -Eqi '/home/tendril|docker\.sock|/run/user|BOTANIST|provider|pollinator|substrate|terrarium|--privileged|--cap-add|STEM_TRANSPORT=tcp|0\.0\.0\.0'; then
+    pass "start uses fixed loopback, exact read-only transport mount, hardened container, and no protected authority"
+  else
+    fail "start uses fixed loopback, exact read-only transport mount, hardened container, and no protected authority" "status=${greenhouse_wrapper_status} run=${run_args} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  if events_match '^DOCKER_ENV host=unix:///run/user/2001/docker.sock context= transport= socket= image= opts=$'; then
+    pass "caller Docker, Stem, image, port, and bind overrides are ignored safely"
+  else
+    fail "caller Docker, Stem, image, port, and bind overrides are ignored safely" "env-events=$(grep '^DOCKER_ENV' "${events_file}" | tr '\n' ' ')"
+  fi
+  if [ "$(cat "${ROOT}/state/greenhouse-run-count")" = 1 ]; then
+    pass "first start creates exactly one Greenhouse instance"
+  else
+    fail "first start creates exactly one Greenhouse instance"
+  fi
+
+  run_installed_greenhouse_wrapper start
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-run-count")" = 1 ] \
+    && grep -q 'already running' "${greenhouse_wrapper_out}"; then
+    pass "repeated start is idempotent and creates no duplicate container"
+  else
+    fail "repeated start is idempotent and creates no duplicate container" "status=${greenhouse_wrapper_status} stdout=$(tr '\n' ' ' <"${greenhouse_wrapper_out}")"
+  fi
+
+  lifecycle_mutations_before=$(grep -Ec '^CMD docker .* (run|container (start|stop|restart|rm))' "${events_file}" || true)
+  run_installed_greenhouse_wrapper status
+  lifecycle_mutations_after=$(grep -Ec '^CMD docker .* (run|container (start|stop|restart|rm))' "${events_file}" || true)
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && grep -q 'Greenhouse: running (health: healthy; image: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef)' "${greenhouse_wrapper_out}" \
+    && [ "${lifecycle_mutations_before}" = "${lifecycle_mutations_after}" ]; then
+    pass "status reports truthful running and health state without mutation"
+  else
+    fail "status reports truthful running and health state without mutation" "stdout=$(tr '\n' ' ' <"${greenhouse_wrapper_out}")"
+  fi
+  run_installed_greenhouse_wrapper check
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && grep -q 'healthy on local Unix transport' "${greenhouse_wrapper_out}" \
+    && ! grep -Eqi 'botanist|api-key|authorization|http.*(/v1|/health)' "${events_file}"; then
+    pass "check is deterministic and requires no Botanist authority or authenticated Stem probe"
+  else
+    fail "check is deterministic and requires no Botanist authority or authenticated Stem probe" "status=${greenhouse_wrapper_status} stdout=$(tr '\n' ' ' <"${greenhouse_wrapper_out}")"
+  fi
+  run_installed_greenhouse_wrapper address
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] && [ "$(cat "${greenhouse_wrapper_out}")" = 'http://127.0.0.1:4173' ]; then
+    pass "address remains fixed after lifecycle operations"
+  else
+    fail "address remains fixed after lifecycle operations"
+  fi
+
+  printf '%s\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"${ROOT}/state/greenhouse-tag-image-id"
+  : >"${events_file}"
+  run_installed_greenhouse_wrapper start
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] \
+    && grep -q 'tag no longer identifies the verified release image' "${greenhouse_wrapper_err}" \
+    && ! events_match '^CMD docker .* run '; then
+    pass "lifecycle refuses a changed mutable tag and never runs an unverified image"
+  else
+    fail "lifecycle refuses a changed mutable tag and never runs an unverified image" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  printf '%s\n' 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"${ROOT}/state/greenhouse-tag-image-id"
+
+  run_installed_greenhouse_wrapper restart
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock container restart opentendril-greenhouse$' \
+    && [ "$(cat "${ROOT}/state/greenhouse-run-count")" = 1 ]; then
+    pass "restart preserves the fixed configuration without duplicate instances"
+  else
+    fail "restart preserves the fixed configuration without duplicate instances" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  run_installed_greenhouse_wrapper stop
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock container stop opentendril-greenhouse$' \
+    && grep -q 'Stem was not changed' "${greenhouse_wrapper_out}" \
+    && ! grep -Eq '^CMD systemctl .*tendril|^CMD docker .* (stop|restart|rm) tendril' "${events_file}"; then
+    pass "stop affects only Greenhouse and leaves Stem untouched"
+  else
+    fail "stop affects only Greenhouse and leaves Stem untouched" "status=${greenhouse_wrapper_status} events=$(tr '\n' ' ' <"${events_file}")"
+  fi
+  run_installed_greenhouse_wrapper status
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] && grep -q 'Greenhouse: exited' "${greenhouse_wrapper_out}"; then
+    pass "status truthfully reports stopped Greenhouse"
+  else
+    fail "status truthfully reports stopped Greenhouse" "stdout=$(tr '\n' ' ' <"${greenhouse_wrapper_out}")"
+  fi
+  run_installed_greenhouse_wrapper check
+  if [ "${greenhouse_wrapper_status}" -ne 0 ] && grep -q 'not running' "${greenhouse_wrapper_err}"; then
+    pass "check fails clearly while Greenhouse is stopped"
+  else
+    fail "check fails clearly while Greenhouse is stopped" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+  run_installed_greenhouse_wrapper start
+  if [ "${greenhouse_wrapper_status}" -eq 0 ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-run-count")" = 1 ] \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock container start opentendril-greenhouse$'; then
+    pass "start resumes the stable stopped instance without creating a duplicate"
+  else
+    fail "start resumes the stable stopped instance without creating a duplicate" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
+  fi
+else
+  fail "Greenhouse lifecycle fixture installation failed" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
 
 if [ -n "${host_tendril}" ]; then
   after_hash="$(sha256sum "${host_tendril}")"

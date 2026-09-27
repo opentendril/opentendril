@@ -39,6 +39,12 @@ SUDOERS_SNIPPET="/etc/sudoers.d/opentendril-p2"
 SUDOERS_PRIMARY="/etc/sudoers"
 SUDOERS_RS="/etc/sudoers-rs"
 SUDOERS_DIR="/etc/sudoers.d"
+GREENHOUSE_ARCHIVE="opentendril-greenhouse-linux-amd64.tar.gz"
+GREENHOUSE_WRAPPER="/usr/local/sbin/opentendril-greenhouse"
+GREENHOUSE_CONTAINER="opentendril-greenhouse"
+GREENHOUSE_SOCKET="/var/lib/opentendril-transport/stem.sock"
+RELEASE_GIT_URL="https://github.com/opentendril/opentendril.git"
+SOURCE_RAW_ROOT="https://raw.githubusercontent.com/opentendril/opentendril"
 
 version="${OPENTENDRIL_VERSION:-}"
 want_help=0
@@ -413,6 +419,501 @@ obtain_verified_archive() {
   verify_archive
 }
 
+is_hex40() {
+  [ "${#1}" -eq 40 ] || return 1
+  case "$1" in
+    *[!0-9a-fA-F]*) return 1 ;;
+  esac
+  return 0
+}
+
+resolve_release_source_sha() {
+  _tag=$1
+  require_cmd env
+  require_cmd git
+  require_cmd awk
+  _refs=$(env -i PATH="$PATH" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0 \
+    git ls-remote "$RELEASE_GIT_URL" "refs/tags/${_tag}" "refs/tags/${_tag}^{}" </dev/null) ||
+    die "cannot resolve source revision for release tag ${_tag}"
+  _source_sha=$(printf '%s\n' "$_refs" | awk -v direct="refs/tags/${_tag}" -v peeled="refs/tags/${_tag}^{}" '
+    NF != 2 || length($1) != 40 || $1 ~ /[^0-9a-fA-F]/ { invalid = 1; next }
+    $2 == direct { direct_count++; direct_sha = $1; next }
+    $2 == peeled { peeled_count++; peeled_sha = $1; next }
+    { invalid = 1 }
+    END {
+      if (invalid || direct_count != 1 || peeled_count > 1) exit 1
+      if (peeled_count == 1) print peeled_sha
+      else print direct_sha
+    }
+  ') || die "release tag ${_tag} did not resolve to one valid Git source revision"
+  is_hex40 "$_source_sha" || die "release tag ${_tag} resolved to an invalid source revision"
+  release_source_sha=$(to_lower_hex "$_source_sha")
+}
+
+download_source_version() {
+  _dest=$1
+  _url="${SOURCE_RAW_ROOT}/${release_source_sha}/VERSION"
+  case "$_url" in
+    https://raw.githubusercontent.com/opentendril/opentendril/[0-9a-f]*/VERSION) ;;
+    *) die "refusing canonical VERSION download from ${_url}" ;;
+  esac
+  command -v curl >/dev/null 2>&1 || die "curl is required"
+  curl -fsSL --proto '=https' -o "$_dest" "$_url" </dev/null || die "failed to download canonical VERSION for release source ${release_source_sha}"
+  [ -f "$_dest" ] && [ -s "$_dest" ] || die "canonical VERSION download produced no file"
+}
+
+pin_governed_release() {
+  _reported_version=${staged_tendril_version#tendril }
+  if [ -z "$version" ]; then
+    case "$_reported_version" in
+      ''|*[!0-9.]*|.*|*.|*..*) die "tendril binary reports a non-canonical release version: ${_reported_version}" ;;
+    esac
+    printf '%s\n' "$_reported_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+      die "tendril binary reports a non-canonical release version: ${_reported_version}"
+    version=$_reported_version
+  fi
+
+  release_tag=$(normalize_tag "$version")
+  version=$release_tag
+  expected_release_version=${release_tag#v}
+  pinned_release_base="${RELEASE_ROOT}/download/${release_tag}"
+
+  download "${pinned_release_base}/checksums.txt" "$checksums_path"
+  verify_archive
+
+  resolve_release_source_sha "$release_tag"
+  canonical_version_path="${workdir}/release-VERSION"
+  download_source_version "$canonical_version_path"
+  canonical_release_version=$(cat "$canonical_version_path") || die "cannot read canonical VERSION for ${release_tag}"
+  _canonical_bytes=$(wc -c <"$canonical_version_path" | tr -d '[:space:]')
+  if [ "$_canonical_bytes" -ne "${#canonical_release_version}" ] &&
+    [ "$_canonical_bytes" -ne $((${#canonical_release_version} + 1)) ]; then
+    die "canonical VERSION for ${release_tag} must contain only MAJOR.MINOR.PATCH"
+  fi
+  printf '%s\n' "$canonical_release_version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' ||
+    die "canonical VERSION for ${release_tag} is not a stable MAJOR.MINOR.PATCH version"
+  [ "$canonical_release_version" = "$expected_release_version" ] ||
+    die "canonical VERSION ${canonical_release_version} does not match release tag ${release_tag}"
+}
+
+verify_greenhouse_archive_metadata() {
+  require_cmd python3
+  expected_image="opentendril-greenhouse:${canonical_release_version}"
+  python3 - "$archive_path" "$expected_image" "$canonical_release_version" "$release_source_sha" <<'PY'
+import gzip
+import json
+import pathlib
+import re
+import sys
+import tarfile
+
+
+def fail(message):
+    raise SystemExit("install.sh: Greenhouse archive metadata is invalid: " + message)
+
+
+archive_path = pathlib.Path(sys.argv[1])
+expected_tag = sys.argv[2]
+expected_version = sys.argv[3]
+expected_revision = sys.argv[4]
+if not re.fullmatch(r"[0-9a-f]{40}", expected_revision):
+    fail("bound source revision is not a full Git commit SHA")
+try:
+    with gzip.open(archive_path, "rb") as compressed:
+        with tarfile.open(fileobj=compressed, mode="r:") as archive:
+            members = archive.getmembers()
+            member_map = {}
+            for member in members:
+                path = pathlib.PurePosixPath(member.name)
+                if path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+                    fail("archive contains an unsafe or unsupported member")
+                if member.name in member_map:
+                    fail("archive contains duplicate members")
+                member_map[member.name] = member
+
+            manifest_member = member_map.get("manifest.json")
+            if manifest_member is None or not manifest_member.isfile():
+                fail("archive has no regular manifest.json")
+            manifest = json.load(archive.extractfile(manifest_member))
+            if not isinstance(manifest, list) or len(manifest) != 1:
+                fail("archive must contain exactly one image")
+            image = manifest[0]
+            if image.get("RepoTags") != [expected_tag]:
+                fail("image tag does not match the pinned release identity")
+            config_name = image.get("Config")
+            config_member = member_map.get(config_name)
+            if config_member is None or not config_member.isfile():
+                fail("archive is missing its regular image config")
+            config = json.load(archive.extractfile(config_member))
+            if config.get("os") != "linux" or config.get("architecture") != "amd64":
+                fail("image is not linux/amd64")
+            labels = (config.get("config") or {}).get("Labels") or {}
+            if labels.get("org.opencontainers.image.version") != expected_version:
+                fail("OCI version label does not match canonical VERSION")
+            if labels.get("org.opencontainers.image.revision") != expected_revision:
+                fail("OCI source revision label does not match the pinned release tag")
+            layers = image.get("Layers")
+            if not isinstance(layers, list) or not layers or any(layer not in member_map for layer in layers):
+                fail("archive is missing a referenced image layer")
+except (OSError, EOFError, tarfile.TarError, json.JSONDecodeError, TypeError, AttributeError) as error:
+    fail("archive is malformed: " + str(error))
+
+print("PASS Greenhouse image tag, linux/amd64, canonical VERSION, and source revision")
+PY
+}
+
+obtain_verified_greenhouse_archive() {
+  archive=$GREENHOUSE_ARCHIVE
+  archive_path="${workdir}/${archive}"
+  download "${pinned_release_base}/${archive}" "$archive_path"
+  verify_archive
+  verify_greenhouse_archive_metadata
+}
+
+tendril_docker() {
+  _docker_path=$(command -v docker) || die "docker CLI is required for the ${STEM_USER} rootless daemon"
+  case "$_docker_path" in
+    */*) _docker_path_dir=${_docker_path%/*} ;;
+    *) die "cannot determine the Docker CLI directory" ;;
+  esac
+  _runtime="/run/user/${tendril_uid}"
+  _host="unix://${_runtime}/docker.sock"
+  sudo -u "$STEM_USER" -H env -i \
+    PATH="${_docker_path_dir}:/usr/bin:/bin" \
+    HOME="$STEM_HOME" USER="$STEM_USER" LOGNAME="$STEM_USER" \
+    XDG_RUNTIME_DIR="$_runtime" DOCKER_HOST="$_host" \
+    docker --host="$_host" "$@" </dev/null
+}
+
+tendril_docker_load_verified_archive() {
+  _docker_path=$(command -v docker) || die "docker CLI is required for the ${STEM_USER} rootless daemon"
+  case "$_docker_path" in
+    */*) _docker_path_dir=${_docker_path%/*} ;;
+    *) die "cannot determine the Docker CLI directory" ;;
+  esac
+  _runtime="/run/user/${tendril_uid}"
+  _host="unix://${_runtime}/docker.sock"
+  sudo -u "$STEM_USER" -H env -i \
+    PATH="${_docker_path_dir}:/usr/bin:/bin" \
+    HOME="$STEM_HOME" USER="$STEM_USER" LOGNAME="$STEM_USER" \
+    XDG_RUNTIME_DIR="$_runtime" DOCKER_HOST="$_host" \
+    docker --host="$_host" load <"$archive_path"
+}
+
+load_verified_greenhouse_image() {
+  require_cmd sudo
+  require_cmd env
+  require_cmd docker
+  _opts=$(tendril_docker info --format '{{.SecurityOptions}}') ||
+    die "cannot query the ${STEM_USER} rootless Docker daemon before loading Greenhouse"
+  case "$_opts" in
+    *rootless*) ;;
+    *) die "refusing Greenhouse image load: ${STEM_USER} Docker daemon is not rootless (SecurityOptions: ${_opts})" ;;
+  esac
+  tendril_docker_load_verified_archive || die "failed to load the verified Greenhouse image into the ${STEM_USER} rootless Docker daemon"
+  _loaded_metadata=$(tendril_docker image inspect --format '{{.Id}}|{{.Os}}/{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' "$expected_image") ||
+    die "verified Greenhouse image ${expected_image} is missing from the ${STEM_USER} rootless Docker daemon after load"
+  IFS='|' read -r greenhouse_image_id _loaded_platform _loaded_version _loaded_revision <<EOF
+$_loaded_metadata
+EOF
+  case "$greenhouse_image_id" in
+    sha256:*) is_hex64 "${greenhouse_image_id#sha256:}" || die "loaded Greenhouse image has an invalid immutable image ID: ${greenhouse_image_id}" ;;
+    *) die "loaded Greenhouse image has no immutable sha256 image ID: ${greenhouse_image_id}" ;;
+  esac
+  _expected_metadata="linux/amd64|${canonical_release_version}|${release_source_sha}"
+  _actual_metadata="${_loaded_platform}|${_loaded_version}|${_loaded_revision}"
+  [ "$_actual_metadata" = "$_expected_metadata" ] ||
+    die "loaded Greenhouse image metadata is incoherent: ${_actual_metadata} (expected ${_expected_metadata})"
+  printf 'PASS Greenhouse image loaded into tendril rootless Docker: %s (%s)\n' "$expected_image" "$greenhouse_image_id"
+}
+
+read_greenhouse_tag_state() {
+  _tag_rows=$(tendril_docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=${expected_image}") || return 1
+  greenhouse_tag_present=0
+  greenhouse_tag_image_id=""
+  [ -n "$_tag_rows" ] || return 0
+  case "$_tag_rows" in
+    *'
+'*) return 1 ;;
+  esac
+  [ "$_tag_rows" = "$expected_image" ] || return 1
+  greenhouse_tag_image_id=$(tendril_docker image inspect --format '{{.Id}}' "$expected_image") || return 1
+  case "$greenhouse_tag_image_id" in
+    sha256:*) is_hex64 "${greenhouse_tag_image_id#sha256:}" || return 1 ;;
+    *) return 1 ;;
+  esac
+  greenhouse_tag_present=1
+}
+
+capture_greenhouse_rollback_state() {
+  rollback_had_greenhouse_wrapper=0
+  rollback_had_greenhouse_tag=0
+  rollback_greenhouse_image_id=""
+  if fs_exists "$GREENHOUSE_WRAPPER"; then
+    ! fs_is_symlink "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is a symlink; cannot capture it for governed-upgrade rollback"
+    fs_is_file "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is not a regular file; cannot capture it for governed-upgrade rollback"
+    cp -a "$GREENHOUSE_WRAPPER" "${workdir}/rollback/greenhouse-wrapper" || die "failed to capture ${GREENHOUSE_WRAPPER} for rollback"
+    rollback_had_greenhouse_wrapper=1
+  fi
+
+  read_greenhouse_tag_state || die "cannot capture the prior Greenhouse release-tag mapping from the ${STEM_USER} rootless Docker daemon"
+  if [ "$greenhouse_tag_present" -eq 1 ]; then
+    rollback_had_greenhouse_tag=1
+    rollback_greenhouse_image_id=$greenhouse_tag_image_id
+  fi
+  rollback_greenhouse_state_captured=1
+}
+
+write_greenhouse_wrapper() {
+  wrapper_source="${workdir}/opentendril-greenhouse"
+  cat >"$wrapper_source" <<EOF
+#!/bin/sh
+set -eu
+
+CONTAINER='${GREENHOUSE_CONTAINER}'
+IMAGE='${expected_image}'
+IMAGE_ID='${greenhouse_image_id}'
+STEM_UID='${tendril_uid}'
+STEM_SOCKET='${GREENHOUSE_SOCKET}'
+SOCKET_CHECK_PATH='${GREENHOUSE_SOCKET}'
+TRANSPORT_DIR='/var/lib/opentendril-transport'
+DOCKER_HOST="unix:///run/user/\${STEM_UID}/docker.sock"
+DOCKER_BIN='/usr/bin/docker'
+RUNUSER_BIN='/usr/sbin/runuser'
+ENV_BIN='/usr/bin/env'
+ID_BIN='/usr/bin/id'
+
+fail() {
+  printf 'opentendril-greenhouse: %s\n' "\$*" >&2
+  exit 1
+}
+
+usage() {
+  printf 'Usage: sudo %s {start|stop|restart|status|check|address}\n' "\$0" >&2
+}
+
+[ "\$#" -eq 1 ] || { usage; fail 'exactly one supported verb is required'; }
+verb=\$1
+case "\$verb" in
+  start|stop|restart|status|check|address) ;;
+  *) usage; fail "unsupported verb: \$verb" ;;
+esac
+caller_uid=\$("\$ID_BIN" -u)
+[ "\$caller_uid" = 0 ] || fail "requires an explicit administrator invocation, for example: sudo \$0 \$verb"
+
+rootless_docker() {
+  "\$RUNUSER_BIN" -u tendril -- "\$ENV_BIN" -i \\
+    PATH=/usr/bin:/bin \\
+    HOME=/home/tendril USER=tendril LOGNAME=tendril \\
+    XDG_RUNTIME_DIR="/run/user/\${STEM_UID}" DOCKER_HOST="\${DOCKER_HOST}" \\
+    "\$DOCKER_BIN" --host="\${DOCKER_HOST}" "\$@"
+}
+
+verify_rootless_daemon() {
+  _options=\$(rootless_docker info --format '{{.SecurityOptions}}' 2>&1) ||
+    fail "the tendril rootless Docker daemon is unavailable at \${DOCKER_HOST}: \${_options}"
+  case "\$_options" in
+    *rootless*) ;;
+    *) fail "refusing lifecycle operation: tendril Docker is not rootless (SecurityOptions: \${_options})" ;;
+  esac
+}
+
+require_stem_socket() {
+  [ -S "\${SOCKET_CHECK_PATH}" ] || fail "the governed Stem Unix socket is missing or not a socket: \${STEM_SOCKET}; start the configured Stem first (TCP is never selected)"
+}
+
+get_image_id() {
+  _image_id=\$(rootless_docker image inspect --format '{{.Id}}' "\${IMAGE}" 2>/dev/null) ||
+    fail "verified installed Greenhouse image is unavailable in tendril rootless Docker: \${IMAGE}"
+  [ "\$_image_id" = "\${IMAGE_ID}" ] || fail "installed Greenhouse tag no longer identifies the verified release image (expected \${IMAGE_ID}, found \$_image_id)"
+  printf '%s\n' "\${IMAGE_ID}"
+}
+
+get_container_image_id() {
+  rootless_docker container inspect --format '{{.Image}}' "\${CONTAINER}"
+}
+
+get_container_row() {
+  rootless_docker container inspect --format '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Image}}' "\${CONTAINER}"
+}
+
+container_present() {
+  _names=\$(rootless_docker container ls --all --filter "name=^/\${CONTAINER}\$" --format '{{.Names}}') ||
+    fail 'could not query tendril rootless Docker for the Greenhouse container'
+  [ "\$_names" = "\${CONTAINER}" ]
+}
+
+run_fixed_container() {
+  rootless_docker run --pull=never --detach \\
+    --name "\${CONTAINER}" \\
+    --restart unless-stopped \\
+    --publish 127.0.0.1:4173:8080 \\
+    --read-only \\
+    --tmpfs /tmp \\
+    --tmpfs /etc/nginx/conf.d:uid=101,gid=101,mode=0755 \\
+    --cap-drop ALL \\
+    --security-opt no-new-privileges:true \\
+    --health-cmd 'wget -q -O /dev/null http://127.0.0.1:8080/' \\
+    --health-interval 30s \\
+    --health-timeout 5s \\
+    --health-retries 3 \\
+    --mount type=bind,source=\${TRANSPORT_DIR},target=\${TRANSPORT_DIR},readonly \\
+    --env STEM_TRANSPORT=unix \\
+    --env STEM_SOCKET=\${STEM_SOCKET} \\
+    "\${IMAGE_ID}" >/dev/null || fail 'failed to create the fixed Greenhouse container'
+}
+
+remove_old_container() {
+  rootless_docker container rm --force "\${CONTAINER}" >/dev/null || fail 'failed to replace the existing Greenhouse container'
+}
+
+start_greenhouse() {
+  require_stem_socket
+  verify_rootless_daemon
+  _desired_id=\$(get_image_id)
+  if container_present; then
+    _current_id=\$(get_container_image_id) || fail 'could not inspect the existing Greenhouse container'
+    if [ "\$_current_id" != "\$_desired_id" ]; then
+      remove_old_container
+    else
+      _row=\$(get_container_row) || fail 'could not read the existing Greenhouse lifecycle state'
+      _state=\${_row%%|*}
+      if [ "\$_state" = running ]; then
+        printf 'Greenhouse is already running at http://127.0.0.1:4173\n'
+        return 0
+      fi
+      rootless_docker container start "\${CONTAINER}" >/dev/null || fail 'failed to start the installed Greenhouse container'
+      printf 'Greenhouse started at http://127.0.0.1:4173\n'
+      return 0
+    fi
+  fi
+  run_fixed_container
+  printf 'Greenhouse started at http://127.0.0.1:4173\n'
+}
+
+restart_greenhouse() {
+  require_stem_socket
+  verify_rootless_daemon
+  _desired_id=\$(get_image_id)
+  if container_present; then
+    _current_id=\$(get_container_image_id) || fail 'could not inspect the existing Greenhouse container'
+    if [ "\$_current_id" != "\$_desired_id" ]; then
+      remove_old_container
+      run_fixed_container
+    else
+      rootless_docker container restart "\${CONTAINER}" >/dev/null || fail 'failed to restart the installed Greenhouse container'
+    fi
+  else
+    run_fixed_container
+  fi
+  printf 'Greenhouse restarted at http://127.0.0.1:4173\n'
+}
+
+stop_greenhouse() {
+  verify_rootless_daemon
+  if ! container_present; then
+    printf 'Greenhouse is absent; Stem was not changed\n'
+    return 0
+  fi
+  _row=\$(get_container_row) || fail 'could not read the existing Greenhouse lifecycle state'
+  _state=\${_row%%|*}
+  if [ "\$_state" = running ] || [ "\$_state" = paused ]; then
+    rootless_docker container stop "\${CONTAINER}" >/dev/null || fail 'failed to stop the Greenhouse container'
+    printf 'Greenhouse stopped; Stem was not changed\n'
+  else
+    printf 'Greenhouse is already %s; Stem was not changed\n' "\$_state"
+  fi
+}
+
+status_greenhouse() {
+  verify_rootless_daemon
+  if ! container_present; then
+    printf 'Greenhouse: absent\n'
+    return 0
+  fi
+  _row=\$(get_container_row) || fail 'could not read the Greenhouse lifecycle state'
+  _state=\${_row%%|*}
+  _rest=\${_row#*|}
+  _health=\${_rest%%|*}
+  _image=\${_rest#*|}
+  printf 'Greenhouse: %s (health: %s; image: %s)\n' "\$_state" "\$_health" "\$_image"
+}
+
+check_greenhouse() {
+  require_stem_socket
+  verify_rootless_daemon
+  _desired_id=\$(get_image_id)
+  container_present || fail 'no installed Greenhouse container exists; run start after the Stem socket is ready'
+  _current_id=\$(get_container_image_id) || fail 'could not inspect the Greenhouse image identity'
+  [ "\$_current_id" = "\$_desired_id" ] || fail 'Greenhouse container is not using the currently installed verified image; run restart to reconcile it'
+  _row=\$(get_container_row) || fail 'could not read the Greenhouse lifecycle state'
+  _state=\${_row%%|*}
+  _rest=\${_row#*|}
+  _health=\${_rest%%|*}
+  [ "\$_state" = running ] || fail "Greenhouse container is not running (state: \${_state})"
+  [ "\$_health" = healthy ] || fail "Greenhouse container is not healthy (health: \${_health}); no Botanist authority is acquired by check"
+  printf 'Greenhouse lifecycle check passed: healthy on local Unix transport\n'
+}
+
+case "\$verb" in
+  address)
+    printf 'http://127.0.0.1:4173\n'
+    ;;
+  start)
+    start_greenhouse
+    ;;
+  stop)
+    stop_greenhouse
+    ;;
+  restart)
+    restart_greenhouse
+    ;;
+  status)
+    status_greenhouse
+    ;;
+  check)
+    check_greenhouse
+    ;;
+esac
+EOF
+  chmod 0755 "$wrapper_source" || die "failed to set the Greenhouse wrapper mode"
+}
+
+install_greenhouse_wrapper() {
+  require_cmd install
+  require_cmd mv
+  wrapper_parent=${GREENHOUSE_WRAPPER%/*}
+  wrapper_staged="${wrapper_parent}/.opentendril-greenhouse.new"
+  for _dir in /usr /usr/local "$wrapper_parent"; do
+    fs_is_dir "$_dir" || die "${_dir} is missing or is not a directory; cannot install ${GREENHOUSE_WRAPPER} safely"
+    ! fs_is_symlink "$_dir" || die "${_dir} is a symlink; cannot install ${GREENHOUSE_WRAPPER} safely"
+    [ "$(fs_owner "$_dir")" = root ] || die "${_dir} is not root-owned; cannot install ${GREENHOUSE_WRAPPER} safely"
+    [ "$(fs_group "$_dir")" = root ] || die "${_dir} is not root-group-owned; cannot install ${GREENHOUSE_WRAPPER} safely"
+    [ "$(fs_mode "$_dir")" = 755 ] || die "${_dir} must have mode 0755; cannot install ${GREENHOUSE_WRAPPER} safely"
+  done
+  if fs_exists "$GREENHOUSE_WRAPPER"; then
+    ! fs_is_symlink "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is a symlink; refusing to replace it"
+    fs_is_file "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is not a regular file; refusing to replace it"
+    [ "$(fs_owner "$GREENHOUSE_WRAPPER")" = root ] || die "${GREENHOUSE_WRAPPER} is not root-owned; refusing to replace it"
+    [ "$(fs_group "$GREENHOUSE_WRAPPER")" = root ] || die "${GREENHOUSE_WRAPPER} is not root-group-owned; refusing to replace it"
+    [ "$(fs_mode "$GREENHOUSE_WRAPPER")" = 755 ] || die "${GREENHOUSE_WRAPPER} must have mode 0755; refusing to replace it"
+  fi
+  write_greenhouse_wrapper
+  install -o root -g root -m 0755 "$wrapper_source" "$wrapper_staged" </dev/null || die "failed to stage ${GREENHOUSE_WRAPPER}"
+  [ "$(fs_owner "$wrapper_staged")" = root ] &&
+    [ "$(fs_group "$wrapper_staged")" = root ] &&
+    [ "$(fs_mode "$wrapper_staged")" = 755 ] || die "staged ${GREENHOUSE_WRAPPER} is not root-owned mode 0755"
+  mv -f "$wrapper_staged" "$GREENHOUSE_WRAPPER" || {
+    rm -f "$wrapper_staged"
+    die "failed to install ${GREENHOUSE_WRAPPER}"
+  }
+  ! fs_is_symlink "$GREENHOUSE_WRAPPER" && fs_is_file "$GREENHOUSE_WRAPPER" || die "installed ${GREENHOUSE_WRAPPER} is not a regular file"
+  [ "$(fs_owner "$GREENHOUSE_WRAPPER")" = root ] &&
+    [ "$(fs_group "$GREENHOUSE_WRAPPER")" = root ] &&
+    [ "$(fs_mode "$GREENHOUSE_WRAPPER")" = 755 ] || die "installed ${GREENHOUSE_WRAPPER} is not root-owned mode 0755"
+  printf 'PASS installed fixed Greenhouse lifecycle wrapper: %s\n' "$GREENHOUSE_WRAPPER"
+}
+
 # --- governed helpers -------------------------------------------------------
 
 fs_exists() {
@@ -422,6 +923,16 @@ fs_exists() {
 fs_is_dir() {
   _kind=$(stat -c '%F' "$1" 2>/dev/null) || return 1
   [ "$_kind" = directory ]
+}
+
+fs_is_file() {
+  _kind=$(stat -c '%F' "$1" 2>/dev/null) || return 1
+  [ "$_kind" = "regular file" ]
+}
+
+fs_is_symlink() {
+  _kind=$(stat -c '%F' "$1" 2>/dev/null) || return 1
+  [ "$_kind" = "symbolic link" ]
 }
 
 fs_owner() {
@@ -868,10 +1379,7 @@ ensure_user_runtime() {
 }
 
 tendril_docker_opts() {
-  sudo -u "$STEM_USER" -H \
-    XDG_RUNTIME_DIR="/run/user/${tendril_uid}" \
-    DOCKER_HOST="unix:///run/user/${tendril_uid}/docker.sock" \
-    docker info --format '{{.SecurityOptions}}' </dev/null
+  tendril_docker info --format '{{.SecurityOptions}}'
 }
 
 establish_rootless_docker() {
@@ -907,10 +1415,6 @@ establish_rootless_docker() {
 }
 
 install_governed_binaries() {
-  extract_member tendril
-  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
-  extract_member tendril-mcp
-  staged_mcp_version=$(verify_binary_version "${workdir}/tendril-mcp" tendril-mcp)
   _pollinator_tendril="${pollinator_home}/.local/bin/tendril"
   if fs_exists "$_pollinator_tendril"; then
     die "refusing to proceed: ${_pollinator_tendril} already exists. Governed mode will not place the full tendril executable on the Pollinator account, and will not delete the existing file."
@@ -1157,6 +1661,8 @@ print_governed_success() {
   printf 'Versions:    %s; %s\n' "$staged_tendril_version" "$staged_mcp_version"
   printf 'Rootless:    verified (docker info SecurityOptions contains rootless)\n'
   printf 'systemd:     %s installed; not enabled; not started\n' "$UNIT_PATH"
+  printf 'Greenhouse:  optional image %s installed; wrapper %s\n' "$expected_image" "$GREENHOUSE_WRAPPER"
+  printf '             not started; use explicit administrator invocation after Stem configuration\n'
   printf '\n'
   printf 'Interactive login as %s is not required.\n' "$STEM_USER"
   printf 'This installer did not run tendril init and did not start the Stem.\n'
@@ -1244,8 +1750,16 @@ install_governed() {
   prepare_workdir governed_cleanup
   install_prereq_packages
   refuse_unsafe_docker
+  require_cmd git
+  require_cmd python3
   ensure_rootless_netfilter
   obtain_verified_archive
+  extract_member tendril
+  staged_tendril_version=$(verify_binary_version "${workdir}/tendril" tendril)
+  extract_member tendril-mcp
+  staged_mcp_version=$(verify_binary_version "${workdir}/tendril-mcp" tendril-mcp)
+  pin_governed_release
+  obtain_verified_greenhouse_archive
   mask_rootful_docker
   ensure_tendril_principal
   install_docker_engine
@@ -1255,6 +1769,8 @@ install_governed() {
   install_tendril_unit
   validate_effective_service
   enforce_p2
+  load_verified_greenhouse_image
+  install_greenhouse_wrapper
   governed_finished=1
   print_governed_success
 }
@@ -1311,6 +1827,30 @@ rollback_upgrade() {
   fi
   if [ -n "${mcp_dest:-}" ] && fs_exists "${workdir}/rollback/tendril-mcp"; then
     cp -a "${workdir}/rollback/tendril-mcp" "$mcp_dest" || rollback_failed=1
+  fi
+
+  if [ "${rollback_greenhouse_state_captured:-0}" -eq 1 ]; then
+    if [ "${rollback_had_greenhouse_wrapper:-0}" -eq 1 ]; then
+      cp -a "${workdir}/rollback/greenhouse-wrapper" "$GREENHOUSE_WRAPPER" || rollback_failed=1
+    elif fs_exists "$GREENHOUSE_WRAPPER"; then
+      rm -f "$GREENHOUSE_WRAPPER" || rollback_failed=1
+    fi
+
+    _greenhouse_rollback_opts=$(tendril_docker info --format '{{.SecurityOptions}}' 2>/dev/null) || _greenhouse_rollback_opts=""
+    case "$_greenhouse_rollback_opts" in
+      *rootless*)
+        if [ "${rollback_had_greenhouse_tag:-0}" -eq 1 ]; then
+          tendril_docker image tag "$rollback_greenhouse_image_id" "$expected_image" || rollback_failed=1
+        elif read_greenhouse_tag_state; then
+          if [ "$greenhouse_tag_present" -eq 1 ]; then
+            tendril_docker image rm "$expected_image" || rollback_failed=1
+          fi
+        else
+          rollback_failed=1
+        fi
+        ;;
+      *) rollback_failed=1 ;;
+    esac
   fi
 
   systemctl daemon-reload </dev/null || rollback_failed=1
@@ -1641,6 +2181,9 @@ install_governed_upgrade() {
   require_cmd cmp
   require_cmd id
   require_cmd sudo
+  require_cmd env
+  require_cmd git
+  require_cmd python3
 
   governed_upgrade_started=0
   governed_upgrade_finished=0
@@ -1648,6 +2191,7 @@ install_governed_upgrade() {
   rollback_failed=0
   rollback_had_baseline=0
   rollback_had_legacy=0
+  rollback_greenhouse_state_captured=0
   legacy_migration=0
   admin_override=0
   was_active=0
@@ -1684,6 +2228,8 @@ install_governed_upgrade() {
     extract_member tendril-mcp
     staged_mcp_version=$(verify_binary_version "${workdir}/tendril-mcp" tendril-mcp)
   fi
+  pin_governed_release
+  obtain_verified_greenhouse_archive
 
   mkdir -p "${workdir}/rollback" || die "failed to create rollback directory"
   cp -a "$STEM_BIN" "${workdir}/rollback/tendril" || die "failed to capture the protected Stem binary for rollback"
@@ -1698,12 +2244,14 @@ install_governed_upgrade() {
     cp -a "$LEGACY_UNIT_PATH" "${workdir}/rollback/legacy.service" || die "failed to capture ${LEGACY_UNIT_PATH} for rollback"
     rollback_had_legacy=1
   fi
+  capture_greenhouse_rollback_state
 
   if systemctl is-active --quiet tendril.service; then
     was_active=1
   fi
 
   governed_upgrade_started=1
+  load_verified_greenhouse_image
   if [ "$was_active" -eq 1 ]; then
     systemctl stop tendril.service </dev/null || rollback_and_die "failed to stop tendril.service"
   fi
@@ -1735,6 +2283,8 @@ install_governed_upgrade() {
     fi
   fi
 
+  install_greenhouse_wrapper
+
   governed_upgrade_finished=1
 
   printf '\n'
@@ -1750,6 +2300,10 @@ install_governed_upgrade() {
   printf '\n'
   printf 'Release-owned baseline:\n'
   printf '  %s\n' "$UNIT_PATH"
+  printf 'Greenhouse image:\n'
+  printf '  %s (verified release artifact; optional, not started)\n' "$expected_image"
+  printf 'Greenhouse lifecycle:\n'
+  printf '  %s (start|stop|restart|status|check|address)\n' "$GREENHOUSE_WRAPPER"
   if [ "$admin_override" -eq 1 ]; then
     printf '\n'
     printf 'Administrator full-unit override preserved (shadows the release baseline):\n'
