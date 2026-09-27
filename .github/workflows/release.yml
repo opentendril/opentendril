@@ -98,18 +98,23 @@ jobs:
       #   ./cmd/stem        -> tendril      (full Stem/operator executable)
       #   ./cmd/tendril-mcp -> tendril-mcp  (restricted governed Pollinator bridge)
       # They are not interchangeable and must not be copied or renamed into
-      # each other. Archives contain only those two files — not the source
-      # tree, scripts, Docker Compose files, or Greenhouse.
+      # each other. Platform archives contain only those two files. Greenhouse
+      # is a separate Docker-save archive built from this bound checkout.
       #
       # install.sh is staged from the tracked first-party installer. Do not
       # generate or maintain a second installer implementation. The staged
       # bytes must match the tracked file. checksums.txt covers the four
-      # archives and install.sh. GitHub Release remains the terminal public
-      # distribution surface.
+      # platform archives, Greenhouse archive, and install.sh. GitHub Release
+      # remains the terminal public distribution surface.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build platform archives
         shell: bash
         run: |
           set -euo pipefail
+          source_sha="${{ needs.bind.outputs.source-sha }}"
+          test "$(git rev-parse HEAD)" = "${source_sha}"
           version="$(bash scripts/release-version.sh current)"
           test "${version}" = "${{ needs.bind.outputs.version }}"
           mkdir -p dist
@@ -130,6 +135,32 @@ jobs:
           test "$("${verify_dir}/tendril" --version)" = "tendril ${version}"
           test "$("${verify_dir}/tendril-mcp" --version)" = "tendril-mcp ${version}"
           echo "Verified release binaries: tendril ${version}; tendril-mcp ${version}"
+
+          image="opentendril-greenhouse:${version}"
+          greenhouse_archive="dist/opentendril-greenhouse-linux-amd64.tar.gz"
+          docker buildx build \
+            --platform linux/amd64 \
+            --load \
+            --tag "${image}" \
+            --build-arg "OT_VERSION=${version}" \
+            --build-arg "OT_REVISION=${source_sha}" \
+            --file ui/Dockerfile \
+            ui
+          image_metadata="$(docker image inspect --format '{{.Os}}/{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
+          expected_metadata="linux/amd64|${version}|${source_sha}"
+          if [ "${image_metadata}" != "${expected_metadata}" ]; then
+            echo "built Greenhouse image metadata is incoherent: ${image_metadata}"
+            exit 1
+          fi
+          docker save "${image}" | gzip -n > "${greenhouse_archive}"
+          docker load --input "${greenhouse_archive}"
+          loaded_metadata="$(docker image inspect --format '{{.Os}}/{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.version"}}|{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
+          if [ "${loaded_metadata}" != "${expected_metadata}" ]; then
+            echo "saved Greenhouse archive metadata is incoherent: ${loaded_metadata}"
+            exit 1
+          fi
+          echo "Verified Greenhouse image: ${image} (${image_metadata})"
+
           want="$(printf '%s\n' tendril tendril-mcp)"
           for archive in \
             opentendril-linux-amd64.tar.gz \
@@ -158,6 +189,7 @@ jobs:
               opentendril-linux-arm64.tar.gz \
               opentendril-darwin-amd64.tar.gz \
               opentendril-darwin-arm64.tar.gz \
+              opentendril-greenhouse-linux-amd64.tar.gz \
               install.sh \
               > checksums.txt
           )
@@ -170,6 +202,7 @@ jobs:
             install.sh \
             opentendril-darwin-amd64.tar.gz \
             opentendril-darwin-arm64.tar.gz \
+            opentendril-greenhouse-linux-amd64.tar.gz \
             opentendril-linux-amd64.tar.gz \
             opentendril-linux-arm64.tar.gz)"
           got_assets="$(find dist -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)"
@@ -182,15 +215,16 @@ jobs:
             install.sh \
             opentendril-darwin-amd64.tar.gz \
             opentendril-darwin-arm64.tar.gz \
+            opentendril-greenhouse-linux-amd64.tar.gz \
             opentendril-linux-amd64.tar.gz \
             opentendril-linux-arm64.tar.gz)"
           checksum_lines="$(wc -l < dist/checksums.txt | tr -d '[:space:]')"
-          if [ "${checksum_lines}" != "5" ]; then
-            echo "checksums.txt must contain exactly 5 SHA-256 entries (got ${checksum_lines}):"
+          if [ "${checksum_lines}" != "6" ]; then
+            echo "checksums.txt must contain exactly 6 SHA-256 entries (got ${checksum_lines}):"
             cat dist/checksums.txt
             exit 1
           fi
-          if grep -Ev '^[0-9a-f]{64}  (opentendril-(linux|darwin)-(amd64|arm64)\.tar\.gz|install\.sh)$' dist/checksums.txt | grep -q .; then
+          if grep -Ev '^[0-9a-f]{64}  (opentendril-(linux|darwin)-(amd64|arm64)\.tar\.gz|opentendril-greenhouse-linux-amd64\.tar\.gz|install\.sh)$' dist/checksums.txt | grep -q .; then
             echo "checksums.txt contains a line that is not a SHA-256 entry for an intended asset:"
             cat dist/checksums.txt
             exit 1
@@ -201,10 +235,7 @@ jobs:
             cat dist/checksums.txt
             exit 1
           fi
-          (
-            cd dist
-            sha256sum -c checksums.txt
-          )
+          bash scripts/check-release-artifacts.sh dist "${version}" "${source_sha}"
           # Publication uses the files: list, not "everything in dist/".
           # Fail closed if Create Release inputs drift from the staged set.
           for asset in \
@@ -212,6 +243,7 @@ jobs:
             opentendril-linux-arm64.tar.gz \
             opentendril-darwin-amd64.tar.gz \
             opentendril-darwin-arm64.tar.gz \
+            opentendril-greenhouse-linux-amd64.tar.gz \
             install.sh \
             checksums.txt
           do
@@ -221,8 +253,8 @@ jobs:
             fi
           done
           publish_count="$(grep -c '^            dist/' .github/workflows/release.yml || true)"
-          if [ "${publish_count}" != "6" ]; then
-            echo "Create Release files: list must name exactly 6 dist/ assets (got ${publish_count})"
+          if [ "${publish_count}" != "7" ]; then
+            echo "Create Release files: list must name exactly 7 dist/ assets (got ${publish_count})"
             grep -n '^            dist/' .github/workflows/release.yml || true
             exit 1
           fi
@@ -271,6 +303,7 @@ jobs:
             dist/opentendril-linux-arm64.tar.gz
             dist/opentendril-darwin-amd64.tar.gz
             dist/opentendril-darwin-arm64.tar.gz
+            dist/opentendril-greenhouse-linux-amd64.tar.gz
             dist/install.sh
             dist/checksums.txt
           body: |
@@ -296,4 +329,5 @@ jobs:
             | `opentendril-linux-arm64.tar.gz` | Linux ARM64 (`tendril` and `tendril-mcp`) |
             | `opentendril-darwin-amd64.tar.gz` | macOS Intel (`tendril` and `tendril-mcp`) |
             | `opentendril-darwin-arm64.tar.gz` | macOS Apple Silicon (`tendril` and `tendril-mcp`) |
-            | `checksums.txt` | SHA-256 of `install.sh` and the four platform archives |
+            | `opentendril-greenhouse-linux-amd64.tar.gz` | Linux/amd64 Greenhouse Docker image archive |
+            | `checksums.txt` | SHA-256 of `install.sh`, four platform archives, and Greenhouse archive |
