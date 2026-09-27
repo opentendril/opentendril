@@ -156,7 +156,8 @@ manage them.
 App                         gates on stored connection settings
 ├─ Onboarding               welcome screen; validates /health + /v1/phytomers, persists to localStorage
 └─ CommandCenter            app shell; boots the store (WS + hydration), renders the grid
-   ├─ SessionRail           left: session list and bounded canonical Sprout-run discovery across Phytomers
+   ├─ PendingConfirmations  topbar: open pending confirmations, approve or deny, then reconcile from the Stem list
+   ├─ SessionRail           left: Work list and bounded canonical Sprout-run discovery across Phytomers
    ├─ GardenCanvas          center: the living visualization (moves aside when a run is open)
    │  └─ PlantFigure        one orchestration = one plant (stem, branches, tendril tips)
    │     └─ SelectionArena  a phenotypic-selection step = an arena of competing phenotype pods
@@ -179,7 +180,8 @@ Supporting modules:
 - `state/garden.ts`: the pure garden reducer (the event → visual fold).
 - `state/store.ts`: the central store. It hydrates Phytomers, messages, runs,
   and the ticker, and it tracks Seed dispatch, the active Phytomer watch, the
-  durable Seed record, continuation, Fruit inventory, and drilldown.
+  durable Seed record, continuation, Fruit inventory, drilldown, and the
+  latest successful pending-confirmation list.
 - `styles/global.css`: the design system (deep-loam dark theme, glassmorphism,
   the Rhizome/Sprout/Tendril colour language) driven by CSS custom properties.
 
@@ -189,7 +191,10 @@ Supporting modules:
 
 One Zustand store (`state/store.ts`) is the single source of truth. It holds:
 
-- `sessions`, `activeSessionId`: the Tendril rail and current context.
+- `sessions`, `activeSessionId`: the Work rail and current context. The rail
+  heading is Work. Normal new work starts in the Workbench. CLI, MCP, and REST
+  Phytomers remain in the list. The label is the durable Seed goal, then the
+  persisted Sprout transcript, then Phytomer.
 - `messagesBySession`, `runsBySession`, `eventsBySession`: per-Phytomer data.
   The active Phytomer's messages and events hydrate when selected. Boot and
   reconnect discover canonical run records for up to the 10 most recently
@@ -205,6 +210,14 @@ One Zustand store (`state/store.ts`) is the single source of truth. It holds:
 - `ticker`: a bounded rolling window of recent events for the Event Pulse.
 - `wsStatus`, `hydration`: connection and hydration lifecycle flags that drive
   the status badge and the "re-growing state" pill.
+- `pendingConfirmations`: the last successful `GET /v1/delegation/pending`
+  array. Greenhouse polls that route from one timer every 5 seconds while it
+  is open, and refreshes it again on boot and EventBus reconnect. At most one
+  list read is in flight. A failed read keeps the previous array and does not
+  fail the rest of hydration. The array is not stored in browser persistence.
+  Approve and deny use the Botanist POST routes, then read the list again
+  after the POST settles. Approval records the Botanist's decision. It does
+  not resume execution. EventBus frames do not create pending rows.
 
 The garden is deliberately **derived, never hand-mutated**: every visual change
 is the result of an event passing through the reducer. This is what lets the

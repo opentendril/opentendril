@@ -9,6 +9,8 @@ import type {
   ContinuationResult,
   EventRecord,
   FruitInventory,
+  PendingConfirmation,
+  PendingConfirmationActionResult,
   PhytomerObservation,
   Preferences,
   SeedDispatchResult,
@@ -190,6 +192,26 @@ export const stemApi = {
 
   fruitInventory(conn: StemConnection) {
     return request<FruitInventory>(conn, "/v1/fruit");
+  },
+
+  pendingConfirmations(conn: StemConnection) {
+    return request<PendingConfirmation[]>(conn, "/v1/delegation/pending");
+  },
+
+  approvePendingConfirmation(conn: StemConnection, id: string) {
+    return request<PendingConfirmationActionResult>(
+      conn,
+      `/v1/delegation/pending/${encodeURIComponent(id)}/approve`,
+      { method: "POST" },
+    );
+  },
+
+  denyPendingConfirmation(conn: StemConnection, id: string) {
+    return request<PendingConfirmationActionResult>(
+      conn,
+      `/v1/delegation/pending/${encodeURIComponent(id)}/deny`,
+      { method: "POST" },
+    );
   },
 
   // Authenticated SSE. The bearer stays on Authorization and is never placed

@@ -6,6 +6,7 @@ import { GardenCanvas } from "./Garden/GardenCanvas";
 import { EventTicker } from "./EventTicker";
 import { ChatPanel } from "./ChatPanel";
 import { DrilldownDrawer } from "./DrilldownDrawer";
+import { PendingConfirmations } from "./PendingConfirmations";
 import { TendrilMark } from "./TendrilMark";
 
 export function CommandCenter() {
@@ -28,7 +29,7 @@ export function CommandCenter() {
       ? "EventBus live"
       : wsStatus === "connecting"
         ? "Reaching Stem…"
-        : "EventBus dormant — reconnecting";
+        : "EventBus dormant: reconnecting";
 
   return (
     <div className={drilldown ? "shell reviewing" : "shell"}>
@@ -49,6 +50,7 @@ export function CommandCenter() {
             </span>
           ) : null}
         </span>
+        <PendingConfirmations />
         <span className="conn-badge">
           {operatorName ? <span>{operatorName}</span> : null}
           <button
