@@ -627,6 +627,43 @@ EOF
   printf 'PASS Greenhouse image loaded into tendril rootless Docker: %s (%s)\n' "$expected_image" "$greenhouse_image_id"
 }
 
+read_greenhouse_tag_state() {
+  _tag_rows=$(tendril_docker image ls --format '{{.Repository}}:{{.Tag}}' --filter "reference=${expected_image}") || return 1
+  greenhouse_tag_present=0
+  greenhouse_tag_image_id=""
+  [ -n "$_tag_rows" ] || return 0
+  case "$_tag_rows" in
+    *'
+'*) return 1 ;;
+  esac
+  [ "$_tag_rows" = "$expected_image" ] || return 1
+  greenhouse_tag_image_id=$(tendril_docker image inspect --format '{{.Id}}' "$expected_image") || return 1
+  case "$greenhouse_tag_image_id" in
+    sha256:*) is_hex64 "${greenhouse_tag_image_id#sha256:}" || return 1 ;;
+    *) return 1 ;;
+  esac
+  greenhouse_tag_present=1
+}
+
+capture_greenhouse_rollback_state() {
+  rollback_had_greenhouse_wrapper=0
+  rollback_had_greenhouse_tag=0
+  rollback_greenhouse_image_id=""
+  if fs_exists "$GREENHOUSE_WRAPPER"; then
+    ! fs_is_symlink "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is a symlink; cannot capture it for governed-upgrade rollback"
+    fs_is_file "$GREENHOUSE_WRAPPER" || die "${GREENHOUSE_WRAPPER} is not a regular file; cannot capture it for governed-upgrade rollback"
+    cp -a "$GREENHOUSE_WRAPPER" "${workdir}/rollback/greenhouse-wrapper" || die "failed to capture ${GREENHOUSE_WRAPPER} for rollback"
+    rollback_had_greenhouse_wrapper=1
+  fi
+
+  read_greenhouse_tag_state || die "cannot capture the prior Greenhouse release-tag mapping from the ${STEM_USER} rootless Docker daemon"
+  if [ "$greenhouse_tag_present" -eq 1 ]; then
+    rollback_had_greenhouse_tag=1
+    rollback_greenhouse_image_id=$greenhouse_tag_image_id
+  fi
+  rollback_greenhouse_state_captured=1
+}
+
 write_greenhouse_wrapper() {
   wrapper_source="${workdir}/opentendril-greenhouse"
   cat >"$wrapper_source" <<EOF
@@ -1792,6 +1829,30 @@ rollback_upgrade() {
     cp -a "${workdir}/rollback/tendril-mcp" "$mcp_dest" || rollback_failed=1
   fi
 
+  if [ "${rollback_greenhouse_state_captured:-0}" -eq 1 ]; then
+    if [ "${rollback_had_greenhouse_wrapper:-0}" -eq 1 ]; then
+      cp -a "${workdir}/rollback/greenhouse-wrapper" "$GREENHOUSE_WRAPPER" || rollback_failed=1
+    elif fs_exists "$GREENHOUSE_WRAPPER"; then
+      rm -f "$GREENHOUSE_WRAPPER" || rollback_failed=1
+    fi
+
+    _greenhouse_rollback_opts=$(tendril_docker info --format '{{.SecurityOptions}}' 2>/dev/null) || _greenhouse_rollback_opts=""
+    case "$_greenhouse_rollback_opts" in
+      *rootless*)
+        if [ "${rollback_had_greenhouse_tag:-0}" -eq 1 ]; then
+          tendril_docker image tag "$rollback_greenhouse_image_id" "$expected_image" || rollback_failed=1
+        elif read_greenhouse_tag_state; then
+          if [ "$greenhouse_tag_present" -eq 1 ]; then
+            tendril_docker image rm "$expected_image" || rollback_failed=1
+          fi
+        else
+          rollback_failed=1
+        fi
+        ;;
+      *) rollback_failed=1 ;;
+    esac
+  fi
+
   systemctl daemon-reload </dev/null || rollback_failed=1
   if [ "${was_active:-0}" -eq 1 ]; then
     systemctl start tendril.service </dev/null || rollback_failed=1
@@ -2130,6 +2191,7 @@ install_governed_upgrade() {
   rollback_failed=0
   rollback_had_baseline=0
   rollback_had_legacy=0
+  rollback_greenhouse_state_captured=0
   legacy_migration=0
   admin_override=0
   was_active=0
@@ -2168,7 +2230,6 @@ install_governed_upgrade() {
   fi
   pin_governed_release
   obtain_verified_greenhouse_archive
-  load_verified_greenhouse_image
 
   mkdir -p "${workdir}/rollback" || die "failed to create rollback directory"
   cp -a "$STEM_BIN" "${workdir}/rollback/tendril" || die "failed to capture the protected Stem binary for rollback"
@@ -2183,12 +2244,14 @@ install_governed_upgrade() {
     cp -a "$LEGACY_UNIT_PATH" "${workdir}/rollback/legacy.service" || die "failed to capture ${LEGACY_UNIT_PATH} for rollback"
     rollback_had_legacy=1
   fi
+  capture_greenhouse_rollback_state
 
   if systemctl is-active --quiet tendril.service; then
     was_active=1
   fi
 
   governed_upgrade_started=1
+  load_verified_greenhouse_image
   if [ "$was_active" -eq 1 ]; then
     systemctl stop tendril.service </dev/null || rollback_and_die "failed to stop tendril.service"
   fi

@@ -310,6 +310,7 @@ setup_governed_release_fixture() {
   expected_image_version=${FIXTURE_IMAGE_VERSION:-${release_version}}
   expected_image_revision=${FIXTURE_IMAGE_REVISION:-${FIXTURE_REVISION}}
   expected_image_tag=${FIXTURE_IMAGE_TAG:-opentendril-greenhouse:${release_version}}
+  printf '%s\n' "${release_version}" >"${ROOT}/state/greenhouse-target-version"
   FIXTURE_CANONICAL_VERSION=${FIXTURE_CANONICAL_VERSION:-${release_version}}
   printf '%s\n' "${FIXTURE_IMAGE_OS}" >"${ROOT}/state/greenhouse-image-os"
   printf '%s\n' "${FIXTURE_IMAGE_ARCH}" >"${ROOT}/state/greenhouse-image-arch"
@@ -1491,6 +1492,12 @@ if ${real_mv} \$args; then
     set_owner "\$target_path" "\$owner"
     set_group "\$target_path" "\$group"
   fi
+  if [ -f "${ROOT}/state/fail-wrapper-mv-after" ] \
+    && [ "\$target_path" = "/usr/local/sbin/opentendril-greenhouse" ]; then
+    ${real_rm} -f "${ROOT}/state/fail-wrapper-mv-after"
+    printf 'mv shim: simulated failure after replacing Greenhouse wrapper\\n' >&2
+    exit 1
+  fi
 else
   exit \$?
 fi
@@ -1957,17 +1964,50 @@ case "\${1:-}" in
       exit 1
     fi
     : >"${ROOT}/state/greenhouse-image-loaded"
+    : >"${ROOT}/state/greenhouse-tag-present"
+    ${real_cat} "${ROOT}/state/greenhouse-daemon-image-id" >"${ROOT}/state/greenhouse-tag-image-id"
     printf 'Loaded image\\n'
     exit 0
     ;;
   image)
-    [ "\${2:-}" = inspect ] || exit 1
+    tag_version=$(${real_cat} "${ROOT}/state/greenhouse-target-version" 2>/dev/null || printf '0.3.13')
+    target_tag="opentendril-greenhouse:\$tag_version"
+    case "\${2:-}" in
+      ls)
+        [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 0
+        printf '%s\\n' "\$target_tag"
+        exit 0
+        ;;
+      tag)
+        [ "\${4:-}" = "\$target_tag" ] || exit 1
+        printf '%s\\n' "\${3:-}" >"${ROOT}/state/greenhouse-tag-image-id"
+        : >"${ROOT}/state/greenhouse-tag-present"
+        exit 0
+        ;;
+      rm)
+        [ "\${3:-}" = "\$target_tag" ] || exit 1
+        rm -f "${ROOT}/state/greenhouse-tag-present" "${ROOT}/state/greenhouse-tag-image-id"
+        exit 0
+        ;;
+      inspect) ;;
+      *) exit 1 ;;
+    esac
     format=""
     format_next=0
     for arg in "\$@"; do
       if [ "\$format_next" = 1 ]; then format=\$arg; format_next=0; continue; fi
       if [ "\$arg" = --format ]; then format_next=1; fi
     done
+    if [ "\$format" = '{{.Repository}}:{{.Tag}}' ]; then
+      [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 0
+      printf '%s\\n' "\$target_tag"
+      exit 0
+    fi
+    if [ "\$format" = '{{.Id}}' ]; then
+      [ -f "${ROOT}/state/greenhouse-tag-present" ] || exit 1
+      ${real_cat} "${ROOT}/state/greenhouse-tag-image-id"
+      exit 0
+    fi
     [ -f "${ROOT}/state/greenhouse-image-loaded" ] || exit 1
     case "\$format" in
       *'{{.Id}}|{{.Os}}/'*)
@@ -2525,6 +2565,17 @@ prepare_upgrade_host() {
   write_floor_systemctl_show 2001
   prepare_upgrade_rootless_runtime
   prepare_upgrade_p2_provenance
+}
+
+seed_greenhouse_rollback_state() {
+  local wrapper="${HOSTFS}${GREENHOUSE_WRAPPER}"
+  mkdir -p "$(dirname "${wrapper}")" "${ROOT}/meta/owners" "${ROOT}/meta/groups"
+  printf '#!/bin/sh\nprintf "prior-greenhouse-wrapper\\n"\n' >"${wrapper}"
+  chmod 0755 "${wrapper}"
+  printf 'root\n' >"${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse"
+  printf 'root\n' >"${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse"
+  printf '%s\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"${ROOT}/state/greenhouse-tag-image-id"
+  touch "${ROOT}/state/greenhouse-tag-present"
 }
 
 assert_canonical_p2_file() {
@@ -3787,6 +3838,15 @@ if [ "${status}" -eq 0 ]; then
   else
     fail "governed upgrade pins the requested release" "events=$(tr '\n' ' ' <"${events_file}")"
   fi
+  if [ -f "${HOSTFS}${GREENHOUSE_WRAPPER}" ] \
+    && [ -f "${ROOT}/state/greenhouse-tag-present" ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = "$(cat "${ROOT}/state/greenhouse-daemon-image-id")" ] \
+    && grep -Fqx "IMAGE='opentendril-greenhouse:0.3.0'" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+    && grep -Fqx "IMAGE_ID='sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'" "${HOSTFS}${GREENHOUSE_WRAPPER}"; then
+    pass "successful upgrade installs the verified release wrapper and matching immutable image tag"
+  else
+    fail "successful upgrade installs the verified release wrapper and matching immutable image tag" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
   if events_match '^CMD install -o tendril -g tendril -m 0750 .* /home/tendril/.local/bin/tendril$'; then
     pass "Stem binary remains owner tendril:tendril mode 0750"
   else
@@ -4141,6 +4201,9 @@ place_old_mcp alice
 old_unit="$(cat "${HOSTFS}/usr/local/lib/systemd/system/tendril.service")"
 old_stem="$(cat "${HOSTFS}/home/tendril/.local/bin/tendril")"
 old_mcp="$(cat "${HOSTFS}/home/alice/.local/bin/tendril-mcp")"
+seed_greenhouse_rollback_state
+old_greenhouse_wrapper="${ROOT}/expected-greenhouse-wrapper"
+cp -a "${HOSTFS}${GREENHOUSE_WRAPPER}" "${old_greenhouse_wrapper}"
 touch "${ROOT}/state/active/tendril.service"
 touch "${ROOT}/state/fail-start-tendril-once"
 run_governed_upgrade_installer --pollinator-user alice
@@ -4153,8 +4216,64 @@ if [ "${status}" -ne 0 ] && grep -q 'failed to restart tendril.service' "${stder
   else
     fail "restart failure rollback: prior state was not restored"
   fi
+  if [ -f "${ROOT}/state/greenhouse-image-loaded" ] \
+    && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ] \
+    && cmp -s "${old_greenhouse_wrapper}" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+    && [ "$(stat -c '%a' "${HOSTFS}${GREENHOUSE_WRAPPER}")" = 755 ] \
+    && [ "$(cat "${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && [ "$(cat "${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+    && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$'; then
+    pass "Greenhouse prior tag and wrapper remain coherent after post-load, pre-wrapper upgrade failure"
+  else
+    fail "Greenhouse prior tag and wrapper remain coherent after post-load, pre-wrapper upgrade failure" "events=$(tr '\n' ' ' <"${events_file}")"
+  fi
 else
   fail "restart failure rollback" "stderr=$(tr '\n' ' ' <"${stderr_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+touch "${ROOT}/state/active/tendril.service"
+touch "${ROOT}/state/fail-start-tendril-once"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.13
+if [ "${status}" -ne 0 ] \
+  && grep -q 'failed to restart tendril.service' "${stderr_file}" \
+  && [ -f "${ROOT}/state/greenhouse-image-loaded" ] \
+  && [ ! -e "${HOSTFS}${GREENHOUSE_WRAPPER}" ] \
+  && [ ! -e "${ROOT}/state/greenhouse-tag-present" ] \
+  && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image rm opentendril-greenhouse:0.3.13$' \
+  && ! events_match '^CMD docker --host=unix:///run/user/2001/docker.sock container (start|stop)'; then
+  pass "failed pre-Greenhouse upgrade removes the introduced tag and leaves the wrapper absent without lifecycle actions"
+else
+  fail "failed pre-Greenhouse upgrade removes the introduced tag and leaves the wrapper absent without lifecycle actions" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+
+new_governed_case
+prepare_upgrade_host
+seed_greenhouse_rollback_state
+old_greenhouse_wrapper="${ROOT}/expected-greenhouse-wrapper"
+cp -a "${HOSTFS}${GREENHOUSE_WRAPPER}" "${old_greenhouse_wrapper}"
+touch "${ROOT}/state/fail-wrapper-mv-after"
+run_governed_upgrade_installer --pollinator-user alice --version v0.3.13
+if [ "${status}" -ne 0 ] \
+  && grep -q 'failed to install /usr/local/sbin/opentendril-greenhouse' "${stderr_file}" \
+  && grep -q 'simulated failure after replacing Greenhouse wrapper' "${stderr_file}" \
+  && cmp -s "${old_greenhouse_wrapper}" "${HOSTFS}${GREENHOUSE_WRAPPER}" \
+  && [ "$(stat -c '%a' "${HOSTFS}${GREENHOUSE_WRAPPER}")" = 755 ] \
+  && [ "$(cat "${ROOT}/meta/owners/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+  && [ "$(cat "${ROOT}/meta/groups/%usr%local%sbin%opentendril-greenhouse")" = root ] \
+  && [ "$(cat "${ROOT}/state/greenhouse-tag-image-id")" = 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ] \
+  && events_match '^CMD docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$'; then
+  pass "failure after wrapper replacement restores exact prior wrapper bytes, owner, mode, and same-tag image mapping"
+else
+  fail "failure after wrapper replacement restores exact prior wrapper bytes, owner, mode, and same-tag image mapping" "status=${status} stderr=$(tr '\n' ' ' <"${stderr_file}") events=$(tr '\n' ' ' <"${events_file}")"
+fi
+if events_match '^CMD sudo -u tendril -H env -i .*XDG_RUNTIME_DIR=/run/user/2001 DOCKER_HOST=unix:///run/user/2001/docker.sock docker --host=unix:///run/user/2001/docker.sock image tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa opentendril-greenhouse:0.3.13$' \
+  && ! events_match '^CMD sudo -u root .*docker image tag' \
+  && ! events_match '^CMD docker image tag'; then
+  pass "Greenhouse rollback restores image tags only through tendril rootless Docker"
+else
+  fail "Greenhouse rollback restores image tags only through tendril rootless Docker" "events=$(tr '\n' ' ' <"${events_file}")"
 fi
 
 new_governed_case
@@ -5068,7 +5187,7 @@ if assert_governed_success_core "Greenhouse lifecycle fixture installation"; the
     fail "address remains fixed after lifecycle operations"
   fi
 
-  printf '%s\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"${ROOT}/state/greenhouse-daemon-image-id"
+  printf '%s\n' 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' >"${ROOT}/state/greenhouse-tag-image-id"
   : >"${events_file}"
   run_installed_greenhouse_wrapper start
   if [ "${greenhouse_wrapper_status}" -ne 0 ] \
@@ -5078,7 +5197,7 @@ if assert_governed_success_core "Greenhouse lifecycle fixture installation"; the
   else
     fail "lifecycle refuses a changed mutable tag and never runs an unverified image" "status=${greenhouse_wrapper_status} stderr=$(tr '\n' ' ' <"${greenhouse_wrapper_err}")"
   fi
-  printf '%s\n' 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"${ROOT}/state/greenhouse-daemon-image-id"
+  printf '%s\n' 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' >"${ROOT}/state/greenhouse-tag-image-id"
 
   run_installed_greenhouse_wrapper restart
   if [ "${greenhouse_wrapper_status}" -eq 0 ] \
