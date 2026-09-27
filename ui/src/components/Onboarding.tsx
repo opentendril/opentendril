@@ -34,6 +34,11 @@ export function Onboarding() {
 
   async function takeRoot() {
     const conn = { baseUrl: baseUrl.trim().replace(/\/+$/, ""), apiKey: apiKey.trim() };
+    if (!conn.apiKey) {
+      setStatus({ kind: "err", text: "Enter your Botanist key to continue" });
+      return;
+    }
+
     setStatus({ kind: "busy", text: "Reaching the Stem…" });
     try {
       await stemApi.health(conn);
@@ -122,10 +127,11 @@ export function Onboarding() {
             placeholder="BOTANIST_KEY"
             spellCheck={false}
             autoComplete="off"
+            required
           />
           <span className="hint">
-            Stored only in this browser. Leave empty if your Stem runs without
-            authentication.
+            Required. Stored in this browser after successful onboarding and
+            presented to the Stem for Botanist authentication.
           </span>
         </div>
 

@@ -499,6 +499,54 @@ test.describe("Command Center onboarding", () => {
 
     // The key collected during onboarding is the one actually sent.
     expect(backend.lastSessionsAuthHeader()).toBe(`Bearer ${testApiKey}`);
+
+    const persistedConnection = await page.evaluate(() => {
+      const value = window.localStorage.getItem("opentendril.connection");
+      return value
+        ? (JSON.parse(value) as {
+            state?: { configured?: boolean; apiKey?: string };
+          })
+        : null;
+    });
+    expect(persistedConnection?.state).toMatchObject({
+      configured: true,
+      apiKey: testApiKey,
+    });
+  });
+
+  test("empty Botanist key cannot complete onboarding", async ({ page }) => {
+    const backend = await mockStemBackend(page, { sessions: [] });
+    await page.goto("/");
+
+    const keyInput = page.getByLabel("Botanist key");
+    await expect(keyInput).toHaveAttribute("required", "");
+    await keyInput.fill("");
+    await page.getByRole("button", { name: "Take root" }).click();
+
+    expect(
+      await keyInput.evaluate(
+        (input) => !(input as HTMLInputElement).checkValidity(),
+      ),
+    ).toBe(true);
+    expect(backend.sessionListReads()).toBe(0);
+    await expect(page.getByRole("button", { name: "Uproot" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Take root" })).toBeVisible();
+  });
+
+  test("Botanist-key guidance describes browser storage and Stem authentication", async ({
+    page,
+  }) => {
+    await mockStemBackend(page, { sessions: [] });
+    await page.goto("/");
+
+    await expect(
+      page.getByText(
+        "Required. Stored in this browser after successful onboarding and presented to the Stem for Botanist authentication.",
+      ),
+    ).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(
+      /leave empty|without authentication|unauthenticated/i,
+    );
   });
 
   test("same-origin onboarding does not ask for a Stem socket path", async ({ page }) => {
