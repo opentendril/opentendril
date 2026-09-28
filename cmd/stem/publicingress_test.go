@@ -27,8 +27,8 @@ func TestDefaultPublicIngressLimits(t *testing.T) {
 	if limits.maxHeaderBytes != 32<<10 {
 		t.Errorf("maxHeaderBytes = %d, want 32 KiB", limits.maxHeaderBytes)
 	}
-	if limits.ordinaryBodyBytes != 8<<20 {
-		t.Errorf("ordinaryBodyBytes = %d, want 8 MiB", limits.ordinaryBodyBytes)
+	if limits.ordinaryBodyBytes != 4<<20 {
+		t.Errorf("ordinaryBodyBytes = %d, want 4 MiB", limits.ordinaryBodyBytes)
 	}
 	if limits.mintBodyBytes != 16<<10 {
 		t.Errorf("mintBodyBytes = %d, want 16 KiB", limits.mintBodyBytes)
@@ -50,6 +50,66 @@ func TestDefaultPublicIngressLimits(t *testing.T) {
 	}
 	if limits.mintBurst != 8 {
 		t.Errorf("mintBurst = %d, want 8", limits.mintBurst)
+	}
+}
+
+func TestPublicIngressBodyLimitIsExpandedOnlyForGitApply(t *testing.T) {
+	limits := defaultPublicIngressLimits()
+	if receptors.MaxGitApplyRequestBodyBytes <= limits.ordinaryBodyBytes {
+		t.Fatalf("git.apply body bound = %d, must exceed ordinary 4 MiB bound %d", receptors.MaxGitApplyRequestBodyBytes, limits.ordinaryBodyBytes)
+	}
+	ingress := newPublicIngress(limits, nil)
+	var handled atomic.Int32
+	handler := ingress.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, "bounded body read failed", http.StatusBadRequest)
+			return
+		}
+		handled.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	largeButAllowed := strings.Repeat("x", int(limits.ordinaryBodyBytes)+1)
+	for _, test := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		status int
+	}{
+		{name: "ordinary route retains 4 MiB bound", method: http.MethodPost, path: "/v1/git/status", body: largeButAllowed, status: http.StatusRequestEntityTooLarge},
+		{name: "git.apply path with wrong method retains ordinary bound", method: http.MethodPut, path: publicGitApplyPath, body: largeButAllowed, status: http.StatusRequestEntityTooLarge},
+		{name: "git.apply receives larger bounded envelope", method: http.MethodPost, path: publicGitApplyPath, body: largeButAllowed, status: http.StatusNoContent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status = %d, want %d", response.Code, test.status)
+			}
+		})
+	}
+	if handled.Load() != 1 {
+		t.Fatalf("downstream handler received %d requests, want only the bounded git.apply request", handled.Load())
+	}
+}
+
+func TestPublicIngressRejectsOversizedGitApplyTransportBody(t *testing.T) {
+	ingress := newPublicIngress(defaultPublicIngressLimits(), nil)
+	var handled atomic.Int32
+	handler := ingress.wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		handled.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	body := strings.Repeat("x", receptors.MaxGitApplyRequestBodyBytes+1)
+	request := httptest.NewRequest(http.MethodPost, publicGitApplyPath, strings.NewReader(body))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized git.apply transport status = %d, want 413", response.Code)
+	}
+	if handled.Load() != 0 {
+		t.Fatal("oversized git.apply transport body reached the downstream handler")
 	}
 }
 

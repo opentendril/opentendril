@@ -166,18 +166,28 @@ func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, subst
 	}
 
 	if isGitRepo(path) {
-		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
-			workspace.Branch = strings.TrimSpace(current)
+		// Existing-workspace branch inspection can trigger a reset when the
+		// owned branch is finished. Serialize it with Git execution, but release
+		// before returning because the caller acquires this same lock around its
+		// own operation.
+		unlockWorkspace := LockWorkspace(path)
+		if !isGitRepo(path) {
+			unlockWorkspace()
+		} else {
+			if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
+				workspace.Branch = strings.TrimSpace(current)
+			}
+			// A workspace whose branch is finished is cycled onto a fresh one, so
+			// the next piece of work starts from the current default branch rather
+			// than piling onto something already merged. This is the other half of
+			// owning a reference: it is reclaimed at the moment its purpose ends,
+			// which for a subject's working branch is the moment its work lands.
+			if rotated, err := rotateFinishedWorkspaceBranch(ctx, base, path, workspace.Branch, trimmedPollen, credential); err == nil && rotated != "" {
+				workspace.Branch = rotated
+			}
+			unlockWorkspace()
+			return workspace, nil
 		}
-		// A workspace whose branch is finished is cycled onto a fresh one, so
-		// the next piece of work starts from the current default branch rather
-		// than piling onto something already merged. This is the other half of
-		// owning a reference: it is reclaimed at the moment its purpose ends,
-		// which for a subject's working branch is the moment its work lands.
-		if rotated, err := rotateFinishedWorkspaceBranch(ctx, base, path, workspace.Branch, trimmedPollen, credential); err == nil && rotated != "" {
-			workspace.Branch = rotated
-		}
-		return workspace, nil
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

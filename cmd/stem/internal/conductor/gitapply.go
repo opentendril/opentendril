@@ -92,6 +92,14 @@ func RunGitApply(ctx context.Context, execution GitApplyExecution) (GitApplyResu
 	if err := checkGitApply(ctx, execution.Workspace, execution.Patch); err != nil {
 		return GitApplyResult{}, gitpatch.ErrPreflightFailed
 	}
+	verifiedHeadOutput, err := runGitCommitCommandFn(ctx, execution.Workspace, "rev-parse", "--verify", "HEAD")
+	if err != nil || strings.TrimSpace(verifiedHeadOutput) != head {
+		return GitApplyResult{}, fmt.Errorf("workspace HEAD changed after patch preflight")
+	}
+	verifiedBranchOutput, err := runGitCommitCommandFn(ctx, execution.Workspace, "branch", "--show-current")
+	if err != nil || strings.TrimSpace(verifiedBranchOutput) != branch {
+		return GitApplyResult{}, fmt.Errorf("workspace branch changed after patch preflight")
+	}
 	if err := applyGitPatch(ctx, execution.Workspace, execution.Patch); err != nil {
 		return GitApplyResult{}, gitpatch.ErrApplyFailed
 	}

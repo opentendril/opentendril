@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveDelegatedWorkspaceExistingOnlyDoesNotCreate(t *testing.T) {
@@ -92,5 +94,103 @@ func TestResolveDelegatedWorkspaceExistingOnlyDoesNotRotateAndKeepsPollenIsolati
 	}
 	if _, err := os.Stat(other.Path); !os.IsNotExist(err) {
 		t.Fatalf("second Pollen workspace was created: %v", err)
+	}
+}
+
+func TestExistingWorkspaceResolverWaitsForWorkspaceLockBeforeRotation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	repository := t.TempDir()
+	gitIn(t, repository, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repository, "base.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repository, "add", "base.txt")
+	gitIn(t, repository, "commit", "-q", "-m", "base")
+	baseHead := gitIn(t, repository, "rev-parse", "HEAD")
+	branch := ownedWorkspaceBranchName("pollen")
+	workspacePath := filepath.Join(delegatedWorkspaceRoot(), "demo", "pollen")
+	if err := os.MkdirAll(filepath.Dir(workspacePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repository, "worktree", "add", "-q", "-b", branch, workspacePath, baseHead)
+	if err := RegisterOwnedRef(OwnedRef{
+		Repository: repository,
+		Branch:     branch,
+		Purpose:    PurposeDelegatedWorkspace,
+		Pollen:     "pollen",
+		Base:       baseHead,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repository, "base.txt"), []byte("advanced default\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repository, "add", "base.txt")
+	gitIn(t, repository, "commit", "-q", "-m", "advance default")
+	advancedHead := gitIn(t, repository, "rev-parse", "HEAD")
+
+	originalRun := runGitCommitCommandFn
+	branchInspection := make(chan struct{}, 1)
+	runGitCommitCommandFn = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if filepath.Clean(dir) == filepath.Clean(workspacePath) && len(args) == 2 && args[0] == "branch" && args[1] == "--show-current" {
+			select {
+			case branchInspection <- struct{}{}:
+			default:
+			}
+		}
+		return originalRun(ctx, dir, args...)
+	}
+	t.Cleanup(func() { runGitCommitCommandFn = originalRun })
+
+	unlockOperation := LockWorkspace(workspacePath)
+	resolverStarted := make(chan struct{})
+	resolved := make(chan error, 1)
+	go func() {
+		close(resolverStarted)
+		_, err := ResolveDelegatedWorkspace(context.Background(), "demo", repository, "pollen", ResolvedCredential{})
+		resolved <- err
+	}()
+	<-resolverStarted
+
+	select {
+	case <-branchInspection:
+		unlockOperation()
+		select {
+		case <-resolved:
+		case <-time.After(5 * time.Second):
+			t.Fatal("resolver did not finish after the lock was released")
+		}
+		t.Fatal("resolver inspected or rotated the workspace branch while another operation held its lock")
+	case err := <-resolved:
+		unlockOperation()
+		t.Fatalf("resolver returned while another operation held its lock: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := gitIn(t, workspacePath, "rev-parse", "HEAD"); got != baseHead {
+		unlockOperation()
+		t.Fatalf("workspace HEAD changed under operation lock to %s, want %s", got, baseHead)
+	}
+	if got := gitIn(t, workspacePath, "branch", "--show-current"); got != branch {
+		unlockOperation()
+		t.Fatalf("workspace branch changed under operation lock to %s, want %s", got, branch)
+	}
+	unlockOperation()
+
+	select {
+	case err := <-resolved:
+		if err != nil {
+			t.Fatalf("resolver after lock release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resolver remained blocked after operation released the workspace lock")
+	}
+	if got := gitIn(t, workspacePath, "rev-parse", "HEAD"); got != advancedHead {
+		t.Fatalf("resolver HEAD after lock release = %s, want rotated base %s", got, advancedHead)
+	}
+	if got := gitIn(t, workspacePath, "branch", "--show-current"); got != branch {
+		t.Fatalf("resolver branch after rotation = %s, want %s", got, branch)
+	}
+	if strings.TrimSpace(gitIn(t, repository, "branch", "--show-current")) != "main" {
+		t.Fatal("resolver changed the substrate checkout branch")
 	}
 }

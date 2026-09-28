@@ -62,7 +62,9 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 	}
 }
 
-const maxGitApplyRequestBodyBytes = core.MaxGitApplyPatchBytes*6 + 4096
+// MaxGitApplyRequestBodyBytes bounds the JSON envelope for one maximum-size
+// git.apply patch, including worst-case UTF-8 JSON string escaping.
+const MaxGitApplyRequestBodyBytes = core.MaxGitApplyPatchBytes*6 + 4096
 
 // apply is a transport-only projection: it bounds and decodes the JSON
 // envelope, obtains the trusted Pollen, authorizes the exact capability tuple,
@@ -73,11 +75,11 @@ func (h *GitHandler) apply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if r.ContentLength > maxGitApplyRequestBodyBytes {
+	if r.ContentLength > MaxGitApplyRequestBodyBytes {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxGitApplyRequestBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxGitApplyRequestBodyBytes)
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError

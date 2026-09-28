@@ -231,6 +231,58 @@ func TestRunGitApplyBinaryPatch(t *testing.T) {
 	}
 }
 
+func TestRunGitApplyRechecksHeadAndBranchAfterPreflight(t *testing.T) {
+	for _, mutation := range []string{"HEAD", "branch"} {
+		t.Run(mutation, func(t *testing.T) {
+			repo, head, branch, substrate := newGitApplyRepo(t)
+			original := mustRead(t, filepath.Join(repo, "a.txt"))
+			patch := gitApplyPatchFromChanges(t, repo, map[string][]byte{"a.txt": []byte("patch result\n")})
+			originalCheck := checkGitApply
+			originalApply := applyGitPatch
+			var applyCalls int
+			checkGitApply = func(ctx context.Context, workspace string, patch []byte) error {
+				if err := gitpatch.Check(ctx, workspace, patch); err != nil {
+					return err
+				}
+				if mutation == "HEAD" {
+					gitIn(t, workspace, "commit", "-q", "--allow-empty", "-m", "concurrent head change")
+				} else {
+					gitIn(t, workspace, "checkout", "-q", "-b", "concurrent-branch")
+				}
+				return nil
+			}
+			applyGitPatch = func(ctx context.Context, workspace string, patch []byte) error {
+				applyCalls++
+				return originalApply(ctx, workspace, patch)
+			}
+			t.Cleanup(func() {
+				checkGitApply = originalCheck
+				applyGitPatch = originalApply
+			})
+
+			if _, err := runGitApplyForTest(repo, substrate, head, patch); err == nil {
+				t.Fatal("git.apply accepted workspace identity changed after preflight")
+			}
+			if applyCalls != 0 {
+				t.Fatalf("patch apply called %d times after HEAD/branch changed", applyCalls)
+			}
+			if got := mustRead(t, filepath.Join(repo, "a.txt")); !bytes.Equal(got, original) {
+				t.Fatalf("patch changed a.txt after workspace identity changed: %q", got)
+			}
+			if mutation == "HEAD" {
+				if gitIn(t, repo, "branch", "--show-current") != branch {
+					t.Fatal("empty commit unexpectedly changed branch")
+				}
+				if gitIn(t, repo, "rev-parse", "HEAD") == head {
+					t.Fatal("test did not change HEAD during the preflight seam")
+				}
+			} else if gitIn(t, repo, "branch", "--show-current") == branch {
+				t.Fatal("test did not change branch during the preflight seam")
+			}
+		})
+	}
+}
+
 func mustRead(t *testing.T, path string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(path)
