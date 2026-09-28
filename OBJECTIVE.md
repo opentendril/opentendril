@@ -13,31 +13,33 @@ exists to make possible.
 
 ## Current
 
-**A Botanist unfamiliar with OpenTendril can go from a clean supported machine to one reviewed Git Fruit using the governed installation path and Greenhouse as the primary workbench, without needing OpenTendril-internal knowledge or separate command-line orchestration for the normal work lifecycle.**
+**A Pollinator holding only OpenTendril authority can submit an exact deterministic patch for an authorized Substrate and obtain Git-reviewable Fruit without receiving repository credentials, requiring client-side Git-host authentication, or invoking Mycorrhizal reasoning for the patch handoff.**
 
 ## Done when
 
-* **Governed installation works from a clean supported machine.** Installation succeeds through the documented public entrypoint.
-* **The protected Stem boundary exists before work.** The protected Stem principal and security boundary are established before any task begins.
-* **Setup requirements are finite and explicit.** Every required provider, Substrate, and Git configuration choice is documented and presented as an explicit input.
-* **Setup leads naturally to Greenhouse.** The documented installation path takes the Botanist to Greenhouse as the primary workbench.
-* **Authentication stays explicit.** Botanist authentication is explicit, and local connectivity does not confer authority.
-* **The normal work lifecycle is handled through Greenhouse.** After setup, the Botanist can handle the task, verifier, dispatch, continuation, explicit Botanist intervention, terminal state, and Fruit review through Greenhouse.
-* **First local value needs no internal orchestration.** The normal local first value does not require Pollinator credentials, token minting, DelegationGrant construction, raw REST calls, or internal identifiers.
-* **Greenhouse reports Stem-owned facts.** It visibly reports the task, Substrate, execution boundary, activity, verification, failures, and resulting Fruit from facts owned by the Stem.
+* **Authority is exact.** An authenticated Pollinator is authorized by the exact Pollen, `git.apply` capability, and named Substrate.
+* **Application stays within delegated isolation.** The supplied patch is applied only inside that Pollinator's isolated delegated workspace.
+* **Handoff freshness is exact.** The handoff requires the exact expected `HEAD`; a stale handoff fails closed.
+* **Unsafe input and state fail closed.** A dirty workspace, invalid patch, unauthorized Substrate, oversized patch, or partial application all fail closed.
+* **Patch application is deterministic.** Applying the patch invokes no Mycorrhizal reasoning.
+* **Repository credentials stay with the Stem.** Credentials remain Stem-held and are not exposed to the Pollinator.
+* **`git.apply` only applies the patch.** It does not itself branch, commit, push, open a PR, merge, or accept Fruit.
+* **Separately granted Git capabilities can continue the lifecycle.** Existing separately granted capabilities can take the applied change through branch, commit, publication, and reviewable Fruit.
 * **Fruit remains under Botanist review.** The default branch remains unchanged until the Botanist reviews and merges the resulting Fruit.
-* **Re-entry preserves authoritative state.** Refresh, reconnect, and restart preserve authoritative state without duplicating work.
-* **Supported failures are actionable.** Failures on the supported path provide diagnostics that tell the Botanist what to do next.
-* **Clean-machine qualification records friction.** The final qualification records elapsed time, manual decisions, and friction.
+* **The capability is projected consistently.** Core, REST, MCP, and CLI expose consistent `git.apply` behavior.
+* **A real external-client qualification succeeds.** One real qualification demonstrates an external client handing OpenTendril a patch and reaching reviewable Git output using only OpenTendril authority.
 
 This objective does not require:
 
-* public-Internet ingress;
-* GitHub-native Pollinators;
-* automatic Fruit acceptance or merge;
-* enterprise SSO or multi-user administration;
-* removing advanced CLI or MCP surfaces; or
-* exposing private Mycorrhizal reasoning.
+* generic `git.pull` or fetch redesign;
+* direct shared-working-tree mutation;
+* arbitrary host-path ingestion;
+* additional forge integrations;
+* Greenhouse redesign;
+* Internet deployment;
+* automatic merge;
+* marketing or site work; or
+* compound cognitive workflows such as automatic code review after publication.
 
 ---
 
