@@ -14,6 +14,7 @@ import (
 const (
 	publicPollinatorTokenPath  = "/v1/pollinator/token"
 	publicPhytomerWatchPattern = "GET /v1/phytomers/{sessionId}/watch"
+	publicGitApplyPath         = "/v1/git/apply"
 )
 
 // publicIngressLimits keeps resource governance at the public transport
@@ -99,6 +100,8 @@ func (p *publicIngress) wrap(next http.Handler) http.Handler {
 		maxBodyBytes := p.limits.ordinaryBodyBytes
 		if isMint {
 			maxBodyBytes = p.limits.mintBodyBytes
+		} else if r.Method == http.MethodPost && r.URL.Path == publicGitApplyPath {
+			maxBodyBytes = receptors.MaxGitApplyRequestBodyBytes
 		}
 		if r.Body != nil {
 			if r.ContentLength > maxBodyBytes {

@@ -18,6 +18,7 @@ func TestCapabilityImpact(t *testing.T) {
 
 		{CapGitCommit, DelegationImpactMedium},
 		{CapGitBranch, DelegationImpactMedium},
+		{CapGitApply, DelegationImpactMedium},
 		{CapStomaPass, DelegationImpactMedium},
 		{CapPlasmidInject, DelegationImpactMedium},
 

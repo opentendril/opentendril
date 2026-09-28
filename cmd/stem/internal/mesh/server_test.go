@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -369,6 +370,60 @@ func TestApplyPatchToTerrarium(t *testing.T) {
 		err = applyPatchToTerrarium(context.Background(), terrariumPath, "this is not a valid patch")
 		if err == nil {
 			t.Errorf("expected error for malformed patch, got nil")
+		}
+	})
+
+	t.Run("binary patch remains supported", func(t *testing.T) {
+		repo := initTestGitRepo(t)
+		original := bytes.Repeat([]byte{0, 1, 2, 3, 4, 5}, 100)
+		changed := bytes.Repeat([]byte{9, 8, 0, 7, 6, 5}, 100)
+		binaryPath := filepath.Join(repo, "payload.bin")
+		if err := os.WriteFile(binaryPath, original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("git", "-C", repo, "add", "payload.bin")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git add binary baseline: %v (%s)", err, output)
+		}
+		cmd = exec.Command("git", "-C", repo, "commit", "-m", "binary baseline")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git commit binary baseline: %v (%s)", err, output)
+		}
+		cmd = exec.Command("git", "-C", repo, "rev-parse", "HEAD")
+		parentOutput, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("read binary baseline commit: %v", err)
+		}
+		parent := strings.TrimSpace(string(parentOutput))
+		if err := os.WriteFile(binaryPath, changed, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command("git", "-C", repo, "diff", "--binary", "--", "payload.bin")
+		patch, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git diff binary patch: %v", err)
+		}
+		if !bytes.Contains(patch, []byte("GIT binary patch")) {
+			t.Fatal("generated patch is not a Git binary patch")
+		}
+		terrariumPath, err := createGraftTerrarium(context.Background(), repo)
+		if err != nil {
+			t.Fatalf("createGraftTerrarium: %v", err)
+		}
+		defer removeGraftTerrarium(repo, terrariumPath)
+		cmd = exec.Command("git", "-C", terrariumPath, "reset", "--hard", parent)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("reset binary terrarium: %v (%s)", err, output)
+		}
+		if err := applyPatchToTerrarium(context.Background(), terrariumPath, string(patch)); err != nil {
+			t.Fatalf("apply Mesh binary patch: %v", err)
+		}
+		got, err := os.ReadFile(filepath.Join(terrariumPath, "payload.bin"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, changed) {
+			t.Fatal("Mesh binary patch content differs")
 		}
 	})
 }

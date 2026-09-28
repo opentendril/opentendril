@@ -348,7 +348,7 @@ Not every governed capability is delegated. The current delegated set is:
 | Sprout | `sprout.grow` |
 | Stoma | `stoma.pass` |
 | Seed | `seed.grow` |
-| Git | `git.commit`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
+| Git | `git.commit`, `git.apply`, `git.push`, `git.pr`, `git.branch`, `git.status`, `git.branch.list`, `git.prune` |
 
 `phytomer.continue` is delegated. Phytomer create/list/get/update/delete/history
 retain their current non-delegated command posture. Other families outside this
@@ -497,6 +497,7 @@ Substrate's dedicated credential.
 
 | Capability | Behavior |
 |---|---|
+| `git.apply` | Apply a UTF-8 Git patch of at most 1 MiB to the trusted Pollen's existing clean isolated workspace for a configured named Substrate. Requires an exact full expected HEAD; supports Git binary patches; leaves changes unstaged and does not create or rotate a workspace or branch. Returns only the configured Substrate, current branch, unchanged HEAD, and sorted workspace-relative changed paths. |
 | `git.commit` | Commit the workspace state. Two modes are determined by the Substrate's connection configuration (see below). Both modes use the same default-branch commit guard: commits to the repository's default branch are refused unless the Substrate explicitly sets `protectDefaultBranch: false`. |
 | `git.push` | Push `HEAD` to a target branch on the remote (`HEAD:refs/heads/<branch>`). If no explicit branch is supplied, the workspace's current branch is used; if a branch is supplied, `HEAD` is pushed to that named remote branch. Uses the Substrate's credential. |
 | `git.pr` | Open a pull request. The base branch is resolved from the repository (never assumed). An existing open PR for the same head is returned rather than duplicated. A head branch that is the default branch is refused. PR creation does not merge. |

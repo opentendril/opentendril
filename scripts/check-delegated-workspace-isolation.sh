@@ -10,15 +10,18 @@
 # delegated commit exists to provide, produced no error, and was reachable with
 # the documented setup.
 #
-# The fix routes every operation through resolveGitWorkspace, which returns a
-# per-Pollinator worktree for a delegated call and the operator's own checkout for
-# a direct one. That routing is easy to bypass by accident: a new operation
+# The fix routes each operation through its approved delegated-workspace
+# resolver. The normal resolver returns a per-Pollinator worktree for a
+# delegated call and the operator's own checkout for a direct one; git.apply
+# uses its existing-only mode. That routing is easy to bypass by accident: a new operation
 # that resolves the substrate's path itself looks perfectly reasonable in
 # review and reintroduces the corruption. So it is checked rather than
 # remembered — the same reasoning as the other guards in this directory.
 #
 # The rule: in the delegated git adapter, every conductor execution's Workspace
-# field must be the resolved workspace path.
+# field must be the resolved workspace path. git.apply uses a stricter
+# existing-workspace-only resolver, so this guard verifies that path separately
+# instead of treating it as an exception.
 #
 # Usage: scripts/check-delegated-workspace-isolation.sh
 set -euo pipefail
@@ -43,13 +46,62 @@ if [ -n "${offenders}" ]; then
   exit 1
 fi
 
-# The resolver itself must still be the thing every operation calls.
-calls="$(grep -c 'resolveGitWorkspace(ctx' "${adapter}" || true)"
-executions="$(grep -cE '^[[:space:]]*Workspace:[[:space:]]+workspace\.Path,' "${adapter}" || true)"
-if [ "${calls}" -lt "${executions}" ]; then
-  echo "::error::Found ${executions} delegated execution(s) but only ${calls} workspace resolution(s)."
-  echo "Each delegated git operation must resolve its own workspace."
+# Check each operation closure independently: exactly one conductor execution,
+# exactly one approved resolver call, and a workspace.Path field. Status also
+# returns the workspace path as safe metadata, so its closure has two such
+# fields; one belongs to the execution and both must still use the resolved
+# path (the global offender check above proves the latter).
+operations=0
+for operation in Apply Commit Push PullRequest Status BranchList Prune Branch; do
+  operation_block="$(awk -v operation="${operation}" '
+    BEGIN { start = "^[[:space:]]*" operation ": func\\(" }
+    $0 ~ start { in_operation = 1 }
+    in_operation && $0 ~ "^[[:space:]]*[A-Z][A-Za-z]+: func\\(" && $0 !~ start { exit }
+    in_operation { print }
+  ' "${adapter}")"
+  if [ -z "${operation_block}" ]; then
+    echo "::error::Delegated Git operation ${operation} is missing from ${adapter}."
+    exit 1
+  fi
+  operation_executions="$(grep -cE 'conductor\.RunGit[A-Za-z]+\(' <<<"${operation_block}" || true)"
+  resolver_calls="$(grep -cE '^[[:space:]]*workspace, substrateSpec, err := resolve(GitWorkspace|ExistingGitApplyWorkspace)\(ctx,' <<<"${operation_block}" || true)"
+  workspace_fields="$(grep -cE '^[[:space:]]*Workspace:' <<<"${operation_block}" || true)"
+  expected_workspace_fields=1
+  if [ "${operation}" = "Status" ]; then
+    expected_workspace_fields=2
+  fi
+  if [ "${operation_executions}" -ne 1 ] || [ "${resolver_calls}" -ne 1 ] || [ "${workspace_fields}" -ne "${expected_workspace_fields}" ]; then
+    echo "::error::Delegated Git operation ${operation} must have one execution, one workspace resolution, and the expected resolved workspace field(s)."
+    exit 1
+  fi
+
+  expected_resolver='resolveGitWorkspace(ctx,'
+  if [ "${operation}" = "Apply" ]; then
+    expected_resolver='resolveExistingGitApplyWorkspace(ctx, spec.Substrate, substratesConfig)'
+  fi
+  if ! grep -Fq "${expected_resolver}" <<<"${operation_block}"; then
+    echo "::error::Delegated Git operation ${operation} does not use its approved workspace resolver."
+    exit 1
+  fi
+  operations=$((operations + 1))
+done
+
+execution_count="$(grep -cE 'conductor\.RunGit[A-Za-z]+\(' "${adapter}" || true)"
+if [ "${execution_count}" -ne "${operations}" ]; then
+  echo "::error::Found ${execution_count} conductor Git execution(s) but checked ${operations} delegated operation closure(s)."
   exit 1
 fi
 
-echo "✅ All ${executions} delegated git operation(s) run in a resolved per-Pollinator workspace."
+apply_resolver="$(awk '
+  /^func resolveExistingGitApplyWorkspace\(/ { in_resolver = 1 }
+  /^func resolveGitWorkspace\(/ { if (in_resolver) exit }
+  in_resolver { print }
+' "${adapter}")"
+if ! grep -Fq 'conductor.ResolveDelegatedWorkspaceWithMode(' <<<"${apply_resolver}" \
+    || ! grep -Fq 'conductor.ExistingDelegatedWorkspaceOnly,' <<<"${apply_resolver}"; then
+  echo "::error::git.apply must use ResolveDelegatedWorkspaceWithMode(..., ExistingDelegatedWorkspaceOnly)."
+  exit 1
+fi
+
+echo "✅ All ${execution_count} delegated Git execution(s) use an approved per-Pollinator workspace resolver."
+echo "✅ git.apply is verified to use ExistingDelegatedWorkspaceOnly."

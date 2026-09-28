@@ -2,9 +2,15 @@ package core
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
+
+// MaxGitApplyPatchBytes is the canonical UTF-8 patch bound shared by every
+// projection of git.apply. The Core enforces it before calling the Git port.
+const MaxGitApplyPatchBytes = 1_048_576
 
 // The git capability family: the delegated-execution ladder. A Pollinator asks
 // the Stem to do git work under the substrate's configured connection rather
@@ -50,6 +56,34 @@ type GitCommitResult struct {
 	// CommitHash is the created commit's hash (empty when nothing was
 	// committed).
 	CommitHash string `json:"commitHash,omitempty"`
+}
+
+// GitApplyInput is one deterministic patch request for a configured named
+// Substrate. Pollen is deliberately absent: adapters bind it from trusted
+// context after authorization, never from Pollinator input.
+type GitApplyInput struct {
+	Substrate    string `json:"substrate"`
+	ExpectedHead string `json:"expectedHead"`
+	Patch        string `json:"patch"`
+	Origin       string `json:"origin,omitempty"`
+}
+
+// GitApplySpec is the transport-free request handed to the Stem-side Git
+// execution port.
+type GitApplySpec struct {
+	Substrate    string
+	ExpectedHead string
+	Patch        string
+	Origin       string
+}
+
+// GitApplyResult reports only safe facts about the successfully applied patch.
+type GitApplyResult struct {
+	Status       string   `json:"status"`
+	Substrate    string   `json:"substrate"`
+	Branch       string   `json:"branch"`
+	Head         string   `json:"head"`
+	ChangedPaths []string `json:"changedPaths"`
 }
 
 // GitPushInput asks the Stem to push the substrate's current branch to its
@@ -351,6 +385,10 @@ type GitPruneResult struct {
 // may be nil, in which case the corresponding capability reports that it is not
 // wired rather than acting.
 type GitOperations struct {
+	// Apply deterministically applies a bounded patch in the caller's existing
+	// isolated workspace. Implementations own configured-Substrate resolution,
+	// clean-state and expected-HEAD checks, path containment, and Git execution.
+	Apply func(ctx context.Context, spec GitApplySpec) (GitApplyResult, error)
 	// Commit stages and commits the spec against the resolved workspace under
 	// the substrate's configured commit identity. Implementations own
 	// substrate resolution, credential resolution, and the deny-closed
@@ -386,6 +424,48 @@ type GitOperations struct {
 func (s *Service) WithGit(operations GitOperations) *Service {
 	s.git = operations
 	return s
+}
+
+// GitApply validates the transport-free request and runs it through the
+// injected Stem-side Git port. It is always delegated: a trusted Pollen and
+// a grant for the exact operation/Substrate tuple are required by the
+// Pollinator-facing adapters before this method is reached.
+func (s *Service) GitApply(ctx context.Context, in GitApplyInput) (GitApplyResult, error) {
+	substrate := strings.TrimSpace(in.Substrate)
+	if substrate == "" {
+		return GitApplyResult{}, fmt.Errorf("substrate is required")
+	}
+	pollen := PollenFromContext(ctx)
+	authorized, ok := AuthorizedDelegationRequestFromContext(ctx)
+	if pollen == "" || !ok || authorized.Pollen != pollen || authorized.OperationClass != CapGitApply || authorized.Substrate != substrate || authorized.Impact != DelegationImpactMedium {
+		return GitApplyResult{}, fmt.Errorf("git.apply requires authorization for the exact Pollen, operation, and Substrate")
+	}
+	if !isFullGitObjectID(in.ExpectedHead) {
+		return GitApplyResult{}, fmt.Errorf("expectedHead must be a full Git object ID")
+	}
+	if !utf8.ValidString(in.Patch) {
+		return GitApplyResult{}, fmt.Errorf("patch must be valid UTF-8")
+	}
+	if len(in.Patch) > MaxGitApplyPatchBytes {
+		return GitApplyResult{}, fmt.Errorf("patch exceeds the %d-byte limit", MaxGitApplyPatchBytes)
+	}
+	if s.git.Apply == nil {
+		return GitApplyResult{}, fmt.Errorf("git.apply is not wired: construct the Core with WithGit(GitOperations{Apply: …})")
+	}
+	return s.git.Apply(ctx, GitApplySpec{
+		Substrate:    substrate,
+		ExpectedHead: in.ExpectedHead,
+		Patch:        in.Patch,
+		Origin:       in.Origin,
+	})
+}
+
+func isFullGitObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // GitCommit validates the request and runs the delegated commit to completion
@@ -533,6 +613,23 @@ func (s *Service) GitPrune(ctx context.Context, in GitPruneInput) (GitPruneResul
 // Service's typed method — identical in shape to the other families.
 func (s *Service) gitCapabilities() []Capability {
 	return []Capability{
+		{
+			Name:        CapGitApply,
+			Description: "Apply a deterministic UTF-8 Git patch to the caller's existing isolated workspace. Requires an exact full expected HEAD and a clean workspace; changes remain unstaged and unpublished.",
+			InputSchema: schemaObject(map[string]any{
+				"substrate":    stringProp("The configured named Substrate."),
+				"expectedHead": stringProp("The exact full commit object ID expected at the workspace HEAD."),
+				"patch":        stringProp("A UTF-8 unified Git patch, at most 1,048,576 bytes; Git binary patch blocks are supported."),
+				"origin":       stringProp("Interaction origin recorded on the operation (cli, mcp, rest)."),
+			}, []string{"substrate", "expectedHead", "patch"}),
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in GitApplyInput
+				if err := decodeInput(input, &in); err != nil {
+					return nil, err
+				}
+				return s.GitApply(ctx, in)
+			},
+		},
 		{
 			Name:        CapGitCommit,
 			Description: "Commit the current state of a substrate's workspace under the substrate's configured commit identity; refused when no identity is configured (deny-closed — an unattributable delegated commit is never created).",

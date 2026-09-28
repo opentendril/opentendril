@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/opentendril/opentendril/cmd/stem/internal/gitpatch"
 )
 
 // Server exposes admin token issuance and graft validation endpoints.
@@ -362,13 +363,9 @@ func copyGovernanceSequence(sourceRoot, terrariumPath, sequenceRelPath string) e
 }
 
 func applyPatchToTerrarium(ctx context.Context, terrariumPath, patch string) error {
-	cmd := exec.CommandContext(ctx, "git", "-C", terrariumPath, "apply", "--binary", "--whitespace=nowarn", "-")
-	cmd.Stdin = strings.NewReader(patch)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("apply graft patch failed: %w (output: %s)", err, strings.TrimSpace(string(output)))
+	if err := gitpatch.Apply(ctx, terrariumPath, []byte(patch)); err != nil {
+		return fmt.Errorf("apply graft patch failed: %w", err)
 	}
-
 	return nil
 }
 

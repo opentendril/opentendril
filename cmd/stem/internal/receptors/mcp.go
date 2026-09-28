@@ -3,12 +3,14 @@ package receptors
 import (
 	"encoding/json"
 
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/conductor"
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
@@ -148,8 +150,20 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	const maxMCPRequestBodyBytes = 8 << 20
+	if r.ContentLength > maxMCPRequestBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMCPRequestBodyBytes)
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil || !utf8.Valid(rawBody) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(h.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}`)))
+		return
+	}
 	var req mcpRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(rawBody, &req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(h.ProcessMCPMessage([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}`)))
 		return
@@ -169,14 +183,16 @@ func (h *MCPHandler) HandleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	reqBytes, _ := json.Marshal(req)
-	respBytes := handler.ProcessMCPMessage(reqBytes)
+	respBytes := handler.ProcessMCPMessage(rawBody)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respBytes)
 }
 
 func (h *MCPHandler) ProcessMCPMessage(reqBytes []byte) []byte {
+	if !utf8.Valid(reqBytes) {
+		return h.formatError(nil, -32700, "Parse error", "request must be UTF-8")
+	}
 	var req mcpRequest
 	if err := json.Unmarshal(reqBytes, &req); err != nil {
 		return h.formatError(nil, -32700, "Parse error", err.Error())

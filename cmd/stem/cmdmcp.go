@@ -74,9 +74,10 @@ func runMCPCmd(ctx context.Context, args []string) {
 
 	scanner := bufio.NewScanner(os.Stdin)
 
-	// Increase buffer size to handle large MCP schemas
-	const maxCapacity = 1024 * 1024 * 5 // 5MB
-	buf := make([]byte, maxCapacity)
+	// Increase the line bound to carry a maximum-size git.apply patch
+	// after JSON escaping, as well as large MCP schemas.
+	const maxCapacity = 8 << 20
+	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, maxCapacity)
 
 	fmt.Fprintln(os.Stderr, "🟢 OpenTendril MCP Server ready. Listening on stdio.")

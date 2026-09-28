@@ -689,6 +689,17 @@ func (m *mockCore) GitCommit(_ context.Context, in core.GitCommitInput) (core.Gi
 	}, nil
 }
 
+func (m *mockCore) GitApply(_ context.Context, in core.GitApplyInput) (core.GitApplyResult, error) {
+	m.record("GitApply", in)
+	return core.GitApplyResult{
+		Status:       "applied",
+		Substrate:    in.Substrate,
+		Branch:       "feat/mock",
+		Head:         in.ExpectedHead,
+		ChangedPaths: []string{"README.md"},
+	}, nil
+}
+
 func (m *mockCore) GitPush(_ context.Context, in core.GitPushInput) (core.GitPushResult, error) {
 	m.record("GitPush", in)
 	return core.GitPushResult{
@@ -998,6 +1009,17 @@ func (m *mockCore) Capabilities() []core.Capability {
 			},
 		},
 		{
+			Name:        core.CapGitApply,
+			InputSchema: map[string]any{},
+			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
+				var in core.GitApplyInput
+				if err := decodeMockInput(input, &in); err != nil {
+					return nil, err
+				}
+				return m.GitApply(ctx, in)
+			},
+		},
+		{
 			Name:        core.CapGitPush,
 			InputSchema: map[string]any{},
 			Invoke: func(ctx context.Context, input map[string]any) (any, error) {
@@ -1122,6 +1144,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 				core.CapStomaPass,
 				core.CapSeedGrow,
 				core.CapGitCommit,
+				core.CapGitApply,
 				core.CapGitPush,
 				core.CapGitPR,
 				core.CapGitBranch,
@@ -1148,7 +1171,7 @@ func newMockParityFixture(t *testing.T) (*mockCore, *http.ServeMux, *receptors.M
 	sproutRest.Register(mux, nil)
 	stomaRest.Register(mux, gate.Middleware)
 	seedRest.Register(mux, gate.Middleware)
-	gitRest.Register(mux, gate.Middleware)
+	gitRest.Register(mux, nil)
 	configRest.Register(mux, gate.Middleware)
 
 	mcp := receptors.NewMCPHandler().WithSessions(manager, nil).WithCore(mock).WithDelegation(gate, "parity-pollen")
@@ -2659,6 +2682,16 @@ func TestBehavioralParity_Git(t *testing.T) {
 			cliArgs:       []string{"--substrate", "core", "--message", "hello", "--origin", "parity-origin"},
 		},
 		{
+			name:          core.CapGitApply,
+			method:        "GitApply",
+			want:          core.GitApplyInput{Substrate: "core", ExpectedHead: "0123456789abcdef0123456789abcdef01234567", Patch: "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n", Origin: "parity-origin"},
+			restPath:      "/v1/git/apply",
+			restBody:      `{"substrate":"core","expectedHead":"0123456789abcdef0123456789abcdef01234567","patch":"diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n","origin":"parity-origin"}`,
+			mcpArgs:       `{"substrate":"core","expectedHead":"0123456789abcdef0123456789abcdef01234567","patch":"diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1 @@\n-old\n+new\n","origin":"parity-origin"}`,
+			cliSubcommand: "apply",
+			cliArgs:       []string{"--substrate", "core", "--expected-head", "0123456789abcdef0123456789abcdef01234567", "--origin", "parity-origin"},
+		},
+		{
 			name:          core.CapGitPush,
 			method:        "GitPush",
 			want:          core.GitPushInput{Substrate: "core", Branch: "feat", Origin: "parity-origin"},
@@ -2740,8 +2773,15 @@ func TestBehavioralParity_Git(t *testing.T) {
 
 			// --- REST -----------------------------------------------------------------
 			mock.reset()
-			resp, err := http.Post(server.URL+tc.restPath, "application/json",
-				bytes.NewBufferString(tc.restBody))
+			restRequest, err := http.NewRequest(http.MethodPost, server.URL+tc.restPath, bytes.NewBufferString(tc.restBody))
+			if err != nil {
+				t.Fatalf("REST %s request: %v", tc.name, err)
+			}
+			restRequest.Header.Set("Content-Type", "application/json")
+			if tc.name == core.CapGitApply {
+				restRequest.Header.Set(receptors.PollenHeader, "parity-pollen")
+			}
+			resp, err := http.DefaultClient.Do(restRequest)
 			if err != nil {
 				t.Fatalf("REST %s: %v", tc.name, err)
 			}
@@ -2783,6 +2823,12 @@ func TestBehavioralParity_Git(t *testing.T) {
 			input, err := parseGitArgs(command.capability, tc.cliArgs)
 			if err != nil {
 				t.Fatalf("CLI parseGitArgs: %v", err)
+			}
+			if tc.name == core.CapGitApply {
+				input, err = readGitApplyInput(input, strings.NewReader(tc.want.(core.GitApplyInput).Patch))
+				if err != nil {
+					t.Fatalf("CLI stdin patch: %v", err)
+				}
 			}
 			if _, err := mock.Invoke(ctx, command.capability, input); err != nil {
 				t.Fatalf("CLI %s: Core.Invoke: %v", tc.name, err)
