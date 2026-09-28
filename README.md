@@ -1,6 +1,6 @@
 # 🌱 OpenTendril
 
-**OpenTendril lets you stop approving every step an LLM takes — it works freely inside a boundary, and everything it did arrives in Git for you to review.**
+**OpenTendril lets you stop approving every step an LLM takes - it works freely inside a boundary, and everything it did arrives in Git for you to review.**
 
 The Terrarium isolation boundary gives it room to work; Git gives you the veto. Neither half is new. The combination is what makes walking away reasonable.
 
@@ -10,7 +10,7 @@ Most work on controlling these models addresses what they *say*: prompts, filter
 
 **Artificial Intelligence does not behave like traditional computing.**
 
-For decades, the software industry has built deterministic systems—rigid state machines where "Tasks," "Scripts," and "Agents" blindly follow instructions and fail if a single parameter deviates. But Large Language Models are not state machines; they are probabilistic, messy, and organic, modeling the very chaotic adaptation seen in natural biology.
+For decades, the software industry has built deterministic systems-rigid state machines where "Tasks," "Scripts," and "Agents" blindly follow instructions and fail if a single parameter deviates. But Large Language Models are not state machines; they are probabilistic, messy, and organic, modeling the very chaotic adaptation seen in natural biology.
 
 Trying to force an organic neural network into rigid, deterministic IT structures leads to fragile execution, context window bloat, and severe security vulnerabilities. 
 
@@ -56,7 +56,7 @@ thing.
 | Posture | What it is | Qualified on |
 |---|---|---|
 | **Local / evaluation** | LOCAL / SINGLE-PRINCIPAL. The Stem runs as this account. It does not claim the governed boundary. | Linux amd64, Linux arm64, WSL2 amd64, WSL2 arm64, macOS Intel, macOS Apple Silicon |
-| **Governed** | Separate Stem principal; protected `tendril`; Pollinator-only `tendril-mcp`. | Ubuntu 24.04 LTS, Linux amd64, systemd, rootless Docker |
+| **Governed** | Separate Stem principal and protected `tendril`; optional restricted `tendril-mcp` for delegated clients. | Ubuntu 24.04 LTS, Linux amd64, systemd, rootless Docker |
 
 An existing governed Ubuntu installation may be eligible for
 `--governed-upgrade` outside that fresh-install matrix when the installer can
@@ -124,10 +124,14 @@ sudo -u tendril -i tendril hardiness
 ```
 
 It reports rather than gates. A weak finding may describe a configuration you
-chose knowingly — running the Stem as your own user on a laptop is legitimate,
+chose knowingly - running the Stem as your own user on a laptop is legitimate,
 and the report says so plainly instead of pretending otherwise.
 
-Once it is running, [docs/GUIDE-QUICKSTART.md](docs/GUIDE-QUICKSTART.md) covers the first session.
+Once the provider and Substrate are configured, the ordinary governed first
+session uses the installed Greenhouse. It requires Botanist authority, not a
+Pollinator credential, access token, DelegationGrant, raw REST orchestration,
+or MCP. See the ordered
+[Greenhouse first-use path](docs/GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
 
 ---
 
@@ -204,7 +208,7 @@ for the TLS and named `trustAnchor` profile.
 claude mcp add opentendril -- tendril-mcp
 ```
 
-**Claude Desktop / Cursor** — edit your MCP configuration file:
+**Claude Desktop / Cursor** - edit your MCP configuration file:
 - **Claude Desktop (Mac):** `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Claude Desktop (Linux):** `~/.config/Claude/claude_desktop_config.json`
 
@@ -263,19 +267,35 @@ aider --openai-api-base http://127.0.0.1:8080/v1 --model openai/tendril
 
 ### 3. The Greenhouse (Command Center UI)
 
-The **Greenhouse** is a desktop-grade web dashboard for watching every
-Sprout the Stem is growing in real time — the visual frontend of **OpenTendril**.
-It is a strictly decoupled React client that talks to the Stem only over
-the documented REST + WebSocket surface, and renders live orchestration as a
-**living botanical garden**: parallel sprouts emerge and wither, mycelial merges
-converge, and phenotypic-selection runs compete for fitness on screen.
-
-It is **optional and containerized** — one command brings it up alongside the
-host Stem (no Node/npm required), served from a single origin that
-reverse-proxies the Stem's API and `/ws` surfaces:
+The **Greenhouse** is the optional browser-facing garden for observing Stem
+work. It is separate from the Stem. On a governed installation, start the
+installed Greenhouse with administrator authority and obtain its fixed local
+address:
 
 ```bash
-docker compose --profile ui up -d               # http://127.0.0.1:4173
+sudo /usr/local/sbin/opentendril-greenhouse start
+sudo /usr/local/sbin/opentendril-greenhouse address
+```
+
+The address is `http://127.0.0.1:4173`. For a generated or persisted Botanist
+key, an administrator deliberately displays the protected value for the
+Botanist to copy into onboarding:
+
+```bash
+sudo -u tendril -H cat /home/tendril/.tendril/api-key
+```
+
+If `BOTANIST_KEY` was explicitly configured, hand off that configured value
+instead. Greenhouse requires and validates the non-empty Botanist key; it is
+not a Pollinator credential. See the
+[first-use walkthrough](docs/GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse)
+for provider and Substrate setup, lifecycle details, task entry, and Fruit
+review.
+
+The repository Compose path is for development/reference use only:
+
+```bash
+docker compose --profile ui up -d
 ```
 
 For UI development, run the Vite dev server instead:
@@ -286,12 +306,13 @@ npm install
 STEM_TARGET=http://127.0.0.1:8080 npm run dev   # http://localhost:5173
 ```
 
-Operators enter their Stem address and API key in an onboarding screen (no
-`.env` editing). See [`ui/README.md`](ui/README.md) for running it, the
-component tree, the refresh-resilient hydration flow, and the full
-EventBus-event → botanical-visual mapping; and
-[docs/GREENHOUSE.md](docs/GREENHOUSE.md) for how it fits the OpenTendril
-architecture and the REST/WebSocket contract it consumes.
+Onboarding stores the browser's configured connection, including the key, in
+`localStorage`. The browser sends REST requests with the bearer header and uses
+the existing authenticated query for WebSocket. The key is not mounted into
+the Greenhouse container or injected through Docker environment. See
+[`ui/README.md`](ui/README.md) for the component tree and observation flow, and
+[docs/GREENHOUSE.md](docs/GREENHOUSE.md) for the current workbench and
+REST/WebSocket contract.
 
 ---
 
