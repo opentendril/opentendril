@@ -27,8 +27,8 @@ func TestDefaultPublicIngressLimits(t *testing.T) {
 	if limits.maxHeaderBytes != 32<<10 {
 		t.Errorf("maxHeaderBytes = %d, want 32 KiB", limits.maxHeaderBytes)
 	}
-	if limits.ordinaryBodyBytes != 4<<20 {
-		t.Errorf("ordinaryBodyBytes = %d, want 4 MiB", limits.ordinaryBodyBytes)
+	if limits.ordinaryBodyBytes != 8<<20 {
+		t.Errorf("ordinaryBodyBytes = %d, want 8 MiB", limits.ordinaryBodyBytes)
 	}
 	if limits.mintBodyBytes != 16<<10 {
 		t.Errorf("mintBodyBytes = %d, want 16 KiB", limits.mintBodyBytes)

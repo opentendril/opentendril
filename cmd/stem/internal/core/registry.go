@@ -44,6 +44,7 @@ const (
 	CapGitStatus       = "git.status"
 	CapGitBranchList   = "git.branch.list"
 	CapGitPrune        = "git.prune"
+	CapGitApply        = "git.apply"
 )
 
 // CapSproutWatch is the read side of the sprout family: it authorises watching
@@ -110,6 +111,7 @@ func CapabilityNames() []string {
 		CapGitStatus,
 		CapGitBranchList,
 		CapGitPrune,
+		CapGitApply,
 	}
 	sort.Strings(names)
 	return names
@@ -135,6 +137,7 @@ func DelegatedCapabilityNames() []string {
 		CapGitStatus,
 		CapGitBranchList,
 		CapGitPrune,
+		CapGitApply,
 	}
 	sort.Strings(names)
 	return names

@@ -2,9 +2,12 @@ package receptors
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/opentendril/opentendril/cmd/stem/internal/core"
 	"github.com/opentendril/opentendril/cmd/stem/internal/session"
@@ -48,6 +51,7 @@ func (h *GitHandler) WithDelegation(gate *DelegationGate) *GitHandler {
 // wires (same contract as StomaHandler.governedRoutes).
 func (h *GitHandler) governedRoutes() []governedRoute {
 	return []governedRoute{
+		{"POST /v1/git/apply", core.CapGitApply, h.apply},
 		{"POST /v1/git/commit", core.CapGitCommit, h.commit},
 		{"POST /v1/git/push", core.CapGitPush, h.push},
 		{"POST /v1/git/pr", core.CapGitPR, h.pullRequest},
@@ -56,6 +60,69 @@ func (h *GitHandler) governedRoutes() []governedRoute {
 		{"POST /v1/git/branches", core.CapGitBranchList, h.branchList},
 		{"POST /v1/git/prune", core.CapGitPrune, h.prune},
 	}
+}
+
+const maxGitApplyRequestBodyBytes = core.MaxGitApplyPatchBytes*6 + 4096
+
+// apply is a transport-only projection: it bounds and decodes the JSON
+// envelope, obtains the trusted Pollen, authorizes the exact capability tuple,
+// then invokes the canonical Core method.
+func (h *GitHandler) apply(w http.ResponseWriter, r *http.Request) {
+	var req core.GitApplyInput
+	if r.Body == nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if r.ContentLength > maxGitApplyRequestBodyBytes {
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxGitApplyRequestBodyBytes)
+	rawBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+		}
+		return
+	}
+	if !utf8.Valid(rawBody) || json.Unmarshal(rawBody, &req) != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Substrate) == "" {
+		http.Error(w, "substrate is required", http.StatusBadRequest)
+		return
+	}
+
+	pollen, credentialOK := h.delegation.PollenFor(r)
+	if !credentialOK || pollen == "" {
+		http.Error(w, "git.apply requires an authorized Pollinator", http.StatusForbidden)
+		return
+	}
+	request := core.DelegationRequest{
+		Pollen:         pollen,
+		OperationClass: core.CapGitApply,
+		Substrate:      strings.TrimSpace(req.Substrate),
+		Impact:         core.CapabilityImpact(core.CapGitApply),
+	}
+	decision := h.delegation.Authorize(request)
+	if !decision.Authorized {
+		http.Error(w, "delegation denied: "+decision.Reason, http.StatusForbidden)
+		return
+	}
+	ctx := core.WithAuthorizedDelegationRequest(core.WithPollen(r.Context(), pollen), request)
+	if strings.TrimSpace(req.Origin) == "" {
+		req.Origin = session.OriginREST
+	}
+	result, err := h.core.GitApply(ctx, req)
+	if err != nil {
+		writeCoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // Capabilities reports the governed capability names this REST adapter has

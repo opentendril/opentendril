@@ -35,11 +35,13 @@ type publicIngressLimits struct {
 
 func defaultPublicIngressLimits() publicIngressLimits {
 	return publicIngressLimits{
-		maxTCPConnections:          128,
-		readHeaderTimeout:          5 * time.Second,
-		idleTimeout:                60 * time.Second,
-		maxHeaderBytes:             32 << 10,
-		ordinaryBodyBytes:          4 << 20,
+		maxTCPConnections: 128,
+		readHeaderTimeout: 5 * time.Second,
+		idleTimeout:       60 * time.Second,
+		maxHeaderBytes:    32 << 10,
+		// Enough for a 1 MiB UTF-8 Git patch after worst-case JSON string
+		// escaping and the surrounding transport envelope.
+		ordinaryBodyBytes:          8 << 20,
 		mintBodyBytes:              16 << 10,
 		maxRequests:                64,
 		maxAuthenticatedAdmissions: 32,

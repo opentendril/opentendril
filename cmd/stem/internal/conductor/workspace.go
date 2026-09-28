@@ -2,6 +2,7 @@ package conductor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,6 +87,18 @@ type DelegatedWorkspace struct {
 	Branch string
 }
 
+// DelegatedWorkspaceMode controls whether resolution may initialize a
+// Pollinator workspace. ExistingWorkspaceOnly is used by capabilities such as
+// git.apply whose resolution must not create or rotate a workspace or branch.
+type DelegatedWorkspaceMode int
+
+const (
+	CreateDelegatedWorkspaceIfMissing DelegatedWorkspaceMode = iota
+	ExistingDelegatedWorkspaceOnly
+)
+
+var ErrDelegatedWorkspaceAbsent = errors.New("delegated workspace is absent")
+
 // ResolveDelegatedWorkspace returns the workspace an operation should run in.
 //
 // With no pollen — a human at a terminal — it returns the substrate's own
@@ -101,8 +114,19 @@ type DelegatedWorkspace struct {
 // reclaimable rather than litter.
 
 func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential) (DelegatedWorkspace, error) {
+	return ResolveDelegatedWorkspaceWithMode(ctx, substrateName, substratePath, pollen, credential, CreateDelegatedWorkspaceIfMissing)
+}
+
+// ResolveDelegatedWorkspaceWithMode returns the subject's private worktree.
+// ExistingWorkspaceOnly never creates a directory/worktree or rotates its
+// branch; it is the resolution mode for operations that require pre-existing
+// state and must have no resolver side effects.
+func ResolveDelegatedWorkspaceWithMode(ctx context.Context, substrateName, substratePath, pollen string, credential ResolvedCredential, mode DelegatedWorkspaceMode) (DelegatedWorkspace, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if mode != CreateDelegatedWorkspaceIfMissing && mode != ExistingDelegatedWorkspaceOnly {
+		return DelegatedWorkspace{}, fmt.Errorf("unknown delegated workspace resolution mode")
 	}
 	base := strings.TrimSpace(substratePath)
 	if base == "" {
@@ -110,6 +134,9 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 	}
 	trimmedPollen := strings.TrimSpace(pollen)
 	if trimmedPollen == "" {
+		if mode == ExistingDelegatedWorkspaceOnly {
+			return DelegatedWorkspace{}, fmt.Errorf("existing delegated workspace requires a Pollen")
+		}
 		return DelegatedWorkspace{Path: base}, nil
 	}
 
@@ -120,6 +147,24 @@ func ResolveDelegatedWorkspace(ctx context.Context, substrateName, substratePath
 	path := filepath.Join(delegatedWorkspaceRoot(), name, sanitizeWorkspaceComponent(trimmedPollen))
 
 	workspace := DelegatedWorkspace{Path: path, Pollen: trimmedPollen, Isolated: true}
+	if mode == ExistingDelegatedWorkspaceOnly {
+		workspaceRoot := delegatedWorkspaceRoot()
+		rootResolved, rootErr := filepath.EvalSymlinks(workspaceRoot)
+		substrateWorkspace := filepath.Join(workspaceRoot, name)
+		substrateInfo, substrateErr := os.Lstat(substrateWorkspace)
+		info, statErr := os.Lstat(path)
+		resolvedPath, resolvedErr := filepath.EvalSymlinks(path)
+		relativePath, relativeErr := filepath.Rel(rootResolved, resolvedPath)
+		insideWorkspaceRoot := relativeErr == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) && !filepath.IsAbs(relativePath)
+		if rootErr != nil || substrateErr != nil || substrateInfo.Mode()&os.ModeSymlink != 0 || statErr != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || resolvedErr != nil || !insideWorkspaceRoot || !checkoutHasGitMetadata(path) || !isGitRepo(path) {
+			return DelegatedWorkspace{}, fmt.Errorf("%w for Pollen %q on Substrate %q", ErrDelegatedWorkspaceAbsent, trimmedPollen, substrateName)
+		}
+		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
+			workspace.Branch = strings.TrimSpace(current)
+		}
+		return workspace, nil
+	}
+
 	if isGitRepo(path) {
 		if current, err := runGitCommitCommandFn(ctx, path, "branch", "--show-current"); err == nil {
 			workspace.Branch = strings.TrimSpace(current)

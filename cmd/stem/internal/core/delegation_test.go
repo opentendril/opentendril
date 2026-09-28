@@ -441,9 +441,9 @@ func TestLoadDelegationGrantsRejectsMalformedGrants(t *testing.T) {
 // git.status is included deliberately: read-only does not mean ungated, since a
 // status response names branches and changed file paths.
 func TestDelegatedCapabilityTaxonomy(t *testing.T) {
-	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate, core.CapContinuePhytomer}
-	if len(delegated) != 12 {
-		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 12: %v", len(delegated), delegated)
+	delegated := []string{core.CapSproutGrow, core.CapStomaPass, core.CapSeedGrow, core.CapGitCommit, core.CapGitApply, core.CapGitPush, core.CapGitPR, core.CapGitBranch, core.CapGitStatus, core.CapGitBranchList, core.CapGitPrune, core.CapGenotypeCreate, core.CapContinuePhytomer}
+	if len(delegated) != 13 {
+		t.Fatalf("DelegatedCapabilityNames() has %d name(s), want 13: %v", len(delegated), delegated)
 	}
 	for _, name := range delegated {
 		if !core.IsDelegatedCapability(name) {

@@ -100,6 +100,9 @@ type Core interface {
 	// identity, the lowest rung of the delegated-execution ladder. Runs
 	// through the injected GitOperations execution port.
 	GitCommit(ctx context.Context, in GitCommitInput) (GitCommitResult, error)
+	// GitApply deterministically applies an exact bounded patch to the
+	// caller's existing clean isolated workspace. Runs through GitOperations.
+	GitApply(ctx context.Context, in GitApplyInput) (GitApplyResult, error)
 	// GitPush pushes a substrate's branch to its remote using the substrate's
 	// configured credential; the push runs on the Stem, never inside a sealed
 	// Sprout. Runs through the injected GitOperations execution port.

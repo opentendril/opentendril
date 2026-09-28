@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -58,6 +60,13 @@ func runGitCmd(ctx context.Context, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
+	if command.capability == core.CapGitApply {
+		input, err = readGitApplyInput(input, os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+			os.Exit(1)
+		}
+	}
 	if origin, _ := input["origin"].(string); strings.TrimSpace(origin) == "" {
 		input["origin"] = session.OriginCLI
 	}
@@ -70,6 +79,14 @@ func runGitCmd(ctx context.Context, args []string) {
 	defer delegation.Close()
 	substrate, _ := input["substrate"].(string)
 	ctx = delegation.Authorize(ctx, command.capability, substrate)
+	if command.capability == core.CapGitApply && delegation.Pollen != "" {
+		ctx = core.WithAuthorizedDelegationRequest(ctx, core.DelegationRequest{
+			Pollen:         delegation.Pollen,
+			OperationClass: core.CapGitApply,
+			Substrate:      strings.TrimSpace(substrate),
+			Impact:         core.CapabilityImpact(core.CapGitApply),
+		})
+	}
 
 	svc, err := buildGitCore(ctx)
 	if err != nil {
@@ -110,6 +127,11 @@ func runGitCmd(ctx context.Context, args []string) {
 			verb = "Already open"
 		}
 		fmt.Fprintf(os.Stderr, "🌱 %s pull request #%d (%s → %s) %s\n", verb, typed.Number, typed.Head, typed.Base, typed.URL)
+	case core.GitApplyResult:
+		if err := json.NewEncoder(os.Stdout).Encode(typed); err != nil {
+			fmt.Fprintln(os.Stderr, "❌ Failed to encode git.apply result")
+			os.Exit(1)
+		}
 	}
 }
 
@@ -136,6 +158,33 @@ func gitOperations() core.GitOperations {
 	}
 
 	return core.GitOperations{
+		Apply: func(ctx context.Context, spec core.GitApplySpec) (core.GitApplyResult, error) {
+			workspace, substrateSpec, err := resolveExistingGitApplyWorkspace(ctx, spec.Substrate, substratesConfig)
+			if err != nil {
+				return core.GitApplyResult{}, err
+			}
+			defer conductor.LockWorkspace(workspace.Path)()
+
+			if substrateSpec == nil {
+				return core.GitApplyResult{}, fmt.Errorf("git.apply requires a configured named Substrate")
+			}
+			result, err := conductor.RunGitApply(ctx, conductor.GitApplyExecution{
+				Workspace:    workspace.Path,
+				Substrate:    spec.Substrate,
+				ExpectedHead: spec.ExpectedHead,
+				Patch:        []byte(spec.Patch),
+			})
+			if err != nil {
+				return core.GitApplyResult{}, err
+			}
+			return core.GitApplyResult{
+				Status:       result.Status,
+				Substrate:    result.Substrate,
+				Branch:       result.Branch,
+				Head:         result.Head,
+				ChangedPaths: result.ChangedPaths,
+			}, nil
+		},
 		Commit: func(ctx context.Context, spec core.GitCommitSpec) (core.GitCommitResult, error) {
 			workspace, substrateSpec, err := resolveGitWorkspace(ctx, spec.Substrate, substratesConfig)
 			if err != nil {
@@ -366,6 +415,40 @@ func gitOperations() core.GitOperations {
 	}
 }
 
+// resolveExistingGitApplyWorkspace accepts only an explicitly configured
+// named Substrate and the trusted Pollen carried by context. Its resolver mode
+// cannot create or rotate a delegated worktree or branch.
+func resolveExistingGitApplyWorkspace(ctx context.Context, substrate string, substratesConfig *conductor.SubstratesConfig) (conductor.DelegatedWorkspace, *conductor.SubstrateSpec, error) {
+	name := strings.TrimSpace(substrate)
+	substrateSpec, configured := conductor.ResolveSubstrate(name, substratesConfig)
+	if !configured || substrateSpec == nil {
+		return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("git.apply requires a configured named Substrate")
+	}
+	workspacePath, err := conductor.ResolveSubstrateWorkspace(name, substrateSpec)
+	if err != nil {
+		return conductor.DelegatedWorkspace{}, nil, err
+	}
+	pollen := core.PollenFromContext(ctx)
+	if strings.TrimSpace(pollen) == "" {
+		return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("git.apply requires an authorized Pollen")
+	}
+	workspace, err := conductor.ResolveDelegatedWorkspaceWithMode(
+		ctx,
+		name,
+		workspacePath,
+		pollen,
+		conductor.ResolvedCredential{},
+		conductor.ExistingDelegatedWorkspaceOnly,
+	)
+	if err != nil {
+		if errors.Is(err, conductor.ErrDelegatedWorkspaceAbsent) {
+			return conductor.DelegatedWorkspace{}, nil, fmt.Errorf("delegated workspace is absent")
+		}
+		return conductor.DelegatedWorkspace{}, nil, err
+	}
+	return workspace, substrateSpec, nil
+}
+
 // resolveGitWorkspace turns a substrate reference into the directory an
 // operation actually runs in, and is the single place the delegated ladder
 // decides that. A delegated invocation (one carrying an authorized Pollen in
@@ -428,6 +511,7 @@ type gitCommand struct {
 // stomaCommands, this registration — NOT core.CapabilityNames() — is
 // the source of truth the parity coverage test reads for the CLI arm.
 var gitCommands = []gitCommand{
+	{"apply", core.CapGitApply},
 	{"commit", core.CapGitCommit},
 	{"push", core.CapGitPush},
 	{"pr", core.CapGitPR},
@@ -473,6 +557,9 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 		return nil
 	}
 	for i := 0; i < len(args); i++ {
+		if capName == core.CapGitApply && args[i] != "--substrate" && args[i] != "--expected-head" && args[i] != "--origin" {
+			return nil, fmt.Errorf("git.apply accepts only --substrate, --expected-head, and --origin; patch bytes are read from stdin")
+		}
 		var err error
 		switch args[i] {
 		case "--json":
@@ -489,6 +576,8 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 			err = stringFlag(&i, "message")
 		case "--branch":
 			err = stringFlag(&i, "branch")
+		case "--expected-head":
+			err = stringFlag(&i, "expectedHead")
 		case "--title":
 			err = stringFlag(&i, "title")
 		case "--body":
@@ -521,12 +610,21 @@ func parseGitArgs(capName string, args []string) (map[string]any, error) {
 		input["paths"] = paths
 	}
 	if substrate, _ := input["substrate"].(string); strings.TrimSpace(substrate) == "" {
-		return nil, fmt.Errorf("missing substrate. Usage: tendril git %s --substrate <path|name>%s", strings.TrimPrefix(capName, "git."), gitUsageSuffix(capName))
+		substrateTarget := "<path|name>"
+		if capName == core.CapGitApply {
+			substrateTarget = "<name>"
+		}
+		return nil, fmt.Errorf("missing substrate. Usage: tendril git %s --substrate %s%s", strings.TrimPrefix(capName, "git."), substrateTarget, gitUsageSuffix(capName))
 	}
 	// A commit message is required only for commit; push takes no message.
 	if capName == core.CapGitCommit {
 		if message, _ := input["message"].(string); strings.TrimSpace(message) == "" {
 			return nil, fmt.Errorf("missing message. Usage: tendril git commit --substrate <path|name> --message <message>")
+		}
+	}
+	if capName == core.CapGitApply {
+		if expectedHead, _ := input["expectedHead"].(string); strings.TrimSpace(expectedHead) == "" {
+			return nil, fmt.Errorf("missing expected head. Usage: tendril git apply --substrate <name> --expected-head <full-oid> < patch.diff")
 		}
 	}
 	// A pull request needs a title; head and base are resolved (never assumed)
@@ -554,12 +652,32 @@ func gitUsageSuffix(capName string) string {
 		return " --title <title>"
 	case core.CapGitBranch:
 		return " --branch <feature-branch>"
+	case core.CapGitApply:
+		return " --expected-head <full-oid> < patch.diff"
 	}
 	return ""
 }
 
+// readGitApplyInput adds patch bytes read solely from stdin to the already
+// parsed transport fields. It reads at most one byte beyond Core's canonical
+// bound so oversize input is rejected by Core without unbounded buffering.
+func readGitApplyInput(input map[string]any, stdin io.Reader) (map[string]any, error) {
+	if stdin == nil {
+		return nil, fmt.Errorf("git.apply patch must be read from stdin")
+	}
+	patchBytes, err := io.ReadAll(io.LimitReader(stdin, core.MaxGitApplyPatchBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("unable to read git.apply patch from stdin")
+	}
+	if input == nil {
+		input = make(map[string]any)
+	}
+	input["patch"] = string(patchBytes)
+	return input, nil
+}
+
 func printGitUsage() {
-	fmt.Println("Usage: tendril git <setup|bootstrap|status|branches|branch|commit|push|pr|prune> --substrate <path|name> [flags]")
+	fmt.Println("Usage: tendril git <setup|bootstrap|status|branches|branch|apply|commit|push|pr|prune> --substrate <path|name> [flags]")
 	fmt.Println()
 	fmt.Println("setup --substrate <name> --repo <owner/repo> [--posture app|pat] ...")
 	fmt.Println("  Writes a git connection (substrates.yaml) and prints the")
@@ -587,6 +705,10 @@ func printGitUsage() {
 	fmt.Println("  Creates the branch and switches to it — the governed way off the default")
 	fmt.Println("  branch before committing. An existing branch is switched to, never reset;")
 	fmt.Println("  a branch named as the repository's default branch is refused.")
+	fmt.Println()
+	fmt.Println("apply --substrate <name> --expected-head <full-oid> < patch.diff")
+	fmt.Println("  Applies a UTF-8 Git patch from stdin to this Pollen's existing clean workspace.")
+	fmt.Println("  Changes remain unstaged; no workspace or branch is created by apply.")
 	fmt.Println()
 	fmt.Println("commit --substrate <path|name> --message <message> [--path P ...]")
 	fmt.Println("  Commits the current state of a substrate's workspace under the substrate's")
