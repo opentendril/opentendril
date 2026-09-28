@@ -1243,24 +1243,25 @@ Grant names remain dotted. Each grant is checked independently. Granting
 > **Serves P2.**
 
 `sudo -u tendril -i` is the natural way in, with one condition that decides
-whether any of the above means anything.
+whether any of the above means anything. Host sudo policy belongs to the
+administrator: OpenTendril observes its effect on the boundary but does not
+create, validate, or change sudo configuration.
 
 **If an account that hosts Pollinators can `sudo` to `tendril`, there is no
 boundary** - a Pollinator running as that account simply becomes the Stem. Two
 details make this sharper than it looks:
 
 * `NOPASSWD` hands the Stem's identity to anything running as you.
-* `sudo` **caches credentials** for about fifteen minutes by default, so a recent
-  authentication counts as passwordless for anything running as you in that
-  window.
+* `sudo` **caches credentials** for several minutes by default, so a recent
+  authentication can count as unattended escalation for anything running as
+  you in that window.
 
-```sudoers
-# [root] visudo - require a password every time, no cached ticket
-Defaults:botanist  timestamp_timeout=0
-botanist ALL=(tendril) PASSWD: ALL
-```
-
-Better still, administer `tendril` from a session that does not host Pollinators.
+The installer reports passwordless or cached escalation as a weaker boundary
+condition and leaves the administrator's sudo policy untouched. Run
+`tendril hardiness` to review the observed posture. If you choose to harden
+the host policy, make that administrator decision separately; OpenTendril does
+not prescribe a timeout or install a sudoers rule. Better still, administer
+`tendril` from a session that does not host Pollinators.
 
 ---
 
@@ -1379,21 +1380,15 @@ The preflight must establish, before any protected host mutation:
   Stem posture;
 - `/home/tendril/.local/bin/tendril` exists as a regular file owned by
   `tendril:tendril` with mode `0750`;
-- the named Pollinator is an ordinary separate principal, is not in the
-  `tendril` group, and has no unattended/passwordless escalation to root,
-  `tendril`, ALL, or equivalent privileged authority. Absence of sudo
-  remains acceptable. If that account has sudo authority, read-only
-  provenance must prove the canonical `/etc/sudoers.d/opentendril-p2`
-  rule `Defaults:<account> timestamp_timeout=0` (regular file, `root:root`,
-  mode `0440`) is the active non-cache policy: `/etc/sudoers` must include
-  `/etc/sudoers.d` with a known include directive, no competing
-  `timestamp_timeout` declaration may be present in that known layout, an
-  alternate primary sudoers source that would bypass the snippet fails
-  closed, and `visudo -c` must accept the configuration. Missing,
-  noncanonical, or unprovable P2 configuration fails closed. The live
-  `sudo -n -u tendril` probe remains defense in depth. Governed upgrade
-  does not rewrite sudo policy, create or repair that snippet, or
-  invalidate a sudo timestamp;
+- the named Pollinator is an ordinary separate principal and is not in the
+  `tendril` group. Its sudo posture is observed read-only. Passwordless or
+  cached escalation to a privileged identity is reported as a weaker boundary
+  condition, not rejected solely because of administrator-owned host policy.
+  Absence of sudo remains acceptable. The live `sudo -n -u tendril` probe
+  detects cached or passwordless access to the Stem; the installer does not
+  require a particular sudoers file, timeout, include order, owner, or mode,
+  and does not validate or change sudo policy or invalidate a sudo timestamp.
+  Review the condition with `tendril hardiness`;
 - `/run/user/<uid>` exists as a directory owned by `tendril`; rootless Docker
   is reachable as `tendril` through `/run/user/<uid>/docker.sock`, Docker
   SecurityOptions contains `rootless`, and rootful `docker.service` /
@@ -1410,7 +1405,8 @@ It then verifies the pinned release, reconciles the release-owned
 validates the resulting effective service again, replaces the protected Stem
 binary, and upgrades `tendril-mcp` only when that executable already exists for
 the named Pollinator-hosting account. It does not install or reconfigure
-Docker, create the Stem principal, rewrite P2 sudo policy, run `tendril init`,
+Docker, create the Stem principal, change sudo policy, invalidate cached sudo,
+run `tendril init`,
 or recreate durable Stem state.
 
 Administrator drop-ins under `/etc/systemd/system/tendril.service.d/*.conf` are
