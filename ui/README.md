@@ -17,6 +17,30 @@ has zero coupling to Go internals.
 
 The UI is a static React app built with Vite. It has no server of its own.
 
+### Installed governed path
+
+The ordinary governed first-use path uses the optional Greenhouse installed by
+the governed installer. It is separate from the Stem and requires no
+OpenTendril repository checkout or Compose invocation. Use explicit
+administrator authority for lifecycle calls:
+
+```bash
+sudo /usr/local/sbin/opentendril-greenhouse start
+sudo /usr/local/sbin/opentendril-greenhouse stop
+sudo /usr/local/sbin/opentendril-greenhouse restart
+sudo /usr/local/sbin/opentendril-greenhouse status
+sudo /usr/local/sbin/opentendril-greenhouse check
+sudo /usr/local/sbin/opentendril-greenhouse address
+```
+
+The normal address is `http://127.0.0.1:4173`. `start` and `restart` require
+the Stem Unix socket. Installed Greenhouse uses Unix transport only and has no
+normal TCP fallback. Its browser-facing address is loopback-only. `stop` stops
+Greenhouse only; it does not stop the Stem. No Greenhouse-specific sudoers or
+`NOPASSWD` grant is installed. Follow
+[`GUIDE-QUICKSTART.md`](../docs/GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse)
+for the Botanist-key handoff and first Fruit.
+
 ### Development
 
 The Stem sets no CORS headers, so in development Vite proxies the REST and
@@ -33,13 +57,13 @@ The proxy (see [`vite.config.ts`](./vite.config.ts)) forwards `/v1`, `/health`,
 and `/ws` (with WebSocket upgrade) to the Stem, so the browser makes only
 same-origin requests.
 
-### Production: the containerized UI front (recommended)
+### Repository Compose development and reference deployment
 
-The supported local deployment is the **optional, isolated, containerized UI
-front**: a hardened nginx container that serves the built bundle **and**
+The repository Compose example is an **optional, isolated, containerized UI
+front**: a hardened nginx container that serves the built bundle and
 reverse-proxies `/v1`, `/health`, and `/ws` (with WebSocket upgrade) to the
-governed Stem through the local Unix socket at
-`/var/lib/opentendril-transport/stem.sock`.
+Stem through the local Unix socket at `/var/lib/opentendril-transport/stem.sock`.
+It is development/reference behavior, not the installed first-use path.
 The browser sees a **single origin**, so no CORS configuration exists anywhere
 and the Stem stays headless. Docker is already a core dependency (Tendrils
 sprout into containerized substrates), so this adds no new requirement, and
@@ -60,7 +84,7 @@ Stem socket:
 STEM_HOST=stem.example docker compose --profile ui-tcp up -d
 ```
 
-The local path is:
+The Compose Unix-transport reference path is:
 
 ```
 browser → 127.0.0.1:4173 → Greenhouse nginx → read-only /var/lib/opentendril-transport
@@ -85,21 +109,21 @@ peers). Configuration knobs (all optional, via environment):
 | `STEM_GATEWAY_PORT` | `9090` | Dedicated `/ws` gateway listener in TCP mode; the proxy falls back to `STEM_PORT` if it is down. |
 
 **Security posture:** the proxy adds no credentials and bypasses nothing. The
-operator's `Authorization: Bearer` key passes through untouched and the Stem's
+Botanist's `Authorization: Bearer` key passes through untouched and the Stem's
 `withAPIKeyAuth` remains the sole authority. Only `/health`, `/v1*`, and `/ws`
 are proxied; nothing else on the host is reachable. `--profile ui` bind-mounts
 only `/var/lib/opentendril-transport`, read-only, and does not create that
 path if it is missing. `--profile ui-tcp` mounts no Unix transport directory.
 Neither profile mounts `/home/tendril`, Botanist keys, Pollinator credentials,
-grants, or the Stem executable. The container
-runs as a non-root user with a read-only root filesystem, all capabilities
-dropped, and `no-new-privileges`. Future server-side layers (BFF, auth,
-enterprise SSO, the concierge) grow **inside this component**. They do not
-belong in the Stem.
+grants, or the Stem executable. The container runs as a non-root user with a
+read-only root filesystem, all capabilities dropped, and `no-new-privileges`.
+The browser connection state includes the entered Botanist key in `localStorage`;
+REST requests send it as a bearer and the browser WebSocket uses the existing
+authenticated query mechanism.
 
-With the container in front, the operator opens `http://127.0.0.1:4173`,
-leaves the **Stem address** blank (same origin), and enters only the Botanist
-key. The browser never configures a filesystem socket.
+With the Compose container in front, open `http://127.0.0.1:4173`, leave the
+**Stem address** blank (same origin), and enter the required Botanist key. The
+browser never configures a filesystem socket.
 
 ### Manual static build (alternative)
 
@@ -130,12 +154,16 @@ only; `ui/Dockerfile`'s production stage copies just `dist/`, never
 ### Onboarding (no `.env`)
 
 On first load a welcome screen asks a non-technical operator for the Stem
-address and the Botanist bearer key (`BOTANIST_KEY`). The key is validated
-live. `/health` confirms the Stem is reachable, and `/v1/phytomers` confirms the
-key is accepted. It is then persisted to `localStorage`. No `.env` editing, and the
-key never leaves the browser. "Uproot" (top-right) clears it and returns to
-onboarding. Provider LLM keys remain server-side by design; the UI does not
-manage them.
+address and the required, non-empty Botanist bearer key. Whitespace-only input
+is rejected. `/health` checks reachability, then the authenticated
+`/v1/sessions` request verifies the key before Greenhouse enters. An invalid
+key is rejected. After successful onboarding, the current connection state,
+including the key, is persisted in browser `localStorage` as
+`opentendril.connection`. REST requests send `Authorization: Bearer ...`; the
+browser WebSocket uses the existing authenticated `?key=` query mechanism.
+No `.env` editing is needed. "Uproot" clears the stored connection and returns
+to onboarding. Provider LLM keys remain server-side; the UI does not manage
+them.
 
 ---
 
@@ -154,7 +182,7 @@ manage them.
 
 ```
 App                         gates on stored connection settings
-├─ Onboarding               welcome screen; validates /health + /v1/phytomers, persists to localStorage
+├─ Onboarding               welcome screen; validates /health + /v1/sessions, persists to localStorage
 └─ CommandCenter            app shell; boots the store (WS + hydration), renders the grid
    ├─ PendingConfirmations  topbar: open pending confirmations, approve or deny, then reconcile from the Stem list
    ├─ SessionRail           left: Work list and bounded canonical Sprout-run discovery across Phytomers

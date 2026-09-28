@@ -45,7 +45,7 @@ that review: observation facts, the task transcript, and tool activity sit
 above the fold. Historical rows without stage or code show neither field.
 Raw Event Pulse and terrarium output stay collapsed until opened.
 
-It leans on three Phase 1 backend capabilities:
+The current Greenhouse uses three Stem capabilities:
 
 1. **Unified `SessionManager`**: `GET /v1/phytomers` lists every live Tendril
    regardless of which surface (CLI, MCP, REST, WS) sprouted it, so the operator
@@ -57,12 +57,67 @@ It leans on three Phase 1 backend capabilities:
 
 ---
 
-## 2. REST surface consumed by the Greenhouse
+## 2. Installed lifecycle and Botanist-key handoff
 
-All endpoints are served by the Go Stem on its API port (default `:8080`) and
-authenticated with the Botanist bearer key. `BOTANIST_KEY` sets it explicitly; if
-unset, the Stem generates one on first run and persists it to `.tendril/api-key`
-(printed once to the log); the API is never served unauthenticated. Handlers:
+Greenhouse is optional and separate from the Stem. The governed installer
+places the installed image and `/usr/local/sbin/opentendril-greenhouse` wrapper
+without requiring an OpenTendril repository checkout or Compose invocation.
+Use explicit administrator authority for lifecycle calls:
+
+```bash
+sudo /usr/local/sbin/opentendril-greenhouse start
+sudo /usr/local/sbin/opentendril-greenhouse stop
+sudo /usr/local/sbin/opentendril-greenhouse restart
+sudo /usr/local/sbin/opentendril-greenhouse status
+sudo /usr/local/sbin/opentendril-greenhouse check
+sudo /usr/local/sbin/opentendril-greenhouse address
+```
+
+The normal address is `http://127.0.0.1:4173`. `start` and `restart` require
+the Stem Unix socket at `/var/lib/opentendril-transport/stem.sock`. Installed
+Greenhouse uses Unix Stem transport only, with no normal TCP fallback. The
+browser-facing address binds to loopback only. `stop` affects Greenhouse only
+and does not stop the Stem. No Greenhouse-specific sudoers or `NOPASSWD` grant
+is installed. Repository Compose instructions below are development/reference
+material rather than the installed first-use path.
+
+The Stem always requires a non-empty Botanist key. It resolves an explicit
+`BOTANIST_KEY` first, then an existing persisted key, then generates and
+persists a key if neither exists. In this governed installation, a generated
+or reused persisted key is at `/home/tendril/.tendril/api-key`. An administrator
+deliberately obtains that value from the Stem account:
+
+```bash
+sudo -u tendril -H cat /home/tendril/.tendril/api-key
+```
+
+The Botanist explicitly copies the value into Greenhouse onboarding. If
+`BOTANIST_KEY` was explicitly configured, the administrator hands off that
+configured value instead of the file. This is the Botanist credential, not a
+Pollinator credential. Ordinary filesystem access to `/home/tendril` is not
+granted. The key is not mounted into Greenhouse or injected through Docker
+environment, and this handoff does not use or introduce a secret API/helper.
+
+Onboarding rejects empty and whitespace-only input. It first checks reachability
+with `/health`, then verifies the non-empty Botanist key with an authenticated
+session-list request before entering. An invalid key is rejected. The Stem Unix
+socket is transport reachability, not authentication. After successful
+onboarding, the browser persists the current connection state, including the
+key, in `localStorage` under `opentendril.connection`. REST requests send
+`Authorization: Bearer ...`; the browser WebSocket uses the existing
+authenticated `?key=` query mechanism because the browser WebSocket API cannot
+attach an Authorization header.
+
+The ordered installation-to-Fruit path is in
+[GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
+
+## 3. REST surface consumed by the Greenhouse
+
+The Stem serves `/health` for reachability. Protected API routes are served on
+its API port (default `:8080`) and require the Botanist bearer. The Stem always
+has a non-empty bearer: explicit `BOTANIST_KEY`, then an existing persisted
+key, then a generated and persisted key at `/home/tendril/.tendril/api-key` in
+this governed installation. Handlers:
 `cmd/stem/internal/api/sessions.go`.
 
 The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
@@ -72,7 +127,8 @@ The canonical path is `/v1/phytomers` (a session is a Phytomer). The legacy
 | Method & path | Used for |
 | --- | --- |
 | `GET /health` | Onboarding reachability check. |
-| `GET /v1/phytomers` | The session rail; also the onboarding key-validation call. |
+| `GET /v1/phytomers` | Canonical Phytomer list route. |
+| `GET /v1/sessions` | Existing session alias used by onboarding to validate the Botanist key and by the current Work rail. |
 | `POST /v1/phytomers` | Creates a Phytomer session for other clients. Greenhouse normal work does not call it. |
 | `PATCH /v1/phytomers/{id}` | Update a session's preferences (model, genotype, substrate, …). |
 | `DELETE /v1/phytomers/{id}` | Prune a session. |
@@ -111,12 +167,28 @@ There is no pending-confirmation EventBus event. While Greenhouse is open it rea
 
 Approve and Deny call the Botanist routes above through the same bearer as the rest of the client. The row stays visible until a list read that starts after the POST has settled returns a new list. Greenhouse does not remove a row because the POST succeeded, because the browser clock is past `expiresAt`, or because an EventBus frame arrived. `404` and `409` stay unsuccessful: missing, expired, or no longer open, using the Stem response text when it distinguishes those cases. A POST that succeeds while the following list read fails keeps the previous list and says the action response was received but the list could not be reconciled. A later list read may replace that list. It does not turn an uncertain or failed action into approval or denial. Nothing in this surface calls a resume route or starts a Seed or Sprout.
 
+Normal work selects a configured Substrate, accepts a task and verifier argv,
+and dispatches detached Seed work. The Stem returns the canonical Phytomer and
+Greenhouse follows its current observation. The Botanist uses Botanist
+authority; no Pollinator credential or DelegationGrant is required. The
+Workbench presents the Seed goal, configured Substrate, current Seed status,
+Sprout activity, verification progress, and structured failures. It permits
+continuation while supported and while the Seed remains running, and exposes
+the terminal state. It reads deterministic Fruit inventory and shows repository,
+branch, commit, and review state when supplied by the Stem. Internal identifiers
+remain in technical details. Greenhouse does not run the verifier in the
+browser, infer Fruit from branch names or commit text, or merge Fruit
+automatically. The default branch remains unchanged until the Botanist separately
+reviews and accepts/merges the Fruit.
+
 Normal work is `new work -> detached Seed -> canonical Phytomer -> current-state watch -> optional continuation -> terminal Seed -> Fruit review`.
-The workbench shows the Seed goal, configured Substrate, Seed status, iteration count, latest Sprout state, the recorded `terrariumProvider` when present, verification progress, and structured failure evidence. Host execution is labeled as bypassing Terrarium isolation because that is the recorded provider contract. An absent `terrariumProvider` stays unknown. Internal ids, provider diagnostics, the unified diff, and Seed logs stay behind technical details. Greenhouse does not run the verifier, does not infer Fruit review state from branch or commit text, and does not claim Fruit when the Stem omitted branch and commit provenance. A transport failure during Seed dispatch keeps the original request and idempotency key, refreshes Phytomer state from the Stem, and retries only that same request. A malformed successful response keeps that same request as well. Greenhouse retains one unresolved retry identity and resolves it only through same-key Seed retry. That identity is the exact request, stored in browser session storage, and restored on boot before a new Seed can be dispatched. A valid successful response clears it and selects the returned canonical Phytomer. An explicit HTTP rejection clears it. Another transport failure or a malformed success leaves it in place. Reload restores the identity and does not send the Seed request again. Seed lifecycle state still comes from Stem observation and the Seed collection.
+The workbench shows the Seed goal, configured Substrate, Seed status, iteration count, latest Sprout state, the recorded `terrariumProvider` when present, verification progress, and structured failure evidence. Host execution is labeled as bypassing Terrarium isolation because that is the recorded provider contract. An absent `terrariumProvider` stays unknown. Internal ids, provider diagnostics, the unified diff, and Seed logs stay behind technical details.
+
+If Seed dispatch has a transport failure, Greenhouse keeps the original request and idempotency key, refreshes Phytomer state from the Stem, and retries only that same request. A malformed successful response also keeps that request. Greenhouse retains one unresolved retry identity in browser session storage and restores it on boot before a new Seed can be dispatched. A valid success clears it and selects the returned canonical Phytomer; an explicit HTTP rejection clears it too. Another transport failure or malformed success leaves it in place. Reload restores the identity but does not resend the Seed request. Seed lifecycle state still comes from Stem observation and the Seed collection.
 
 ---
 
-## 3. WebSocket surface: the EventBus gateway (`/ws`)
+## 4. WebSocket surface: the EventBus gateway (`/ws`)
 
 `/ws` requires the same bearer key as the REST surface. Native
 WebSocket clients (e.g. the CLI's gorilla/websocket dialer) send it as an
@@ -145,7 +217,7 @@ The registered event types are defined in
 subscribes a handler for every one of them. The UI's event → botanical-visual
 mapping for each type is tabulated in [`ui/README.md`](../ui/README.md).
 
-### 3.1 `?replay=N`: recent-history replay (public contract)
+### 4.1 `?replay=N`: recent-history replay (public contract)
 
 `/ws` accepts an **opt-in** `replay` query parameter:
 
@@ -172,24 +244,10 @@ guaranteed-complete event log. The durable log remains `history.db`.
 
 ---
 
-## 4. Stem changes made for the Greenhouse
+## 5. Repository Compose reference deployment
 
-The following backend changes shipped alongside the UI. All are **additive and
-backward-compatible**: existing CLI, MCP, and Stem-Grafting behavior is
-unchanged.
-
-| Change | File | Why | Blast radius |
-| --- | --- | --- | --- |
-| **`phenotypic-selection` registered as a first-class `EventType`** and added to `AllEventTypes()`. | `internal/eventbus/eventbus.go`, `internal/orchestrator/selection.go` | It was previously published with an ad-hoc `EventType("phenotypic-selection")` that no gateway subscription covered, so Genetic-Algorithm telemetry reached persistence sinks but **never the `/ws` live feed** (and, carrying no `sessionId`, was unreachable over REST too). | The gateway now forwards these events to every WS client, and `history.db` still records them as before. No change to selection logic or the event payload shape. |
-| **`/ws?replay=N`** opt-in recent-history replay. | `internal/gateway/gateway.go` | Lets a refreshed/reconnected client recover session-less sequence telemetry (see §3.1). | Only active when the query parameter is supplied; default connections are byte-for-byte unchanged. Bounded by the bus's existing 100-event window. |
-| **`GATEWAY_PORT` env var** for the standalone WS listener (default `9090`). | `cmd/stem/cmdserve.go` | Allows running a second Stem (or the UI's dev Stem) without a port clash on the auxiliary gateway. | Purely additive; unset preserves the previous `:9090` default. |
-| **Graceful gateway-bind degradation.** | `cmd/stem/cmdserve.go` | The standalone `:9090` listener previously `log.Fatalf`'d: a port conflict there killed the **entire API server**. It now logs a warning and continues; the same `/ws` surface is already mounted on the main API mux, so live telemetry still works. | Strictly more robust. The main API `/ws` endpoint is unaffected and remains the primary WebSocket surface. |
-
----
-
-## 5. Deployment - the containerized UI front
-
-The Greenhouse ships as a **separate, optional, isolated, containerized
+For repository development and reference deployment, the Greenhouse is a
+**separate, optional, isolated, containerized
 component**: a hardened nginx container (built by
 [`ui/Dockerfile`](../ui/Dockerfile), configured by
 [`ui/nginx/default.conf.template`](../ui/nginx/default.conf.template)) that
@@ -198,7 +256,7 @@ surface, giving the browser a single origin. The Stem itself stays **on the
 host and headless**: it never serves the UI, and the system is fully
 operable with this container absent.
 
-The normal local path uses the Stem's authenticated Unix-domain socket.
+The Compose Unix-transport reference uses the Stem's authenticated Unix-domain socket.
 `--profile ui` bind-mounts only `/var/lib/opentendril-transport` into the
 container, read-only, and does not create that path if it is missing. The
 Greenhouse does not use host networking and does not need
@@ -226,13 +284,14 @@ Greenhouse does not use host networking and does not need
   `/var/lib/opentendril-transport/stem.sock`: the same authenticated mux the
   Stem already serves on loopback TCP. Socket reachability is not
   authorization.
-- **Single origin, no CORS:** the browser only ever talks to the container, so
-  the Stem needs no CORS headers (adding them was explicitly rejected).
+- **Single origin, no CORS:** the browser only talks to the container, so the
+  Stem needs no CORS headers.
   In development, Vite's proxy plays the same role via `STEM_TARGET`.
-- **Auth preserved:** the proxy forwards the operator's bearer key untouched;
-  the Stem's `withAPIKeyAuth` remains the sole authority. Only `/health`,
-  `/v1*`, and `/ws` are proxied; nothing else on the host is reachable. The
-  Greenhouse holds no Botanist key.
+- **Auth preserved:** the proxy forwards the Botanist bearer untouched; the
+  Stem remains the authority. Only `/health`, `/v1*`, and `/ws` are proxied;
+  nothing else on the host is reachable. The Greenhouse container does not
+  hold the key. The browser stores the configured connection, including the
+  key, in `localStorage` and presents it to the Stem.
 - **WebSocket upgrade:** the `/ws` proxy speaks HTTP/1.1 with
   `Upgrade`/`Connection` headers against the same Unix socket. Explicit TCP
   mode (`--profile ui-tcp`) still prefers the dedicated gateway listener
@@ -255,10 +314,5 @@ Greenhouse does not use host networking and does not need
   `STEM_HOST` at container start, and mounts no
   `/var/lib/opentendril-transport` bind. A missing local socket on
   `--profile ui` is a transport failure; it does not select TCP.
-- **Growth path:** any future server-side layer (BFF, operator auth/SSO,
-  enterprise integration, the optional concierge mini-model) grows
-  **inside this UI component**, never in the Stem. The Stem's surface stays
-  the headless CLI/MCP/OpenAPI capability core.
-
 See [`ui/README.md`](../ui/README.md) for commands, configuration variables,
 and the manual static-build alternative.

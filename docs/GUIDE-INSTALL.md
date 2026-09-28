@@ -5,7 +5,7 @@ Stem running as its own operating-system principal, holding credentials no
 Pollinator can read, on a Linux Terroir.
 
 **It is one worked example, not the definition of a correct installation.** What
-makes an installation sound is a set of properties — the *invariants* below — and
+makes an installation sound is a set of properties - the *invariants* below - and
 several of the choices made here could be made differently without weakening any
 of them. Where that is true, the step says so, and the [Variations](#variations)
 section shows what changes.
@@ -26,7 +26,7 @@ sudo -u tendril -i tendril hardiness
 
 **That command reports; it does not gate.** It tells you what is true about this
 Terroir and stops there. A weak finding may describe something you chose
-knowingly — running the Stem as yourself on a laptop is a legitimate
+knowingly - running the Stem as yourself on a laptop is a legitimate
 configuration, not a failed installation. Hardening is opt-out here, so the
 report informs your judgement rather than substituting for it. Its exit status is
 always zero.
@@ -47,7 +47,7 @@ or merely *recorded*. Every step below names the one it serves.
 | | Invariant | Why it decides the boundary |
 |---|---|---|
 | **P1** | The Stem's control plane belongs to a principal distinct from every account that hosts Pollinators | If a caller owns the control plane it can rewrite `grants.yaml` and ignore the binary entirely |
-| **P2** | No Pollinator-hosting account can *become* that principal | Escalation makes ownership cosmetic — a caller that can `sudo` to the Stem simply is the Stem |
+| **P2** | No Pollinator-hosting account can *become* that principal | Escalation makes ownership cosmetic - a caller that can `sudo` to the Stem simply is the Stem |
 | **P3** | No Pollinator-hosting account can read the Stem's credential material | A caller that can read a credential uses it directly, without asking the Stem and without appearing in the audit lane |
 | **P4** | A caller proves its Pollen with an issued credential rather than declaring one | A declared identity constrains only callers who choose to be honest |
 | **P5** | No Pollinator-hosting account can write the binary the Stem executes, or anything on its resolution path | Credential ownership is worthless if the binary enforcing it can be replaced before the next start |
@@ -63,12 +63,12 @@ instantiates the value in bold; [Variations](#variations) covers the rest.
 
 | Axis | Options | Constrained by |
 |---|---|---|
-| Binary provenance | **verified precompiled release** / compiled from source / package manager | — |
-| Build principal | **none — the release is obtained, not compiled** / a separate build account / the Stem's own account | — |
+| Binary provenance | **verified precompiled release** / compiled from source / package manager | - |
+| Build principal | **none - the release is obtained, not compiled** / a separate build account / the Stem's own account | - |
 | Binary location | **the Stem's own home** / a system location | P5 only |
-| Lifecycle | **system service** / user service / foreground | — |
-| State directory | **a conventional home** / a service state directory | — |
-| Container access | **rootless daemon** / Firecracker / rootful daemon | **P2 — genuinely constrained** |
+| Lifecycle | **system service** / user service / foreground | - |
+| State directory | **a conventional home** / a service state directory | - |
+| Container access | **rootless daemon** / Firecracker / rootful daemon | **P2 - genuinely constrained** |
 
 Container access is the one axis that can destroy an invariant on its own.
 Membership of a container-daemon group with a **rootful** daemon is
@@ -84,7 +84,7 @@ This is the single fact that most often produces an installation that looks righ
 and is not.
 
 `tendril serve`, `tendril pollinator`, `tendril hardiness` and the Model Context
-Protocol surface use their Stem process state under `./.tendril` — relative to
+Protocol surface use their Stem process state under `./.tendril` - relative to
 the **current directory of the process**. The environment file is read the same
 way: `./.env` and nothing else. This process state is distinct from the ordinary
 Substrate registry, which is account-global at `~/.tendril/substrates.yaml`.
@@ -95,7 +95,7 @@ Two consequences to hold on to:
 
 * Every command marked *as tendril* below must be run from `/home/tendril`. Run
   `tendril pollinator issue` from somewhere else and it writes a credential store
-  the running Stem will never read — and nothing will tell you.
+  the running Stem will never read - and nothing will tell you.
 * **The Stem's working directory must not be a repository checkout.** A checkout
   has its own `.tendril/` holding tracked genome, genotypes and sequences;
   pointing the control plane there would drop the bearer key, the credential
@@ -147,7 +147,7 @@ clone. It gets its own, and **the remote is the only thing the two share**.
 > - Each managed run that produces committed reviewable Fruit retains/publishes its own `sprout/task-<stepID>` Fruit.
 > - The Botanist reviews each Fruit separately.
 
-The boundary and the workflow are the same mechanism here — nothing needs to be
+The boundary and the workflow are the same mechanism here - nothing needs to be
 shared between the accounts, because everything already travels through the
 remote.
 
@@ -156,13 +156,13 @@ remote.
 # The procedure
 
 Commands marked **[root]** need `sudo`; the rest run as the named user. **Do the
-stages in order** — container access comes first, because a user in a
+stages in order** - container access comes first, because a user in a
 root-equivalent group makes every later stage cosmetic.
 
 Prerequisites for the normal path:
 - A Terrarium provider. This guide instantiates rootless Docker Engine in Stage 2.
 - Git, where the Stem clones and manages Substrates.
-- An LLM — local [Ollama](https://ollama.com) by default, or a cloud provider key.
+- An LLM - local [Ollama](https://ollama.com) by default, or a cloud provider key.
 - Access to the target GitHub repository. An empty repository is supported for
   the managed GitHub App/API path through `tendril git bootstrap`; other
   postures still require an existing Git base.
@@ -214,9 +214,9 @@ start.
 
 ---
 
-## Stage 1 — Create the Stem's principal
+## Stage 1 - Create the Stem's principal
 
-> **Serves P1.** Axis: state directory (*free*) — this guide instantiates a
+> **Serves P1.** Axis: state directory (*free*) - this guide instantiates a
 > conventional home at `/home/tendril`.
 
 ```bash
@@ -231,7 +231,7 @@ grep -E "^tendril:" /etc/subuid /etc/subgid   # must print two lines
 loginctl enable-linger tendril
 ```
 
-If the `grep` printed nothing, add the ranges before continuing — rootless Docker
+If the `grep` printed nothing, add the ranges before continuing - rootless Docker
 cannot start without them:
 
 ```bash
@@ -243,9 +243,9 @@ usermod --add-subuids 165536-231071 --add-subgids 165536-231071 tendril
 
 ---
 
-## Stage 2 — Rootless containers for that principal
+## Stage 2 - Rootless containers for that principal
 
-> **Serves P2.** Axis: container access — **constrained**. A rootful daemon is
+> **Serves P2.** Axis: container access - **constrained**. A rootful daemon is
 > not a supported alternative; Firecracker is (see Variations).
 
 A rootless daemon runs as an ordinary user, so a container cannot become root on
@@ -260,10 +260,10 @@ is the package that provides `dockerd-rootless-setuptool.sh`.
 > **Do not `apt-get install docker.io`.** Ubuntu's `docker.io` package is not
 > the governed path: it does not ship `dockerd-rootless-setuptool.sh`, and it
 > starts a rootful daemon. If `docker.io` is already installed, remove it
-> before adding Docker's repository — the two stacks conflict.
+> before adding Docker's repository - the two stacks conflict.
 
 ```bash
-# [root] Ubuntu 24.04 LTS — Docker Engine. docker-ce-rootless-extras provides
+# [root] Ubuntu 24.04 LTS - Docker Engine. docker-ce-rootless-extras provides
 #        dockerd-rootless-setuptool.sh.
 apt-get remove -y docker.io
 apt-get update && apt-get install -y ca-certificates curl
@@ -293,7 +293,7 @@ Engine's `docker-ce-rootless-extras` from
 https://download.docker.com/linux/ubuntu does.
 
 The `docker-ce` package starts a rootful `docker.service`. If that unit is
-present — from this install or from leftover `docker.io` — disable it before
+present - from this install or from leftover `docker.io` - disable it before
 the setuptool:
 
 ```bash
@@ -329,7 +329,7 @@ All three container limits Tendril sets are enforced under rootless:
 | `--pids-limit 512` | 512 | `pids.max: 512` |
 
 The daemon warns that `io.max` is unsupported. That is block-IO throttling, which
-Tendril never requests — there is no `--device-read-bps` or `--blkio-weight`
+Tendril never requests - there is no `--device-read-bps` or `--blkio-weight`
 anywhere in the codebase, so nothing it relies on is silently dropped. The
 consequence to know: there is no disk-throughput bound on a Sprout. Where that
 matters, the Firecracker provider bounds it by construction and needs only
@@ -340,17 +340,17 @@ Sprout images on demand, so this costs a slow first run rather than any work.
 
 ---
 
-## Stage 3 — Obtain and place the binary
+## Stage 3 - Obtain and place the binary
 
 > **Serves P5.** Axes: binary provenance, build principal and binary location
-> (*all free*) — this guide instantiates *a verified precompiled OpenTendril
+> (*all free*) - this guide instantiates *a verified precompiled OpenTendril
 > release, installed into the Stem's own home*.
 
 What P5 requires is only that no Pollinator-hosting account can write the binary
 or any directory on the path used to reach it. A binary owned by `tendril` inside
 a home that other accounts cannot traverse satisfies that; so does a root-owned
 binary in a system location. Neither is more secure than the other, and the
-choice is logistics — see Variations.
+choice is logistics - see Variations.
 
 The current OpenTendril release is pinned once as `RELEASE` in the commands
 below. Each platform archive contains two independent executables, `tendril`
@@ -415,7 +415,7 @@ this stage as a way of reinitializing the Stem.
 
 ---
 
-## Stage 4 — Create the control plane
+## Stage 4 - Create the control plane
 
 > **Serves P1 and P3.** The directory location within the home is *preference*;
 > what matters is that it belongs to the Stem and no caller can read its
@@ -450,11 +450,11 @@ export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock
 
 Both LLM paths create the environment file **before** running the wizard.
 `tendril init` writes to `~/.tendril/.env` when no `./.env` exists, and the
-Stem reads `./.env` — so an empty file here is what makes the wizard write
+Stem reads `./.env` - so an empty file here is what makes the wizard write
 where the Stem will look:
 
 ```bash
-# as tendril, in /home/tendril — both LLM paths
+# as tendril, in /home/tendril - both LLM paths
 touch /home/tendril/.env
 chmod 600 /home/tendril/.env
 ```
@@ -463,7 +463,7 @@ chmod 600 /home/tendril/.env
 cloud-provider path.
 
 ```bash
-# as tendril — local Ollama only
+# as tendril - local Ollama only
 ollama pull llama3.2
 ```
 
@@ -474,17 +474,17 @@ Then run the wizard:
 tendril init
 ```
 
-The wizard is Ollama-first: it detects a running local instance — including one
-with no models pulled yet — and defaults to fully local inference. Decline and
+The wizard is Ollama-first: it detects a running local instance - including one
+with no models pulled yet - and defaults to fully local inference. Decline and
 it walks you through a cloud provider and its key.
 
 **Check:** `grep DEFAULT_LLM_PROVIDER /home/tendril/.env` prints your choice.
 
 ---
 
-## Stage 5 — Install the credential and configure the connection
+## Stage 5 - Install the credential and configure the connection
 
-> **Serves P3.** The Substrate's `checkout` mode is *constrained by P1* —
+> **Serves P3.** The Substrate's `checkout` mode is *constrained by P1* -
 > `mode: path` cannot work once the Stem cannot read your home.
 
 Create the GitHub App and download its private key **before** this step.
@@ -513,9 +513,9 @@ sudo -u tendril sh -c 'umask 077 && cat > /home/tendril/.tendril/app.pem'
 ```
 
 *(If you must use a transfer mechanism like `scp`, it must be executed through a
-trusted administrative context—such as connecting directly as `root`—that does
-not expose the PEM to the Pollinator-hosting account. A shared location like
-`/tmp` is not neutral with respect to Unix file ownership.)*
+trusted administrative context, such as connecting directly as `root`, that
+does not expose the PEM to the Pollinator-hosting account. A shared location
+like `/tmp` is not neutral with respect to Unix file ownership.)*
 
 **Check:** `sudo -u tendril test -r /home/tendril/.tendril/app.pem && echo ok`
 prints `ok`, while `cat /home/tendril/.tendril/app.pem` as your own account is
@@ -551,9 +551,16 @@ is a deliberate alternate. It configures a connection only; no setup operation
 implicitly grants Pollinator authority. No grant means every delegated
 invocation is denied, which is the secure default.
 
-Create the first grant through the control-plane command; do not edit
-`.tendril/grants.yaml` by hand for ordinary first use. Name every operation
-class explicitly; there is no hidden or wildcard authority:
+The Botanist's normal first-use path uses the installed Greenhouse with
+Botanist authority. It does not require a Pollinator credential, access token,
+or DelegationGrant. The grant procedure below is for a separate delegated
+Pollinator and is not part of Greenhouse first use.
+
+### Optional delegated Pollinator grant
+
+Create a Pollinator grant through the control-plane command; do not edit
+`.tendril/grants.yaml` by hand for delegated integration setup. Name every
+operation class explicitly; there is no hidden or wildcard authority:
 
 ```bash
 tendril delegation create \
@@ -584,9 +591,9 @@ tendril delegation grants --pollen claude
 
 `seed.grow` is the bounded task hand-off. `phytomer.continue` accepts additional
 intent for the active owned Phytomer. `sprout.watch` is the read side: it lets
-this Pollen observe the Phytomer the Stem created for that Seed — REST
-`GET /v1/phytomers/{sessionId}/watch` and MCP `sproutWatch` — and also the
-stored run records, persisted events, and live stream — and nothing anyone else
+this Pollen observe the Phytomer the Stem created for that Seed - REST
+`GET /v1/phytomers/{sessionId}/watch` and MCP `sproutWatch` - and also the
+stored run records, persisted events, and live stream - and nothing anyone else
 dispatched. Each grant is independent. `sprout.grow` is not part of this
 first-use grant.
 
@@ -639,7 +646,7 @@ path where the Botanist can grant it.
 
 ### Commit signing
 
-*Preference in general — **required** if the target repository demands signed
+*Preference in general - **required** if the target repository demands signed
 commits.* Many do, either through a repository ruleset or classic branch
 protection, and an unsigned commit is then rejected at push time. Discovering
 that during the Stem's first delegated run is a bad way to learn it, so settle it
@@ -650,7 +657,7 @@ the App:
 
 | Posture | Signing | What you configure |
 |---|---|---|
-| **GitHub App** (`--posture app`) | GitHub signs server-side; commits show **Verified** | nothing — it is automatic |
+| **GitHub App** (`--posture app`) | GitHub signs server-side; commits show **Verified** | nothing - it is automatic |
 | Personal Access Token (`--posture pat`) | your own GPG key, signed locally | a dedicated key, and its public half uploaded to GitHub |
 
 With the App posture the Stem commits through the API (`commit: api`), so no key
@@ -682,7 +689,7 @@ gh api repos/<owner>/<repo>/rulesets --jq '.[].name'
 gh api repos/<owner>/<repo>/rulesets/<id> --jq '[.rules[].type]'
 ```
 
-A `required_signatures` rule means every commit must be signed — including the
+A `required_signatures` rule means every commit must be signed - including the
 Stem's. Note that the classic endpoint
 (`repos/<owner>/<repo>/branches/main/protection`) reports nothing when protection
 comes from a ruleset, so checking it alone will tell you a repository is
@@ -690,16 +697,19 @@ unprotected when it is not.
 
 ---
 
-## Stage 6 — Issue a credential per Pollinator
+## Stage 6 - Optional: issue a credential per Pollinator
 
 > **Serves P4.**
+
+This stage is only for a separate Pollinator that will call the Stem. It is not
+needed for the Botanist's Greenhouse first-use path.
 
 ```bash
 # as tendril, in /home/tendril
 tendril pollinator issue --pollen claude --note "laptop"
 ```
 
-The secret prints **once** and is never stored — only its SHA-256 digest is kept,
+The secret prints **once** and is never stored - only its SHA-256 digest is kept,
 so a leaked store is not a leaked credential. It begins `tendril_refresh_`, which makes it
 recognisable in a log or a configuration file. That secret is the **durable
 refresh root** for this Pollinator. Give it to that Pollinator; do not give the
@@ -727,7 +737,7 @@ tendril pollinator list
 
 ---
 
-## Stage 7 — Run the Stem as a service
+## Stage 7 - Run the Stem as a service
 
 > **Preference.** Axis: lifecycle (*free*). A system service, a user service, and
 > a foreground process are valid variations when the invariants are satisfied.
@@ -766,7 +776,7 @@ PrivateTmp=yes
 ProtectSystem=strict
 # ProtectHome= is deliberately absent. It empties /home inside the service's
 # namespace, and the Stem's binary, control plane and managed checkouts all live
-# there — systemd cannot even resolve ExecStart, failing with 203/EXEC.
+# there - systemd cannot even resolve ExecStart, failing with 203/EXEC.
 # ReadWritePaths does not rescue that lookup. Little is lost: the Stem runs as
 # its own unprivileged user, so ordinary permissions already keep it out of
 # other accounts' homes.
@@ -792,15 +802,17 @@ journalctl -u tendril -f
 > Administrator overrides belong in `/etc/systemd/system/tendril.service.d/*.conf` (drop-ins)
 > or a full override unit at `/etc/systemd/system/tendril.service` which shadows the release baseline.
 
-On first start the Stem generates a bearer key at
-`/home/tendril/.tendril/api-key`, mode `0600`. That key authenticates **you**,
-the Botanist (`BOTANIST_KEY` sets it explicitly when you prefer not to use the
-file). It is not what a Pollinator uses.
+The Stem requires a non-empty Botanist bearer. Its resolution order is an
+explicit `BOTANIST_KEY`, an existing persisted key, then a newly generated and
+persisted key. When the Stem generated or reused its persisted key in this
+governed installation, its path is `/home/tendril/.tendril/api-key` (mode
+`0600`). An explicit `BOTANIST_KEY` takes precedence over the file. This is the
+Botanist credential, not a Pollinator credential.
 
 The daemon binds **loopback by default** (`TERROIR_HOST` unset → `127.0.0.1`).
 When `TENDRIL_LOCAL_SOCKET` is unset, no Unix-domain socket is created and TCP
-behavior is unchanged. When it is set to an absolute path — the governed unit
-sets `/var/lib/opentendril-transport/stem.sock` — the Stem serves the **same
+behavior is unchanged. When it is set to an absolute path - the governed unit
+sets `/var/lib/opentendril-transport/stem.sock` - the Stem serves the **same
 authenticated HTTP mux** on that socket as well as on loopback TCP. The socket
 is transport only: connecting to it grants no extra trust. Botanist bearer
 checks and Pollinator credential / access-token semantics are unchanged.
@@ -812,11 +824,44 @@ credentials, grants, provider credentials, or other Stem control-plane state.
 The socket file itself is connectable by local clients. It is not under
 `/home/tendril`.
 
-The containerized Greenhouse (`docker compose --profile ui up -d`) reaches this
-socket through a read-only mount of `/var/lib/opentendril-transport` only. The
-browser talks only to the Greenhouse origin (`http://127.0.0.1:4173` by
-default). The Stem stays on loopback TCP when `TERROIR_HOST` is unset. See
-[GREENHOUSE.md](./GREENHOUSE.md).
+The installed Greenhouse is optional and separate from the Stem. The governed
+installer places its image and `/usr/local/sbin/opentendril-greenhouse`. Start
+it only after the configured Stem has created its Unix socket. The wrapper
+requires explicit administrator authority for every command:
+
+```bash
+sudo /usr/local/sbin/opentendril-greenhouse start
+sudo /usr/local/sbin/opentendril-greenhouse stop
+sudo /usr/local/sbin/opentendril-greenhouse restart
+sudo /usr/local/sbin/opentendril-greenhouse status
+sudo /usr/local/sbin/opentendril-greenhouse check
+sudo /usr/local/sbin/opentendril-greenhouse address
+```
+
+The normal address is `http://127.0.0.1:4173`. `start` and `restart` require
+`/var/lib/opentendril-transport/stem.sock`. Installed Greenhouse uses Unix
+transport only, with no normal TCP fallback, and publishes its browser address
+on loopback only. `stop` affects Greenhouse only and does not stop the Stem.
+No Greenhouse-specific sudoers or `NOPASSWD` grant is installed. This installed
+path needs no OpenTendril repository checkout or Compose invocation; repository
+Compose instructions are development/reference material.
+
+The Stem's Unix socket is transport reachability, not Botanist authentication.
+The Greenhouse container mounts only `/var/lib/opentendril-transport`,
+read-only. It does not mount `/home/tendril` or the Botanist key, and this
+handoff does not use or introduce a secret API/helper. To deliberately hand off
+a generated or persisted Botanist key to the browser, the administrator can
+display it from the Stem account:
+
+```bash
+sudo -u tendril -H cat /home/tendril/.tendril/api-key
+```
+
+The Botanist explicitly copies that value into onboarding. If `BOTANIST_KEY`
+was explicitly configured, hand off that configured value instead of using the
+file. Ordinary filesystem access to `/home/tendril` is not granted. See
+[GREENHOUSE.md](./GREENHOUSE.md) and the ordered
+[GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
 
 ### Remote Pollinator HTTPS listener
 
@@ -871,7 +916,7 @@ readiness response; it does not run health checks, publish events, inspect
 repositories, contact providers, invoke Docker, create Sprouts or Terrariums,
 or expose the local owner UID.
 
-If the service fails at `203/EXEC` — *"Unable to locate executable"* — a
+If the service fails at `203/EXEC` - *"Unable to locate executable"* - a
 sandboxing directive is hiding the path rather than the path being wrong. Check
 `ProtectHome=` is absent, then `ProtectSystem=`. Confirm the binary is reachable
 outside the unit first:
@@ -886,13 +931,16 @@ in all three places it appears.
 
 ---
 
-## Stage 8 — Connect the Pollinator
+## Stage 8 - Optional: connect the Pollinator
+
+This stage is for delegated Pollinator clients. The Botanist's Greenhouse lane
+uses Botanist authority and does not require this setup.
 
 > **Mechanism, not an invariant.** How a Pollinator reaches the Stem is decided
 > by the delegation gate rather than by this guide.
 
 The ordinary Pollinator-hosting account does not receive the protected `tendril`
-binary. It installs **only** `tendril-mcp` from a verified release archive — the
+binary. It installs **only** `tendril-mcp` from a verified release archive - the
 same bundle Stage 3 used, independently downloaded and checksum-verified on this
 account. Do not run `make install-mcp-client` on the normal path.
 
@@ -1073,11 +1121,11 @@ mints with the durable root, and forwards only after the Stem accepts the root.
 
 ### Handing off a bounded Seed
 
-`seed.grow` grows a **Seed** — a bounded intent: a goal, a verify command that
+`seed.grow` grows a **Seed** - a bounded intent: a goal, a verify command that
 must exit 0, and iteration/time bounds. A Sprout builds toward the goal and the
 Stem runs the verify command deterministically in a network-sealed Terrarium
-against the accumulated Seed candidate; that exit code — never the Sprout's own
-claim — is the verdict. Structured verification outcomes distinguish a failed
+against the accumulated Seed candidate; that exit code - never the Sprout's own
+claim - is the verdict. Structured verification outcomes distinguish a failed
 predicate from a timeout or an inability to execute the verifier. Internal
 execution paths cannot become Fruit. The work lands on
 a branch for review as **Fruit**; nothing is ever merged.
@@ -1091,7 +1139,7 @@ that token. The response contains the token; keep it in the Pollinator's own
 process or protected storage, not in the Stem's control plane:
 
 ```bash
-# from the Pollinator account — the durable root is sent only to this route
+# from the Pollinator account - the durable root is sent only to this route
 STEM=https://stem.example.net:8443
 curl -sS -X POST "$STEM/v1/pollinator/token" \
   -H "Authorization: Bearer <durable-pollinator-root>"
@@ -1099,7 +1147,7 @@ curl -sS -X POST "$STEM/v1/pollinator/token" \
 ```
 
 ```bash
-# Dispatch a bounded Seed. Substrate must be myrepo — the name granted above.
+# Dispatch a bounded Seed. Substrate must be myrepo - the name granted above.
 curl -s -X POST "$STEM/v1/seeds/grow" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -1190,7 +1238,7 @@ Grant names remain dotted. Each grant is checked independently. Granting
 
 ---
 
-## Stage 9 — Administer without undoing it
+## Stage 9 - Administer without undoing it
 
 > **Serves P2.**
 
@@ -1198,7 +1246,7 @@ Grant names remain dotted. Each grant is checked independently. Granting
 whether any of the above means anything.
 
 **If an account that hosts Pollinators can `sudo` to `tendril`, there is no
-boundary** — a Pollinator running as that account simply becomes the Stem. Two
+boundary** - a Pollinator running as that account simply becomes the Stem. Two
 details make this sharper than it looks:
 
 * `NOPASSWD` hands the Stem's identity to anything running as you.
@@ -1207,7 +1255,7 @@ details make this sharper than it looks:
   window.
 
 ```sudoers
-# [root] visudo — require a password every time, no cached ticket
+# [root] visudo - require a password every time, no cached ticket
 Defaults:botanist  timestamp_timeout=0
 botanist ALL=(tendril) PASSWD: ALL
 ```
@@ -1219,7 +1267,7 @@ Better still, administer `tendril` from a session that does not host Pollinators
 ## Verify the installation
 
 Run the report from **both** sides. They answer different questions, and only
-together do they describe the boundary — so a finding that differs between them
+together do they describe the boundary - so a finding that differs between them
 is expected, not a fault.
 
 | Finding | Authoritative side | Why |
@@ -1229,7 +1277,7 @@ is expected, not a fault.
 | Principal, escalation, host configuration, control-plane reachability | **the Stem** | Properties of the Stem's own environment |
 
 ```bash
-# as tendril — the Stem's own view
+# as tendril - the Stem's own view
 sudo -u tendril -i tendril hardiness
 ```
 
@@ -1241,7 +1289,7 @@ not `tendril`. That is the intended outcome: `command -v tendril` prints
 nothing. The Stem-side report above remains the authoritative P5 reading.
 Hardiness is a control-plane operation; if its output tells you to run it again
 from a Pollinator-hosting account, that sentence does not apply to this
-posture — that account intentionally has no full Stem CLI.
+posture - that account intentionally has no full Stem CLI.
 
 From the ordinary account, confirm the other side of the boundary without that
 binary:
@@ -1252,16 +1300,16 @@ command -v tendril
 
 test -r /home/tendril/.tendril/api-key; echo $?
 test -r /home/tendril/.tendril/pollinators.json; echo $?
-# both non-zero — this account cannot read Stem control-plane material
+# both non-zero - this account cannot read Stem control-plane material
 ```
 
 Those `test -r` checks do not print file contents.
 
-If this account *does* resolve a `tendril` executable — a single-user install,
-or a leftover copy — run the caller's-view report from your home:
+If this account *does* resolve a `tendril` executable - a single-user install,
+or a leftover copy - run the caller's-view report from your home:
 
 ```bash
-# as your own account, from your own home — the caller's view
+# as your own account, from your own home - the caller's view
 cd ~ && tendril hardiness
 ```
 
@@ -1271,7 +1319,7 @@ through group membership, and it examines the invoking user's own home as well a
 the control plane. If anything ever left credential material in your `~/.tendril`,
 this is where it surfaces.
 
-For reference, a **single-principal** installation reports like this — every
+For reference, a **single-principal** installation reports like this - every
 finding legible, exit status still zero:
 
 ```console
@@ -1285,8 +1333,8 @@ $ tendril hardiness
      A Pollinator that can read a credential can use it directly, without asking
      the Stem and without appearing in the audit lane.
 ✅ Nothing on the running binary's resolution chain is writable by others (…/bin/tendril)
-ℹ️  No Pollinator credentials issued — every Pollen is DECLARED, not proven
-ℹ️  No grants configured — every delegated invocation is denied (secure default)
+ℹ️  No Pollinator credentials issued - every Pollen is DECLARED, not proven
+ℹ️  No grants configured - every delegated invocation is denied (secure default)
 
 2 condition(s) mean delegation here is ADVISORY, not enforced.
 ```
@@ -1295,7 +1343,7 @@ $ tendril hardiness
 > **Run the report as the Stem for an authoritative P5 reading.** Executable
 > integrity is a property of the Stem's own binary; run from your account it
 > measures *your* binary, which is a different and less useful question. The two
-> runs answer different things and both are correct — see the note below on which
+> runs answer different things and both are correct - see the note below on which
 > side is authoritative for which finding.
 >
 > The Stem records which binary it is running, in
@@ -1370,8 +1418,8 @@ left in place. A full unit at `/etc/systemd/system/tendril.service` is treated
 as an administrator override that shadows the release baseline: it is preserved
 and reported, and the resulting effective service must still satisfy the
 governed floor. An exact known historical unit at that `/etc` path is migrated
-to the release-owned baseline. Any other `/etc` unit — including a one-byte
-manual edit — fails closed before mutation.
+to the release-owned baseline. Any other `/etc` unit - including a one-byte
+manual edit - fails closed before mutation.
 
 If a step fails after host files have changed, the installer attempts to restore
 the previous binaries, service layout, and prior active or inactive state. That
@@ -1384,7 +1432,7 @@ installer, then invoke `--governed-upgrade` with the named Pollinator and the
 same release pin. Do **not** pipe the installer into `sudo sh`.
 
 ```bash
-# [root] Linux amd64 — substitute the newer release tag.
+# [root] Linux amd64 - substitute the newer release tag.
 RELEASE=v0.5.0
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
@@ -1415,7 +1463,7 @@ path.
 ## Variations
 
 Each entry changes only the steps named. Choose an axis value once and keep it
-consistent — these are global choices, not per-step ones.
+consistent - these are global choices, not per-step ones.
 
 ### Compile from source
 
@@ -1465,7 +1513,7 @@ make install-mcp-client
 *Changes Stage 3. Invariants unaffected.*
 
 Give the `tendril` account the source-build dependencies above and its own
-source clone — kept separate from any managed checkout, which is reset on every
+source clone - kept separate from any managed checkout, which is reset on every
 run. It then builds and installs into its own `~/.local/bin` with no
 cross-account handoff. The cost is a compiler and a build path inside the
 account you are hardening.
@@ -1476,7 +1524,7 @@ account you are hardening.
 
 Install to `/usr/local/bin/tendril` owned by `root`, mode `0755`, and update
 `ExecStart=` in Stage 7. Both accounts then share one binary, which means both
-run the same version — convenient if you want that, and a coupling if you do not.
+run the same version - convenient if you want that, and a coupling if you do not.
 Watch `$PATH` order: a stale copy in `~/.local/bin` shadows `/usr/local/bin`.
 
 ### A user service, or no service at all
@@ -1485,7 +1533,7 @@ Watch `$PATH` order: a stale copy in `~/.local/bin` shadows `/usr/local/bin`.
 
 `systemctl --user` under the `tendril` account works identically given
 `loginctl enable-linger`. Running `tendril serve` in the foreground from
-`/home/tendril` is also fine — the control plane is the working directory either
+`/home/tendril` is also fine - the control plane is the working directory either
 way.
 
 ### A service state directory instead of a home
@@ -1502,7 +1550,7 @@ match. Rootless containers still need a real user session.
 *Changes Stage 2. Satisfies P2.*
 
 The Firecracker provider needs only `/dev/kvm`, whose group is not
-root-equivalent, and bounds disk throughput by construction — which rootless
+root-equivalent, and bounds disk throughput by construction - which rootless
 Docker does not. Configure the provider instead of installing a rootless daemon.
 
 ### A single principal (the Stem runs as you)
@@ -1521,8 +1569,8 @@ Pollinator account's PATH.
 
 **This fails P1, P2 and P3.** The Stem's credentials, its grants and its issued
 credential store all sit in a directory your own account owns. A Pollinator
-running as you can read the git credential and use it directly — without asking
-the Stem and without appearing in the audit lane — and can rewrite the grants
+running as you can read the git credential and use it directly - without asking
+the Stem and without appearing in the audit lane - and can rewrite the grants
 meant to constrain it. Grants and audit still record intent and catch accidents.
 They do not constrain a caller that chooses otherwise.
 
@@ -1541,7 +1589,7 @@ git check-ignore -v .tendril/api-key .tendril/pollinators.json .tendril/grants.y
 
 ## Moving from a single principal to a separate one
 
-Install the governed posture, then decommission the single-principal runtime —
+Install the governed posture, then decommission the single-principal runtime -
 do not relocate its control plane.
 
 The configuration has to change anyway (`checkout: mode: path` stops working,
@@ -1550,17 +1598,17 @@ changes who owns a file and says nothing about who has already copied it.
 
 > [!CAUTION]
 > **Do not delete a repository's `.tendril/` directory.** In a development
-> checkout it holds tracked content — genome, genotypes, sequences — beside
+> checkout it holds tracked content - genome, genotypes, sequences - beside
 > ignored runtime state. Removing it destroys part of the working tree. The
 > user-level `~/.tendril` is the one that goes.
 
 **1. Stop any Stem still running as the ordinary account.** A leftover process
 or unit that still serves as that account competes for port 8080 and can start
-an ungoverned Stem beside the governed one. Do not disable `tendril.service` —
+an ungoverned Stem beside the governed one. Do not disable `tendril.service` -
 that unit belongs to the governed Stem.
 
 ```bash
-# as the ordinary account — stop a foreground Stem in this session
+# as the ordinary account - stop a foreground Stem in this session
 # Ctrl-C the `tendril serve` process if it is running
 
 # [root] list units if a leftover system unit still starts a Stem as this
@@ -1592,7 +1640,7 @@ rm -rf ~/.tendril
 which -a tendril
 ```
 
-**5. Clear runtime state from the development checkout** — ignored files only,
+**5. Clear runtime state from the development checkout** - ignored files only,
 leaving tracked files intact:
 
 ```bash
@@ -1623,7 +1671,7 @@ git fetch origin
 git diff main...origin/<branch>
 ```
 
-**Inspect what the Stem did** — read-only, as the Stem:
+**Inspect what the Stem did** - read-only, as the Stem:
 
 ```bash
 sudo -u tendril -i
@@ -1663,11 +1711,11 @@ material in `$HOME` still surfaces: from there, run `tendril hardiness`.
 
 ## Related documents
 
-* [GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md) — short public installation
+* [GUIDE-INSTALL-QUICK.md](./GUIDE-INSTALL-QUICK.md) - short public installation
   entrypoint (local/evaluation and governed).
-* [GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md) — connection postures,
+* [GUIDE-GIT-CONNECTION.md](./GUIDE-GIT-CONNECTION.md) - connection postures,
   signing, and what each grant operation-class permits.
-* [GUIDE-HOST-TENDRIL.md](./GUIDE-HOST-TENDRIL.md) — running a Tendril directly on the Stem
+* [GUIDE-HOST-TENDRIL.md](./GUIDE-HOST-TENDRIL.md) - running a Tendril directly on the Stem
   host to reach locally authenticated command-line tools.
-* [GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) — client
+* [GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) - client
   configuration per Pollinator.

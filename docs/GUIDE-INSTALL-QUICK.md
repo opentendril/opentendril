@@ -11,8 +11,8 @@ existing governed Ubuntu host may be eligible for `--governed-upgrade`
 outside that matrix only after a read-only proof of the current governed
 posture. That is not fresh-install qualification.
 
-The deeper hardened/manual reference — invariants, rationale, the full
-procedure, variations, and troubleshooting — is
+The deeper hardened/manual reference: invariants, rationale, the full
+procedure, variations, and troubleshooting - is
 [GUIDE-INSTALL.md](./GUIDE-INSTALL.md). This page does not repeat those
 topics.
 
@@ -63,8 +63,10 @@ session is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md).
 
 Download `install.sh` and `checksums.txt` from the governed release below,
 verify the installer against the checksum file, then run it with
-administrative authority. Name the ordinary Pollinator-hosting account
-explicitly — not `root`, and not `tendril`.
+administrative authority. Name your ordinary account explicitly, not `root`
+or `tendril`. The installer's `--pollinator-user` option names that ordinary
+account for the operating-system boundary; it does not create a Pollinator
+identity or credential.
 
 Do **not** pipe the installer into `sudo sh`.
 
@@ -87,8 +89,10 @@ sudo sh install.sh \
   --version "${RELEASE}"
 ```
 
-The installer does not run `tendril init` and does not start the Stem. Complete
-configuration as the Stem, from `/home/tendril`.
+The installer verifies and installs the governed host components, including
+the stopped Stem service and optional Greenhouse. It does not run `tendril init`
+or start the Stem. Complete provider and Git/Substrate configuration as the
+Stem, from `/home/tendril`.
 
 An LLM is required before `tendril init`. Local
 [Ollama](https://ollama.com) is the worked default. A clean machine does not
@@ -112,8 +116,8 @@ sudo -u tendril -H bash -lc 'ollama pull llama3.2'
 model. Have a supported credential ready for the wizard (Anthropic, OpenAI,
 xAI, or Google).
 
-The wizard detects a running Ollama instance at `localhost:11434` — including
-one with no models pulled yet — and defaults to fully local inference. If none
+The wizard detects a running Ollama instance at `localhost:11434` - including
+one with no models pulled yet - and defaults to fully local inference. If none
 is reachable, it asks for a cloud provider and its key.
 
 Both paths create `/home/tendril/.env` before the wizard. `tendril init`
@@ -128,20 +132,45 @@ sudo -u tendril -H bash -lc 'cd /home/tendril && export DOCKER_HOST=unix:///run/
 sudo -u tendril -H bash -lc 'cd /home/tendril && /home/tendril/.local/bin/tendril hardiness'
 ```
 
-Git connection, the explicit `seed.grow` / `phytomer.continue` / `sprout.watch`
-grant, and Pollinator
-credentials still require Botanist intent — Stage 5 and Stage 6 of
-[GUIDE-INSTALL.md](./GUIDE-INSTALL.md). Configure those grants before starting
-the Stem. When configuration is complete, start it:
+The wizard configures the LLM provider. Next configure the Stem's Git identity
+and repository connection, add the named Substrate, and verify it. Stage 5 of
+[GUIDE-INSTALL.md](./GUIDE-INSTALL.md) gives the supported GitHub App and
+fine-grained PAT procedures. Verification requires a usable Git base; if the
+repository is empty, follow the bootstrap instructions there. The Botanist's
+Greenhouse path does not require a Pollinator credential, access token, or
+DelegationGrant.
+
+When the provider and Substrate are ready, start the configured Stem:
 
 ```bash
 # [root]
 systemctl enable --now tendril
+curl --fail --silent http://127.0.0.1:8080/health
 ```
 
-The first session after that is [GUIDE-QUICKSTART.md](./GUIDE-QUICKSTART.md):
-dispatch a Seed with the Pollinator credential, watch that Phytomer, and review
-the Git Fruit. `main` stays unchanged until a human merges.
+Start the separate, optional installed Greenhouse and ask its wrapper for the
+fixed local address:
+
+```bash
+sudo /usr/local/sbin/opentendril-greenhouse start
+sudo /usr/local/sbin/opentendril-greenhouse address
+```
+
+The address is `http://127.0.0.1:4173`. When the Stem generated its Botanist
+key, an administrator deliberately displays the protected value for the
+Botanist to copy into onboarding:
+
+```bash
+sudo -u tendril -H cat /home/tendril/.tendril/api-key
+```
+
+If `BOTANIST_KEY` was configured explicitly, hand off that configured value
+instead. Then select the verified Substrate, enter a meaningful task and
+verifier argv, start work, observe its settlement, and review the reported Git
+Fruit. Follow the ordered [Greenhouse first-use path](./GUIDE-QUICKSTART.md#first-governed-work-through-greenhouse).
+The default branch stays unchanged until the Botanist separately accepts and
+merges the Fruit. Pollinator, REST, and MCP instructions remain available for
+delegated integrations in the detailed guide.
 
 ## Upgrade
 
@@ -156,7 +185,7 @@ Docker. If the installer cannot prove the existing governed posture, it fails
 closed before changing protected host state.
 
 ```bash
-# [root] Linux amd64 — same RELEASE pin as governed installation above.
+# [root] Linux amd64 - same RELEASE pin as governed installation above.
 curl -fsSL -o install.sh \
   "https://github.com/opentendril/opentendril/releases/download/${RELEASE}/install.sh"
 curl -fsSL -o checksums.txt \
@@ -170,7 +199,7 @@ sudo sh install.sh \
 ```
 
 The upgrade does not run `tendril init` and does not reinitialize durable Stem
-state. An exact known historical `/etc/systemd/system/tendril.service` is
+state. A recognized `/etc/systemd/system/tendril.service` is
 migrated; a modified or otherwise ambiguous `/etc` unit fails closed. See
 [GUIDE-INSTALL.md](./GUIDE-INSTALL.md) for the ownership model, fail-closed
 cases, and how restoration is reported if a step fails.

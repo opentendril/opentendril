@@ -1,11 +1,12 @@
-# OpenTendril Quick Start — your first session
+# OpenTendril Quick Start - your first session
 
-This covers what to do **once OpenTendril is installed**: confirming the Stem is
-live, obtaining a credential, and making your first governed call.
+This covers what to do **once OpenTendril is installed**: use the Greenhouse as
+the ordinary governed first-use path, observe one task, and review its Git
+Fruit.
 
 > [!IMPORTANT]
 > **Installation is not here.** If OpenTendril is not installed yet, start with
-> **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** — the short public
+> **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** - the short public
 > entrypoint for local/evaluation and governed installation.
 > **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** is the deeper hardened/manual
 > reference: the properties that decide whether the delegation boundary is
@@ -21,7 +22,7 @@ Both installation shapes need these:
 | Requirement | Check |
 |---|---|
 | Docker | `docker --version` |
-| An LLM | Local [Ollama](https://ollama.ai) (default) — or a cloud provider key |
+| An LLM | Local [Ollama](https://ollama.ai) (default) - or a cloud provider key |
 
 A governed installation runs Docker rootless, under the Stem's own account, so
 check it as the Stem: `sudo -u tendril -i docker --version`. The Stem's health
@@ -30,7 +31,7 @@ report names both, so step 1 confirms them either way.
 **Which runtime actually isolates your code.** Docker is the requirement, but it
 is not necessarily what runs a Terrarium. Given no explicit choice, the conductor
 prefers **gVisor** when the host supports it, and falls back to Docker's default
-runtime otherwise. gVisor is not an alternative to Docker — it is a runtime
+runtime otherwise. gVisor is not an alternative to Docker - it is a runtime
 *within* it, selected as `--runtime=runsc`, which is why the daemon is required
 either way. Ask the daemon what it has:
 
@@ -46,25 +47,9 @@ explicit selection is always honoured rather than second-guessed.
 
 ## Which installation do you have?
 
-This matters more than anything else on this page, and the two shapes need
-different instructions.
-
-```bash
-command -v tendril
-```
-
-- **Nothing on your path** — you have a **governed** installation. The full
-  Stem binary belongs to the Stem's own account, at mode 750, so that you
-  cannot run or replace it. That is the design working. A governed
-  installation may also have the restricted client on this account:
-
-  ```bash
-  command -v tendril-mcp
-  ```
-
-  Continue below.
-- **A path is printed** — you have a **single-user** installation. Skip to
-  [Single-user installations](#single-user-installations).
+If you followed the governed installation in
+[Quick install](GUIDE-INSTALL-QUICK.md), continue below. For a local/evaluation
+installation, skip to [Single-user installations](#single-user-installations).
 
 If you are unsure which you have,
 [GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md) names the two postures;
@@ -74,155 +59,189 @@ If you are unsure which you have,
 
 # Governed installations
 
-The Stem runs as its own operating-system principal. You talk to it over the
-transport surface, holding a credential it issued you.
+The Stem runs as its own operating-system principal. The ordinary governed
+first-use path is through Greenhouse, using the Botanist key deliberately
+provided by an administrator. It does not use a Pollinator credential or a
+DelegationGrant.
 
-## 1. Confirm the Stem is running
+## First governed work through Greenhouse
 
-```bash
-systemctl status tendril
-curl -s 127.0.0.1:8080/health
-```
+Follow these steps in order. The governed host setup is in
+[Quick install](GUIDE-INSTALL-QUICK.md); the complete hardened procedure is in
+[GUIDE-INSTALL.md](GUIDE-INSTALL.md).
 
-A healthy Stem answers with a report naming each check:
+1. **Install OpenTendril and complete Stem readiness.** The governed installer
+   establishes the Stem's protected control plane, rootless container runtime,
+   installed service, and optional Greenhouse image. The install guide's
+   readiness checks report the installed Stem posture. The installer leaves
+   the Stem stopped until configuration is complete.
 
-```json
-{"overall":true,"results":{"api-key":{"healthy":true,"message":"At least one LLM provider is available"},
- "docker-daemon":{"healthy":true},"workspace":{"healthy":true,"message":".tendril workspace is writable"}}}
-```
+2. **Configure the LLM provider.** Run `tendril init` as the Stem and choose a
+   supported cloud provider and credential, or configure local Ollama. Provider
+   credentials belong to the Stem and are not Botanist or Pollinator
+   credentials. The guided provider setup is in
+   [Quick install](GUIDE-INSTALL-QUICK.md#governed).
 
-The startup log states the primary HTTP bind posture:
+3. **Configure Git identity and connection, then add the Substrate.** Follow
+   Stage 5 of [GUIDE-INSTALL.md](GUIDE-INSTALL.md) for the supported GitHub App
+   or fine-grained PAT posture and the named Substrate configuration. The
+   managed checkout is owned by the Stem.
 
-```
-Starting Go Stem API on 127.0.0.1:8080 (loopback: durable Pollinator credentials
-still accepted on data routes)...
-```
+4. **Verify the Substrate.** As the Stem, verify the configured repository
+   connection and its usable Git base:
 
-Loopback is the default. For a Pollinator on another machine, configure the
-Stem's separate HTTPS listener with `TENDRIL_REMOTE_LISTEN_ADDR`,
-`TENDRIL_REMOTE_TLS_CERT`, and `TENDRIL_REMOTE_TLS_KEY`. Do not use a
-non-loopback plaintext HTTP endpoint for Pollinator traffic. See
-[GUIDE-INSTALL.md](./GUIDE-INSTALL.md#remote-pollinator-https-listener) and
-[GUIDE-POLLINATOR-INTEGRATION.md](./GUIDE-POLLINATOR-INTEGRATION.md) for the
-Stem and Pollinator setup.
+   ```bash
+   sudo -u tendril -H /home/tendril/.local/bin/tendril substrate verify myrepo
+   ```
 
-## 2. Read what the installation actually is
+   Replace `myrepo` with the configured Substrate name. If the repository has
+   no Git base, use the supported bootstrap instructions in the install guide,
+   then verify it again.
 
-```bash
-sudo -u tendril -i tendril hardiness
-```
+5. **Start the configured Stem and check readiness.**
 
-**This reports and never gates — its exit status is always zero.** The output is
-the point, not the exit code:
+   ```bash
+   sudo systemctl enable --now tendril
+   curl --fail --silent http://127.0.0.1:8080/health
+   ```
 
-```
-✅  Running as the Stem (tendril), which owns ./.tendril
-✅  3 credential file(s) readable — this is the Stem's own material
-✅  The Stem's binary: Nothing on its resolution chain is writable by others
-✅  The control plane is outside any repository
-✅  1 active Pollinator credential(s) — those callers PROVE their Pollen
-✅  1 grant(s) configured
+6. **Start the installed Greenhouse.** Greenhouse is optional and separate from
+   the Stem. The installed path needs no repository checkout or Compose
+   invocation:
 
-HARDY — no weak conditions and nothing unestablished.
-```
+   ```bash
+   sudo /usr/local/sbin/opentendril-greenhouse start
+   ```
 
-Hardiness is a control-plane operation. It is not a Pollinator-facing command.
-A correctly governed Pollinator-hosting account has no full `tendril` binary, so
-it cannot run `tendril hardiness`. If the Stem-side report tells you to run it
-again from an account that hosts Pollinators, that sentence does not apply to
-this posture.
+   The wrapper's supported lifecycle commands are:
 
-From the ordinary account, confirm the other side of the boundary with tools
-that account already has. Do not copy or chmod the Stem binary.
+   ```bash
+   sudo /usr/local/sbin/opentendril-greenhouse start
+   sudo /usr/local/sbin/opentendril-greenhouse stop
+   sudo /usr/local/sbin/opentendril-greenhouse restart
+   sudo /usr/local/sbin/opentendril-greenhouse status
+   sudo /usr/local/sbin/opentendril-greenhouse check
+   sudo /usr/local/sbin/opentendril-greenhouse address
+   ```
 
-```bash
-command -v tendril
-# no result
+   `start` and `restart` require the Stem Unix socket. Installed Greenhouse
+   uses Unix Stem transport only, with no normal TCP fallback. Its browser
+   address is loopback-only. `stop` affects Greenhouse only and does not stop
+   the Stem. Lifecycle calls require explicit administrator authority; no
+   Greenhouse-specific sudoers or `NOPASSWD` grant is installed.
 
-test -r /home/tendril/.tendril/api-key; echo $?
-# non-zero — this account cannot read the Botanist key the Stem holds
+7. **Obtain the fixed local address.**
 
-test -r /home/tendril/.tendril/pollinators.json; echo $?
-# non-zero — this account cannot read the Pollinator credential store
-```
+   ```bash
+   sudo /usr/local/sbin/opentendril-greenhouse address
+   ```
 
-Those `test -r` checks do not print file contents. A zero from either means this
-account can read Stem control-plane material; that is a weak installation, not
-a prompt to install `tendril` here.
+   The normal address is `http://127.0.0.1:4173`.
 
-> [!NOTE]
-> `hardiness` measures the binary **on disk**. If you have installed a new binary
-> and not yet restarted the service, the running Stem may be executing a
-> different image. Restart before trusting the reading.
+8. **Deliberately obtain the protected Botanist key.** The Stem always requires
+   a non-empty Botanist key. Its resolution order is explicit `BOTANIST_KEY`,
+   an existing persisted key, then a generated and persisted key. When the
+   Stem generated or reused its key in this governed installation, an
+   administrator can display it with:
 
-## 3. Get a credential
+   ```bash
+   sudo -u tendril -H cat /home/tendril/.tendril/api-key
+   ```
 
-A Pollinator is a caller. Each one holds its own credential and is constrained by
-its own grant. See what already exists:
+   If `BOTANIST_KEY` was explicitly configured, the administrator hands off
+   that configured value instead. This is the Botanist credential, not a
+   Pollinator credential. Ordinary filesystem access to `/home/tendril` is not
+   granted.
 
-```bash
-sudo -u tendril -i tendril pollinator list
-```
+9. **Open Greenhouse and authenticate.** Open `http://127.0.0.1:4173`, leave
+   the Stem address empty for the normal same-origin path, and explicitly paste
+   the Botanist key into the required onboarding field. Greenhouse rejects an
+   empty or whitespace-only key and verifies it live against the Stem before
+   entering. Invalid keys are rejected. Socket reachability is transport, not
+   authentication.
 
-```
-POLLEN  STATUS  ISSUED      DIGEST         NOTE
-claude  active  2026-07-22  38c3089267f7…  laptop
-```
+   The browser persists the current connection state, including the key, in
+   `localStorage`. REST calls send `Authorization: Bearer ...`; the browser
+   WebSocket uses the existing authenticated query mechanism. The key is not
+   mounted into Greenhouse or injected through Docker environment, and this
+   handoff does not use or introduce a secret API/helper.
 
-Before creating the first grant, use the ordinary Substrate lifecycle. These
-commands read and write the canonical account-global registry and do not create
-delegation authority:
+10. **Select the configured Substrate** in the Greenhouse Workbench. The
+    configured name is enough; you do not need internal identifiers.
+
+11. **Enter a meaningful task or goal.** Describe the change or outcome you
+    want the Seed to achieve.
+
+12. **Enter verifier argv.** Set the executable and each argument separately.
+    For example, `go`, `test`, and `./...` are three argv entries. Greenhouse
+    does not assemble or run a shell command in the browser.
+
+13. **Start governed work** with the Workbench's **Start work** button. The
+    Stem dispatches detached Seed work and Greenhouse follows the canonical
+    work context returned by the Stem. The Botanist already holds Botanist
+    authority for this lane. First Greenhouse work requires no Pollinator,
+    Pollen identity, refresh root, access token, token file, DelegationGrant,
+    raw REST orchestration, or MCP.
+
+14. **Observe the work.** Greenhouse presents current Seed and Phytomer state,
+    Sprout activity, verification progress, and structured failures. While
+    supported and still running, use the Workbench continuation control to
+    provide more intent for that same work. Watch for its terminal state.
+
+15. **Review the resulting Fruit.** Greenhouse reads the deterministic Fruit
+    inventory and shows the reported repository, branch, commit, and review
+    state when the Stem supplies that provenance. It does not run the verifier
+    in the browser or infer Fruit from branch names or commit text. If the Stem
+    reports no provenance, the UI does not claim Fruit.
+
+16. **Keep the default branch unchanged** until the Botanist separately reviews
+    and accepts/merges the reported Fruit. Greenhouse does not merge Fruit
+    automatically.
+
+## Advanced: Pollinator and direct transport integrations
+
+The following sections document separate delegated and direct transport
+interfaces. They are not prerequisites for the Botanist's Greenhouse path.
+Use them when setting up a Pollinator or another integration that needs its own
+Pollen identity, credential, grant, REST, or MCP access.
+
+### Pollinator credential setup
+
+For delegated clients, configure and verify the Substrate as the Stem, then
+issue a credential for each Pollinator:
 
 ```bash
 sudo -u tendril -i tendril substrate add myrepo --repo owner/repo --posture app --app-id 123456 --key /home/tendril/.tendril/app.pem
 sudo -u tendril -i tendril substrate list
 sudo -u tendril -i tendril substrate get myrepo
 sudo -u tendril -i tendril substrate verify myrepo
-```
-
-The supported first-use postures are GitHub App and fine-grained PAT plus GPG;
-managed checkout remains the governed default. If an empty managed App/API
-repository needs a Git base, the Botanist can run
-`sudo -u tendril -i tendril git bootstrap --substrate myrepo`, then repeat
-`sudo -u tendril -i tendril substrate verify myrepo`.
-
-If yours is not listed, issue one — as the Stem, in its own home:
-
-```bash
+sudo -u tendril -i tendril pollinator list
 sudo -u tendril -i tendril pollinator issue --pollen claude --note "laptop"
 ```
 
-The secret prints **once** and is never stored; only its digest is kept. It begins
-`tendril_refresh_` and is the **durable refresh root** for that Pollinator. Give
-it to that Pollinator; do not give the Pollinator the Botanist key.
-
-Then mint a short-lived access token to actually use:
+The issued secret is the Pollinator's durable refresh root. It prints once and
+is not stored; give it to that Pollinator, not the Botanist key. Mint a
+short-lived access token for governed data routes:
 
 ```bash
 sudo -u tendril -i tendril pollinator token --pollen claude > ~/.tendril-token
 chmod 600 ~/.tendril-token
 ```
 
-Minting gives the Pollinator a short-lived bearer to use on governed requests.
-Tokens last at most 15 minutes; mint another when one expires. Root revocation
-blocks the next mint without restarting the Stem, and outstanding tokens remain
-bounded by their existing expiry. The Stem reads current grants on each
-governed admission.
-
-The redirect keeps the secret out of your terminal history and off your screen.
-Use it without printing it:
+Tokens last at most 15 minutes. Send the access token, not the durable root, on
+delegated data requests:
 
 ```bash
 -H "Authorization: Bearer $(cat ~/.tendril-token)"
 ```
 
-## 4. Understand your grant
+### 1. Understand the Pollinator credential and grant
 
 A credential proves *who* you are. A grant decides *what* you may do. No grant
-means every delegated invocation is denied — the secure default.
+means every delegated invocation is denied - the secure default.
 
-Create the first grant explicitly through the Stem control plane. Do not edit
-`.tendril/grants.yaml` by hand for ordinary first use. Name every operation
+Create the grant explicitly through the Stem control plane. Do not edit
+`.tendril/grants.yaml` by hand for delegated integration setup. Name every operation
 class explicitly; there is no hidden or wildcard authority:
 
 ```bash
@@ -256,7 +275,7 @@ pollen: claude
 
 Read it as a sentence: *the Pollen `claude` may run these operation classes, on
 this Substrate, and nothing else.* Note `git.prune` and `sprout.grow` are
-absent — deletion and raw Sprout dispatch are not part of the first-use grant.
+absent - deletion and raw Sprout dispatch are not part of the first-use grant.
 
 Removal is separate and dependency-safe. First narrow or revoke every live
 grant that names the Substrate, then run `sudo -u tendril -i tendril substrate remove myrepo` as
@@ -271,9 +290,9 @@ Core / grant:  git.status
 MCP tool:      gitStatus
 ```
 
-## 5. Make your first governed call
+### 2. Make a delegated governed call
 
-The Substrate must already have a Git base — at least one commit on the
+The Substrate must already have a Git base - at least one commit on the
 required branch. `tendril substrate verify myrepo` confirms
 authentication and that Git base without mutating the repository.
 
@@ -294,20 +313,20 @@ curl -s -X POST 127.0.0.1:8080/v1/git/status \
 
 Three things in that response are worth reading closely:
 
-- **`"pollen":"claude"`** — the Stem *derived* your Pollen from the credential you
+- **`"pollen":"claude"`** - the Stem *derived* your Pollen from the credential you
   presented. A Pollen claimed in a header is ignored for credential-bearing
   callers, so a caller cannot assert someone else's identity.
-- **`"isolated":true`** and the `workspace` path — you get your own worktree,
+- **`"isolated":true`** and the `workspace` path - you get your own worktree,
   under your own Pollen. Two Pollinators never share a tree, so they cannot stage
   each other's files.
-- **`"branch":"tendril/claude/work"`** — work you do here happens on a branch the
+- **`"branch":"tendril/claude/work"`** - work you do here happens on a branch the
   Stem owns and can later reclaim. Branches made by hand in a shell are invisible
   to it.
 
-## 6. Hand off a bounded Seed
+### 3. Hand off a bounded Seed
 
 Use the same Pollinator credential and the same Substrate name. This is the
-delegated first task — not the Botanist/operator `tendril seed grow` command,
+delegated first task - not the Botanist/operator `tendril seed grow` command,
 and not the Botanist key.
 
 ```bash
@@ -400,7 +419,7 @@ Grant names remain dotted (`seed.grow`, `sprout.watch`, `phytomer.continue`).
 Tool names are lower-camel MCP presentation. Each grant is checked
 independently. `sproutWatch` is a view, not a governed command.
 
-## Botanist Fruit review inventory
+### Botanist Fruit review inventory
 
 The Botanist can inspect all durable Fruit claims from the Stem account without
 enumerating Git branches:
@@ -420,7 +439,7 @@ inventory does not accept, merge, delete, block, or mutate Fruit. If persisted
 inventory evidence is unavailable, the commands report that condition instead
 of presenting an empty inventory.
 
-## 7. Learn what a refusal looks like
+### 4. Learn what a refusal looks like
 
 A refusal is not a fault. Knowing the difference between these three saves an
 afternoon:
@@ -428,7 +447,7 @@ afternoon:
 | What you did | Response | Meaning |
 |---|---|---|
 | Sent no credential | `401` | The route is authenticated. |
-| Sent an unrecognised bearer | `401 Unauthorized` | Unknown, revoked, expired or forged — all refused the same way. |
+| Sent an unrecognised bearer | `401 Unauthorized` | Unknown, revoked, expired or forged - all refused the same way. |
 | Asked for something outside your grant | `403` | Authenticated fine; not permitted. |
 
 The `403` names all three things it checked, so you know which to change:
@@ -439,10 +458,10 @@ operation-class "git.prune", substrate "myrepo"
 ```
 
 If a Substrate is configured but its managed checkout has not been materialized,
-an in-grant call returns `409` — a configuration state you fix on the host, not a
+an in-grant call returns `409` - a configuration state you fix on the host, not a
 server fault.
 
-## 8. Two credential systems, not one
+### 5. Two credential systems, not one
 
 A frequent confusion, worth stating plainly:
 
@@ -454,7 +473,7 @@ A frequent confusion, worth stating plainly:
 They are separate on purpose. It is why a Pollinator cannot approve its own
 pending confirmation.
 
-## 9. Connect over MCP
+### 6. Connect over MCP
 
 The supported MCP client on this installation is `tendril-mcp`, not
 `tendril mcp`. See [Model Context Protocol over stdio](#model-context-protocol-over-stdio).
@@ -506,7 +525,7 @@ tendril substrate verify default-workspace
 that still use the wizard; it is not the preferred lifecycle. Delegation is a
 separate explicit `tendril delegation create` step.
 
-## 4. Start direct coding — `tendril chat`
+## 4. Start direct coding - `tendril chat`
 
 `tendril chat` is the direct local coding path. It is a presentation adapter
 over the same Stem-owned Seed lifecycle that governs all coding work.
@@ -516,7 +535,7 @@ tendril chat [--substrate <name>] [--max-iterations N] [--timeout N] -- <verify 
 ```
 
 A bare `--` is required. Everything after it is the verification command that
-bounds success. The verifier is not invented automatically — you must supply it
+bounds success. The verifier is not invented automatically - you must supply it
 explicitly.
 
 **With one configured Substrate**, `--substrate` may be omitted:
@@ -743,9 +762,9 @@ For the **in-process MCP path**, bind one Pollen with `TENDRIL_POLLEN`. Unset, e
 
 ## Where to go next
 
-Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike — parity is mechanically checked. REST and CLI use canonical identity; MCP publishes a lower-camelCase primary identifier that maps one-to-one back to that identity. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
+Every governed command in `core.CapabilityNames()` is projected across the command line, the transport surface (REST), and the Model Context Protocol (MCP) surface alike - parity is mechanically checked. REST and CLI use canonical identity; MCP publishes a lower-camelCase primary identifier that maps one-to-one back to that identity. Views and control-plane operations are distinct and are not part of governed command parity. So `tendril phytomer create|list|get|history` manages sessions from a terminal exactly as the transport routes do.
 
-- **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** — short install entrypoint
-- **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** — the five invariants, and which configurations satisfy them
-- **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** — connecting a Substrate to its forge
-- `tendril --help` (or `sudo -u tendril -i tendril --help`) — every command
+- **[docs/GUIDE-INSTALL-QUICK.md](GUIDE-INSTALL-QUICK.md)** - short install entrypoint
+- **[docs/GUIDE-INSTALL.md](GUIDE-INSTALL.md)** - the five invariants, and which configurations satisfy them
+- **[docs/GUIDE-GIT-CONNECTION.md](GUIDE-GIT-CONNECTION.md)** - connecting a Substrate to its forge
+- `tendril --help` (or `sudo -u tendril -i tendril --help`) - every command
